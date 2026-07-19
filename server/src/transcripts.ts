@@ -14,15 +14,25 @@
 
 import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import type { IngestBody } from "../../shared/types.ts";
 import { normalize } from "./ingest.ts";
 import { db, insertEvent, RETENTION_DAYS, type InsertResult } from "./db.ts";
 import { projectRootOf } from "./git.ts";
 import { workspaceRoot } from "./config.ts";
 
-const PROJECTS_DIR =
-  process.env.AGENTGLASS_PROJECTS_DIR || join(homedir(), ".claude", "projects");
+// One root by default; a path.delimiter-separated list (":" on POSIX, ";" on
+// Windows) sweeps several at once — e.g. a WSL home next to a Windows one.
+// The Set folds a root listed twice, which would otherwise ingest every
+// transcript in it twice.
+const PROJECTS_DIRS = [
+  ...new Set(
+    (process.env.AGENTGLASS_PROJECTS_DIR || join(homedir(), ".claude", "projects"))
+      .split(delimiter)
+      .map((d) => d.trim())
+      .filter(Boolean)
+  ),
+];
 const POLL_MS = Math.max(500, Number(process.env.AGENTGLASS_SCAN_INTERVAL_MS || 3000));
 export const SCAN_ENABLED = process.env.AGENTGLASS_SCAN_DISABLED !== "1";
 
@@ -423,67 +433,69 @@ function walkTranscripts(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** One sweep over every project directory. */
+/** One sweep over every project directory under every root. */
 async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<number> {
   // Read the workspace once per sweep so every file in it sees the same scope.
   const scope = workspaceRoot();
-  let dirs: string[];
-  try {
-    dirs = readdirSync(PROJECTS_DIR);
-  } catch {
-    return 0; // no ~/.claude/projects yet — nothing to do
-  }
   // Transcripts older than the retention window would be pruned on the next
   // sweep anyway, so never spend time parsing them.
   const cutoff = RETENTION_DAYS ? Date.now() - RETENTION_DAYS * 86_400_000 : 0;
   let total = 0;
 
-  for (const dir of dirs) {
-    const dirPath = join(PROJECTS_DIR, dir);
+  for (const root of PROJECTS_DIRS) {
+    let dirs: string[];
     try {
-      if (!statSync(dirPath).isDirectory()) continue;
+      dirs = readdirSync(root);
     } catch {
-      continue;
+      continue; // this root doesn't exist (yet) — the others still count
     }
-    for (const path of walkTranscripts(dirPath)) {
-      let st: ReturnType<typeof statSync>;
+    for (const dir of dirs) {
+      const dirPath = join(root, dir);
       try {
-        st = statSync(path);
+        if (!statSync(dirPath).isDirectory()) continue;
       } catch {
         continue;
       }
-      if (cutoff && st.mtimeMs < cutoff) continue; // outside retention
+      for (const path of walkTranscripts(dirPath)) {
+        let st: ReturnType<typeof statSync>;
+        try {
+          st = statSync(path);
+        } catch {
+          continue;
+        }
+        if (cutoff && st.mtimeMs < cutoff) continue; // outside retention
 
-      const prev = getFile.get(path);
-      // Unchanged since last sweep → skip without opening it.
-      if (prev && prev.size === st.size && prev.mtime === Math.floor(st.mtimeMs)) {
-        owned.add(prev.session_id);
-        continue;
-      }
+        const prev = getFile.get(path);
+        // Unchanged since last sweep → skip without opening it.
+        if (prev && prev.size === st.size && prev.mtime === Math.floor(st.mtimeMs)) {
+          owned.add(prev.session_id);
+          continue;
+        }
 
-      try {
-        // A transcript that got *shorter* was rewritten, not appended to, so a
-        // saved offset now points into different content. Re-read it whole
-        // rather than skipping past records that no longer exist.
-        const rewritten = !!prev && st.size < prev.size;
-        const from = rewritten ? 0 : prev?.lines_done ?? 0;
-        const r = await ingestFile(path, basename(path, ".jsonl"), from, onLive, scope);
-        // Out of scope: claim nothing, so widening the scope later can still
-        // pick it up, and the hook path isn't blocked for a session we skipped.
-        if (r.skipped) continue;
-        owned.add(r.session_id);
-        putFile.run({
-          $path: path,
-          $sid: r.session_id,
-          $src: r.source_app,
-          $proj: r.project_path,
-          $lines: r.lines,
-          $size: st.size,
-          $mtime: Math.floor(st.mtimeMs),
-        });
-        total += r.ingested;
-      } catch (e) {
-        console.error(`[scan] ${path}: ${e instanceof Error ? e.message : e}`);
+        try {
+          // A transcript that got *shorter* was rewritten, not appended to, so a
+          // saved offset now points into different content. Re-read it whole
+          // rather than skipping past records that no longer exist.
+          const rewritten = !!prev && st.size < prev.size;
+          const from = rewritten ? 0 : prev?.lines_done ?? 0;
+          const r = await ingestFile(path, basename(path, ".jsonl"), from, onLive, scope);
+          // Out of scope: claim nothing, so widening the scope later can still
+          // pick it up, and the hook path isn't blocked for a session we skipped.
+          if (r.skipped) continue;
+          owned.add(r.session_id);
+          putFile.run({
+            $path: path,
+            $sid: r.session_id,
+            $src: r.source_app,
+            $proj: r.project_path,
+            $lines: r.lines,
+            $size: st.size,
+            $mtime: Math.floor(st.mtimeMs),
+          });
+          total += r.ingested;
+        } catch (e) {
+          console.error(`[scan] ${path}: ${e instanceof Error ? e.message : e}`);
+        }
       }
     }
   }
@@ -537,7 +549,7 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
     .then((n) => {
       const projects = projectPaths.size;
       console.log(
-        `📚 scanned ${PROJECTS_DIR} — ${n} events from ${projects} project${projects === 1 ? "" : "s"} in ${Date.now() - t0}ms`
+        `📚 scanned ${PROJECTS_DIRS.join(", ")} — ${n} events from ${projects} project${projects === 1 ? "" : "s"} in ${Date.now() - t0}ms`
       );
       setInterval(async () => {
         if (sweepBusy) return; // a slow sweep must not stack up behind the timer
