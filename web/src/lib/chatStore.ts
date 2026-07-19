@@ -104,7 +104,7 @@ const titleOf = (s: string) => {
  * `activeId` decides whether the reply counts as unread — a chat answering in
  * the background should say so, and the one on screen shouldn't.
  */
-export async function send(id: string, text: string, isActive: () => boolean) {
+export async function send(id: string, text: string, isActive: () => boolean, allowedTools: string[] = []) {
   const chat = chats.get(id);
   const msg = text.trim();
   if (!chat || !msg || chat.sending || !chat.cwd) return;
@@ -151,7 +151,7 @@ export async function send(id: string, text: string, isActive: () => boolean) {
   };
 
   try {
-    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId }, onEvent, ac.signal);
+    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools }, onEvent, ac.signal);
   } catch (e) {
     if (!(e instanceof DOMException && e.name === "AbortError")) {
       update(id, (c) => {

@@ -473,7 +473,7 @@ const server = Bun.serve<WsData>({
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      return chatStream(b.cwd, b.message, b.model, b.resumeId, b.mode);
+      return chatStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools);
     }
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---
