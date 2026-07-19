@@ -14,6 +14,8 @@ import type { GitRepoRef, SessionRollup } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
+import { ToolRow } from "./ToolRow.tsx";
+import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
 import { fmtAgo, fmtUsd, modelLabelOf, modelColor, providerOf } from "../lib/format.ts";
@@ -568,10 +570,33 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                           )}
                           <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                           <div className="max-w-[86%] min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
-                            style={{ ...CODE_FONT_STYLE, fontFamily: undefined, opacity: m.historical ? 0.72 : 1, background: m.role === "user" ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text)" }}>
+                            style={{
+                              ...CODE_FONT_STYLE, fontFamily: undefined, opacity: m.historical ? 0.72 : 1,
+                              // Stronger than the old 16%/45% wash: at that
+                              // strength every bubble was the same violet as the
+                              // panel behind it, and on some themes the two roles
+                              // were indistinguishable. The left border is what
+                              // survives a theme that flattens the fills.
+                              background: m.role === "user"
+                                ? "color-mix(in srgb, var(--primary) 26%, var(--bg2))"
+                                : "color-mix(in srgb, var(--bg3) 85%, var(--bg))",
+                              border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
+                              borderLeft: `3px solid ${m.role === "user" ? "var(--primary)" : "color-mix(in srgb, var(--info) 70%, transparent)"}`,
+                              color: "var(--text)",
+                            }}>
+                            {/* Role and time, the way the session view has always
+                                shown them — their absence is most of why the two
+                                read as different products. */}
+                            <div className="text-[9px] uppercase tracking-wider mb-1 flex items-center gap-2"
+                              style={{ color: m.role === "user" ? "var(--primary-hover)" : "var(--info)" }}>
+                              <span>{m.role}</span>
+                              <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
+                            </div>
                             {m.tools.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mb-1.5">
-                                {m.tools.map((t, j) => <span key={j} className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, color: "var(--info)", background: "color-mix(in srgb, var(--info) 12%, transparent)" }}>⚙ {t}</span>)}
+                              <div className="flex flex-col gap-0.5 mb-1.5 pb-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                                {m.tools.map((t) => (
+                                  <ToolRow key={t.id} e={{ kind: "tool", ts: t.ts, tool: t.name, target: t.target, is_error: t.error, output: t.output }} />
+                                ))}
                               </div>
                             )}
                             {!!m.images?.length && (
