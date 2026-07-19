@@ -34,6 +34,36 @@ const authHeaders = (h: Record<string, string> = {}): Record<string, string> =>
 const withToken = (url: string): string =>
   TOKEN ? url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : url;
 
+/** Whether this client has a shared-secret token configured. */
+export const hasToken = (): boolean => !!TOKEN;
+
+/** Tell an auth failure apart from a plain outage. A browser WebSocket can't
+ *  read the 401 that rejects its upgrade, so a socket that closes before it ever
+ *  opens looks identical to the server being down. Probing an authenticated HTTP
+ *  endpoint (which *can* read the status) disambiguates: 401 → the token is
+ *  wrong/rotated/missing; any other answer → the server is up; a thrown fetch →
+ *  it's unreachable. */
+export async function probeAuth(): Promise<"ok" | "unauthorized" | "offline"> {
+  try {
+    const r = await fetch(SERVER + "/events/filter-options", { headers: authHeaders() });
+    return r.status === 401 ? "unauthorized" : "ok";
+  } catch {
+    return "offline";
+  }
+}
+
+/** Ask for a token, persist it, and reload so every fetch/WS picks it up. The
+ *  recovery path when a server starts requiring a token, or rotates it, after
+ *  this tab was loaded. */
+export function reauthPrompt(): void {
+  if (typeof window === "undefined") return;
+  const t = window.prompt("This server needs an access token.\nPaste it to reconnect:");
+  if (t && t.trim()) {
+    try { localStorage.setItem("agentglass_token", t.trim()); } catch { /* private mode */ }
+    location.reload();
+  }
+}
+
 export const WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */

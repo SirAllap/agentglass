@@ -11,7 +11,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { GitRepoRef, ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
-import { api, IS_DEMO, ptyWsUrl } from "../lib/api.ts";
+import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
@@ -40,7 +40,7 @@ function themeFromCss() {
 const TERM_FONT = '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", Menlo, Monaco, "Roboto Mono", Consolas, "Liberation Mono", monospace';
 
 // --- persistent per-repo shell sessions (outlive the panel) ------------------
-type SessStatus = "idle" | "connecting" | "live" | "exited" | "error";
+type SessStatus = "idle" | "connecting" | "live" | "exited" | "error" | "unauthorized";
 type Sess = {
   id: string;             // many shells can share a repo, so the id is the key
   root: string;
@@ -123,6 +123,7 @@ function connect(s: Sess) {
   };
   ws.onclose = () => {
     if (s.ws !== ws) return; // stale socket — the session already moved on
+    const wasLive = s.status === "live";
     s.ws = null;
     if (s.status === "connecting" || s.status === "live") {
       s.status = "error";
@@ -132,7 +133,7 @@ function connect(s: Sess) {
       // Making the user press Enter to come back is asking them to do the
       // computer's job; retry on our own and say so, with the manual path
       // still there if the retries give up.
-      scheduleReconnect(s);
+      maybeReconnect(s, wasLive);
     }
   };
 }
@@ -140,9 +141,40 @@ function connect(s: Sess) {
 /** Reconnect delay, backing off so a server that's down for a while isn't
  *  hammered, but a quick restart is picked up almost immediately. */
 const RETRY_MS = [400, 800, 1500, 3000, 5000, 8000];
+// Stop after ~2 minutes of failed reconnects (the backoff tops out at 8s). Left
+// unbounded, a wrong/rotated token — which rejects every upgrade with a 401 a
+// browser WS can't read — printed a reconnect dot forever (~450/hour).
+const MAX_RETRIES = 15;
+
+/** Decide whether to keep reconnecting after a socket dropped. A close before
+ *  the shell ever went live, on a token-protected server, is almost always the
+ *  401 that rejects the WS upgrade — unreadable off a browser WebSocket — so we
+ *  probe an authenticated endpoint to tell an auth wall from a plain outage and
+ *  stop retrying (with a way back) instead of spinning forever. */
+async function maybeReconnect(s: Sess, wasLive: boolean) {
+  if (!wasLive && hasToken()) {
+    const state = await probeAuth();
+    if (s.ws) return; // a manual reconnect (Enter / ⟲) beat us to it
+    if (state === "unauthorized") {
+      if (s.retryTimer) { clearTimeout(s.retryTimer); s.retryTimer = null; }
+      s.retries = 0;
+      s.status = "unauthorized";
+      s.term.write("\r\n\x1b[31m— unauthorized: this server needs an access token —\x1b[0m\r\n\x1b[2m  reopen the dashboard with ?token=… (or click the ⚿ status) to re-enter it\x1b[0m\r\n");
+      notify(s);
+      return;
+    }
+  }
+  scheduleReconnect(s);
+}
 
 function scheduleReconnect(s: Sess) {
   if (s.retryTimer) return;
+  if (s.retries >= MAX_RETRIES) {
+    s.status = "error";
+    s.term.write("\r\n\x1b[2m— still no server after many tries · press Enter to retry —\x1b[0m\r\n");
+    notify(s);
+    return;
+  }
   const wait = RETRY_MS[Math.min(s.retries, RETRY_MS.length - 1)];
   s.retries++;
   if (s.retries === 1) s.term.write("\r\n\x1b[2m— disconnected · reconnecting…\x1b[0m");
@@ -188,7 +220,8 @@ function createSession(root: string): Sess {
     sess.lastUsed = Date.now();
     if (sess.status === "live" && sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(JSON.stringify({ t: "in", d }));
     else if (sess.status === "connecting") sess.pending.push(d); // don't drop keys typed before the shell is up
-    else if ((sess.status === "exited" || sess.status === "error") && d.includes("\r")) connect(sess); // Enter → new shell, scrollback kept
+    else if (sess.status === "unauthorized" && d.includes("\r")) reauthPrompt(); // Enter → re-enter the token
+    else if ((sess.status === "exited" || sess.status === "error") && d.includes("\r")) { sess.retries = 0; connect(sess); } // Enter → new shell, scrollback kept
   });
   term.onResize(({ cols, rows }) => {
     if (sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(JSON.stringify({ t: "resize", cols, rows }));
@@ -364,6 +397,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
     live: { color: "var(--success, #98c379)", label: sess ? `${sess.shell} · ${sess.mode === "pipe" ? "pipe" : "pty"}${sess.mode !== "pipe" && !sess.canResize ? " · fixed size" : ""}` : "live" },
     exited: { color: "var(--text2)", label: "exited" },
     error: { color: "var(--error)", label: "disconnected" },
+    unauthorized: { color: "var(--error)", label: "unauthorized ⚿" },
   };
 
   return (
@@ -445,7 +479,9 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                   </div>
 
                   <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                    <span className="flex items-center gap-1.5 text-[10px] t-dim2 mr-1" title="shell status">
+                    <span onClick={status === "unauthorized" ? reauthPrompt : undefined}
+                      className={`flex items-center gap-1.5 text-[10px] t-dim2 mr-1 ${status === "unauthorized" ? "cursor-pointer" : ""}`}
+                      title={status === "unauthorized" ? "this server needs an access token — click to enter it" : "shell status"}>
                       <span style={{ color: statusDot[status].color }}>●</span>{statusDot[status].label}
                     </span>
                     <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ split</button>

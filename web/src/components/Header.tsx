@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { ConnState } from "../lib/useLive.ts";
-import { api, IS_DEMO } from "../lib/api.ts";
+import { api, IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { ThemeSwitcher } from "./ThemeSwitcher.tsx";
 import { UsageWidget } from "./UsageWidget.tsx";
@@ -211,6 +211,8 @@ export function Header({
   onOpenProject: () => void;
 }) {
   const live = conn === "open";
+  const unauth = conn === "unauthorized";
+  const pillColor = live ? "var(--success)" : unauth ? "var(--error)" : "var(--warning)";
   const hasFilter = filter.app || filter.type || filter.provider;
 
   return (
@@ -230,13 +232,15 @@ export function Header({
             <span className="t-dim2">▾</span>
           </button>
         </div>
-        <span className="flex items-center gap-1.5 ml-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
-          style={{ color: live ? "var(--success)" : "var(--warning)", background: `color-mix(in srgb, ${live ? "var(--success)" : "var(--warning)"} 14%, transparent)` }}>
+        <span onClick={unauth ? reauthPrompt : undefined}
+          title={unauth ? "This server needs an access token — click to enter it" : undefined}
+          className={`flex items-center gap-1.5 ml-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${unauth ? "cursor-pointer" : ""}`}
+          style={{ color: pillColor, background: `color-mix(in srgb, ${pillColor} 14%, transparent)` }}>
           <span className="relative flex h-1.5 w-1.5">
             {live && <span className="absolute inline-flex h-full w-full rounded-full opacity-70" style={{ background: "var(--success)", animation: "ping-ring 1.6s ease-out infinite" }} />}
-            <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ background: live ? "var(--success)" : "var(--warning)" }} />
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ background: pillColor }} />
           </span>
-          {live ? "LIVE" : conn.toUpperCase()}
+          {live ? "LIVE" : unauth ? "UNAUTHORIZED ⚿" : conn.toUpperCase()}
         </span>
         {IS_DEMO && (
           <a
