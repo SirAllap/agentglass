@@ -4,6 +4,7 @@ import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from ".
 import { Portal } from "./Portal.tsx";
 import { CommitModal } from "./CommitModal.tsx";
 import { api } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { fmtTime, agentKey } from "../lib/format.ts";
 import { THEMES } from "../lib/highlight.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
@@ -580,6 +581,25 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
     // focus the frame so j/k nav works immediately (filter is opt-in via click)
     requestAnimationFrame(() => frameRef.current?.focus());
   }, [open]);
+
+  // The fleet keeps editing while this is open, so a list loaded once goes
+  // stale within a turn. Refreshed in place rather than through the effect
+  // above: that one resets the filter, the collapsed groups and the selection,
+  // which would yank the file out from under you mid-read every few seconds.
+  //
+  // Not polled for a preset changeset — those are one session's changes, handed
+  // in already resolved, and re-fetching would replace them with the fleet's.
+  usePoll(open && !presetChanges, () => {
+    api.changes(200).then((r) => {
+      setChanges((prev) => {
+        // Same ids in the same order → keep the old array so nothing downstream
+        // re-renders or re-highlights on an unchanged poll.
+        if (prev && prev.length === r.changes.length && prev.every((c, i) => c.id === r.changes[i].id)) return prev;
+        return r.changes;
+      });
+      setSelId((cur) => (cur && r.changes.some((c) => c.id === cur) ? cur : r.changes[0]?.id ?? null));
+    }).catch(() => { /* keep showing what we have */ });
+  }, 4000);
 
   // prune stored "reviewed" ids to those still present; persist the group-by pref
   useEffect(() => {
