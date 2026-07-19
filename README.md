@@ -10,7 +10,7 @@
 
 ![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Tauri%20app-ffc131) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
 
-![agentglass dashboard](.github/assets/dashboard.png)
+<img width="2517" height="1372" alt="image" src="https://github.com/user-attachments/assets/489536c3-333f-4078-b2fa-fed9121d86ba" />
 
 </div>
 
