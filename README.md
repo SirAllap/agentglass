@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🛰 agentglass
+<img src=".github/assets/logo.svg" alt="agentglass" width="88" height="88" />
+
+# agentglass
 
 **A loupe for your agents** — a real-time Mission-Control **dashboard _and_ workspace** for AI coding agents, across every provider and every project on your machine.
 
