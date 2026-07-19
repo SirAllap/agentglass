@@ -69,6 +69,30 @@ export function workspaceRoot(): string | null {
   return cachedRoot;
 }
 
+/**
+ * Is this path inside the open project?
+ *
+ * Scope became a read filter in #48, but only a read filter: a cockpit opened
+ * for one project still handed out git writes, a login shell and chat in any
+ * repo on the machine. "Open a project" that narrows what you can *see* while
+ * leaving what you can *touch* wide open is the confusing half-state — the UI
+ * says you are in one project and the capabilities say otherwise.
+ *
+ * The escape hatch for genuinely multi-repo work already exists and is
+ * documented: scope to the parent folder (`~/code`) instead of one repo, which
+ * `reposUnder()` already supports. So refusing here has a real answer that
+ * isn't "turn the feature off", and the error message says it.
+ *
+ * Unscoped (whole machine) allows everything, unchanged — this only narrows an
+ * instance that was deliberately pointed at one project.
+ */
+export function inScope(path: string | null | undefined, scope = workspaceRoot()): boolean {
+  if (!scope) return true; // whole-machine: nothing to enforce
+  if (!path) return false;
+  const p = resolve(expand(path));
+  return p === scope || p.startsWith(scope + "/");
+}
+
 /** One rule for turning "what the user asked for" into a scope directory —
  *  shared by boot (env/config) and the runtime picker, so both resolve the
  *  same input to the same root. */

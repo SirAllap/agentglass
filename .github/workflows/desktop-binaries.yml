@@ -75,10 +75,15 @@ jobs:
       # Mirrors `make desktop-web`. The address is pinned because inside the app
       # window location.hostname is the Tauri scheme, not localhost.
       - name: Build web
+        shell: bash # Windows defaults to PowerShell, where VAR=value cmd is a syntax error
         run: cd web && VITE_CW_SERVER=http://localhost:4000 bun run build
 
       - uses: tauri-apps/tauri-action@v0
         id: tauri
+        env:
+          # linuxdeploy mounts its AppImages with FUSE, which the runners don't
+          # have. Extracting instead of mounting avoids needing it at all.
+          APPIMAGE_EXTRACT_AND_RUN: 1
         with:
           args: --target ${{ matrix.triple }} --bundles ${{ matrix.bundles }}
 
