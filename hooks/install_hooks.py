@@ -69,7 +69,9 @@ def do_install(cfg):
     hooks = cfg.setdefault("hooks", {})
     for event, (matcher, add_chat) in EVENTS.items():
         arr = [e for e in hooks.get(event, []) if not _is_ours(e)]
-        cmd = f"python3 {SEND_EVENT} --event-type {event}"
+        # Quote the script path on Windows so spaces/backslashes survive JSON + shell parsing.
+        send_event_cmd = f'"{SEND_EVENT}"' if os.name == "nt" else SEND_EVENT
+        cmd = f"python3 {send_event_cmd} --event-type {event}"
         if add_chat:
             cmd += " --add-chat"
         entry = {"hooks": [{"type": "command", "command": cmd}]}
