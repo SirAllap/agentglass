@@ -1,7 +1,8 @@
-name: Deploy demo to GitHub Pages
+name: Deploy landing + demo to GitHub Pages
 
-# Builds the web UI in demo mode (VITE_DEMO=1 → fabricated data, no server)
-# and publishes it to GitHub Pages on every push to main.
+# Publishes the static landing page (landing/) at the site root and the
+# web UI built in demo mode (VITE_DEMO=1 → fabricated data, no server)
+# under /demo/, on every push to main.
 
 on:
   push:
@@ -28,13 +29,17 @@ jobs:
           bun-version: latest
       - name: Install deps
         run: bun install
-      - name: Build demo (VITE_DEMO=1, base /agentglass/)
+      - name: Build demo (VITE_DEMO=1, base /agentglass/demo/)
         run: cd web && bun run build:demo
-      - name: Add .nojekyll
-        run: touch web/dist/.nojekyll
+      - name: Assemble site (landing at /, demo at /demo/)
+        run: |
+          mkdir -p site/demo
+          cp -r landing/. site/
+          cp -r web/dist/. site/demo/
+          touch site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: web/dist
+          path: site
 
   deploy:
     needs: build
