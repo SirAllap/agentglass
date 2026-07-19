@@ -26,5 +26,9 @@ jobs:
             echo "release for $GITHUB_REF_NAME already exists — leaving it untouched"
             exit 0
           fi
+          # checkout leaves the tag as a lightweight ref pointing at the commit,
+          # so %(contents) yields the commit message and the annotation — the
+          # actual release notes — is lost. Re-fetch to get the tag object.
+          git fetch --force --tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/notes.md
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md
