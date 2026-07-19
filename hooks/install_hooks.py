@@ -63,16 +63,32 @@ def load(path):
     return json.loads(raw) if raw else {}
 
 
+def _hook_python():
+    """Interpreter name written into Claude Code hook commands.
+
+    On Windows most installs expose `py` (launcher) and/or `python`, not
+    `python3`. Prefer those at install time. Deliberately avoid
+    `sys.executable` so a later-deleted venv does not break every hook.
+    """
+    if os.name != "nt":
+        return "python3"
+    for candidate in ("py", "python"):
+        if shutil.which(candidate):
+            return candidate
+    return "py"
+
+
 def do_install(cfg):
     """Append our forwarder to each event, first stripping any prior agentglass
     entry (so a moved clone re-points cleanly). All other hooks are preserved."""
     hooks = cfg.setdefault("hooks", {})
+    python = _hook_python()
     for event, (matcher, add_chat) in EVENTS.items():
         arr = [e for e in hooks.get(event, []) if not _is_ours(e)]
         # Quote the script path unconditionally: a clone living under a spaced
         # path ("/Users/x/My Projects/…", "C:\Users\…") breaks the hook command
         # on every platform, not just Windows.
-        cmd = f'python3 "{SEND_EVENT}" --event-type {event}'
+        cmd = f'{python} "{SEND_EVENT}" --event-type {event}'
         if add_chat:
             cmd += " --add-chat"
         entry = {"hooks": [{"type": "command", "command": cmd}]}

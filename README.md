@@ -333,6 +333,8 @@ with Approve / Deny buttons — decide from any device and the agent unblocks.
 ]
 ```
 
+On Windows, use `py` (or `python`) instead of `python3` in hand-written hook commands; `hooks/install_hooks.py` picks this automatically.
+
 Safe by design — it **never blocks your agents by accident**:
 
 - unreachable server or an error → **allow** (the hook exits 0, no decision)
