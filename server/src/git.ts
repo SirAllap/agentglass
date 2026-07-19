@@ -11,7 +11,7 @@
 // root; and the whole feature can be killed with AGENTGLASS_COMMIT_DISABLED=1.
 
 import { resolve, dirname, relative, sep } from "node:path";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import type { GitFileStatus, RepoStatus, CommitResult } from "../../shared/types.ts";
 
 export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
@@ -50,9 +50,33 @@ export async function gitAsync(cwd: string, args: string[]): Promise<GitResult> 
   }
 }
 
+// Windows-side Claude Code records Windows cwds (`C:\Users\...`) in its
+// transcripts. On a posix host that string isn't absolute, so resolve() would
+// treat it as relative to the server's own cwd and git would then attribute
+// every such session to whatever repo the server runs from. Map drive-letter
+// paths onto the WSL automount (`/mnt/c/...` by default; /etc/wsl.conf's
+// [automount] root can move it) before any path or git logic sees them.
+const WINDOWS_DRIVE = /^([A-Za-z]):[\\/]/;
+const AUTOMOUNT_ROOT = (() => {
+  if (process.platform === "win32") return null; // native Windows resolves C:\ itself
+  let root = "/mnt/";
+  try {
+    const automount = readFileSync("/etc/wsl.conf", "utf8").match(/\[automount\]([^[]*)/)?.[1] ?? "";
+    const custom = automount.match(/^\s*root\s*=\s*(\S+)/m)?.[1];
+    if (custom) root = custom.endsWith("/") ? custom : custom + "/";
+  } catch { /* not WSL or no config — the conventional mount root still beats a relative path */ }
+  return root;
+})();
+
+function fromWindowsPath(p: string): string {
+  const drive = p.match(WINDOWS_DRIVE);
+  if (!drive || !AUTOMOUNT_ROOT) return p;
+  return AUTOMOUNT_ROOT + drive[1]!.toLowerCase() + "/" + p.slice(3).replaceAll("\\", "/");
+}
+
 export function safeAbs(p: unknown): string | null {
   if (typeof p !== "string" || !p || p.includes("\0")) return null;
-  return resolve(p);
+  return resolve(fromWindowsPath(p));
 }
 
 /** Resolve the git top-level for a file/dir path (a real path from telemetry). */

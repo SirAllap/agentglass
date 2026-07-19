@@ -18,7 +18,7 @@ import { basename, join } from "node:path";
 import type { IngestBody } from "../../shared/types.ts";
 import { normalize } from "./ingest.ts";
 import { db, insertEvent, RETENTION_DAYS, type InsertResult } from "./db.ts";
-import { projectRootOf } from "./git.ts";
+import { projectRootOf, safeAbs } from "./git.ts";
 import { workspaceRoot } from "./config.ts";
 
 const PROJECTS_DIR =
@@ -104,7 +104,9 @@ const rootCache = new Map<string, string>();
 function projectOf(cwd: string): { source_app: string; project_path: string } {
   let root = rootCache.get(cwd);
   if (root === undefined) {
-    root = projectRootOf(cwd) ?? cwd;
+    // safeAbs, not the raw cwd: a Windows-recorded cwd with no resolvable
+    // repo should still group under its own translated folder, not raw text.
+    root = projectRootOf(cwd) ?? safeAbs(cwd) ?? cwd;
     rootCache.set(cwd, root);
   }
   return { source_app: basename(root), project_path: root };
