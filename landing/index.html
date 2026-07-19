@@ -123,6 +123,22 @@
   }
   .btn-b:hover{border-color:var(--primary);}
   .btn-b .c{color:var(--success);}
+  /* workspace keycaps — the app's real keybindings */
+  .keys{display:flex; align-items:center; gap:9px; margin-top:26px; flex-wrap:wrap;}
+  .keys .klbl{color:var(--text4); font-size:12px;}
+  .key{
+    display:inline-flex; align-items:center; gap:7px; font-size:12.5px; color:var(--text2);
+    background:linear-gradient(180deg, var(--bg3), var(--bg2));
+    border:1px solid color-mix(in srgb, var(--border) 80%, transparent); border-radius:8px;
+    padding:6px 11px 7px; box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 2px 0 color-mix(in srgb, var(--border) 70%, transparent);
+    transition:transform .12s, border-color .15s;
+  }
+  .key:hover{transform:translateY(-2px); border-color:var(--primary);}
+  .key b{
+    color:var(--primary); font-weight:700; font-size:12px;
+    border:1px solid var(--border2); border-radius:5px; padding:0 6px; line-height:1.6;
+    background:color-mix(in srgb, var(--bg) 60%, transparent);
+  }
   /* live events ticker */
   .ticker{
     position:absolute; left:0; right:0; bottom:0;
@@ -282,12 +298,19 @@
     background:color-mix(in srgb, var(--bg2) 92%, transparent);
     border:1px solid var(--border2); backdrop-filter:blur(12px);
     box-shadow:0 12px 40px var(--shadow); font-size:12.5px;
+    white-space:nowrap; max-width:94vw;
   }
   .themer .cap{font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text4); padding:0 6px; font-weight:700;}
   .themer button{
     display:flex; align-items:center; gap:8px; border:none; background:transparent; color:var(--text2);
     padding:7px 13px; border-radius:999px; font-weight:600; transition:background .2s;
+    white-space:nowrap;
   }
+  #th-name{
+    display:inline-block; max-width:9.5em; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; vertical-align:bottom;
+  }
+  @media(max-width:420px){ #th-name{max-width:6.5em;} .themer .cap{display:none;} }
   .themer button:hover{background:color-mix(in srgb, var(--primary) 12%, transparent);}
   .themer button:focus-visible{outline:2px solid var(--primary); outline-offset:2px;}
   .themer .sw{width:12px; height:12px; border-radius:50%; background:var(--primary); box-shadow:0 0 8px var(--glow); flex:none;}
@@ -332,7 +355,7 @@
   <div class="in">
     <span class="logo"><span class="sat">🛰</span><span>agentglass<small>a loupe for your agents</small></span></span>
     <span class="lamp"></span>
-    <span class="links"><a href="#fleet">Fleet</a><a href="#workspace">Workspace</a><a href="#quickstart">Quickstart</a></span>
+    <span class="links"><a href="#workspace">Workspace</a><a href="#fleet">Fleet</a><a href="#quickstart">Quickstart</a></span>
     <span class="sp"></span>
     <a class="gh" href="https://github.com/SirAllap/agentglass" target="_blank" rel="noopener">★ <b>GitHub</b></a>
   </div>
@@ -349,14 +372,24 @@
 
     <p class="sub">
       Claude Code, Codex, Gemini CLI — every AI coding agent on your machine, on one radar.
-      <b>agentglass</b> is a real-time mission-control dashboard <b>and workspace</b>:
-      watch every tool call, token and dollar live, then act — diff, git, docker,
-      a real terminal — without leaving the glass.
+      But <b>agentglass</b> is not a viewer: it's mission control <b>and a full workspace</b>.
+      The dashboard watches every tool call, token and dollar live; the cockpit acts —
+      review diffs, stage &amp; push, drive docker, drop into a <b>real terminal</b>,
+      chat with Claude — without leaving the glass.
     </p>
 
     <div class="ctas">
       <a class="btn-a" href="./demo/">▶ Enter the live demo</a>
       <button class="btn-b" id="copy-npx" title="Copy to clipboard"><span class="c">$</span> <span id="npx-txt">npx agentglass</span></button>
+    </div>
+
+    <div class="keys" aria-label="Workspace panels, one keystroke away">
+      <span class="klbl">the whole workspace, one keystroke away —</span>
+      <a class="key" href="#workspace"><b>d</b> diff</a>
+      <a class="key" href="#workspace"><b>g</b> git</a>
+      <a class="key" href="#workspace"><b>o</b> docker</a>
+      <a class="key" href="#workspace"><b>t</b> terminal</a>
+      <a class="key" href="#workspace"><b>c</b> chat</a>
     </div>
   </div>
 
@@ -369,46 +402,13 @@
       <span>09:52:29 · <b>Grep</b> shop-web/src/components/Cart.tsx <i>73ms</i></span>
       <span>spend this window <i>$359.85</i> · 779,200 tokens</span>
       <span>✋ approval requested · kubectl delete deploy api</span>
+      <span><b>g</b> staged 3 files · push ↑2 · shop-api</span>
+      <span><b>o</b> api-worker <i>restarted</i> · logs streaming</span>
+      <span><b>t</b> make test · <i>running</i> in a real PTY</span>
+      <span><b>c</b> claude replied · shop-web chat</span>
     </div>
   </div>
 </header>
-
-<!-- ══════════ DEPARTURES / SESSIONS ══════════ -->
-<section class="sec" id="fleet">
-  <div class="rv">
-    <span class="plabel">Sessions</span>
-    <h2>Departures — every agent session</h2>
-    <p class="note">Every session on your machine, live. History appears the moment you open the cockpit, and it persists across reloads.</p>
-  </div>
-  <div class="panel rv d1">
-    <div class="phead">
-      <span class="live"><span class="lamp"></span>LIVE</span>
-      <span class="t">Fleet board</span>
-      <span class="sp"></span>
-      <span class="t">18 live · 6 projects</span>
-    </div>
-    <div class="boardwrap">
-      <table>
-        <thead>
-          <tr><th>Flight</th><th>Model</th><th>Origin</th><th>Tools</th><th>Tokens</th><th>Spend</th><th>Remark</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>AG-7A3F</td><td><span class="model">Opus</span></td><td class="dim">shop-web</td><td class="dim">3</td><td class="dim">183.8k</td><td>$211.61</td><td><span class="st ok" data-cycle="ok">on time</span></td></tr>
-          <tr><td>AG-E2B8</td><td><span class="model">GPT-4o</span></td><td class="dim">shop-web</td><td class="dim">5</td><td class="dim">1.36M</td><td>$160.21</td><td><span class="st run" data-cycle="run">running Bash</span></td></tr>
-          <tr><td>AG-3C9A</td><td><span class="model">Sonnet</span></td><td class="dim">shop-api</td><td class="dim">12</td><td class="dim">930.9k</td><td>$469.83</td><td><span class="st ok" data-cycle="ok2">on time</span></td></tr>
-          <tr><td>AG-D4E9</td><td><span class="model">Gemini Flash</span></td><td class="dim">sandbox</td><td class="dim">6</td><td class="dim">18.0k</td><td>$9.70</td><td><span class="st run" data-cycle="run2">running Read</span></td></tr>
-          <tr><td>AG-5F6D</td><td><span class="model">Opus</span></td><td class="dim">payments-svc</td><td class="dim">9</td><td class="dim">1.25M</td><td>$571.22</td><td><span class="st hold">✋ holding — approve?</span></td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="pfoot">
-      <span><b>18</b> sessions tracked</span>
-      <span><b>6</b> projects</span>
-      <span>spend window <b>$359.85</b></span>
-      <span style="margin-left:auto">sources: claude code hooks · any otel genai exporter · transcript scanner</span>
-    </div>
-  </div>
-</section>
 
 <!-- ══════════ WORKSPACE ══════════ -->
 <section class="sec" id="workspace">
@@ -453,6 +453,43 @@
       <h3>Any aircraft, any fleet</h3>
       <p>Claude Code hooks, or <b>any OpenTelemetry GenAI exporter</b>: Codex, Gemini CLI, Bedrock, LangChain, LiteLLM.</p>
       <div class="read">otel/genai ▸ rx <span class="a">1.33 events/sec</span> · peak 2/s</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ DEPARTURES / SESSIONS ══════════ -->
+<section class="sec" id="fleet">
+  <div class="rv">
+    <span class="plabel">Sessions</span>
+    <h2>Departures — every agent session</h2>
+    <p class="note">Every session on your machine, live. History appears the moment you open the cockpit, and it persists across reloads.</p>
+  </div>
+  <div class="panel rv d1">
+    <div class="phead">
+      <span class="live"><span class="lamp"></span>LIVE</span>
+      <span class="t">Fleet board</span>
+      <span class="sp"></span>
+      <span class="t">18 live · 6 projects</span>
+    </div>
+    <div class="boardwrap">
+      <table>
+        <thead>
+          <tr><th>Flight</th><th>Model</th><th>Origin</th><th>Tools</th><th>Tokens</th><th>Spend</th><th>Remark</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>AG-7A3F</td><td><span class="model">Opus</span></td><td class="dim">shop-web</td><td class="dim">3</td><td class="dim">183.8k</td><td>$211.61</td><td><span class="st ok" data-cycle="ok">on time</span></td></tr>
+          <tr><td>AG-E2B8</td><td><span class="model">GPT-4o</span></td><td class="dim">shop-web</td><td class="dim">5</td><td class="dim">1.36M</td><td>$160.21</td><td><span class="st run" data-cycle="run">running Bash</span></td></tr>
+          <tr><td>AG-3C9A</td><td><span class="model">Sonnet</span></td><td class="dim">shop-api</td><td class="dim">12</td><td class="dim">930.9k</td><td>$469.83</td><td><span class="st ok" data-cycle="ok2">on time</span></td></tr>
+          <tr><td>AG-D4E9</td><td><span class="model">Gemini Flash</span></td><td class="dim">sandbox</td><td class="dim">6</td><td class="dim">18.0k</td><td>$9.70</td><td><span class="st run" data-cycle="run2">running Read</span></td></tr>
+          <tr><td>AG-5F6D</td><td><span class="model">Opus</span></td><td class="dim">payments-svc</td><td class="dim">9</td><td class="dim">1.25M</td><td>$571.22</td><td><span class="st hold">✋ holding — approve?</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pfoot">
+      <span><b>18</b> sessions tracked</span>
+      <span><b>6</b> projects</span>
+      <span>spend window <b>$359.85</b></span>
+      <span style="margin-left:auto">sources: claude code hooks · any otel genai exporter · transcript scanner</span>
     </div>
   </div>
 </section>
