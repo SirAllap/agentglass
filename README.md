@@ -330,6 +330,8 @@ with Approve / Deny buttons — decide from any device and the agent unblocks.
 "PreToolUse": [
   { "matcher": "Bash", "hooks": [{ "type": "command",
     "command": "python3 ~/code/agentglass/hooks/gate_event.py --source-app my-project" }] }
+
+On Windows, use `py` (or `python`) instead of `python3` in hand-written hook commands; `hooks/install_hooks.py` picks this automatically.
 ]
 ```
 

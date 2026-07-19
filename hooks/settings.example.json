@@ -1,5 +1,5 @@
 {
-  "//": "MANUAL FALLBACK. `bun install` (or `bun run setup`) wires these globally for you via hooks/install_hooks.py. Only copy by hand if you want to customize.",
+  "//": "MANUAL FALLBACK. `bun install` (or `bun run setup`) wires these globally for you via hooks/install_hooks.py. Only copy by hand if you want to customize. On Windows use `py` (or `python`) instead of `python3`.",
   "//copy": "Copy these hooks into your project's .claude/settings.json (or ~/.claude/settings.json).",
   "//source-app": "Change --source-app to name this project/agent in the dashboard (the installer omits it so each project auto-labels by folder name).",
   "//path": "Adjust the absolute path to send_event.py.",
