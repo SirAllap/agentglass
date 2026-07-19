@@ -854,7 +854,8 @@ export function getChanges(limit = 200, sessionId?: string): import("../../share
 export function getSession(sessionId: string): import("../../shared/types.ts").SessionDetail | null {
   const roll = db.query<any, [string]>(`SELECT * FROM sessions WHERE session_id = ?`).get(sessionId);
   const agg = db.query<any, [string]>(
-    `SELECT source_app, MAX(model_name) model_name, MIN(timestamp) started_at, MAX(timestamp) last_seen,
+    `SELECT source_app, MAX(model_name) model_name, MAX(project_path) project_path,
+            MIN(timestamp) started_at, MAX(timestamp) last_seen,
             COUNT(*) events,
             SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) tools,
             SUM(is_error) errors, SUM(cost_usd) cost_usd,
@@ -893,6 +894,9 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     session_id: sessionId,
     source_app: agg.source_app,
     model_name: agg.model_name ?? roll?.model_name ?? null,
+    // Prefer the session row; fall back to the events for one that predates the
+    // column. Without a directory the UI can't offer to resume the session.
+    project_path: roll?.project_path ?? agg.project_path ?? null,
     started_at: agg.started_at,
     ended_at: roll?.ended_at ?? null,
     last_seen: agg.last_seen,
