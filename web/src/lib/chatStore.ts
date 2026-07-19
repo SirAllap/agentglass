@@ -6,12 +6,21 @@
 // owner. That's also what lets many exist at once instead of one at a time.
 
 import { api } from "./api.ts";
+import type { ChatImage } from "../../../shared/types.ts";
+
+/** A pasted image waiting in the composer. `url` is an object URL for the
+ *  thumbnail; it is revoked when the attachment is dropped or sent, since
+ *  otherwise every paste leaks a blob for the life of the tab. */
+export type Attachment = ChatImage & { id: string; name: string; bytes: number; url: string };
 
 export type ChatMsg = {
   role: "user" | "assistant";
   text: string;
   tools: string[];
   streaming?: boolean;
+  /** Images sent with this turn, shown back in the transcript so the message
+   *  reads the way it was written. */
+  images?: ChatImage[];
   /** Replayed from the session's transcript when this chat adopted an existing
    *  session, rather than said in this panel. Marked so the UI can draw the
    *  seam — and so it's clear these were not sent from here. */
@@ -28,6 +37,7 @@ export type Chat = {
   sessionId: string;    // claude's own id, for resuming
   sending: boolean;
   draft: string;        // per-chat, so switching tabs doesn't lose what you typed
+  attachments: Attachment[]; // pasted images, per-chat for the same reason as the draft
   createdAt: number;
   abort: AbortController | null;
   unread: boolean;      // replied while you were looking at another chat
@@ -72,7 +82,7 @@ export function newChat(
     id, cwd, model, mode,
     title: resume?.title || "new chat",
     messages: [], sessionId: resume?.sessionId ?? "",
-    sending: false, draft: "", createdAt: Date.now(), abort: null, unread: false,
+    sending: false, draft: "", attachments: [], createdAt: Date.now(), abort: null, unread: false,
   };
   chats.set(id, chat);
   emit();
@@ -126,6 +136,7 @@ export function closeChat(id: string) {
   const c = chats.get(id);
   if (!c) return;
   c.abort?.abort(); // a closed tab must not keep a stream running
+  for (const a of c.attachments) URL.revokeObjectURL(a.url);
   chats.delete(id);
   emit();
 }
@@ -153,14 +164,21 @@ const titleOf = (s: string) => {
 export async function send(id: string, text: string, isActive: () => boolean, allowedTools: string[] = []) {
   const chat = chats.get(id);
   const msg = text.trim();
-  if (!chat || !msg || chat.sending || !chat.cwd) return;
+  // An image alone is a complete turn, so the draft may be empty when something
+  // is attached.
+  const images: ChatImage[] = chat ? chat.attachments.map((a) => ({ mediaType: a.mediaType, data: a.data })) : [];
+  if (!chat || (!msg && !images.length) || chat.sending || !chat.cwd) return;
 
   update(id, (c) => {
-    if (c.messages.length === 0) c.title = titleOf(msg);
-    c.messages.push({ role: "user", text: msg, tools: [] });
+    if (c.messages.length === 0) c.title = titleOf(msg || `${images.length} image${images.length > 1 ? "s" : ""}`);
+    c.messages.push({ role: "user", text: msg, tools: [], images: images.length ? images : undefined });
     c.messages.push({ role: "assistant", text: "", tools: [], streaming: true });
     c.sending = true;
     c.draft = "";
+    // The thumbnails belong to the composer, not the sent message, so their
+    // object URLs are released as the attachments leave it.
+    for (const a of c.attachments) URL.revokeObjectURL(a.url);
+    c.attachments = [];
   });
 
   const ac = new AbortController();
@@ -197,7 +215,7 @@ export async function send(id: string, text: string, isActive: () => boolean, al
   };
 
   try {
-    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools }, onEvent, ac.signal);
+    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images }, onEvent, ac.signal);
   } catch (e) {
     if (!(e instanceof DOMException && e.name === "AbortError")) {
       update(id, (c) => {
@@ -218,4 +236,60 @@ export async function send(id: string, text: string, isActive: () => boolean, al
 
 export function stop(id: string) {
   chats.get(id)?.abort?.abort();
+}
+
+// Mirrors the server's caps in server/src/chat.ts. The server is what actually
+// enforces them — this copy exists only so an oversized paste is refused with a
+// message in the composer instead of a failed request after the upload.
+export const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGES_TOTAL_BYTES = 10 * 1024 * 1024;
+const MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+const toBase64 = (buf: ArrayBuffer) => {
+  // Chunked because String.fromCharCode(...bytes) on a multi-megabyte image
+  // blows the argument limit and throws.
+  const b = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+
+/** Attach images to a chat's composer. Returns a message to show the user when
+ *  something was refused, or "" when everything was taken. */
+export async function addAttachments(id: string, files: File[]): Promise<string> {
+  const chat = chats.get(id);
+  if (!chat) return "";
+  let rejected = "";
+  for (const f of files) {
+    const c = chats.get(id);
+    if (!c) break;
+    if (!MEDIA_TYPES.has(f.type)) { rejected = "only png, jpeg, gif and webp images can be attached"; continue; }
+    if (c.attachments.length >= MAX_IMAGES) { rejected = `at most ${MAX_IMAGES} images per message`; continue; }
+    if (f.size > MAX_IMAGE_BYTES) { rejected = `each image must be under ${MAX_IMAGE_BYTES / 1024 / 1024}MB`; continue; }
+    if (c.attachments.reduce((n, a) => n + a.bytes, 0) + f.size > MAX_IMAGES_TOTAL_BYTES) {
+      rejected = `attachments must total under ${MAX_IMAGES_TOTAL_BYTES / 1024 / 1024}MB`;
+      continue;
+    }
+    const data = toBase64(await f.arrayBuffer());
+    update(id, (cc) => {
+      cc.attachments.push({
+        id: `a${++seq}-${Date.now().toString(36)}`,
+        name: f.name || "pasted image",
+        bytes: f.size,
+        mediaType: f.type as Attachment["mediaType"],
+        data,
+        url: URL.createObjectURL(f),
+      });
+    });
+  }
+  return rejected;
+}
+
+export function dropAttachment(id: string, attId: string) {
+  update(id, (c) => {
+    const a = c.attachments.find((x) => x.id === attId);
+    if (a) URL.revokeObjectURL(a.url);
+    c.attachments = c.attachments.filter((x) => x.id !== attId);
+  });
 }
