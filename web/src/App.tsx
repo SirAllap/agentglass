@@ -76,6 +76,11 @@ export default function App() {
     if (IS_DEMO) return;
     api.projects().then((p) => {
       setWorkspace(p.workspace);
+      // The app filter is hidden while a project is open (the scope already
+      // says whose data this is). Clear it on the way in, or a filter set in
+      // the whole-machine view would keep narrowing the panels from behind a
+      // control that is no longer on screen to undo it.
+      if (p.workspace) setFilter((f) => (f.app ? { ...f, app: "" } : f));
       let answered = false;
       try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
       if (!p.workspace && !answered) setProjectOpen(true);

@@ -225,16 +225,23 @@ export function Header({
         </motion.span>
         <div className="leading-none">
           <div className="text-[16px] font-bold tracking-tight" style={{ color: "var(--text)" }}>agent<span style={{ color: "var(--primary)" }}>glass</span></div>
-          {/* Scoped to one project → say which — and make it the way to switch:
-              the name IS the project picker. */}
-          <button onClick={onOpenProject} className="hidden sm:flex items-center gap-1 text-[10px] hover:opacity-80"
-            title={workspace ? `${workspace}\nclick to switch project` : "click to open a project — the cockpit scopes itself to its folder"}>
-            {workspace
-              ? <span className="truncate" style={{ color: "var(--primary-hover)", maxWidth: 260 }}>⌂ {workspace.split("/").pop()}</span>
-              : <span className="t-dim2">⌂ pick a project</span>}
-            <span className="t-dim2">▾</span>
-          </button>
         </div>
+        {/* The project defines what every other number on screen means, so it
+            reads as a control in its own right rather than a caption under the
+            wordmark — at that size it was easy to miss that the scope was even
+            settable, let alone what it was set to. */}
+        <button onClick={onOpenProject}
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium shrink-0 transition-opacity hover:opacity-80"
+          title={workspace ? `${workspace}\nclick to switch project` : "click to open a project — the cockpit scopes itself to its folder"}
+          style={{
+            color: workspace ? "var(--primary-hover)" : "var(--text2)",
+            background: `color-mix(in srgb, var(--primary) ${workspace ? 14 : 7}%, transparent)`,
+            border: `1px solid color-mix(in srgb, var(--primary) ${workspace ? 40 : 20}%, transparent)`,
+          }}>
+          <span>⌂</span>
+          <span className="truncate" style={{ maxWidth: 200 }}>{workspace ? workspace.split("/").pop() : "every project"}</span>
+          <span className="opacity-60">▾</span>
+        </button>
         <span onClick={unauth ? reauthPrompt : undefined}
           title={unauth ? "This server needs an access token — click to enter it" : undefined}
           className={`flex items-center gap-1.5 ml-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${unauth ? "cursor-pointer" : ""}`}
@@ -274,7 +281,13 @@ export function Header({
       </div>
 
       {/* max-w keeps long worktree names (e.g. feature-branch-…) from blowing the header open */}
-      <Select value={filter.app} style={selStyle} options={[{ value: "", label: "all apps" }, ...apps.map((a) => ({ value: a, label: a }))]} onChange={(v) => onFilter({ ...filter, app: v })} />
+      {/* The app filter and the project scope answer the same question — "whose
+          data is this?" — so with a project open it is a weaker duplicate of a
+          control that already applies, offering a list of one. It earns its
+          place only in the whole-machine view. */}
+      {!workspace && (
+        <Select value={filter.app} style={selStyle} options={[{ value: "", label: "all apps" }, ...apps.map((a) => ({ value: a, label: a }))]} onChange={(v) => onFilter({ ...filter, app: v })} />
+      )}
       <Select value={filter.type} style={selStyle} options={[{ value: "", label: "all events" }, ...types.map((t) => ({ value: t, label: t }))]} onChange={(v) => onFilter({ ...filter, type: v })} />
       {/* Provider is auto-detected from each session's model. With one provider
           it's shown but disabled (just so you can see it); a mixed fleet
