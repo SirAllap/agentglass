@@ -89,7 +89,7 @@
     background:color-mix(in srgb, var(--bg2) 85%, transparent);
   }
   .chip b{color:var(--warning); font-weight:700;}
-  .flap-line{margin-top:32px; line-height:1.05; font-size:clamp(30px,5.8vw,80px); font-weight:700;}
+  .flap-line{margin-top:32px; line-height:1.05; font-size:clamp(24px,5.8vw,80px); font-weight:700; white-space:nowrap;}
   .flap{
     display:inline-block; text-align:center;
     font-size:inherit; letter-spacing:.02em;
@@ -411,6 +411,54 @@
     display:flex; overflow:hidden;
   }
   .th-pop .opt .pv i{flex:1;}
+
+
+  /* ============ mobile pass — phones are the primary reader ============ */
+  @media(max-width:640px){
+    .nav .in{padding:12px 16px; gap:14px;}
+    .hero{min-height:auto;}
+    .hero .in{padding:44px 18px 120px;}
+    .chip{font-size:10.5px; letter-spacing:.05em; padding:6px 12px;}
+    .flap-line{margin-top:26px; font-size:clamp(21px, 7.6vw, 80px);}
+    .flap{margin:.05em .012em;}
+    .sub{font-size:15px; line-height:1.85; margin-top:24px;}
+    .ctas{margin-top:30px;}
+    .ctas .btn-a, .ctas .btn-b{width:100%; justify-content:center; padding:16px 20px; font-size:15px;}
+    .keys{margin-top:24px; gap:8px;}
+    .keys .klbl{width:100%; margin-bottom:2px;}
+    .key{padding:8px 13px; font-size:13px;}
+    .ticker{font-size:11px; padding:9px 0;}
+    .sec{padding:60px 18px 0;}
+    .sec h2{font-size:clamp(24px, 7vw, 36px); line-height:1.15;}
+    .sec .note{font-size:13.5px; line-height:1.7; margin-top:12px;}
+    .plabel{font-size:10.5px;}
+    .panel{margin-top:20px; border-radius:14px;}
+    .panel .phead{padding:12px 14px; gap:10px; font-size:10.5px;}
+    .phead .t:last-child{display:none;} /* drop the right-side caption, keep the title */
+    .panel .pfoot{padding:10px 14px; gap:14px; font-size:10.5px;}
+    .pfoot span[style]{margin-left:0 !important;}
+    thead th{padding:10px 12px;}
+    tbody td{padding:11px 12px; font-size:12.5px;}
+    .ws-tabs{padding:10px; gap:5px;}
+    .wtab{padding:9px 11px; font-size:12.5px;}
+    .ws-view{padding:14px 12px;}
+    .ws-body{min-height:0;}
+    .m-row{font-size:12px; gap:8px;}
+    .m-bar{width:56px;}
+    .m-keys{font-size:10.5px; line-height:1.8; margin-top:10px;}
+    .m-msg{max-width:92%;}
+    .cards{gap:12px; margin-top:20px;}
+    .card{padding:18px;}
+    .card p{font-size:13.5px;}
+    .band{margin-top:60px; padding:0 18px; gap:12px;}
+    .tile{padding:16px;}
+    .tile .k{font-size:12px;}
+    .foot{padding:72px 18px 150px;}
+    .foot .cmdline{font-size:14px; padding:13px 20px;}
+    .foot .row{margin-top:26px;}
+    .foot .row .btn-a, .foot .row .btn-b{width:100%; justify-content:center;}
+    .foot .meta{font-size:11px; line-height:1.8;}
+  }
 
   @media (prefers-reduced-motion: reduce){
     *,*::before,*::after{animation:none !important; transition:none !important;}
