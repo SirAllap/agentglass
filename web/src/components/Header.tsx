@@ -6,6 +6,7 @@ import { MOD_KEY } from "../lib/format.ts";
 import { ThemeSwitcher } from "./ThemeSwitcher.tsx";
 import { UsageWidget } from "./UsageWidget.tsx";
 import { Portal } from "./Portal.tsx";
+import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { autostartEnabled, setAutostart } from "../lib/desktop.ts";
 
@@ -219,9 +220,11 @@ export function Header({
     <header className="flex items-center gap-x-3 gap-y-2 px-3 sm:px-4 py-2.5 shrink-0 relative z-20 flex-wrap sm:flex-nowrap"
       style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg2) 94%, var(--bg))" }}>
       <div className="flex items-center gap-2.5 shrink-0">
-        <motion.span initial={{ rotate: -20, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 200 }} className="text-xl">🛰</motion.span>
+        <motion.span initial={{ rotate: -20, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 200 }} className="flex">
+          <Logo size={26} title="agentglass" />
+        </motion.span>
         <div className="leading-none">
-          <div className="text-[16px] font-bold tracking-tight" style={{ color: "var(--text)" }}>agentglass</div>
+          <div className="text-[16px] font-bold tracking-tight" style={{ color: "var(--text)" }}>agent<span style={{ color: "var(--primary)" }}>glass</span></div>
           {/* Scoped to one project → say which — and make it the way to switch:
               the name IS the project picker. */}
           <button onClick={onOpenProject} className="hidden sm:flex items-center gap-1 text-[10px] hover:opacity-80"
