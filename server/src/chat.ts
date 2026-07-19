@@ -12,6 +12,7 @@
 // line carrying text and image content blocks together, which is the only
 // channel structured content has into a `claude -p` run.
 import { safeAbs, repoRootOf } from "./git.ts";
+import { inScope } from "./config.ts";
 import type { ChatImage, ChatImageMediaType } from "../../shared/types.ts";
 
 const claudeBin = () => Bun.which("claude");
@@ -158,6 +159,11 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403);
   const dir = safeAbs(cwd);
   if (!dir || !repoRootOf(dir)) return err("invalid or non-repo directory");
+  // The last write path still outside the scope boundary (#67 covered git and
+  // the terminal). A chat runs a real `claude` with tools in that directory, so
+  // it can change anything a shell could — leaving it machine-wide would have
+  // made the boundary decorative in exactly the place it matters most.
+  if (!inScope(dir)) return err("outside the open project — open the parent folder to work across repos", 403);
   const imgs = chatImages(images);
   if (!imgs) return err("invalid image attachment");
   if (typeof message !== "string" || message.length > 100_000) return err("invalid message");

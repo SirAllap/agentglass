@@ -435,7 +435,7 @@ inference, prompt) to an event the same way.
 | `AGENTGLASS_GIT_WRITE_DISABLED` | — | `1` → make the **Source control** panel read-only (no stage / commit / push). |
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |
 **Scope is a boundary, not just a filter.** With a project open, git writes, the
-terminal and chat are refused outside it — the same rule that decides what the
+terminal and chat are all refused outside it — the same rule that decides what the
 dashboard shows. For genuinely multi-repo work, scope to the parent folder
 (`~/code`) rather than one repo: every repo beneath it is then in scope. An
 unscoped (whole-machine) instance is unaffected.
