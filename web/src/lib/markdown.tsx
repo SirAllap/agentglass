@@ -131,6 +131,53 @@ export function Markdown({ text }: { text: string }) {
       continue;
     }
 
+    // GFM table: a header row, a |---|:--:|---| separator, then body rows.
+    // Requires the separator, so a line that merely contains pipes (a shell
+    // pipeline, an `A | B` type union) is left as prose.
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      flushPara(para);
+      const cells = (row: string) => row.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+      const header = cells(line);
+      // ":---" / ":--:" / "---:" carry the column alignment.
+      const align = cells(lines[i + 1]).map((s) =>
+        s.startsWith(":") && s.endsWith(":") ? "center" : s.endsWith(":") ? "right" : "left" as const);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
+      const cellStyle = (n: number) => ({
+        textAlign: (align[n] ?? "left") as "left" | "right" | "center",
+        borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)",
+      });
+      blocks.push(
+        // Scrolls on its own rather than widening the bubble: a wide table must
+        // not force the whole conversation into a horizontal scroll.
+        <div key={`t${key++}`} className="my-2 overflow-x-auto agx-scroll">
+          <table className="text-[0.95em]" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                {header.map((h, n) => (
+                  <th key={n} className="px-2.5 py-1.5 font-semibold whitespace-nowrap"
+                    style={{ textAlign: (align[n] ?? "left") as "left" | "right" | "center", color: "var(--text)" }}>
+                    {inline(h, `th${key}-${n}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, ri) => (
+                <tr key={ri}>
+                  {r.map((c, n) => (
+                    <td key={n} className="px-2.5 py-1.5 align-top" style={cellStyle(n)}>{inline(c, `td${key}-${ri}-${n}`)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
     const quote = line.match(/^\s*>\s?(.*)$/);
     if (quote) {
       flushPara(para);

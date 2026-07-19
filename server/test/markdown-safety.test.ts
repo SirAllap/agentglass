@@ -45,3 +45,32 @@ describe("markdown link hrefs", () => {
     expect(isSafeHref("\thttps://ok.example.com")).toBe(false);
   });
 });
+
+// Mirrors the table detection in web/src/lib/markdown.tsx. A table is only a
+// table when a |---| separator follows the header — without that guard, any
+// prose line containing pipes (a shell pipeline, a TypeScript union) would be
+// silently eaten and re-rendered as a one-row table.
+const isTableStart = (line: string, next: string) =>
+  /^\s*\|.*\|\s*$/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(next);
+
+describe("markdown table detection", () => {
+  test("recognises a table with its separator", () => {
+    expect(isTableStart("| a | b |", "|---|---|")).toBe(true);
+    expect(isTableStart("| a | b |", "| :--- | ---: |")).toBe(true);
+    expect(isTableStart("| a | b |", "|:--:|:--:|")).toBe(true);
+  });
+
+  test("a pipe in prose is not a table", () => {
+    expect(isTableStart("run `ps aux | grep bun` first", "and then look")).toBe(false);
+    expect(isTableStart("| a | b |", "just more prose")).toBe(false);
+    expect(isTableStart("type T = | A | B |", "| not | a separator |")).toBe(false);
+  });
+
+  test("a table cannot begin at its separator", () => {
+    // The separator is never the header: "|---|" followed by data is a
+    // malformed table, and treating it as a start would render the dashes as
+    // column names.
+    expect(isTableStart("|---|---|", "| a | b |")).toBe(false);
+    expect(isTableStart("plain text", "|---|---|")).toBe(false);
+  });
+});
