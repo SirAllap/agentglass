@@ -1,0 +1,36 @@
+{
+  "name": "agentglass",
+  "version": "0.1.0",
+  "description": "🛰 agentglass — a loupe for your agents. Real-time mission-control dashboard for AI coding agents (Claude Code hooks + any OpenTelemetry GenAI exporter). This package is the quickstart launcher; the app lives at github.com/SirAllap/agentglass.",
+  "bin": {
+    "agentglass": "./cli.mjs"
+  },
+  "type": "module",
+  "files": [
+    "cli.mjs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SirAllap/agentglass.git"
+  },
+  "homepage": "https://github.com/SirAllap/agentglass#readme",
+  "bugs": {
+    "url": "https://github.com/SirAllap/agentglass/issues"
+  },
+  "keywords": [
+    "ai-agents",
+    "observability",
+    "claude-code",
+    "opentelemetry",
+    "dashboard",
+    "mission-control",
+    "cost-tracking",
+    "terminal"
+  ],
+  "author": "David Pallares (https://github.com/SirAllap)",
+  "license": "MIT"
+}
