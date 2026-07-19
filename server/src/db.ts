@@ -874,21 +874,49 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
      GROUP BY agent_id ORDER BY n DESC LIMIT 20`).all(sessionId);
 
   // Conversation: interleave user prompts and assistant messages by time.
+  //
+  // 600 characters used to be the cap, which cut a typical reply off in its
+  // first paragraph — mid-word, with nothing saying it had been cut. This view
+  // is meant to be where you read a session, not a teaser for it, so the budget
+  // is per-session rather than per-message: long messages get room, and a
+  // session full of them still can't produce an unbounded response.
+  const MSG_MAX = 20_000;
+  const CONVO_BUDGET = 400_000;
+
+  /** Trim at a line, then a word, so a cut never lands mid-word — and say so,
+   *  because silently-shortened text reads as the model having stopped. */
+  const clip = (s: string): string => {
+    if (s.length <= MSG_MAX) return s;
+    const head = s.slice(0, MSG_MAX);
+    const at = Math.max(head.lastIndexOf("\n"), head.lastIndexOf(" "));
+    return head.slice(0, at > MSG_MAX * 0.8 ? at : MSG_MAX) + "\n\n…[truncated]";
+  };
+
   const convo: { role: "user" | "assistant"; text: string; ts: number }[] = [];
   for (const r of db.query<{ timestamp: number; payload: string }, [string]>(
-    `SELECT timestamp, payload FROM events WHERE session_id = ? AND hook_event_type='UserPromptSubmit' ORDER BY timestamp DESC LIMIT 12`).all(sessionId)) {
-    try { const p = JSON.parse(r.payload); if (p.prompt) convo.push({ role: "user", text: String(p.prompt).slice(0, 600), ts: r.timestamp }); } catch { /* skip */ }
+    `SELECT timestamp, payload FROM events WHERE session_id = ? AND hook_event_type='UserPromptSubmit' ORDER BY timestamp DESC LIMIT 40`).all(sessionId)) {
+    try { const p = JSON.parse(r.payload); if (p.prompt) convo.push({ role: "user", text: clip(String(p.prompt)), ts: r.timestamp }); } catch { /* skip */ }
   }
   let lastMsg = "";
   for (const r of db.query<{ timestamp: number; payload: string }, [string]>(
-    `SELECT timestamp, payload FROM events WHERE session_id = ? AND payload LIKE '%last_assistant_message%' ORDER BY timestamp DESC LIMIT 20`).all(sessionId)) {
+    `SELECT timestamp, payload FROM events WHERE session_id = ? AND payload LIKE '%last_assistant_message%' ORDER BY timestamp DESC LIMIT 60`).all(sessionId)) {
     try {
       const m = JSON.parse(r.payload).last_assistant_message;
-      if (m && m !== lastMsg) { convo.push({ role: "assistant", text: String(m).slice(0, 600), ts: r.timestamp }); lastMsg = m; }
+      if (m && m !== lastMsg) { convo.push({ role: "assistant", text: clip(String(m)), ts: r.timestamp }); lastMsg = m; }
     } catch { /* skip */ }
   }
   convo.sort((a, b) => b.ts - a.ts);
   const summary = convo.find((c) => c.role === "assistant")?.text ?? null;
+
+  // Newest-first, so the budget drops the oldest turns rather than the ones
+  // you opened the session to read.
+  const kept: typeof convo = [];
+  let spent = 0;
+  for (const c of convo) {
+    if (spent + c.text.length > CONVO_BUDGET && kept.length) break;
+    kept.push(c);
+    spent += c.text.length;
+  }
 
   return {
     session_id: sessionId,
@@ -909,7 +937,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     summary,
     tool_mix: toolMix,
     subagents: subRows.map((s) => ({ agent_id: s.agent_id, agent_type: s.agent_type || "subagent", events: s.n })),
-    conversation: convo.slice(0, 16),
+    conversation: kept,
     changes: getChanges(40, sessionId),
   };
 }
