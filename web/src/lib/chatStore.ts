@@ -13,10 +13,25 @@ import type { ChatImage } from "../../../shared/types.ts";
  *  otherwise every paste leaks a blob for the life of the tab. */
 export type Attachment = ChatImage & { id: string; name: string; bytes: number; url: string };
 
+/** A tool the agent ran inside a turn. Shaped like the session timeline's rows
+ *  so both render through the same component — the chat used to keep only the
+ *  name, which lost the command, its output and whether it failed. */
+export type ChatTool = {
+  id: string;
+  name: string;
+  target: string | null;
+  output: string | null;
+  error: boolean;
+  ts: number;
+};
+
 export type ChatMsg = {
   role: "user" | "assistant";
   text: string;
-  tools: string[];
+  tools: ChatTool[];
+  /** When it was said — the session view has always shown this and the chat
+   *  hasn't, which is most of why they read as different products. */
+  ts: number;
   streaming?: boolean;
   /** Images sent with this turn, shown back in the transcript so the message
    *  reads the way it was written. */
@@ -111,7 +126,7 @@ async function hydrate(chatId: string, sessionId: string) {
     // interleaved timeline for anyone who wants the machinery.
     const msgs: ChatMsg[] = [...(s.conversation ?? [])]
       .sort((a, b) => a.ts - b.ts)
-      .map((c) => ({ role: c.role, text: c.text, tools: [], historical: true }));
+      .map((c) => ({ role: c.role, text: c.text, tools: [], ts: c.ts, historical: true }));
     if (!msgs.length) return;
     update(chatId, (c) => {
       // Anything typed while this was in flight stays last — the reply to a
@@ -182,8 +197,8 @@ export async function send(id: string, text: string, isActive: () => boolean, al
   update(id, (c) => {
     // A name you chose outranks one derived from the first message.
     if (c.messages.length === 0 && !c.renamed) c.title = titleOf(msg || `${images.length} image${images.length > 1 ? "s" : ""}`);
-    c.messages.push({ role: "user", text: msg, tools: [], images: images.length ? images : undefined });
-    c.messages.push({ role: "assistant", text: "", tools: [], streaming: true });
+    c.messages.push({ role: "user", text: msg, tools: [], ts: Date.now(), images: images.length ? images : undefined });
+    c.messages.push({ role: "assistant", text: "", tools: [], ts: Date.now(), streaming: true });
     c.sending = true;
     c.draft = "";
     // The thumbnails belong to the composer, not the sent message, so their
@@ -210,13 +225,23 @@ export async function send(id: string, text: string, isActive: () => boolean, al
         for (const b of blocks) {
           if (b.type === "text" && typeof b.text === "string") last.text += b.text;
           else if (b.type === "tool_use" && typeof b.name === "string") {
-            // The denial comes back later keyed only by id, so remember which
-            // tool it was — naming it is the whole point of the prompt below.
+            // The result comes back later keyed only by id, so remember which
+            // tool it was — both to name a refusal and to attach the output.
             if (typeof b.id === "string") toolNames.set(b.id, String(b.name));
             const inp = (b.input ?? {}) as Record<string, unknown>;
-            const hint = typeof inp.command === "string" ? `: ${inp.command.slice(0, 44)}`
-              : typeof inp.file_path === "string" ? `: ${String(inp.file_path).split("/").pop()}` : "";
-            last.tools.push(String(b.name) + hint);
+            const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+            // Same per-tool notion of "what it acted on" the server uses for
+            // the session timeline, so the two views agree.
+            const target = String(b.name) === "Bash" ? str(inp.command)
+              : str(inp.file_path) ?? str(inp.url) ?? str(inp.query) ?? str(inp.pattern) ?? str(inp.description);
+            last.tools.push({
+              id: String(b.id ?? `${Date.now()}`),
+              name: String(b.name),
+              target,
+              output: null,
+              error: false,
+              ts: Date.now(),
+            });
           }
         }
         if (!isActive()) c.unread = true;
@@ -232,8 +257,20 @@ export async function send(id: string, text: string, isActive: () => boolean, al
         const text = typeof b.content === "string" ? b.content
           : Array.isArray(b.content) ? b.content.map((x: Record<string, unknown>) => (typeof x?.text === "string" ? x.text : "")).join(" ")
           : "";
+        const useId = String(b.tool_use_id ?? "");
+        // Attach the answer to the row that asked for it, so the chat shows
+        // what came back rather than only what was run.
+        update(id, (c) => {
+          for (const m of c.messages) {
+            const row = m.tools.find((t) => t.id === useId);
+            if (!row) continue;
+            row.output = text.trimEnd() || null;
+            row.error = b.is_error === true;
+            break;
+          }
+        });
         if (!/permission|requires approval|not allowed|denied/i.test(text)) continue;
-        const tool = toolNames.get(String(b.tool_use_id ?? ""));
+        const tool = toolNames.get(useId);
         if (tool) update(id, (c) => { c.blockedTool = tool; });
       }
     } else if (t === "agx_error") {
