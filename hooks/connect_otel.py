@@ -141,7 +141,7 @@ def main() -> None:
     ap.add_argument("--undo", action="store_true", help="remove the agentglass telemetry wiring")
     ap.add_argument("--postinstall", action="store_true", help="lifecycle mode: honor AGENTGLASS_NO_OTEL, never fail")
     args = ap.parse_args()
-    _agentglass_local_only(getattr(args, "server", None) or DEFAULT_SERVER)
+    _agentglass_local_only(SERVER)
 
     if args.postinstall and os.environ.get("AGENTGLASS_NO_OTEL"):
         print("[agentglass] AGENTGLASS_NO_OTEL set — skipping OTel auto-connect.")

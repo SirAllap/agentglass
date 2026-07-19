@@ -17,7 +17,7 @@
     "setup:undo": "python3 hooks/install_hooks.py --uninstall",
     "connect": "python3 hooks/connect_otel.py",
     "connect:undo": "python3 hooks/connect_otel.py --undo",
-    "postinstall": "node -e \"console.log('agentglass: run `bun run setup` to wire Claude Code hooks, `bun run connect` for OTel CLIs')\""
+    "postinstall": "node -e \"console.log('agentglass: run [bun run setup] to wire Claude Code hooks, [bun run connect] for OTel CLIs')\""
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
