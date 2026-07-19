@@ -892,17 +892,17 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     return head.slice(0, at > MSG_MAX * 0.8 ? at : MSG_MAX) + "\n\n…[truncated]";
   };
 
-  const convo: { role: "user" | "assistant"; text: string; ts: number }[] = [];
+  const convo: { role: "user" | "assistant"; text: string; ts: number; agent_id?: string | null; agent_type?: string | null }[] = [];
   for (const r of db.query<{ timestamp: number; payload: string }, [string]>(
     `SELECT timestamp, payload FROM events WHERE session_id = ? AND hook_event_type='UserPromptSubmit' ORDER BY timestamp DESC LIMIT 40`).all(sessionId)) {
     try { const p = JSON.parse(r.payload); if (p.prompt) convo.push({ role: "user", text: clip(String(p.prompt)), ts: r.timestamp }); } catch { /* skip */ }
   }
   let lastMsg = "";
-  for (const r of db.query<{ timestamp: number; payload: string }, [string]>(
-    `SELECT timestamp, payload FROM events WHERE session_id = ? AND payload LIKE '%last_assistant_message%' ORDER BY timestamp DESC LIMIT 60`).all(sessionId)) {
+  for (const r of db.query<{ timestamp: number; payload: string; agent_id: string | null; agent_type: string | null }, [string]>(
+    `SELECT timestamp, payload, agent_id, agent_type FROM events WHERE session_id = ? AND payload LIKE '%last_assistant_message%' ORDER BY timestamp DESC LIMIT 60`).all(sessionId)) {
     try {
       const m = JSON.parse(r.payload).last_assistant_message;
-      if (m && m !== lastMsg) { convo.push({ role: "assistant", text: clip(String(m)), ts: r.timestamp }); lastMsg = m; }
+      if (m && m !== lastMsg) { convo.push({ role: "assistant", text: clip(String(m)), ts: r.timestamp, agent_id: r.agent_id, agent_type: r.agent_type }); lastMsg = m; }
     } catch { /* skip */ }
   }
   convo.sort((a, b) => b.ts - a.ts);
@@ -937,13 +937,13 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
   };
 
   const timeline: import("../../shared/types.ts").TimelineEntry[] =
-    kept.map((c) => ({ kind: "message" as const, ts: c.ts, role: c.role, text: c.text }));
+    kept.map((c) => ({ kind: "message" as const, ts: c.ts, role: c.role, text: c.text, agent_id: c.agent_id, agent_type: c.agent_type }));
 
   // Bounded to the same window the messages cover, so the timeline can't be
   // dominated by tool noise from turns whose text was already dropped.
   const oldest = kept.length ? Math.min(...kept.map((c) => c.ts)) : 0;
-  for (const r of db.query<{ timestamp: number; tool_name: string | null; is_error: number; duration_ms: number | null; tool_use_id: string | null; payload: string }, [string, number]>(
-    `SELECT timestamp, tool_name, is_error, duration_ms, tool_use_id, payload FROM events
+  for (const r of db.query<{ timestamp: number; tool_name: string | null; is_error: number; duration_ms: number | null; tool_use_id: string | null; agent_id: string | null; agent_type: string | null; payload: string }, [string, number]>(
+    `SELECT timestamp, tool_name, is_error, duration_ms, tool_use_id, agent_id, agent_type, payload FROM events
       WHERE session_id = ? AND hook_event_type IN ('PostToolUse','PostToolUseFailure')
         AND timestamp >= ?
       ORDER BY timestamp DESC LIMIT 400`).all(sessionId, oldest)) {
@@ -958,6 +958,8 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
       is_error: !!r.is_error,
       duration_ms: r.duration_ms,
       tool_use_id: r.tool_use_id,
+      agent_id: r.agent_id,
+      agent_type: r.agent_type,
     });
   }
   timeline.sort((a, b) => b.ts - a.ts);

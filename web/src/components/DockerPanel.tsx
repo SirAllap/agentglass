@@ -189,6 +189,19 @@ export function DockerPanel({ open, onClose }: { open: boolean; onClose: () => v
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>🐳 Docker</span>
                   {ov?.version && <span className="text-[10px] t-dim2">engine {ov.version}</span>}
+                  {/* Scoped to the open project. The fallback case is spelled out
+                      rather than shown as an empty list, so an unlabelled stack
+                      doesn't read as "docker is broken". */}
+                  {ov?.scope && (
+                    <span className="text-[9.5px] px-1.5 py-0.5 rounded shrink-0" title={ov.scope.showingAll
+                      ? `no container is labelled for ${ov.scope.project} (${ov.scope.workspace}) — showing every container on this host`
+                      : `showing containers for ${ov.scope.workspace}`}
+                      style={ov.scope.showingAll
+                        ? { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning)" }
+                        : { background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--text2)" }}>
+                      {ov.scope.showingAll ? `no ${ov.scope.project} containers · showing all` : ov.scope.project}
+                    </span>
+                  )}
                   <div className="flex items-center gap-1 ml-2">
                     <TabBtn id="containers" label="Containers" n={containers.length} />
                     <TabBtn id="images" label="Images" n={ov?.images.length ?? 0} />
