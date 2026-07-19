@@ -7,20 +7,47 @@ export const SERVER: string =
   (import.meta.env.VITE_CW_SERVER as string | undefined)?.replace(/\/$/, "") ||
   `http://${location.hostname}:4000`;
 
-export const WS_URL = SERVER.replace(/^http/, "ws") + "/stream";
+/** Auth token for a server that requires one (exposed / multi-user box). Read
+ *  once from `?token=` — then stripped from the URL bar so it isn't shoulder-
+ *  surfed or copied around — or from a prior localStorage save. Empty on the
+ *  usual local box, where every call below is a no-op passthrough. */
+const TOKEN: string = (() => {
+  try {
+    const u = new URL(location.href);
+    const fromUrl = u.searchParams.get("token");
+    if (fromUrl) {
+      try { localStorage.setItem("agentglass_token", fromUrl); } catch { /* private mode */ }
+      u.searchParams.delete("token");
+      history.replaceState(null, "", u.pathname + u.search + u.hash);
+      return fromUrl;
+    }
+    return localStorage.getItem("agentglass_token") || "";
+  } catch { return ""; }
+})();
+
+/** Attach the bearer token to fetch headers when one is configured. */
+const authHeaders = (h: Record<string, string> = {}): Record<string, string> =>
+  TOKEN ? { ...h, authorization: `Bearer ${TOKEN}` } : h;
+
+/** Append ?token= to URLs a browser can't put a header on: WS upgrades and the
+ *  download navigations (export links). */
+const withToken = (url: string): string =>
+  TOKEN ? url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : url;
+
+export const WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
 export const ptyWsUrl = (root: string, cols: number, rows: number) =>
-  `${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`;
+  withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`);
 
 async function get<T>(path: string): Promise<T> {
-  const r = await fetch(SERVER + path);
+  const r = await fetch(SERVER + path, { headers: authHeaders() });
   if (!r.ok) throw new Error(`${path} → ${r.status}`);
   return r.json() as Promise<T>;
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const r = await fetch(SERVER + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const r = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) });
   return r.json() as Promise<T>;
 }
 
@@ -39,8 +66,8 @@ const realApi = {
     get<{ source_apps: string[]; hook_event_types: string[]; models: string[] }>(
       `/events/filter-options`
     ),
-  exportUrl: (fmt: "csv" | "json") => `${SERVER}/export?format=${fmt}`,
-  skillsExportUrl: () => `${SERVER}/skills/export?format=md`,
+  exportUrl: (fmt: "csv" | "json") => withToken(`${SERVER}/export?format=${fmt}`),
+  skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   usage: () => get<UsagePayload>(`/usage`),
   skills: () => get<{ skills: SkillInfo[]; generated_at: number }>(`/skills`),
   changes: (limit = 200) => get<{ changes: FileChange[] }>(`/changes?limit=${limit}`),
@@ -51,25 +78,25 @@ const realApi = {
   gateDecide: (id: string, decision: "allow" | "deny", reason = "") =>
     fetch(SERVER + "/gate/decide", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ id, decision, reason }),
     }).then((r) => r.json()),
   gitStatus: (paths: string[]) =>
     fetch(SERVER + "/git/status", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ paths }),
     }).then((r) => r.json() as Promise<GitStatusResponse>),
   gitCommit: (payload: { root: string; files: string[]; title: string; body: string }) =>
     fetch(SERVER + "/git/commit", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify(payload),
     }).then((r) => r.json() as Promise<CommitResult>),
   walkthrough: (files: WalkthroughInputFile[]) =>
     fetch(SERVER + "/walkthrough", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ files }),
     }).then((r) => r.json() as Promise<WalkthroughResult>),
   /** Scope this instance to one project dir (null → whole machine). */
@@ -117,7 +144,7 @@ const realApi = {
   // --- multi-chat: drive a claude session from the browser ---
   chatEnabled: () => get<{ enabled: boolean }>("/chat/enabled"),
   chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
-    const res = await fetch(SERVER + "/chat/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload), signal });
+    const res = await fetch(SERVER + "/chat/send", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
     if (!res.body) { try { onEvent(JSON.parse(await res.text())); } catch { /* non-json */ } return; }
     const reader = res.body.getReader();
     const dec = new TextDecoder();

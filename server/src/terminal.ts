@@ -235,7 +235,7 @@ export function shutdownTerminals() {
 /** Parse Makefile text into named targets WITH their descriptions. A
  * description is taken from the `target: ## comment` convention, or from the
  * `# comment` line(s) directly above the target. */
-function parseMakeTargets(text: string): { name: string; desc: string }[] {
+export function parseMakeTargets(text: string): { name: string; desc: string }[] {
   const out: { name: string; desc: string }[] = [];
   const seen = new Set<string>();
   let pendingComment: string[] = [];
@@ -276,7 +276,7 @@ const CMD_SKIP = new Set([...SKIP_DIRS, "out", "coverage"]);
 // These strings end up verbatim in `make -C <dir>` / `--cwd <dir>` lines typed
 // into the user's shell, so only plain path characters are allowed — a folder
 // named `; rm -rf ~` (or just one with spaces) is skipped, not quoted.
-const shellSafeRel = (rel: string) => /^[A-Za-z0-9][A-Za-z0-9._@\/-]*$/.test(rel);
+export const shellSafeRel = (rel: string) => /^[A-Za-z0-9][A-Za-z0-9._@\/-]*$/.test(rel);
 
 type CommandDir = { rel: string; makefile: string | null; pkg: boolean };
 

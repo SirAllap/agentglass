@@ -283,23 +283,35 @@ write to your repos and control Docker. It ships safe for its intended home —
 **your own single-user machine** — and you should know exactly where the lines
 are:
 
-- **It only listens on your own machine.** The server binds `127.0.0.1` — 
-  nothing on your network can reach it. There is **no authentication**, because
-  on a single-user machine "can reach localhost" already means "is you".
+- **It only listens on your own machine.** The server binds `127.0.0.1` —
+  nothing on your network can reach it. By default there is **no authentication**,
+  because on a single-user machine "can reach localhost" already means "is you".
+- **Optional shared-secret token.** Set `AGENTGLASS_TOKEN` and every route but
+  the append-only telemetry sinks (`/ingest`, the OTLP receivers) requires it —
+  `Authorization: Bearer <token>` for the API, `?token=<token>` on the dashboard
+  URL (it's stored and stripped from the address bar). This is what makes a
+  shared machine or a network bind safe, and it stops *other local processes*
+  from opening the shell. Binding a non-loopback address **without** a token
+  refuses to run unauthenticated: it mints one, prints it, and saves it
+  `0600` under your config dir.
 - **Websites you visit can't touch it.** Every request is origin-checked, the
   shell and the live stream require a verified local origin, and a Host-header
   guard blocks DNS-rebinding tricks (browsers can't forge `Host`). Running it
   behind a reverse proxy? Allow its name via `AGENTGLASS_ALLOWED_HOSTS`.
-- **⚠️ Shared / multi-user machines are NOT the intended home.** `localhost`
+- **⚠️ Shared / multi-user machines are NOT the default home.** `localhost`
   belongs to the *machine*, not to your account — on a box where other people
   also have accounts, any of them could reach the server and its shell **as
-  your user**. If you must run it there, disable the capability surfaces:
-  `AGENTGLASS_TERMINAL_DISABLED=1`, `AGENTGLASS_CHAT_DISABLED=1`,
-  `AGENTGLASS_GIT_WRITE_DISABLED=1`, `AGENTGLASS_DOCKER_WRITE_DISABLED=1`.
-- **⚠️ Never set `AGENTGLASS_BIND=0.0.0.0` on a network you don't fully
-  trust.** It hands the shell, git write and Docker control to anyone on that
-  network, unauthenticated. It exists for trusted-LAN setups only, and turning
-  it on is a deliberate act.
+  your user**. Set `AGENTGLASS_TOKEN` to lock it to you, and/or disable the
+  capability surfaces: `AGENTGLASS_TERMINAL_DISABLED=1`,
+  `AGENTGLASS_CHAT_DISABLED=1`, `AGENTGLASS_GIT_WRITE_DISABLED=1`,
+  `AGENTGLASS_DOCKER_WRITE_DISABLED=1`.
+- **⚠️ Exposing it to a network is a three-part deliberate act.** `AGENTGLASS_BIND=0.0.0.0`
+  hands the shell, git write and Docker control to that network. Do it only with
+  a token set **and** `AGENTGLASS_TRUST_LAN=1` (off by default, LAN browsers are
+  refused as cross-origin without it), and only on a network you fully trust.
+- **⚠️ Browser-driven autonomy is opt-in.** The Chat panel's `bypassPermissions`
+  mode (`claude --dangerously-skip-permissions`) is honored only when
+  `AGENTGLASS_CHAT_BYPASS=1`; otherwise it's downgraded to a prompting default.
 - **Your data stays local.** Events live in a local SQLite file (owner-only
   permissions). The only outbound call is the optional Anthropic plan-usage
   meter (`api.anthropic.com`, using your own credentials) and anything *you*
@@ -329,6 +341,11 @@ Safe by design — it **never blocks your agents by accident**:
 
 Scope it with the `matcher` (e.g. `Bash` only, or a specific tool) so you're not
 gating every call. Denying returns a `PreToolUse` deny with your reason.
+
+Want the opposite trade-off? Set `AGENTGLASS_GATE_FAILCLOSED=1` and a timeout or
+an unreachable control plane **denies** instead of allows — the fleet stops
+until you decide. Off by default; turn it on only when blocking is safer than
+proceeding, and remember agentglass being down then blocks every gated call.
 
 ---
 
@@ -390,7 +407,9 @@ inference, prompt) to an event the same way.
 | Var | Default | Meaning |
 |---|---|---|
 | `AGENTGLASS_PORT` | `4000` | Server HTTP/WS port. |
-| `AGENTGLASS_BIND` | `127.0.0.1` | Address the server binds to. Loopback-only by default. Setting `0.0.0.0` exposes the terminal / git-write / Docker control to your network **unauthenticated** — only on a trusted LAN. See [Security model](#security-model--read-this-before-installing). |
+| `AGENTGLASS_BIND` | `127.0.0.1` | Address the server binds to. Loopback-only by default. Exposing (`0.0.0.0`) requires `AGENTGLASS_TOKEN` **and** `AGENTGLASS_TRUST_LAN=1`, and only on a trusted network. See [Security model](#security-model--read-this-before-installing). |
+| `AGENTGLASS_TOKEN` | — | Shared secret required on every route but the telemetry intake sinks. Pass as `Authorization: Bearer <t>` or `?token=<t>`. Locks the server to you on a shared machine and makes a network bind safe. Exposing without one auto-mints + prints a token (saved `0600` in the config dir). |
+| `AGENTGLASS_TRUST_LAN` | — | `1` → also trust RFC1918 (private-LAN) addresses as origins/hosts, not just loopback. Required for LAN browsers to reach an exposed instance. Off by default: a shell-granting server trusts only `localhost` unless told otherwise. |
 | `AGENTGLASS_ALLOWED_HOSTS` | — | Comma-separated extra hostnames accepted by the DNS-rebinding guard (requests must arrive under a localhost/private `Host`). Only needed behind a reverse proxy. |
 | `AGENTGLASS_DB` | `agentglass.db` | SQLite file path. |
 | `AGENTGLASS_ROOT` | — | Scope the whole cockpit to one project (repo + worktrees) or a folder of projects. Unset = every project on the machine. Also set by passing a directory to the desktop app; the in-app **project picker** sets/clears the same scope at runtime and persists it as `root` in the config file (note: the env var, when set, wins again on the next launch). |
@@ -408,8 +427,12 @@ inference, prompt) to an event the same way.
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |
 | `AGENTGLASS_TERMINAL_DISABLED` | — | `1` → disable the in-browser **Terminal** entirely (no PTY shells are spawned). |
 | `AGENTGLASS_CHAT_DISABLED` | — | `1` → disable the **Chat** panel (no `claude` sessions can be started from the browser). |
+| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's `bypassPermissions` mode (`claude --dangerously-skip-permissions`). Off by default: the mode is downgraded to a prompting default unless you opt in. |
 | `AGENTGLASS_COMMIT_DISABLED` | — | `1` → disable the diff viewer's **Commit…** composer. |
 | `AGENTGLASS_GATE_TIMEOUT` | `60` | Seconds the `PreToolUse` gate hook waits for an approve/deny before auto-allowing. |
+| `AGENTGLASS_GATE_FAILCLOSED` | — | `1` → a gate timeout (server) or an unreachable control plane (hook) **denies** the tool call instead of allowing it. Off by default (fail-open — never block agents by accident). |
+| `AGENTGLASS_RATE_MAX` | `300` | Max intake requests (`/ingest`, OTLP receivers) per source-address+route within the window, before `429`. |
+| `AGENTGLASS_RATE_WINDOW_MS` | `10000` | Rate-limit window in ms for the intake sinks. |
 | `AGENTGLASS_CODE_DIR` | `~/code` | Where the skills explorer scans for per-project `.claude` skills/commands. |
 | `AGENTGLASS_WALKTHROUGH_MODEL` | `claude-haiku-4-5` | Model for the AI **Explain** walkthrough (uses a local `claude` CLI, else `ANTHROPIC_API_KEY`). |
 | `CLAUDE_CREDENTIALS` | `~/.claude/.credentials.json` | OAuth token for the Anthropic plan-usage meters (never leaves your machine except to `api.anthropic.com`). |

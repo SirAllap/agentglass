@@ -17,6 +17,11 @@ const CORS = {
   "Access-Control-Allow-Headers": "content-type",
 };
 const MODES = new Set(["default", "plan", "acceptEdits", "bypassPermissions"]);
+// `bypassPermissions` launches `claude --dangerously-skip-permissions`: full
+// unattended autonomy driven straight from a browser request. That is too much
+// to hand out on the same-origin check alone, so it is off unless the operator
+// explicitly opts in; otherwise the mode is downgraded to a prompting default.
+const BYPASS_ALLOWED = process.env.AGENTGLASS_CHAT_BYPASS === "1";
 const MODEL_RE = /^[a-z0-9][a-z0-9.-]{2,48}$/;
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
 const err = (msg: string, status = 400) => new Response(msg + "\n", { status, headers: CORS });
@@ -29,7 +34,8 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   if (!dir || !repoRootOf(dir)) return err("invalid or non-repo directory");
   if (typeof message !== "string" || !message.trim() || message.length > 100_000) return err("invalid message");
   const m = typeof model === "string" && MODEL_RE.test(model) ? model : "claude-opus-4-8";
-  const pm = typeof mode === "string" && MODES.has(mode) ? mode : "default";
+  let pm = typeof mode === "string" && MODES.has(mode) ? mode : "default";
+  if (pm === "bypassPermissions" && !BYPASS_ALLOWED) pm = "default"; // opt-in only
   const rid = typeof resumeId === "string" && SESSION_RE.test(resumeId) ? resumeId : "";
 
   const args = [bin, "-p", "--output-format", "stream-json", "--verbose", "--model", m];

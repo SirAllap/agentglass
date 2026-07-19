@@ -13,6 +13,12 @@ interface Waiter extends PendingGate {
   timer: ReturnType<typeof setTimeout>;
 }
 
+// The gate is fail-open by design: a timeout (or an unreachable server) never
+// blocks an agent. Set this to invert that — a tool call that no human decides
+// within the timeout is DENIED. Opt-in, because it means a slow or absent human
+// stops the fleet; that is the point for security-sensitive use.
+const FAIL_CLOSED = process.env.AGENTGLASS_GATE_FAILCLOSED === "1";
+
 const waiters = new Map<string, Waiter>();
 let onChange: () => void = () => {};
 export function onGateChange(fn: () => void) { onChange = fn; }
@@ -31,6 +37,10 @@ export function submitGate(
     const timer = setTimeout(() => {
       waiters.delete(id);
       onChange();
+      if (FAIL_CLOSED) {
+        resolve({ decision: "deny", reason: "gate timeout — no decision (fail-closed)" });
+        return;
+      }
       // Empty reason so the hook falls through to Claude Code's own permission
       // prompt instead of force-allowing — an auto-allow shouldn't silently
       // skip the human it was meant to ask.

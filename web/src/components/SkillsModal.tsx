@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { SkillInfo } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
-import { api, SERVER } from "../lib/api.ts";
+import { api } from "../lib/api.ts";
 import { fmtAgo, fmtUsd } from "../lib/format.ts";
 
 type Kind = "all" | "skill" | "command";
@@ -217,9 +217,9 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <a href={`${SERVER}/skills/export?format=md`} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ md</a>
-                  <a href={`${SERVER}/skills/export?format=csv`} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ csv</a>
-                  <a href={`${SERVER}/skills/export?format=json`} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ json</a>
+                  <a href={api.skillsExportUrl("md")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ md</a>
+                  <a href={api.skillsExportUrl("csv")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ csv</a>
+                  <a href={api.skillsExportUrl("json")} className="chip" style={{ color: "var(--text3)" }} onClick={(e) => e.stopPropagation()}>↓ json</a>
                   <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                 </div>
               </div>

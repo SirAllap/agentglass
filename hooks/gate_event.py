@@ -42,6 +42,10 @@ def _agentglass_local_only(url):
         sys.exit(0)
 
 TIMEOUT = int(os.environ.get("AGENTGLASS_GATE_TIMEOUT", "60"))
+# Default is fail-open: if agentglass is unreachable, allow (never block agents
+# by accident). Set this to invert it — an unreachable control plane DENIES the
+# tool call. Opt-in, because with agentglass down every gated call is blocked.
+FAIL_CLOSED = os.environ.get("AGENTGLASS_GATE_FAILCLOSED") == "1"
 
 
 def allow_silently():
@@ -96,7 +100,9 @@ def main():
         with urllib.request.urlopen(req, timeout=TIMEOUT + 5) as resp:
             out = json.loads(resp.read())
     except Exception:
-        allow_silently()  # unreachable / error → never block
+        if FAIL_CLOSED:
+            emit("deny", "agentglass unreachable (fail-closed)")
+        allow_silently()  # unreachable / error → never block (default)
 
     decision = out.get("decision", "allow")
     reason = out.get("reason", "")

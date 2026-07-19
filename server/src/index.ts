@@ -1,4 +1,3 @@
-import { isIP } from "node:net";
 import type { ServerWebSocket } from "bun";
 import type { IngestBody, WsFrame } from "../../shared/types.ts";
 import { normalize, detectError } from "./ingest.ts";
@@ -43,6 +42,9 @@ import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERM
 import { chatStream, CHAT_ENABLED } from "./chat.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, CONFIG_PATH } from "./config.ts";
+import { privateHost } from "./net.ts";
+import { resolveToken, tokenOk, isIntake } from "./auth.ts";
+import { rateOk } from "./ratelimit.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 /**
@@ -55,20 +57,32 @@ const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
  */
 const BIND = process.env.AGENTGLASS_BIND || "127.0.0.1";
 const LOOPBACK_ONLY = BIND === "127.0.0.1" || BIND === "::1" || BIND === "localhost";
+// RFC1918 addresses are trusted as origins/hosts only when this is set. Off by
+// default: a shell-granting server should trust loopback alone unless exposing
+// it to a LAN is a deliberate choice (paired with a token — see below).
+const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
+// Optional shared-secret auth. Null on a loopback-only box with no token set
+// (unchanged zero-config UX); required otherwise. Exposing without a token
+// mints and prints one rather than running unauthenticated.
+const AUTH = resolveToken(LOOPBACK_ONLY);
+const AUTH_TOKEN = AUTH.token;
 /** One socket, two roles: the live event stream and PTY terminal shells. */
 type WsData = { kind: "events" } | PtyWsData;
 const clients = new Set<ServerWebSocket<WsData>>();
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-  "Access-Control-Allow-Headers": "content-type",
-};
-const json = (data: unknown, status = 200) =>
-  new Response(JSON.stringify(data), {
-    status,
-    headers: { "content-type": "application/json", ...CORS },
-  });
+// Reflect the caller's Origin instead of a blanket `*`. Foreign origins are
+// already turned away by localOrigin() before any body is served, so the old
+// wildcard leaked nothing — but reflecting is honest, pairs with `Vary: Origin`,
+// and permits the Authorization header the token flow now sends.
+function corsFor(req: Request): Record<string, string> {
+  const origin = req.headers.get("origin");
+  return {
+    "Access-Control-Allow-Origin": origin || "*",
+    Vary: "Origin",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "content-type, authorization",
+  };
+}
 
 /**
  * Is this request's Origin a machine we're willing to be driven by?
@@ -80,17 +94,7 @@ const json = (data: unknown, status = 200) =>
  * when it is literally localhost; everything else has to *be* an address in a
  * private range, not merely look like one.
  */
-function privateHost(hRaw: string): boolean {
-  const h = hRaw.replace(/^\[|\]$/g, ""); // URL keeps IPv6 brackets
-  if (h === "localhost" || h === "127.0.0.1" || h === "::1" || h.endsWith(".localhost")) return true;
-  const v = isIP(h);
-  if (v === 4) {
-    const [a, b] = h.split(".").map(Number);
-    return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
-  }
-  if (v === 6) return h === "::1" || /^f[cd]/i.test(h); // loopback / unique-local
-  return false; // a name that isn't localhost resolves wherever its owner says
-}
+const isPrivate = (h: string): boolean => privateHost(h, TRUST_LAN);
 
 // Block drive-by cross-site writes: a request carrying an Origin from a real
 // website is rejected. A request with NO Origin is not a browser, so it can't
@@ -100,7 +104,7 @@ function localOrigin(req: Request): boolean {
   const o = req.headers.get("origin");
   if (!o) return true;
   try {
-    return privateHost(new URL(o).hostname);
+    return isPrivate(new URL(o).hostname);
   } catch { return false; }
 }
 
@@ -118,10 +122,9 @@ function trustedCaller(req: Request): boolean {
   const o = req.headers.get("origin");
   if (!o) return LOOPBACK_ONLY; // no origin is only safe when nobody remote can connect
   try {
-    return privateHost(new URL(o).hostname);
+    return isPrivate(new URL(o).hostname);
   } catch { return false; }
 }
-const csrfBlocked = () => json({ ok: false, error: "cross-origin write blocked" }, 403);
 
 /**
  * DNS-rebinding guard: the Host header must name an address that is plausibly
@@ -138,9 +141,7 @@ const csrfBlocked = () => json({ ok: false, error: "cross-origin write blocked" 
 const ALLOWED_HOSTS = new Set(
   (process.env.AGENTGLASS_ALLOWED_HOSTS || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean)
 );
-const trustedHost = (url: URL) => privateHost(url.hostname) || ALLOWED_HOSTS.has(url.hostname.toLowerCase());
-const rebindBlocked = () =>
-  json({ ok: false, error: "request Host is not a local or private address (DNS-rebinding guard — set AGENTGLASS_ALLOWED_HOSTS for a reverse-proxy name)" }, 403);
+const trustedHost = (url: URL) => isPrivate(url.hostname) || ALLOWED_HOSTS.has(url.hostname.toLowerCase());
 
 function broadcast(frame: WsFrame) {
   const msg = JSON.stringify(frame);
@@ -168,7 +169,7 @@ function csvEscape(v: unknown): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-const server = Bun.serve({
+const server = Bun.serve<WsData>({
   port: PORT,
   hostname: BIND,
   // A frame is a control message or a keystroke; nothing legitimate is large.
@@ -178,17 +179,41 @@ const server = Bun.serve({
     const url = new URL(req.url);
     const { pathname } = url;
 
+    // Per-request response helpers: `cors` reflects this caller's Origin, so it
+    // has to be built here rather than shared as a module constant.
+    const cors = corsFor(req);
+    const json = (data: unknown, status = 200) =>
+      new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...cors } });
+    const csrfBlocked = () => json({ ok: false, error: "cross-origin write blocked" }, 403);
+    const rebindBlocked = () =>
+      json({ ok: false, error: "request Host is not a local or private address (DNS-rebinding guard — set AGENTGLASS_ALLOWED_HOSTS for a reverse-proxy name)" }, 403);
+
     // Before anything else — including OPTIONS and WS upgrades: a request that
     // arrived under a foreign Host is a rebinding attempt, whatever it asks.
     if (!trustedHost(url)) return rebindBlocked();
 
-    if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+    if (req.method === "OPTIONS") return new Response(null, { headers: cors });
 
-    // One gate for the whole surface — reads included. Without it, CORS `*` let
-    // any site the user visited read /export, /search and the rest from
-    // loopback. A missing Origin is a non-browser caller (curl, the hooks), not
-    // a drive-by, so it's allowed; a foreign website is turned away here.
+    // One gate for the whole surface — reads included. Without it, CORS let any
+    // site the user visited read /export, /search and the rest from loopback. A
+    // missing Origin is a non-browser caller (curl, the hooks), not a drive-by,
+    // so it's allowed; a foreign website is turned away here.
     if (!localOrigin(req)) return csrfBlocked();
+
+    // Shared-secret gate. When a token is configured, every route but the
+    // append-only intake sinks needs it — this is what closes the door on other
+    // local processes and makes a non-loopback bind safe. WS upgrades carry it
+    // as ?token= (a browser can't set a header on them); fetch uses Bearer.
+    if (AUTH_TOKEN && !isIntake(pathname) && !tokenOk(req, url, AUTH_TOKEN)) {
+      return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
+    }
+
+    // Throttle the unauthenticated intake sinks so a runaway client can't flood
+    // the DB and the broadcast fan-out. Keyed by source address + route.
+    if (req.method === "POST" && isIntake(pathname)) {
+      const ip = srv.requestIP(req)?.address || "local";
+      if (!rateOk(`${ip} ${pathname}`)) return json({ ok: false, error: "rate limited" }, 429);
+    }
 
     // --- WebSocket upgrade ---
     // Origin-checked like the mutating routes. WebSockets are exempt from CORS,
@@ -469,7 +494,7 @@ const server = Bun.serve({
       const fmt = url.searchParams.get("format") || "md";
       const dl = (body: string, type: string, name: string) =>
         new Response(body, {
-          headers: { "content-type": type, "content-disposition": `attachment; filename="${name}"`, ...CORS },
+          headers: { "content-type": type, "content-disposition": `attachment; filename="${name}"`, ...cors },
         });
       if (fmt === "json") return dl(JSON.stringify(getSkills(), null, 2), "application/json", "skills-catalog.json");
       if (fmt === "csv") return dl(catalogCsv(), "text/csv", "skills-catalog.csv");
@@ -501,7 +526,7 @@ const server = Bun.serve({
           headers: {
             "content-type": "text/csv",
             "content-disposition": 'attachment; filename="agentglass-events.csv"',
-            ...CORS,
+            ...cors,
           },
         });
       }
@@ -509,7 +534,7 @@ const server = Bun.serve({
         headers: {
           "content-type": "application/json",
           "content-disposition": 'attachment; filename="agentglass-events.json"',
-          ...CORS,
+          ...cors,
         },
       });
     }
@@ -636,7 +661,20 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 
 console.log(`🛰  agentglass server on http://${LOOPBACK_ONLY ? "localhost" : BIND}:${server.port}`);
 if (!LOOPBACK_ONLY) {
-  console.warn(`⚠  bound to ${BIND} — this exposes a shell, git write access and docker control to the network, unauthenticated`);
+  const posture = AUTH_TOKEN ? "token-protected" : "UNAUTHENTICATED";
+  console.warn(`⚠  bound to ${BIND} — this exposes a shell, git write access and docker control to the network (${posture})`);
+  if (!TRUST_LAN) console.warn(`⚠  AGENTGLASS_TRUST_LAN is not set — LAN browsers will be refused as cross-origin; set it to allow them`);
+}
+if (AUTH_TOKEN) {
+  if (AUTH.source === "generated") {
+    console.log(`🔑 auth token (generated, saved ${AUTH.path} — keep it):`);
+    console.log(`     ${AUTH_TOKEN}`);
+    console.log(`     open the dashboard as  <url>/?token=${AUTH_TOKEN}`);
+  } else if (AUTH.source === "file") {
+    console.log(`🔑 auth token loaded from ${AUTH.path} — clients must pass ?token= or Authorization: Bearer`);
+  } else {
+    console.log(`🔑 AGENTGLASS_TOKEN set — clients must pass ?token= or Authorization: Bearer`);
+  }
 }
 console.log(`   POST events → http://localhost:${server.port}/ingest`);
 console.log(`   WebSocket   → ws://localhost:${server.port}/stream`);
