@@ -181,6 +181,14 @@ const server = Bun.serve<WsData>({
   // A frame is a control message or a keystroke; nothing legitimate is large.
   // Unset, Bun allows 16MB per frame, which is a cheap way to exhaust memory.
   maxRequestBodySize: 32 * 1024 * 1024,
+  // Bun closes a connection that has been quiet for `idleTimeout` seconds, and
+  // the default is 10 — which counts the gaps *inside* a streaming response, not
+  // just an idle socket. A chat turn is silent for as long as the model thinks
+  // or a tool runs, so the default cut `/chat/send` off mid-turn and the browser
+  // reported only a generic fetch failure. 255 is the maximum Bun accepts; it is
+  // still not long enough on its own for a slow turn, so `chat.ts` also sends a
+  // periodic keepalive to keep the gaps under it.
+  idleTimeout: 255,
   async fetch(req, srv) {
     const url = new URL(req.url);
     const { pathname } = url;

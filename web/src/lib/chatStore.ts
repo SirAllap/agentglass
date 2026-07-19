@@ -5,7 +5,7 @@
 // as the terminal's session store: the panel is a *view* of these, not their
 // owner. That's also what lets many exist at once instead of one at a time.
 
-import { api } from "./api.ts";
+import { api, ChatStreamError } from "./api.ts";
 import type { ChatImage } from "../../../shared/types.ts";
 
 /** A pasted image waiting in the composer. `url` is an object URL for the
@@ -218,9 +218,12 @@ export async function send(id: string, text: string, isActive: () => boolean, al
     await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images }, onEvent, ac.signal);
   } catch (e) {
     if (!(e instanceof DOMException && e.name === "AbortError")) {
+      // A ChatStreamError already carries a sentence written for this spot;
+      // anything else is unexpected and its own text is the best there is.
+      const why = e instanceof ChatStreamError ? e.message : String(e);
       update(id, (c) => {
         const last = c.messages[c.messages.length - 1];
-        if (last?.role === "assistant") last.text += `\n[error] ${String(e)}`;
+        if (last?.role === "assistant") last.text += `\n[error] ${why}`;
       });
     }
   } finally {
