@@ -1,0 +1,28 @@
+name: ✨ Feature request
+description: Propose an improvement or a new capability for the cockpit
+title: "[feat]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the workflow gap, not just the feature — "as someone watching a fleet, I can't…"
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like agentglass to do? Sketches and keystroke ideas welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other tools or workarounds you use today, and why they fall short.
+  - type: markdown
+    attributes:
+      value: |
+        agentglass tries to stay **small, fast, and dependency-light** (see CONTRIBUTING.md) — proposals that fit that spirit land easiest.

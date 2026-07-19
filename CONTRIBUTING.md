@@ -46,3 +46,12 @@ python3 hooks/seed_demo.py   # populate with demo data
 
 Open an issue with repro steps (a failing `hooks/seed_demo.py` scenario is
 ideal). Feature ideas welcome — describe the observability question it answers.
+For open questions and setups, use
+[Discussions](https://github.com/SirAllap/agentglass/discussions); for security
+problems, follow [SECURITY.md](SECURITY.md) (private reporting — no public
+issues, please).
+
+## Community
+
+Be excellent to each other — the [Code of Conduct](CODE_OF_CONDUCT.md) applies
+to all project spaces.

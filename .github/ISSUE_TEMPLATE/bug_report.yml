@@ -1,0 +1,58 @@
+name: 🐛 Bug report
+description: Something in agentglass is broken or behaving unexpectedly
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! A minimal, concrete report gets fixed much faster.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: Opened the terminal panel (`t`), ran `make dev`, and…
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. bun run dev
+        2. Open http://localhost:6180 and press `t`
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard / cockpit
+        - Diff viewer (d)
+        - Source control (g)
+        - Docker (o)
+        - Terminal (t)
+        - Chat (c)
+        - Hooks / ingest (Claude Code)
+        - OpenTelemetry ingest (Codex, Gemini, …)
+        - Control plane / gate
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Bun version, browser — and provider/CLI if it's an ingest issue.
+      placeholder: macOS 15 · Bun 1.2.9 · Chrome 138 · Claude Code hooks
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: Server output, browser console, or a screenshot. Please redact anything private.
+      render: shell

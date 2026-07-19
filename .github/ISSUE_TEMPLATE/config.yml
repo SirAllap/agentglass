@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Questions & ideas — Discussions
+    url: https://github.com/SirAllap/agentglass/discussions
+    about: Ask questions, share setups, and discuss ideas before they become issues.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/SirAllap/agentglass/security/advisories/new
+    about: Please report vulnerabilities privately — see SECURITY.md.
