@@ -18,7 +18,7 @@ function Stat({ k, v, color }: { k: string; v: string; color?: string }) {
   );
 }
 
-export function SessionModal({ sessionId, sourceApp, onClose, onFilter }: { sessionId: string | null; sourceApp?: string; onClose: () => void; onFilter?: (app: string) => void }) {
+export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume }: { sessionId: string | null; sourceApp?: string; onClose: () => void; onFilter?: (app: string) => void; onResume?: (s: SessionDetail) => void }) {
   const [d, setD] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
@@ -35,6 +35,10 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter }: { sess
   const dur = d ? Math.max(0, d.last_seen - d.started_at) : 0;
   const durLabel = dur > 3_600_000 ? `${(dur / 3_600_000).toFixed(1)}h` : dur > 60_000 ? `${Math.round(dur / 60_000)}m` : `${Math.round(dur / 1000)}s`;
   const toolMax = Math.max(1, ...(d?.tool_mix.map((t) => t.n) ?? [1]));
+  // Still owned by a running claude: no end recorded and it spoke recently.
+  // Erring towards "live" is the safe side — refusing to resume a dead session
+  // is an annoyance, resuming a live one forks its transcript.
+  const live = !!d && !d.ended_at && Date.now() - d.last_seen < 120_000;
 
   return (
     <Portal>
@@ -58,6 +62,27 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter }: { sess
                     {d && <span className="text-[10px] t-dim2">{durLabel} · last {fmtAgo(d.last_seen)} ago</span>}
                   </div>
                   <div className="ml-auto flex items-center gap-2 shrink-0">
+                    {d && onResume && (
+                      live ? (
+                        // A claude session has one owner. Resuming one that's
+                        // still running would put a second writer on the same
+                        // transcript, so say why rather than offer a button
+                        // that corrupts the history.
+                        <span className="chip t-dim2" title="This session is still running — resume it once it stops, or watch it live below.">
+                          ● running
+                        </span>
+                      ) : d.project_path ? (
+                        <button onClick={() => { onResume(d); onClose(); }} className="chip cursor-pointer"
+                          title={`Continue this conversation in ${d.project_path} — claude keeps the full context`}
+                          style={{ color: "var(--ok, #34d399)", background: "color-mix(in srgb, #34d399 15%, transparent)", borderColor: "color-mix(in srgb, #34d399 45%, transparent)" }}>
+                          ↩ resume in chat
+                        </button>
+                      ) : (
+                        <span className="chip t-dim2" title="No directory recorded for this session, so there's nowhere to resume it.">
+                          ↩ resume unavailable
+                        </span>
+                      )
+                    )}
                     {d && onFilter && (
                       <button onClick={() => { onFilter(d.source_app); onClose(); }} className="chip cursor-pointer" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 45%, transparent)" }}>
                         ⧉ watch in live feed

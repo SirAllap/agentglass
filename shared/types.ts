@@ -56,6 +56,9 @@ export interface SessionRollup {
   session_id: string;
   source_app: string;
   model_name: string | null;
+  /** Directory the session ran in — what a resume needs to run in the right
+   *  place. Null for rows recorded before the column existed. */
+  project_path?: string | null;
   started_at: number;
   ended_at: number | null;
   last_seen: number;
@@ -215,6 +218,8 @@ export interface SessionDetail {
   session_id: string;
   source_app: string;
   model_name: string | null;
+  /** Where it ran — a resume has to start in the same directory. */
+  project_path?: string | null;
   started_at: number;
   ended_at: number | null;
   last_seen: number;
