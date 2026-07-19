@@ -129,6 +129,11 @@ and a permission mode (plan → default / acceptEdits → bypass), then converse
 replies stream in, tool calls appear as chips, and follow-ups resume the same
 session. Sessions you start here show up in the fleet like any other agent.
 
+**↩ resume** picks up a session that already exists — including one you started
+in a terminal — with its full context intact. Sessions that are still running
+are listed but can't be picked: a claude session has a single owner, and a
+second writer on the same transcript corrupts its history.
+
 ---
 
 ## Why
