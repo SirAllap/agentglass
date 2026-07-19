@@ -56,6 +56,16 @@ export default function App() {
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
 
+  // A live snapshot of "is any panel/overlay open", read by the global key
+  // handler so single-letter shortcuts can't stack a second panel on top of an
+  // open one. Kept in a ref so the handler needn't re-subscribe on every toggle.
+  const anyPanelOpen =
+    paletteOpen || helpOpen || statsOpen || skillsOpen || changesOpen ||
+    gitOpen || dockerOpen || terminalOpen || chatOpen || searchOpen ||
+    projectOpen || sessionView !== null || selected !== null;
+  const anyPanelOpenRef = useRef(anyPanelOpen);
+  anyPanelOpenRef.current = anyPanelOpen;
+
   // Which folder is this cockpit about? Ask once on first open when nothing is
   // scoped yet — picking a project up front is what gives the terminal, git
   // panel and command list their directory. Answering "whole machine" (or just
@@ -129,40 +139,21 @@ export default function App() {
 
   const clearFilters = useCallback(() => setFilter({ app: "", type: "", provider: "" }), []);
 
-  // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, Esc closes
+  // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, single-letter panels, Esc closes
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // ⌘K / Ctrl-K palette — always available, even inside a field or panel.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
-      } else if (e.key === "?" && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        setHelpOpen((o) => !o);
-      } else if (e.key === "s" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault(); // don't let the key leak into the modal's autofocused input
-        setStatsOpen((o) => !o);
-      } else if (e.key === "k" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setSkillsOpen((o) => !o);
-      } else if (e.key === "d" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setChangesOpen((o) => !o);
-      } else if (e.key === "g" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setGitOpen((o) => !o);
-      } else if (e.key === "o" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setDockerOpen((o) => !o);
-      } else if (e.key === "t" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setTerminalOpen((o) => !o);
-      } else if (e.key === "c" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setChatOpen((o) => !o);
-      } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setSearchOpen((o) => !o);
-      } else if (e.key === "Escape") {
-        // the real terminal owns Escape while focused (vim, fzf, Ctrl+R…)
+        return;
+      }
+
+      // Escape closes open panels, regardless of where focus rests. The real
+      // terminal owns Escape while its shell is focused (vim, fzf, Ctrl+R…), so
+      // leave xterm alone. Chat handles its own Escape locally (see ChatPanel)
+      // because a focused textarea can swallow it before it reaches here.
+      if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
         setSelected(null);
         setPaletteOpen(false);
@@ -176,6 +167,30 @@ export default function App() {
         setChatOpen(false);
         setSearchOpen(false);
         setSessionView(null);
+        return;
+      }
+
+      // Single-letter globals below. Two guards, both required:
+      //  * focus must rest on nothing (the <body>) — never a button (a mouse
+      //    click parks focus there), an input, or a textarea. Without this a
+      //    letter fires right after any click, and leaks into a field's draft.
+      //  * no panel may already be open — otherwise a letter stacks a second
+      //    panel on top of the first. Close with Escape, then open with a letter.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const a = document.activeElement;
+      const focusFree = !a || a === document.body || a === document.documentElement;
+      if (!focusFree || anyPanelOpenRef.current) return;
+
+      switch (e.key) {
+        case "?": setHelpOpen((o) => !o); break;
+        case "s": e.preventDefault(); setStatsOpen((o) => !o); break;
+        case "k": e.preventDefault(); setSkillsOpen((o) => !o); break;
+        case "d": e.preventDefault(); setChangesOpen((o) => !o); break;
+        case "g": e.preventDefault(); setGitOpen((o) => !o); break;
+        case "o": e.preventDefault(); setDockerOpen((o) => !o); break;
+        case "t": e.preventDefault(); setTerminalOpen((o) => !o); break;
+        case "c": e.preventDefault(); setChatOpen((o) => !o); break;
+        case "/": e.preventDefault(); setSearchOpen((o) => !o); break;
       }
     };
     window.addEventListener("keydown", onKey);

@@ -153,6 +153,9 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
   };
   const [hint, setHint] = useState("");
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // A focused textarea can swallow Escape before it reaches the global
+    // handler, stranding the panel open. Close it here instead.
+    if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     // send() returns early in both these cases; without saying so, Enter just
