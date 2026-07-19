@@ -232,6 +232,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const stuckBottom = useRef(true);
 
   const active = getChat(activeId);
@@ -328,12 +329,41 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   const hasTurn = !!(active?.draft.trim() || active?.attachments.length);
 
   // Screenshots arrive as clipboard *files*, not text, so the paste is only
-  // intercepted when there is at least one image among the items — a normal
-  // text paste has to fall through to the textarea untouched.
+  // intercepted when there is at least one image among them — a normal text
+  // paste has to fall through to the textarea untouched.
+  //
+  // Both `files` and `items` are read because the two engines this runs on
+  // disagree. Chromium populates `clipboardData.files` for a pasted image;
+  // WebKitGTK — which is what Tauri uses on Linux, i.e. the desktop app —
+  // delivers it through `items` and leaves `files` empty. Reading only `files`
+  // worked in a browser and silently did nothing in the app.
+  const imagesFrom = (dt: DataTransfer): File[] => {
+    const out = new Map<string, File>();
+    for (const f of Array.from(dt.files)) {
+      if (f.type.startsWith("image/")) out.set(`${f.name}:${f.size}`, f);
+    }
+    for (const it of Array.from(dt.items)) {
+      if (it.kind !== "file" || !it.type.startsWith("image/")) continue;
+      const f = it.getAsFile();
+      // Same image can appear in both collections; key by name+size so it is
+      // attached once rather than twice.
+      if (f) out.set(`${f.name}:${f.size}`, f);
+    }
+    return [...out.values()];
+  };
+
   const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     if (!active) return;
-    const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
-    if (!files.length) return;
+    const files = imagesFrom(e.clipboardData);
+    if (!files.length) {
+      // A paste that carried a file which wasn't an image would otherwise look
+      // identical to the feature being broken.
+      if (Array.from(e.clipboardData.items).some((i) => i.kind === "file")) {
+        e.preventDefault();
+        setHint("that file isn't a PNG, JPEG, GIF or WebP");
+      }
+      return;
+    }
     e.preventDefault();
     setHint(await addAttachments(active.id, files));
   };
@@ -504,11 +534,27 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                       </div>
                     )}
                     <div className="flex items-end gap-2">
+                      {/* Clipboard behaviour differs per engine and some
+                          screenshot tools only put a file path on it, so the
+                          picker is the path that always works — these tools
+                          save a file as well as copying it. */}
+                      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden
+                        onChange={async (ev) => {
+                          const picked = Array.from(ev.target.files ?? []);
+                          ev.target.value = ""; // re-picking the same file must still fire
+                          if (active && picked.length) setHint(await addAttachments(active.id, picked));
+                        }} />
+                      <button onClick={() => fileRef.current?.click()} disabled={!enabled || !active}
+                        title="Attach an image (PNG, JPEG, GIF or WebP)"
+                        className="h-9 w-9 shrink-0 grid place-items-center rounded-lg text-[15px]"
+                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
+                        ⊕
+                      </button>
                       <textarea ref={inputRef} value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
                         onChange={(e) => active && update(active.id, (c) => { c.draft = e.target.value; })}
                         onKeyDown={onKey}
                         onPaste={onPaste}
-                        placeholder={!enabled ? "chat unavailable" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline, paste to attach an image)" : "message a new session… (Enter to send, paste to attach an image)"}
+                        placeholder={!enabled ? "chat unavailable" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline, ⊕ or paste to attach an image)" : "message a new session… (Enter to send, ⊕ or paste to attach an image)"}
                         className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
                       {active?.sending
                         ? <button onClick={() => stop(active.id)} className="shrink-0 px-3.5 py-2 rounded-lg text-[11.5px] font-semibold" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ stop</button>
