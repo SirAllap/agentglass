@@ -34,6 +34,7 @@ import {
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktrees as gitWorktrees, addWorktree, removeWorktree,
 } from "./gitwork.ts";
+import { completePath } from "./fsbrowse.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs,
   startContainer, stopContainer, restartContainer, removeContainer,
@@ -391,6 +392,13 @@ const server = Bun.serve<WsData>({
       // cockpit is currently scoped to one project, or there'd be no way out.
       const ignoreScope = url.searchParams.get("all") === "1";
       return json({ repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }) });
+    }
+    // Directory completion for the project picker's free-text path input. A
+    // plain read, so the surface-wide origin/rebinding/token gate above is the
+    // whole authorisation story — same as /git/repos. See fsbrowse.ts for why
+    // it isn't confined to the configured repoDirs.
+    if (pathname === "/fs/complete") {
+      return json(completePath(url.searchParams.get("prefix") || ""));
     }
     if (pathname === "/git/tree") {
       const root = url.searchParams.get("root") || "";

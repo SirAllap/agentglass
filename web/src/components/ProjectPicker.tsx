@@ -6,9 +6,9 @@
 // Makefile commands, its repos, its sessions — instead of everything on the
 // machine. The choice is persisted server-side (config.json), so the next
 // launch opens straight into the same project.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import type { GitRepoRef } from "../../../shared/types.ts";
+import type { GitRepoRef, FsEntry } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api, IS_DEMO } from "../lib/api.ts";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
@@ -24,6 +24,14 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Directory completions for the free-text path box. `sel` is -1 until the user
+  // arrows into the list: until then Enter means "open what I typed", which is
+  // what someone pasting a full path expects — pre-highlighting a row would
+  // silently redirect that Enter into a completion instead.
+  const [sugg, setSugg] = useState<FsEntry[]>([]);
+  const [more, setMore] = useState(false);
+  const [sel, setSel] = useState(-1);
+  const pathRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -31,6 +39,61 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
     setRepos(null);
     api.gitReposAll().then(({ repos }) => setRepos(repos)).catch(() => setRepos([]));
   }, [open]);
+
+  // Completions, debounced. Every keystroke is a directory read on the server,
+  // and typing a long path would otherwise fire a dozen of them for answers
+  // nobody sees. The stale-response guard matters more than the delay: a slow
+  // read of a big directory must not overwrite the newer answer for what the
+  // user has typed since.
+  useEffect(() => {
+    const p = path.trim();
+    // Only absolute / `~`-rooted input has a meaningful parent to list, which is
+    // the same rule the server applies before it will answer at all.
+    if (!open || (!p.startsWith("/") && !p.startsWith("~"))) { setSugg([]); setMore(false); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      api.fsComplete(p)
+        .then((r) => { if (live) { setSugg(r.entries); setMore(r.truncated); } })
+        .catch(() => { if (live) { setSugg([]); setMore(false); } });
+    }, 120);
+    return () => { live = false; clearTimeout(t); };
+  }, [path, open]);
+
+  // A new set of candidates invalidates whatever row was highlighted — keeping
+  // index 3 across a re-filter would point at an unrelated directory.
+  useEffect(() => { setSel(-1); }, [sugg]);
+
+  /** Accept a suggestion: replace the half-typed segment and leave a trailing
+   *  slash, so the very next completion lists inside the folder just chosen.
+   *  That makes Tab-Tab-Tab walk down a tree, which is the whole point. */
+  const accept = (e: FsEntry) => {
+    setPath(e.path + "/");
+    setSel(-1);
+    pathRef.current?.focus();
+  };
+
+  const onPathKey = (ev: React.KeyboardEvent<HTMLInputElement>) => {
+    const p = path.trim();
+    if (ev.key === "Tab" && sugg.length) {
+      // Tab with nothing highlighted takes the first match — the shell habit.
+      ev.preventDefault();
+      accept(sugg[sel >= 0 ? sel : 0]);
+      return;
+    }
+    if (ev.key === "ArrowDown" && sugg.length) { ev.preventDefault(); setSel((s) => (s + 1) % sugg.length); return; }
+    if (ev.key === "ArrowUp" && sugg.length) { ev.preventDefault(); setSel((s) => (s <= 0 ? sugg.length : s) - 1); return; }
+    if (ev.key === "Escape" && sugg.length) {
+      // Dismiss the list without closing the whole modal — the outer handler
+      // would otherwise throw away a path the user is halfway through typing.
+      ev.stopPropagation();
+      setSugg([]);
+      return;
+    }
+    if (ev.key === "Enter") {
+      if (sel >= 0 && sugg[sel]) { accept(sugg[sel]); return; }
+      if (p) choose(p);
+    }
+  };
 
   const choose = (root: string | null) => {
     if (busy) return;
@@ -57,8 +120,16 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
   // short wait watching the "switching…" note.
   const close = () => { if (busy) return; markAnswered(); onClose(); };
 
-  const q = query.trim().toLowerCase();
-  const shown = (repos ?? []).filter((r) => !q || (r.name + " " + r.root + " " + r.branch).toLowerCase().includes(q));
+  // Name, full path and branch are all searchable, and each whitespace-separated
+  // term has to match somewhere. One substring over the joined string meant
+  // "hdd alavera" found nothing, because the terms are far apart in the path —
+  // yet typing the two memorable fragments of a long path is exactly how people
+  // look for `/mnt/hdd/code/current_project/alavera_app`.
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = (repos ?? []).filter((r) => {
+    const hay = (r.name + " " + r.root + " " + r.branch).toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
 
   return (
     <Portal>
@@ -101,7 +172,7 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                   </button>
 
                   {repos === null && <div className="px-3 py-3 text-[11px] t-dim2">looking for repos…</div>}
-                  {repos !== null && !shown.length && <div className="px-3 py-3 text-[11px] t-dim2">no repos found{q ? " for that filter" : ""}</div>}
+                  {repos !== null && !shown.length && <div className="px-3 py-3 text-[11px] t-dim2">no repos found{terms.length ? " for that filter" : ""}</div>}
                   {shown.map((r) => (
                     <button key={r.root} onClick={() => choose(r.root)} disabled={busy}
                       className="w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 hover:bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]"
@@ -121,9 +192,30 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                 </div>
 
                 {/* a project that lives somewhere the sweep doesn't reach */}
-                <div className="px-4 py-3 border-t shrink-0 flex items-center gap-2" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="…or type a folder: ~/code/my-project, or ~/code for everything in it"
-                    onKeyDown={(e) => { if (e.key === "Enter" && path.trim()) choose(path.trim()); }}
+                <div className="px-4 py-3 border-t shrink-0 flex items-center gap-2 relative" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                  {/* Completions sit ABOVE the input: this row is pinned to the
+                      bottom of the modal, so a dropdown hanging below it would
+                      fall off the viewport on a short window. */}
+                  {!!sugg.length && (
+                    <div className="agx-scroll absolute left-4 right-4 bottom-full mb-1 rounded-lg overflow-y-auto py-1"
+                      style={{ maxHeight: 220, zIndex: 1, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 12px 32px -12px rgba(0,0,0,0.7)" }}>
+                      {sugg.map((e, i) => (
+                        // onMouseDown, not onClick: a click first blurs the input,
+                        // and blur-driven dismissal would unmount the row before
+                        // the click ever landed on it.
+                        <div key={e.path} onMouseDown={(ev) => { ev.preventDefault(); accept(e); }} onMouseEnter={() => setSel(i)}
+                          className="px-3 py-1 flex items-center gap-2 cursor-pointer text-[11px]"
+                          style={{ background: i === sel ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", color: "var(--text)" }}>
+                          <span className="text-[11px]">{e.repo ? "📁" : "🗀"}</span>
+                          <span className="truncate">{e.name}</span>
+                          {e.repo && <span className="ml-auto shrink-0 text-[9px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>git</span>}
+                        </div>
+                      ))}
+                      {more && <div className="px-3 py-1 text-[10px] t-dim2">more matches — keep typing</div>}
+                    </div>
+                  )}
+                  <input ref={pathRef} value={path} onChange={(e) => setPath(e.target.value)} placeholder="…or type a folder: ~/code/my-project, or ~/code for everything in it"
+                    onKeyDown={onPathKey} onBlur={() => setSugg([])} spellCheck={false} autoComplete="off"
                     className="flex-1 px-3 py-1.5 rounded-lg text-[11px] outline-none"
                     style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                   <button onClick={() => path.trim() && choose(path.trim())} disabled={busy || !path.trim()}

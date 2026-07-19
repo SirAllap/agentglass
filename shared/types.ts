@@ -351,6 +351,20 @@ export interface GitRepoRef {
   ahead: number;
   behind: number;
 }
+/** One candidate directory from the project picker's path completion. Names and
+ *  a `.git` flag only — the completion endpoint never reports files. */
+export interface FsEntry {
+  name: string;
+  path: string;
+  repo: boolean;
+}
+export interface FsCompletion {
+  /** Absolute, normalised directory the entries live in. */
+  base: string;
+  entries: FsEntry[];
+  /** More matches existed than were returned — the UI says "keep typing". */
+  truncated: boolean;
+}
 export interface GitActionResult {
   ok: boolean;
   error?: string;
