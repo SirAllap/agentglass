@@ -1,4 +1,4 @@
-<!-- Thanks for contributing to agentglass! -->
+<!-- Thanks for contributing to agentglass! Keep this short — two sections is all we need. -->
 
 ## What does this PR do?
 
@@ -6,12 +6,8 @@
 
 ## How was it tested?
 
-<!-- e.g. `bunx tsc --noEmit` in web/ and server/, `bunx vite build`, and exercised in the UI (which panel / flow). -->
+<!-- e.g. `bunx tsc --noEmit` in web/ and server/, `bunx vite build`, and which panel / flow you exercised in the UI. -->
 
-## Checklist
+---
 
-- [ ] Typechecks pass (`bunx tsc --noEmit` in `web/` and `server/`)
-- [ ] Production build passes (`bunx vite build` in `web/`)
-- [ ] Stays dependency-light (no new runtime deps without a strong reason — see CONTRIBUTING.md)
-- [ ] `shared/types.ts` updated if the server↔web contract changed
-- [ ] Docs updated if behavior/config changed (README, CONTRIBUTING)
+<sub>CI runs typecheck, tests and the production build for you. If you changed the server↔web contract update `shared/types.ts`; if behavior or config changed, update the docs. See [CONTRIBUTING.md](../CONTRIBUTING.md).</sub>

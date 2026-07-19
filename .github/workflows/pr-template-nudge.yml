@@ -1,0 +1,68 @@
+name: PR template nudge
+
+# Reminds contributors about the PR template when the description skips it.
+# Never fails the PR — this is a nudge, not a gate. Uses pull_request_target so
+# the token can comment on PRs from forks; it deliberately does not check out
+# any PR code.
+
+on:
+  pull_request_target:
+    types: [opened, edited]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  nudge:
+    if: github.event.pull_request.user.type != 'Bot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- pr-template-nudge -->'
+            const body = context.payload.pull_request.body || ''
+
+            const hasWhat = /##\s*What does this PR do\?/i.test(body)
+            const hasTested = /##\s*How was it tested\?/i.test(body)
+
+            const { owner, repo } = context.repo
+            const issue_number = context.payload.pull_request.number
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            })
+            const existing = comments.find((c) => c.body?.includes(marker))
+
+            if (hasWhat && hasTested) {
+              // Description was fixed after an earlier nudge — clean up after ourselves.
+              if (existing) await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id })
+              return
+            }
+
+            if (existing) return
+
+            const missing = [
+              !hasWhat && '`## What does this PR do?`',
+              !hasTested && '`## How was it tested?`',
+            ].filter(Boolean).join(' and ')
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: [
+                marker,
+                "Thanks for the PR! Heads up: the description is missing " + missing + ".",
+                '',
+                "No need to redo anything — just edit the description and add them. It keeps reviews quick, and it's easy to miss the template when opening a PR from the CLI (`gh pr create --body ...` skips it).",
+                '',
+                '```markdown',
+                '## What does this PR do?',
+                '',
+                '',
+                '## How was it tested?',
+                '',
+                '```',
+                '',
+                'This is only a reminder — nothing is blocking your merge.',
+              ].join('\n'),
+            })
