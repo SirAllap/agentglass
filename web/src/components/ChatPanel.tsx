@@ -13,6 +13,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { GitRepoRef } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
+import { Markdown } from "../lib/markdown.tsx";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
 import {
@@ -25,13 +26,22 @@ const MODELS = [
   { id: "claude-sonnet-5", label: "Sonnet 5" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5" },
 ];
+// These run through `claude -p`, which has no terminal to prompt from: a tool
+// that would raise a permission dialog is refused outright, and there is no
+// way to grant it mid-chat. "Ask" therefore does not ask — it declines. The
+// labels say so, because a mode that silently denies while claiming to prompt
+// is what sends you hunting for a bug that isn't there.
 const MODES = [
-  { id: "default", label: "Ask" },
+  { id: "default", label: "Ask (denies un-allowed)" },
   { id: "plan", label: "Plan (no edits)" },
   { id: "acceptEdits", label: "Auto-accept edits" },
   { id: "bypassPermissions", label: "⚡ Bypass (runs all)" },
 ];
 const CWD_KEY = "agentglass.chatCwd";
+const ALLOW_KEY = "agentglass.chatAllowedTools";
+// A starting point that covers the reading and inspection an assistant reaches
+// for constantly, without granting anything that writes or leaves the machine.
+const ALLOW_DEFAULT = "Read Glob Grep Bash(git status) Bash(git log:*) Bash(git diff:*) Bash(gh pr view:*)";
 const repoName = (p: string) => p.split("/").pop() || p;
 
 const selCls = "text-[10.5px] px-2 py-1 rounded-md outline-none";
@@ -68,7 +78,7 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
   );
 }
 
-export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: () => void; focusId?: string }) {
   const chats = useSyncExternalStore(subscribe, listChats, listChats);
   const [activeId, setActiveId] = useState("");
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
@@ -76,6 +86,12 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
   // The server silently downgrades bypassPermissions unless the operator opted
   // in (AGENTGLASS_CHAT_BYPASS=1) — don't offer a mode that wouldn't stick.
   const [bypassAllowed, setBypassAllowed] = useState(false);
+  // Shared by every chat and remembered across launches: the set of tools you
+  // trust is a property of how you work, not of one conversation.
+  const [allowed, setAllowed] = useState(() => {
+    try { return localStorage.getItem(ALLOW_KEY) ?? ALLOW_DEFAULT; } catch { return ALLOW_DEFAULT; }
+  });
+  useEffect(() => { try { localStorage.setItem(ALLOW_KEY, allowed); } catch { /* private mode */ } }, [allowed]);
   const [query, setQuery] = useState("");
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -118,6 +134,10 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
     if (!getChat(activeId) && chats.length) setActiveId(chats[chats.length - 1].id);
   }, [open, chats, defaultCwd, activeId]);
 
+  // Opened to continue a specific session (from the fleet view): show that tab
+  // rather than whichever was last active, or the request looks ignored.
+  useEffect(() => { if (focusId && getChat(focusId)) setActiveId(focusId); }, [focusId]);
+
   useEffect(() => { if (defaultCwd) { try { localStorage.setItem(CWD_KEY, defaultCwd); } catch { /* ignore */ } } }, [defaultCwd]);
 
   // Clear the unread mark for whatever is on screen.
@@ -149,10 +169,13 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
   const submit = () => {
     if (!active) return;
     const text = active.draft;
-    send(active.id, text, () => openRef.current && activeIdRef.current === active.id);
+    send(active.id, text, () => openRef.current && activeIdRef.current === active.id, allowed.split(/\s+/).filter(Boolean));
   };
   const [hint, setHint] = useState("");
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // A focused textarea can swallow Escape before it reaches the global
+    // handler, stranding the panel open. Close it here instead.
+    if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     // send() returns early in both these cases; without saying so, Enter just
@@ -184,7 +207,7 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
             <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
               <motion.div initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[min(1400px,96vw)] h-[94vh] rounded-2xl flex pointer-events-auto overflow-hidden"
+                className="w-[95vw] h-[95vh] rounded-2xl flex pointer-events-auto overflow-hidden"
                 style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
                 <style>{SCROLLBAR_CSS}</style>
 
@@ -220,6 +243,16 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
                         <Select value={active.mode} onChange={(v) => update(active.id, (c) => { c.mode = v; })}
                           className={selCls} style={selStyle} title="Permission mode for tool use"
                           options={MODES.filter((m) => bypassAllowed || m.id !== "bypassPermissions").map((m) => ({ value: m.id, label: m.label }))} />
+                        {active.mode !== "bypassPermissions" && (
+                          <input
+                            value={allowed}
+                            onChange={(e) => setAllowed(e.target.value)}
+                            placeholder="allowed tools…"
+                            title={"Tools that may run without asking — space-separated.\n\nExamples: Read  Edit  Bash(git status)  Bash(gh pr view:*)\n\nWithout this, `claude -p` refuses anything that would normally prompt, because there is no terminal to prompt from."}
+                            className="text-[10px] px-2 py-1 rounded-md outline-none min-w-0 flex-1 max-w-[280px]"
+                            style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
+                          />
+                        )}
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                       </>
                     ) : <span className="text-[12px] t-dim2">no chat selected</span>}
@@ -242,14 +275,14 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
                       )}
                       {active?.messages.map((m, i) => (
                         <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                          <div className="max-w-[86%] rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed whitespace-pre-wrap break-words"
+                          <div className="max-w-[86%] min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
                             style={{ ...CODE_FONT_STYLE, fontFamily: undefined, background: m.role === "user" ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text)" }}>
                             {m.tools.length > 0 && (
                               <div className="flex flex-wrap gap-1 mb-1.5">
                                 {m.tools.map((t, j) => <span key={j} className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, color: "var(--info)", background: "color-mix(in srgb, var(--info) 12%, transparent)" }}>⚙ {t}</span>)}
                               </div>
                             )}
-                            {m.text || (m.streaming ? <span className="t-dim2">▍</span> : "")}
+                            {m.text ? <Markdown text={m.text} /> : (m.streaming ? <span className="t-dim2">▍</span> : "")}
                             {m.streaming && m.text && <span className="t-dim2">▍</span>}
                           </div>
                         </div>

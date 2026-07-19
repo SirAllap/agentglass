@@ -5,6 +5,7 @@ import { db } from "./db.ts";
 import {
   insertEvent,
   getRecent,
+  openToolCalls,
   getFilterOptions,
   getSessions,
   statsSummary,
@@ -21,7 +22,7 @@ import { maybeAlert } from "./alerts.ts";
 import { getSkills, catalogMarkdown, catalogCsv } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getUsage } from "./usage.ts";
-import { submitGate, decideGate, pendingGates } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, GATE_MAX_MS } from "./gate.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
 import { statusForPaths, commit as gitCommit, COMMIT_ENABLED } from "./git.ts";
@@ -43,7 +44,7 @@ import { chatStream, CHAT_ENABLED, CHAT_BYPASS_ALLOWED } from "./chat.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, CONFIG_PATH } from "./config.ts";
 import { privateHost } from "./net.ts";
-import { resolveToken, tokenOk, isIntake } from "./auth.ts";
+import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { rateOk } from "./ratelimit.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
@@ -204,7 +205,9 @@ const server = Bun.serve<WsData>({
     // append-only intake sinks needs it — this is what closes the door on other
     // local processes and makes a non-loopback bind safe. WS upgrades carry it
     // as ?token= (a browser can't set a header on them); fetch uses Bearer.
-    if (AUTH_TOKEN && !isIntake(pathname) && !tokenOk(req, url, AUTH_TOKEN)) {
+    // /gate is NOT exempt here: it's the control plane, and its hook carries the
+    // token when one is set (see auth.ts / gate_event.py).
+    if (AUTH_TOKEN && !isAuthExempt(pathname) && !tokenOk(req, url, AUTH_TOKEN)) {
       return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
     }
 
@@ -343,7 +346,7 @@ const server = Bun.serve<WsData>({
       const summary = String(ti.command || ti.file_path || ti.path || ti.pattern || ti.query || ti.description || b.tool_name || "").slice(0, 300);
       const decision = await submitGate(
         { source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
-        Math.min(120_000, Number(b.timeout_ms) || 60_000)
+        Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000)
       );
       return json(decision);
     }
@@ -470,7 +473,7 @@ const server = Bun.serve<WsData>({
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      return chatStream(b.cwd, b.message, b.model, b.resumeId, b.mode);
+      return chatStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools);
     }
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---
@@ -548,7 +551,10 @@ const server = Bun.serve<WsData>({
     open(ws: ServerWebSocket<WsData>) {
       if (ws.data?.kind === "pty") { ptyOpen(ws); return; }
       clients.add(ws);
-      const frame: WsFrame = { type: "initial", data: getRecent(300) };
+      // openTools seeds the client's "running" state for tools whose PreToolUse
+      // predates the 300-event initial slice — otherwise a long job in flight
+      // when the page loads shows as idle (or missing) until its Post arrives.
+      const frame: WsFrame = { type: "initial", data: getRecent(300), openTools: openToolCalls() };
       ws.send(JSON.stringify(frame));
     },
     close(ws: ServerWebSocket<WsData>) {

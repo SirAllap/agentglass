@@ -47,16 +47,41 @@ export const listChats = (): Chat[] => snapshot;
 export const getChat = (id: string): Chat | undefined => chats.get(id);
 export const chatCount = () => chats.size;
 
-export function newChat(cwd: string, model = DEFAULT_MODEL, mode = DEFAULT_MODE): Chat {
+/** Open a chat. `resume` adopts an existing claude session instead of starting
+ *  a fresh one: the next message goes out with `--resume <id>`, so the model
+ *  still has the whole conversation even though this panel has no transcript of
+ *  it. That's what turns a finished session in the fleet view into something you
+ *  can pick back up, rather than only read. */
+export function newChat(
+  cwd: string,
+  model = DEFAULT_MODEL,
+  mode = DEFAULT_MODE,
+  resume?: { sessionId: string; title?: string },
+): Chat {
   const id = `c${++seq}-${Date.now().toString(36)}`;
   const chat: Chat = {
-    id, cwd, model, mode, title: "new chat", messages: [], sessionId: "",
+    id, cwd, model, mode,
+    title: resume?.title || "new chat",
+    messages: [], sessionId: resume?.sessionId ?? "",
     sending: false, draft: "", createdAt: Date.now(), abort: null, unread: false,
   };
   chats.set(id, chat);
   emit();
   return chat;
 }
+
+/** An existing chat already resuming this claude session, if any — so asking to
+ *  resume twice focuses the open tab instead of forking a second writer onto
+ *  the same transcript. */
+/** How many chats have answered while you were looking elsewhere.
+ *
+ *  A chat runs on its own clock: you send, switch to the diff, and the reply
+ *  lands minutes later against a closed panel. Without a count surfaced outside
+ *  the panel, "is anything waiting for me?" is only answerable by opening it. */
+export const attentionCount = (): number => snapshot.reduce((n, c) => n + (c.unread ? 1 : 0), 0);
+
+export const chatResuming = (sessionId: string): Chat | undefined =>
+  [...chats.values()].find((c) => c.sessionId === sessionId);
 
 export function closeChat(id: string) {
   const c = chats.get(id);
@@ -86,7 +111,7 @@ const titleOf = (s: string) => {
  * `activeId` decides whether the reply counts as unread — a chat answering in
  * the background should say so, and the one on screen shouldn't.
  */
-export async function send(id: string, text: string, isActive: () => boolean) {
+export async function send(id: string, text: string, isActive: () => boolean, allowedTools: string[] = []) {
   const chat = chats.get(id);
   const msg = text.trim();
   if (!chat || !msg || chat.sending || !chat.cwd) return;
@@ -133,7 +158,7 @@ export async function send(id: string, text: string, isActive: () => boolean) {
   };
 
   try {
-    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId }, onEvent, ac.signal);
+    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools }, onEvent, ac.signal);
   } catch (e) {
     if (!(e instanceof DOMException && e.name === "AbortError")) {
       update(id, (c) => {

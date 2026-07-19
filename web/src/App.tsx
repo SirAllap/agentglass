@@ -29,12 +29,14 @@ import { GitPanel } from "./components/GitPanel.tsx";
 import { DockerPanel } from "./components/DockerPanel.tsx";
 import { TerminalPanel } from "./components/TerminalPanel.tsx";
 import { ChatPanel } from "./components/ChatPanel.tsx";
+import { newChat, chatResuming } from "./lib/chatStore.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
+import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
 
 export default function App() {
-  const { events, conn, lastEvent } = useLive();
+  const { events, conn, lastEvent, openTools } = useLive();
   const [windowMs, setWindowMs] = useState(3_600_000);
   const [filter, setFilter] = useState({ app: "", type: "", provider: "" });
   const [theme, setTheme] = useState(initialTheme());
@@ -49,12 +51,24 @@ export default function App() {
   const [dockerOpen, setDockerOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [chatFocus, setChatFocus] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
   const [sound, setSound] = useState(false);
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
+
+  // A live snapshot of "is any panel/overlay open", read by the global key
+  // handler so single-letter shortcuts can't stack a second panel on top of an
+  // open one. Kept in a ref so the handler needn't re-subscribe on every toggle.
+  const anyPanelOpen =
+    paletteOpen || helpOpen || statsOpen || skillsOpen || changesOpen ||
+    gitOpen || dockerOpen || terminalOpen || chatOpen || searchOpen ||
+    projectOpen || sessionView !== null || selected !== null;
+  const anyPanelOpenRef = useRef(anyPanelOpen);
+  anyPanelOpenRef.current = anyPanelOpen;
 
   // Which folder is this cockpit about? Ask once on first open when nothing is
   // scoped yet — picking a project up front is what gives the terminal, git
@@ -64,6 +78,11 @@ export default function App() {
     if (IS_DEMO) return;
     api.projects().then((p) => {
       setWorkspace(p.workspace);
+      // The app filter is hidden while a project is open (the scope already
+      // says whose data this is). Clear it on the way in, or a filter set in
+      // the whole-machine view would keep narrowing the panels from behind a
+      // control that is no longer on screen to undo it.
+      if (p.workspace) setFilter((f) => (f.app ? { ...f, app: "" } : f));
       let answered = false;
       try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
       if (!p.workspace && !answered) setProjectOpen(true);
@@ -100,7 +119,7 @@ export default function App() {
   // Every session's provider, from the FULL buffer (so the list is stable and
   // never collapses when one provider is selected).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const agentsAll = useMemo(() => deriveAgents(events), [events, tick]);
+  const agentsAll = useMemo(() => deriveAgents(events, openTools), [events, openTools, tick]);
   const sessionProvider = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of agentsAll) if (a.model_name) map.set(a.session_id, providerOf(a.model_name));
@@ -121,48 +140,32 @@ export default function App() {
     [events, filter.provider, sessionProvider]
   );
   const agents = useMemo(
-    () => (filter.provider ? deriveAgents(visibleEvents) : agentsAll),
-    [filter.provider, visibleEvents, agentsAll]
+    () =>
+      filter.provider
+        ? deriveAgents(visibleEvents, openTools.filter((s) => sessionProvider.get(s.session_id) === filter.provider))
+        : agentsAll,
+    [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider]
   );
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
   useAlertSound(alerts.length, sound);
 
   const clearFilters = useCallback(() => setFilter({ app: "", type: "", provider: "" }), []);
 
-  // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, Esc closes
+  // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, single-letter panels, Esc closes
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // ⌘K / Ctrl-K palette — always available, even inside a field or panel.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((o) => !o);
-      } else if (e.key === "?" && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        setHelpOpen((o) => !o);
-      } else if (e.key === "s" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault(); // don't let the key leak into the modal's autofocused input
-        setStatsOpen((o) => !o);
-      } else if (e.key === "k" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setSkillsOpen((o) => !o);
-      } else if (e.key === "d" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setChangesOpen((o) => !o);
-      } else if (e.key === "g" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setGitOpen((o) => !o);
-      } else if (e.key === "o" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setDockerOpen((o) => !o);
-      } else if (e.key === "t" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setTerminalOpen((o) => !o);
-      } else if (e.key === "c" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setChatOpen((o) => !o);
-      } else if (e.key === "/" && !e.metaKey && !e.ctrlKey && !/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) {
-        e.preventDefault();
-        setSearchOpen((o) => !o);
-      } else if (e.key === "Escape") {
-        // the real terminal owns Escape while focused (vim, fzf, Ctrl+R…)
+        return;
+      }
+
+      // Escape closes open panels, regardless of where focus rests. The real
+      // terminal owns Escape while its shell is focused (vim, fzf, Ctrl+R…), so
+      // leave xterm alone. Chat handles its own Escape locally (see ChatPanel)
+      // because a focused textarea can swallow it before it reaches here.
+      if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
         setSelected(null);
         setPaletteOpen(false);
@@ -176,6 +179,30 @@ export default function App() {
         setChatOpen(false);
         setSearchOpen(false);
         setSessionView(null);
+        return;
+      }
+
+      // Single-letter globals below. Two guards, both required:
+      //  * focus must rest on nothing (the <body>) — never a button (a mouse
+      //    click parks focus there), an input, or a textarea. Without this a
+      //    letter fires right after any click, and leaks into a field's draft.
+      //  * no panel may already be open — otherwise a letter stacks a second
+      //    panel on top of the first. Close with Escape, then open with a letter.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const a = document.activeElement;
+      const focusFree = !a || a === document.body || a === document.documentElement;
+      if (!focusFree || anyPanelOpenRef.current) return;
+
+      switch (e.key) {
+        case "?": setHelpOpen((o) => !o); break;
+        case "s": e.preventDefault(); setStatsOpen((o) => !o); break;
+        case "k": e.preventDefault(); setSkillsOpen((o) => !o); break;
+        case "d": e.preventDefault(); setChangesOpen((o) => !o); break;
+        case "g": e.preventDefault(); setGitOpen((o) => !o); break;
+        case "o": e.preventDefault(); setDockerOpen((o) => !o); break;
+        case "t": e.preventDefault(); setTerminalOpen((o) => !o); break;
+        case "c": e.preventDefault(); setChatOpen((o) => !o); break;
+        case "/": e.preventDefault(); setSearchOpen((o) => !o); break;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -216,6 +243,7 @@ export default function App() {
         onOpenDocker={() => setDockerOpen(true)}
         onOpenTerminal={() => setTerminalOpen(true)}
         onOpenChat={() => setChatOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
         onClear={clearFilters}
         showUsage={showUsage}
         workspace={workspace}
@@ -234,8 +262,10 @@ export default function App() {
             <Fleet agents={agents} activeApp={filter.app} onSelect={(a) => setSessionView({ id: a.session_id, app: a.source_app })} />
           </div>
 
-          <div className="xl:col-span-6 min-w-0 min-h-0 grid grid-rows-[minmax(0,150px)_minmax(0,1fr)] gap-3 h-[520px] tall:h-auto">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 min-w-0 min-h-0">
+          {/* Phones: auto-height rows with fixed chart/feed heights — the
+              desktop 520px box clipped Throughput/ToolMix to slivers. */}
+          <div className="xl:col-span-6 min-w-0 min-h-0 grid grid-rows-[auto_400px] sm:grid-rows-[minmax(0,150px)_minmax(0,1fr)] gap-3 h-auto sm:h-[520px] tall:h-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 auto-rows-[150px] sm:auto-rows-auto gap-3 min-w-0 min-h-0">
               <Throughput events={visibleEvents} />
               <ToolMix events={visibleEvents} />
             </div>
@@ -270,9 +300,34 @@ export default function App() {
       <GitPanel open={gitOpen} onClose={() => setGitOpen(false)} />
       <DockerPanel open={dockerOpen} onClose={() => setDockerOpen(false)} />
       <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
-      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} focusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
-      <SessionModal sessionId={sessionView?.id ?? null} sourceApp={sessionView?.app} onClose={() => setSessionView(null)} onFilter={(app) => setFilter((f) => ({ ...f, app }))} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        sound={sound}
+        onSound={() => setSound((s) => !s)}
+        onOpenStats={() => setStatsOpen(true)}
+        onOpenHelp={() => setHelpOpen(true)}
+      />
+      <SessionModal
+        sessionId={sessionView?.id ?? null}
+        sourceApp={sessionView?.app}
+        onClose={() => setSessionView(null)}
+        onFilter={(app) => setFilter((f) => ({ ...f, app }))}
+        onResume={(s) => {
+          if (!s.project_path) return;
+          // Reuse an open tab for the same session rather than starting a
+          // second one: two chats resuming one id would both write to it.
+          const existing = chatResuming(s.session_id);
+          const chat = existing ?? newChat(s.project_path, s.model_name || undefined, undefined, {
+            sessionId: s.session_id,
+            title: s.summary?.slice(0, 40) || `${s.source_app}:${s.session_id.slice(0, 8)}`,
+          });
+          setChatFocus(chat.id);
+          setChatOpen(true);
+        }}
+      />
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

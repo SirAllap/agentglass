@@ -1,13 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { motion } from "motion/react";
 import type { ConnState } from "../lib/useLive.ts";
-import { api, IS_DEMO } from "../lib/api.ts";
+import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { ThemeSwitcher } from "./ThemeSwitcher.tsx";
 import { UsageWidget } from "./UsageWidget.tsx";
-import { Portal } from "./Portal.tsx";
+import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
-import { autostartEnabled, setAutostart } from "../lib/desktop.ts";
+import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
 
 // The long windows matter once history isn't pruned: the transcript scan can
 // backfill months of sessions, and a 7d ceiling would hide most of the fleet.
@@ -93,95 +93,26 @@ function ChatIcon() {
   );
 }
 
-/** Overflow menu: secondary actions nested behind one "⋯" button. */
-function MoreMenu({ sound, onSound, onOpenStats, onOpenHelp }: { sound: boolean; onSound: () => void; onOpenStats: () => void; onOpenHelp: () => void }) {
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ top: 0, right: 0 });
-
-  useLayoutEffect(() => {
-    if (open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 8, right: window.innerWidth - r.right });
-    }
-  }, [open]);
-
-  // Launch-at-login is a property of the installed app, so the entry only
-  // exists in the desktop window — and only once the shell has confirmed the
-  // current state, rather than showing a toggle that might be lying.
-  const [autostart, setAutostartState] = useState<boolean | null>(null);
-  useEffect(() => { autostartEnabled().then(setAutostartState); }, []);
-  const toggleAutostart = async () => {
-    const next = await setAutostart(!autostart);
-    if (next !== null) setAutostartState(next);
-  };
-
-  const items: { label: string; hint?: string; onClick?: () => void; href?: string; download?: string }[] = [
-    { label: "📊 Statistics", hint: "s", onClick: onOpenStats },
-    { label: "❔ Legend & shortcuts", hint: "?", onClick: onOpenHelp },
-    { label: sound ? "🔊 Alert sounds — on" : "🔇 Alert sounds — off", onClick: onSound },
-    ...(autostart === null
-      ? []
-      : [{ label: autostart ? "🚀 Start at login — on" : "🚀 Start at login — off", onClick: toggleAutostart }]),
-    { label: "↓ Events CSV", href: api.exportUrl("csv"), download: "agentglass-events.csv" },
-    { label: "↓ Events JSON", href: api.exportUrl("json"), download: "agentglass-events.json" },
-    { label: "↓ Skills catalog (md)", href: api.skillsExportUrl(), download: "agentglass-skills.md" },
-  ];
-
+/** Settings button — the overflow menu became a real modal (SettingsModal),
+ *  because a flat list of one-liners could not show a toggle's state without
+ *  spelling it out in the label. */
+function MoreMenu({ onOpen }: { onOpen: () => void }) {
   return (
-    <>
-      <button ref={btnRef} title="More — stats, help, sounds, exports" onClick={() => setOpen((o) => !o)}
-        className="h-8 w-8 grid place-items-center rounded-lg text-[15px]"
-        style={{
-          border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
-          background: open ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)",
-          color: open ? "var(--primary-hover)" : "var(--text3)",
-        }}>
-        ⋯
-      </button>
-      <Portal>
-        <AnimatePresence>
-          {open && (
-            <>
-              <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
-              <motion.div
-                initial={{ opacity: 0, y: -8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, scale: 0.96 }}
-                transition={{ type: "spring", stiffness: 420, damping: 32 }}
-                className="fixed w-56 p-1.5 rounded-xl flex flex-col gap-0.5"
-                style={{
-                  top: pos.top, right: pos.right, zIndex: 9999,
-                  background: "color-mix(in srgb, var(--bg2) 97%, black)",
-                  border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
-                  boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
-                  backdropFilter: "blur(18px)",
-                }}
-              >
-                {items.map((it) =>
-                  it.href ? (
-                    <a key={it.label} href={it.href} download={it.download} onClick={() => setOpen(false)}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[11.5px] t-dim hover:bg-white/5">
-                      {it.label}
-                    </a>
-                  ) : (
-                    <button key={it.label} onClick={() => { it.onClick?.(); setOpen(false); }}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[11.5px] t-dim text-left hover:bg-white/5">
-                      <span>{it.label}</span>
-                      {it.hint && <kbd className="chip text-[9px] t-dim2">{it.hint}</kbd>}
-                    </button>
-                  )
-                )}
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
-      </Portal>
-    </>
+    <button title="Settings — preferences, exports, shortcuts" onClick={onOpen}
+      className="h-8 w-8 grid place-items-center rounded-lg text-[15px]"
+      style={{
+        border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+        background: "color-mix(in srgb, var(--bg3) 30%, transparent)",
+        color: "var(--text3)",
+      }}>
+      ⋯
+    </button>
   );
 }
 
 export function Header({
   conn, windowMs, onWindow, apps, types, providers, filter, onFilter, theme, onTheme,
-  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenChanges, onOpenGit, onOpenDocker, onOpenTerminal, onOpenChat, onClear, showUsage,
+  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenChanges, onOpenGit, onOpenDocker, onOpenTerminal, onOpenChat, onOpenSettings, onClear, showUsage,
   workspace, onOpenProject,
 }: {
   conn: ConnState;
@@ -205,38 +136,55 @@ export function Header({
   onOpenDocker: () => void;
   onOpenTerminal: () => void;
   onOpenChat: () => void;
+  onOpenSettings: () => void;
   onClear: () => void;
   showUsage: boolean;
   workspace: string | null;
   onOpenProject: () => void;
 }) {
   const live = conn === "open";
+  // Subscribed rather than polled: a reply arriving is exactly when this can
+  // change, and the store already notifies on it.
+  const waiting = useSyncExternalStore(subscribeChats, attentionCount, attentionCount);
+  const unauth = conn === "unauthorized";
+  const pillColor = live ? "var(--success)" : unauth ? "var(--error)" : "var(--warning)";
   const hasFilter = filter.app || filter.type || filter.provider;
 
   return (
-    <header className="flex items-center gap-3 px-4 py-2.5 shrink-0 relative z-20"
+    <header className="flex items-center gap-x-3 gap-y-2 px-3 sm:px-4 py-2.5 shrink-0 relative z-20 flex-wrap sm:flex-nowrap"
       style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg2) 94%, var(--bg))" }}>
       <div className="flex items-center gap-2.5 shrink-0">
-        <motion.span initial={{ rotate: -20, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 200 }} className="text-xl">🛰</motion.span>
+        <motion.span initial={{ rotate: -20, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 200 }} className="flex">
+          <Logo size={26} title="agentglass" />
+        </motion.span>
         <div className="leading-none">
-          <div className="text-[16px] font-bold tracking-tight" style={{ color: "var(--text)" }}>agentglass</div>
-          {/* Scoped to one project → say which — and make it the way to switch:
-              the name IS the project picker. */}
-          <button onClick={onOpenProject} className="hidden sm:flex items-center gap-1 text-[10px] hover:opacity-80"
-            title={workspace ? `${workspace}\nclick to switch project` : "click to open a project — the cockpit scopes itself to its folder"}>
-            {workspace
-              ? <span className="truncate" style={{ color: "var(--primary-hover)", maxWidth: 260 }}>⌂ {workspace.split("/").pop()}</span>
-              : <span className="t-dim2">⌂ pick a project</span>}
-            <span className="t-dim2">▾</span>
-          </button>
+          <div className="text-[16px] font-bold tracking-tight" style={{ color: "var(--text)" }}>agent<span style={{ color: "var(--primary)" }}>glass</span></div>
         </div>
-        <span className="flex items-center gap-1.5 ml-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
-          style={{ color: live ? "var(--success)" : "var(--warning)", background: `color-mix(in srgb, ${live ? "var(--success)" : "var(--warning)"} 14%, transparent)` }}>
+        {/* The project defines what every other number on screen means, so it
+            reads as a control in its own right rather than a caption under the
+            wordmark — at that size it was easy to miss that the scope was even
+            settable, let alone what it was set to. */}
+        <button onClick={onOpenProject}
+          className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium shrink-0 transition-opacity hover:opacity-80"
+          title={workspace ? `${workspace}\nclick to switch project` : "click to open a project — the cockpit scopes itself to its folder"}
+          style={{
+            color: workspace ? "var(--primary-hover)" : "var(--text2)",
+            background: `color-mix(in srgb, var(--primary) ${workspace ? 14 : 7}%, transparent)`,
+            border: `1px solid color-mix(in srgb, var(--primary) ${workspace ? 40 : 20}%, transparent)`,
+          }}>
+          <span>⌂</span>
+          <span className="truncate" style={{ maxWidth: 200 }}>{workspace ? workspace.split("/").pop() : "every project"}</span>
+          <span className="opacity-60">▾</span>
+        </button>
+        <span onClick={unauth ? reauthPrompt : undefined}
+          title={unauth ? "This server needs an access token — click to enter it" : undefined}
+          className={`flex items-center gap-1.5 ml-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${unauth ? "cursor-pointer" : ""}`}
+          style={{ color: pillColor, background: `color-mix(in srgb, ${pillColor} 14%, transparent)` }}>
           <span className="relative flex h-1.5 w-1.5">
             {live && <span className="absolute inline-flex h-full w-full rounded-full opacity-70" style={{ background: "var(--success)", animation: "ping-ring 1.6s ease-out infinite" }} />}
-            <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ background: live ? "var(--success)" : "var(--warning)" }} />
+            <span className="relative inline-flex rounded-full h-1.5 w-1.5" style={{ background: pillColor }} />
           </span>
-          {live ? "LIVE" : conn.toUpperCase()}
+          {live ? "LIVE" : unauth ? "UNAUTHORIZED ⚿" : conn.toUpperCase()}
         </span>
         {IS_DEMO && (
           <a
@@ -247,14 +195,16 @@ export function Header({
             className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold"
             style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}
           >
-            ✦ DEMO · sample data
+            ✦ DEMO<span className="hidden sm:inline"> · sample data</span>
           </a>
         )}
       </div>
 
       {/* Middle zone: fills the free space and scrolls sideways instead of
-          wrapping, so the header stays a single line at any width / zoom. */}
-      <div className="flex items-center gap-2 flex-1 min-w-0 overflow-x-auto agw-noscrollbar">
+          wrapping, so the header stays a single line at any width / zoom.
+          On phones it drops to its own full-width second row — otherwise the
+          right-side controls get pushed off-screen and become unreachable. */}
+      <div className="flex items-center gap-2 grow min-w-0 overflow-x-auto agw-noscrollbar order-3 basis-full sm:order-none sm:basis-0">
       <div className="flex items-center gap-0.5 p-0.5 rounded-lg shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 35%, transparent)" }}>
         {WINDOWS.map((w) => (
           <button key={w.label} onClick={() => onWindow(w.ms)} className="px-2 py-1 rounded-md text-[11px] transition-all"
@@ -265,7 +215,13 @@ export function Header({
       </div>
 
       {/* max-w keeps long worktree names (e.g. feature-branch-…) from blowing the header open */}
-      <Select value={filter.app} style={selStyle} options={[{ value: "", label: "all apps" }, ...apps.map((a) => ({ value: a, label: a }))]} onChange={(v) => onFilter({ ...filter, app: v })} />
+      {/* The app filter and the project scope answer the same question — "whose
+          data is this?" — so with a project open it is a weaker duplicate of a
+          control that already applies, offering a list of one. It earns its
+          place only in the whole-machine view. */}
+      {!workspace && (
+        <Select value={filter.app} style={selStyle} options={[{ value: "", label: "all apps" }, ...apps.map((a) => ({ value: a, label: a }))]} onChange={(v) => onFilter({ ...filter, app: v })} />
+      )}
       <Select value={filter.type} style={selStyle} options={[{ value: "", label: "all events" }, ...types.map((t) => ({ value: t, label: t }))]} onChange={(v) => onFilter({ ...filter, type: v })} />
       {/* Provider is auto-detected from each session's model. With one provider
           it's shown but disabled (just so you can see it); a mixed fleet
@@ -279,11 +235,12 @@ export function Header({
       {hasFilter && <button onClick={onClear} className="text-[11px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>clear ✕</button>}
       </div>{/* middle scroll zone */}
 
-      <div className="shrink-0 flex items-center gap-2">
+      <div className="shrink-0 flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-0 max-w-full overflow-x-auto agw-noscrollbar">
         {/* Anthropic plan meters — only shown when viewing Anthropic (it's the
             one provider with a usage API), and only where there's room. */}
         {showUsage && <div className="hidden 2xl:block"><UsageWidget /></div>}
-        <button onClick={onOpenPalette} className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px]" style={selStyle}>
+        {/* A keyboard-palette chip is dead weight on touch — hide it there. */}
+        <button onClick={onOpenPalette} className="h-8 hidden sm:flex items-center gap-1.5 px-2.5 rounded-lg text-[11px]" style={selStyle}>
           <span>{MOD_KEY}K</span><span className="hidden sm:inline t-dim2">search</span>
         </button>
         {/* Git + Diff are the primary workspaces (replacing lazygit) — labeled + accented */}
@@ -339,22 +296,33 @@ export function Header({
           <TerminalIcon />
           <span className="hidden lg:inline">term</span>
         </button>
+        {/* A chat runs on its own clock: you send, move to the diff, and the
+            reply lands against a closed panel. Waiting replies pull the button
+            to the success colour and pulse it, so "is anything waiting for me?"
+            is answerable without opening anything. */}
         <button
           onClick={onOpenChat}
-          title="Chat — drive a Claude session in any repo/worktree (c)"
+          title={waiting
+            ? `${waiting} chat${waiting === 1 ? "" : "s"} replied while you were elsewhere (c)`
+            : "Chat — drive a Claude session in any repo/worktree (c)"}
           className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold"
           style={{
-            color: "var(--primary-hover)",
-            background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)",
+            color: waiting ? "var(--success)" : "var(--primary-hover)",
+            background: `color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} 18%, transparent)`,
+            border: `1px solid color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} ${waiting ? 70 : 50}%, transparent)`,
+            animation: waiting ? "agx-attention 1.8s ease-in-out infinite" : undefined,
           }}
         >
           <ChatIcon />
           <span className="hidden lg:inline">chat</span>
+          {waiting > 0 && (
+            <span className="tabular-nums px-1 rounded-full text-[9.5px]"
+              style={{ background: "color-mix(in srgb, var(--success) 30%, transparent)" }}>{waiting}</span>
+          )}
         </button>
         {/* Skills demoted to a plain icon */}
         <IconBtn title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></IconBtn>
-        <MoreMenu sound={sound} onSound={onSound} onOpenStats={onOpenStats} onOpenHelp={onOpenHelp} />
+        <MoreMenu onOpen={onOpenSettings} />
         <ThemeSwitcher current={theme} onChange={onTheme} />
       </div>
     </header>

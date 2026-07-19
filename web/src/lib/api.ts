@@ -34,6 +34,36 @@ const authHeaders = (h: Record<string, string> = {}): Record<string, string> =>
 const withToken = (url: string): string =>
   TOKEN ? url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : url;
 
+/** Whether this client has a shared-secret token configured. */
+export const hasToken = (): boolean => !!TOKEN;
+
+/** Tell an auth failure apart from a plain outage. A browser WebSocket can't
+ *  read the 401 that rejects its upgrade, so a socket that closes before it ever
+ *  opens looks identical to the server being down. Probing an authenticated HTTP
+ *  endpoint (which *can* read the status) disambiguates: 401 → the token is
+ *  wrong/rotated/missing; any other answer → the server is up; a thrown fetch →
+ *  it's unreachable. */
+export async function probeAuth(): Promise<"ok" | "unauthorized" | "offline"> {
+  try {
+    const r = await fetch(SERVER + "/events/filter-options", { headers: authHeaders() });
+    return r.status === 401 ? "unauthorized" : "ok";
+  } catch {
+    return "offline";
+  }
+}
+
+/** Ask for a token, persist it, and reload so every fetch/WS picks it up. The
+ *  recovery path when a server starts requiring a token, or rotates it, after
+ *  this tab was loaded. */
+export function reauthPrompt(): void {
+  if (typeof window === "undefined") return;
+  const t = window.prompt("This server needs an access token.\nPaste it to reconnect:");
+  if (t && t.trim()) {
+    try { localStorage.setItem("agentglass_token", t.trim()); } catch { /* private mode */ }
+    location.reload();
+  }
+}
+
 export const WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
@@ -143,7 +173,7 @@ const realApi = {
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
   chatEnabled: () => get<{ enabled: boolean; bypass?: boolean }>("/chat/enabled"),
-  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
+  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[] }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     const res = await fetch(SERVER + "/chat/send", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
     if (!res.body) { try { onEvent(JSON.parse(await res.text())); } catch { /* non-json */ } return; }
     const reader = res.body.getReader();
@@ -218,7 +248,7 @@ const demoApi: typeof realApi = {
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
   chatEnabled: () => D({ enabled: false }),
-  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
+  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[] }, onEvent: (o: Record<string, unknown>) => void) => {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });
     onEvent({ type: "result", result: "" });

@@ -58,6 +58,11 @@ const SKILL_NAMES = ["pr-summary", "code-review", "test-scaffold", "dep-upgrade"
 
 let idc = 1000;
 const demoCtx = new Map<string, number>(); // session → simulated context size
+// Pre events waiting for their Post. Without this the demo emitted Pres and
+// Posts with unrelated tool_use_ids, so nothing ever paired: every Pre stayed
+// a pulsing "Running…" row forever and no demo session could reach idle —
+// the showcase demonstrating exactly the wrong behavior.
+const openPres: { app: string; sid: string; model: string; tool: string; tuid: string }[] = [];
 function mkEvent(o: Partial<WatchEvent> & { source_app: string; session_id: string; hook_event_type: string }): WatchEvent {
   return {
     id: ++idc,
@@ -71,6 +76,17 @@ function mkEvent(o: Partial<WatchEvent> & { source_app: string; session_id: stri
 
 /** One plausible event for the live stream (weighted toward tool activity). */
 function nextEvent(): WatchEvent {
+  // Resolve an open Pre first, most of the time — running rows should morph
+  // into finished ones within a few ticks, the way the real pairing behaves.
+  if (openPres.length && (Math.random() < 0.45 || openPres.length > 4)) {
+    const p = openPres.shift()!;
+    return mkEvent({
+      source_app: p.app, session_id: p.sid, model_name: p.model, timestamp: Date.now(),
+      hook_event_type: "PostToolUse", tool_name: p.tool, tool_use_id: p.tuid,
+      duration_ms: rint(300, p.tool === "Bash" ? 6000 : 900),
+      payload: { tool_name: p.tool },
+    });
+  }
   const s = pick(SESSIONS);
   const base = { source_app: s.app, session_id: s.sid, model_name: s.model, timestamp: Date.now() };
   const roll = Math.random();
@@ -88,7 +104,9 @@ function nextEvent(): WatchEvent {
   if (roll < 0.62) {
     const tool = pick(["Bash", "Read", "Edit"]);
     const detail = tool === "Bash" ? pick(BASHES) : pick(PATHS);
-    return mkEvent({ ...base, hook_event_type: "PreToolUse", tool_name: tool, tool_use_id: uid(), payload: { tool_name: tool, tool_input: tool === "Bash" ? { command: detail } : { file_path: detail } } });
+    const tuid = uid();
+    openPres.push({ app: s.app, sid: s.sid, model: s.model, tool, tuid });
+    return mkEvent({ ...base, hook_event_type: "PreToolUse", tool_name: tool, tool_use_id: tuid, payload: { tool_name: tool, tool_input: tool === "Bash" ? { command: detail } : { file_path: detail } } });
   }
   if (roll < 0.72) {
     // Each turn re-sends the growing conversation (mostly as cache reads), so
@@ -458,6 +476,22 @@ export function session(id: string): SessionDetail {
       { role: "assistant", text: "Found it — `calculateTotal` applied the coupon and `checkout()` applied it again. Consolidating it into one place and clamping the total at zero.", ts: now - 78 * 60_000 },
       { role: "user", text: "add a retry to the checkout webhook too", ts: now - 40 * 60_000 },
       { role: "assistant", text: "Done. Wrapped the webhook call in the standard retry policy (3 attempts, exponential backoff) and opened PR #482.", ts: now - 12 * 60_000 },
+    ],
+    // The demo's timeline shows what the real one is for: the tool runs between
+    // the messages, which is where the work actually happens.
+    timeline: [
+      { kind: "message", role: "user", text: "the cart total is applying the discount twice at checkout, fix it", ts: now - 90 * 60_000 },
+      { kind: "tool", tool: "Grep", target: "calculateTotal", ts: now - 89 * 60_000, duration_ms: 120 },
+      { kind: "tool", tool: "Read", target: "src/cart/total.ts", ts: now - 88 * 60_000, duration_ms: 90 },
+      { kind: "tool", tool: "Edit", target: "src/cart/total.ts", ts: now - 80 * 60_000, duration_ms: 210 },
+      { kind: "tool", tool: "Bash", target: "npm test -- cart", note: "run the cart suite", ts: now - 79 * 60_000, duration_ms: 8400 },
+      { kind: "message", role: "assistant", text: "Found it — `calculateTotal` applied the coupon and `checkout()` applied it again. Consolidating it into one place and clamping the total at zero.", ts: now - 78 * 60_000 },
+      { kind: "message", role: "user", text: "add a retry to the checkout webhook too", ts: now - 40 * 60_000 },
+      { kind: "tool", tool: "Edit", target: "src/checkout/webhook.ts", ts: now - 30 * 60_000, duration_ms: 180 },
+      { kind: "tool", tool: "Bash", target: "npm test -- checkout", ts: now - 26 * 60_000, is_error: true, duration_ms: 6100 },
+      { kind: "tool", tool: "Edit", target: "src/checkout/webhook.ts", ts: now - 22 * 60_000, duration_ms: 160 },
+      { kind: "tool", tool: "Bash", target: "gh pr create --fill", ts: now - 13 * 60_000, duration_ms: 2400 },
+      { kind: "message", role: "assistant", text: "Done. Wrapped the webhook call in the standard retry policy (3 attempts, exponential backoff) and opened PR #482.", ts: now - 12 * 60_000 },
     ],
     changes: changes().changes.slice(0, 6),
   };

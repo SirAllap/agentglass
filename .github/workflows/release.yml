@@ -1,7 +1,9 @@
 name: Release
 
-# Every annotated tag vX.Y.Z becomes a GitHub Release, with the tag's
-# annotation message as the release notes — write the notes once, in the tag.
+# A pushed v* tag gets a GitHub Release created from its annotation — but a
+# release that already exists (e.g. published from the UI, which is also what
+# creates the tag) is left strictly alone. Overwriting almost erased the
+# hand-written v0.1.0 notes once; never again.
 on:
   push:
     tags: ["v*"]
@@ -16,8 +18,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # need the real tag object, not a shallow peel
-      - name: Extract tag annotation as release notes
-        run: git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/notes.md
-      - uses: softprops/action-gh-release@v2
-        with:
-          body_path: /tmp/notes.md
+      - name: Create release only if the tag has none
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release for $GITHUB_REF_NAME already exists — leaving it untouched"
+            exit 0
+          fi
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/notes.md
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md

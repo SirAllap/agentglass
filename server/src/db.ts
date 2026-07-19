@@ -12,9 +12,11 @@ import type {
   SkillUsage,
   AppUsage,
   TypeCount,
+  OpenToolCall,
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel } from "./pricing.ts";
+import { workspaceRoot } from "./config.ts";
 
 /**
  * Where the database lives.
@@ -113,6 +115,33 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(text);
 // it is prepared. Harmless (throws "duplicate column") once it already exists.
 try { db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT"); } catch { /* already present */ }
 
+// Where a row came from, promoted out of `payload` so scope can be a WHERE
+// clause instead of a JSON re-parse per query. Both are VIRTUAL generated
+// columns: they cost no storage and apply to rows written *before* this
+// migration, so a cockpit scoped today correctly hides a machine-wide history
+// collected yesterday — no backfill pass over a multi-GB events table.
+//
+// `project_path` is the resolved repo root; `cwd` is only present when the turn
+// ran somewhere else inside it (a linked worktree, a monorepo subdir). Scope has
+// to consult both, mirroring the scanner's own test in transcripts.ts.
+for (const [col, path] of [["project_path", "$.project_path"], ["cwd_path", "$.cwd"]]) {
+  try {
+    db.exec(`ALTER TABLE events ADD COLUMN ${col} TEXT GENERATED ALWAYS AS (json_extract(payload, '${path}')) VIRTUAL`);
+  } catch { /* already present */ }
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_path)");
+
+// Sessions have no payload of their own, so this one is a real column, written
+// at upsert and backfilled from the session's events for rows that predate it.
+try { db.exec("ALTER TABLE sessions ADD COLUMN project_path TEXT"); } catch { /* already present */ }
+db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)");
+db.exec(`
+  UPDATE sessions SET project_path = (
+    SELECT e.project_path FROM events e
+     WHERE e.session_id = sessions.session_id AND e.project_path IS NOT NULL
+     ORDER BY e.id DESC LIMIT 1
+  ) WHERE project_path IS NULL`);
+
 /** Coarse vendor for a model name — the provider dimension. Returns null for an
  *  unknown/absent model so a session's known provider is never overwritten.
  *  Kept in sync with the web's providerOf() in web/src/lib/format.ts. */
@@ -135,6 +164,32 @@ export function providerOf(model: string | null | undefined): string | null {
 function providerScope(provider?: string | null): { clause: string; args: string[] } {
   return provider
     ? { clause: " AND session_id IN (SELECT session_id FROM sessions WHERE provider = ?)", args: [provider] }
+    : { clause: "", args: [] };
+}
+
+/** SQL fragment + args restricting an events query to one project. A scoped
+ *  cockpit is *about* that project, so rows from anywhere else stay hidden even
+ *  though they remain in the DB — an earlier machine-wide run, or hooks fired by
+ *  a sibling repo. Matches the root and everything under it, against both the
+ *  resolved repo root and the raw cwd, so linked worktrees and monorepo subdirs
+ *  are in scope either way (the same test the scanner applies at ingest).
+ *
+ *  Rows with no recorded path (pre-scanner events) are treated as out of scope:
+ *  a project view that quietly includes "unknown" is worse than one that's
+ *  honestly narrow. Empty clause when unscoped — the whole-machine view. */
+export function scopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
+  if (!scope) return { clause: "", args: [] };
+  const under = scope + "/%";
+  return {
+    clause: " AND (project_path = ? OR project_path LIKE ? OR cwd_path = ? OR cwd_path LIKE ?)",
+    args: [scope, under, scope, under],
+  };
+}
+
+/** Same restriction for the `sessions` table, which carries its own column. */
+function sessionScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
+  return scope
+    ? { clause: " AND (project_path = ? OR project_path LIKE ?)", args: [scope, scope + "/%"] }
     : { clause: "", args: [] };
 }
 
@@ -306,11 +361,11 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
 
 const upsertStmt = db.query(`
   INSERT INTO sessions (
-    session_id, source_app, model_name, provider, started_at, ended_at, last_seen,
+    session_id, source_app, model_name, provider, project_path, started_at, ended_at, last_seen,
     event_count, tool_count, error_count,
     input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd
   ) VALUES (
-    $sid, $src, $model, $provider, $ts, $ended, $ts,
+    $sid, $src, $model, $provider, $project, $ts, $ended, $ts,
     1, $tool, $err,
     $in, $out, $cw, $cr, $cost
   )
@@ -318,6 +373,7 @@ const upsertStmt = db.query(`
     source_app = excluded.source_app,
     model_name = COALESCE(excluded.model_name, sessions.model_name),
     provider = COALESCE(excluded.provider, sessions.provider),
+    project_path = COALESCE(excluded.project_path, sessions.project_path),
     ended_at = COALESCE(excluded.ended_at, sessions.ended_at),
     last_seen = excluded.last_seen,
     event_count = sessions.event_count + 1,
@@ -347,6 +403,9 @@ function upsertSession(
     $src: n.source_app,
     $model: n.model_name,
     $provider: providerOf(n.model_name),
+    // Carried in the payload by both the scanner and the hooks; null for an
+    // event that never recorded where it ran, which COALESCE leaves alone.
+    $project: typeof n.payload?.project_path === "string" ? n.payload.project_path : null,
     $ts: n.timestamp,
     $ended: isTerminal(n.hook_event_type) ? n.timestamp : null,
     $tool: isToolPost(n.hook_event_type) ? 1 : 0,
@@ -372,42 +431,90 @@ const recentStmt = db.query<any, [number]>(
   `SELECT * FROM events ORDER BY timestamp DESC, id DESC LIMIT ?`
 );
 export function getRecent(limit = 300, provider?: string): WatchEvent[] {
-  if (!provider) return recentStmt.all(limit).map(parseEventRow).reverse();
+  const scope = scopeClause();
+  const prov = providerScope(provider);
+  if (!scope.clause && !prov.clause) return recentStmt.all(limit).map(parseEventRow).reverse();
   return db
     .query<any, any[]>(
-      `SELECT * FROM events WHERE session_id IN (SELECT session_id FROM sessions WHERE provider = ?) ORDER BY timestamp DESC, id DESC LIMIT ?`
+      `SELECT * FROM events WHERE 1=1${prov.clause}${scope.clause} ORDER BY timestamp DESC, id DESC LIMIT ?`
     )
-    .all(provider, limit)
+    .all(...prov.args, ...scope.args, limit)
     .map(parseEventRow)
     .reverse();
 }
 
+// A tool call is "open" while its PreToolUse has no matching Post. The client
+// derives this from its live buffer, but a long tool emits nothing while it runs,
+// so on a busy fleet (or after a reload) the Pre can age out of the buffer and
+// the session wrongly flips to idle — or vanishes — mid-run. This is the server's
+// authoritative view, sent on the initial frame so the client doesn't depend on
+// the Pre still being in memory. Bounded to the last 30 min (past that a stuck
+// pair is a lost session, not a long build — matching the client's ceiling) and
+// to sessions with no Stop/SessionEnd after the Pre.
+const OPEN_TOOL_MAX_MS = 30 * 60_000;
+const openToolSql = (scoped: string) =>
+  `SELECT p.session_id AS session_id, p.source_app AS source_app,
+          COALESCE(p.tool_name, 'tool') AS tool_name, p.timestamp AS since
+     FROM events p
+    WHERE p.hook_event_type = 'PreToolUse'
+      AND p.timestamp >= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM events q
+         WHERE q.hook_event_type IN ('PostToolUse','PostToolUseFailure')
+           AND (
+             (p.tool_use_id IS NOT NULL AND q.tool_use_id = p.tool_use_id)
+             OR (p.tool_use_id IS NULL AND q.session_id = p.session_id
+                 AND q.tool_name = p.tool_name AND q.timestamp >= p.timestamp)
+           )
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM events s
+         WHERE s.session_id = p.session_id
+           AND s.hook_event_type IN ('Stop','SessionEnd')
+           AND s.timestamp >= p.timestamp
+      )
+      ${scoped}
+    ORDER BY p.timestamp ASC
+    LIMIT 200`;
+
+/** Currently-running tool calls across the fleet (open Pre, unpaired, session
+ *  still alive) — the seed for the client's per-agent "running" state. */
+export function openToolCalls(): OpenToolCall[] {
+  // Aliased to `p`, so the shared clause needs qualifying to stay unambiguous
+  // against the correlated subqueries above.
+  const s = scopeClause();
+  const scoped = s.clause.replace(/\b(project_path|cwd_path)\b/g, "p.$1");
+  return db
+    .query<OpenToolCall, any[]>(openToolSql(scoped))
+    .all(Date.now() - OPEN_TOOL_MAX_MS, ...s.args);
+}
+
 export function getFilterOptions() {
-  const apps = db
-    .query<{ source_app: string }, []>(`SELECT DISTINCT source_app FROM events ORDER BY 1`)
-    .all()
-    .map((r) => r.source_app);
-  const types = db
-    .query<{ hook_event_type: string }, []>(
-      `SELECT DISTINCT hook_event_type FROM events ORDER BY 1`
-    )
-    .all()
-    .map((r) => r.hook_event_type);
-  const models = db
-    .query<{ model_name: string }, []>(
-      `SELECT DISTINCT model_name FROM events WHERE model_name IS NOT NULL ORDER BY 1`
-    )
-    .all()
-    .map((r) => r.model_name);
-  return { source_apps: apps, hook_event_types: types, models };
+  // Scoped too, or the dropdowns keep offering apps and models that the feed
+  // behind them can no longer show — picking one would just empty the panel.
+  const s = scopeClause();
+  const distinct = <T,>(col: string, extra = "") =>
+    db
+      .query<Record<string, T>, string[]>(
+        `SELECT DISTINCT ${col} FROM events WHERE 1=1${extra}${s.clause} ORDER BY 1`
+      )
+      .all(...s.args)
+      .map((r) => r[col] as T);
+  return {
+    source_apps: distinct<string>("source_app"),
+    hook_event_types: distinct<string>("hook_event_type"),
+    models: distinct<string>("model_name", " AND model_name IS NOT NULL"),
+  };
 }
 
 export function getSessions(limit = 100, provider?: string): SessionRollup[] {
-  const where = provider ? " WHERE provider = ?" : "";
-  const args = provider ? [provider, limit] : [limit];
+  const s = sessionScopeClause();
+  const prov = provider ? { clause: " AND provider = ?", args: [provider] } : { clause: "", args: [] };
   return db
-    .query<SessionRollup, any[]>(`SELECT * FROM sessions${where} ORDER BY last_seen DESC LIMIT ?`)
-    .all(...args);
+    .query<SessionRollup, any[]>(
+      `SELECT * FROM sessions WHERE 1=1${prov.clause}${s.clause} ORDER BY last_seen DESC LIMIT ?`
+    )
+    .all(...prov.args, ...s.args, limit);
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -417,11 +524,16 @@ function percentile(sorted: number[], p: number): number {
 }
 
 /** Full analytics summary over a rolling window (default 24h), optionally scoped
- *  to a single provider (Anthropic / OpenAI / Google / …). */
+ *  to a single provider (Anthropic / OpenAI / Google / …). Always scoped to the
+ *  open project, so spend, tool mix and the radar describe that project alone. */
 export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): StatsSummary {
   const since = Date.now() - windowMs;
-  const { clause: pf, args: pa } = providerScope(provider);
-  const A = [since, ...pa]; // bind order: timestamp first, then provider (if any)
+  const { clause: prov, args: pa } = providerScope(provider);
+  const { clause: sc, args: sa } = scopeClause();
+  // Every query below appends `pf` and binds `A` in this order, so folding the
+  // project filter in here reaches all of them at once.
+  const pf = prov + sc;
+  const A = [since, ...pa, ...sa]; // bind order: timestamp, provider (if any), project (if any)
 
   // Totals come from the authoritative sessions table for cost/tokens,
   // and from events for counts/errors within the window.
@@ -725,15 +837,16 @@ function parseChange(r: ChangeRow): import("../../shared/types.ts").FileChange |
 /** Recent file changes (Edit/Write/MultiEdit) with their diff hunks, parsed
  *  from the tool_response.structuredPatch Claude Code already provides. */
 export function getChanges(limit = 200, sessionId?: string): import("../../shared/types.ts").FileChange[] {
+  const chg = scopeClause();
   const rows = sessionId
-    ? db.query<ChangeRow, [string, number]>(
+    ? db.query<ChangeRow, any[]>(
         `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
-         WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit') AND session_id = ?
-         ORDER BY timestamp DESC, id DESC LIMIT ?`).all(sessionId, limit)
-    : db.query<ChangeRow, [number]>(
+         WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit') AND session_id = ?${chg.clause}
+         ORDER BY timestamp DESC, id DESC LIMIT ?`).all(sessionId, ...chg.args, limit)
+    : db.query<ChangeRow, any[]>(
         `SELECT id, timestamp, source_app, session_id, tool_name, payload FROM events
-         WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')
-         ORDER BY timestamp DESC, id DESC LIMIT ?`).all(limit);
+         WHERE hook_event_type='PostToolUse' AND tool_name IN ('Edit','Write','MultiEdit')${chg.clause}
+         ORDER BY timestamp DESC, id DESC LIMIT ?`).all(...chg.args, limit);
   return rows.map(parseChange).filter((c): c is import("../../shared/types.ts").FileChange => c !== null);
 }
 
@@ -741,7 +854,8 @@ export function getChanges(limit = 200, sessionId?: string): import("../../share
 export function getSession(sessionId: string): import("../../shared/types.ts").SessionDetail | null {
   const roll = db.query<any, [string]>(`SELECT * FROM sessions WHERE session_id = ?`).get(sessionId);
   const agg = db.query<any, [string]>(
-    `SELECT source_app, MAX(model_name) model_name, MIN(timestamp) started_at, MAX(timestamp) last_seen,
+    `SELECT source_app, MAX(model_name) model_name, MAX(project_path) project_path,
+            MIN(timestamp) started_at, MAX(timestamp) last_seen,
             COUNT(*) events,
             SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) tools,
             SUM(is_error) errors, SUM(cost_usd) cost_usd,
@@ -760,26 +874,103 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
      GROUP BY agent_id ORDER BY n DESC LIMIT 20`).all(sessionId);
 
   // Conversation: interleave user prompts and assistant messages by time.
-  const convo: { role: "user" | "assistant"; text: string; ts: number }[] = [];
+  //
+  // 600 characters used to be the cap, which cut a typical reply off in its
+  // first paragraph — mid-word, with nothing saying it had been cut. This view
+  // is meant to be where you read a session, not a teaser for it, so the budget
+  // is per-session rather than per-message: long messages get room, and a
+  // session full of them still can't produce an unbounded response.
+  const MSG_MAX = 20_000;
+  const CONVO_BUDGET = 400_000;
+
+  /** Trim at a line, then a word, so a cut never lands mid-word — and say so,
+   *  because silently-shortened text reads as the model having stopped. */
+  const clip = (s: string): string => {
+    if (s.length <= MSG_MAX) return s;
+    const head = s.slice(0, MSG_MAX);
+    const at = Math.max(head.lastIndexOf("\n"), head.lastIndexOf(" "));
+    return head.slice(0, at > MSG_MAX * 0.8 ? at : MSG_MAX) + "\n\n…[truncated]";
+  };
+
+  const convo: { role: "user" | "assistant"; text: string; ts: number; agent_id?: string | null; agent_type?: string | null }[] = [];
   for (const r of db.query<{ timestamp: number; payload: string }, [string]>(
-    `SELECT timestamp, payload FROM events WHERE session_id = ? AND hook_event_type='UserPromptSubmit' ORDER BY timestamp DESC LIMIT 12`).all(sessionId)) {
-    try { const p = JSON.parse(r.payload); if (p.prompt) convo.push({ role: "user", text: String(p.prompt).slice(0, 600), ts: r.timestamp }); } catch { /* skip */ }
+    `SELECT timestamp, payload FROM events WHERE session_id = ? AND hook_event_type='UserPromptSubmit' ORDER BY timestamp DESC LIMIT 40`).all(sessionId)) {
+    try { const p = JSON.parse(r.payload); if (p.prompt) convo.push({ role: "user", text: clip(String(p.prompt)), ts: r.timestamp }); } catch { /* skip */ }
   }
   let lastMsg = "";
-  for (const r of db.query<{ timestamp: number; payload: string }, [string]>(
-    `SELECT timestamp, payload FROM events WHERE session_id = ? AND payload LIKE '%last_assistant_message%' ORDER BY timestamp DESC LIMIT 20`).all(sessionId)) {
+  for (const r of db.query<{ timestamp: number; payload: string; agent_id: string | null; agent_type: string | null }, [string]>(
+    `SELECT timestamp, payload, agent_id, agent_type FROM events WHERE session_id = ? AND payload LIKE '%last_assistant_message%' ORDER BY timestamp DESC LIMIT 60`).all(sessionId)) {
     try {
       const m = JSON.parse(r.payload).last_assistant_message;
-      if (m && m !== lastMsg) { convo.push({ role: "assistant", text: String(m).slice(0, 600), ts: r.timestamp }); lastMsg = m; }
+      if (m && m !== lastMsg) { convo.push({ role: "assistant", text: clip(String(m)), ts: r.timestamp, agent_id: r.agent_id, agent_type: r.agent_type }); lastMsg = m; }
     } catch { /* skip */ }
   }
   convo.sort((a, b) => b.ts - a.ts);
   const summary = convo.find((c) => c.role === "assistant")?.text ?? null;
 
+  // Newest-first, so the budget drops the oldest turns rather than the ones
+  // you opened the session to read.
+  const kept: typeof convo = [];
+  let spent = 0;
+  for (const c of convo) {
+    if (spent + c.text.length > CONVO_BUDGET && kept.length) break;
+    kept.push(c);
+    spent += c.text.length;
+  }
+
+  // Timeline: the messages above, plus every tool the session ran, in order.
+  //
+  // Without the tool runs the panel shows what was said and hides what was
+  // done — an agent that spent an hour editing files looks like it produced
+  // two paragraphs. What identifies a run differs per tool, so each one is
+  // reduced to the single thing worth reading in a list: the path it touched,
+  // the command it ran, the URL it fetched.
+  const target = (tool: string, ti: Record<string, unknown>): string | null => {
+    const s = (v: unknown) => (typeof v === "string" && v ? v : null);
+    switch (tool) {
+      case "Bash": return s(ti.command);
+      case "WebFetch": case "WebSearch": return s(ti.url) ?? s(ti.query);
+      case "ToolSearch": return s(ti.query);
+      case "Task": case "Agent": return s(ti.description);
+      default: return s(ti.file_path) ?? s(ti.path) ?? s(ti.pattern) ?? s(ti.query) ?? s(ti.command);
+    }
+  };
+
+  const timeline: import("../../shared/types.ts").TimelineEntry[] =
+    kept.map((c) => ({ kind: "message" as const, ts: c.ts, role: c.role, text: c.text, agent_id: c.agent_id, agent_type: c.agent_type }));
+
+  // Bounded to the same window the messages cover, so the timeline can't be
+  // dominated by tool noise from turns whose text was already dropped.
+  const oldest = kept.length ? Math.min(...kept.map((c) => c.ts)) : 0;
+  for (const r of db.query<{ timestamp: number; tool_name: string | null; is_error: number; duration_ms: number | null; tool_use_id: string | null; agent_id: string | null; agent_type: string | null; payload: string }, [string, number]>(
+    `SELECT timestamp, tool_name, is_error, duration_ms, tool_use_id, agent_id, agent_type, payload FROM events
+      WHERE session_id = ? AND hook_event_type IN ('PostToolUse','PostToolUseFailure')
+        AND timestamp >= ?
+      ORDER BY timestamp DESC LIMIT 400`).all(sessionId, oldest)) {
+    const tool = r.tool_name || "tool";
+    let ti: Record<string, unknown> = {};
+    try { ti = (JSON.parse(r.payload).tool_input ?? {}) as Record<string, unknown>; } catch { /* keep empty */ }
+    const note = typeof ti.description === "string" ? ti.description : null;
+    timeline.push({
+      kind: "tool", ts: r.timestamp, tool,
+      target: target(tool, ti),
+      note: note && note !== target(tool, ti) ? note : null,
+      is_error: !!r.is_error,
+      duration_ms: r.duration_ms,
+      tool_use_id: r.tool_use_id,
+      agent_id: r.agent_id,
+      agent_type: r.agent_type,
+    });
+  }
+  timeline.sort((a, b) => b.ts - a.ts);
+
   return {
     session_id: sessionId,
     source_app: agg.source_app,
     model_name: agg.model_name ?? roll?.model_name ?? null,
+    // Prefer the session row; fall back to the events for one that predates the
+    // column. Without a directory the UI can't offer to resume the session.
+    project_path: roll?.project_path ?? agg.project_path ?? null,
     started_at: agg.started_at,
     ended_at: roll?.ended_at ?? null,
     last_seen: agg.last_seen,
@@ -792,7 +983,8 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     summary,
     tool_mix: toolMix,
     subagents: subRows.map((s) => ({ agent_id: s.agent_id, agent_type: s.agent_type || "subagent", events: s.n })),
-    conversation: convo.slice(0, 16),
+    conversation: kept,
+    timeline,
     changes: getChanges(40, sessionId),
   };
 }
@@ -801,26 +993,30 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
 export function searchEvents(q: string, limit = 60): import("../../shared/types.ts").SearchHit[] {
   const match = q.trim().split(/\s+/).map((t) => t.replace(/[^a-zA-Z0-9_]/g, "")).filter(Boolean).map((t) => t + "*").join(" ");
   if (!match) return [];
+  const s = scopeClause();
+  const scoped = s.clause.replace(/\b(project_path|cwd_path)\b/g, "e.$1");
   try {
     return db
-      .query<any, [string, number]>(
+      .query<any, any[]>(
         `SELECT e.id, e.timestamp, e.source_app, e.session_id, e.hook_event_type, e.tool_name,
                 e.cost_usd, e.duration_ms,
                 snippet(events_fts, 0, char(1), char(2), ' … ', 14) AS snippet
          FROM events_fts f JOIN events e ON e.id = f.rowid
-         WHERE events_fts MATCH ? ORDER BY rank LIMIT ?`
+         WHERE events_fts MATCH ?${scoped} ORDER BY rank LIMIT ?`
       )
-      .all(match, limit);
+      .all(match, ...s.args, limit);
   } catch {
     return [];
   }
 }
 
-/** Stream rows for export (bounded). */
+/** Stream rows for export (bounded). Scoped like everything else — an export
+ *  from a project cockpit is that project's data, not the whole machine's. */
 export function exportRows(limit = 100_000): WatchEvent[] {
+  const s = scopeClause();
   return db
-    .query<any, [number]>(`SELECT * FROM events ORDER BY id ASC LIMIT ?`)
-    .all(limit)
+    .query<any, any[]>(`SELECT * FROM events WHERE 1=1${s.clause} ORDER BY id ASC LIMIT ?`)
+    .all(...s.args, limit)
     .map(parseEventRow);
 }
 

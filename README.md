@@ -1,10 +1,12 @@
 <div align="center">
 
-# 🛰 agentglass
+<img src=".github/assets/logo.svg" alt="agentglass" width="88" height="88" />
+
+# agentglass
 
 **A loupe for your agents** — a real-time Mission-Control **dashboard _and_ workspace** for AI coding agents, across every provider and every project on your machine.
 
-[![▶ Live demo](https://img.shields.io/badge/▶%20Live%20demo-try%20it%20now-6366f1?style=for-the-badge)](https://sirallap.github.io/agentglass/)
+[![▶ Live demo](https://img.shields.io/badge/▶%20Live%20demo-try%20it%20now-6366f1?style=for-the-badge)](https://sirallap.github.io/agentglass/demo/)
 
 ![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Tauri%20app-ffc131) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -16,7 +18,7 @@ Point any AI coding agent at agentglass — via Claude Code hooks or any OpenTel
 
 And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — each one keystroke away. Runs in the browser or as a **native desktop app**.
 
-### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/)
+### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/demo/)
 
 The full cockpit running on fabricated sample data — a simulated live event
 stream, populated radar, spend charts, and even the control-plane approve/deny
@@ -332,6 +334,8 @@ with Approve / Deny buttons — decide from any device and the agent unblocks.
     "command": "python3 ~/code/agentglass/hooks/gate_event.py --source-app my-project" }] }
 ]
 ```
+
+On Windows, use `py` (or `python`) instead of `python3` in hand-written hook commands; `hooks/install_hooks.py` picks this automatically.
 
 Safe by design — it **never blocks your agents by accident**:
 

@@ -40,11 +40,14 @@ interface Row {
  *     tool_use_id so a running row morphs in place into its finished row.
  *  2. Coalesce consecutive identical rows (same agent + type + detail) into ×N.
  */
-function buildRows(events: WatchEvent[]): Row[] {
-  // Post lookups for pairing.
+function buildRows(events: WatchEvent[], pairPool: WatchEvent[] = events): Row[] {
+  // Post lookups for pairing — computed over the FULL buffer, not the filtered
+  // view. Pairing against a filtered list made every finished tool in a
+  // "PreToolUse"-filtered (or searched, or lane-sliced) view render as a
+  // perpetually pulsing Running row, because its Post was filtered out.
   const postIds = new Set<string>();
   const postBySessTool = new Map<string, number[]>();
-  for (const e of events) {
+  for (const e of pairPool) {
     if (e.hook_event_type !== "PostToolUse" && e.hook_event_type !== "PostToolUseFailure") continue;
     if (e.tool_use_id) postIds.add(e.tool_use_id);
     if (e.tool_name) {
@@ -199,7 +202,7 @@ export function Feed({ events, filter, sessionProvider, onSelect, onClearFilter 
     });
   }, [events, filter.app, filter.type, filter.provider, sessionProvider, cat, q]);
 
-  const rows = useMemo(() => buildRows(shown).slice(-120), [shown]);
+  const rows = useMemo(() => buildRows(shown, events).slice(-120), [shown, events]);
 
   // Lanes: the same filtered stream, split one column per session, most
   // recently active first. With several sessions running at once the single
@@ -213,10 +216,10 @@ export function Feed({ events, filter, sessionProvider, onSelect, onClearFilter 
       if (arr) arr.push(e); else by.set(k, [e]);
     }
     return [...by.entries()]
-      .map(([k, evs]) => ({ key: k, last: evs[evs.length - 1].timestamp, rows: buildRows(evs).slice(-80) }))
+      .map(([k, evs]) => ({ key: k, last: evs[evs.length - 1].timestamp, rows: buildRows(evs, events).slice(-80) }))
       .sort((a, b) => b.last - a.last)
       .slice(0, MAX_LANES);
-  }, [lanes, shown]);
+  }, [lanes, shown, events]);
 
   useEffect(() => {
     if (follow && ref.current) ref.current.scrollTop = ref.current.scrollHeight;

@@ -1,4 +1,4 @@
-import type { WatchEvent } from "../../../shared/types.ts";
+import type { WatchEvent, OpenToolCall } from "../../../shared/types.ts";
 import { agentKey, fmtMs } from "./format.ts";
 
 export type AgentStatus = "working" | "waiting" | "errored" | "idle";
@@ -53,8 +53,38 @@ const TOOL_RUN_MAX_MS = 30 * 60_000;
 // possibly a hang — either way the user wants to know it's still open.
 const TOOL_RUN_WARN_MS = 5 * 60_000;
 
-/** Roll the live event buffer up into per-agent cards. */
-export function deriveAgents(events: WatchEvent[]): AgentCard[] {
+function blankCard(key: string, source_app: string, session_id: string, model_name: string | null): AgentCard {
+  return {
+    key,
+    source_app,
+    session_id,
+    model_name,
+    status: "idle",
+    lastAction: "",
+    lastType: "",
+    events: 0,
+    tools: 0,
+    errors: 0,
+    cost: 0,
+    tokens: 0,
+    lastSeen: 0,
+    lastErrorTs: 0,
+    spark: new Array(20).fill(0),
+    subagents: 0,
+    subagentTypes: [],
+    runningTool: null,
+    runningSince: 0,
+    ctxTokens: 0,
+    ctxTs: 0,
+    ctxLimit: 200_000,
+  };
+}
+
+/** Roll the live event buffer up into per-agent cards. `openTools` is the
+ *  server's authoritative list of still-running tool calls, used to keep (or
+ *  restore) a session's "running" state when the originating PreToolUse has aged
+ *  out of `events` — otherwise a long job in flight reads as idle or vanishes. */
+export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = []): AgentCard[] {
   const now = Date.now();
   const map = new Map<string, AgentCard>();
   // Subagents fold into their parent session_id but carry agent_id/agent_type,
@@ -82,30 +112,7 @@ export function deriveAgents(events: WatchEvent[]): AgentCard[] {
     const key = agentKey(e);
     let a = map.get(key);
     if (!a) {
-      a = {
-        key,
-        source_app: e.source_app,
-        session_id: e.session_id,
-        model_name: e.model_name,
-        status: "idle",
-        lastAction: "",
-        lastType: "",
-        events: 0,
-        tools: 0,
-        errors: 0,
-        cost: 0,
-        tokens: 0,
-        lastSeen: 0,
-        lastErrorTs: 0,
-        spark: new Array(20).fill(0),
-        subagents: 0,
-        subagentTypes: [],
-        runningTool: null,
-        runningSince: 0,
-        ctxTokens: 0,
-        ctxTs: 0,
-        ctxLimit: 200_000,
-      };
+      a = blankCard(key, e.source_app, e.session_id, e.model_name);
       map.set(key, a);
     }
     // Context estimate from the newest MAIN-session turn. Subagent turns are
@@ -141,6 +148,26 @@ export function deriveAgents(events: WatchEvent[]): AgentCard[] {
         ? `${e.hook_event_type} · ${e.tool_name}`
         : e.hook_event_type;
     }
+  }
+
+  // Seed "running" state from the server's authoritative open-tool list, for
+  // tool calls whose PreToolUse isn't in the buffer (aged out on a busy fleet,
+  // or never loaded after a reload). A session with ALL its events evicted gets
+  // its card recreated here so it doesn't vanish from Fleet/Radar mid-run.
+  for (const s of openTools) {
+    // A Post already in the buffer means the tool finished after the seed was
+    // taken — don't resurrect it as running.
+    const closed = (postBySessTool.get(`${s.session_id}|${s.tool_name}`) ?? []).some((t) => t >= s.since);
+    if (closed) continue;
+    const key = `${s.source_app}:${s.session_id}`;
+    let a = map.get(key);
+    if (!a) {
+      a = blankCard(key, s.source_app, s.session_id, null);
+      a.lastSeen = s.since;
+      a.lastType = "PreToolUse";
+      map.set(key, a);
+    }
+    if (s.since >= a.runningSince) { a.runningTool = s.tool_name; a.runningSince = s.since; }
   }
 
   // Spark buckets over the last 20 * 3s = 60s window.

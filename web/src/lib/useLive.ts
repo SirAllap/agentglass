@@ -1,17 +1,24 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { WatchEvent, WsFrame } from "../../../shared/types.ts";
-import { WS_URL, IS_DEMO } from "./api.ts";
+import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts";
+import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
+// Stop hammering a server that won't come back. ~2 minutes of failed reconnects
+// (the backoff tops out at 8s) is long enough to ride out a restart but short
+// enough not to loop forever; becoming visible again resets and retries.
+const GIVE_UP_MS = 120_000;
 
-export type ConnState = "connecting" | "open" | "closed";
+export type ConnState = "connecting" | "open" | "closed" | "unauthorized";
 
 export interface LiveData {
   events: WatchEvent[];
   conn: ConnState;
   lastEvent: WatchEvent | null;
+  /** Server's authoritative list of tool calls still running — seeds the
+   *  per-agent "running" state for Pres that have aged out of `events`. */
+  openTools: OpenToolCall[];
 }
 
 /**
@@ -23,10 +30,16 @@ export function useLive(): LiveData {
   const [events, setEvents] = useState<WatchEvent[]>([]);
   const [conn, setConn] = useState<ConnState>("connecting");
   const [lastEvent, setLastEvent] = useState<WatchEvent | null>(null);
+  const [openTools, setOpenTools] = useState<OpenToolCall[]>([]);
+  const connRef = useRef(conn);
+  connRef.current = conn;
   const wsRef = useRef<WebSocket | null>(null);
   const retry = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const disposed = useRef(false);
+  const opened = useRef(false);       // did the current socket ever reach open?
+  const firstFailAt = useRef(0);      // when the current run of failures started
 
   // Buffered incoming events + a set of ids already in the buffer (dedupe).
   const pending = useRef<WatchEvent[]>([]);
@@ -71,17 +84,35 @@ export function useLive(): LiveData {
   const connect = useCallback(() => {
     if (disposed.current) return;
     setConn("connecting");
+    opened.current = false;
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onopen = () => {
       retry.current = 0;
+      firstFailAt.current = 0;
+      opened.current = true;
       setConn("open");
     };
-    ws.onclose = () => {
+    ws.onclose = async () => {
       if (disposed.current || wsRef.current !== ws) return;
+      const everOpened = opened.current;
+      opened.current = false;
+
+      // A close before the socket ever opened, on a token-protected server, is
+      // almost always the 401 that rejects the WS upgrade — which a browser can't
+      // read off the socket. Probe an authenticated endpoint to be sure, and if
+      // it's an auth wall, stop: retrying forever just spams and never recovers.
+      if (!everOpened && hasToken()) {
+        const state = await probeAuth();
+        if (disposed.current || wsRef.current !== ws) return;
+        if (state === "unauthorized") { setConn("unauthorized"); return; }
+      }
+
       setConn("closed");
-      setTimeout(connect, Math.min(8000, 500 * 2 ** retry.current++));
+      if (!firstFailAt.current) firstFailAt.current = Date.now();
+      if (Date.now() - firstFailAt.current > GIVE_UP_MS) return; // gave up — see visibility reset
+      reconnectTimer.current = setTimeout(connect, Math.min(8000, 500 * 2 ** retry.current++));
     };
     ws.onerror = () => ws.close();
     ws.onmessage = (msg) => {
@@ -97,11 +128,22 @@ export function useLive(): LiveData {
         pending.current = [];
         setEvents(initial);
         setLastEvent(initial[initial.length - 1] ?? null);
+        setOpenTools(frame.openTools ?? []);
       } else if (frame.type === "event") {
         if (seen.current.has(frame.data.id)) return; // duplicate delivery
         seen.current.add(frame.data.id);
         pending.current.push(frame.data);
         scheduleFlush();
+        // A Post closes its tool: drop the matching seed so it can't keep a
+        // finished tool marked "running" after its Post later evicts the buffer.
+        const ev = frame.data;
+        if (ev.hook_event_type === "PostToolUse" || ev.hook_event_type === "PostToolUseFailure") {
+          setOpenTools((cur) =>
+            cur.length && cur.some((s) => s.session_id === ev.session_id && (!ev.tool_name || s.tool_name === ev.tool_name) && ev.timestamp >= s.since)
+              ? cur.filter((s) => !(s.session_id === ev.session_id && (!ev.tool_name || s.tool_name === ev.tool_name) && ev.timestamp >= s.since))
+              : cur
+          );
+        }
       }
       // "session" frames are ignored — the Sessions panel fetches its own roll-ups.
     };
@@ -138,16 +180,32 @@ export function useLive(): LiveData {
     }
 
     connect();
-    // Catch up the moment the tab becomes visible again.
-    const onVis = () => { if (!document.hidden) flush(); };
+    // Catch up the moment the tab becomes visible again — and, if the stream
+    // died or gave up while we were away, reconnect right now instead of waiting
+    // out a backoff. An auth wall is left alone: the token is still wrong until
+    // the user re-enters it, so we don't spin on it.
+    const onVis = () => {
+      if (document.hidden) return;
+      flush();
+      if (connRef.current === "unauthorized") return;
+      const ws = wsRef.current;
+      const dead = !ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING;
+      if (dead && connRef.current !== "open") {
+        if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; }
+        retry.current = 0;
+        firstFailAt.current = 0;
+        connect();
+      }
+    };
     document.addEventListener("visibilitychange", onVis);
     return () => {
       disposed.current = true;
       document.removeEventListener("visibilitychange", onVis);
       if (timer.current) clearTimeout(timer.current);
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };
   }, [connect, flush]);
 
-  return { events, conn, lastEvent };
+  return { events, conn, lastEvent, openTools };
 }

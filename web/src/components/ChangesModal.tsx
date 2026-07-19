@@ -4,6 +4,7 @@ import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from ".
 import { Portal } from "./Portal.tsx";
 import { CommitModal } from "./CommitModal.tsx";
 import { api } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { fmtTime, agentKey } from "../lib/format.ts";
 import { THEMES } from "../lib/highlight.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
@@ -479,10 +480,14 @@ export function ThemePicker({ value, onChange }: { value: string; onChange: (v: 
         <span className="truncate" style={{ maxWidth: 92 }}>{label}</span>
         <span style={{ opacity: 0.6, fontSize: 8 }}>▼</span>
       </button>
+      {/* zIndex must beat the diff's sticky hunk headers, which are also z-20:
+          on a tie the later-painted element wins, so those headers were
+          striping grey bars across this list wherever a `@@ … @@` line sat
+          behind it. */}
       {open && (
         <div
           className="agx-scroll absolute right-0 mt-1 rounded-lg py-1 text-[10.5px] shadow-2xl"
-          style={{ zIndex: 20, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
+          style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
         >
           <Row id="auto" name="Auto (app theme)" />
           <div className="px-2.5 pt-1.5 pb-0.5 text-[8.5px] uppercase tracking-wider t-dim2">Dark</div>
@@ -580,6 +585,25 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
     // focus the frame so j/k nav works immediately (filter is opt-in via click)
     requestAnimationFrame(() => frameRef.current?.focus());
   }, [open]);
+
+  // The fleet keeps editing while this is open, so a list loaded once goes
+  // stale within a turn. Refreshed in place rather than through the effect
+  // above: that one resets the filter, the collapsed groups and the selection,
+  // which would yank the file out from under you mid-read every few seconds.
+  //
+  // Not polled for a preset changeset — those are one session's changes, handed
+  // in already resolved, and re-fetching would replace them with the fleet's.
+  usePoll(open && !presetChanges, () => {
+    api.changes(200).then((r) => {
+      setChanges((prev) => {
+        // Same ids in the same order → keep the old array so nothing downstream
+        // re-renders or re-highlights on an unchanged poll.
+        if (prev && prev.length === r.changes.length && prev.every((c, i) => c.id === r.changes[i].id)) return prev;
+        return r.changes;
+      });
+      setSelId((cur) => (cur && r.changes.some((c) => c.id === cur) ? cur : r.changes[0]?.id ?? null));
+    }).catch(() => { /* keep showing what we have */ });
+  }, 4000);
 
   // prune stored "reviewed" ids to those still present; persist the group-by pref
   useEffect(() => {

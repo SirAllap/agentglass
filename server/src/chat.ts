@@ -25,9 +25,28 @@ export const CHAT_BYPASS_ALLOWED = process.env.AGENTGLASS_CHAT_BYPASS === "1";
 const BYPASS_ALLOWED = CHAT_BYPASS_ALLOWED;
 const MODEL_RE = /^[a-z0-9][a-z0-9.-]{2,48}$/;
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
+
+// A pre-approved tool spec, e.g. `Read`, `Edit`, `Bash(git status)`,
+// `Bash(gh pr view:*)`. Deliberately narrow: letters for the tool name, and an
+// optional parenthesised argument pattern built from the characters those specs
+// actually use. Anything else is dropped rather than passed through, since this
+// string ends up shaping what the agent may run unattended.
+const TOOL_RE = /^[A-Za-z_][A-Za-z0-9_]{0,31}(\([^()\n]{1,120}\))?$/;
+const MAX_ALLOWED = 40;
+
+/** Tool specs the user has pre-approved for this chat.
+ *
+ *  `claude -p` has no terminal to prompt from, so a tool that would normally
+ *  raise a permission dialog is simply refused — the chat reports "requires
+ *  approval" and there is no way to grant it from inside. This is the way out:
+ *  the caller says up front what may run without asking. */
+export function allowList(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((t): t is string => typeof t === "string" && TOOL_RE.test(t.trim())).map((t) => t.trim()).slice(0, MAX_ALLOWED);
+}
 const err = (msg: string, status = 400) => new Response(msg + "\n", { status, headers: CORS });
 
-export function chatStream(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown): Response {
+export function chatStream(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown): Response {
   const bin = claudeBin();
   if (!bin) return err("no local `claude` CLI — install Claude Code to chat", 403);
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403);
@@ -42,6 +61,9 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   const args = [bin, "-p", "--output-format", "stream-json", "--verbose", "--model", m];
   if (pm === "bypassPermissions") args.push("--dangerously-skip-permissions");
   else args.push("--permission-mode", pm);
+  // Only meaningful for the prompting modes — bypass already allows everything.
+  const allow = pm === "bypassPermissions" ? [] : allowList(allowedTools);
+  if (allow.length) args.push("--allowedTools", ...allow);
   if (rid) args.push("--resume", rid);
 
   // Its own process group, so stopping a turn reaches the whole job tree.

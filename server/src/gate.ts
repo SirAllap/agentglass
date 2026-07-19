@@ -19,6 +19,12 @@ interface Waiter extends PendingGate {
 // stops the fleet; that is the point for security-sensitive use.
 const FAIL_CLOSED = process.env.AGENTGLASS_GATE_FAILCLOSED === "1";
 
+// The clamp is a DoS guard (each waiter pins a held connection + timer), but a
+// hard 120s silently defeated the documented AGENTGLASS_GATE_TIMEOUT knob: an
+// operator asking for a 5-minute approval window got auto-resolved at 2. The
+// operator's own configured timeout now raises the ceiling.
+export const GATE_MAX_MS = Math.max(120_000, (Number(process.env.AGENTGLASS_GATE_TIMEOUT) || 60) * 1000);
+
 const waiters = new Map<string, Waiter>();
 let onChange: () => void = () => {};
 export function onGateChange(fn: () => void) { onChange = fn; }
@@ -31,7 +37,7 @@ export function submitGate(
   // Floor the timeout: a negative value (a repo-local settings.json can set
   // AGENTGLASS_GATE_TIMEOUT=-1) makes setTimeout fire immediately, turning the
   // gate into an instant auto-allow. Never below 1s, never above 2min.
-  const wait = Math.max(1000, Math.min(120_000, Number.isFinite(timeoutMs) ? timeoutMs : 60_000));
+  const wait = Math.max(1000, Math.min(GATE_MAX_MS, Number.isFinite(timeoutMs) ? timeoutMs : 60_000));
   return new Promise((resolve) => {
     const id = crypto.randomUUID();
     const timer = setTimeout(() => {

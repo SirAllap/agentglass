@@ -56,6 +56,9 @@ export interface SessionRollup {
   session_id: string;
   source_app: string;
   model_name: string | null;
+  /** Directory the session ran in — what a resume needs to run in the right
+   *  place. Null for rows recorded before the column existed. */
+  project_path?: string | null;
   started_at: number;
   ended_at: number | null;
   last_seen: number;
@@ -211,10 +214,45 @@ export interface DiffHunk {
   newLines: number;
   lines: string[]; // each begins with " ", "+" or "-"
 }
+/** One thing that happened in a session, in order — a message or a tool run.
+ *
+ *  The conversation used to be prompts and assistant replies only, which left
+ *  out everything the agent actually *did*: the file it edited, the command it
+ *  ran, the search it made. That is most of the work, and without it the panel
+ *  can't replace the terminal you'd otherwise read it in. */
+export interface TimelineEntry {
+  kind: "message" | "tool";
+  ts: number;
+  /** kind === "message" */
+  role?: "user" | "assistant";
+  text?: string;
+  /** kind === "tool" */
+  tool?: string;
+  /** What it acted on: a file path, a command, a URL, a query. */
+  target?: string | null;
+  /** A Bash tool's own description of its intent, when it gave one. */
+  note?: string | null;
+  is_error?: boolean;
+  duration_ms?: number | null;
+  /** Links a tool run to its diff in `changes`, so an edit can show what it
+   *  changed rather than only that it happened. */
+  tool_use_id?: string | null;
+  /** Which subagent produced this, when it wasn't the main thread.
+   *
+   *  Subagent turns report the *parent's* session id, so everything a fleet of
+   *  them does lands on one timeline. Without this tag those runs are
+   *  indistinguishable from the main thread's, and four agents working in
+   *  parallel read as one very busy one. */
+  agent_id?: string | null;
+  agent_type?: string | null;
+}
+
 export interface SessionDetail {
   session_id: string;
   source_app: string;
   model_name: string | null;
+  /** Where it ran — a resume has to start in the same directory. */
+  project_path?: string | null;
   started_at: number;
   ended_at: number | null;
   last_seen: number;
@@ -228,6 +266,8 @@ export interface SessionDetail {
   tool_mix: { tool: string; n: number }[];
   subagents: { agent_id: string; agent_type: string; events: number }[];
   conversation: { role: "user" | "assistant"; text: string; ts: number }[];
+  /** Messages and tool runs interleaved in time — what actually happened. */
+  timeline: TimelineEntry[];
   changes: FileChange[];
 }
 
@@ -243,9 +283,20 @@ export interface FileChange {
   hunks: DiffHunk[];
 }
 
+/** A tool call the server sees as still running: a PreToolUse with no matching
+ *  Post yet, in a session that hasn't stopped. This is the authoritative "what's
+ *  open right now" — independent of whether the Pre still lives in the client's
+ *  bounded event buffer, which it may not on a busy fleet or after a reload. */
+export interface OpenToolCall {
+  session_id: string;
+  source_app: string;
+  tool_name: string;
+  since: number; // ms — the PreToolUse timestamp
+}
+
 /** WebSocket frames. */
 export type WsFrame =
-  | { type: "initial"; data: WatchEvent[] }
+  | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
   | { type: "event"; data: WatchEvent }
   | { type: "session"; data: SessionRollup };
 
@@ -386,6 +437,15 @@ export interface DockerImage {
 }
 export interface DockerVolume { name: string; driver: string; }
 export interface DockerNetwork { id: string; name: string; driver: string; scope: string; }
+/** Present only when the cockpit is open for one project, so the panel can say
+ *  which slice of the host it is showing — and admit when the filter found
+ *  nothing and fell back to the whole machine. */
+export interface DockerScope {
+  workspace: string;   // the open project's directory
+  project: string;     // compose project name derived from it
+  matched: number;     // containers that belong to it
+  showingAll: boolean; // nothing matched, so every container is listed instead
+}
 export interface DockerOverview {
   available: boolean;
   writeEnabled: boolean;
@@ -394,6 +454,7 @@ export interface DockerOverview {
   images: DockerImage[];
   volumes: DockerVolume[];
   networks: DockerNetwork[];
+  scope?: DockerScope;
   error?: string;
 }
 export interface DockerActionResult { ok: boolean; error?: string; output?: string; }

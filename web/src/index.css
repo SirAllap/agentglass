@@ -127,6 +127,13 @@
     color: var(--text);
     letter-spacing: -0.01em;
   }
+  /* Phones: the 0.2em tracking makes eyebrows wrap into vertical stacks of
+     letters inside narrow flex cells — tighten it instead of shrinking type. */
+  @media (max-width: 640px) {
+    .panel-eyebrow {
+      letter-spacing: 0.12em;
+    }
+  }
   .tile {
     position: relative;
     background: color-mix(in srgb, var(--bg2) 60%, transparent);
@@ -238,4 +245,16 @@
   outline: 2px solid var(--primary) !important;
   outline-offset: 2px;
   border-radius: 6px;
+}
+
+/* A chat that replied while you were elsewhere. Deliberately a slow, low-
+   contrast breath rather than a hard blink: it sits in a header you look at
+   all day, and something that flashes urgently for a message that can wait
+   trains you to ignore it. */
+@keyframes agx-attention {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 40%, transparent); }
+  50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  @keyframes agx-attention { 0%, 100% { box-shadow: none; } }
 }

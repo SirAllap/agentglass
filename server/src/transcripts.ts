@@ -99,9 +99,10 @@ function str(v: unknown): string | null {
 // Resolving a project root shells out to git, so memoize per cwd — a scan walks
 // hundreds of transcripts that share a handful of directories.
 const rootCache = new Map<string, string>();
-/** Label a session by the project it belongs to, folding worktrees and nested
- *  subdirectories into the repo that owns them. */
-function projectOf(cwd: string): { source_app: string; project_path: string } {
+/** The repo a cwd belongs to, folding linked worktrees and nested subdirectories
+ *  up to the owning repo (via `git --git-common-dir`). Falls back to the cwd
+ *  itself for a non-repo path. Memoized. */
+function resolvedRoot(cwd: string): string {
   let root = rootCache.get(cwd);
   if (root === undefined) {
     // safeAbs, not the raw cwd: a Windows-recorded cwd with no resolvable
@@ -109,6 +110,12 @@ function projectOf(cwd: string): { source_app: string; project_path: string } {
     root = projectRootOf(cwd) ?? safeAbs(cwd) ?? cwd;
     rootCache.set(cwd, root);
   }
+  return root;
+}
+/** Label a session by the project it belongs to, folding worktrees and nested
+ *  subdirectories into the repo that owns them. */
+function projectOf(cwd: string): { source_app: string; project_path: string } {
+  const root = resolvedRoot(cwd);
   return { source_app: basename(root), project_path: root };
 }
 
@@ -343,8 +350,18 @@ async function ingestFile(
   // the project list despite contributing no events. The scope is pinned per
   // sweep (passed in), so a workspace switched mid-sweep can't suddenly widen
   // a *live* sweep into broadcasting months of backfill.
-  if (scope && cwd && cwd !== scope && !cwd.startsWith(scope + "/")) {
-    return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true };
+  //
+  // Match on the *resolved repo root*, not just the raw cwd: a session running
+  // in a project's own linked worktree (e.g. ~/code/app-wt, outside the scope
+  // path) belongs to the scoped repo — `--git-common-dir` folds it back — and
+  // the git panel already lists such worktrees as part of the project. We still
+  // accept a raw-cwd match first, so scoping to a monorepo subdir (whose git
+  // root sits *above* the scope) keeps working.
+  if (scope && cwd) {
+    const inScope = (p: string) => p === scope || p.startsWith(scope + "/");
+    if (!inScope(cwd) && !inScope(resolvedRoot(cwd))) {
+      return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true };
+    }
   }
 
   let source_app: string;
@@ -512,6 +529,12 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
     return;
   }
   const t0 = Date.now();
+  // The startup backfill holds the same busy flag as every other sweep. It
+  // didn't once, and a /workspace switch during a long cold-start backfill
+  // kicked off a second concurrent scanOnce over the same files — both saw
+  // "no row yet" for a transcript, both inserted its lines, and every count,
+  // token and dollar for those sessions was silently doubled in the DB.
+  sweepBusy = true;
   scanOnce(null)
     .then((n) => {
       const projects = projectPaths.size;
@@ -530,5 +553,6 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
         }
       }, POLL_MS);
     })
-    .catch((e) => console.error(`[scan] initial sweep failed: ${e}`));
+    .catch((e) => console.error(`[scan] initial sweep failed: ${e}`))
+    .finally(() => { sweepBusy = false; });
 }

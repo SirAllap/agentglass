@@ -294,7 +294,9 @@ function commandDirs(root: string): CommandDir[] {
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
     const names = new Set(entries.map((e) => e.name));
     if (rel && names.has(".git")) return; // a nested checkout is its own project
-    const makefile = ["Makefile", "makefile", "GNUmakefile"].find((n) => names.has(n)) ?? null;
+    // GNU make's own search order — parsing Makefile while `make` would read
+    // the GNUmakefile advertises targets that then fail to run.
+    const makefile = ["GNUmakefile", "makefile", "Makefile"].find((n) => names.has(n)) ?? null;
     const pkg = names.has("package.json");
     if (makefile || pkg) found.push({ rel, makefile, pkg });
     if (found.length >= CMD_MAX_DIRS || left <= 0) return;

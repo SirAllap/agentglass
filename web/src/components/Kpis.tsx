@@ -90,8 +90,10 @@ export function Kpis({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1.1fr_1.4fr] gap-2">
       {/* hero — spend + health lead the eye */}
-      <motion.div {...enter} transition={{ type: "spring", stiffness: 300, damping: 26 }} className="panel flex-row items-center gap-4 px-5 py-3.5">
-        <div className="min-w-0">
+      {/* flex-wrap: on a phone the sparkline + health ring drop below the
+          number instead of crushing it into a three-line label. */}
+      <motion.div {...enter} transition={{ type: "spring", stiffness: 300, damping: 26 }} className="panel flex-row flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3.5">
+        <div className="min-w-0 grow">
           <div className="panel-eyebrow">Spend · this window</div>
           <div className="text-[32px] font-semibold leading-none tabular-nums" style={{ color: "var(--success)" }}>
             <NumberFlow value={cost} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2 }} />
@@ -101,7 +103,7 @@ export function Kpis({
           </div>
         </div>
         <Spark values={spark} color="var(--success)" />
-        <div className="w-px self-stretch my-1" style={{ background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} />
+        <div className="hidden sm:block w-px self-stretch my-1" style={{ background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} />
         <div className="flex items-center gap-2.5 shrink-0">
           <HealthRing value={health} />
           <div className="text-[10px] t-dim2 leading-tight">
