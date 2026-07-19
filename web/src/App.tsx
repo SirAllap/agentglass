@@ -29,6 +29,7 @@ import { GitPanel } from "./components/GitPanel.tsx";
 import { DockerPanel } from "./components/DockerPanel.tsx";
 import { TerminalPanel } from "./components/TerminalPanel.tsx";
 import { ChatPanel } from "./components/ChatPanel.tsx";
+import { newChat, chatResuming } from "./lib/chatStore.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
@@ -49,6 +50,7 @@ export default function App() {
   const [dockerOpen, setDockerOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatFocus, setChatFocus] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
   const [sound, setSound] = useState(false);
@@ -290,9 +292,26 @@ export default function App() {
       <GitPanel open={gitOpen} onClose={() => setGitOpen(false)} />
       <DockerPanel open={dockerOpen} onClose={() => setDockerOpen(false)} />
       <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
-      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} focusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
-      <SessionModal sessionId={sessionView?.id ?? null} sourceApp={sessionView?.app} onClose={() => setSessionView(null)} onFilter={(app) => setFilter((f) => ({ ...f, app }))} />
+      <SessionModal
+        sessionId={sessionView?.id ?? null}
+        sourceApp={sessionView?.app}
+        onClose={() => setSessionView(null)}
+        onFilter={(app) => setFilter((f) => ({ ...f, app }))}
+        onResume={(s) => {
+          if (!s.project_path) return;
+          // Reuse an open tab for the same session rather than starting a
+          // second one: two chats resuming one id would both write to it.
+          const existing = chatResuming(s.session_id);
+          const chat = existing ?? newChat(s.project_path, s.model_name || undefined, undefined, {
+            sessionId: s.session_id,
+            title: s.summary?.slice(0, 40) || `${s.source_app}:${s.session_id.slice(0, 8)}`,
+          });
+          setChatFocus(chat.id);
+          setChatOpen(true);
+        }}
+      />
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}

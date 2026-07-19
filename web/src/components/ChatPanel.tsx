@@ -68,7 +68,7 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
   );
 }
 
-export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: () => void; focusId?: string }) {
   const chats = useSyncExternalStore(subscribe, listChats, listChats);
   const [activeId, setActiveId] = useState("");
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
@@ -117,6 +117,10 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
     }
     if (!getChat(activeId) && chats.length) setActiveId(chats[chats.length - 1].id);
   }, [open, chats, defaultCwd, activeId]);
+
+  // Opened to continue a specific session (from the fleet view): show that tab
+  // rather than whichever was last active, or the request looks ignored.
+  useEffect(() => { if (focusId && getChat(focusId)) setActiveId(focusId); }, [focusId]);
 
   useEffect(() => { if (defaultCwd) { try { localStorage.setItem(CWD_KEY, defaultCwd); } catch { /* ignore */ } } }, [defaultCwd]);
 
