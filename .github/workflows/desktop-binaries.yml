@@ -1,0 +1,106 @@
+name: Desktop binaries
+
+# Builds the desktop app for every platform and attaches the installers to the
+# GitHub Release for the tag. It deliberately only ever *uploads assets* — the
+# release itself and its hand-written notes belong to release.yml, which is
+# careful never to overwrite them. Nothing here touches the release body.
+#
+# Run it by hand (workflow_dispatch) to check the build still works without
+# cutting a tag; that path builds everything and uploads nothing.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false # one platform failing shouldn't strand the others
+      matrix:
+        include:
+          - os: ubuntu-22.04 # oldest supported glibc — newer runners break older distros
+            triple: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+          - os: macos-14
+            triple: aarch64-apple-darwin
+            bundles: dmg
+          - os: macos-13
+            triple: x86_64-apple-darwin
+            bundles: dmg
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            bundles: msi,nsis
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Linux build deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libgtk-3-dev libxdo-dev libssl-dev build-essential file
+
+      - name: Install
+        run: bun install
+
+      # Mirrors `make desktop-server`. The triple suffix is how Tauri picks the
+      # right sidecar per platform; on Windows it also needs the .exe extension.
+      - name: Build server sidecar
+        shell: bash
+        run: |
+          ext=""
+          [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          bun build --compile server/src/index.ts \
+            --outfile "src-tauri/bin/agentglass-server-${{ matrix.triple }}${ext}"
+
+      # Mirrors `make desktop-web`. The address is pinned because inside the app
+      # window location.hostname is the Tauri scheme, not localhost.
+      - name: Build web
+        run: cd web && VITE_CW_SERVER=http://localhost:4000 bun run build
+
+      - uses: tauri-apps/tauri-action@v0
+        id: tauri
+        with:
+          args: --target ${{ matrix.triple }} --bundles ${{ matrix.bundles }}
+
+      # Assets only. `--clobber` makes re-runs idempotent; the release body is
+      # never passed, so release.yml's notes stay exactly as written.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo '${{ steps.tauri.outputs.artifactPaths }}' \
+            | tr -d '[]"' | tr ',' '\n' | sed '/^\s*$/d' \
+            | while read -r path; do
+                echo "uploading $path"
+                gh release upload "$GITHUB_REF_NAME" "$path" --clobber --repo "$GITHUB_REPOSITORY"
+              done
+
+      - name: Keep the build even when there is no tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentglass-${{ matrix.triple }}
+          path: src-tauri/target/${{ matrix.triple }}/release/bundle/**/*
+          if-no-files-found: error
