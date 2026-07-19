@@ -127,6 +127,13 @@
     color: var(--text);
     letter-spacing: -0.01em;
   }
+  /* Phones: the 0.2em tracking makes eyebrows wrap into vertical stacks of
+     letters inside narrow flex cells — tighten it instead of shrinking type. */
+  @media (max-width: 640px) {
+    .panel-eyebrow {
+      letter-spacing: 0.12em;
+    }
+  }
   .tile {
     position: relative;
     background: color-mix(in srgb, var(--bg2) 60%, transparent);
