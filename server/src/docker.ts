@@ -4,10 +4,12 @@
 // AGENTGLASS_DOCKER_WRITE_DISABLED=1. Container ids/names are validated before
 // they reach the CLI.
 
+import { basename } from "node:path";
 import type {
   DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork,
-  DockerOverview, DockerActionResult,
+  DockerOverview, DockerScope, DockerActionResult,
 } from "../../shared/types.ts";
+import { workspaceRoot } from "./config.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
@@ -89,7 +91,78 @@ const PS_FIELDS = ["ID", "Names", "Image", "State", "Status", "Ports", "Labels",
 // labels do this (a cloudflared image here embeds a JSON blob in one).
 const PS_FORMAT = PS_FIELDS.map((f) => `{{.${f}}}`).join("\t");
 
-async function containers(): Promise<DockerContainer[]> {
+// --- project scope ----------------------------------------------------------
+// The rest of the cockpit (events, sessions, git, diffs) narrows to the open
+// project; the docker panel used to be the one surface that still showed the
+// whole machine, which made "my containers" a hunt through everything else
+// running on the host.
+//
+// Compose is the only thing that records which directory a container came from,
+// so its labels are the key. `working_dir` is the strong signal — it is the
+// absolute path of the compose file's directory — but it is only set by
+// reasonably recent compose versions, so the project name is kept as a fallback
+// for containers that carry just that.
+const WORKING_DIR_LABEL = "com.docker.compose.project.working_dir";
+
+// Compose lowercases the project name and drops everything outside [a-z0-9_-],
+// so a checkout at ~/code/My.App runs as project "myapp". Comparing the raw
+// basename would miss exactly those repos, which is the confusing half of the
+// bug rather than the obvious half.
+const normalizeProject = (s: string) => s.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+
+export interface DockerScopeKey { dir: string; project: string }
+const trimSlash = (p: string) => p.replace(/\/+$/, "");
+
+/** The open project expressed the way container labels express it, or null when
+ *  this instance is machine-wide. */
+export function dockerScopeKey(root: string | null): DockerScopeKey | null {
+  if (!root) return null;
+  const dir = trimSlash(root);
+  return { dir, project: normalizeProject(basename(dir)) };
+}
+
+/**
+ * Whether a container belongs to the open project.
+ *
+ * Either signal is enough. A directory match is authoritative — that stack was
+ * literally launched from inside this checkout, whatever it named itself. A
+ * name match is looser (two checkouts of the same repo in different directories
+ * both answer to "myapp") but it is the only thing older compose versions give
+ * us, and showing a sibling checkout's container is a far smaller failure than
+ * showing none of them.
+ */
+export function containerInScope(c: { project: string | null; workingDir: string | null }, s: DockerScopeKey): boolean {
+  const wd = trimSlash(c.workingDir || "");
+  if (wd && (wd === s.dir || wd.startsWith(s.dir + "/"))) return true;
+  return !!s.project && normalizeProject(c.project || "") === s.project;
+}
+
+// Carries the working-dir label alongside the wire shape; it is a matching
+// input, not something the panel renders, so it is stripped before serving.
+type ScopedContainer = DockerContainer & { workingDir: string | null };
+const strip = (c: ScopedContainer): DockerContainer => {
+  const { workingDir: _wd, ...rest } = c;
+  return rest;
+};
+
+/**
+ * Apply the scope to a container list.
+ *
+ * When a scope is set but nothing matches, the full list is returned with
+ * `showingAll` set rather than an empty one. An empty panel is indistinguishable
+ * from a broken daemon, and plenty of perfectly normal containers carry no
+ * compose labels at all (`docker run`, Podman, k3d) — silently hiding them would
+ * teach people the panel is unreliable. Degrading to the host view *and saying
+ * so* keeps the panel honest in both directions.
+ */
+export function applyScope(all: ScopedContainer[], key: DockerScopeKey | null): { containers: DockerContainer[]; scope?: DockerScope } {
+  if (!key) return { containers: all.map(strip) };
+  const mine = all.filter((c) => containerInScope(c, key));
+  const scope: DockerScope = { workspace: key.dir, project: key.project, matched: mine.length, showingAll: mine.length === 0 };
+  return { containers: (mine.length ? mine : all).map(strip), scope };
+}
+
+async function containers(): Promise<ScopedContainer[]> {
   const r = await dockerAsync(["ps", "--all", "--no-trunc", "--format", PS_FORMAT]);
   if (r.code !== 0) return [];
   const rows: Record<string, string>[] = [];
@@ -111,6 +184,7 @@ async function containers(): Promise<DockerContainer[]> {
       ports: c.Ports || "",
       project: labels["com.docker.compose.project"] || null,
       service: labels["com.docker.compose.service"] || null,
+      workingDir: labels[WORKING_DIR_LABEL] || null,
       runningFor: c.RunningFor || "",
       size: c.Size || "",
     };
@@ -148,19 +222,28 @@ async function networks(): Promise<DockerNetwork[]> {
 // never idle — it just queued. They're independent, so they go together, and
 // the result is held long enough to absorb a second viewer or a panel reopen.
 const OVERVIEW_CACHE_MS = 2_000;
-let overviewCache: { at: number; data: DockerOverview } | null = null;
+// The scope is part of the cache identity: the project picker can switch
+// workspaces mid-poll, and serving the previous project's containers for the
+// next two seconds looks like the switch didn't take.
+let overviewCache: { at: number; root: string | null; data: DockerOverview } | null = null;
 
 export async function overview(): Promise<DockerOverview> {
-  if (overviewCache && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS) return overviewCache.data;
+  const root = workspaceRoot();
+  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS) return overviewCache.data;
   const version = await dockerVersion();
   if (!version) {
     const down: DockerOverview = { available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null, containers: [], images: [], volumes: [], networks: [], error: "docker not available (is the daemon running?)" };
-    overviewCache = { at: Date.now(), data: down };
+    overviewCache = { at: Date.now(), root, data: down };
     return down;
   }
   const [c, i, v, n] = await Promise.all([containers(), images(), volumes(), networks()]);
-  const data: DockerOverview = { available: true, writeEnabled: DOCKER_WRITE_ENABLED, version, containers: c, images: i, volumes: v, networks: n };
-  overviewCache = { at: Date.now(), data };
+  // Only containers are scoped. Images, volumes and networks are host-global
+  // resources shared between projects — an image layer isn't "owned" by the
+  // checkout that happened to build it — so filtering them would hide things
+  // the user can legitimately act on without telling them anything true.
+  const { containers: scoped, scope } = applyScope(c, dockerScopeKey(root));
+  const data: DockerOverview = { available: true, writeEnabled: DOCKER_WRITE_ENABLED, version, containers: scoped, images: i, volumes: v, networks: n, ...(scope ? { scope } : {}) };
+  overviewCache = { at: Date.now(), root, data };
   return data;
 }
 

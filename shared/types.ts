@@ -429,6 +429,15 @@ export interface DockerImage {
 }
 export interface DockerVolume { name: string; driver: string; }
 export interface DockerNetwork { id: string; name: string; driver: string; scope: string; }
+/** Present only when the cockpit is open for one project, so the panel can say
+ *  which slice of the host it is showing — and admit when the filter found
+ *  nothing and fell back to the whole machine. */
+export interface DockerScope {
+  workspace: string;   // the open project's directory
+  project: string;     // compose project name derived from it
+  matched: number;     // containers that belong to it
+  showingAll: boolean; // nothing matched, so every container is listed instead
+}
 export interface DockerOverview {
   available: boolean;
   writeEnabled: boolean;
@@ -437,6 +446,7 @@ export interface DockerOverview {
   images: DockerImage[];
   volumes: DockerVolume[];
   networks: DockerNetwork[];
+  scope?: DockerScope;
   error?: string;
 }
 export interface DockerActionResult { ok: boolean; error?: string; output?: string; }
