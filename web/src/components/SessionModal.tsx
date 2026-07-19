@@ -61,9 +61,10 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffPath, setDiffPath] = useState<string | undefined>(undefined);
   const [showTools, setShowTools] = useState(true);
+  const [focusAgent, setFocusAgent] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!sessionId) { setD(null); setDiffOpen(false); return; }
+    if (!sessionId) { setD(null); setDiffOpen(false); setFocusAgent(null); return; }
     setLoading(true);
     api.session(sessionId).then((s) => { setD(s); setLoading(false); }).catch(() => { setD(null); setLoading(false); });
   }, [sessionId]);
@@ -98,7 +99,12 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
     ? d.timeline
     : (d?.conversation ?? []).map((c) => ({ kind: "message" as const, ts: c.ts, role: c.role, text: c.text }));
   const toolCount = entries.reduce((n, e) => n + (e.kind === "tool" ? 1 : 0), 0);
-  const timeline = [...entries].reverse().filter((e) => showTools || e.kind !== "tool");
+  // Subagents report the parent's session id, so a fleet of them lands on this
+  // one timeline. Focusing one is the only way to read what it actually did
+  // without its work being shuffled together with three siblings'.
+  const timeline = [...entries].reverse()
+    .filter((e) => showTools || e.kind !== "tool")
+    .filter((e) => !focusAgent || e.agent_id === focusAgent);
 
   return (
     <Portal>
@@ -196,14 +202,33 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                         </div>
                         <div>
                           <div className="panel-eyebrow mb-2">Subagents · {d.subagents.length}</div>
+                          {/* Clickable: a subagent's work is buried in the
+                              parent's timeline because it reports the parent's
+                              session id, so focusing one is the only way to read
+                              it as its own thread. */}
                           <div className="flex flex-wrap gap-1.5">
-                            {d.subagents.map((s) => (
-                              <span key={s.agent_id} className="chip" style={{ color: "var(--info)", background: "color-mix(in srgb, var(--info) 12%, transparent)" }} title={s.agent_id}>
-                                {shortType(s.agent_type)} · {s.events}
-                              </span>
-                            ))}
+                            {d.subagents.map((s) => {
+                              const on = focusAgent === s.agent_id;
+                              return (
+                                <button key={s.agent_id} onClick={() => setFocusAgent(on ? null : s.agent_id)}
+                                  className="chip cursor-pointer"
+                                  title={on ? `${s.agent_id}\nclick to show the whole session again` : `${s.agent_id}\nclick to read only this subagent's thread`}
+                                  style={{
+                                    color: on ? "var(--bg)" : "var(--info)",
+                                    background: on ? "var(--info)" : "color-mix(in srgb, var(--info) 12%, transparent)",
+                                    borderColor: `color-mix(in srgb, var(--info) ${on ? 80 : 30}%, transparent)`,
+                                  }}>
+                                  {shortType(s.agent_type)} · {s.events}
+                                </button>
+                              );
+                            })}
                             {d.subagents.length === 0 && <div className="t-dim2 text-[11px]">none</div>}
                           </div>
+                          {focusAgent && (
+                            <button onClick={() => setFocusAgent(null)} className="mt-2 text-[10px] t-dim2 hover:opacity-70">
+                              ← showing one subagent · back to the whole session
+                            </button>
+                          )}
                         </div>
                         <div>
                           <div className="panel-eyebrow mb-2 flex items-center gap-2">

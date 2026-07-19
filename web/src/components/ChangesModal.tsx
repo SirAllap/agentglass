@@ -480,10 +480,14 @@ export function ThemePicker({ value, onChange }: { value: string; onChange: (v: 
         <span className="truncate" style={{ maxWidth: 92 }}>{label}</span>
         <span style={{ opacity: 0.6, fontSize: 8 }}>▼</span>
       </button>
+      {/* zIndex must beat the diff's sticky hunk headers, which are also z-20:
+          on a tie the later-painted element wins, so those headers were
+          striping grey bars across this list wherever a `@@ … @@` line sat
+          behind it. */}
       {open && (
         <div
           className="agx-scroll absolute right-0 mt-1 rounded-lg py-1 text-[10.5px] shadow-2xl"
-          style={{ zIndex: 20, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
+          style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
         >
           <Row id="auto" name="Auto (app theme)" />
           <div className="px-2.5 pt-1.5 pb-0.5 text-[8.5px] uppercase tracking-wider t-dim2">Dark</div>
