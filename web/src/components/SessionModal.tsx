@@ -7,6 +7,7 @@ import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { fmtUsd, fmtTokens, fmtAgo, fmtTime, modelLabelOf, modelColor } from "../lib/format.ts";
+import { sessionIsLive } from "../lib/derive.ts";
 
 const TOOL_RAMP = ["#a78bfa", "#f472b6", "#34d399", "#60a5fa", "#fbbf24", "#22d3ee", "#a3e635", "#fb923c"];
 const shortType = (t: string) => t.replace(/^workflow-subagent$/, "workflow").replace(/^general-purpose$/, "general");
@@ -87,10 +88,10 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
   const dur = d ? Math.max(0, d.last_seen - d.started_at) : 0;
   const durLabel = dur > 3_600_000 ? `${(dur / 3_600_000).toFixed(1)}h` : dur > 60_000 ? `${Math.round(dur / 60_000)}m` : `${Math.round(dur / 1000)}s`;
   const toolMax = Math.max(1, ...(d?.tool_mix.map((t) => t.n) ?? [1]));
-  // Still owned by a running claude: no end recorded and it spoke recently.
-  // Erring towards "live" is the safe side — refusing to resume a dead session
-  // is an annoyance, resuming a live one forks its transcript.
-  const live = !!d && !d.ended_at && Date.now() - d.last_seen < 120_000;
+  // Still owned by a running claude. The rule lives in derive.ts because the
+  // chat panel's resume picker has to answer exactly the same question, and two
+  // copies of it would eventually disagree about which sessions are safe.
+  const live = !!d && sessionIsLive(d);
 
   // Oldest-first, so it reads as a story rather than in reverse. Falls back to
   // the plain conversation for a server that predates the timeline field.

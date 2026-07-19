@@ -10,14 +10,16 @@
 // that. It filters, and it says which chats answered while you were elsewhere.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import type { GitRepoRef } from "../../../shared/types.ts";
+import type { GitRepoRef, SessionRollup } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
+import { fmtAgo, fmtUsd, modelLabelOf, modelColor, providerOf } from "../lib/format.ts";
+import { sessionIsLive } from "../lib/derive.ts";
 import {
-  listChats, getChat, newChat, closeChat, update, send, stop, subscribe,
+  listChats, getChat, newChat, closeChat, update, send, stop, subscribe, chatResuming,
   DEFAULT_MODEL, DEFAULT_MODE, type Chat,
 } from "../lib/chatStore.ts";
 
@@ -78,6 +80,139 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
   );
 }
 
+/** Why a session can't be picked up, or `null` if it can.
+ *
+ *  Three different refusals with three different remedies — "wait for it to
+ *  finish", "nothing we can do", "it's already open over there" — so the row
+ *  has to say which one applies rather than just going grey. */
+type Blocked = "live" | "no-dir" | null;
+const blockedReason = (s: SessionRollup): Blocked =>
+  sessionIsLive(s) ? "live" : s.project_path ? null : "no-dir";
+
+/** One resumable session in the picker. */
+function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: string; onPick: () => void }) {
+  const why = blockedReason(s);
+  const model = modelLabelOf(s.model_name);
+  const label = s.project_path ? repoName(s.project_path) : s.source_app;
+  const note = why === "live"
+    ? "This session is still running. A claude session has a single owner — a second one writing to the same transcript would corrupt its history. Resume it once it stops."
+    : why === "no-dir"
+    ? "No directory was recorded for this session, so there's nowhere to run the resumed conversation."
+    : openChatId
+    ? "Already open in this panel — picking it focuses that tab."
+    : `Continue this conversation in ${s.project_path}`;
+
+  return (
+    <button
+      onClick={onPick}
+      disabled={!!why}
+      role="option"
+      aria-selected={false}
+      title={note}
+      className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2 ${why ? "cursor-default opacity-55" : "cursor-pointer hover:bg-white/5"}`}
+      style={{ border: "1px solid transparent" }}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          <span className="truncate text-[11.5px]" style={{ color: "var(--text2)" }}>{label}</span>
+          <span className="text-[9.5px] tabular-nums t-dim2 shrink-0">{s.session_id.slice(0, 8)}</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-[9.5px] t-dim2">
+          <span style={{ color: modelColor(model) }}>{model}</span>
+          <span>· {fmtAgo(s.last_seen)} ago</span>
+          <span>· {fmtUsd(s.cost_usd)}</span>
+        </div>
+      </div>
+      {why === "live"
+        ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>● running</span>
+        : why === "no-dir"
+        ? <span className="text-[9.5px] shrink-0 t-dim2">no dir</span>
+        : openChatId
+        ? <span className="text-[9.5px] shrink-0 t-dim2">open ↗</span>
+        : <span className="text-[10px] shrink-0" style={{ color: "var(--primary-hover)" }}>↩</span>}
+    </button>
+  );
+}
+
+/**
+ * Pick up a claude session that already exists.
+ *
+ * The panel could always *start* conversations, but the ones worth continuing
+ * are usually the ones started somewhere else — in a terminal, or by an earlier
+ * run — and until now there was no way to reach them from here. This lists what
+ * the fleet has seen, most recent first, and hands the chosen session to the
+ * store to resume.
+ *
+ * Running sessions are listed rather than hidden: their absence would read as
+ * a bug ("I just used that one, where is it?"), where a greyed row that says
+ * "running" answers the question.
+ */
+function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void; onClose: () => void }) {
+  const [rows, setRows] = useState<SessionRollup[] | null>(null);
+  const [q, setQ] = useState("");
+
+  // Fetched once per opening rather than polled: this is a menu the user is
+  // actively reading, and rows shuffling under the cursor would be worse than
+  // a list a few seconds stale.
+  useEffect(() => { api.sessions(60).then(setRows).catch(() => setRows([])); }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Capture, and stop the event here: the chat textarea and the panel both
+      // treat Escape as "close me", and one keypress should only close the menu.
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const shown = useMemo(() => {
+    // `claude --resume` only knows about claude's own transcripts, so a session
+    // recorded from another vendor's telemetry is not something we could pick
+    // up. Unknown models stay in — early claude rows have no model recorded.
+    const claudeish = (rows ?? []).filter((s) => {
+      const p = providerOf(s.model_name);
+      return p === "Anthropic" || p === "unknown";
+    });
+    const needle = q.trim().toLowerCase();
+    if (!needle) return claudeish;
+    return claudeish.filter((s) =>
+      (`${s.project_path ?? ""} ${s.source_app} ${s.session_id}`).toLowerCase().includes(needle));
+  }, [rows, q]);
+
+  return (
+    <>
+      <div className="absolute inset-0" style={{ zIndex: 20 }} onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, y: -8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, scale: 0.97 }}
+        transition={{ type: "spring", stiffness: 420, damping: 32 }}
+        className="absolute left-2 top-12 w-[360px] max-w-[calc(100%-1rem)] rounded-xl p-1.5 flex flex-col"
+        style={{
+          zIndex: 21,
+          maxHeight: "min(60vh, 460px)",
+          background: "color-mix(in srgb, var(--bg2) 97%, black)",
+          border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
+          boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
+        }}
+      >
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter sessions…"
+          className="mx-1 mt-0.5 mb-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
+          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
+        <div role="listbox" aria-label="sessions to resume" className="agx-scroll flex-1 min-h-0 overflow-y-auto flex flex-col gap-0.5">
+          {rows === null && <div className="px-2.5 py-3 text-[11px] t-dim2">loading sessions…</div>}
+          {rows !== null && !shown.length && <div className="px-2.5 py-3 text-[11px] t-dim2">no sessions to resume</div>}
+          {shown.map((s) => (
+            <ResumeRow key={s.session_id} s={s} openChatId={chatResuming(s.session_id)?.id} onPick={() => onPick(s)} />
+          ))}
+        </div>
+        <div className="px-2.5 pt-1.5 pb-0.5 text-[9px] t-dim2 shrink-0">
+          resuming keeps claude's full context · running sessions can't be resumed
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
 export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: () => void; focusId?: string }) {
   const chats = useSyncExternalStore(subscribe, listChats, listChats);
   const [activeId, setActiveId] = useState("");
@@ -93,6 +228,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   });
   useEffect(() => { try { localStorage.setItem(ALLOW_KEY, allowed); } catch { /* private mode */ } }, [allowed]);
   const [query, setQuery] = useState("");
+  const [resumeOpen, setResumeOpen] = useState(false);
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -125,7 +261,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   // to the count, which made closing the last chat instantly resurrect it.
   const seeded = useRef(false);
   useEffect(() => {
-    if (!open) { seeded.current = false; return; }
+    if (!open) { seeded.current = false; setResumeOpen(false); return; }
     if (!seeded.current && !chats.length && defaultCwd) {
       seeded.current = true;
       setActiveId(newChat(defaultCwd).id);
@@ -159,6 +295,22 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
     setActiveId(c.id);
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [active, defaultCwd, repos]);
+
+  // Adopt an existing claude session. Focusing an already-open tab rather than
+  // opening a second one is not a nicety: two chats resuming one session id
+  // would both write to that transcript, which is the same corruption the live
+  // check exists to prevent.
+  const resume = useCallback((s: SessionRollup) => {
+    setResumeOpen(false);
+    if (!s.project_path || sessionIsLive(s)) return;
+    const chat = chatResuming(s.session_id)
+      ?? newChat(s.project_path, s.model_name || undefined, active?.mode ?? DEFAULT_MODE, {
+        sessionId: s.session_id,
+        title: `${s.source_app}:${s.session_id.slice(0, 8)}`,
+      });
+    setActiveId(chat.id);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [active]);
 
   const drop = useCallback((id: string) => {
     const rest = listChats().filter((c) => c.id !== id);
@@ -207,16 +359,26 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
             <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
               <motion.div initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[95vw] h-[95vh] rounded-2xl flex pointer-events-auto overflow-hidden"
+                className="relative w-[95vw] h-[95vh] rounded-2xl flex pointer-events-auto overflow-hidden"
                 style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
                 <style>{SCROLLBAR_CSS}</style>
 
+                {/* Anchored inside the modal rather than portalled like Select:
+                    this panel already sits at a very high z-index, and a
+                    portalled menu would render underneath it. */}
+                <AnimatePresence>
+                  {resumeOpen && <ResumePicker onPick={resume} onClose={() => setResumeOpen(false)} />}
+                </AnimatePresence>
+
                 {/* ---- sidebar: every open chat ---- */}
                 <div className="w-[236px] shrink-0 flex flex-col border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
-                  <div className="flex items-center gap-2 px-3 py-3 shrink-0">
-                    <span className="text-[13px] font-semibold" style={{ color: "var(--text)" }}>💬 Chats</span>
-                    <span className="text-[10px] t-dim2 tabular-nums">{chats.length}</span>
-                    <button onClick={add} className="ml-auto text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="new chat">+ new</button>
+                  <div className="flex items-center gap-1.5 px-3 py-3 shrink-0">
+                    <span className="text-[13px] font-semibold shrink-0" style={{ color: "var(--text)" }}>💬 Chats</span>
+                    <span className="text-[10px] t-dim2 tabular-nums shrink-0">{chats.length}</span>
+                    <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
+                      className="ml-auto text-[11px] px-1.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+                      title="continue a session that already exists — e.g. one you started in a terminal">↩ resume</button>
+                    <button onClick={add} className="text-[11px] px-1.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="new chat">+ new</button>
                   </div>
                   {chats.length > 6 && (
                     <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="filter chats…"

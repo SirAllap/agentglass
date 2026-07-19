@@ -243,3 +243,23 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
   }
   return out.sort((x, y) => y.ts - x.ts);
 }
+
+/** How long a session may stay silent before we treat it as finished.
+ *
+ *  Sessions don't reliably record an end — a closed terminal or a killed
+ *  process never gets to write one — so silence has to stand in for it. Two
+ *  minutes is well past the gap between a long tool call and its result, so a
+ *  session that is merely thinking hard is not mistaken for a dead one. */
+export const SESSION_LIVE_MS = 120_000;
+
+/** Whether a claude session still has a running owner.
+ *
+ *  A session has exactly one writer. Resuming one that is still going puts a
+ *  second `claude` on the same transcript and corrupts its history, so this is
+ *  the gate every "resume" affordance has to pass. The bias is deliberate:
+ *  refusing to resume a session that had in fact ended is a small annoyance,
+ *  while resuming one that hadn't destroys the conversation. */
+export const sessionIsLive = (
+  s: { ended_at?: number | null; last_seen: number },
+  now = Date.now(),
+): boolean => !s.ended_at && now - s.last_seen < SESSION_LIVE_MS;
