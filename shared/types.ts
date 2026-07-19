@@ -237,6 +237,14 @@ export interface TimelineEntry {
   /** Links a tool run to its diff in `changes`, so an edit can show what it
    *  changed rather than only that it happened. */
   tool_use_id?: string | null;
+  /** Which subagent produced this, when it wasn't the main thread.
+   *
+   *  Subagent turns report the *parent's* session id, so everything a fleet of
+   *  them does lands on one timeline. Without this tag those runs are
+   *  indistinguishable from the main thread's, and four agents working in
+   *  parallel read as one very busy one. */
+  agent_id?: string | null;
+  agent_type?: string | null;
 }
 
 export interface SessionDetail {
