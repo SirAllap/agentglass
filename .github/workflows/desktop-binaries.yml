@@ -26,15 +26,22 @@ jobs:
           # into an AppImage, and .deb covers the distros this targets anyway.
           - os: ubuntu-22.04 # oldest supported glibc — newer runners break older distros
             triple: x86_64-unknown-linux-gnu
+            bunTarget: bun-linux-x64
             bundles: deb
           - os: macos-14
             triple: aarch64-apple-darwin
+            bunTarget: bun-darwin-arm64
             bundles: dmg
-          - os: macos-13
+          # Intel macOS is cross-compiled from the arm64 runner: macos-13 has no
+          # runners left and its job just waits forever. Rust and Bun both take
+          # an explicit target, so nothing here depends on the host arch.
+          - os: macos-14
             triple: x86_64-apple-darwin
+            bunTarget: bun-darwin-x64
             bundles: dmg
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
+            bunTarget: bun-windows-x64
             bundles: msi,nsis
 
     runs-on: ${{ matrix.os }}
@@ -71,7 +78,7 @@ jobs:
         run: |
           ext=""
           [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
-          bun build --compile server/src/index.ts \
+          bun build --compile --target=${{ matrix.bunTarget }} server/src/index.ts \
             --outfile "src-tauri/bin/agentglass-server-${{ matrix.triple }}${ext}"
 
       # Mirrors `make desktop-web`. The address is pinned because inside the app
