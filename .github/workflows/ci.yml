@@ -17,12 +17,16 @@ jobs:
         run: bun install
       - name: Typecheck web
         run: cd web && bunx tsc --noEmit
+      - name: Typecheck server
+        run: cd server && bunx tsc --noEmit
+      - name: Tests (server)
+        run: cd server && bun test
       - name: Build web
         run: cd web && bunx vite build
       - name: Server boots
         run: |
           cd server
-          AGENTGLASS_PORT=4123 AGENTGLASS_DB=/tmp/ci.db bun run src/index.ts &
+          AGENTGLASS_PORT=4123 AGENTGLASS_DB=/tmp/ci.db AGENTGLASS_SCAN_DISABLED=1 bun run src/index.ts &
           SVPID=$!
           sleep 2
           curl -sf http://localhost:4123/health
