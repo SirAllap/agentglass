@@ -7,7 +7,16 @@
 
 import { api } from "./api.ts";
 
-export type ChatMsg = { role: "user" | "assistant"; text: string; tools: string[]; streaming?: boolean };
+export type ChatMsg = {
+  role: "user" | "assistant";
+  text: string;
+  tools: string[];
+  streaming?: boolean;
+  /** Replayed from the session's transcript when this chat adopted an existing
+   *  session, rather than said in this panel. Marked so the UI can draw the
+   *  seam — and so it's clear these were not sent from here. */
+  historical?: boolean;
+};
 
 export type Chat = {
   id: string;
@@ -67,7 +76,37 @@ export function newChat(
   };
   chats.set(id, chat);
   emit();
+  // Resuming leaves `claude` holding the whole conversation while this panel
+  // holds none of it, so an adopted session opened as a blank canvas — the
+  // model knew everything and the user could see nothing, which reads as the
+  // resume having silently failed. Replay the transcript we already store so
+  // the thread you are continuing is actually in front of you.
+  if (resume?.sessionId) void hydrate(id, resume.sessionId);
   return chat;
+}
+
+/** Fill a resumed chat with the session's existing conversation.
+ *
+ *  Best-effort and non-blocking: the chat is usable the moment it opens, and a
+ *  failure here costs history on screen, not the ability to continue — `claude`
+ *  still has the real context either way. */
+async function hydrate(chatId: string, sessionId: string) {
+  try {
+    const s = await api.session(sessionId);
+    if (!s) return;
+    // Oldest-first, matching how the panel reads. Tool runs are left out: this
+    // is the conversation view, and the session modal already renders the full
+    // interleaved timeline for anyone who wants the machinery.
+    const msgs: ChatMsg[] = [...(s.conversation ?? [])]
+      .sort((a, b) => a.ts - b.ts)
+      .map((c) => ({ role: c.role, text: c.text, tools: [], historical: true }));
+    if (!msgs.length) return;
+    update(chatId, (c) => {
+      // Anything typed while this was in flight stays last — the reply to a
+      // resumed thread must not end up above the thread it replies to.
+      c.messages = [...msgs, ...c.messages];
+    });
+  } catch { /* history is a nicety; the resume itself still works */ }
 }
 
 /** An existing chat already resuming this claude session, if any — so asking to

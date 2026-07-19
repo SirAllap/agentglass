@@ -436,9 +436,21 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                         </div>
                       )}
                       {active?.messages.map((m, i) => (
-                        <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                        <div key={i}>
+                          {/* The seam between what was said before this panel
+                              adopted the session and what is being said in it
+                              now — without it, replayed history reads as though
+                              you had typed it here. */}
+                          {m.historical && !active.messages[i + 1]?.historical && (
+                            <div className="flex items-center gap-2 my-3 text-[9.5px] uppercase tracking-wider t-dim2">
+                              <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                              <span>resumed here</span>
+                              <span className="flex-1 h-px" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                            </div>
+                          )}
+                          <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                           <div className="max-w-[86%] min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
-                            style={{ ...CODE_FONT_STYLE, fontFamily: undefined, background: m.role === "user" ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text)" }}>
+                            style={{ ...CODE_FONT_STYLE, fontFamily: undefined, opacity: m.historical ? 0.72 : 1, background: m.role === "user" ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text)" }}>
                             {m.tools.length > 0 && (
                               <div className="flex flex-wrap gap-1 mb-1.5">
                                 {m.tools.map((t, j) => <span key={j} className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, color: "var(--info)", background: "color-mix(in srgb, var(--info) 12%, transparent)" }}>⚙ {t}</span>)}
@@ -446,6 +458,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                             )}
                             {m.text ? <Markdown text={m.text} /> : (m.streaming ? <span className="t-dim2">▍</span> : "")}
                             {m.streaming && m.text && <span className="t-dim2">▍</span>}
+                          </div>
                           </div>
                         </div>
                       ))}
