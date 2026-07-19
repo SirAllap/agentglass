@@ -8,6 +8,7 @@
 // `bold` is on we clone the chosen theme and append a rule that bolds them —
 // giving the same look on ANY theme. Themes' own italic/bold are always honored.
 import type { Highlighter, ThemeRegistrationRaw } from "shiki";
+import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 
 // Lazy handle to the shiki module — imported once, shared by every helper, so
 // the whole library is a single on-demand chunk.
@@ -15,8 +16,25 @@ let modP: Promise<typeof import("shiki")> | null = null;
 const shiki = () => (modP ??= import("shiki"));
 
 let hp: Promise<Highlighter> | null = null;
+/**
+ * The one shared highlighter, tokenizing with shiki's **JavaScript** RegExp
+ * engine rather than its default Oniguruma one.
+ *
+ * Oniguruma is WebAssembly, and the desktop shell serves the bundle under the
+ * CSP in `src-tauri/tauri.conf.json`, whose `script-src 'self'` omits
+ * `'wasm-unsafe-eval'` — so the webview refuses to instantiate the module and
+ * `createHighlighter` rejects before a theme or a language is ever requested.
+ * That is why the diff was monochrome in the app but coloured in a browser,
+ * and why the theme picker showed no complaint: the theme step never ran.
+ *
+ * The engine swap is preferred over widening the CSP because it keeps the
+ * desktop app's script policy as tight as it is today, and because relying on
+ * `'wasm-unsafe-eval'` would put us at the mercy of whether the host's
+ * WebKitGTK recognises that token — an unknown source expression is simply
+ * ignored, which would silently leave wasm blocked on older systems.
+ */
 export function getHighlighter(): Promise<Highlighter> {
-  if (!hp) hp = shiki().then((m) => m.createHighlighter({ themes: [], langs: [] }));
+  if (!hp) hp = shiki().then((m) => m.createHighlighter({ themes: [], langs: [], engine: createJavaScriptRegexEngine() }));
   return hp;
 }
 

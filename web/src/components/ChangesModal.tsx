@@ -636,7 +636,7 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
   const commitPaths = useMemo(() => [...new Set(all.map((c) => c.file_path))], [all]);
   const walkSig = useMemo(() => changesetSig(all), [all]);
   // Shiki highlighter + theme/bold controls (shared with the git panel).
-  const { hilite, themePref, setThemePref, bold, setBold, themeError } = useDiffHighlight(selected?.file_path);
+  const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(selected?.file_path);
   // Restore a cached walkthrough for the current changeset (on open / when the
   // changeset changes) so it persists across close/reopen and never re-runs.
   useEffect(() => {
@@ -874,7 +874,7 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
                             <Toggle on={reviewed.has(selected.id)} onClick={() => toggleReviewed(selected.id)} title="Mark this file reviewed (x)">{reviewed.has(selected.id) ? "reviewed ✓" : "review"}</Toggle>
                             <Toggle on={split} onClick={() => setSplit((s) => !s)} title="Split / unified">{split ? "split" : "unified"}</Toggle>
                             <Toggle on={wrap} onClick={() => setWrap((w) => !w)} title="Toggle line wrap (w)">wrap</Toggle>
-                            <ThemePicker value={themePref} onChange={setThemePref} error={themeError} />
+                            <ThemePicker value={themePref} onChange={setThemePref} error={hiliteError} />
                             <Toggle on={bold} onClick={() => setBold((b) => !b)} title="Bold keywords, functions & types (Neovim-style)">bold</Toggle>
                             <Toggle onClick={() => copy("path")} title="Copy file path (c)">{copied === "path" ? "copied ✓" : "path"}</Toggle>
                             <Toggle onClick={() => copy("diff")} title="Copy unified diff">{copied === "diff" ? "copied ✓" : "diff"}</Toggle>

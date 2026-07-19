@@ -8,9 +8,33 @@
 // was to compare two themes side by side.
 import { expect, test } from "bun:test";
 import { bundledThemes } from "shiki";
-import { getHighlighter, ensureTheme, THEMES, themeLabel } from "../src/lib/highlight.ts";
+import { getHighlighter, ensureTheme, langFromPath, THEMES, themeLabel } from "../src/lib/highlight.ts";
 
 const CODE = 'const greeting = "hello"; // note';
+
+// Stand in for the desktop shell's CSP for this whole file.
+//
+// The regression: shiki's default Oniguruma engine is WebAssembly, and
+// `src-tauri/tauri.conf.json` sets `script-src 'self'` with no
+// `'wasm-unsafe-eval'`, so the webview refuses to instantiate it and
+// `createHighlighter` rejects before a theme or grammar is ever asked for —
+// every diff in the app came out monochrome while browsers were fine. The
+// guard is installed at import time rather than inside one test because the
+// highlighter is memoized: by the time any single test ran, an earlier one
+// would already have built it, wasm and all, and the check would pass
+// vacuously. With it here, *any* test in this file that reaches for wasm
+// fails.
+const usedWasm: string[] = [];
+for (const k of ["instantiate", "compile", "instantiateStreaming", "compileStreaming"] as const) {
+  const refuse = () => { usedWasm.push(k); throw new Error(`WebAssembly.${k} is blocked, as it is under the desktop CSP`); };
+  (WebAssembly as unknown as Record<string, unknown>)[k] = refuse;
+}
+for (const k of ["Instance", "Module"] as const) {
+  (WebAssembly as unknown as Record<string, unknown>)[k] = function () {
+    usedWasm.push(k);
+    throw new Error(`new WebAssembly.${k} is blocked, as it is under the desktop CSP`);
+  };
+}
 
 test("every theme the picker offers is a real shiki bundled id", () => {
   // A typo, or an id shiki renames or drops in a future major, would otherwise
@@ -64,6 +88,33 @@ test("a theme that cannot load falls back to one that is actually registered", a
   expect(failed).toBe("no-such-theme");
   expect(name).toBe("github-dark-bold");
   expect(() => hl.codeToTokens(CODE, { lang: "typescript" as never, theme: name! })).not.toThrow();
+});
+
+test("the highlighter tokenizes without instantiating any WebAssembly", async () => {
+  const hl = await getHighlighter();
+  await hl.loadLanguage("typescript" as never);
+  const { name, failed } = await ensureTheme(hl, "gruvbox-dark-medium", true);
+  expect(failed).toBeUndefined();
+  const tokens = hl.codeToTokens(CODE, { lang: "typescript" as never, theme: name! }).tokens.flat();
+  expect(new Set(tokens.map((x) => x.color)).size).toBeGreaterThan(1);
+  expect(usedWasm).toEqual([]);
+});
+
+test("every language the diff maps a file to actually has a grammar", async () => {
+  // A grammar that will not load leaves the file as plain text, which looks
+  // identical to a theme failure — so the extension table is checked against
+  // shiki directly rather than trusted.
+  const hl = await getHighlighter();
+  const langs = [...new Set(["a.ts", "a.tsx", "a.js", "a.jsx", "a.json", "a.py", "a.rb", "a.go", "a.rs",
+    "a.java", "a.kt", "a.swift", "a.scala", "a.dart", "a.c", "a.cpp", "a.cs", "a.php", "a.css", "a.scss",
+    "a.html", "a.xml", "a.vue", "a.svelte", "a.astro", "a.md", "a.mdx", "a.sh", "a.fish", "a.yml",
+    "a.toml", "a.ini", "a.sql", "a.graphql", "a.proto", "a.lua", "a.r", "a.ex", "a.clj", "a.hs",
+    "a.elm", "a.ml", "a.nim", "a.zig", "Dockerfile", "Makefile"].map((f) => langFromPath(f)!))];
+  const failed: string[] = [];
+  for (const l of langs) {
+    try { await hl.loadLanguage(l as never); } catch { failed.push(l); }
+  }
+  expect(failed).toEqual([]);
 });
 
 test("the failure is reported with the name the user chose, not the internal one", () => {
