@@ -477,6 +477,22 @@ export function session(id: string): SessionDetail {
       { role: "user", text: "add a retry to the checkout webhook too", ts: now - 40 * 60_000 },
       { role: "assistant", text: "Done. Wrapped the webhook call in the standard retry policy (3 attempts, exponential backoff) and opened PR #482.", ts: now - 12 * 60_000 },
     ],
+    // The demo's timeline shows what the real one is for: the tool runs between
+    // the messages, which is where the work actually happens.
+    timeline: [
+      { kind: "message", role: "user", text: "the cart total is applying the discount twice at checkout, fix it", ts: now - 90 * 60_000 },
+      { kind: "tool", tool: "Grep", target: "calculateTotal", ts: now - 89 * 60_000, duration_ms: 120 },
+      { kind: "tool", tool: "Read", target: "src/cart/total.ts", ts: now - 88 * 60_000, duration_ms: 90 },
+      { kind: "tool", tool: "Edit", target: "src/cart/total.ts", ts: now - 80 * 60_000, duration_ms: 210 },
+      { kind: "tool", tool: "Bash", target: "npm test -- cart", note: "run the cart suite", ts: now - 79 * 60_000, duration_ms: 8400 },
+      { kind: "message", role: "assistant", text: "Found it — `calculateTotal` applied the coupon and `checkout()` applied it again. Consolidating it into one place and clamping the total at zero.", ts: now - 78 * 60_000 },
+      { kind: "message", role: "user", text: "add a retry to the checkout webhook too", ts: now - 40 * 60_000 },
+      { kind: "tool", tool: "Edit", target: "src/checkout/webhook.ts", ts: now - 30 * 60_000, duration_ms: 180 },
+      { kind: "tool", tool: "Bash", target: "npm test -- checkout", ts: now - 26 * 60_000, is_error: true, duration_ms: 6100 },
+      { kind: "tool", tool: "Edit", target: "src/checkout/webhook.ts", ts: now - 22 * 60_000, duration_ms: 160 },
+      { kind: "tool", tool: "Bash", target: "gh pr create --fill", ts: now - 13 * 60_000, duration_ms: 2400 },
+      { kind: "message", role: "assistant", text: "Done. Wrapped the webhook call in the standard retry policy (3 attempts, exponential backoff) and opened PR #482.", ts: now - 12 * 60_000 },
+    ],
     changes: changes().changes.slice(0, 6),
   };
 }

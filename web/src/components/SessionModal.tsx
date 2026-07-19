@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import type { SessionDetail } from "../../../shared/types.ts";
+import type { SessionDetail, TimelineEntry } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { ChangesModal } from "./ChangesModal.tsx";
 import { api } from "../lib/api.ts";
@@ -10,6 +10,41 @@ import { fmtUsd, fmtTokens, fmtAgo, fmtTime, modelLabelOf, modelColor } from "..
 
 const TOOL_RAMP = ["#a78bfa", "#f472b6", "#34d399", "#60a5fa", "#fbbf24", "#22d3ee", "#a3e635", "#fb923c"];
 const shortType = (t: string) => t.replace(/^workflow-subagent$/, "workflow").replace(/^general-purpose$/, "general");
+
+// A tool run in the thread. Deliberately one dense line rather than a bubble:
+// a session runs hundreds of these, and giving each the weight of a message
+// would bury the conversation it is supposed to sit alongside.
+function ToolRow({ e }: { e: TimelineEntry }) {
+  const [open, setOpen] = useState(false);
+  const target = e.target ?? "";
+  // A command can be a whole script; show its first line and let the rest be
+  // opened, rather than either truncating it away or pasting 40 lines inline.
+  const firstLine = target.split("\n")[0];
+  const hasMore = target.length > firstLine.length || firstLine.length > 110;
+  const tint = e.is_error ? "var(--error)" : "var(--info)";
+  return (
+    <div className="flex items-start gap-2 text-[10.5px] leading-relaxed pl-1">
+      <span className="shrink-0 tabular-nums t-dim2 pt-px" style={{ minWidth: 52 }}>{fmtTime(e.ts)}</span>
+      <span className="shrink-0 px-1.5 rounded font-medium"
+        style={{ color: tint, background: `color-mix(in srgb, ${tint} 13%, transparent)` }}>
+        {e.is_error ? "✕" : "⚙"} {e.tool}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span
+          onClick={hasMore ? () => setOpen((o) => !o) : undefined}
+          className={`block break-all ${hasMore ? "cursor-pointer" : ""} ${open ? "whitespace-pre-wrap" : "truncate"}`}
+          style={{ color: "var(--text3)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}
+          title={hasMore && !open ? "click to expand" : undefined}>
+          {open ? target : firstLine}
+        </span>
+        {e.note && <span className="block t-dim2 truncate">{e.note}</span>}
+      </span>
+      {e.duration_ms != null && e.duration_ms >= 1000 && (
+        <span className="shrink-0 tabular-nums t-dim2">{(e.duration_ms / 1000).toFixed(1)}s</span>
+      )}
+    </div>
+  );
+}
 
 function Stat({ k, v, color }: { k: string; v: string; color?: string }) {
   return (
@@ -25,6 +60,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
   const [loading, setLoading] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffPath, setDiffPath] = useState<string | undefined>(undefined);
+  const [showTools, setShowTools] = useState(true);
 
   useEffect(() => {
     if (!sessionId) { setD(null); setDiffOpen(false); return; }
@@ -55,6 +91,14 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
   // Erring towards "live" is the safe side — refusing to resume a dead session
   // is an annoyance, resuming a live one forks its transcript.
   const live = !!d && !d.ended_at && Date.now() - d.last_seen < 120_000;
+
+  // Oldest-first, so it reads as a story rather than in reverse. Falls back to
+  // the plain conversation for a server that predates the timeline field.
+  const entries: TimelineEntry[] = d?.timeline?.length
+    ? d.timeline
+    : (d?.conversation ?? []).map((c) => ({ kind: "message" as const, ts: c.ts, role: c.role, text: c.text }));
+  const toolCount = entries.reduce((n, e) => n + (e.kind === "tool" ? 1 : 0), 0);
+  const timeline = [...entries].reverse().filter((e) => showTools || e.kind !== "tool");
 
   return (
     <Portal>
@@ -185,10 +229,27 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
 
                       {/* right: conversation — scrolls independently */}
                       <div className="agx-scroll min-h-0 overflow-y-auto px-5 py-4">
-                        <div className="panel-eyebrow mb-2.5">Conversation</div>
+                        <div className="flex items-center gap-2 mb-2.5">
+                          <span className="panel-eyebrow">Conversation</span>
+                          {/* Tool runs are most of what a session does, but they
+                              are also the bulk of the rows — so they can be
+                              hidden when you want to read the thread alone. */}
+                          <button onClick={() => setShowTools((s) => !s)}
+                            className="ml-auto text-[9.5px] px-1.5 py-0.5 rounded-full"
+                            title={showTools ? "Hide tool runs" : "Show tool runs"}
+                            style={{
+                              color: showTools ? "var(--primary-hover)" : "var(--text3)",
+                              background: `color-mix(in srgb, var(--primary) ${showTools ? 15 : 6}%, transparent)`,
+                              border: `1px solid color-mix(in srgb, var(--primary) ${showTools ? 40 : 18}%, transparent)`,
+                            }}>
+                            ⚙ tools {toolCount > 0 && <span className="tabular-nums">{toolCount}</span>}
+                          </button>
+                        </div>
                         <div className="space-y-2.5">
-                          {d.conversation.length === 0 && <div className="t-dim2 text-[11px]">no prompts or messages captured</div>}
-                          {[...d.conversation].reverse().map((c, i) => (
+                          {timeline.length === 0 && <div className="t-dim2 text-[11px]">no prompts or messages captured</div>}
+                          {timeline.map((c, i) => c.kind === "tool" ? (
+                            <ToolRow key={i} e={c} />
+                          ) : (
                             <div key={i} className={`flex ${c.role === "user" ? "justify-end" : "justify-start"}`}>
                               <div
                                 className="max-w-[85%] min-w-0 rounded-xl px-3 py-2 text-[11.5px] leading-relaxed break-words"
@@ -199,7 +260,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                                 }
                               >
                                 <div className="text-[9px] uppercase tracking-wider mb-1" style={{ color: c.role === "user" ? "var(--primary-hover)" : "var(--text4)" }}>{c.role} · {fmtTime(c.ts)}</div>
-                                <Markdown text={c.text} />
+                                <Markdown text={c.text ?? ""} />
                               </div>
                             </div>
                           ))}

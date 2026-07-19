@@ -918,6 +918,50 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     spent += c.text.length;
   }
 
+  // Timeline: the messages above, plus every tool the session ran, in order.
+  //
+  // Without the tool runs the panel shows what was said and hides what was
+  // done — an agent that spent an hour editing files looks like it produced
+  // two paragraphs. What identifies a run differs per tool, so each one is
+  // reduced to the single thing worth reading in a list: the path it touched,
+  // the command it ran, the URL it fetched.
+  const target = (tool: string, ti: Record<string, unknown>): string | null => {
+    const s = (v: unknown) => (typeof v === "string" && v ? v : null);
+    switch (tool) {
+      case "Bash": return s(ti.command);
+      case "WebFetch": case "WebSearch": return s(ti.url) ?? s(ti.query);
+      case "ToolSearch": return s(ti.query);
+      case "Task": case "Agent": return s(ti.description);
+      default: return s(ti.file_path) ?? s(ti.path) ?? s(ti.pattern) ?? s(ti.query) ?? s(ti.command);
+    }
+  };
+
+  const timeline: import("../../shared/types.ts").TimelineEntry[] =
+    kept.map((c) => ({ kind: "message" as const, ts: c.ts, role: c.role, text: c.text }));
+
+  // Bounded to the same window the messages cover, so the timeline can't be
+  // dominated by tool noise from turns whose text was already dropped.
+  const oldest = kept.length ? Math.min(...kept.map((c) => c.ts)) : 0;
+  for (const r of db.query<{ timestamp: number; tool_name: string | null; is_error: number; duration_ms: number | null; tool_use_id: string | null; payload: string }, [string, number]>(
+    `SELECT timestamp, tool_name, is_error, duration_ms, tool_use_id, payload FROM events
+      WHERE session_id = ? AND hook_event_type IN ('PostToolUse','PostToolUseFailure')
+        AND timestamp >= ?
+      ORDER BY timestamp DESC LIMIT 400`).all(sessionId, oldest)) {
+    const tool = r.tool_name || "tool";
+    let ti: Record<string, unknown> = {};
+    try { ti = (JSON.parse(r.payload).tool_input ?? {}) as Record<string, unknown>; } catch { /* keep empty */ }
+    const note = typeof ti.description === "string" ? ti.description : null;
+    timeline.push({
+      kind: "tool", ts: r.timestamp, tool,
+      target: target(tool, ti),
+      note: note && note !== target(tool, ti) ? note : null,
+      is_error: !!r.is_error,
+      duration_ms: r.duration_ms,
+      tool_use_id: r.tool_use_id,
+    });
+  }
+  timeline.sort((a, b) => b.ts - a.ts);
+
   return {
     session_id: sessionId,
     source_app: agg.source_app,
@@ -938,6 +982,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     tool_mix: toolMix,
     subagents: subRows.map((s) => ({ agent_id: s.agent_id, agent_type: s.agent_type || "subagent", events: s.n })),
     conversation: kept,
+    timeline,
     changes: getChanges(40, sessionId),
   };
 }

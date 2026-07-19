@@ -214,6 +214,31 @@ export interface DiffHunk {
   newLines: number;
   lines: string[]; // each begins with " ", "+" or "-"
 }
+/** One thing that happened in a session, in order — a message or a tool run.
+ *
+ *  The conversation used to be prompts and assistant replies only, which left
+ *  out everything the agent actually *did*: the file it edited, the command it
+ *  ran, the search it made. That is most of the work, and without it the panel
+ *  can't replace the terminal you'd otherwise read it in. */
+export interface TimelineEntry {
+  kind: "message" | "tool";
+  ts: number;
+  /** kind === "message" */
+  role?: "user" | "assistant";
+  text?: string;
+  /** kind === "tool" */
+  tool?: string;
+  /** What it acted on: a file path, a command, a URL, a query. */
+  target?: string | null;
+  /** A Bash tool's own description of its intent, when it gave one. */
+  note?: string | null;
+  is_error?: boolean;
+  duration_ms?: number | null;
+  /** Links a tool run to its diff in `changes`, so an edit can show what it
+   *  changed rather than only that it happened. */
+  tool_use_id?: string | null;
+}
+
 export interface SessionDetail {
   session_id: string;
   source_app: string;
@@ -233,6 +258,8 @@ export interface SessionDetail {
   tool_mix: { tool: string; n: number }[];
   subagents: { agent_id: string; agent_type: string; events: number }[];
   conversation: { role: "user" | "assistant"; text: string; ts: number }[];
+  /** Messages and tool runs interleaved in time — what actually happened. */
+  timeline: TimelineEntry[];
   changes: FileChange[];
 }
 
