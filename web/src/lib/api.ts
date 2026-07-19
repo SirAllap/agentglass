@@ -142,7 +142,7 @@ const realApi = {
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
-  chatEnabled: () => get<{ enabled: boolean }>("/chat/enabled"),
+  chatEnabled: () => get<{ enabled: boolean; bypass?: boolean }>("/chat/enabled"),
   chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     const res = await fetch(SERVER + "/chat/send", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
     if (!res.body) { try { onEvent(JSON.parse(await res.text())); } catch { /* non-json */ } return; }

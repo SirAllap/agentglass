@@ -39,7 +39,7 @@ import {
 } from "./docker.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
-import { chatStream, CHAT_ENABLED } from "./chat.ts";
+import { chatStream, CHAT_ENABLED, CHAT_BYPASS_ALLOWED } from "./chat.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, CONFIG_PATH } from "./config.ts";
 import { privateHost } from "./net.ts";
@@ -463,7 +463,9 @@ const server = Bun.serve<WsData>({
     if (pathname === "/terminal/commands") return json(projectCommands(url.searchParams.get("root") || ""));
 
     // --- multi-chat: drive claude sessions from the browser ---
-    if (pathname === "/chat/enabled") return json({ enabled: CHAT_ENABLED });
+    // `bypass` rides along so the mode picker can stop offering a mode the
+    // server would silently downgrade — the downgrade itself stays server-side.
+    if (pathname === "/chat/enabled") return json({ enabled: CHAT_ENABLED, bypass: CHAT_BYPASS_ALLOWED });
     if (pathname === "/chat/send" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};

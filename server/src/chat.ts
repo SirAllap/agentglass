@@ -21,7 +21,8 @@ const MODES = new Set(["default", "plan", "acceptEdits", "bypassPermissions"]);
 // unattended autonomy driven straight from a browser request. That is too much
 // to hand out on the same-origin check alone, so it is off unless the operator
 // explicitly opts in; otherwise the mode is downgraded to a prompting default.
-const BYPASS_ALLOWED = process.env.AGENTGLASS_CHAT_BYPASS === "1";
+export const CHAT_BYPASS_ALLOWED = process.env.AGENTGLASS_CHAT_BYPASS === "1";
+const BYPASS_ALLOWED = CHAT_BYPASS_ALLOWED;
 const MODEL_RE = /^[a-z0-9][a-z0-9.-]{2,48}$/;
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
 const err = (msg: string, status = 400) => new Response(msg + "\n", { status, headers: CORS });

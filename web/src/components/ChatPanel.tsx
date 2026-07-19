@@ -73,6 +73,9 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
   const [activeId, setActiveId] = useState("");
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [enabled, setEnabled] = useState(true);
+  // The server silently downgrades bypassPermissions unless the operator opted
+  // in (AGENTGLASS_CHAT_BYPASS=1) — don't offer a mode that wouldn't stick.
+  const [bypassAllowed, setBypassAllowed] = useState(false);
   const [query, setQuery] = useState("");
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -96,7 +99,7 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
       setRepos(repos);
       setDefaultCwd((c) => c || repos[0]?.root || "");
     }).catch(() => {});
-    api.chatEnabled().then((r) => setEnabled(r.enabled)).catch(() => {});
+    api.chatEnabled().then((r) => { setEnabled(r.enabled); setBypassAllowed(!!r.bypass); }).catch(() => {});
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
@@ -215,7 +218,8 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
                         <Select value={active.model} onChange={(v) => update(active.id, (c) => { c.model = v; })}
                           className={selCls} style={selStyle} options={MODELS.map((m) => ({ value: m.id, label: m.label }))} />
                         <Select value={active.mode} onChange={(v) => update(active.id, (c) => { c.mode = v; })}
-                          className={selCls} style={selStyle} title="Permission mode for tool use" options={MODES.map((m) => ({ value: m.id, label: m.label }))} />
+                          className={selCls} style={selStyle} title="Permission mode for tool use"
+                          options={MODES.filter((m) => bypassAllowed || m.id !== "bypassPermissions").map((m) => ({ value: m.id, label: m.label }))} />
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                       </>
                     ) : <span className="text-[12px] t-dim2">no chat selected</span>}
