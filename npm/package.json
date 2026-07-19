@@ -1,6 +1,6 @@
 {
   "name": "agentglass",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "🛰 agentglass — a loupe for your agents. Real-time mission-control dashboard for AI coding agents (Claude Code hooks + any OpenTelemetry GenAI exporter). This package is the quickstart launcher; the app lives at github.com/SirAllap/agentglass.",
   "bin": {
     "agentglass": "./cli.mjs"
