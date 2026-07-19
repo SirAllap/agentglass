@@ -5,6 +5,7 @@ import { Portal } from "./Portal.tsx";
 import { ChangesModal } from "./ChangesModal.tsx";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
+import { Markdown } from "../lib/markdown.tsx";
 import { fmtUsd, fmtTokens, fmtAgo, fmtTime, modelLabelOf, modelColor } from "../lib/format.ts";
 
 const TOOL_RAMP = ["#a78bfa", "#f472b6", "#34d399", "#60a5fa", "#fbbf24", "#22d3ee", "#a3e635", "#fb923c"];
@@ -115,8 +116,11 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                     {/* summary + stats (fixed header) */}
                     <div className="shrink-0 px-5 py-4 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
                       <div className="panel-eyebrow mb-1.5">What it did</div>
-                      <div className="text-[12.5px] leading-relaxed" style={{ color: "var(--text2)" }}>
-                        {d.summary || <span className="t-dim2 italic">no assistant summary captured for this session</span>}
+                      {/* Capped: this is the header above the stats, not the
+                          conversation — the full text is in the thread below.
+                          Scrolls rather than truncating, so nothing is lost. */}
+                      <div className="text-[12.5px] leading-relaxed max-h-[150px] overflow-y-auto agx-scroll" style={{ color: "var(--text2)" }}>
+                        {d.summary ? <Markdown text={d.summary} /> : <span className="t-dim2 italic">no assistant summary captured for this session</span>}
                       </div>
                       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mt-4">
                         <Stat k="Events" v={d.events.toLocaleString()} />
@@ -187,7 +191,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                           {[...d.conversation].reverse().map((c, i) => (
                             <div key={i} className={`flex ${c.role === "user" ? "justify-end" : "justify-start"}`}>
                               <div
-                                className="max-w-[85%] rounded-xl px-3 py-2 text-[11.5px] leading-relaxed whitespace-pre-wrap break-words"
+                                className="max-w-[85%] min-w-0 rounded-xl px-3 py-2 text-[11.5px] leading-relaxed break-words"
                                 style={
                                   c.role === "user"
                                     ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }
@@ -195,7 +199,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                                 }
                               >
                                 <div className="text-[9px] uppercase tracking-wider mb-1" style={{ color: c.role === "user" ? "var(--primary-hover)" : "var(--text4)" }}>{c.role} · {fmtTime(c.ts)}</div>
-                                {c.text}
+                                <Markdown text={c.text} />
                               </div>
                             </div>
                           ))}

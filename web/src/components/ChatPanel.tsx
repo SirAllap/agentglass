@@ -13,6 +13,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { GitRepoRef } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
+import { Markdown } from "../lib/markdown.tsx";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
 import {
@@ -274,14 +275,14 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                       )}
                       {active?.messages.map((m, i) => (
                         <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                          <div className="max-w-[86%] rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed whitespace-pre-wrap break-words"
+                          <div className="max-w-[86%] min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
                             style={{ ...CODE_FONT_STYLE, fontFamily: undefined, background: m.role === "user" ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text)" }}>
                             {m.tools.length > 0 && (
                               <div className="flex flex-wrap gap-1 mb-1.5">
                                 {m.tools.map((t, j) => <span key={j} className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, color: "var(--info)", background: "color-mix(in srgb, var(--info) 12%, transparent)" }}>⚙ {t}</span>)}
                               </div>
                             )}
-                            {m.text || (m.streaming ? <span className="t-dim2">▍</span> : "")}
+                            {m.text ? <Markdown text={m.text} /> : (m.streaming ? <span className="t-dim2">▍</span> : "")}
                             {m.streaming && m.text && <span className="t-dim2">▍</span>}
                           </div>
                         </div>
