@@ -113,7 +113,7 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
 
   const all = useMemo(() => [...(tree?.staged ?? []), ...(tree?.unstaged ?? [])], [tree]);
   const selected = useMemo(() => all.find((c) => keyOf(c) === selKey) ?? all[0] ?? null, [all, selKey]);
-  const { hilite, themePref, setThemePref, bold, setBold, themeError } = useDiffHighlight(selected?.file_path);
+  const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(selected?.file_path);
   const writeEnabled = tree?.writeEnabled ?? false;
   const flash = (ok: boolean, msg: string) => { setToast({ ok, msg }); setTimeout(() => setToast(null), 2600); };
 
@@ -373,7 +373,7 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
                               {writeEnabled && (selected.staged ? <Toggle onClick={() => unstage(selected)} title="Unstage this file">－ unstage</Toggle> : <Toggle onClick={() => stage(selected)} title="Stage this file">＋ stage</Toggle>)}
                               <Toggle on={split} onClick={() => setSplit((s) => !s)} title="Split / unified">{split ? "split" : "unified"}</Toggle>
                               <Toggle on={wrap} onClick={() => setWrap((w) => !w)} title="Toggle line wrap">wrap</Toggle>
-                              <ThemePicker value={themePref} onChange={setThemePref} error={themeError} />
+                              <ThemePicker value={themePref} onChange={setThemePref} error={hiliteError} />
                               <Toggle on={bold} onClick={() => setBold((b) => !b)} title="Bold keywords, functions & types (Neovim-style)">bold</Toggle>
                             </div>
                           </div>
