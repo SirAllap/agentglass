@@ -80,7 +80,7 @@ export const typeColor = (t: string) => TYPE_COLORS[t] ?? "#64748b";
 const MODEL_LABELS: [string, string][] = [
   ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"], ["fable", "Fable"],
   ["gpt-4o-mini", "GPT-4o mini"], ["gpt-4o", "GPT-4o"], ["gpt-4.1", "GPT-4.1"],
-  ["gpt-4", "GPT-4"], ["gpt-3.5", "GPT-3.5"], ["gpt-5", "GPT-5"],
+  ["gpt-4", "GPT-4"], ["gpt-3.5", "GPT-3.5"], ["gpt-5-mini", "GPT-5 mini"], ["gpt-5", "GPT-5"],
   ["o4-mini", "o4-mini"], ["o3-mini", "o3-mini"], ["o1-mini", "o1-mini"], ["o1", "o1"], ["o3", "o3"],
   ["flash", "Gemini Flash"], ["gemini", "Gemini"],
   ["deepseek", "DeepSeek"], ["grok", "Grok"], ["mixtral", "Mistral"], ["mistral", "Mistral"],

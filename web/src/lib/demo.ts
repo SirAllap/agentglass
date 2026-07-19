@@ -23,17 +23,17 @@ const uid = () => Array.from({ length: 8 }, () => "0123456789abcdef"[rint(0, 15)
 
 // A deliberately mixed fleet so the demo shows off multi-provider support:
 // Anthropic + OpenAI + Google, all auto-detected from the model name.
-const MODELS = ["claude-opus-4-8", "claude-sonnet-5", "gpt-4o", "gpt-4o-mini", "gemini-2.0-flash"];
+const MODELS = ["claude-opus-4-8", "claude-sonnet-5", "gpt-5", "gpt-5-mini", "gemini-3-flash"];
 interface Sess { app: string; sid: string; model: string }
 // Fictional app suite for a made-up online store.
 const SESSIONS: Sess[] = [
   { app: "shop-web", sid: "7a3f21c9-demo", model: "claude-opus-4-8" },
-  { app: "shop-web", sid: "e2b8d640-demo", model: "gpt-4o" },
+  { app: "shop-web", sid: "e2b8d640-demo", model: "gpt-5" },
   { app: "shop-api", sid: "3c9a1f52-demo", model: "claude-sonnet-5" },
   { app: "agentglass", sid: "b7e40a18-demo", model: "claude-opus-4-8" },
-  { app: "payments-svc", sid: "5f6d2e93-demo", model: "gemini-2.0-flash" },
-  { app: "inventory-svc", sid: "8a1c7b04-demo", model: "gpt-4o-mini" },
-  { app: "sandbox", sid: "d4e903a7-demo", model: "gpt-4o" },
+  { app: "payments-svc", sid: "5f6d2e93-demo", model: "gemini-3-flash" },
+  { app: "inventory-svc", sid: "8a1c7b04-demo", model: "gpt-5-mini" },
+  { app: "sandbox", sid: "d4e903a7-demo", model: "gpt-5" },
   { app: "sandbox", sid: "20f5c86b-demo", model: "claude-sonnet-5" },
 ];
 
@@ -94,7 +94,7 @@ function nextEvent(): WatchEvent {
     // Each turn re-sends the growing conversation (mostly as cache reads), so
     // per-session context creeps up between turns and drops on "compaction" —
     // that drift toward the radar's edge and snap back is the point of it.
-    const limit = s.model.includes("gemini") ? 1_000_000 : s.model.includes("gpt") ? 128_000 : 200_000;
+    const limit = s.model.includes("gemini") ? 1_000_000 : s.model.includes("gpt-5") ? 400_000 : s.model.includes("gpt") ? 128_000 : 200_000;
     let ctx = demoCtx.get(s.sid) ?? rint(8_000, limit * 0.5);
     ctx += rint(3_000, 14_000);
     if (ctx > limit * 0.92) ctx = rint(limit * 0.2, limit * 0.35); // compacted
@@ -192,10 +192,10 @@ export function stats(windowMs: number, provider?: string): StatsSummary {
     totals: { events: si(12840), sessions: si(41), tool_calls: si(6210), errors: Math.round(34 * f), cost_usd: sc(4498.08), input_tokens: Math.round(9_100_000 * f), output_tokens: Math.round(640_000 * f), cache_creation_tokens: Math.round(1_200_000 * f), cache_read_tokens: Math.round(78_000_000 * f) },
     by_model: [
       { model_name: "Opus", input_tokens: Math.round(4_100_000 * f), output_tokens: Math.round(300_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(2350.0), sessions: si(14) },
-      { model_name: "GPT-4o", input_tokens: Math.round(3_200_000 * f), output_tokens: Math.round(240_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(1180.3), sessions: si(11) },
+      { model_name: "GPT-5", input_tokens: Math.round(3_200_000 * f), output_tokens: Math.round(240_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(1180.3), sessions: si(11) },
       { model_name: "Sonnet", input_tokens: Math.round(900_000 * f), output_tokens: Math.round(80_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(430.2), sessions: si(6) },
       { model_name: "Gemini Flash", input_tokens: Math.round(2_400_000 * f), output_tokens: Math.round(180_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(320.44), sessions: si(7) },
-      { model_name: "GPT-4o mini", input_tokens: Math.round(1_800_000 * f), output_tokens: Math.round(120_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(217.14), sessions: si(3) },
+      { model_name: "GPT-5 mini", input_tokens: Math.round(1_800_000 * f), output_tokens: Math.round(120_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(217.14), sessions: si(3) },
     ],
     tool_latency: [
       { tool_name: "Bash", calls: si(2179), errors: Math.round(22 * f), p50_ms: 186, p95_ms: 8630, max_ms: 21620, avg_ms: 640, total_ms: Math.round(1_394_560 * f) },

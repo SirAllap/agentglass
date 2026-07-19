@@ -39,6 +39,7 @@ export interface AgentCard {
 function ctxLimitOf(model: string | null): number {
   const m = (model || "").toLowerCase();
   if (m.includes("gemini")) return 1_000_000;
+  if (m.includes("gpt-5")) return 400_000;
   if (m.includes("gpt") || /^o[134]/.test(m)) return 128_000;
   return 200_000;
 }
