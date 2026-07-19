@@ -20,7 +20,7 @@ import { fmtAgo, fmtUsd, modelLabelOf, modelColor, providerOf } from "../lib/for
 import { sessionIsLive } from "../lib/derive.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, subscribe, chatResuming,
-  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, type Chat,
+  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, type Chat,
 } from "../lib/chatStore.ts";
 
 const MODELS = [
@@ -51,6 +51,9 @@ const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)"
 
 /** One row in the chat list. */
 function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolean; onPick: () => void; onClose: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(chat.title);
+  const commit = () => { renameChat(chat.id, draft); setEditing(false); };
   return (
     <div
       onClick={onPick}
@@ -67,7 +70,31 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
         background: chat.sending ? "var(--success)" : chat.unread ? "var(--primary)" : "color-mix(in srgb, var(--text4) 50%, transparent)",
       }} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[11.5px]" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{chat.title}</div>
+        {/* Double-click to rename. The derived title is whatever you happened to
+            type first, which is rarely what the conversation turns out to be
+            about — and with several chats open that is the only thing telling
+            them apart. */}
+        {editing ? (
+          <input
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") { e.preventDefault(); commit(); }
+              // Escape restores the old name rather than saving a half-edit.
+              if (e.key === "Escape") { e.preventDefault(); setDraft(chat.title); setEditing(false); }
+            }}
+            className="w-full px-1 py-0.5 rounded text-[11.5px] outline-none"
+            style={{ background: "color-mix(in srgb, var(--bg) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}
+          />
+        ) : (
+          <div className="truncate text-[11.5px]" title="double-click to rename"
+            onDoubleClick={(e) => { e.stopPropagation(); setDraft(chat.title); setEditing(true); }}
+            style={{ color: active ? "var(--text)" : "var(--text2)" }}>{chat.title}</div>
+        )}
         <div className="truncate text-[9.5px] t-dim2">{repoName(chat.cwd) || "no repo"}</div>
       </div>
       <button
@@ -244,9 +271,36 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // Skills are already usable — `claude -p` keeps slash commands on unless
+  // --disable-slash-commands is passed, which we never do. What was missing is
+  // knowing they exist: you had to remember the exact name with no way to look
+  // it up without leaving the chat.
+  const [skills, setSkills] = useState<{ name: string; description: string }[]>([]);
+  useEffect(() => {
+    if (!open || skills.length) return;
+    api.skills().then((r) => setSkills(r.skills.map((k) => ({ name: k.name, description: k.when_to_use || k.description })))).catch(() => {});
+  }, [open, skills.length]);
+
   const stuckBottom = useRef(true);
 
   const active = getChat(activeId);
+
+  // Only while the draft is a bare `/word` on the first line: past the first
+  // space it is prose, and a menu stealing Enter there would be maddening.
+  const slashQuery = (() => {
+    const d = active?.draft ?? "";
+    const m = /^\/([A-Za-z0-9:_-]*)$/.exec(d);
+    return m ? m[1].toLowerCase() : null;
+  })();
+  const slashMatches = slashQuery === null ? [] :
+    skills.filter((k) => k.name.toLowerCase().includes(slashQuery)).slice(0, 8);
+  const [slashIdx, setSlashIdx] = useState(0);
+  useEffect(() => { setSlashIdx(0); }, [slashQuery]);
+  const pickSkill = (name: string) => {
+    if (!active) return;
+    update(active.id, (c) => { c.draft = `/${name} `; });
+    inputRef.current?.focus();
+  };
   // Read through a ref so the streaming callback always asks about the chat on
   // screen *now*, not the one that was active when the send started.
   const activeIdRef = useRef(activeId);
@@ -380,6 +434,15 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   };
 
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // The skill menu owns the arrows, Tab and Enter while it is showing, or
+    // Enter would send `/rev` as a message instead of completing it.
+    if (slashMatches.length) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setSlashIdx((i) => (i + 1) % slashMatches.length); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setSlashIdx((i) => (i - 1 + slashMatches.length) % slashMatches.length); return; }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault(); pickSkill(slashMatches[slashIdx].name); return;
+      }
+    }
     // A focused textarea can swallow Escape before it reaches the global
     // handler, stranding the panel open. Close it here instead.
     if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
@@ -542,6 +605,26 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                               style={{ color: "var(--text)", background: "rgba(0,0,0,0.65)" }}>✕</button>
                           </div>
                         ))}
+                      </div>
+                    )}
+                    {slashMatches.length > 0 && (
+                      // Above the input, not below: the composer is pinned to
+                      // the panel's bottom edge, so a menu underneath would be
+                      // off-screen.
+                      <div className="mb-2 rounded-lg overflow-hidden"
+                        style={{ background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                        {slashMatches.map((k, i) => (
+                          <div key={k.name} onMouseDown={(ev) => { ev.preventDefault(); pickSkill(k.name); }}
+                            onMouseEnter={() => setSlashIdx(i)}
+                            className="px-2.5 py-1.5 cursor-pointer flex items-baseline gap-2"
+                            style={{ background: i === slashIdx ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent" }}>
+                            <span className="text-[11.5px] shrink-0" style={{ color: "var(--primary-hover)" }}>/{k.name}</span>
+                            <span className="text-[10px] t-dim2 truncate">{k.description}</span>
+                          </div>
+                        ))}
+                        <div className="px-2.5 py-1 text-[9.5px] t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                          ↑↓ move · Tab or Enter to pick · keep typing to filter
+                        </div>
                       </div>
                     )}
                     <div className="flex items-end gap-2">

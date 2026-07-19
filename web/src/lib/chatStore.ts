@@ -41,6 +41,7 @@ export type Chat = {
   createdAt: number;
   abort: AbortController | null;
   unread: boolean;      // replied while you were looking at another chat
+  renamed?: boolean;    // titled by hand, so the first message must not overwrite it
 };
 
 const chats = new Map<string, Chat>();
@@ -132,6 +133,14 @@ export const attentionCount = (): number => snapshot.reduce((n, c) => n + (c.unr
 export const chatResuming = (sessionId: string): Chat | undefined =>
   [...chats.values()].find((c) => c.sessionId === sessionId);
 
+
+/** Name a chat by hand. The derived title is a fallback for chats you never
+ *  named; once you have, nothing should quietly replace it. */
+export function renameChat(id: string, title: string) {
+  const t = title.trim().slice(0, 60);
+  update(id, (c) => { c.title = t || c.title; c.renamed = !!t; });
+}
+
 export function closeChat(id: string) {
   const c = chats.get(id);
   if (!c) return;
@@ -170,7 +179,8 @@ export async function send(id: string, text: string, isActive: () => boolean, al
   if (!chat || (!msg && !images.length) || chat.sending || !chat.cwd) return;
 
   update(id, (c) => {
-    if (c.messages.length === 0) c.title = titleOf(msg || `${images.length} image${images.length > 1 ? "s" : ""}`);
+    // A name you chose outranks one derived from the first message.
+    if (c.messages.length === 0 && !c.renamed) c.title = titleOf(msg || `${images.length} image${images.length > 1 ? "s" : ""}`);
     c.messages.push({ role: "user", text: msg, tools: [], images: images.length ? images : undefined });
     c.messages.push({ role: "assistant", text: "", tools: [], streaming: true });
     c.sending = true;
