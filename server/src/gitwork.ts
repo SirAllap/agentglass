@@ -7,7 +7,7 @@
 import { resolve, basename, relative, dirname, sep } from "node:path";
 import { statSync, readFileSync, readdirSync } from "node:fs";
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
-import { configuredRepoDirs, workspaceRoot } from "./config.ts";
+import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import type {
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
   GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine,
@@ -373,6 +373,10 @@ function within(repos: GitRepoRef[], dirs: string[]): GitRepoRef[] {
 function guard(root: string): GitActionResult | null {
   if (!GIT_WRITE_ENABLED) return { ok: false, error: "git write is disabled (AGENTGLASS_GIT_WRITE_DISABLED=1)" };
   if (!repoRoot(root)) return { ok: false, error: "not a git repository root" };
+  // A cockpit opened for one project should not be able to commit, stage or
+  // discard in a different one. The message names the way out rather than just
+  // refusing: scoping to a parent folder is the supported multi-repo setup.
+  if (!inScope(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   return null;
 }
 

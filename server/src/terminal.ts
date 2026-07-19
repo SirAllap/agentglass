@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
 import type { ProjectCommand, TerminalCommands } from "../../shared/types.ts";
 import { safeAbs, repoRootOf } from "./git.ts";
+import { inScope } from "./config.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 export const TERMINAL_ENABLED = process.env.AGENTGLASS_TERMINAL_DISABLED !== "1";
@@ -113,6 +114,11 @@ export function ptyOpen(ws: PtyWs) {
   if (!TERMINAL_ENABLED) { ctl(ws, { t: "fatal", error: "terminal is disabled (AGENTGLASS_TERMINAL_DISABLED=1)" }); ws.close(1008, "disabled"); return; }
   const cwd = safeAbs(d.root);
   if (!cwd || !repoRootOf(cwd)) { ctl(ws, { t: "fatal", error: "invalid or non-repo directory" }); ws.close(1008, "bad root"); return; }
+  // A shell is the widest capability here — anything it can reach, it can
+  // change. An instance opened for one project must not hand one out anywhere
+  // else, or "open a project" narrows the view while leaving the blast radius
+  // machine-wide.
+  if (!inScope(cwd)) { ctl(ws, { t: "fatal", error: "outside the open project — open the parent folder to work across repos" }); ws.close(1008, "out of scope"); return; }
   if (sessions.size >= MAX_SESSIONS) { ctl(ws, { t: "fatal", error: `too many open terminals (max ${MAX_SESSIONS})` }); ws.close(1013, "busy"); return; }
 
   const cols = clampCols(d.cols) || 80;
