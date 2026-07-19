@@ -234,8 +234,10 @@ export default function App() {
             <Fleet agents={agents} activeApp={filter.app} onSelect={(a) => setSessionView({ id: a.session_id, app: a.source_app })} />
           </div>
 
-          <div className="xl:col-span-6 min-w-0 min-h-0 grid grid-rows-[minmax(0,150px)_minmax(0,1fr)] gap-3 h-[520px] tall:h-auto">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 min-w-0 min-h-0">
+          {/* Phones: auto-height rows with fixed chart/feed heights — the
+              desktop 520px box clipped Throughput/ToolMix to slivers. */}
+          <div className="xl:col-span-6 min-w-0 min-h-0 grid grid-rows-[auto_400px] sm:grid-rows-[minmax(0,150px)_minmax(0,1fr)] gap-3 h-auto sm:h-[520px] tall:h-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-2 auto-rows-[150px] sm:auto-rows-auto gap-3 min-w-0 min-h-0">
               <Throughput events={visibleEvents} />
               <ToolMix events={visibleEvents} />
             </div>

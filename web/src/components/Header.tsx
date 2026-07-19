@@ -214,7 +214,7 @@ export function Header({
   const hasFilter = filter.app || filter.type || filter.provider;
 
   return (
-    <header className="flex items-center gap-3 px-4 py-2.5 shrink-0 relative z-20"
+    <header className="flex items-center gap-x-3 gap-y-2 px-3 sm:px-4 py-2.5 shrink-0 relative z-20 flex-wrap sm:flex-nowrap"
       style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg2) 94%, var(--bg))" }}>
       <div className="flex items-center gap-2.5 shrink-0">
         <motion.span initial={{ rotate: -20, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 200 }} className="text-xl">🛰</motion.span>
@@ -247,14 +247,16 @@ export function Header({
             className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold"
             style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}
           >
-            ✦ DEMO · sample data
+            ✦ DEMO<span className="hidden sm:inline"> · sample data</span>
           </a>
         )}
       </div>
 
       {/* Middle zone: fills the free space and scrolls sideways instead of
-          wrapping, so the header stays a single line at any width / zoom. */}
-      <div className="flex items-center gap-2 flex-1 min-w-0 overflow-x-auto agw-noscrollbar">
+          wrapping, so the header stays a single line at any width / zoom.
+          On phones it drops to its own full-width second row — otherwise the
+          right-side controls get pushed off-screen and become unreachable. */}
+      <div className="flex items-center gap-2 grow min-w-0 overflow-x-auto agw-noscrollbar order-3 basis-full sm:order-none sm:basis-0">
       <div className="flex items-center gap-0.5 p-0.5 rounded-lg shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 35%, transparent)" }}>
         {WINDOWS.map((w) => (
           <button key={w.label} onClick={() => onWindow(w.ms)} className="px-2 py-1 rounded-md text-[11px] transition-all"
@@ -279,11 +281,12 @@ export function Header({
       {hasFilter && <button onClick={onClear} className="text-[11px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>clear ✕</button>}
       </div>{/* middle scroll zone */}
 
-      <div className="shrink-0 flex items-center gap-2">
+      <div className="shrink-0 flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-0 max-w-full overflow-x-auto agw-noscrollbar">
         {/* Anthropic plan meters — only shown when viewing Anthropic (it's the
             one provider with a usage API), and only where there's room. */}
         {showUsage && <div className="hidden 2xl:block"><UsageWidget /></div>}
-        <button onClick={onOpenPalette} className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px]" style={selStyle}>
+        {/* A keyboard-palette chip is dead weight on touch — hide it there. */}
+        <button onClick={onOpenPalette} className="h-8 hidden sm:flex items-center gap-1.5 px-2.5 rounded-lg text-[11px]" style={selStyle}>
           <span>{MOD_KEY}K</span><span className="hidden sm:inline t-dim2">search</span>
         </button>
         {/* Git + Diff are the primary workspaces (replacing lazygit) — labeled + accented */}
