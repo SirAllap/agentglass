@@ -213,6 +213,17 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
   );
 }
 
+// A paperclip, not a plus: this attaches an existing file, it doesn't create
+// anything. Drawn rather than an emoji so it renders identically in WebKitGTK
+// and matches the stroke weight of the header's icons.
+function ClipIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7l8.9-8.9a3.3 3.3 0 0 1 4.7 4.7l-8.9 8.9a1.7 1.7 0 0 1-2.3-2.3l8.2-8.2" />
+    </svg>
+  );
+}
+
 export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: () => void; focusId?: string }) {
   const chats = useSyncExternalStore(subscribe, listChats, listChats);
   const [activeId, setActiveId] = useState("");
@@ -360,7 +371,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
       // identical to the feature being broken.
       if (Array.from(e.clipboardData.items).some((i) => i.kind === "file")) {
         e.preventDefault();
-        setHint("that file isn't a PNG, JPEG, GIF or WebP");
+        setHint("that file isn't an image or a text file");
       }
       return;
     }
@@ -538,27 +549,28 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                           screenshot tools only put a file path on it, so the
                           picker is the path that always works — these tools
                           save a file as well as copying it. */}
-                      <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden
+                      <input ref={fileRef} type="file" multiple hidden
                         onChange={async (ev) => {
                           const picked = Array.from(ev.target.files ?? []);
                           ev.target.value = ""; // re-picking the same file must still fire
                           if (active && picked.length) setHint(await addAttachments(active.id, picked));
                         }} />
                       <button onClick={() => fileRef.current?.click()} disabled={!enabled || !active}
-                        title="Attach an image (PNG, JPEG, GIF or WebP)"
-                        className="h-9 w-9 shrink-0 grid place-items-center rounded-lg text-[15px]"
+                        title="Attach a file — images are sent as images, text files are quoted into the message"
+                        aria-label="Attach a file"
+                        className="shrink-0 grid place-items-center rounded-lg px-3 self-stretch"
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
-                        ⊕
+                        <ClipIcon />
                       </button>
                       <textarea ref={inputRef} value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
                         onChange={(e) => active && update(active.id, (c) => { c.draft = e.target.value; })}
                         onKeyDown={onKey}
                         onPaste={onPaste}
-                        placeholder={!enabled ? "chat unavailable" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline, ⊕ or paste to attach an image)" : "message a new session… (Enter to send, ⊕ or paste to attach an image)"}
+                        placeholder={!enabled ? "chat unavailable" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline)" : "message a new session… (Enter to send)"}
                         className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
                       {active?.sending
-                        ? <button onClick={() => stop(active.id)} className="shrink-0 px-3.5 py-2 rounded-lg text-[11.5px] font-semibold" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ stop</button>
-                        : <button onClick={submit} disabled={!hasTurn || !active?.cwd || !enabled} className="shrink-0 px-4 py-2 rounded-lg text-[11.5px] font-semibold" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>send ↵</button>}
+                        ? <button onClick={() => stop(active.id)} className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ stop</button>
+                        : <button onClick={submit} disabled={!hasTurn || !active?.cwd || !enabled} className="shrink-0 px-4 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>send ↵</button>}
                     </div>
                     <div className="mt-1.5 text-[9.5px] t-dim2">
                       {hint

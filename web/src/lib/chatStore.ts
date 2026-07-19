@@ -260,6 +260,22 @@ const toBase64 = (buf: ArrayBuffer) => {
 
 /** Attach images to a chat's composer. Returns a message to show the user when
  *  something was refused, or "" when everything was taken. */
+
+/** A non-image file, quoted into the draft so it reaches the conversation.
+ *
+ *  Bounded because this becomes part of the prompt: a 5MB log pasted whole
+ *  would be billed as tokens and drown the question being asked. Binary files
+ *  return null — inlining their bytes as text helps nobody. */
+const TEXT_FILE_MAX = 128 * 1024;
+async function quoteTextFile(f: File): Promise<string | null> {
+  if (f.size > TEXT_FILE_MAX) return null;
+  let text: string;
+  try { text = await f.text(); } catch { return null; }
+  // A NUL byte is the cheap, reliable tell that this isn't text.
+  if (!text || text.includes("\u0000")) return null;
+  return `${f.name}:\n\n\u0060\u0060\u0060\n${text.trimEnd()}\n\u0060\u0060\u0060`;
+}
+
 export async function addAttachments(id: string, files: File[]): Promise<string> {
   const chat = chats.get(id);
   if (!chat) return "";
@@ -267,7 +283,18 @@ export async function addAttachments(id: string, files: File[]): Promise<string>
   for (const f of files) {
     const c = chats.get(id);
     if (!c) break;
-    if (!MEDIA_TYPES.has(f.type)) { rejected = "only png, jpeg, gif and webp images can be attached"; continue; }
+    if (!MEDIA_TYPES.has(f.type)) {
+      // Anything that isn't an image claude can look at directly still has a
+      // useful path: quote it into the message. `claude` runs with tools in the
+      // project, so a file that lives there it can simply read — but a file
+      // picked from anywhere else (a download, another disk) it cannot, and the
+      // picker deliberately doesn't expose real paths. Inlining the text is the
+      // only way that file reaches the conversation at all.
+      const note = await quoteTextFile(f);
+      if (note) update(id, (cc) => { cc.draft = cc.draft ? `${cc.draft}\n\n${note}` : note; });
+      else rejected = `${f.name} isn't an image or a text file`;
+      continue;
+    }
     if (c.attachments.length >= MAX_IMAGES) { rejected = `at most ${MAX_IMAGES} images per message`; continue; }
     if (f.size > MAX_IMAGE_BYTES) { rejected = `each image must be under ${MAX_IMAGE_BYTES / 1024 / 1024}MB`; continue; }
     if (c.attachments.reduce((n, a) => n + a.bytes, 0) + f.size > MAX_IMAGES_TOTAL_BYTES) {
