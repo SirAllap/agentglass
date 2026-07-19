@@ -50,6 +50,9 @@ import { rateOk } from "./ratelimit.ts";
 import { parseWindowMs } from "./params.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
+/** When this process came up. /stats ships it so the dashboard's uptime is
+ *  the server's, not the age of the oldest event in the database. */
+const STARTED_AT = Date.now() - Math.round(process.uptime() * 1000);
 /**
  * Loopback unless told otherwise.
  *
@@ -485,7 +488,7 @@ const server = Bun.serve<WsData>({
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      return chatStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools);
+      return chatStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images);
     }
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---
@@ -523,7 +526,7 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/stats") {
       const windowMs = parseWindowMs(url.searchParams.get("window"));
-      return json(statsSummary(windowMs, url.searchParams.get("provider") || undefined));
+      return json({ ...statsSummary(windowMs, url.searchParams.get("provider") || undefined), server_started_at: STARTED_AT });
     }
 
     // --- export ---

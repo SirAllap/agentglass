@@ -68,29 +68,68 @@ function boldify(theme: ThemeRegistrationRaw, id: string): ThemeRegistrationRaw 
 }
 
 const loadedThemes = new Set<string>();
+
+/** Register one theme and return the name it was registered under. Rejects if
+ *  the theme cannot be loaded — including for an id shiki doesn't bundle, which
+ *  must not be papered over: recording a name that is not actually on the
+ *  highlighter is the failure mode this whole module has to avoid. */
+async function loadInto(hl: Highlighter, id: string, bold: boolean): Promise<string> {
+  const name = bold ? `${id}-bold` : id;
+  if (loadedThemes.has(name)) return name;
+  if (!bold) {
+    await hl.loadTheme(id as never); // shiki resolves the bundled id string
+  } else {
+    const m = await shiki();
+    const loader = (m.bundledThemes as Record<string, () => Promise<{ default: ThemeRegistrationRaw }>>)[id];
+    if (!loader) throw new Error(`"${id}" is not a bundled shiki theme`);
+    await hl.loadTheme(boldify((await loader()).default, id) as never);
+  }
+  loadedThemes.add(name);
+  return name;
+}
+
+/** Whichever theme a diff surface should actually tokenize with. `name` is
+ *  always a theme that is registered on the highlighter, or null when nothing
+ *  could be registered at all; `failed` carries the id we were asked for when
+ *  it isn't the one we got. */
+export type ResolvedTheme = { name: string | null; failed?: string };
+
+// Falling back within the same light/dark family keeps the diff legible against
+// the panel it sits on, rather than painting light-theme foregrounds onto a
+// dark surface.
+const FALLBACK = { dark: "github-dark", light: "github-light" } as const;
+
 /**
  * Ensure a theme is registered on the highlighter and return the theme *name*
  * to pass to codeToTokens. When `bold`, a boldified variant is registered under
  * `${id}-bold`. Idempotent; safe to call on every render.
+ *
+ * Loading a theme fetches a chunk at runtime, so it can fail for reasons that
+ * have nothing to do with the theme itself — offline, or a deploy whose hashed
+ * chunks moved out from under a long-lived tab. This used to answer such a
+ * failure by returning the requested name anyway, and `codeToTokens` then threw
+ * on every single line: the diff rendered as unstyled monochrome text with
+ * nothing logged, indistinguishable from "this language has no grammar". So a
+ * failed load now resolves to a theme we have genuinely registered and reports
+ * which id we could not honour, for the caller to put in front of the user.
  */
-export async function ensureTheme(hl: Highlighter, id: string, bold: boolean): Promise<string> {
-  const name = bold ? `${id}-bold` : id;
-  if (loadedThemes.has(name)) return name;
+export async function ensureTheme(hl: Highlighter, id: string, bold: boolean): Promise<ResolvedTheme> {
   try {
-    if (!bold) {
-      await hl.loadTheme(id as never); // shiki resolves the bundled id string
-    } else {
-      const m = await shiki();
-      const loader = (m.bundledThemes as Record<string, () => Promise<{ default: ThemeRegistrationRaw }>>)[id];
-      const mod = loader ? await loader() : null;
-      await hl.loadTheme((mod ? boldify(mod.default, id) : (id as never)) as never);
-    }
-    loadedThemes.add(name);
-    return name;
+    return { name: await loadInto(hl, id, bold) };
   } catch {
-    // Load failed — reuse any theme already registered so highlighting survives.
-    return loadedThemes.size ? [...loadedThemes][0] : name;
+    const fallback = FALLBACK[THEMES.find((t) => t.id === id)?.dark === false ? "light" : "dark"];
+    if (fallback !== id) {
+      try { return { name: await loadInto(hl, fallback, bold), failed: id }; } catch { /* both gone — plain text below */ }
+    }
+    return { name: null, failed: id };
   }
+}
+
+/** The picker label for a name `ensureTheme` resolved to (it may carry the
+ *  `-bold` suffix, which is an implementation detail users never chose). */
+export function themeLabel(name: string): string {
+  const id = name.endsWith("-bold") ? name.slice(0, -"-bold".length) : name;
+  return THEMES.find((t) => t.id === id)?.label ?? id;
 }
 
 const EXT: Record<string, string> = {

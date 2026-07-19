@@ -172,6 +172,9 @@ export interface StatsSummary {
   /** Event counts by day-of-week × hour (length 168 = 7*24), local time. */
   heatmap: number[];
   window_ms: number;
+  /** Wall-clock ms when the server process started — what the header's
+   *  uptime counts from. Absent in demo mode, where nothing is "up". */
+  server_started_at?: number;
 }
 
 /** A tool call held at the gate, awaiting a remote approve/deny. */
@@ -492,6 +495,22 @@ export interface WalkthroughResult {
   files: WalkthroughFile[];
   error?: string;
 }
+
+// --- chat attachments (images pasted into the composer) ----------------------
+/** An image attached to a chat turn, carried inline as base64.
+ *
+ *  The browser has no path the server could read, so the bytes travel in the
+ *  JSON body rather than as a file reference. `data` is unpadded-or-padded
+ *  standard base64 with no `data:` URI prefix — the server strips the prefix on
+ *  the way in so the field holds only what a Claude image block wants. */
+export interface ChatImage {
+  mediaType: ChatImageMediaType;
+  data: string; // base64, no `data:image/png;base64,` prefix
+}
+/** The media types a chat attachment may declare. This mirrors the set the
+ *  `claude` CLI itself accepts for image blocks, so anything outside it would be
+ *  rejected downstream anyway. */
+export type ChatImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
 // --- in-browser terminal (real PTY shell per repo/worktree) ------------------
 /** A ready-to-run project command surfaced in the terminal panel. */

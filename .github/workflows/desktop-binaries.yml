@@ -22,9 +22,11 @@ jobs:
       fail-fast: false # one platform failing shouldn't strand the others
       matrix:
         include:
+          # .deb only: linuxdeploy fails bundling the ~100MB compiled sidecar
+          # into an AppImage, and .deb covers the distros this targets anyway.
           - os: ubuntu-22.04 # oldest supported glibc — newer runners break older distros
             triple: x86_64-unknown-linux-gnu
-            bundles: deb,appimage
+            bundles: deb
           - os: macos-14
             triple: aarch64-apple-darwin
             bundles: dmg
@@ -75,7 +77,24 @@ jobs:
       # Mirrors `make desktop-web`. The address is pinned because inside the app
       # window location.hostname is the Tauri scheme, not localhost.
       - name: Build web
+        shell: bash # Windows defaults to PowerShell, where VAR=value cmd is a syntax error
         run: cd web && VITE_CW_SERVER=http://localhost:4000 bun run build
+
+      # tauri.conf.json carries a hardcoded version and nothing bumps it, so a
+      # v0.2.0 tag would otherwise ship files named agentglass_0.1.0. The tag is
+      # the source of truth here; this edit is build-only and never committed.
+      - name: Sync bundle version to the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs")
+            const f = "src-tauri/tauri.conf.json"
+            const conf = JSON.parse(fs.readFileSync(f, "utf8"))
+            conf.version = process.argv[1]
+            fs.writeFileSync(f, JSON.stringify(conf, null, 2) + "\n")
+          ' "${GITHUB_REF_NAME#v}"
+          echo "bundle version → ${GITHUB_REF_NAME#v}"
 
       - uses: tauri-apps/tauri-action@v0
         id: tauri

@@ -21,12 +21,35 @@ import sys
 import termios
 
 
+# Signals CPython sets to SIG_IGN for its own convenience at interpreter
+# startup. An ignored disposition is one of the few things that survives
+# execve, so without this the user's shell — and every command they run in the
+# panel — would start with SIGPIPE ignored, which a real terminal never does.
+# The visible symptom is a pipeline whose reader exits early (`history | sed
+# -n 1p`, `... | head`): instead of the writer dying quietly on SIGPIPE it gets
+# EPIPE back and prints "write error: Broken pipe".
+_INHERITED_IGNORES = ("SIGPIPE", "SIGXFSZ", "SIGXCPU", "SIGTTIN", "SIGTTOU")
+
+
+def reset_signals() -> None:
+    """Hand the shell the clean signal slate a terminal emulator would."""
+    for name in _INHERITED_IGNORES:
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue  # not on this platform
+        try:
+            signal.signal(sig, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass  # unresettable here — better a stray ignore than no shell
+
+
 def main() -> int:
     cmd = sys.argv[1:] or [os.environ.get("SHELL", "bash"), "-i"]
     size_file = os.environ.get("AGENTGLASS_PTY_SIZE_FILE", "")
 
     pid, fd = pty.fork()
     if pid == 0:  # child: become the shell, attached to the pty slave
+        reset_signals()
         try:
             os.execvp(cmd[0], cmd)
         except OSError as e:

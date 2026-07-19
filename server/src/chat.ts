@@ -6,7 +6,14 @@
 // plan (no execution) → default/acceptEdits → bypass (runs everything). Unlike
 // the walkthrough this is NOT marked internal: a chat you start SHOULD appear
 // in the fleet. Gated by AGENTGLASS_CHAT_DISABLED; cwd must be a git dir.
+//
+// A turn is normally written to stdin as plain text. When the user has pasted
+// images the turn goes out as `--input-format stream-json` instead — one JSON
+// line carrying text and image content blocks together, which is the only
+// channel structured content has into a `claude -p` run.
 import { safeAbs, repoRootOf } from "./git.ts";
+import { inScope } from "./config.ts";
+import type { ChatImage, ChatImageMediaType } from "../../shared/types.ts";
 
 const claudeBin = () => Bun.which("claude");
 export const CHAT_ENABLED = !!claudeBin();
@@ -44,21 +51,137 @@ export function allowList(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.filter((t): t is string => typeof t === "string" && TOOL_RE.test(t.trim())).map((t) => t.trim()).slice(0, MAX_ALLOWED);
 }
+// --- pasted images ----------------------------------------------------------
+// These bounds exist because /chat/send accepts arbitrary binary from a browser
+// request, and every byte is held in memory twice (base64 in the JSON body, and
+// again in the stdin line handed to `claude`).
+//
+// Four images per turn covers what a person actually pastes — a screenshot, or
+// a before/after pair, with room to spare — while keeping a single turn's worth
+// of buffering bounded. Five megabytes per image matches the Anthropic API's own
+// per-image ceiling, so a larger one could not be answered anyway. Ten megabytes
+// total is the real backstop: it caps a turn at roughly 13MB of base64 regardless
+// of how the per-image budget is spent.
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGES_TOTAL_BYTES = 10 * 1024 * 1024;
+
+// The media types `claude` accepts for an image block. A type outside this set
+// is refused here rather than passed through, since the client's label is the
+// only thing that would otherwise decide how the bytes get interpreted.
+const MEDIA_TYPES = new Set<string>(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** Sniff the real media type from the leading bytes.
+ *
+ *  The client's declared type is a label, not evidence — a `image/png` claim
+ *  over a payload that is something else entirely would still be forwarded
+ *  verbatim to the model. These signatures are a few bytes each, so checking is
+ *  cheap enough to do unconditionally, and it is what makes the declared type
+ *  trustworthy rather than merely allowlisted. */
+export function sniffMediaType(b: Uint8Array): ChatImageMediaType | null {
+  const at = (i: number) => b[i];
+  if (b.length >= 8 && at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4e && at(3) === 0x47
+    && at(4) === 0x0d && at(5) === 0x0a && at(6) === 0x1a && at(7) === 0x0a) return "image/png";
+  if (b.length >= 3 && at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return "image/jpeg";
+  // "GIF87a" / "GIF89a" — the version digit differs, the rest does not.
+  if (b.length >= 6 && at(0) === 0x47 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x38) return "image/gif";
+  // WebP is a RIFF container: "RIFF" <4-byte size> "WEBP".
+  if (b.length >= 12 && at(0) === 0x52 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x46
+    && at(8) === 0x57 && at(9) === 0x45 && at(10) === 0x42 && at(11) === 0x50) return "image/webp";
+  return null;
+}
+
+/** Images attached to this turn, or `null` if the payload is unusable.
+ *
+ *  Returning `null` rather than silently dropping matters here: quietly sending
+ *  a turn without the screenshot it was written about produces a confusing
+ *  answer, which is worse than an error saying the attachment was rejected. */
+export function chatImages(v: unknown): ChatImage[] | null {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) return null;
+  if (v.length > MAX_IMAGES) return null;
+  const out: ChatImage[] = [];
+  let total = 0;
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") return null;
+    const { mediaType, data } = raw as Record<string, unknown>;
+    if (typeof mediaType !== "string" || !MEDIA_TYPES.has(mediaType)) return null;
+    if (typeof data !== "string" || !data) return null;
+    // Bound the encoded length before decoding — decoding first would mean
+    // materialising whatever size the client chose to send just to discover it
+    // was too big, which is the denial-of-service this cap exists to prevent.
+    if (data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 4) return null;
+    if (!BASE64_RE.test(data)) return null;
+    let bytes: Uint8Array;
+    try { bytes = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0)); } catch { return null; }
+    if (!bytes.length || bytes.length > MAX_IMAGE_BYTES) return null;
+    total += bytes.length;
+    if (total > MAX_IMAGES_TOTAL_BYTES) return null;
+    // The declared type has to match the bytes, not merely be allowlisted.
+    if (sniffMediaType(bytes) !== mediaType) return null;
+    out.push({ mediaType: mediaType as ChatImageMediaType, data });
+  }
+  return out;
+}
+
 const err = (msg: string, status = 400) => new Response(msg + "\n", { status, headers: CORS });
 
-export function chatStream(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown): Response {
+/** The stdin line for a turn that carries image blocks.
+ *
+ *  This envelope is not guesswork: it is the shape `claude` itself writes when
+ *  it injects a user message into its own structured-input stream, and the shape
+ *  its stdin reader validates on the way back in — the reader accepts a line
+ *  whose `type` is `user` and whose `message.role` is `user`, and rejects
+ *  anything else with "Expected message role 'user'". `content` is passed
+ *  through to the API untouched, which is what lets it be an array of blocks
+ *  rather than a bare string.
+ *
+ *  Exported for tests: this is the one part of the feature that cannot be
+ *  checked without spending money on a real turn, so it is pinned here instead. */
+export function turnEnvelope(text: string, images: ChatImage[]): string {
+  const content: Array<Record<string, unknown>> = [];
+  if (text) content.push({ type: "text", text });
+  for (const img of images) {
+    content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.data } });
+  }
+  return JSON.stringify({
+    type: "user",
+    session_id: "",
+    message: { role: "user", content },
+    parent_tool_use_id: null,
+  }) + "\n";
+}
+
+export function chatStream(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown): Response {
   const bin = claudeBin();
   if (!bin) return err("no local `claude` CLI — install Claude Code to chat", 403);
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403);
   const dir = safeAbs(cwd);
   if (!dir || !repoRootOf(dir)) return err("invalid or non-repo directory");
-  if (typeof message !== "string" || !message.trim() || message.length > 100_000) return err("invalid message");
+  // The last write path still outside the scope boundary (#67 covered git and
+  // the terminal). A chat runs a real `claude` with tools in that directory, so
+  // it can change anything a shell could — leaving it machine-wide would have
+  // made the boundary decorative in exactly the place it matters most.
+  if (!inScope(dir)) return err("outside the open project — open the parent folder to work across repos", 403);
+  const imgs = chatImages(images);
+  if (!imgs) return err("invalid image attachment");
+  if (typeof message !== "string" || message.length > 100_000) return err("invalid message");
+  // An image on its own is a complete thought ("what's wrong with this?"), so a
+  // turn only needs text when it carries nothing else.
+  if (!message.trim() && !imgs.length) return err("invalid message");
   const m = typeof model === "string" && MODEL_RE.test(model) ? model : "claude-opus-4-8";
   let pm = typeof mode === "string" && MODES.has(mode) ? mode : "default";
   if (pm === "bypassPermissions" && !BYPASS_ALLOWED) pm = "default"; // opt-in only
   const rid = typeof resumeId === "string" && SESSION_RE.test(resumeId) ? resumeId : "";
 
   const args = [bin, "-p", "--output-format", "stream-json", "--verbose", "--model", m];
+  // Structured input is only switched on for a turn that actually needs it.
+  // Plain text is the overwhelmingly common case and its path through `claude`
+  // is the well-trodden one; `--input-format stream-json` is comparatively
+  // undocumented, so a turn with nothing to gain from it keeps the old
+  // behaviour byte for byte rather than riding a newer code path for free.
+  if (imgs.length) args.push("--input-format", "stream-json");
   if (pm === "bypassPermissions") args.push("--dangerously-skip-permissions");
   else args.push("--permission-mode", pm);
   // Only meaningful for the prompting modes — bypass already allows everything.
@@ -72,7 +195,7 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   const setsid = Bun.which("setsid");
   const proc = Bun.spawn(setsid ? [setsid, ...args] : args, {
     cwd: dir,
-    stdin: new TextEncoder().encode(message),
+    stdin: new TextEncoder().encode(imgs.length ? turnEnvelope(message.trim(), imgs) : message),
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env },

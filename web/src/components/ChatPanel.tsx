@@ -20,7 +20,7 @@ import { fmtAgo, fmtUsd, modelLabelOf, modelColor, providerOf } from "../lib/for
 import { sessionIsLive } from "../lib/derive.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, subscribe, chatResuming,
-  DEFAULT_MODEL, DEFAULT_MODE, type Chat,
+  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, type Chat,
 } from "../lib/chatStore.ts";
 
 const MODELS = [
@@ -324,6 +324,20 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
     send(active.id, text, () => openRef.current && activeIdRef.current === active.id, allowed.split(/\s+/).filter(Boolean));
   };
   const [hint, setHint] = useState("");
+  // A turn is sendable when there is text or at least one attachment.
+  const hasTurn = !!(active?.draft.trim() || active?.attachments.length);
+
+  // Screenshots arrive as clipboard *files*, not text, so the paste is only
+  // intercepted when there is at least one image among the items — a normal
+  // text paste has to fall through to the textarea untouched.
+  const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!active) return;
+    const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
+    e.preventDefault();
+    setHint(await addAttachments(active.id, files));
+  };
+
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // A focused textarea can swallow Escape before it reaches the global
     // handler, stranding the panel open. Close it here instead.
@@ -456,6 +470,15 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                                 {m.tools.map((t, j) => <span key={j} className="text-[9.5px] px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, color: "var(--info)", background: "color-mix(in srgb, var(--info) 12%, transparent)" }}>⚙ {t}</span>)}
                               </div>
                             )}
+                            {!!m.images?.length && (
+                              <div className="flex flex-wrap gap-1.5 mb-1.5">
+                                {m.images.map((img, j) => (
+                                  <img key={j} src={`data:${img.mediaType};base64,${img.data}`} alt="attached image"
+                                    className="block max-h-40 max-w-full rounded-lg"
+                                    style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} />
+                                ))}
+                              </div>
+                            )}
                             {m.text ? <Markdown text={m.text} /> : (m.streaming ? <span className="t-dim2">▍</span> : "")}
                             {m.streaming && m.text && <span className="t-dim2">▍</span>}
                           </div>
@@ -466,15 +489,30 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                   </div>
 
                   <div className="shrink-0 border-t p-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                    {!!active?.attachments.length && (
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {active.attachments.map((a) => (
+                          <div key={a.id} className="relative group rounded-lg overflow-hidden shrink-0"
+                            style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                            title={`${a.name} · ${(a.bytes / 1024).toFixed(0)}KB`}>
+                            <img src={a.url} alt={a.name} className="block h-14 w-14 object-cover" />
+                            <button onClick={() => dropAttachment(active.id, a.id)} aria-label={`remove ${a.name}`}
+                              className="absolute top-0.5 right-0.5 w-4 h-4 grid place-items-center rounded text-[10px] leading-none"
+                              style={{ color: "var(--text)", background: "rgba(0,0,0,0.65)" }}>✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex items-end gap-2">
                       <textarea ref={inputRef} value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
                         onChange={(e) => active && update(active.id, (c) => { c.draft = e.target.value; })}
                         onKeyDown={onKey}
-                        placeholder={!enabled ? "chat unavailable" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline)" : "message a new session… (Enter to send)"}
+                        onPaste={onPaste}
+                        placeholder={!enabled ? "chat unavailable" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline, paste to attach an image)" : "message a new session… (Enter to send, paste to attach an image)"}
                         className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
                       {active?.sending
                         ? <button onClick={() => stop(active.id)} className="shrink-0 px-3.5 py-2 rounded-lg text-[11.5px] font-semibold" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ stop</button>
-                        : <button onClick={submit} disabled={!active?.draft.trim() || !active?.cwd || !enabled} className="shrink-0 px-4 py-2 rounded-lg text-[11.5px] font-semibold" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!active?.draft.trim() || !active?.cwd) ? 0.45 : 1 }}>send ↵</button>}
+                        : <button onClick={submit} disabled={!hasTurn || !active?.cwd || !enabled} className="shrink-0 px-4 py-2 rounded-lg text-[11.5px] font-semibold" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>send ↵</button>}
                     </div>
                     <div className="mt-1.5 text-[9.5px] t-dim2">
                       {hint
