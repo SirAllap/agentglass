@@ -607,6 +607,29 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                         ))}
                       </div>
                     )}
+                    {active?.blockedTool && (
+                      // The refusal happens silently server-side, so without
+                      // this the only symptom is an agent saying it is blocked
+                      // and a user with no idea an allowlist exists.
+                      <div className="mb-2 px-2.5 py-2 rounded-lg flex items-center gap-2 text-[11px]"
+                        style={{ background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--text2)" }}>
+                        <span className="min-w-0 flex-1">
+                          <b style={{ color: "var(--text)" }}>{active.blockedTool}</b> was refused — it isn't in this chat's allowed tools.
+                        </span>
+                        <button
+                          onClick={() => {
+                            const next = `${allowed} ${active.blockedTool}`.trim();
+                            setAllowed(next);
+                            update(active.id, (c) => { c.blockedTool = undefined; });
+                          }}
+                          className="shrink-0 px-2 py-1 rounded-md text-[10.5px] font-medium"
+                          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                          allow {active.blockedTool}
+                        </button>
+                        <button onClick={() => update(active.id, (c) => { c.blockedTool = undefined; })}
+                          className="shrink-0 px-1 t-dim2 hover:opacity-70" aria-label="dismiss">✕</button>
+                      </div>
+                    )}
                     {slashMatches.length > 0 && (
                       // Above the input, not below: the composer is pinned to
                       // the panel's bottom edge, so a menu underneath would be

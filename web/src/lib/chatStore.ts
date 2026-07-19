@@ -42,6 +42,7 @@ export type Chat = {
   abort: AbortController | null;
   unread: boolean;      // replied while you were looking at another chat
   renamed?: boolean;    // titled by hand, so the first message must not overwrite it
+  blockedTool?: string; // a tool the allowlist refused, so the UI can offer to add it
 };
 
 const chats = new Map<string, Chat>();
@@ -194,6 +195,7 @@ export async function send(id: string, text: string, isActive: () => boolean, al
   const ac = new AbortController();
   update(id, (c) => { c.abort = ac; });
 
+  const toolNames = new Map<string, string>();
   const onEvent = (o: Record<string, unknown>) => {
     const t = o.type;
     if (t === "system" && o.subtype === "init" && typeof o.session_id === "string") {
@@ -208,6 +210,9 @@ export async function send(id: string, text: string, isActive: () => boolean, al
         for (const b of blocks) {
           if (b.type === "text" && typeof b.text === "string") last.text += b.text;
           else if (b.type === "tool_use" && typeof b.name === "string") {
+            // The denial comes back later keyed only by id, so remember which
+            // tool it was — naming it is the whole point of the prompt below.
+            if (typeof b.id === "string") toolNames.set(b.id, String(b.name));
             const inp = (b.input ?? {}) as Record<string, unknown>;
             const hint = typeof inp.command === "string" ? `: ${inp.command.slice(0, 44)}`
               : typeof inp.file_path === "string" ? `: ${String(inp.file_path).split("/").pop()}` : "";
@@ -216,6 +221,21 @@ export async function send(id: string, text: string, isActive: () => boolean, al
         }
         if (!isActive()) c.unread = true;
       });
+    } else if (t === "user") {
+      // `claude -p` has no terminal to prompt from, so a tool outside the
+      // allowlist is refused and the turn simply carries on without it. The
+      // model reports being "blocked" and the user, who never saw a dialog,
+      // has no way to know an allowlist exists — let alone which entry to add.
+      const blocks = (((o.message as Record<string, unknown>)?.content) ?? []) as Array<Record<string, unknown>>;
+      for (const b of blocks) {
+        if (b.type !== "tool_result") continue;
+        const text = typeof b.content === "string" ? b.content
+          : Array.isArray(b.content) ? b.content.map((x: Record<string, unknown>) => (typeof x?.text === "string" ? x.text : "")).join(" ")
+          : "";
+        if (!/permission|requires approval|not allowed|denied/i.test(text)) continue;
+        const tool = toolNames.get(String(b.tool_use_id ?? ""));
+        if (tool) update(id, (c) => { c.blockedTool = tool; });
+      }
     } else if (t === "agx_error") {
       update(id, (c) => {
         const last = c.messages[c.messages.length - 1];
