@@ -4,7 +4,7 @@
 // value to drop into <HiliteCtx.Provider>.
 import { createContext, useEffect, useMemo, useState } from "react";
 import type { Highlighter } from "shiki";
-import { getHighlighter, langFromPath, shikiTheme, ensureTheme } from "./highlight.ts";
+import { getHighlighter, langFromPath, shikiTheme, ensureTheme, themeLabel } from "./highlight.ts";
 
 export type Hilite = { hl: Highlighter | null; lang: string | null; theme: string | null };
 export const HiliteCtx = createContext<Hilite>({ hl: null, lang: null, theme: null });
@@ -18,6 +18,7 @@ export function useDiffHighlight(filePath?: string) {
   const [themePref, setThemePref] = useState<string>(() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch { return "auto"; } });
   const [bold, setBold] = useState<boolean>(() => { try { return localStorage.getItem(BOLD_KEY) !== "0"; } catch { return true; } });
   const [themeName, setThemeName] = useState<string | null>(null);
+  const [themeError, setThemeError] = useState<string | null>(null);
   const lang = useMemo(() => langFromPath(filePath), [filePath]);
 
   useEffect(() => {
@@ -41,12 +42,20 @@ export function useDiffHighlight(filePath?: string) {
   useEffect(() => {
     if (!hl) return;
     let alive = true;
-    ensureTheme(hl, resolvedTheme, bold).then((name) => { if (alive) setThemeName(name); }).catch(() => {});
+    // A theme that won't load is reported rather than swallowed: without this
+    // the diff just renders monochrome and the picker keeps claiming the theme
+    // the user chose is the one on screen.
+    ensureTheme(hl, resolvedTheme, bold).then(({ name, failed }) => {
+      if (!alive) return;
+      setThemeName(name);
+      setThemeError(!failed ? null
+        : `${themeLabel(failed)} couldn't be loaded — ${name ? `showing ${themeLabel(name)} instead` : "syntax highlighting is off"}.`);
+    }).catch(() => {});
     return () => { alive = false; };
   }, [hl, resolvedTheme, bold]);
 
   // Stable context object so <HiliteCtx.Provider> doesn't re-render every
   // memoized <Code> whenever an unrelated parent state changes.
   const hilite = useMemo<Hilite>(() => ({ hl, lang: lang && loadedLangs.has(lang) ? lang : null, theme: themeName }), [hl, lang, loadedLangs, themeName]);
-  return { hilite, themePref, setThemePref, bold, setBold };
+  return { hilite, themePref, setThemePref, bold, setBold, themeError };
 }

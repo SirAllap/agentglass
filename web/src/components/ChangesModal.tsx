@@ -446,7 +446,7 @@ function GroupBlock({ g, collapsed, selId, reviewed, descMap, onToggleCollapse, 
 // --- controls ----------------------------------------------------------------
 // Syntax-theme dropdown (Shiki). "auto" follows the app's light/dark; the rest
 // mirror the user's Neovim themes. Grouped dark/light, closes on outside click.
-export function ThemePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+export function ThemePicker({ value, onChange, error }: { value: string; onChange: (v: string) => void; error?: string | null }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -473,10 +473,18 @@ export function ThemePicker({ value, onChange }: { value: string; onChange: (v: 
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        title="Syntax theme"
+        title={error || "Syntax theme"}
         className="px-2 py-0.5 rounded-md text-[10px] transition-colors flex items-center gap-1"
-        style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text3)" }}
+        style={{
+          background: error ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "color-mix(in srgb, var(--bg3) 45%, transparent)",
+          border: `1px solid color-mix(in srgb, var(--${error ? "warning" : "border"}) ${error ? 55 : 30}%, transparent)`,
+          color: error ? "var(--warning)" : "var(--text3)",
+        }}
       >
+        {/* The label names the theme the user picked, so when that theme could
+            not be loaded the button has to say so — otherwise it vouches for
+            colors that aren't on screen. */}
+        {error && <span aria-hidden>⚠</span>}
         <span className="truncate" style={{ maxWidth: 92 }}>{label}</span>
         <span style={{ opacity: 0.6, fontSize: 8 }}>▼</span>
       </button>
@@ -628,7 +636,7 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
   const commitPaths = useMemo(() => [...new Set(all.map((c) => c.file_path))], [all]);
   const walkSig = useMemo(() => changesetSig(all), [all]);
   // Shiki highlighter + theme/bold controls (shared with the git panel).
-  const { hilite, themePref, setThemePref, bold, setBold } = useDiffHighlight(selected?.file_path);
+  const { hilite, themePref, setThemePref, bold, setBold, themeError } = useDiffHighlight(selected?.file_path);
   // Restore a cached walkthrough for the current changeset (on open / when the
   // changeset changes) so it persists across close/reopen and never re-runs.
   useEffect(() => {
@@ -866,7 +874,7 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
                             <Toggle on={reviewed.has(selected.id)} onClick={() => toggleReviewed(selected.id)} title="Mark this file reviewed (x)">{reviewed.has(selected.id) ? "reviewed ✓" : "review"}</Toggle>
                             <Toggle on={split} onClick={() => setSplit((s) => !s)} title="Split / unified">{split ? "split" : "unified"}</Toggle>
                             <Toggle on={wrap} onClick={() => setWrap((w) => !w)} title="Toggle line wrap (w)">wrap</Toggle>
-                            <ThemePicker value={themePref} onChange={setThemePref} />
+                            <ThemePicker value={themePref} onChange={setThemePref} error={themeError} />
                             <Toggle on={bold} onClick={() => setBold((b) => !b)} title="Bold keywords, functions & types (Neovim-style)">bold</Toggle>
                             <Toggle onClick={() => copy("path")} title="Copy file path (c)">{copied === "path" ? "copied ✓" : "path"}</Toggle>
                             <Toggle onClick={() => copy("diff")} title="Copy unified diff">{copied === "diff" ? "copied ✓" : "diff"}</Toggle>
