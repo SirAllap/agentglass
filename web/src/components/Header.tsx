@@ -1,14 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { motion } from "motion/react";
 import type { ConnState } from "../lib/useLive.ts";
-import { api, IS_DEMO, reauthPrompt } from "../lib/api.ts";
+import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { ThemeSwitcher } from "./ThemeSwitcher.tsx";
 import { UsageWidget } from "./UsageWidget.tsx";
-import { Portal } from "./Portal.tsx";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
-import { autostartEnabled, setAutostart } from "../lib/desktop.ts";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
 
 // The long windows matter once history isn't pruned: the transcript scan can
@@ -95,95 +93,26 @@ function ChatIcon() {
   );
 }
 
-/** Overflow menu: secondary actions nested behind one "⋯" button. */
-function MoreMenu({ sound, onSound, onOpenStats, onOpenHelp }: { sound: boolean; onSound: () => void; onOpenStats: () => void; onOpenHelp: () => void }) {
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ top: 0, right: 0 });
-
-  useLayoutEffect(() => {
-    if (open && btnRef.current) {
-      const r = btnRef.current.getBoundingClientRect();
-      setPos({ top: r.bottom + 8, right: window.innerWidth - r.right });
-    }
-  }, [open]);
-
-  // Launch-at-login is a property of the installed app, so the entry only
-  // exists in the desktop window — and only once the shell has confirmed the
-  // current state, rather than showing a toggle that might be lying.
-  const [autostart, setAutostartState] = useState<boolean | null>(null);
-  useEffect(() => { autostartEnabled().then(setAutostartState); }, []);
-  const toggleAutostart = async () => {
-    const next = await setAutostart(!autostart);
-    if (next !== null) setAutostartState(next);
-  };
-
-  const items: { label: string; hint?: string; onClick?: () => void; href?: string; download?: string }[] = [
-    { label: "📊 Statistics", hint: "s", onClick: onOpenStats },
-    { label: "❔ Legend & shortcuts", hint: "?", onClick: onOpenHelp },
-    { label: sound ? "🔊 Alert sounds — on" : "🔇 Alert sounds — off", onClick: onSound },
-    ...(autostart === null
-      ? []
-      : [{ label: autostart ? "🚀 Start at login — on" : "🚀 Start at login — off", onClick: toggleAutostart }]),
-    { label: "↓ Events CSV", href: api.exportUrl("csv"), download: "agentglass-events.csv" },
-    { label: "↓ Events JSON", href: api.exportUrl("json"), download: "agentglass-events.json" },
-    { label: "↓ Skills catalog (md)", href: api.skillsExportUrl(), download: "agentglass-skills.md" },
-  ];
-
+/** Settings button — the overflow menu became a real modal (SettingsModal),
+ *  because a flat list of one-liners could not show a toggle's state without
+ *  spelling it out in the label. */
+function MoreMenu({ onOpen }: { onOpen: () => void }) {
   return (
-    <>
-      <button ref={btnRef} title="More — stats, help, sounds, exports" onClick={() => setOpen((o) => !o)}
-        className="h-8 w-8 grid place-items-center rounded-lg text-[15px]"
-        style={{
-          border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
-          background: open ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)",
-          color: open ? "var(--primary-hover)" : "var(--text3)",
-        }}>
-        ⋯
-      </button>
-      <Portal>
-        <AnimatePresence>
-          {open && (
-            <>
-              <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
-              <motion.div
-                initial={{ opacity: 0, y: -8, scale: 0.96 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -8, scale: 0.96 }}
-                transition={{ type: "spring", stiffness: 420, damping: 32 }}
-                className="fixed w-56 p-1.5 rounded-xl flex flex-col gap-0.5"
-                style={{
-                  top: pos.top, right: pos.right, zIndex: 9999,
-                  background: "color-mix(in srgb, var(--bg2) 97%, black)",
-                  border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)",
-                  boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
-                  backdropFilter: "blur(18px)",
-                }}
-              >
-                {items.map((it) =>
-                  it.href ? (
-                    <a key={it.label} href={it.href} download={it.download} onClick={() => setOpen(false)}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[11.5px] t-dim hover:bg-white/5">
-                      {it.label}
-                    </a>
-                  ) : (
-                    <button key={it.label} onClick={() => { it.onClick?.(); setOpen(false); }}
-                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[11.5px] t-dim text-left hover:bg-white/5">
-                      <span>{it.label}</span>
-                      {it.hint && <kbd className="chip text-[9px] t-dim2">{it.hint}</kbd>}
-                    </button>
-                  )
-                )}
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
-      </Portal>
-    </>
+    <button title="Settings — preferences, exports, shortcuts" onClick={onOpen}
+      className="h-8 w-8 grid place-items-center rounded-lg text-[15px]"
+      style={{
+        border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+        background: "color-mix(in srgb, var(--bg3) 30%, transparent)",
+        color: "var(--text3)",
+      }}>
+      ⋯
+    </button>
   );
 }
 
 export function Header({
   conn, windowMs, onWindow, apps, types, providers, filter, onFilter, theme, onTheme,
-  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenChanges, onOpenGit, onOpenDocker, onOpenTerminal, onOpenChat, onClear, showUsage,
+  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenChanges, onOpenGit, onOpenDocker, onOpenTerminal, onOpenChat, onOpenSettings, onClear, showUsage,
   workspace, onOpenProject,
 }: {
   conn: ConnState;
@@ -207,6 +136,7 @@ export function Header({
   onOpenDocker: () => void;
   onOpenTerminal: () => void;
   onOpenChat: () => void;
+  onOpenSettings: () => void;
   onClear: () => void;
   showUsage: boolean;
   workspace: string | null;
@@ -392,7 +322,7 @@ export function Header({
         </button>
         {/* Skills demoted to a plain icon */}
         <IconBtn title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></IconBtn>
-        <MoreMenu sound={sound} onSound={onSound} onOpenStats={onOpenStats} onOpenHelp={onOpenHelp} />
+        <MoreMenu onOpen={onOpenSettings} />
         <ThemeSwitcher current={theme} onChange={onTheme} />
       </div>
     </header>

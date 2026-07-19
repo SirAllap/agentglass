@@ -31,6 +31,7 @@ import { TerminalPanel } from "./components/TerminalPanel.tsx";
 import { ChatPanel } from "./components/ChatPanel.tsx";
 import { newChat, chatResuming } from "./lib/chatStore.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
+import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
 
@@ -50,6 +51,7 @@ export default function App() {
   const [dockerOpen, setDockerOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatFocus, setChatFocus] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
@@ -241,6 +243,7 @@ export default function App() {
         onOpenDocker={() => setDockerOpen(true)}
         onOpenTerminal={() => setTerminalOpen(true)}
         onOpenChat={() => setChatOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
         onClear={clearFilters}
         showUsage={showUsage}
         workspace={workspace}
@@ -299,6 +302,14 @@ export default function App() {
       <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
       <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} focusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        sound={sound}
+        onSound={() => setSound((s) => !s)}
+        onOpenStats={() => setStatsOpen(true)}
+        onOpenHelp={() => setHelpOpen(true)}
+      />
       <SessionModal
         sessionId={sessionView?.id ?? null}
         sourceApp={sessionView?.app}
