@@ -37,6 +37,31 @@ const withToken = (url: string): string =>
 /** Whether this client has a shared-secret token configured. */
 export const hasToken = (): boolean => !!TOKEN;
 
+/** Why a chat turn ended early.
+ *
+ *  `refused` — the server answered and declined; `detail` is its reason.
+ *  `unreachable` — the request never got a response at all.
+ *  `dropped` — the turn was accepted and the connection died partway through.
+ *
+ *  The distinction is the whole point: a dropped turn may still be running in
+ *  the background, so the advice is to go look, whereas a refusal is over and
+ *  the reason is already known. Neither is recoverable from the raw fetch error,
+ *  which under WebKitGTK is the same opaque "TypeError: Load failed" either way. */
+export type ChatStreamFailure = "refused" | "unreachable" | "dropped";
+
+export class ChatStreamError extends Error {
+  constructor(readonly kind: ChatStreamFailure, readonly detail = "", readonly status = 0) {
+    super(
+      kind === "refused"
+        ? `the server refused this turn${status ? ` (${status})` : ""}${detail ? `: ${detail}` : ""}`
+        : kind === "unreachable"
+          ? `can't reach the agentglass server at ${SERVER} — it may not be running`
+          : "the connection to the agentglass server dropped mid-turn — it may have restarted (reinstalling replaces the running server). The turn itself may still be going; check the session in the fleet view before resending",
+    );
+    this.name = "ChatStreamError";
+  }
+}
+
 /** Tell an auth failure apart from a plain outage. A browser WebSocket can't
  *  read the 401 that rejects its upgrade, so a socket that closes before it ever
  *  opens looks identical to the server being down. Probing an authenticated HTTP
@@ -176,13 +201,36 @@ const realApi = {
   // --- multi-chat: drive a claude session from the browser ---
   chatEnabled: () => get<{ enabled: boolean; bypass?: boolean }>("/chat/enabled"),
   chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[] }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
-    const res = await fetch(SERVER + "/chat/send", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
+    let res: Response;
+    // A fetch that throws before a response has arrived never reached the
+    // server, which is a different problem from one that dies mid-turn — the
+    // turn has not started, so there is nothing running to go back to.
+    try {
+      res = await fetch(SERVER + "/chat/send", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") throw e;
+      throw new ChatStreamError("unreachable", "");
+    }
+    // A refusal — chat disabled, out of scope, a bad directory — comes back as
+    // plain text with a 4xx, not ndjson. Without this it fell into the reader
+    // below, failed to parse as JSON, and was skipped line by line, so the user
+    // was told nothing at all about why their turn did not run.
+    if (!res.ok) throw new ChatStreamError("refused", (await res.text().catch(() => "")).trim(), res.status);
     if (!res.body) { try { onEvent(JSON.parse(await res.text())); } catch { /* non-json */ } return; }
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
     const flush = (line: string) => { const t = line.trim(); if (t) { try { onEvent(JSON.parse(t)); } catch { /* skip */ } } };
-    for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let nl; while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); } }
+    try {
+      for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let nl; while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); } }
+    } catch (e) {
+      // The turn was accepted and then the connection died under it. WebKitGTK
+      // (the Tauri shell) reports every such failure as "TypeError: Load
+      // failed", so the raw error says nothing about what happened — the cause
+      // is named here instead, where it is known.
+      if (e instanceof DOMException && e.name === "AbortError") throw e;
+      throw new ChatStreamError("dropped", "");
+    }
     flush(buf);
   },
   dockerStart: (id: string) => post<DockerActionResult>("/docker/start", { id }),

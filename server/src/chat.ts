@@ -127,6 +127,33 @@ export function chatImages(v: unknown): ChatImage[] | null {
 
 const err = (msg: string, status = 400) => new Response(msg + "\n", { status, headers: CORS });
 
+// --- keepalive --------------------------------------------------------------
+// How often a turn that is producing nothing still writes something.
+//
+// A turn goes quiet for as long as the model thinks or a tool runs, and both the
+// server's own idleTimeout (255s, its ceiling) and any proxy in front of it drop
+// a connection that has been silent too long. A blank line is the cheapest thing
+// that resets those timers: the ndjson framing makes it a no-op, and both this
+// server's client and any other line reader skip an empty line already, so it
+// costs one byte and needs no handling on the far end.
+const KEEPALIVE_MS = 20_000;
+
+/** Write a blank ndjson line to `controller` every `ms` until the returned
+ *  function is called.
+ *
+ *  Exported for tests: the surrounding turn cannot be exercised without spawning
+ *  a real `claude`, so the keepalive is pinned on its own. `enqueue` throws once
+ *  the stream is closed or cancelled, which is a race the timer cannot avoid —
+ *  losing that race simply means the stream is over, so it stops rather than
+ *  surfacing an unhandled rejection. */
+export function startKeepalive(controller: { enqueue: (c: Uint8Array) => void }, ms = KEEPALIVE_MS): () => void {
+  const nl = new TextEncoder().encode("\n");
+  const timer = setInterval(() => {
+    try { controller.enqueue(nl); } catch { clearInterval(timer); }
+  }, ms);
+  return () => clearInterval(timer);
+}
+
 /** The stdin line for a turn that carries image blocks.
  *
  *  This envelope is not guesswork: it is the shape `claude` itself writes when
@@ -213,6 +240,7 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+      const stopKeepalive = startKeepalive(controller);
       try {
         for (;;) {
           const { done, value } = await reader.read();
@@ -220,6 +248,7 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
           if (value) controller.enqueue(value);
         }
       } catch { /* closed */ }
+      stopKeepalive();
       const code = await proc.exited;
       // The reader loop ends on cancel too, and a cancelled controller throws
       // on enqueue/close — which would surface as an unhandled rejection on
