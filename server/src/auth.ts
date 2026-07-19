@@ -24,17 +24,31 @@ const TOKEN_PATH = join(
   "token"
 );
 
-// Append-only telemetry sinks + health. Everything else — reads, shell,
-// git/docker writes, gate decisions — is behind the token when one is set.
-const INTAKE = new Set([
+// Routes that never require the token: append-only telemetry sinks + health.
+// A local hook or OTel exporter has no way to carry a secret and can only
+// *append* events, so these stay open even when a token is configured.
+//
+// Note: /gate is deliberately NOT here. It's the control plane — a POST creates
+// an operator-facing approval prompt with caller-controlled text — so when a
+// token is set the gate hook must authenticate (it runs on the same machine and
+// can read AGENTGLASS_TOKEN from the env). With no token configured the whole
+// auth check is skipped anyway, so /gate keeps its zero-config tokenless UX.
+const AUTH_EXEMPT = new Set([
   "/health",
   "/ingest",
-  "/gate",
   "/v1/traces",
   "/otlp/v1/traces",
   "/v1/logs",
   "/otlp/v1/logs",
 ]);
+
+/** True for routes that bypass the shared-secret gate even when a token is set. */
+export const isAuthExempt = (pathname: string) => AUTH_EXEMPT.has(pathname);
+
+// Rate-limited intake sinks (flood protection). /gate is included: even though
+// it authenticates when a token is set, a burst of gate posts shouldn't be
+// unbounded. This set governs throttling only, not auth exemption.
+const INTAKE = new Set([...AUTH_EXEMPT, "/gate"]);
 
 export const isIntake = (pathname: string) => INTAKE.has(pathname);
 

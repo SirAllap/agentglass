@@ -43,7 +43,7 @@ import { chatStream, CHAT_ENABLED, CHAT_BYPASS_ALLOWED } from "./chat.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, CONFIG_PATH } from "./config.ts";
 import { privateHost } from "./net.ts";
-import { resolveToken, tokenOk, isIntake } from "./auth.ts";
+import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { rateOk } from "./ratelimit.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
@@ -204,7 +204,9 @@ const server = Bun.serve<WsData>({
     // append-only intake sinks needs it — this is what closes the door on other
     // local processes and makes a non-loopback bind safe. WS upgrades carry it
     // as ?token= (a browser can't set a header on them); fetch uses Bearer.
-    if (AUTH_TOKEN && !isIntake(pathname) && !tokenOk(req, url, AUTH_TOKEN)) {
+    // /gate is NOT exempt here: it's the control plane, and its hook carries the
+    // token when one is set (see auth.ts / gate_event.py).
+    if (AUTH_TOKEN && !isAuthExempt(pathname) && !tokenOk(req, url, AUTH_TOKEN)) {
       return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
     }
 

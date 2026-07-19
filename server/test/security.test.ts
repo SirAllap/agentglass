@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { privateHost } from "../src/net.ts";
 import { safeAbs } from "../src/git.ts";
 import { shellSafeRel, parseMakeTargets } from "../src/terminal.ts";
-import { tokenOk } from "../src/auth.ts";
+import { tokenOk, isAuthExempt, isIntake } from "../src/auth.ts";
 
 describe("privateHost", () => {
   test("loopback is always trusted, regardless of trustLan", () => {
@@ -111,5 +111,30 @@ describe("tokenOk", () => {
     expect(tokenOk(reqWith({ authorization: "Bearer nope" }), new URL(at), "secret")).toBe(false);
     expect(tokenOk(reqWith({}), new URL(at), "secret")).toBe(false);
     expect(tokenOk(reqWith({ authorization: "Bearer s" }), new URL(at), "secret")).toBe(false);
+  });
+});
+
+describe("auth exemption vs intake", () => {
+  test("append-only telemetry sinks are always tokenless", () => {
+    for (const p of ["/health", "/ingest", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs"]) {
+      expect(isAuthExempt(p)).toBe(true);
+    }
+  });
+
+  test("/gate is the control plane — NOT auth-exempt, so a configured token guards it", () => {
+    // Regression guard for the spoofed-approval-queue injection: /gate must sit
+    // behind the token when one is set, not alongside the telemetry sinks.
+    expect(isAuthExempt("/gate")).toBe(false);
+  });
+
+  test("/gate stays rate-limited as intake even though it authenticates", () => {
+    expect(isIntake("/gate")).toBe(true);
+  });
+
+  test("reads and writes are neither exempt nor intake", () => {
+    for (const p of ["/events/recent", "/gate/decide", "/workspace", "/terminal/pty"]) {
+      expect(isAuthExempt(p)).toBe(false);
+      expect(isIntake(p)).toBe(false);
+    }
   });
 });

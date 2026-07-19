@@ -89,10 +89,19 @@ def main():
         "timeout_ms": TIMEOUT * 1000,
     }).encode("utf-8")
 
+    # Carry the shared secret when the server has one. /gate is the control plane
+    # (a POST raises an operator-facing approval prompt), so a token-protected
+    # server requires auth here — otherwise any local process could inject spoofed
+    # approval prompts. The hook runs on the same machine and reads it from env.
+    headers = {"Content-Type": "application/json"}
+    token = os.environ.get("AGENTGLASS_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = "Bearer " + token
+
     req = urllib.request.Request(
         args.server.rstrip("/") + "/gate",
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
     try:
