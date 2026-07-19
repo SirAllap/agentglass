@@ -172,6 +172,9 @@ export interface StatsSummary {
   /** Event counts by day-of-week × hour (length 168 = 7*24), local time. */
   heatmap: number[];
   window_ms: number;
+  /** Wall-clock ms when the server process started — what the header's
+   *  uptime counts from. Absent in demo mode, where nothing is "up". */
+  server_started_at?: number;
 }
 
 /** A tool call held at the gate, awaiting a remote approve/deny. */
