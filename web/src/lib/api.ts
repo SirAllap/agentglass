@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult, TerminalCommands } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult, TerminalCommands } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -131,6 +131,8 @@ const realApi = {
     }).then((r) => r.json() as Promise<WalkthroughResult>),
   /** Scope this instance to one project dir (null → whole machine). */
   setWorkspace: (root: string | null) => post<{ ok: boolean; workspace: string | null; persisted: boolean; error?: string; note?: string }>("/workspace", { root }),
+  /** Subdirectories matching a half-typed path — the picker's completion. */
+  fsComplete: (prefix: string) => get<FsCompletion>(`/fs/complete?prefix=${encodeURIComponent(prefix)}`),
   // --- live git panel (lazygit-style) ---
   gitRepos: () => get<{ repos: GitRepoRef[] }>("/git/repos"),
   /** Every repo on the machine — for the project picker, even when scoped. */
@@ -211,6 +213,8 @@ const demoApi: typeof realApi = {
   gitCommit: (_payload: { root: string; files: string[]; title: string; body: string }) => D(demo.gitCommit()),
   walkthrough: (files: WalkthroughInputFile[]) => D(demo.walkthrough(files)),
   setWorkspace: (_root: string | null) => D({ ok: false, workspace: null, persisted: false, error: "unavailable in the demo" }),
+  // The demo has no filesystem to browse, so completion is simply always empty.
+  fsComplete: (_prefix: string) => D({ base: "", entries: [], truncated: false }),
   gitRepos: () => D(demo.gitRepos()),
   gitReposAll: () => D(demo.gitRepos()),
   gitTree: (root: string) => D(demo.gitTree(root)),
