@@ -5,6 +5,7 @@ import { db } from "./db.ts";
 import {
   insertEvent,
   getRecent,
+  openToolCalls,
   getFilterOptions,
   getSessions,
   statsSummary,
@@ -550,7 +551,10 @@ const server = Bun.serve<WsData>({
     open(ws: ServerWebSocket<WsData>) {
       if (ws.data?.kind === "pty") { ptyOpen(ws); return; }
       clients.add(ws);
-      const frame: WsFrame = { type: "initial", data: getRecent(300) };
+      // openTools seeds the client's "running" state for tools whose PreToolUse
+      // predates the 300-event initial slice — otherwise a long job in flight
+      // when the page loads shows as idle (or missing) until its Post arrives.
+      const frame: WsFrame = { type: "initial", data: getRecent(300), openTools: openToolCalls() };
       ws.send(JSON.stringify(frame));
     },
     close(ws: ServerWebSocket<WsData>) {

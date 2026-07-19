@@ -243,9 +243,20 @@ export interface FileChange {
   hunks: DiffHunk[];
 }
 
+/** A tool call the server sees as still running: a PreToolUse with no matching
+ *  Post yet, in a session that hasn't stopped. This is the authoritative "what's
+ *  open right now" — independent of whether the Pre still lives in the client's
+ *  bounded event buffer, which it may not on a busy fleet or after a reload. */
+export interface OpenToolCall {
+  session_id: string;
+  source_app: string;
+  tool_name: string;
+  since: number; // ms — the PreToolUse timestamp
+}
+
 /** WebSocket frames. */
 export type WsFrame =
-  | { type: "initial"; data: WatchEvent[] }
+  | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
   | { type: "event"; data: WatchEvent }
   | { type: "session"; data: SessionRollup };
 

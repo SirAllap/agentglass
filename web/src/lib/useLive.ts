@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { WatchEvent, WsFrame } from "../../../shared/types.ts";
+import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts";
 import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
 
@@ -16,6 +16,9 @@ export interface LiveData {
   events: WatchEvent[];
   conn: ConnState;
   lastEvent: WatchEvent | null;
+  /** Server's authoritative list of tool calls still running — seeds the
+   *  per-agent "running" state for Pres that have aged out of `events`. */
+  openTools: OpenToolCall[];
 }
 
 /**
@@ -27,6 +30,7 @@ export function useLive(): LiveData {
   const [events, setEvents] = useState<WatchEvent[]>([]);
   const [conn, setConn] = useState<ConnState>("connecting");
   const [lastEvent, setLastEvent] = useState<WatchEvent | null>(null);
+  const [openTools, setOpenTools] = useState<OpenToolCall[]>([]);
   const connRef = useRef(conn);
   connRef.current = conn;
   const wsRef = useRef<WebSocket | null>(null);
@@ -124,11 +128,22 @@ export function useLive(): LiveData {
         pending.current = [];
         setEvents(initial);
         setLastEvent(initial[initial.length - 1] ?? null);
+        setOpenTools(frame.openTools ?? []);
       } else if (frame.type === "event") {
         if (seen.current.has(frame.data.id)) return; // duplicate delivery
         seen.current.add(frame.data.id);
         pending.current.push(frame.data);
         scheduleFlush();
+        // A Post closes its tool: drop the matching seed so it can't keep a
+        // finished tool marked "running" after its Post later evicts the buffer.
+        const ev = frame.data;
+        if (ev.hook_event_type === "PostToolUse" || ev.hook_event_type === "PostToolUseFailure") {
+          setOpenTools((cur) =>
+            cur.length && cur.some((s) => s.session_id === ev.session_id && (!ev.tool_name || s.tool_name === ev.tool_name) && ev.timestamp >= s.since)
+              ? cur.filter((s) => !(s.session_id === ev.session_id && (!ev.tool_name || s.tool_name === ev.tool_name) && ev.timestamp >= s.since))
+              : cur
+          );
+        }
       }
       // "session" frames are ignored — the Sessions panel fetches its own roll-ups.
     };
@@ -192,5 +207,5 @@ export function useLive(): LiveData {
     };
   }, [connect, flush]);
 
-  return { events, conn, lastEvent };
+  return { events, conn, lastEvent, openTools };
 }

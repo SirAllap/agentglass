@@ -12,6 +12,7 @@ import type {
   SkillUsage,
   AppUsage,
   TypeCount,
+  OpenToolCall,
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel } from "./pricing.ts";
@@ -380,6 +381,46 @@ export function getRecent(limit = 300, provider?: string): WatchEvent[] {
     .all(provider, limit)
     .map(parseEventRow)
     .reverse();
+}
+
+// A tool call is "open" while its PreToolUse has no matching Post. The client
+// derives this from its live buffer, but a long tool emits nothing while it runs,
+// so on a busy fleet (or after a reload) the Pre can age out of the buffer and
+// the session wrongly flips to idle — or vanishes — mid-run. This is the server's
+// authoritative view, sent on the initial frame so the client doesn't depend on
+// the Pre still being in memory. Bounded to the last 30 min (past that a stuck
+// pair is a lost session, not a long build — matching the client's ceiling) and
+// to sessions with no Stop/SessionEnd after the Pre.
+const OPEN_TOOL_MAX_MS = 30 * 60_000;
+const openToolStmt = db.query<OpenToolCall, [number]>(
+  `SELECT p.session_id AS session_id, p.source_app AS source_app,
+          COALESCE(p.tool_name, 'tool') AS tool_name, p.timestamp AS since
+     FROM events p
+    WHERE p.hook_event_type = 'PreToolUse'
+      AND p.timestamp >= ?
+      AND NOT EXISTS (
+        SELECT 1 FROM events q
+         WHERE q.hook_event_type IN ('PostToolUse','PostToolUseFailure')
+           AND (
+             (p.tool_use_id IS NOT NULL AND q.tool_use_id = p.tool_use_id)
+             OR (p.tool_use_id IS NULL AND q.session_id = p.session_id
+                 AND q.tool_name = p.tool_name AND q.timestamp >= p.timestamp)
+           )
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM events s
+         WHERE s.session_id = p.session_id
+           AND s.hook_event_type IN ('Stop','SessionEnd')
+           AND s.timestamp >= p.timestamp
+      )
+    ORDER BY p.timestamp ASC
+    LIMIT 200`
+);
+
+/** Currently-running tool calls across the fleet (open Pre, unpaired, session
+ *  still alive) — the seed for the client's per-agent "running" state. */
+export function openToolCalls(): OpenToolCall[] {
+  return openToolStmt.all(Date.now() - OPEN_TOOL_MAX_MS);
 }
 
 export function getFilterOptions() {

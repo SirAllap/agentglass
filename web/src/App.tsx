@@ -34,7 +34,7 @@ import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
 
 export default function App() {
-  const { events, conn, lastEvent } = useLive();
+  const { events, conn, lastEvent, openTools } = useLive();
   const [windowMs, setWindowMs] = useState(3_600_000);
   const [filter, setFilter] = useState({ app: "", type: "", provider: "" });
   const [theme, setTheme] = useState(initialTheme());
@@ -110,7 +110,7 @@ export default function App() {
   // Every session's provider, from the FULL buffer (so the list is stable and
   // never collapses when one provider is selected).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const agentsAll = useMemo(() => deriveAgents(events), [events, tick]);
+  const agentsAll = useMemo(() => deriveAgents(events, openTools), [events, openTools, tick]);
   const sessionProvider = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of agentsAll) if (a.model_name) map.set(a.session_id, providerOf(a.model_name));
@@ -131,8 +131,11 @@ export default function App() {
     [events, filter.provider, sessionProvider]
   );
   const agents = useMemo(
-    () => (filter.provider ? deriveAgents(visibleEvents) : agentsAll),
-    [filter.provider, visibleEvents, agentsAll]
+    () =>
+      filter.provider
+        ? deriveAgents(visibleEvents, openTools.filter((s) => sessionProvider.get(s.session_id) === filter.provider))
+        : agentsAll,
+    [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider]
   );
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
   useAlertSound(alerts.length, sound);
