@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { ConnState } from "../lib/useLive.ts";
 import { api, IS_DEMO, reauthPrompt } from "../lib/api.ts";
@@ -9,6 +9,7 @@ import { Portal } from "./Portal.tsx";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { autostartEnabled, setAutostart } from "../lib/desktop.ts";
+import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
 
 // The long windows matter once history isn't pruned: the transcript scan can
 // backfill months of sessions, and a 7d ceiling would hide most of the fleet.
@@ -212,6 +213,9 @@ export function Header({
   onOpenProject: () => void;
 }) {
   const live = conn === "open";
+  // Subscribed rather than polled: a reply arriving is exactly when this can
+  // change, and the store already notifies on it.
+  const waiting = useSyncExternalStore(subscribeChats, attentionCount, attentionCount);
   const unauth = conn === "unauthorized";
   const pillColor = live ? "var(--success)" : unauth ? "var(--error)" : "var(--warning)";
   const hasFilter = filter.app || filter.type || filter.provider;
@@ -362,18 +366,29 @@ export function Header({
           <TerminalIcon />
           <span className="hidden lg:inline">term</span>
         </button>
+        {/* A chat runs on its own clock: you send, move to the diff, and the
+            reply lands against a closed panel. Waiting replies pull the button
+            to the success colour and pulse it, so "is anything waiting for me?"
+            is answerable without opening anything. */}
         <button
           onClick={onOpenChat}
-          title="Chat — drive a Claude session in any repo/worktree (c)"
+          title={waiting
+            ? `${waiting} chat${waiting === 1 ? "" : "s"} replied while you were elsewhere (c)`
+            : "Chat — drive a Claude session in any repo/worktree (c)"}
           className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold"
           style={{
-            color: "var(--primary-hover)",
-            background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)",
+            color: waiting ? "var(--success)" : "var(--primary-hover)",
+            background: `color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} 18%, transparent)`,
+            border: `1px solid color-mix(in srgb, ${waiting ? "var(--success)" : "var(--primary)"} ${waiting ? 70 : 50}%, transparent)`,
+            animation: waiting ? "agx-attention 1.8s ease-in-out infinite" : undefined,
           }}
         >
           <ChatIcon />
           <span className="hidden lg:inline">chat</span>
+          {waiting > 0 && (
+            <span className="tabular-nums px-1 rounded-full text-[9.5px]"
+              style={{ background: "color-mix(in srgb, var(--success) 30%, transparent)" }}>{waiting}</span>
+          )}
         </button>
         {/* Skills demoted to a plain icon */}
         <IconBtn title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></IconBtn>

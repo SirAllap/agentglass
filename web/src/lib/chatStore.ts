@@ -73,6 +73,13 @@ export function newChat(
 /** An existing chat already resuming this claude session, if any — so asking to
  *  resume twice focuses the open tab instead of forking a second writer onto
  *  the same transcript. */
+/** How many chats have answered while you were looking elsewhere.
+ *
+ *  A chat runs on its own clock: you send, switch to the diff, and the reply
+ *  lands minutes later against a closed panel. Without a count surfaced outside
+ *  the panel, "is anything waiting for me?" is only answerable by opening it. */
+export const attentionCount = (): number => snapshot.reduce((n, c) => n + (c.unread ? 1 : 0), 0);
+
 export const chatResuming = (sessionId: string): Chat | undefined =>
   [...chats.values()].find((c) => c.sessionId === sessionId);
 
