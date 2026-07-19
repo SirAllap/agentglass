@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { SessionDetail, TimelineEntry } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
@@ -128,6 +128,33 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
     .filter((e) => showTools || e.kind !== "tool")
     .filter((e) => !focusAgent || e.agent_id === focusAgent);
 
+  // Follow the newest turn, the way a terminal does — but only while you are
+  // already at the bottom. Scrolling up to read something is an explicit "leave
+  // me here", and a live view that overrides it is unusable on a busy session.
+  const convoRef = useRef<HTMLDivElement>(null);
+  const following = useRef(true);
+  const [pinned, setPinned] = useState(true);
+  const onConvoScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    // A slack of 40px: "close enough to the bottom" survives the sub-pixel
+    // drift that would otherwise flip this off on every render.
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    following.current = atBottom;
+    setPinned(atBottom);
+  };
+  const toBottom = () => {
+    const el = convoRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    following.current = true;
+    setPinned(true);
+  };
+  // Open at the bottom, and stay there as the poll brings new turns in.
+  useLayoutEffect(() => {
+    const el = convoRef.current;
+    if (el && following.current) el.scrollTop = el.scrollHeight;
+  }, [timeline.length, sessionId]);
+
   return (
     <Portal>
       <AnimatePresence>
@@ -139,7 +166,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[min(1180px,95vw)] h-[min(900px,92vh)] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
+                className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
                 style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 {/* header */}
@@ -274,15 +301,33 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                         </div>
                       </div>
 
-                      {/* right: conversation — scrolls independently */}
-                      <div className="agx-scroll min-h-0 overflow-y-auto px-5 py-4">
+                      {/* right: conversation — scrolls independently, and
+                          follows new activity the way a terminal does: pinned
+                          to the newest turn until you scroll up to read
+                          something, then left alone until you come back down.
+                          Yanking someone back to the bottom mid-read is the
+                          one behaviour a live view must not have. */}
+                      <div ref={convoRef} onScroll={onConvoScroll}
+                        className="agx-scroll min-h-0 overflow-y-auto px-5 py-4 relative">
                         <div className="flex items-center gap-2 mb-2.5">
                           <span className="panel-eyebrow">Conversation</span>
+                          <span className="ml-auto" />
                           {/* Tool runs are most of what a session does, but they
                               are also the bulk of the rows — so they can be
                               hidden when you want to read the thread alone. */}
+                          {/* Only while detached: a permanent badge would be
+                              noise, but silently stopping following looks like
+                              the panel froze. */}
+                          {!pinned && (
+                            <button onClick={toBottom}
+                              className="text-[9.5px] px-1.5 py-0.5 rounded-full"
+                              title="Jump to the newest turn and follow again"
+                              style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
+                              ↓ resume live
+                            </button>
+                          )}
                           <button onClick={() => setShowTools((s) => !s)}
-                            className="ml-auto text-[9.5px] px-1.5 py-0.5 rounded-full"
+                            className="text-[9.5px] px-1.5 py-0.5 rounded-full"
                             title={showTools ? "Hide tool runs" : "Show tool runs"}
                             style={{
                               color: showTools ? "var(--primary-hover)" : "var(--text3)",
