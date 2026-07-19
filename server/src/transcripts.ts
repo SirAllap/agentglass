@@ -99,14 +99,21 @@ function str(v: unknown): string | null {
 // Resolving a project root shells out to git, so memoize per cwd — a scan walks
 // hundreds of transcripts that share a handful of directories.
 const rootCache = new Map<string, string>();
-/** Label a session by the project it belongs to, folding worktrees and nested
- *  subdirectories into the repo that owns them. */
-function projectOf(cwd: string): { source_app: string; project_path: string } {
+/** The repo a cwd belongs to, folding linked worktrees and nested subdirectories
+ *  up to the owning repo (via `git --git-common-dir`). Falls back to the cwd
+ *  itself for a non-repo path. Memoized. */
+function resolvedRoot(cwd: string): string {
   let root = rootCache.get(cwd);
   if (root === undefined) {
     root = projectRootOf(cwd) ?? cwd;
     rootCache.set(cwd, root);
   }
+  return root;
+}
+/** Label a session by the project it belongs to, folding worktrees and nested
+ *  subdirectories into the repo that owns them. */
+function projectOf(cwd: string): { source_app: string; project_path: string } {
+  const root = resolvedRoot(cwd);
   return { source_app: basename(root), project_path: root };
 }
 
@@ -341,8 +348,18 @@ async function ingestFile(
   // the project list despite contributing no events. The scope is pinned per
   // sweep (passed in), so a workspace switched mid-sweep can't suddenly widen
   // a *live* sweep into broadcasting months of backfill.
-  if (scope && cwd && cwd !== scope && !cwd.startsWith(scope + "/")) {
-    return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true };
+  //
+  // Match on the *resolved repo root*, not just the raw cwd: a session running
+  // in a project's own linked worktree (e.g. ~/code/app-wt, outside the scope
+  // path) belongs to the scoped repo — `--git-common-dir` folds it back — and
+  // the git panel already lists such worktrees as part of the project. We still
+  // accept a raw-cwd match first, so scoping to a monorepo subdir (whose git
+  // root sits *above* the scope) keeps working.
+  if (scope && cwd) {
+    const inScope = (p: string) => p === scope || p.startsWith(scope + "/");
+    if (!inScope(cwd) && !inScope(resolvedRoot(cwd))) {
+      return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true };
+    }
   }
 
   let source_app: string;
