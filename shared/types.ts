@@ -248,6 +248,13 @@ export interface TimelineEntry {
    *  parallel read as one very busy one. */
   agent_id?: string | null;
   agent_type?: string | null;
+  /** What the tool answered, trimmed. Seeing only what an agent *ran* and never
+   *  what came back is what still sends you to the terminal — a failing test and
+   *  a passing one look identical without it. */
+  output?: string | null;
+  /** True when `output` is only the head of a longer result, so the UI can say
+   *  so instead of implying the command was that quiet. */
+  output_clipped?: boolean;
 }
 
 export interface SessionDetail {

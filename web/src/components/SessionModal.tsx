@@ -21,7 +21,14 @@ function ToolRow({ e }: { e: TimelineEntry }) {
   // A command can be a whole script; show its first line and let the rest be
   // opened, rather than either truncating it away or pasting 40 lines inline.
   const firstLine = target.split("\n")[0];
-  const hasMore = target.length > firstLine.length || firstLine.length > 110;
+  const out = (e.output ?? "").trimEnd();
+  const outLines = out ? out.split("\n") : [];
+  // Two lines of result, always. It is usually the difference between "the
+  // tests ran" and "the tests passed", and expanding for that every time would
+  // make the timeline useless as something you skim.
+  const PREVIEW = 2;
+  const outMore = outLines.length > PREVIEW || !!e.output_clipped;
+  const hasMore = target.length > firstLine.length || firstLine.length > 110 || outMore;
   const tint = e.is_error ? "var(--error)" : "var(--info)";
   return (
     <div className="flex items-start gap-2 text-[10.5px] leading-relaxed pl-1">
@@ -39,6 +46,20 @@ function ToolRow({ e }: { e: TimelineEntry }) {
           {open ? target : firstLine}
         </span>
         {e.note && <span className="block t-dim2 truncate">{e.note}</span>}
+        {outLines.length > 0 && (
+          <span className="block mt-0.5 pl-2" style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            <span className={`block ${open ? "whitespace-pre-wrap break-all" : "truncate"}`}
+              style={{ color: e.is_error ? "var(--error)" : "var(--text4)", fontFamily: "var(--font-mono, ui-monospace, monospace)" }}>
+              {open ? out : outLines.slice(0, PREVIEW).join(" · ")}
+            </span>
+            {outMore && !open && (
+              <span className="block t-dim2 cursor-pointer" onClick={() => setOpen(true)}>
+                +{e.output_clipped ? "more" : `${outLines.length - PREVIEW} lines`}
+              </span>
+            )}
+            {open && e.output_clipped && <span className="block t-dim2">…output trimmed</span>}
+          </span>
+        )}
       </span>
       {e.duration_ms != null && e.duration_ms >= 1000 && (
         <span className="shrink-0 tabular-nums t-dim2">{(e.duration_ms / 1000).toFixed(1)}s</span>

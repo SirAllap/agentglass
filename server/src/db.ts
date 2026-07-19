@@ -881,6 +881,13 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
   // is per-session rather than per-message: long messages get room, and a
   // session full of them still can't produce an unbounded response.
   const MSG_MAX = 20_000;
+  // Outputs are attached to the newest runs only. Every row carrying one would
+  // multiply this response by the size of a build log, and the rows you scroll
+  // back to are the ones you already read. Counted over tool rows specifically:
+  // counting whole timeline entries let the messages, which are added first,
+  // eat the budget before any tool reached it.
+  const OUTPUT_ROWS = 120;
+  const OUTPUT_MAX = 4_000;
   const CONVO_BUDGET = 400_000;
 
   /** Trim at a line, then a word, so a cut never lands mid-word — and say so,
@@ -942,6 +949,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
   // Bounded to the same window the messages cover, so the timeline can't be
   // dominated by tool noise from turns whose text was already dropped.
   const oldest = kept.length ? Math.min(...kept.map((c) => c.ts)) : 0;
+  let withOutput = 0;
   for (const r of db.query<{ timestamp: number; tool_name: string | null; is_error: number; duration_ms: number | null; tool_use_id: string | null; agent_id: string | null; agent_type: string | null; payload: string }, [string, number]>(
     `SELECT timestamp, tool_name, is_error, duration_ms, tool_use_id, agent_id, agent_type, payload FROM events
       WHERE session_id = ? AND hook_event_type IN ('PostToolUse','PostToolUseFailure')
@@ -951,6 +959,23 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     let ti: Record<string, unknown> = {};
     try { ti = (JSON.parse(r.payload).tool_input ?? {}) as Record<string, unknown>; } catch { /* keep empty */ }
     const note = typeof ti.description === "string" ? ti.description : null;
+    // What the tool answered. Capped per row and only for the newest runs: a
+    // session's outputs together dwarf everything else in this response, and a
+    // `bun test` or a `git log` alone can be hundreds of lines. The head is
+    // what tells you whether it worked, which is the question being asked.
+    let output: string | null = null;
+    let clipped = false;
+    if (withOutput < OUTPUT_ROWS) {
+      try {
+        const raw = JSON.parse(r.payload)?.tool_response?.content;
+        if (typeof raw === "string" && raw.trim()) {
+          const t = raw.trimEnd();
+          clipped = t.length > OUTPUT_MAX;
+          output = clipped ? t.slice(0, OUTPUT_MAX) : t;
+          withOutput++;
+        }
+      } catch { /* no parseable response — the row still stands on its own */ }
+    }
     timeline.push({
       kind: "tool", ts: r.timestamp, tool,
       target: target(tool, ti),
@@ -960,6 +985,8 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
       tool_use_id: r.tool_use_id,
       agent_id: r.agent_id,
       agent_type: r.agent_type,
+      output,
+      output_clipped: clipped,
     });
   }
   timeline.sort((a, b) => b.ts - a.ts);
