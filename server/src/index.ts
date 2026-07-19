@@ -34,7 +34,7 @@ import {
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktrees as gitWorktrees, addWorktree, removeWorktree,
 } from "./gitwork.ts";
-import { completePath } from "./fsbrowse.ts";
+import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs,
   startContainer, stopContainer, restartContainer, removeContainer,
@@ -398,6 +398,9 @@ const server = Bun.serve<WsData>({
     // whole authorisation story — same as /git/repos. See fsbrowse.ts for why
     // it isn't confined to the configured repoDirs.
     if (pathname === "/fs/complete") {
+      // Its own switch, not the terminal's: an operator who disabled the shell
+      // gave up filesystem reach on purpose, and this must not hand it back.
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
       return json(completePath(url.searchParams.get("prefix") || ""));
     }
     if (pathname === "/git/tree") {

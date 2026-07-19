@@ -11,16 +11,20 @@
 // "what's in this folder" is only ever the subfolders you could plausibly open
 // as a project.
 //
-// On scope: this is NOT restricted to `configuredRepoDirs()`. Two reasons, and
-// the second is the real one. First, `repoDirs` is empty in the default install
-// — restricting to it would leave the feature dead for almost everyone, and the
-// input exists precisely for projects living outside the swept directories.
-// Second, the endpoint sits behind the same origin/rebinding/token gate as the
-// rest of the surface, and that gate already guards `/terminal/pty`, which
-// hands out a real login shell. A caller who can reach this route can already
-// `ls` the machine with far less ceremony, so confining it would buy no
-// security while breaking the feature. The gate is the boundary; this module's
-// job is only to not widen it.
+// On scope: this is NOT restricted to `configuredRepoDirs()`. `repoDirs` is
+// empty in the default install, so restricting to it would leave the feature
+// dead for almost everyone — and this input exists precisely for projects
+// living outside the swept directories. The endpoint sits behind the same
+// origin/rebinding/token gate as the rest of the surface, which is the real
+// boundary; this module's job is only not to widen it.
+//
+// That reasoning has a limit worth naming. The tempting argument is "the same
+// gate already fronts /terminal/pty, which hands out a login shell, so anyone
+// who can reach this could already `ls` the machine". True by default — but
+// AGENTGLASS_TERMINAL_DISABLED=1 exists, and an operator who turns the shell
+// off has deliberately given up that capability. Silently handing it back a
+// directory listing at a time would quietly undo their decision, so this gets
+// its own switch rather than riding on the terminal's.
 
 import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -33,6 +37,10 @@ import type { FsEntry, FsCompletion } from "../../shared/types.ts";
  *  The response says when it truncated, so the UI can tell the user to keep
  *  typing rather than silently pretend the list is complete. */
 const MAX_ENTRIES = 60;
+
+/** Kill switch for operators who don't want the machine's directory tree
+ *  readable over the wire, independent of whether the terminal is enabled. */
+export const FS_BROWSE_ENABLED = process.env.AGENTGLASS_FS_BROWSE_DISABLED !== "1";
 
 // `repo` is a cheap `.git` stat per entry. Worth it: "which of these forty
 // folders is actually a project" is the question the user is really asking.
