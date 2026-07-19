@@ -49,6 +49,9 @@ import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { rateOk } from "./ratelimit.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
+/** When this process came up. /stats ships it so the dashboard's uptime is
+ *  the server's, not the age of the oldest event in the database. */
+const STARTED_AT = Date.now() - Math.round(process.uptime() * 1000);
 /**
  * Loopback unless told otherwise.
  *
@@ -522,7 +525,7 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/stats") {
       const windowMs = Math.min(3660 * 86_400_000, Math.max(60_000, Number(url.searchParams.get("window") || 24 * 3600 * 1000)));
-      return json(statsSummary(windowMs, url.searchParams.get("provider") || undefined));
+      return json({ ...statsSummary(windowMs, url.searchParams.get("provider") || undefined), server_started_at: STARTED_AT });
     }
 
     // --- export ---

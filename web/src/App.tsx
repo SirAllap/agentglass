@@ -209,7 +209,9 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const startedAt = events.length ? Math.min(mountedAt.current, events[0].timestamp) : mountedAt.current;
+  // /stats carries the server's process start; fall back to page mount for
+  // demo mode and the beat before the first poll lands.
+  const startedAt = stats?.server_started_at ?? mountedAt.current;
   const epm = useMemo(() => {
     const cutoff = Date.now() - 60_000;
     return visibleEvents.filter((e) => e.timestamp >= cutoff).length;
