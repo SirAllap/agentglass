@@ -173,7 +173,7 @@ const realApi = {
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
   chatEnabled: () => get<{ enabled: boolean; bypass?: boolean }>("/chat/enabled"),
-  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
+  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[] }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     const res = await fetch(SERVER + "/chat/send", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
     if (!res.body) { try { onEvent(JSON.parse(await res.text())); } catch { /* non-json */ } return; }
     const reader = res.body.getReader();
@@ -248,7 +248,7 @@ const demoApi: typeof realApi = {
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
   chatEnabled: () => D({ enabled: false }),
-  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
+  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[] }, onEvent: (o: Record<string, unknown>) => void) => {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });
     onEvent({ type: "result", result: "" });

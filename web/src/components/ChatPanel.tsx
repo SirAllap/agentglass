@@ -25,13 +25,22 @@ const MODELS = [
   { id: "claude-sonnet-5", label: "Sonnet 5" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5" },
 ];
+// These run through `claude -p`, which has no terminal to prompt from: a tool
+// that would raise a permission dialog is refused outright, and there is no
+// way to grant it mid-chat. "Ask" therefore does not ask — it declines. The
+// labels say so, because a mode that silently denies while claiming to prompt
+// is what sends you hunting for a bug that isn't there.
 const MODES = [
-  { id: "default", label: "Ask" },
+  { id: "default", label: "Ask (denies un-allowed)" },
   { id: "plan", label: "Plan (no edits)" },
   { id: "acceptEdits", label: "Auto-accept edits" },
   { id: "bypassPermissions", label: "⚡ Bypass (runs all)" },
 ];
 const CWD_KEY = "agentglass.chatCwd";
+const ALLOW_KEY = "agentglass.chatAllowedTools";
+// A starting point that covers the reading and inspection an assistant reaches
+// for constantly, without granting anything that writes or leaves the machine.
+const ALLOW_DEFAULT = "Read Glob Grep Bash(git status) Bash(git log:*) Bash(git diff:*) Bash(gh pr view:*)";
 const repoName = (p: string) => p.split("/").pop() || p;
 
 const selCls = "text-[10.5px] px-2 py-1 rounded-md outline-none";
@@ -76,6 +85,12 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   // The server silently downgrades bypassPermissions unless the operator opted
   // in (AGENTGLASS_CHAT_BYPASS=1) — don't offer a mode that wouldn't stick.
   const [bypassAllowed, setBypassAllowed] = useState(false);
+  // Shared by every chat and remembered across launches: the set of tools you
+  // trust is a property of how you work, not of one conversation.
+  const [allowed, setAllowed] = useState(() => {
+    try { return localStorage.getItem(ALLOW_KEY) ?? ALLOW_DEFAULT; } catch { return ALLOW_DEFAULT; }
+  });
+  useEffect(() => { try { localStorage.setItem(ALLOW_KEY, allowed); } catch { /* private mode */ } }, [allowed]);
   const [query, setQuery] = useState("");
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -153,7 +168,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   const submit = () => {
     if (!active) return;
     const text = active.draft;
-    send(active.id, text, () => openRef.current && activeIdRef.current === active.id);
+    send(active.id, text, () => openRef.current && activeIdRef.current === active.id, allowed.split(/\s+/).filter(Boolean));
   };
   const [hint, setHint] = useState("");
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -227,6 +242,16 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                         <Select value={active.mode} onChange={(v) => update(active.id, (c) => { c.mode = v; })}
                           className={selCls} style={selStyle} title="Permission mode for tool use"
                           options={MODES.filter((m) => bypassAllowed || m.id !== "bypassPermissions").map((m) => ({ value: m.id, label: m.label }))} />
+                        {active.mode !== "bypassPermissions" && (
+                          <input
+                            value={allowed}
+                            onChange={(e) => setAllowed(e.target.value)}
+                            placeholder="allowed tools…"
+                            title={"Tools that may run without asking — space-separated.\n\nExamples: Read  Edit  Bash(git status)  Bash(gh pr view:*)\n\nWithout this, `claude -p` refuses anything that would normally prompt, because there is no terminal to prompt from."}
+                            className="text-[10px] px-2 py-1 rounded-md outline-none min-w-0 flex-1 max-w-[280px]"
+                            style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
+                          />
+                        )}
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                       </>
                     ) : <span className="text-[12px] t-dim2">no chat selected</span>}
