@@ -233,6 +233,78 @@
   .card .read .g{color:var(--success);} .card .read .a{color:var(--primary);}
   .card .read .r{color:var(--error);} .card .read .w{color:var(--warning);}
 
+
+  /* ============ workspace showcase — press a key, switch a panel ============ */
+  .ws-body{display:grid; grid-template-columns:210px 1fr; min-height:430px;}
+  @media(max-width:760px){.ws-body{grid-template-columns:1fr;}}
+  .ws-tabs{
+    display:flex; flex-direction:column; gap:6px; padding:14px;
+    border-right:1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  }
+  @media(max-width:760px){
+    .ws-tabs{flex-direction:row; overflow-x:auto; border-right:none;
+      border-bottom:1px solid color-mix(in srgb, var(--border) 55%, transparent);}
+  }
+  .wtab{
+    display:flex; align-items:center; gap:10px; text-align:left;
+    background:transparent; border:1px solid transparent; border-radius:10px;
+    padding:10px 12px; color:var(--text3); font-size:13px; font-weight:600;
+    transition:background .15s, border-color .15s, color .15s; white-space:nowrap;
+  }
+  .wtab b{
+    color:var(--primary); font-weight:700; font-size:12px;
+    border:1px solid var(--border2); border-radius:5px; padding:0 7px; line-height:1.7;
+    background:color-mix(in srgb, var(--bg) 60%, transparent); flex:none;
+  }
+  .wtab:hover{background:color-mix(in srgb, var(--primary) 8%, transparent); color:var(--text);}
+  .wtab.on{
+    background:color-mix(in srgb, var(--primary) 14%, transparent);
+    border-color:var(--border2); color:var(--text);
+  }
+  .ws-view{position:relative; padding:16px 18px; overflow-x:auto;}
+  .wpane{display:none; animation:wfade .3s ease;}
+  .wpane.on{display:block;}
+  @keyframes wfade{from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:none}}
+  /* shared mock bits */
+  .m-row{display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:7px; font-size:12.5px; color:var(--text3); white-space:nowrap;}
+  .m-row:hover{background:color-mix(in srgb, var(--primary) 5%, transparent);}
+  .m-hd{font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text4); font-weight:700; margin:10px 0 4px; padding:0 8px;}
+  .m-chip{font-size:10.5px; border:1px solid var(--border2); border-radius:5px; padding:1px 7px; color:var(--text4);}
+  .m-btn{
+    font-size:11.5px; font-weight:700; border-radius:7px; padding:5px 12px; border:1px solid var(--border2);
+    background:color-mix(in srgb, var(--bg) 55%, transparent); color:var(--text2);
+  }
+  .m-btn.pri{background:var(--primary); color:var(--bg); border-color:transparent;}
+  .m-keys{margin-top:12px; padding:0 8px; font-size:11px; color:var(--text4); white-space:normal;}
+  .m-keys b{color:var(--text3); border:1px solid var(--border); border-radius:4px; padding:0 5px;}
+  .m-code{
+    background:color-mix(in srgb, var(--bg) 72%, transparent);
+    border:1px solid color-mix(in srgb, var(--border) 55%, transparent);
+    border-radius:10px; padding:10px 0; font-size:12px; line-height:1.85; overflow-x:auto;
+  }
+  .m-code .ln{display:flex; gap:12px; padding:0 14px; white-space:pre;}
+  .m-code .no{color:var(--text4); opacity:.6; width:2ch; text-align:right; flex:none; user-select:none;}
+  .m-code .del{background:color-mix(in srgb, var(--error) 12%, transparent); color:var(--text2);}
+  .m-code .add{background:color-mix(in srgb, var(--success) 12%, transparent); color:var(--text2);}
+  .m-code .del .tok{background:color-mix(in srgb, var(--error) 30%, transparent); border-radius:3px; padding:0 2px;}
+  .m-code .add .tok{background:color-mix(in srgb, var(--success) 30%, transparent); border-radius:3px; padding:0 2px;}
+  .m-code .kw{color:var(--primary);} .m-code .fn{color:var(--info);} .m-code .cm{color:var(--text4);}
+  .m-bar{position:relative; height:6px; border-radius:4px; background:color-mix(in srgb, var(--border) 45%, transparent); width:90px; flex:none; overflow:hidden;}
+  .m-bar i{position:absolute; inset:0 auto 0 0; border-radius:4px; background:var(--primary);}
+  .m-log{font-size:11.5px; line-height:1.9; color:var(--text3); padding:2px 8px; white-space:pre; overflow-x:auto;}
+  .m-log .t{color:var(--text4); opacity:.7;}
+  .m-log .ok{color:var(--success);} .m-log .wr{color:var(--warning);}
+  .m-status{display:inline-flex; align-items:center; gap:6px;}
+  .m-status i{width:7px; height:7px; border-radius:50%; background:var(--success); box-shadow:0 0 7px var(--success); flex:none;}
+  /* chat bubbles */
+  .m-msg{max-width:78%; border-radius:12px; padding:9px 13px; font-size:12.5px; line-height:1.65; margin:8px 8px;}
+  .m-msg.user{margin-left:auto; background:color-mix(in srgb, var(--primary) 16%, transparent); color:var(--text);}
+  .m-msg.ai{background:color-mix(in srgb, var(--bg) 65%, transparent); border:1px solid color-mix(in srgb, var(--border) 55%, transparent); color:var(--text2);}
+  .m-msg .tools{display:flex; gap:6px; margin:7px 0 2px; flex-wrap:wrap;}
+  .m-msg .tools span{font-size:10.5px; border:1px solid var(--border2); border-radius:5px; padding:1px 7px; color:var(--primary);}
+  .m-typing i{display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--text4); margin-right:3px; animation:mty 1.1s infinite;}
+  .m-typing i:nth-child(2){animation-delay:.18s} .m-typing i:nth-child(3){animation-delay:.36s}
+  @keyframes mty{0%,100%{opacity:.25; transform:translateY(0)} 50%{opacity:1; transform:translateY(-3px)}}
   /* reveals */
   .rv{opacity:0; transform:translateY(22px); transition:opacity .55s ease, transform .55s ease;}
   .rv.in{opacity:1; transform:none;}
@@ -385,11 +457,11 @@
 
     <div class="keys" aria-label="Workspace panels, one keystroke away">
       <span class="klbl">the whole workspace, one keystroke away —</span>
-      <a class="key" href="#workspace"><b>d</b> diff</a>
-      <a class="key" href="#workspace"><b>g</b> git</a>
-      <a class="key" href="#workspace"><b>o</b> docker</a>
-      <a class="key" href="#workspace"><b>t</b> terminal</a>
-      <a class="key" href="#workspace"><b>c</b> chat</a>
+      <a class="key" href="#workspace" data-panel="d"><b>d</b> diff</a>
+      <a class="key" href="#workspace" data-panel="g"><b>g</b> git</a>
+      <a class="key" href="#workspace" data-panel="o"><b>o</b> docker</a>
+      <a class="key" href="#workspace" data-panel="t"><b>t</b> terminal</a>
+      <a class="key" href="#workspace" data-panel="c"><b>c</b> chat</a>
     </div>
   </div>
 
@@ -414,45 +486,91 @@
 <section class="sec" id="workspace">
   <div class="rv">
     <span class="plabel">Workspace</span>
-    <h2>Not just a dashboard. A cockpit you fly.</h2>
-    <p class="note">Telemetry shows what the fleet did. The workspace lets you do something about it — one keystroke away, same glass.</p>
+    <h2>Press a key. Fly the cockpit.</h2>
+    <p class="note">Each panel below is the real layout of the app — and the keys are real too. Try it: press <b>d</b>, <b>g</b>, <b>o</b>, <b>t</b> or <b>c</b> on your keyboard right now.</p>
   </div>
-  <div class="cards">
-    <div class="card rv">
-      <div class="head"><span class="led"></span><span class="klabel">Cost</span></div>
-      <h3>Where the money goes</h3>
-      <p>Cost per model, session and project. Tool-latency <b>p50/p95</b>, error timelines, session lifecycles.</p>
-      <div class="read">Opus 352.0k <span class="a">$188.00</span> · GPT-4o 275.2k <span class="a">$94.42</span> · Sonnet <span class="a">$34.42</span></div>
+  <div class="panel rv d1">
+    <div class="phead">
+      <span class="live"><span class="lamp"></span>WORKSPACE</span>
+      <span class="t" id="ws-title">Diff — everything the fleet changed</span>
+      <span class="sp"></span>
+      <span class="t">one keystroke away</span>
     </div>
-    <div class="card arm rv d1">
-      <div class="head"><span class="led"></span><span class="klabel">Alerts</span></div>
-      <h3>What needs you</h3>
-      <p>Dangerous tool calls <b>hold for your clearance</b>. Approve or deny remotely — opt-in, audited.</p>
-      <div class="read"><span class="w">✋ Approve Bash?</span> kubectl delete deploy api <span class="g">[Approve]</span> <span class="r">[Deny]</span></div>
-    </div>
-    <div class="card rv d2">
-      <div class="head"><span class="led"></span><span class="klabel">Diff</span></div>
-      <h3>Everything the fleet changed</h3>
-      <p>Syntax-highlighted diffs across every session and project. Review the swarm's work like a single PR.</p>
-      <div class="read"><span class="g">+ const price = round(subtotal * rate)</span></div>
-    </div>
-    <div class="card rv">
-      <div class="head"><span class="led"></span><span class="klabel">Git · Docker</span></div>
-      <h3>Stage, commit, push</h3>
-      <p>A <b>lazygit</b>-style source-control panel, and a <b>lazydocker</b>-style panel for containers, logs and stats.</p>
-      <div class="read">M pricing.ts · staged 3 · <span class="a">push ↑2</span> · api-worker <span class="g">running</span></div>
-    </div>
-    <div class="card rv d1">
-      <div class="head"><span class="led"></span><span class="klabel">Terminal · Chat</span></div>
-      <h3>A real terminal</h3>
-      <p>An actual <b>PTY shell</b> on your machine — not an emulation. Plus a chat panel that drives local Claude Code sessions.</p>
-      <div class="read">$ agentglass▮</div>
-    </div>
-    <div class="card rv d2">
-      <div class="head"><span class="led"></span><span class="klabel">Providers</span></div>
-      <h3>Any aircraft, any fleet</h3>
-      <p>Claude Code hooks, or <b>any OpenTelemetry GenAI exporter</b>: Codex, Gemini CLI, Bedrock, LangChain, LiteLLM.</p>
-      <div class="read">otel/genai ▸ rx <span class="a">1.33 events/sec</span> · peak 2/s</div>
+    <div class="ws-body">
+      <div class="ws-tabs" role="tablist" aria-label="Workspace panels">
+        <button class="wtab on" data-panel="d" role="tab"><b>d</b> Diff &amp; review</button>
+        <button class="wtab" data-panel="g" role="tab"><b>g</b> Source control</button>
+        <button class="wtab" data-panel="o" role="tab"><b>o</b> Docker</button>
+        <button class="wtab" data-panel="t" role="tab"><b>t</b> Terminal</button>
+        <button class="wtab" data-panel="c" role="tab"><b>c</b> Chat</button>
+      </div>
+      <div class="ws-view">
+
+        <div class="wpane on" id="wp-d" role="tabpanel">
+          <div class="m-row"><span class="m-status"><i></i>src/services/pricing.ts</span><span class="m-chip">M · 2 chunks</span><span style="margin-left:auto"></span><button class="m-btn">✦ Explain</button><button class="m-btn pri">Commit…</button></div>
+          <div class="m-code" style="margin-top:8px">
+            <div class="ln"><span class="no">41</span><span>  <span class="kw">const</span> rate = taxRate(region)</span></div>
+            <div class="ln del"><span class="no">42</span><span>- <span class="kw">const</span> price = subtotal * rate</span></div>
+            <div class="ln add"><span class="no">42</span><span>+ <span class="kw">const</span> price = <span class="tok"><span class="fn">round</span>(</span>subtotal * rate<span class="tok">)</span></span></div>
+            <div class="ln"><span class="no">43</span><span>  cart.total = price <span class="cm">// word-level diff, shiki-highlighted</span></span></div>
+          </div>
+          <div class="m-code" style="margin-top:8px">
+            <div class="ln"><span class="no">17</span><span>  <span class="kw">export</span> <span class="kw">function</span> <span class="fn">checkout</span>(cart: Cart) {</span></div>
+            <div class="ln add"><span class="no">18</span><span>+   <span class="fn">assertRounded</span>(cart.total)</span></div>
+            <div class="ln"><span class="no">19</span><span>    <span class="kw">return</span> pay(cart) }</span></div>
+          </div>
+          <div class="m-keys">every Edit/Write the fleet made, chaptered per session · <b>j/k</b> move · <b>v</b> split/unified · check off reviewed files</div>
+        </div>
+
+        <div class="wpane" id="wp-g" role="tabpanel">
+          <div class="m-row"><span class="m-status"><i></i>shop-api · main</span><span class="m-chip">↑2 ahead</span><span style="margin-left:auto"></span><button class="m-btn">Pull</button><button class="m-btn pri">Push ↑2</button></div>
+          <div class="m-hd">Staged (2)</div>
+          <div class="m-row"><span style="color:var(--warning)">M</span> src/services/pricing.ts</div>
+          <div class="m-row"><span style="color:var(--warning)">M</span> src/routes/checkout.ts</div>
+          <div class="m-hd">Unstaged (1)</div>
+          <div class="m-row"><span style="color:var(--warning)">M</span> web/src/components/Cart.tsx</div>
+          <div class="m-hd">Commit</div>
+          <div class="m-row" style="border:1px solid color-mix(in srgb, var(--border) 60%, transparent); border-radius:8px; color:var(--text2)">fix: round prices at checkout<span style="margin-left:auto"></span><button class="m-btn pri">Commit</button></div>
+          <div class="m-keys">lazygit-style, write-gated · <b>s</b> stage · <b>u</b> unstage · <b>x</b> discard · interactive hunk staging · branches, log, stashes</div>
+        </div>
+
+        <div class="wpane" id="wp-o" role="tabpanel">
+          <div class="m-hd" style="margin-top:0">compose: shop</div>
+          <div class="m-row"><span class="m-status"><i></i>api-worker</span><span class="m-chip">running</span><span class="m-bar"><i style="width:34%"></i></span><span>cpu 34%</span><span class="m-chip">212 MB</span></div>
+          <div class="m-row"><span class="m-status"><i></i>postgres</span><span class="m-chip">running</span><span class="m-bar"><i style="width:12%"></i></span><span>cpu 12%</span><span class="m-chip">148 MB</span></div>
+          <div class="m-row"><span class="m-status"><i></i>redis</span><span class="m-chip">running</span><span class="m-bar"><i style="width:3%"></i></span><span>cpu 3%</span><span class="m-chip">18 MB</span></div>
+          <div class="m-hd" style="margin-top:14px">logs — api-worker</div>
+          <div class="m-log"><span class="t">13:46:02</span> <span class="ok">INFO</span>  worker started · queue=payments
+<span class="t">13:46:04</span> <span class="ok">INFO</span>  processed 14 jobs in 412ms
+<span class="t">13:46:07</span> <span class="wr">WARN</span>  retry #1 · stripe timeout (2.1s)
+<span class="t">13:46:08</span> <span class="ok">INFO</span>  ok · job 8842 settled $129.00</div>
+          <div class="m-keys">lazydocker-style, write-gated · <b>r</b> restart · <b>l</b> logs · <b>s</b> stop · images, volumes, networks</div>
+        </div>
+
+        <div class="wpane" id="wp-t" role="tabpanel">
+          <div class="m-log"><span style="color:var(--success)">dev@machine</span> <span style="color:var(--info)">shop-api</span> % make test
+bun test v1.2.19
+<span class="ok">✓</span> pricing rounds correctly <span class="t">(12ms)</span>
+<span class="ok">✓</span> checkout asserts rounded totals <span class="t">(8ms)</span>
+<span class="ok">✓</span> cart merges line items <span class="t">(21ms)</span>
+
+ <span class="ok">3 pass</span> · 0 fail · 41 expect() calls
+<span style="color:var(--success)">dev@machine</span> <span style="color:var(--info)">shop-api</span> % <span class="caret"></span></div>
+          <div class="m-keys">a real PTY — your login shell over a WebSocket, not an emulation · per-repo, persistent · <b>⚙</b> discovers Makefile targets &amp; package.json scripts</div>
+        </div>
+
+        <div class="wpane" id="wp-c" role="tabpanel">
+          <div class="m-row" style="padding:2px 8px"><span class="m-status"><i></i>shop-web</span><span class="m-chip">Opus</span><span class="m-chip">acceptEdits</span></div>
+          <div class="m-msg user">fix the cart rounding bug</div>
+          <div class="m-msg ai">
+            <div class="tools"><span>Read Cart.tsx</span><span>Grep pricing</span><span>Edit pricing.ts</span></div>
+            Found it — totals were summed before rounding. Patched <b>round()</b> into <b>pricing.ts</b> and added a guard in checkout. Running the tests now.
+          </div>
+          <div class="m-msg ai m-typing"><i></i><i></i><i></i></div>
+          <div class="m-keys">drives your local <b>claude</b> CLI · pick repo, model, permission mode · sessions join the fleet like any other agent</div>
+        </div>
+
+      </div>
     </div>
   </div>
 </section>
@@ -490,6 +608,35 @@
       <span><b>6</b> projects</span>
       <span>spend window <b>$359.85</b></span>
       <span style="margin-left:auto">sources: claude code hooks · any otel genai exporter · transcript scanner</span>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ TELEMETRY ══════════ -->
+<section class="sec" id="telemetry">
+  <div class="rv">
+    <span class="plabel">Telemetry</span>
+    <h2>And the dashboard never blinks.</h2>
+    <p class="note">While you fly the panels, the glass keeps watching every provider — persisted across reloads.</p>
+  </div>
+  <div class="cards">
+    <div class="card rv">
+      <div class="head"><span class="led"></span><span class="klabel">Cost</span></div>
+      <h3>Where the money goes</h3>
+      <p>Cost per model, session and project. Tool-latency <b>p50/p95</b>, error timelines, session lifecycles.</p>
+      <div class="read">Opus 352.0k <span class="a">$188.00</span> · GPT-4o 275.2k <span class="a">$94.42</span> · Sonnet <span class="a">$34.42</span></div>
+    </div>
+    <div class="card arm rv d1">
+      <div class="head"><span class="led"></span><span class="klabel">Alerts</span></div>
+      <h3>What needs you</h3>
+      <p>Dangerous tool calls <b>hold for your clearance</b>. Approve or deny remotely — opt-in, audited.</p>
+      <div class="read"><span class="w">✋ Approve Bash?</span> kubectl delete deploy api <span class="g">[Approve]</span> <span class="r">[Deny]</span></div>
+    </div>
+    <div class="card rv d2">
+      <div class="head"><span class="led"></span><span class="klabel">Providers</span></div>
+      <h3>Any aircraft, any fleet</h3>
+      <p>Claude Code hooks, or <b>any OpenTelemetry GenAI exporter</b>: Codex, Gemini CLI, Bedrock, LangChain, LiteLLM.</p>
+      <div class="read">otel/genai ▸ rx <span class="a">1.33 events/sec</span> · peak 2/s</div>
     </div>
   </div>
 </section>
@@ -818,6 +965,52 @@
       card.style.setProperty('--my', (e.clientY - r.top) + 'px');
     });
   });
+
+  /* ── workspace showcase: tabs, real keyboard shortcuts, auto-rotate ── */
+  (function(){
+    var order = ['d','g','o','t','c'];
+    var titles = {
+      d:'Diff — everything the fleet changed',
+      g:'Source control — stage, commit, push',
+      o:'Docker — containers, logs, stats',
+      t:'Terminal — a real PTY on your machine',
+      c:'Chat — drive local Claude sessions'
+    };
+    var interacted = false;
+    function activate(k){
+      document.querySelectorAll('.wtab').forEach(function(b){ b.classList.toggle('on', b.dataset.panel===k); });
+      document.querySelectorAll('.wpane').forEach(function(p2){ p2.classList.toggle('on', p2.id==='wp-'+k); });
+      var t = document.getElementById('ws-title'); if(t) t.textContent = titles[k];
+    }
+    document.querySelectorAll('.wtab').forEach(function(b){
+      b.addEventListener('click', function(){ interacted = true; activate(b.dataset.panel); });
+    });
+    /* hero keycaps jump to the section AND open their panel */
+    document.querySelectorAll('.keys .key[data-panel]').forEach(function(a){
+      a.addEventListener('click', function(){ interacted = true; activate(a.dataset.panel); });
+    });
+    /* the real thing: press d/g/o/t/c anywhere on the page */
+    document.addEventListener('keydown', function(e){
+      if(e.metaKey || e.ctrlKey || e.altKey) return;
+      var tag = (e.target && e.target.tagName) || '';
+      if(tag === 'INPUT' || tag === 'TEXTAREA') return;
+      var k = e.key.toLowerCase();
+      if(order.indexOf(k) === -1) return;
+      interacted = true; activate(k);
+      var sec = document.getElementById('workspace');
+      var r = sec.getBoundingClientRect();
+      if(r.bottom < 80 || r.top > innerHeight - 80) sec.scrollIntoView({behavior:'smooth', block:'nearest'});
+    });
+    /* gentle auto-rotate until the visitor touches it */
+    if(!reduced){
+      var i = 0;
+      var iv = setInterval(function(){
+        if(interacted){ clearInterval(iv); return; }
+        i = (i+1) % order.length;
+        activate(order[i]);
+      }, 5000);
+    }
+  })();
 
   /* ── reveals ── */
   (function(){
