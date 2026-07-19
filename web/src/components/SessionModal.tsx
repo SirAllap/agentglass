@@ -4,6 +4,7 @@ import type { SessionDetail } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { ChangesModal } from "./ChangesModal.tsx";
 import { api } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
 import { fmtUsd, fmtTokens, fmtAgo, fmtTime, modelLabelOf, modelColor } from "../lib/format.ts";
 
 const TOOL_RAMP = ["#a78bfa", "#f472b6", "#34d399", "#60a5fa", "#fbbf24", "#22d3ee", "#a3e635", "#fb923c"];
@@ -29,6 +30,20 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
     setLoading(true);
     api.session(sessionId).then((s) => { setD(s); setLoading(false); }).catch(() => { setD(null); setLoading(false); });
   }, [sessionId]);
+
+  // A session you are reading is very often one that is still working, so this
+  // is the last place that should be a snapshot: the conversation, the cost and
+  // the file list all keep moving while the modal sits open. Refreshed in place
+  // — no `loading` flag, no clearing `d` — so a running session updates under
+  // you instead of flickering through an empty state every few seconds.
+  usePoll(!!sessionId, () => {
+    if (!sessionId) return;
+    api.session(sessionId).then((s) => {
+      // last_seen advances on every new event, so it is the cheap way to tell a
+      // genuinely changed session from an idle poll and skip the re-render.
+      setD((prev) => (prev && s && prev.last_seen === s.last_seen && prev.events === s.events ? prev : s));
+    }).catch(() => { /* keep showing what we have */ });
+  }, 3000);
 
   const open = !!sessionId;
   const key = d ? `${d.source_app}:${d.session_id.slice(0, 8)}` : sourceApp ? `${sourceApp}:${sessionId?.slice(0, 8)}` : sessionId?.slice(0, 8) ?? "";
