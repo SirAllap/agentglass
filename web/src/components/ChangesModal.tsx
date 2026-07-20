@@ -572,7 +572,24 @@ export function writeWalkCache(sig: string, r: WalkthroughResult) {
   } catch { /* ignore */ }
 }
 
-export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, presetTitle, presetPath }: { open: boolean; onClose: () => void; onBack?: () => void; backLabel?: string; presetChanges?: FileChange[]; presetTitle?: string; presetPath?: string }) {
+type DiffViewProps = {
+  active: boolean;
+  onClose?: () => void;
+  onBack?: () => void;
+  backLabel?: string;
+  presetChanges?: FileChange[];
+  presetTitle?: string;
+  presetPath?: string;
+};
+
+/** The file-changes viewer, without a frame around it.
+ *
+ *  Two callers with two different shapes: the workspace mounts it as the
+ *  `diff` view (no chrome — the rail is the chrome), and GitPanel still opens
+ *  it as a modal to drill into one commit. Hence `DiffView` plus the
+ *  `ChangesModal` wrapper at the bottom of this file. */
+export function DiffView({ active, onClose, onBack, backLabel, presetChanges, presetTitle, presetPath }: DiffViewProps) {
+  const open = active;
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [titles, setTitles] = useState<ReadonlyMap<string, string>>(new Map());
   const [q, setQ] = useState("");
@@ -772,22 +789,8 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
   };
 
   return (
-    <Portal>
-      <AnimatePresence>
-        {open && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
-            <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
-              <motion.div
-                ref={frameRef}
-                tabIndex={-1}
-                onKeyDown={onKey}
-                initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
-                transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
-              >
+    <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
+      className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
                 <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <div className="flex items-baseline gap-2.5 flex-wrap">
@@ -824,7 +827,9 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
                         style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}
                       >⎇ Commit…</button>
                     )}
-                    <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
+                    {/* only when framed as a modal — inside the workspace the
+                        rail owns closing */}
+                    {onClose && <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>}
                   </div>
                 </div>
 
@@ -925,9 +930,31 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
                     )}
                   </div>
                 </div>
+      <CommitModal open={commitOpen} onClose={() => setCommitOpen(false)} paths={commitPaths} />
+    </div>
+  );
+}
+
+/** The same viewer with a modal frame, for callers that drill into it rather
+ *  than navigate to it (GitPanel's commit log, the file-card deep link). */
+export function ChangesModal({ open, onClose, ...rest }: Omit<DiffViewProps, "active"> & { open: boolean; onClose: () => void }) {
+  return (
+    <Portal>
+      <AnimatePresence>
+        {open && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
+            <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
+                transition={{ type: "spring", stiffness: 330, damping: 30 }}
+                className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto outline-none overflow-hidden"
+                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+              >
+                <DiffView active={open} onClose={onClose} {...rest} />
               </motion.div>
             </div>
-            <CommitModal open={commitOpen} onClose={() => setCommitOpen(false)} paths={commitPaths} />
           </>
         )}
       </AnimatePresence>

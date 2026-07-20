@@ -8,6 +8,7 @@ import { UsageWidget } from "./UsageWidget.tsx";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
+import { WorkspaceIcon } from "./workspace/icons.tsx";
 
 // The long windows matter once history isn't pruned: the transcript scan can
 // backfill months of sessions, and a 7d ceiling would hide most of the fleet.
@@ -52,46 +53,8 @@ function SkillsIcon() {
   );
 }
 
-function DiffIcon() {
-  return (
-    <svg {...svg}>
-      <path d="M6 3v12" /><circle cx="6" cy="18" r="2.2" /><path d="M6 15a6 6 0 0 0 6 6" />
-      <circle cx="18" cy="6" r="2.2" /><path d="M18 8v3a6 6 0 0 1-6 6" />
-    </svg>
-  );
-}
-
-function GitIcon() {
-  return (
-    <svg {...svg}>
-      <path d="M12 3v6M12 15v6" /><circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-function DockerIcon() {
-  return (
-    <svg {...svg}>
-      <path d="M3 9l9-5 9 5v6l-9 5-9-5z" /><path d="M3 9l9 5 9-5M12 14v6" />
-    </svg>
-  );
-}
-
-function TerminalIcon() {
-  return (
-    <svg {...svg}>
-      <path d="M6 8l3.5 4L6 16" /><path d="M12.5 16.5H18" />
-    </svg>
-  );
-}
-
-function ChatIcon() {
-  return (
-    <svg {...svg}>
-      <path d="M20 4H4v12h5v4l5-4h6z" />
-    </svg>
-  );
-}
+/* The git/diff/docker/terminal/chat glyphs moved to workspace/icons.tsx when
+   their five buttons became one — the rail needs them too. */
 
 /** Settings button — the overflow menu became a real modal (SettingsModal),
  *  because a flat list of one-liners could not show a toggle's state without
@@ -112,7 +75,7 @@ function MoreMenu({ onOpen }: { onOpen: () => void }) {
 
 export function Header({
   conn, windowMs, onWindow, apps, types, providers, filter, onFilter, theme, onTheme,
-  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenChanges, onOpenGit, onOpenDocker, onOpenTerminal, onOpenChat, onOpenSettings, onClear, showUsage,
+  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenWorkspace, onOpenSettings, onClear, showUsage,
   workspace, onOpenProject,
 }: {
   conn: ConnState;
@@ -131,11 +94,7 @@ export function Header({
   onOpenHelp: () => void;
   onOpenStats: () => void;
   onOpenSkills: () => void;
-  onOpenChanges: () => void;
-  onOpenGit: () => void;
-  onOpenDocker: () => void;
-  onOpenTerminal: () => void;
-  onOpenChat: () => void;
+  onOpenWorkspace: () => void;
   onOpenSettings: () => void;
   onClear: () => void;
   showUsage: boolean;
@@ -243,68 +202,20 @@ export function Header({
         <button onClick={onOpenPalette} className="h-8 hidden sm:flex items-center gap-1.5 px-2.5 rounded-lg text-[11px]" style={selStyle}>
           <span>{MOD_KEY}K</span><span className="hidden sm:inline t-dim2">search</span>
         </button>
-        {/* Git + Diff are the primary workspaces (replacing lazygit) — labeled + accented */}
+        {/* One button where there were five (git/diff/docker/term/chat).
+            They were the app's whole purpose and yet each one opened its own
+            modal, so moving between them meant closing and reopening — the
+            rail inside the workspace does that switching now, for free.
+            The letter keys still deep-link straight to a view, so this button
+            only serves the mouse.
+            It also inherits the chat button's attention state: a reply that
+            landed while you were elsewhere has to be visible from the
+            dashboard, and this is the only door left. */}
         <button
-          onClick={onOpenGit}
-          title="Source control — stage, commit, push/pull the working tree (g)"
-          className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold"
-          style={{
-            color: "var(--primary-hover)",
-            background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)",
-          }}
-        >
-          <GitIcon />
-          <span className="hidden sm:inline">git</span>
-        </button>
-        <button
-          onClick={onOpenChanges}
-          title="File changes — review & commit every diff the fleet made (d)"
-          className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold"
-          style={{
-            color: "var(--primary-hover)",
-            background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)",
-          }}
-        >
-          <DiffIcon />
-          <span className="hidden sm:inline">diff</span>
-        </button>
-        <button
-          onClick={onOpenDocker}
-          title="Docker — containers, logs, stats & actions (o)"
-          className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold"
-          style={{
-            color: "var(--primary-hover)",
-            background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)",
-          }}
-        >
-          <DockerIcon />
-          <span className="hidden md:inline">docker</span>
-        </button>
-        <button
-          onClick={onOpenTerminal}
-          title="Terminal — a real shell in any repo/worktree (t)"
-          className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold"
-          style={{
-            color: "var(--primary-hover)",
-            background: "color-mix(in srgb, var(--primary) 18%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)",
-          }}
-        >
-          <TerminalIcon />
-          <span className="hidden lg:inline">term</span>
-        </button>
-        {/* A chat runs on its own clock: you send, move to the diff, and the
-            reply lands against a closed panel. Waiting replies pull the button
-            to the success colour and pulse it, so "is anything waiting for me?"
-            is answerable without opening anything. */}
-        <button
-          onClick={onOpenChat}
+          onClick={onOpenWorkspace}
           title={waiting
-            ? `${waiting} chat${waiting === 1 ? "" : "s"} replied while you were elsewhere (c)`
-            : "Chat — drive a Claude session in any repo/worktree (c)"}
+            ? `Workspace — ${waiting} chat${waiting === 1 ? "" : "s"} replied while you were elsewhere (${MOD_KEY}\\)`
+            : `Workspace — git, diff, docker, terminal, chat (${MOD_KEY}\\)`}
           className="h-8 flex items-center gap-1.5 px-2.5 rounded-lg text-[11px] font-semibold"
           style={{
             color: waiting ? "var(--success)" : "var(--primary-hover)",
@@ -313,8 +224,8 @@ export function Header({
             animation: waiting ? "agx-attention 1.8s ease-in-out infinite" : undefined,
           }}
         >
-          <ChatIcon />
-          <span className="hidden lg:inline">chat</span>
+          <WorkspaceIcon />
+          <span className="hidden sm:inline">workspace</span>
           {waiting > 0 && (
             <span className="tabular-nums px-1 rounded-full text-[9.5px]"
               style={{ background: "color-mix(in srgb, var(--success) 30%, transparent)" }}>{waiting}</span>

@@ -5,12 +5,10 @@
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { GitRepoRef, ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
-import { Portal } from "./Portal.tsx";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { worktreeTag } from "../lib/worktree.ts";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
@@ -70,7 +68,27 @@ const sessions = new Map<string, Sess>();
 let seq = 0;
 /** Shells for one repo, in creation order. */
 const sessionsFor = (root: string) => [...sessions.values()].filter((s) => s.root === root).sort((a, b) => a.createdAt - b.createdAt);
-const notify = (s: Sess) => s.subs.forEach((fn) => fn());
+const notify = (s: Sess) => { s.subs.forEach((fn) => fn()); rosterChanged(); };
+
+// --- roster: "is any shell alive?", for the workspace rail ---------------------
+// Per-session `subs` answer "did *this* shell change"; nothing could answer
+// "is anything running at all" without holding a session. The rail needs
+// exactly that, and needs it while the terminal view is hidden.
+const rosterSubs = new Set<() => void>();
+export function subscribeSessions(fn: () => void) {
+  rosterSubs.add(fn);
+  return () => { rosterSubs.delete(fn); };
+}
+let liveCount = 0;
+function recount() {
+  let n = 0;
+  for (const s of sessions.values()) if (s.status === "live" || s.status === "connecting") n++;
+  liveCount = n;
+}
+/** Cached so useSyncExternalStore sees a stable value between real changes —
+ *  recomputing per call would hand React a new number and loop. */
+export function liveSessionCount() { return liveCount; }
+const rosterChanged = () => { const before = liveCount; recount(); if (before !== liveCount) rosterSubs.forEach((fn) => fn()); };
 // Set by the mounted panel so the terminal itself can close it (Shift+Esc).
 let panelClose: () => void = () => {};
 
@@ -95,6 +113,7 @@ function evictLru(exceptRoot: string) {
   try { lru.term.dispose(); } catch { /* already disposed */ }
   lru.holder.remove();
   sessions.delete(lru.id);
+  rosterChanged();
 }
 
 /**
@@ -280,6 +299,7 @@ function killSession(s: Sess) {
   try { s.term.dispose(); } catch { /* already disposed */ }
   s.holder.remove();
   sessions.delete(s.id);
+  rosterChanged();
 }
 
 /** Type a command into the repo's shell (starting one if needed). */
@@ -292,7 +312,12 @@ function runInShell(s: Sess, cmd: string) {
 }
 
 // --- the panel ---------------------------------------------------------------
-export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** The terminal as a workspace view.
+ *
+ *  `onClose` is still needed here (unlike the other views) because the shell
+ *  itself can dismiss the workspace with Shift+Esc — see `panelClose`. */
+export function TermView({ active, onClose = () => {} }: { active: boolean; onClose?: () => void }) {
+  const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>(() => { try { return localStorage.getItem(ROOT_KEY) || ""; } catch { return ""; } });
   const [repoOpen, setRepoOpen] = useState(false);
@@ -449,23 +474,11 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   };
 
   return (
-    <Portal>
-      <AnimatePresence>
-        {open && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
-            {/* Above the panel, not inside it. Sitting within the terminal it
-                covered the first line of output and read as part of the shell;
-                floating over the modal's top edge it belongs to the app, which
-                is what it actually reports on. */}
-            <UsageIsland />
-            <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
-                transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+    <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+                {/* Only while this view is the visible one — the island is
+                    fixed-positioned, so a hidden terminal would otherwise leave
+                    it floating over the git view. */}
+                {active && <UsageIsland />}
                 <style>{SCROLLBAR_CSS}</style>
                 {/* Pin xterm's own boxes flush. The stylesheet ships no padding
                     today, but it has before and it is one release away from
@@ -661,12 +674,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                   )}
                   <span className="ml-auto">{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
                 </div>
-              </motion.div>
-            </div>
-          </>
-        )}
-      </AnimatePresence>
-    </Portal>
+    </div>
   );
 }
 

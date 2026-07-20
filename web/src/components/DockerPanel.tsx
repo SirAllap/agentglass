@@ -2,9 +2,7 @@
 // compose project with live CPU/mem, a streaming-ish log viewer, and start/
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import type { DockerOverview, DockerContainer, DockerStat } from "../../../shared/types.ts";
-import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
@@ -61,7 +59,9 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
   );
 }
 
-export function DockerPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** Docker as a workspace view. `active` means "visible right now" — the view
+ *  stays mounted while you're off in the diff, it just stops polling. */
+export function DockerView({ active }: { active: boolean }) {
   const [ov, setOv] = useState<DockerOverview | null>(null);
   const [stats, setStats] = useState<Record<string, DockerStat>>({});
   const [view, setView] = useState<View>("containers");
@@ -96,33 +96,34 @@ export function DockerPanel({ open, onClose }: { open: boolean; onClose: () => v
     catch (e) { if (seq === logSeq.current) setLogs(String(e)); }
   }, []);
 
-  // open → load overview (cheap), then poll every 5s.
+  // visible → load overview (cheap), then poll every 5s. Gated on `active`
+  // rather than on mount: hidden views keep their state but go quiet.
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     setToast(null);
     loadOverview();
     const t = setInterval(loadOverview, 5000);
     requestAnimationFrame(() => frameRef.current?.focus());
     return () => clearInterval(t);
-  }, [open, loadOverview]);
+  }, [active, loadOverview]);
 
   // stats: only poll the (slow) `docker stats` sample while viewing containers.
   useEffect(() => {
-    if (!open || view !== "containers") return;
+    if (!active || view !== "containers") return;
     loadStats();
     const t = setInterval(loadStats, 5000);
     return () => clearInterval(t);
-  }, [open, view, loadStats]);
+  }, [active, view, loadStats]);
 
   // logs: poll every 3s while a container's log tab is visible. Keyed by id
   // (not the container object) so the 5s overview refresh doesn't restart it.
   useEffect(() => {
     const id = selected?.id;
-    if (!open || view !== "containers" || tab !== "logs" || !id) return;
+    if (!active || view !== "containers" || tab !== "logs" || !id) return;
     loadLogs(id, tail);
     const t = setInterval(() => loadLogs(id, tail), 3000);
     return () => clearInterval(t);
-  }, [open, view, tab, selected?.id, tail, loadLogs]);
+  }, [active, view, tab, selected?.id, tail, loadLogs]);
 
   // keep the log view pinned to the bottom.
   useEffect(() => { const el = logRef.current; if (el && stuckBottom.current) el.scrollTop = el.scrollHeight; }, [logs]);
@@ -173,18 +174,8 @@ export function DockerPanel({ open, onClose }: { open: boolean; onClose: () => v
   );
 
   return (
-    <Portal>
-      <AnimatePresence>
-        {open && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
-            <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
-              <motion.div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
-                initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
-                transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+    <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
+      className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>🐳 Docker</span>
@@ -211,7 +202,6 @@ export function DockerPanel({ open, onClose }: { open: boolean; onClose: () => v
                   <div className="ml-auto flex items-center gap-1.5">
                     {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">read-only</span>}
                     <button onClick={() => { loadOverview(); loadStats(); }} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
-                    <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
                 </div>
 
@@ -303,11 +293,6 @@ export function DockerPanel({ open, onClose }: { open: boolean; onClose: () => v
                 {toast && (
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-lg text-[11px] shadow-xl" style={{ zIndex: 40, background: "var(--bg3)", border: `1px solid ${toast.ok ? "color-mix(in srgb, var(--success) 50%, transparent)" : "color-mix(in srgb, var(--error) 50%, transparent)"}`, color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</div>
                 )}
-              </motion.div>
-            </div>
-          </>
-        )}
-      </AnimatePresence>
-    </Portal>
+    </div>
   );
 }
