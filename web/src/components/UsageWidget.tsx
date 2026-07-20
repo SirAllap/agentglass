@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, type UsagePayload } from "../lib/api.ts";
 
 // Human reset label: "in 1h 44m" when soon, else "Wed 3:00 PM".
-function resetLabel(iso: string | null): string {
+export function resetLabel(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);
   const ms = d.getTime() - Date.now();
@@ -46,7 +46,7 @@ let poller: ReturnType<typeof setInterval> | null = null;
  * importantly, makes the rate a property of the app rather than of how many
  * places happen to be showing the number.
  */
-function subscribeUsage(fn: (u: UsagePayload | null) => void): () => void {
+export function subscribeUsage(fn: (u: UsagePayload | null) => void): () => void {
   listeners.add(fn);
   if (!poller) {
     const load = () => api.usage()
@@ -76,7 +76,7 @@ function subscribeUsage(fn: (u: UsagePayload | null) => void): () => void {
 }
 
 // Colour escalates with consumption (matches the "used" mental model).
-function usedColor(used: number): string {
+export function usedColor(used: number): string {
   if (used >= 85) return "var(--error)";
   if (used >= 60) return "var(--warning)";
   return "var(--success)";
@@ -97,93 +97,9 @@ function Meter({ label, used, resets }: { label: string; used: number; resets: s
   );
 }
 
-/**
- * The plan meters, floating over a full-screen panel.
- *
- * The header's copy is the right place for them until something covers the
- * header — which the terminal does, by design, because a terminal wants the
- * whole window. But "how much of my 5-hour window is left" is *more* relevant
- * there, not less: that's where the long agent runs happen.
- *
- * So the same numbers come back as an island over the top edge. Deliberately
- * unclickable (`pointer-events: none`) — it sits above a terminal, and a strip
- * that swallowed a click meant for the shell underneath would be worse than not
- * having it. It also steps out of the way on hover, for the one line of output
- * that ends up behind it.
- */
-export function UsageIsland() {
-  const [u, setU] = useState<UsagePayload | null>(lastUsage);
-  // The first call is a real round trip to Anthropic — the server caches it for
-  // a minute afterwards, so only the cold one is slow. Rendering nothing while
-  // it's in flight is what makes that read as a bug: an empty strip where the
-  // numbers should be looks broken, whereas a spinner is just waiting.
-  const [loading, setLoading] = useState(!lastUsage);
-  useEffect(() => subscribeUsage((next) => { setU(next); setLoading(false); }), []);
-
-  if (!u?.available) {
-    // Only while the first fetch is out. Once it has answered and there is no
-    // usage to show — no Claude credentials, a non-Anthropic setup — the island
-    // disappears rather than sitting there as a permanent empty promise.
-    // Throttled by the upstream. Saying so beats vanishing — the meters going
-    // missing looks like a bug, and the actual state ("we're being rate
-    // limited, it'll come back") is both true and reassuring.
-    if (!loading && lastError?.includes("429")) {
-      return (
-        <div className="fixed top-1.5 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 10002 }}>
-          <div className="px-3 py-1 rounded-full text-[9px] t-dim2"
-            style={{ opacity: 0.7, background: "color-mix(in srgb, var(--bg2) 92%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", backdropFilter: "blur(6px)" }}>
-            plan usage — rate limited, retrying
-          </div>
-        </div>
-      );
-    }
-    if (!loading) return null;
-    return (
-      <div className="fixed top-1.5 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 10002 }}>
-        <div className="flex items-center gap-2 px-3 py-1 rounded-full"
-          style={{
-            opacity: 0.75,
-            background: "color-mix(in srgb, var(--bg2) 92%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
-            backdropFilter: "blur(6px)",
-          }}>
-          <span className="h-2.5 w-2.5 rounded-full animate-spin"
-            style={{ border: "2px solid color-mix(in srgb, var(--primary) 25%, transparent)", borderTopColor: "var(--primary)" }} />
-          <span className="text-[9px] t-dim2">plan usage…</span>
-        </div>
-      </div>
-    );
-  }
-  const mini = (label: string, used: number, resets: string | null) => (
-    <span className="flex items-center gap-1.5" title={`${label}: ${used}% used — resets ${resetLabel(resets)}`}>
-      <span className="text-[8.5px] uppercase tracking-[0.14em] t-dim2">{label}</span>
-      <span className="h-1 w-10 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }}>
-        <span className="block h-full rounded-full transition-all duration-700" style={{ width: `${used}%`, background: usedColor(used) }} />
-      </span>
-      <span className="text-[10px] font-semibold tabular-nums" style={{ color: usedColor(used) }}>{used}%</span>
-    </span>
-  );
-  return (
-    // pointer-events: none all the way down. Hover-to-fade was tempting, but a
-    // strip that listens for the mouse is a strip that can swallow a click
-    // meant for the shell underneath — and there is no way to have both. A
-    // terminal never loses an interaction to this.
-    <div className="fixed top-1.5 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 10002 }}>
-      <div className="flex items-center gap-3 px-3 py-1 rounded-full"
-        style={{
-          opacity: 0.9,
-          background: "color-mix(in srgb, var(--bg2) 92%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)",
-          boxShadow: "0 6px 20px -8px rgba(0,0,0,.7)",
-          backdropFilter: "blur(6px)",
-        }}>
-        {u.five_hour && mini("5h", u.five_hour.utilization, u.five_hour.resets_at)}
-        {u.five_hour && u.seven_day && <span className="w-px h-3" style={{ background: "color-mix(in srgb, var(--border) 55%, transparent)" }} />}
-        {u.seven_day && mini("weekly", u.seven_day.utilization, u.seven_day.resets_at)}
-      </div>
-    </div>
-  );
-}
+/** The most recent usage error the shared poll saw, so the island can say
+ *  "rate limited, retrying" instead of blanking out. Read after subscribing. */
+export const usageError = (): string | null => lastError;
 
 export function UsageWidget() {
   const [u, setU] = useState<UsagePayload | null>(lastUsage);

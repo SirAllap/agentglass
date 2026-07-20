@@ -12,7 +12,6 @@ import type { GitRepoRef, ProjectCommand, TerminalCommands } from "../../../shar
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { worktreeTag } from "../lib/worktree.ts";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
-import { UsageIsland } from "./UsageWidget.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 const QUICK = ["git status", "git log --oneline -15", "git diff --stat", "git branch -vv"];
@@ -475,10 +474,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-                {/* Only while this view is the visible one — the island is
-                    fixed-positioned, so a hidden terminal would otherwise leave
-                    it floating over the git view. */}
-                {active && <UsageIsland />}
+                {/* The plan meters moved to the workspace's DynamicIsland, which
+                    covers every view now rather than only the terminal. */}
                 <style>{SCROLLBAR_CSS}</style>
                 {/* Pin xterm's own boxes flush. The stylesheet ships no padding
                     today, but it has before and it is one release away from

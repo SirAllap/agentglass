@@ -298,6 +298,51 @@
   .agw-tip::after { transition: opacity 0.12s ease 0.25s; transform: none; }
 }
 
+/* The workspace dynamic island.
+ *
+ * A near-black notch, so the LCD and the meters read as a lit display carved
+ * from the top edge of the frame. It keeps its own dark ground rather than the
+ * theme's --bg2, on purpose: an amber/green phosphor only looks like one over
+ * black, and the notch is a device, not a panel. */
+.agx-notch {
+  background: linear-gradient(180deg, #131316, #0a0a0c);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: none;
+  box-shadow: 0 14px 34px -12px rgba(0, 0, 0, 0.85), inset 0 -1px 0 0 rgba(255, 255, 255, 0.04);
+}
+
+/* Ghost-segment LCD. The lit layer glows; the ghost is the same glyph run at a
+   whisper of opacity so the unlit segments of an all-8s readout show through --
+   the tell of a real digital watch. A hair of skew gives the italic slant those
+   displays have. */
+.agx-lcd {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+  font-variant-numeric: tabular-nums;
+  transform: skewX(-4deg);
+}
+.agx-lcd-ghost {
+  color: rgba(120, 255, 190, 0.1);
+}
+.agx-lcd-lit {
+  color: #bcffd8;
+  text-shadow: 0 0 5px rgba(90, 255, 170, 0.55), 0 0 12px rgba(60, 220, 150, 0.3);
+}
+
+/* The live-work pips breathe when something is running, so a green shell dot is
+   visibly alive rather than a static light. Paused with the rest of the ambient
+   loops when the page is idle or hidden. */
+@keyframes agx-pip {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.agx-pip {
+  animation: agx-pip 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agx-pip { animation: none; }
+}
+:root[data-idle="1"] .agx-pip { animation-play-state: paused !important; }
+
 /* A chat that replied while you were elsewhere. Deliberately a slow, low-
    contrast breath rather than a hard blink: it sits in a header you look at
    all day, and something that flashes urgently for a message that can wait
