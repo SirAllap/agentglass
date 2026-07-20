@@ -114,13 +114,16 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
             {/* field wash */}
             <circle cx={C} cy={C} r={R} fill="url(#rdr-field)" />
 
-            {/* range rings (relative to outer drawing radius) */}
-            {[0.34, 0.67, 1].map((r) => (
+            {/* range rings — inner guides only, anchored to the blip band
+                (OUTER). The edge itself is the dashed compaction ring below,
+                so no solid ring is drawn at r=1: it sat outside the band and
+                read as a second, redundant edge. */}
+            {[0.34, 0.67].map((r) => (
               <circle
                 key={r}
                 cx={C}
                 cy={C}
-                r={R * r}
+                r={OUTER * r}
                 fill="none"
                 stroke="color-mix(in srgb, var(--primary) 22%, transparent)"
                 strokeWidth={1}
@@ -152,9 +155,10 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
               );
             })}
 
-            {/* range labels — distance is fraction-to-compaction, not raw model max */}
-            <text x={C + 3} y={C - R * 0.34 + 8} fontSize={7} fill="var(--text4)" className="tabular-nums">⅓ →compact</text>
-            <text x={C + 3} y={C - R + 10} fontSize={7} fill="var(--text4)" className="tabular-nums">compact</text>
+            {/* range labels — distance is fraction-to-compaction, not raw model
+                max; anchored to OUTER so `compact` sits on the dashed ring. */}
+            <text x={C + 3} y={C - OUTER * 0.34 + 8} fontSize={7} fill="var(--text4)" className="tabular-nums">⅓ →compact</text>
+            <text x={C + 3} y={C - OUTER + 10} fontSize={7} fill="var(--text4)" className="tabular-nums">compact</text>
 
             {/* (sweep lives in a separate, GPU-composited <svg> overlay below) */}
 
