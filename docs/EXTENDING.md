@@ -130,7 +130,8 @@ folder instead.
 
 See the README security table (`AGENTGLASS_TOKEN`, `AGENTGLASS_GIT_WRITE_DISABLED`,
 `AGENTGLASS_DOCKER_WRITE_DISABLED`, `AGENTGLASS_CHAT_DISABLED`, …). Intake routes
-(`/ingest`, OTLP) honour the token when set.
+(`/ingest`, OTLP) stay tokenless on purpose — local hooks and OTel exporters
+have no way to carry a secret — while everything else needs the token when set.
 
 ## 4. How it stays live
 
