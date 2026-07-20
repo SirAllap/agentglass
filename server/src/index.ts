@@ -493,7 +493,7 @@ const server = Bun.serve<WsData>({
 
     // --- live docker panel (lazydocker-style) ---
     if (pathname === "/docker/overview") return json(await dockerOverview());
-    if (pathname === "/docker/stats") return json({ stats: dockerStats() });
+    if (pathname === "/docker/stats") return json({ stats: await dockerStats() });
     if (pathname === "/docker/logs") {
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);

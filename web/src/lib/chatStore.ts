@@ -272,7 +272,14 @@ const APPLIED_MAX = 8000;
  */
 export function applyLiveEvent(ev: WatchEvent) {
   if (applied.has(ev.id)) return;
-  const chat = [...chats.values()].find((c) => c.sessionId && c.sessionId === ev.session_id);
+  // Walk the map rather than spreading it into an array to call .find(). Most
+  // events belong to no open chat at all, so this is the hot path and the
+  // allocation was the whole cost of it.
+  if (!ev.session_id) return;
+  let chat: Chat | undefined;
+  for (const c of chats.values()) {
+    if (c.sessionId === ev.session_id) { chat = c; break; }
+  }
   if (!chat) return;
 
   applied.add(ev.id);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { WatchEvent } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
@@ -93,7 +93,7 @@ function buildRows(events: WatchEvent[], pairPool: WatchEvent[] = events): Row[]
 }
 
 /** One feed line — shared between the single stream and the per-session lanes. */
-function EventRow({ row, onSelect, compact }: { row: Row; onSelect?: (e: WatchEvent) => void; compact?: boolean }) {
+function EventRowInner({ row, onSelect, compact }: { row: Row; onSelect?: (e: WatchEvent) => void; compact?: boolean }) {
   const { e, running, count } = row;
   const f = running ? { verb: "Running", color: "#a78bfa", dot: "run" as const } : friendly(e);
   const d = detail(e);
@@ -133,6 +133,29 @@ function EventRow({ row, onSelect, compact }: { row: Row; onSelect?: (e: WatchEv
   );
 }
 
+/**
+ * Memoized on the row's *contents*, not its identity.
+ *
+ * Two things made this the most expensive thing on screen. The feed renders 120
+ * rows, and App re-renders for any reason at all — a 4s stats poll, a 20s
+ * options poll, the 10s tick — so all 120 `motion.div`s were rebuilt several
+ * times a second with byte-identical props: 12.1ms of React work per commit
+ * that changed nothing. And `buildRows` allocates fresh row objects every call,
+ * so a plain memo() would compare identities that never match and buy nothing.
+ *
+ * Hence the explicit comparator. `count` and `running` are in it because a
+ * coalesced ×N row and a running→finished tool change nothing else about the
+ * row: leave either out and those rows silently stop updating.
+ */
+const EventRow = memo(EventRowInner, (a, b) =>
+  a.row.key === b.row.key &&
+  a.row.e.id === b.row.e.id &&
+  a.row.count === b.row.count &&
+  a.row.running === b.row.running &&
+  a.compact === b.compact &&
+  a.onSelect === b.onSelect
+);
+
 /** One session's column in the lanes view: its own header and its own scroll,
  *  pinned to the newest line — so three busy Claudes read as three tidy
  *  streams instead of one interleaved wall. */
@@ -158,7 +181,7 @@ function Lane({ aKey, rows, onSelect }: { aKey: string; rows: Row[]; onSelect?: 
 
 const MAX_LANES = 4; // beyond four a lane is too narrow to read
 
-export function Feed({ events, filter, sessionProvider, onSelect, onClearFilter }: { events: WatchEvent[]; filter: { app: string; type: string; provider: string }; sessionProvider?: Map<string, string>; onSelect?: (e: WatchEvent) => void; onClearFilter?: () => void }) {
+function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }: { events: WatchEvent[]; filter: { app: string; type: string; provider: string }; sessionProvider?: Map<string, string>; onSelect?: (e: WatchEvent) => void; onClearFilter?: () => void }) {
   const [q, setQ] = useState("");
   const [cat, setCat] = useState<Category>("all");
   const [lanes, setLanes] = useState(false);
@@ -200,7 +223,12 @@ export function Feed({ events, filter, sessionProvider, onSelect, onClearFilter 
       }
       return true;
     });
-  }, [events, filter.app, filter.type, filter.provider, sessionProvider, cat, q]);
+    // `sessionProvider` is a fresh Map on every tick and every socket flush, but
+    // the filter above only reads it when a provider filter is set — which is
+    // not the default. Depending on it unconditionally re-ran this filter, and
+    // re-rendered all 120 rows behind it, ten times a minute for a value nobody
+    // was looking at.
+  }, [events, filter.app, filter.type, filter.provider, filter.provider ? sessionProvider : null, cat, q]);
 
   const rows = useMemo(() => buildRows(shown, events).slice(-120), [shown, events]);
 
@@ -414,3 +442,7 @@ export function Feed({ events, filter, sessionProvider, onSelect, onClearFilter 
     </>
   );
 }
+
+/** The whole panel, memoized: App re-renders for reasons the feed does not care
+ *  about (a stats poll, an options poll), and each one rebuilt every row. */
+export const Feed = memo(FeedInner);

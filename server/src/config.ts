@@ -68,9 +68,17 @@ const expand = (p: string) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) 
  * Scoping is a decision, so it has to be stated.
  */
 let cachedRoot: string | null | undefined;
+let cachedFor: string | undefined;
 export function workspaceRoot(): string | null {
-  if (cachedRoot !== undefined) return cachedRoot;
   const asked = process.env.AGENTGLASS_ROOT || config.root;
+  // Keyed on what was asked for, not merely "have we answered before". The
+  // scope never changes in a running server, so this costs one comparison —
+  // but `bun test` shares a process, and the first suite to call this used to
+  // pin the answer for every suite after it. A later file setting
+  // AGENTGLASS_ROOT then got the earlier file's scope, silently, and only in
+  // whatever file order the runner happened to pick.
+  if (cachedRoot !== undefined && cachedFor === asked) return cachedRoot;
+  cachedFor = asked;
   cachedRoot = asked ? resolveScope(asked) : null;
   return cachedRoot;
 }
