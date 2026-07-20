@@ -72,6 +72,11 @@ desktop-dist-linux: ## Package Linux binaries (AppImage + deb)
 desktop-install: ## Install the built app for this user (no root)
 	electron/install-local.sh
 
+desktop-update: ## Pull the latest and reinstall the desktop app (fast-forward only)
+	git pull --ff-only
+	bun install
+	$(MAKE) desktop-install
+
 # Open the cockpit for ONE project: only that repo (and its worktrees) appear,
 # and the dashboard shows that project's work rather than the whole machine.
 # Without DIR it covers every project, as before.
@@ -80,4 +85,4 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
 .PHONY: help install dev server web build test smoke typecheck start setup setup-undo connect connect-undo demo-feed \
-        desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-open
+        desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open
