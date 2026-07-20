@@ -39,8 +39,20 @@ jobs:
       # instant a browser evaluates it — a use-before-declaration inside a
       # component already shipped a black screen that way. This is the only
       # step that actually runs the thing.
+      # On port 4000 because that is where the bundle looks. Without it the smoke
+      # run has no repos, so it cannot open a chat, so the chat-persistence check
+      # skips itself and the reload path goes uncovered.
       - name: Smoke (production bundle boots)
-        run: bun scripts/smoke.ts
+        run: |
+          cd server
+          AGENTGLASS_PORT=4000 AGENTGLASS_DB=/tmp/smoke.db AGENTGLASS_SCAN_DISABLED=1 bun run src/index.ts &
+          SVPID=$!
+          cd ..
+          for i in $(seq 1 30); do curl -sf http://localhost:4000/health >/dev/null && break; sleep 1; done
+          bun scripts/smoke.ts
+          STATUS=$?
+          kill $SVPID || true
+          exit $STATUS
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
       - name: Server boots

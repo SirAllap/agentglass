@@ -6,6 +6,7 @@
 // owner. That's also what lets many exist at once instead of one at a time.
 
 import { api, ChatStreamError } from "./api.ts";
+import { loadChats, saveChats } from "./chatPersist.ts";
 import type { ChatImage, WatchEvent } from "../../../shared/types.ts";
 
 /** A pasted image waiting in the composer. `url` is an object URL for the
@@ -69,6 +70,10 @@ export type ChatMsg = {
    * longer than the answer, and it belongs behind a fold.
    */
   thinking?: string;
+  /** How many images this turn carried, when the turn was restored from storage
+   *  and the pixels themselves were not. Base64 image data is megabytes; the
+   *  quota buys the conversation or the screenshots, not both. */
+  imagesDropped?: number;
 };
 
 /** What a turn cost. Every field is already on the stream's `usage` object;
@@ -155,8 +160,61 @@ export const DEFAULT_MODE = "default";
 // when it can differ.
 let snapshot: Chat[] = [];
 function rebuild() { snapshot = [...chats.values()].sort((a, b) => a.createdAt - b.createdAt); }
-function emit() { rebuild(); subs.forEach((fn) => fn()); }
+function emit() { rebuild(); persistSoon(); subs.forEach((fn) => fn()); }
 export function subscribe(fn: () => void): () => void { subs.add(fn); return () => subs.delete(fn); }
+
+// Writing on every emit would mean serializing every open chat once per streamed
+// token, so the write is coalesced to the end of a quiet moment. The tradeoff is
+// a window in which a crash loses the last fraction of a second of a reply,
+// which `pagehide` closes for every exit the browser tells us about.
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let activeChatId = "";
+// Whether this window has changed anything worth writing down.
+//
+// Without it, a window that merely *opened* still saves on the way out, and
+// what it saves is its own empty store. Open the app twice, close the one you
+// never used, and it overwrites the tabs belonging to the one you did. A page
+// that has not touched a chat has nothing to say about chats.
+let touched = false;
+function persistNow() {
+  if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+  if (touched) saveChats(snapshot, activeChatId);
+}
+function persistSoon() {
+  touched = true;
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => { persistTimer = null; saveChats(snapshot, activeChatId); }, 500);
+}
+
+/** Which tab is on screen, remembered so a restored window comes back to the
+ *  conversation you were actually in rather than whichever sorts last. */
+export function setActiveChatId(id: string) {
+  if (id === activeChatId) return;
+  activeChatId = id;
+  persistSoon();
+}
+
+// Restored synchronously, at module load, on purpose. The panel seeds a blank
+// chat when it opens and finds none, so a restore that resolved a tick later
+// would race that and land behind an empty tab nobody asked for.
+const restored = loadChats();
+for (const c of restored.chats) chats.set(c.id, c);
+// Ids embed a counter. Resuming it below the highest restored one would mint a
+// second `c1-...` and quietly overwrite a conversation.
+seq = restored.chats.reduce((n, c) => Math.max(n, Number(/^c(\d+)-/.exec(c.id)?.[1] ?? 0)), 0);
+activeChatId = restored.activeId;
+rebuild();
+
+/** The tab that was selected when the window last went away, if it is still
+ *  around. The panel owns selection, so it asks for this rather than being told. */
+export const restoredActiveId = (): string => (chats.has(restored.activeId) ? restored.activeId : "");
+
+if (typeof window !== "undefined") {
+  // `pagehide` rather than `beforeunload`: it is the one that fires for a tab
+  // discarded on mobile and for bfcache, and it does not block the navigation.
+  window.addEventListener("pagehide", persistNow);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") persistNow(); });
+}
 
 export const listChats = (): Chat[] => snapshot;
 export const getChat = (id: string): Chat | undefined => chats.get(id);

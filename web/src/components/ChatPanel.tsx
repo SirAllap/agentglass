@@ -26,6 +26,7 @@ import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
+  restoredActiveId, setActiveChatId,
 } from "../lib/chatStore.ts";
 
 // Still hand-maintained, and still drifts every release — the runtime-sourced
@@ -396,8 +397,27 @@ function ClipIcon() {
 // `active` of its own — the currently selected chat.
 export function ChatView({ active: visible, focusId, onClose = () => {} }: { active: boolean; focusId?: string | null; onClose?: () => void }) {
   const open = visible;
-  const chats = useSyncExternalStore(subscribe, listChats, listChats);
-  const [activeId, setActiveId] = useState("");
+  const allChats = useSyncExternalStore(subscribe, listChats, listChats);
+  // `null` until we know, which is not the same as "unscoped". See the filter
+  // below, which must not run on a guess.
+  const [workspace, setWorkspace] = useState<string | null>(null);
+  const [scopeKnown, setScopeKnown] = useState(false);
+
+  // Chats outlive the page now, so the panel can be holding tabs from a project
+  // you are no longer in. They stay in the store, and stay saved, but a project
+  // is a scope: being in one repo and looking at another's conversations is the
+  // mixing this app exists to avoid. Switching back brings them straight back.
+  //
+  // An unscoped instance, the desktop app watching every project at once, has
+  // no scope to filter by, so it shows everything.
+  const chats = useMemo(() => {
+    if (!workspace) return allChats;
+    return allChats.filter((c) => c.cwd === workspace || c.cwd.startsWith(workspace.replace(/\/$/, "") + "/"));
+  }, [allChats, workspace]);
+  // Starts on whichever tab was open when the window last went away, so a crash
+  // or a project switch puts you back where you were instead of at the end of
+  // the tab strip.
+  const [activeId, setActiveId] = useState(restoredActiveId);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [enabled, setEnabled] = useState(true);
   // The server silently downgrades bypassPermissions unless the operator opted
@@ -424,7 +444,10 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     api.skills().then((r) => setSkills(r.skills.map((k) => ({ name: k.name, description: k.when_to_use || k.description })))).catch(() => {});
   }, [open, skills.length]);
 
-  const active = getChat(activeId);
+  // Looked up in the scoped list, not the store, so a restored tab belonging to
+  // another project never renders even for the frame before the effect below
+  // moves selection off it.
+  const active = chats.find((c) => c.id === activeId);
 
   // Only while the draft is a bare `/word` on the first line: past the first
   // space it is prose, and a menu stealing Enter there would be maddening.
@@ -459,6 +482,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
       setDefaultCwd((c) => c || repos[0]?.root || "");
     }).catch(() => {});
     api.chatEnabled().then((r) => { setEnabled(r.enabled); setBypassAllowed(!!r.bypass); }).catch(() => {});
+    // Which project this instance is scoped to, if any. A failure here means we
+    // never learn of a scope, so nothing is hidden, which is the safe direction.
+    api.projects()
+      .then((r) => setWorkspace(r.workspace))
+      .catch(() => {})
+      .finally(() => setScopeKnown(true));
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
@@ -469,13 +498,23 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   const seeded = useRef(false);
   useEffect(() => {
     if (!open) { seeded.current = false; setResumeOpen(false); return; }
+    // Not before the scope is known. Restored chats are already in the store,
+    // but until we know which project we are in we cannot tell whether any of
+    // them belong here, and seeding on that guess drops a blank tab on top of
+    // the ones about to appear.
+    if (!scopeKnown) return;
     if (!seeded.current && !chats.length && defaultCwd) {
       seeded.current = true;
       setActiveId(newChat(defaultCwd).id);
       return;
     }
-    if (!getChat(activeId) && chats.length) setActiveId(chats[chats.length - 1].id);
-  }, [open, chats, defaultCwd, activeId]);
+    // Covers the restored tab having been closed, and the restored tab belonging
+    // to a project other than the one now open.
+    if (!chats.some((c) => c.id === activeId) && chats.length) setActiveId(chats[chats.length - 1].id);
+  }, [open, chats, defaultCwd, activeId, scopeKnown]);
+
+  // The store persists the tab set and needs to record which of them was up.
+  useEffect(() => { setActiveChatId(activeId); }, [activeId]);
 
   // Opened to continue a specific session (from the fleet view): show that tab
   // rather than whichever was last active, or the request looks ignored.
@@ -769,6 +808,11 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                                 ))}
                               </div>
                             )}
+                            {!!m.imagesDropped && (
+                              <div className="mb-1.5 text-[10px] t-dim2 italic">
+                                {m.imagesDropped} image{m.imagesDropped > 1 ? "s" : ""} sent with this turn, not kept when the chat was restored
+                              </div>
+                            )}
                             {m.text ? <Markdown text={m.text} /> : (m.streaming ? <span className="t-dim2">▍</span> : "")}
                             {m.streaming && m.text && <span className="t-dim2">▍</span>}
                           </div>
@@ -915,7 +959,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
                         <ClipIcon />
                       </button>
-                      <textarea ref={inputRef} value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
+                      <textarea ref={inputRef} aria-label="chat composer" value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
                         onChange={(e) => active && update(active.id, (c) => { c.draft = e.target.value; })}
                         onKeyDown={onKey}
                         onPaste={onPaste}
