@@ -680,12 +680,71 @@ export function defaultBranch(root: string): string | null {
 const MERGED_TTL_MS = 30_000;
 const mergedCache = new Map<string, { at: number; set: Set<string> }>();
 
+/**
+ * Was this branch squash-merged into `ref`?
+ *
+ * `--merged` only knows ancestry, and a squash merge destroys it: the PR lands
+ * as one new commit with a new hash, so the branch tip never becomes an
+ * ancestor of the trunk. Every branch merged through the GitHub button is
+ * therefore "unmerged" by that test — which is most of them here, and which is
+ * why the panel dead-ended on "not fully merged" for work already in main.
+ *
+ * The test that survives the rewrite is by content, not ancestry: replay the
+ * branch's whole diff as a single commit on top of the merge base, then ask
+ * `git cherry` whether the trunk already holds an equivalent patch. That is
+ * exactly the shape a squash merge produces, so the patch-ids match; a leading
+ * `-` means "already upstream".
+ *
+ * `commit-tree` leaves one dangling commit behind. It's unreferenced and the
+ * next gc collects it — the standard price for this probe.
+ *
+ * False, never a throw, when the two share no history: this repo has unrelated
+ * histories in it, and "no merge base" means there is nothing to compare, not
+ * that the work is safe to delete.
+ */
+function isSquashMerged(root: string, ref: string, name: string): boolean {
+  const base = git(root, ["merge-base", ref, name]);
+  const mergeBase = base.stdout.trim();
+  if (base.code !== 0 || !mergeBase) return false;
+  const tree = git(root, ["rev-parse", `${name}^{tree}`]).stdout.trim();
+  if (!tree) return false;
+  // A branch holding nothing the base didn't already have has no patch to find,
+  // and would otherwise look "merged" on the strength of an empty diff.
+  if (tree === git(root, ["rev-parse", `${mergeBase}^{tree}`]).stdout.trim()) return false;
+  const dangling = git(root, ["commit-tree", tree, "-p", mergeBase, "-m", "_"]);
+  if (dangling.code !== 0) return false;
+  const cherry = git(root, ["cherry", ref, dangling.stdout.trim()]);
+  return cherry.code === 0 && cherry.stdout.trim().startsWith("-");
+}
+
+/**
+ * Four spawns per branch, so this can't run over every branch of a big repo on
+ * a 2.5s poll. The branches anyone is actually trying to delete are the recent
+ * ones, so probe those and leave the tail to the ancestry answer. A branch past
+ * the cap reads as unmerged, which is the safe direction to be wrong in: it
+ * keeps its confirmation prompt instead of losing it.
+ */
+const SQUASH_PROBE_MAX = 20;
+
 function mergedInto(root: string, ref: string): Set<string> {
   const key = `${root} ${ref}`;
   const hit = mergedCache.get(key);
   if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.set;
   const r = git(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
   const set = new Set(r.stdout.split("\n").filter(Boolean));
+  // Recover the squash merges ancestry can't see. Folded into the same set, and
+  // so into the same cache entry and the same invalidation, because callers ask
+  // one question — "is this work already in the trunk" — and both tests answer
+  // it. Newest first: that's the order for-each-ref gives with this sort, and
+  // the order that spends the probe budget where deletes actually happen.
+  const all = git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", "--format=%(refname:short)"])
+    .stdout.split("\n").filter(Boolean);
+  let probes = 0;
+  for (const name of all) {
+    if (set.has(name)) continue;
+    if (probes++ >= SQUASH_PROBE_MAX) break;
+    if (isSquashMerged(root, ref, name)) set.add(name);
+  }
   mergedCache.set(key, { at: Date.now(), set });
   return set;
 }
