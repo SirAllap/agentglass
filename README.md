@@ -447,9 +447,11 @@ inference, prompt) to an event the same way.
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |
 **Scope is a boundary, not just a filter.** With a project open, git writes, the
 terminal and chat are all refused outside it — the same rule that decides what the
-dashboard shows. This is a *behaviour* boundary, not cosmetic: opening the app
-on `~/code` and then jumping to `/tmp` in the terminal is refused, and git
-writes outside the root are blocked by `AGENTGLASS_GIT_WRITE_DISABLED`/`AGENTGLASS_TERMINAL_DISABLED` knobs if set.
+dashboard shows. This is a *behaviour* boundary, not cosmetic: with a project
+open, opening the app on `~/code` and then jumping to `/tmp` in the terminal is
+refused, and git writes outside the root are blocked — on their own, by the
+scope boundary. (The `AGENTGLASS_GIT_WRITE_DISABLED`/`AGENTGLASS_TERMINAL_DISABLED`
+knobs are a separate, global off-switch, not what enforces the root.)
 For genuinely multi-repo work, scope to the parent folder (`~/code`) rather
 than one repo: every repo beneath it is then in scope. An unscoped (whole-machine)
 instance is unaffected.
