@@ -15,14 +15,17 @@ import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
+import { buildRows } from "../lib/toolTree.ts";
 import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
-import { fmtAgo, fmtUsd, modelLabelOf, modelColor, providerOf } from "../lib/format.ts";
+import { fmtAgo, fmtUsd, fmtTokens, modelLabelOf, modelColor, providerOf } from "../lib/format.ts";
 import { sessionIsLive } from "../lib/derive.ts";
+import { worktreeTag, sessionWorktree, sessionCwd } from "../lib/worktree.ts";
+import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, subscribe, chatResuming,
-  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, type Chat,
+  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
 } from "../lib/chatStore.ts";
 
 const MODELS = [
@@ -52,6 +55,102 @@ const selCls = "text-[10.5px] px-2 py-1 rounded-md outline-none";
 const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text2)" };
 
 /** One row in the chat list. */
+/**
+ * The model's reasoning, folded away.
+ *
+ * It arrives on the stream and was being discarded, which made a turn that
+ * reasoned for two minutes and then answered in one line look like a model with
+ * nothing to say. Collapsed by default and deliberately quiet — this is the
+ * working-out, not the answer, and it is usually several times longer.
+ *
+ * Auto-opens only while it's the only thing happening: watching it stream is the
+ * difference between "thinking" and "frozen". It folds itself the moment real
+ * output starts.
+ */
+function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
+  const [openedByHand, setOpenedByHand] = useState<boolean | null>(null);
+  const open = openedByHand ?? streaming;
+  const lines = text.trim().split("\n");
+  return (
+    <div className="mb-1.5 rounded-md overflow-hidden" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+      <button onClick={() => setOpenedByHand(!open)}
+        className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:opacity-80">
+        <span className="text-[8px] t-dim2 transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
+        <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>thinking</span>
+        {streaming && <span className="text-[9px]" style={{ color: "var(--info)" }}>·</span>}
+        {/* A length cue, so a fold is an informed choice rather than a mystery. */}
+        {!open && <span className="text-[9px] t-dim2 ml-auto tabular-nums">{lines.length} line{lines.length === 1 ? "" : "s"}</span>}
+      </button>
+      {open && (
+        <div className="px-2.5 pb-2 pt-0.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words"
+          style={{ color: "var(--text3)", fontStyle: "italic", maxHeight: 260, overflowY: "auto" }}>
+          {text.trim()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Context ceiling by model — the same coarse table the radar uses. */
+function ctxLimitOf(model: string): number {
+  const m = model.toLowerCase();
+  if (m.includes("1m")) return 1_000_000;
+  if (m.includes("gemini")) return 1_000_000;
+  if (m.includes("gpt-5")) return 400_000;
+  return 200_000;
+}
+
+/**
+ * What this chat has spent, and how close it is to a compaction.
+ *
+ * Every number here was already arriving on the stream and being thrown away.
+ * Context is the one that changes behaviour: at 90% the next turn gets
+ * compacted and the model quietly loses the earlier conversation, and knowing
+ * that *before* it happens is the difference between finishing a thought and
+ * starting again.
+ */
+function Inspector({ chat }: { chat: Chat }) {
+  const u = chat.usage;
+  if (!u) return null;
+  const limit = ctxLimitOf(chat.model);
+  const pct = Math.min(100, (u.contextTokens / limit) * 100);
+  // Amber is "start thinking about wrapping up"; red is "the next turn may compact".
+  const tone = pct >= 90 ? "var(--error)" : pct >= 70 ? "var(--warning)" : "var(--primary)";
+  const Row = ({ k, v, c }: { k: string; v: string; c?: string }) => (
+    <div className="flex items-baseline gap-2 text-[10px]">
+      <span className="t-dim2">{k}</span>
+      <span className="ml-auto tabular-nums" style={{ color: c ?? "var(--text2)" }}>{v}</span>
+    </div>
+  );
+  return (
+    <div className="shrink-0 px-3 py-2 border-t flex flex-col gap-1.5"
+      style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+      <div className="flex items-baseline gap-2">
+        <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>context</span>
+        <span className="text-[10px] tabular-nums ml-auto" style={{ color: tone }}>{pct.toFixed(0)}%</span>
+        <span className="text-[9px] t-dim2 tabular-nums">{fmtTokens(u.contextTokens)} / {fmtTokens(limit)}</span>
+      </div>
+      <div className="h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(1, pct)}%`, background: tone }} />
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-0.5">
+        <Row k="in" v={fmtTokens(u.input)} />
+        <Row k="out" v={fmtTokens(u.output)} />
+        {/* Cache read is the cheap part and usually the biggest — worth its own
+            line so a large total doesn't read as a large bill. */}
+        <Row k="cache read" v={fmtTokens(u.cacheRead)} c="var(--success)" />
+        <Row k="cache write" v={fmtTokens(u.cacheWrite)} c="var(--warning)" />
+      </div>
+      {u.costUsd > 0 && (
+        <div className="flex items-baseline gap-2 pt-1 mt-0.5 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 20%, transparent)" }}>
+          <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>cost</span>
+          <span className="ml-auto text-[11px] tabular-nums font-medium" style={{ color: "var(--success)" }}>{fmtUsd(u.costUsd)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolean; onPick: () => void; onClose: () => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(chat.title);
@@ -68,8 +167,11 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
         ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }
         : { border: "1px solid transparent" }}
     >
-      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{
-        background: chat.sending ? "var(--success)" : chat.unread ? "var(--primary)" : "color-mix(in srgb, var(--text4) 50%, transparent)",
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${chat.sending ? "animate-pulse" : ""}`} style={{
+        background: chat.sending ? "var(--success)"
+          : chat.attention === "blocked" ? "var(--warning)"
+          : chat.attention === "done" ? "var(--primary)"
+          : "color-mix(in srgb, var(--text4) 50%, transparent)",
       }} />
       <div className="min-w-0 flex-1">
         {/* Double-click to rename. The derived title is whatever you happened to
@@ -97,7 +199,32 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
             onDoubleClick={(e) => { e.stopPropagation(); setDraft(chat.title); setEditing(true); }}
             style={{ color: active ? "var(--text)" : "var(--text2)" }}>{chat.title}</div>
         )}
-        <div className="truncate text-[9.5px] t-dim2">{repoName(chat.cwd) || "no repo"}</div>
+        {/* The dot carries the state as colour; this says which one, because
+            "finished" and "stuck, needs you" are the same glance otherwise and
+            they want opposite reactions from you. */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="truncate text-[9.5px] t-dim2">{repoName(chat.cwd) || "no repo"}</span>
+          {chat.sending
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>· running</span>
+            : chat.attention === "blocked"
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--warning)" }}>· needs you</span>
+            : chat.attention === "done"
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--primary)" }}>· done</span>
+            : null}
+          {/* How full this chat's context is, per row. With several open it's
+              the number that decides which one you go back to first — the one
+              at 88% is about to lose its own history to a compaction. */}
+          {chat.usage && chat.usage.contextTokens > 0 && (() => {
+            const pct = Math.min(100, (chat.usage.contextTokens / ctxLimitOf(chat.model)) * 100);
+            if (pct < 1) return null;
+            return (
+              <span className="ml-auto shrink-0 text-[9px] tabular-nums" title={`${fmtTokens(chat.usage.contextTokens)} of context used`}
+                style={{ color: pct >= 90 ? "var(--error)" : pct >= 70 ? "var(--warning)" : "var(--text3)" }}>
+                {pct.toFixed(0)}%
+              </span>
+            );
+          })()}
+        </div>
       </div>
       <button
         onClick={(e) => { e.stopPropagation(); onClose(); }}
@@ -116,20 +243,23 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
  *  has to say which one applies rather than just going grey. */
 type Blocked = "live" | "no-dir" | null;
 const blockedReason = (s: SessionRollup): Blocked =>
-  sessionIsLive(s) ? "live" : s.project_path ? null : "no-dir";
+  sessionIsLive(s) ? "live" : sessionCwd(s) ? null : "no-dir";
 
 /** One resumable session in the picker. */
 function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: string; onPick: () => void }) {
   const why = blockedReason(s);
   const model = modelLabelOf(s.model_name);
-  const label = s.project_path ? repoName(s.project_path) : s.source_app;
+  // A resumable session names the worktree it ran in when that isn't the repo
+  // itself — resuming lands back in that checkout, so it has to say which.
+  const wt = sessionWorktree(s);
+  const label = (s.project_path ? repoName(s.project_path) : s.source_app) + (wt ? ` └ ${wt}` : "");
   const note = why === "live"
     ? "This session is still running. A claude session has a single owner — a second one writing to the same transcript would corrupt its history. Resume it once it stops."
     : why === "no-dir"
     ? "No directory was recorded for this session, so there's nowhere to run the resumed conversation."
     : openChatId
     ? "Already open in this panel — picking it focuses that tab."
-    : `Continue this conversation in ${s.project_path}`;
+    : `Continue this conversation in ${sessionCwd(s)}`;
 
   return (
     <button
@@ -206,7 +336,9 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
     const needle = q.trim().toLowerCase();
     if (!needle) return claudeish;
     return claudeish.filter((s) =>
-      (`${s.project_path ?? ""} ${s.source_app} ${s.session_id}`).toLowerCase().includes(needle));
+      // cwd included: with a worktree per card, the card id is in the checkout
+      // path and nowhere else — searching "20343" has to find that session.
+      (`${s.project_path ?? ""} ${s.cwd_path ?? ""} ${s.source_app} ${s.session_id}`).toLowerCase().includes(needle));
   }, [rows, q]);
 
   return (
@@ -270,7 +402,6 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   const [query, setQuery] = useState("");
   const [resumeOpen, setResumeOpen] = useState(false);
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
-  const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   // Skills are already usable — `claude -p` keeps slash commands on unless
@@ -282,8 +413,6 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
     if (!open || skills.length) return;
     api.skills().then((r) => setSkills(r.skills.map((k) => ({ name: k.name, description: k.when_to_use || k.description })))).catch(() => {});
   }, [open, skills.length]);
-
-  const stuckBottom = useRef(true);
 
   const active = getChat(activeId);
 
@@ -344,18 +473,24 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
 
   useEffect(() => { if (defaultCwd) { try { localStorage.setItem(CWD_KEY, defaultCwd); } catch { /* ignore */ } } }, [defaultCwd]);
 
-  // Clear the unread mark for whatever is on screen.
-  useEffect(() => { if (open && active?.unread) update(active.id, (c) => { c.unread = false; }); }, [open, active?.id, active?.unread]);
-
-  // Depends on scalars that actually change. `messages` is mutated in place by
-  // the store, so its identity is stable for the life of a chat — depending on
-  // it meant this only ever ran on chat switch, and a streaming reply scrolled
-  // off the bottom without the view following.
-  const lastLen = active?.messages[active.messages.length - 1]?.text.length ?? 0;
+  // Whatever is on screen is, by definition, no longer waiting on you.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el && stuckBottom.current) el.scrollTop = el.scrollHeight;
-  }, [active?.id, active?.messages.length, lastLen]);
+    if (open && active) clearAttention(active.id);
+  }, [open, active?.id, active?.unread, active?.attention]);
+
+  // Follow the newest turn. The reset key is "which chat, and is the panel up",
+  // so opening it — or coming back to a chat you had scrolled up in — always
+  // lands on the live end rather than wherever you last left the scrollbar.
+  //
+  // Height changes are watched rather than enumerated: a chat grows from
+  // streaming text, from tool chips appended to a message already on screen,
+  // and from markdown and syntax highlighting that settle a frame or two after
+  // the content arrives. The previous version keyed an effect on the message
+  // count and the last message's length, so everything in that second group
+  // slipped past it and the view fell behind the stream it was supposed to be
+  // showing live.
+  const { scrollRef, contentRef, pinned, toBottom, onScroll } =
+    useStuckBottom(open ? active?.id ?? "" : null);
 
   const add = useCallback(() => {
     const cwd = active?.cwd || defaultCwd || repos[0]?.root || "";
@@ -370,9 +505,11 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   // check exists to prevent.
   const resume = useCallback((s: SessionRollup) => {
     setResumeOpen(false);
-    if (!s.project_path || sessionIsLive(s)) return;
+    // Resume in the checkout it ran in, not the repo it rolls up to.
+    const cwd = sessionCwd(s);
+    if (!cwd || sessionIsLive(s)) return;
     const chat = chatResuming(s.session_id)
-      ?? newChat(s.project_path, s.model_name || undefined, active?.mode ?? DEFAULT_MODE, {
+      ?? newChat(cwd, s.model_name || undefined, active?.mode ?? DEFAULT_MODE, {
         sessionId: s.session_id,
         title: `${s.source_app}:${s.session_id.slice(0, 8)}`,
       });
@@ -464,8 +601,14 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
     return chats.filter((c) => (c.title + " " + repoName(c.cwd)).toLowerCase().includes(q));
   }, [chats, query]);
 
+  // Worktrees read as their card ("└ WEB-1042"), not as a near-duplicate of
+  // the project name — with a dozen open, `orbit-WEB-1042` and
+  // `orbit-WEB-1043` are one glance apart otherwise.
   const repoOptions = useMemo(
-    () => repos.map((r) => ({ value: r.root, label: repoName(r.root), hint: r.branch })),
+    () => repos.map((r) => {
+      const wt = worktreeTag(r);
+      return { value: r.root, label: wt ? `└ ${wt}` : repoName(r.root), hint: r.branch };
+    }),
     [repos]
   );
 
@@ -511,6 +654,9 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                     ))}
                     {!shown.length && <div className="px-2.5 py-3 text-[11px] t-dim2">no chats match</div>}
                   </div>
+                  {/* Pinned under the list, so context and spend for the chat you
+                      are reading stay on screen while you scroll its history. */}
+                  {active && <Inspector chat={active} />}
                 </div>
 
                 {/* ---- the active conversation ---- */}
@@ -544,10 +690,13 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                   {/* Bottom-anchored: a short conversation sits above the input
                       where a chat belongs, instead of stranding it at the top of
                       a tall empty panel. */}
-                  <div ref={scrollRef}
-                    onScroll={(e) => { const el = e.currentTarget; stuckBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}
+                  {/* The wrapper is what "jump to latest" is positioned against:
+                      it ends exactly where the composer begins, so the button
+                      floats just above the input instead of over it. */}
+                  <div className="relative flex-1 min-h-0 flex flex-col">
+                  <div ref={scrollRef} onScroll={onScroll}
                     className="agx-scroll flex-1 min-h-0 overflow-y-auto px-5 py-4">
-                    <div className="min-h-full flex flex-col justify-end gap-3">
+                    <div ref={contentRef} className="min-h-full flex flex-col justify-end gap-3">
                       {active && !active.messages.length && (
                         <div className="grid place-items-center text-center t-dim2 text-[12px] py-10">
                           {enabled
@@ -592,10 +741,19 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                               <span>{m.role}</span>
                               <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
                             </div>
+                            {m.thinking && <Thinking text={m.thinking} streaming={!!m.streaming && !m.text} />}
                             {m.tools.length > 0 && (
                               <div className="flex flex-col gap-0.5 mb-1.5 pb-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                                {m.tools.map((t) => (
-                                  <ToolRow key={t.id} e={{ kind: "tool", ts: t.ts, tool: t.name, target: t.target, is_error: t.error, output: t.output }} />
+                                {/* Folded the same way the session timeline
+                                    folds it: a subagent's work nests under the
+                                    call that spawned it rather than being
+                                    interleaved with the main thread's. */}
+                                {buildRows(m.tools.map((t) => ({
+                                  kind: "tool" as const, ts: t.ts, tool: t.name, target: t.target,
+                                  is_error: t.error, output: t.output, note: t.note,
+                                  agent_id: t.agentId, agent_type: t.agentType, tool_use_id: t.id,
+                                }))).map((r) => r.kind === "tool" && (
+                                  <ToolRow key={r.key} e={r.e} sub={r.children} />
                                 ))}
                               </div>
                             )}
@@ -617,6 +775,23 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                     </div>
                   </div>
 
+                  {/* Sibling of the scroller, not a child: an absolutely
+                      positioned element inside a scroll container scrolls away
+                      with the content, which is the one place this must not be.
+                      Only while detached — a permanent button would be noise,
+                      but silently stopping following looks like a frozen panel. */}
+                  {!pinned && (
+                    <div className="absolute left-0 right-0 bottom-0 grid place-items-center pointer-events-none" style={{ zIndex: 5 }}>
+                      <button onClick={toBottom}
+                        title="Jump to the newest message and follow again"
+                        className="pointer-events-auto mb-2 text-[10px] px-2.5 py-1 rounded-full font-medium shadow-lg"
+                        style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 18%, var(--bg2))", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
+                        ↓ jump to latest
+                      </button>
+                    </div>
+                  )}
+                  </div>
+
                   <div className="shrink-0 border-t p-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                     {!!active?.attachments.length && (
                       <div className="flex flex-wrap gap-2 mb-2">
@@ -630,6 +805,24 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                               style={{ color: "var(--text)", background: "rgba(0,0,0,0.65)" }}>✕</button>
                           </div>
                         ))}
+                      </div>
+                    )}
+                    {active?.setupNeeded && (
+                      // The CLI never started. Retrying is pointless until the
+                      // named command is run, so this says the command rather
+                      // than offering a retry that will fail the same way.
+                      <div className="mb-2 px-2.5 py-2 rounded-lg text-[11px]"
+                        style={{ background: "color-mix(in srgb, var(--error) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--text2)" }}>
+                        <div style={{ color: "var(--text)" }}>{active.setupNeeded.why}</div>
+                        <div className="mt-1.5 flex items-center gap-2">
+                          <code className="px-1.5 py-0.5 rounded" style={{ ...CODE_FONT_STYLE, background: "color-mix(in srgb, var(--bg3) 60%, transparent)", color: "var(--text)" }}>
+                            {active.setupNeeded.command}
+                          </code>
+                          <button onClick={() => { navigator.clipboard?.writeText(active.setupNeeded!.command); }}
+                            className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>copy</button>
+                          <button onClick={() => update(active.id, (c) => { c.setupNeeded = undefined; c.attention = "none"; })}
+                            className="ml-auto text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)" }}>dismiss</button>
+                        </div>
                       </div>
                     )}
                     {active?.blockedTool && (

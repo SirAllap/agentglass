@@ -22,6 +22,13 @@ web: ## Run only the Vite dashboard on :6180
 build: ## Production build of the web dashboard (web/dist)
 	bun run build
 
+test: ## Run the server test suite (what CI runs)
+	cd server && bun test
+
+typecheck: ## Type-check both halves (vite build and bun both strip types without checking)
+	cd web && bunx tsc --noEmit
+	cd server && bunx tsc --noEmit
+
 start: ## Run the server in production mode
 	bun run start
 

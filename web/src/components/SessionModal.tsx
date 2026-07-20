@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { SessionDetail, TimelineEntry } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
@@ -6,9 +6,12 @@ import { ChangesModal } from "./ChangesModal.tsx";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { Markdown } from "../lib/markdown.tsx";
-import { fmtUsd, fmtTokens, fmtAgo, fmtTime, modelLabelOf, modelColor } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, fmtAgo, fmtTime, modelLabelOf, modelColor, sessionTitle } from "../lib/format.ts";
 import { ToolRow } from "./ToolRow.tsx";
+import { buildRows, type Row } from "../lib/toolTree.ts";
 import { sessionIsLive } from "../lib/derive.ts";
+import { sessionWorktree, sessionCwd } from "../lib/worktree.ts";
+import { useStuckBottom } from "../lib/useStuckBottom.ts";
 
 const TOOL_RAMP = ["#a78bfa", "#f472b6", "#34d399", "#60a5fa", "#fbbf24", "#22d3ee", "#a3e635", "#fb923c"];
 const shortType = (t: string) => t.replace(/^workflow-subagent$/, "workflow").replace(/^general-purpose$/, "general");
@@ -51,7 +54,11 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
   }, 3000);
 
   const open = !!sessionId;
-  const key = d ? `${d.source_app}:${d.session_id.slice(0, 8)}` : sourceApp ? `${sourceApp}:${sessionId?.slice(0, 8)}` : sessionId?.slice(0, 8) ?? "";
+  // The name if it has one, the uuid otherwise. `id` stays available for the
+  // tooltip and for anything that needs to identify the session rather than
+  // describe it.
+  const id = d ? `${d.source_app}:${d.session_id.slice(0, 8)}` : sourceApp ? `${sourceApp}:${sessionId?.slice(0, 8)}` : sessionId?.slice(0, 8) ?? "";
+  const key = d ? sessionTitle(d) : id;
   const dur = d ? Math.max(0, d.last_seen - d.started_at) : 0;
   const durLabel = dur > 3_600_000 ? `${(dur / 3_600_000).toFixed(1)}h` : dur > 60_000 ? `${Math.round(dur / 60_000)}m` : `${Math.round(dur / 1000)}s`;
   const toolMax = Math.max(1, ...(d?.tool_mix.map((t) => t.n) ?? [1]));
@@ -69,36 +76,24 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
   // Subagents report the parent's session id, so a fleet of them lands on this
   // one timeline. Focusing one is the only way to read what it actually did
   // without its work being shuffled together with three siblings'.
-  const timeline = [...entries].reverse()
-    .filter((e) => showTools || e.kind !== "tool")
-    .filter((e) => !focusAgent || e.agent_id === focusAgent);
+  const ordered = [...entries].reverse().filter((e) => showTools || e.kind !== "tool");
+  // Focusing one is a request to read ITS thread alone, so it stays flat —
+  // nesting it under a spawn row it is the only occupant of would only indent
+  // it. Unfocused, the fleet's work folds back under the calls that started it.
+  const rows: Row[] = focusAgent
+    ? ordered.filter((e) => e.agent_id === focusAgent).map((e, i): Row =>
+        e.kind === "tool" ? { kind: "tool", e, children: [], key: `f${i}` } : { kind: "message", e, key: `f${i}` })
+    : buildRows(ordered);
 
   // Follow the newest turn, the way a terminal does — but only while you are
   // already at the bottom. Scrolling up to read something is an explicit "leave
   // me here", and a live view that overrides it is unusable on a busy session.
-  const convoRef = useRef<HTMLDivElement>(null);
-  const following = useRef(true);
-  const [pinned, setPinned] = useState(true);
-  const onConvoScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    // A slack of 40px: "close enough to the bottom" survives the sub-pixel
-    // drift that would otherwise flip this off on every render.
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-    following.current = atBottom;
-    setPinned(atBottom);
-  };
-  const toBottom = () => {
-    const el = convoRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    following.current = true;
-    setPinned(true);
-  };
-  // Open at the bottom, and stay there as the poll brings new turns in.
-  useLayoutEffect(() => {
-    const el = convoRef.current;
-    if (el && following.current) el.scrollTop = el.scrollHeight;
-  }, [timeline.length, sessionId]);
+  //
+  // Keyed on the session so opening a different one starts at ITS newest turn:
+  // following used to persist across sessions, so scrolling up to read one
+  // session left the next one opening halfway up its own history.
+  const { scrollRef: convoRef, contentRef: convoContentRef, pinned, toBottom, onScroll: onConvoScroll } =
+    useStuckBottom(open ? sessionId : null);
 
   return (
     <Portal>
@@ -117,8 +112,17 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                 {/* header */}
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <div className="flex items-baseline gap-2.5 min-w-0">
-                    <span className="text-[15px] font-semibold truncate" style={{ color: "var(--text)" }}>{key}</span>
+                    <span className="text-[15px] font-semibold truncate" style={{ color: "var(--text)" }} title={id}>{key}</span>
                     {d?.model_name && <span className="chip" style={{ color: modelColor(modelLabelOf(d.model_name)), background: `color-mix(in srgb, ${modelColor(modelLabelOf(d.model_name))} 15%, transparent)` }}>{modelLabelOf(d.model_name)}</span>}
+                    {/* Which checkout this agent is working. With a worktree per
+                        card, "which branch is this one on" is the first thing you
+                        need and the session id can't tell you. */}
+                    {d && sessionWorktree(d) && (
+                      <span className="chip" title={`Linked worktree — ran in ${d.cwd_path}`}
+                        style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>
+                        ⑂ {sessionWorktree(d)}
+                      </span>
+                    )}
                     {d && <span className="text-[10px] t-dim2">{durLabel} · last {fmtAgo(d.last_seen)} ago</span>}
                   </div>
                   <div className="ml-auto flex items-center gap-2 shrink-0">
@@ -131,9 +135,9 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                         <span className="chip t-dim2" title="This session is still running — resume it once it stops, or watch it live below.">
                           ● running
                         </span>
-                      ) : d.project_path ? (
+                      ) : sessionCwd(d) ? (
                         <button onClick={() => { onResume(d); onClose(); }} className="chip cursor-pointer"
-                          title={`Continue this conversation in ${d.project_path} — claude keeps the full context`}
+                          title={`Continue this conversation in ${sessionCwd(d)} — claude keeps the full context`}
                           style={{ color: "var(--ok, #34d399)", background: "color-mix(in srgb, #34d399 15%, transparent)", borderColor: "color-mix(in srgb, #34d399 45%, transparent)" }}>
                           ↩ resume in chat
                         </button>
@@ -282,12 +286,16 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                             ⚙ tools {toolCount > 0 && <span className="tabular-nums">{toolCount}</span>}
                           </button>
                         </div>
-                        <div className="space-y-2.5">
-                          {timeline.length === 0 && <div className="t-dim2 text-[11px]">no prompts or messages captured</div>}
-                          {timeline.map((c, i) => c.kind === "tool" ? (
-                            <ToolRow key={i} e={c} />
+                        {/* Watched for height changes — the eyebrow row above is
+                            fixed, so every growth in this view happens here:
+                            new turns, and tool output whose syntax highlighting
+                            lands a moment after the row itself. */}
+                        <div ref={convoContentRef} className="space-y-2.5">
+                          {rows.length === 0 && <div className="t-dim2 text-[11px]">no prompts or messages captured</div>}
+                          {rows.map((r) => r.kind === "tool" ? (
+                            <ToolRow key={r.key} e={r.e} sub={r.children} />
                           ) : (
-                            <div key={i} className={`flex ${c.role === "user" ? "justify-end" : "justify-start"}`}>
+                            <div key={r.key} className={`flex ${r.e.role === "user" ? "justify-end" : "justify-start"}`}>
                               <div
                                 className="max-w-[85%] min-w-0 rounded-xl px-3 py-2 text-[11.5px] leading-relaxed break-words"
                                 // Mixed against a solid base rather than
@@ -297,13 +305,13 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                                 // completely. The left border carries the
                                 // distinction even where the fills don't.
                                 style={
-                                  c.role === "user"
+                                  r.e.role === "user"
                                     ? { background: "color-mix(in srgb, var(--primary) 26%, var(--bg2))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", borderLeft: "3px solid var(--primary)" }
                                     : { background: "color-mix(in srgb, var(--bg3) 85%, var(--bg))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", borderLeft: "3px solid color-mix(in srgb, var(--info) 70%, transparent)" }
                                 }
                               >
-                                <div className="text-[9px] uppercase tracking-wider mb-1" style={{ color: c.role === "user" ? "var(--primary-hover)" : "var(--info)" }}>{c.role} · {fmtTime(c.ts)}</div>
-                                <Markdown text={c.text ?? ""} />
+                                <div className="text-[9px] uppercase tracking-wider mb-1" style={{ color: r.e.role === "user" ? "var(--primary-hover)" : "var(--info)" }}>{r.e.role} · {fmtTime(r.e.ts)}</div>
+                                <Markdown text={r.e.text ?? ""} />
                               </div>
                             </div>
                           ))}

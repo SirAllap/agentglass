@@ -4,13 +4,15 @@
 // (never a shell string); paths are validated to stay inside the repo root; and
 // every mutating op is gated by AGENTGLASS_GIT_WRITE_DISABLED=1.
 
-import { resolve, basename, relative, dirname, sep } from "node:path";
-import { statSync, readFileSync, readdirSync } from "node:fs";
+import { resolve, basename, relative, dirname, sep, join } from "node:path";
+import { statSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
+import { worktreeParent, gitDir } from "./worktree.ts";
 import type {
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
-  GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine,
+  GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine, GitTreeState,
+  GitRemote, GitTag, GitReflogEntry,
 } from "../../shared/types.ts";
 
 export const GIT_WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -133,6 +135,30 @@ function untracked(root: string): GitFileChange[] {
   return out;
 }
 
+/**
+ * What git is in the middle of, if anything.
+ *
+ * A repo mid-rebase behaves differently from a clean one — half the commit
+ * operations are unavailable and the useful action is continue/abort/skip — so
+ * the header has to say so rather than showing a branch name as if nothing were
+ * happening. Probing `.git` is how git itself decides, and it costs one stat
+ * per state instead of a subprocess.
+ *
+ * A linked worktree's `.git` is a *file* pointing at the real dir, and these
+ * state files live in the per-worktree dir rather than the shared one — so this
+ * resolves through gitDir() rather than assuming `<root>/.git`.
+ */
+function treeState(root: string): GitTreeState {
+  const dir = gitDir(root);
+  if (!dir) return "clean";
+  if (existsSync(join(dir, "rebase-merge")) || existsSync(join(dir, "rebase-apply"))) return "rebasing";
+  if (existsSync(join(dir, "MERGE_HEAD"))) return "merging";
+  if (existsSync(join(dir, "CHERRY_PICK_HEAD"))) return "cherry-picking";
+  if (existsSync(join(dir, "REVERT_HEAD"))) return "reverting";
+  if (existsSync(join(dir, "BISECT_LOG"))) return "bisecting";
+  return "clean";
+}
+
 function branchInfo(root: string): GitBranchInfo {
   const name = currentBranch(root);
   const detached = name === "(detached)";
@@ -143,7 +169,7 @@ function branchInfo(root: string): GitBranchInfo {
     behind = Number(c[0]) || 0;
     ahead = Number(c[1]) || 0;
   }
-  return { name, upstream, ahead, behind, detached };
+  return { name, upstream, ahead, behind, detached, state: treeState(root) };
 }
 
 /** Full working-tree state for one repo. */
@@ -263,8 +289,13 @@ function codeRootsOf(knownRoots: string[]): string[] {
  *  disk entirely would never show up. */
 /** Branch + dirty count for one repo, in a single git call. `--branch` prepends
  *  a `##` header naming the branch, so asking separately would double the
- *  process count for data already in hand. ahead/behind stays 0 here; the
- *  header computes the real values for the selected repo via workingTree(). */
+ *  process count for data already in hand — including ahead/behind, which the
+ *  same header already carries as "[ahead 1, behind 2]". Reading it here is
+ *  free; computing it with rev-list would be one more subprocess per repo, and
+ *  this runs for every repo in the sweep.
+ *
+ *  Both counts are only as fresh as the last fetch — they compare against the
+ *  local origin/* refs, not the remote. See startAutoFetch(). */
 async function repoRef(root: string): Promise<GitRepoRef | null> {
   const r = await gitAsync(root, ["status", "--porcelain=v1", "--branch"]);
   if (r.code !== 0) return null;
@@ -276,7 +307,16 @@ async function repoRef(root: string): Promise<GitRepoRef | null> {
   // "release-1").
   const m = head.match(/^## (?:No commits yet on )?(.+?)(?:\.\.\.|\s|$)/);
   const branch = head.includes("(no branch)") ? "(detached)" : m?.[1] ?? "(detached)";
-  return { root, name: basename(root), branch, dirty: lines.length - (head ? 1 : 0), ahead: 0, behind: 0 };
+  // Free (one stat + one small read, no subprocess), and it's what lets every
+  // panel say "this is a worktree of X" rather than showing a bare directory
+  // name that happens to look like a project.
+  const parent = worktreeParent(root);
+  return {
+    root, name: basename(root), branch, dirty: lines.length - (head ? 1 : 0),
+    ahead: Number(head.match(/ahead (\d+)/)?.[1]) || 0,
+    behind: Number(head.match(/behind (\d+)/)?.[1]) || 0,
+    ...(parent ? { worktreeOf: parent } : {}),
+  };
 }
 
 // Opening git, terminal and chat each asks for the same list, and a user
@@ -317,7 +357,12 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
       : reposUnder(only1);
     const refs = await Promise.all(found.map((r) => repoRef(r)));
     const scoped = refs.filter((r): r is GitRepoRef => !!r);
-    scoped.sort((a, b) => b.dirty - a.dirty || a.name.localeCompare(b.name));
+    // The project itself first, then its worktrees. Dirtiest-first is the right
+    // order among peers, but it shouldn't bury the main checkout behind a
+    // worktree that happens to have more edits open — the dropdown is read as
+    // "the project, and the branches I have checked out beside it".
+    scoped.sort((a, b) =>
+      Number(!!a.worktreeOf) - Number(!!b.worktreeOf) || b.dirty - a.dirty || a.name.localeCompare(b.name));
     repoCache.set(key, { at: Date.now(), repos: scoped });
     return scoped;
   }
@@ -350,14 +395,64 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   const dirs = new Set<string>();
   for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
   for (const d of dirs) { const r = repoRootOf(d); if (r) roots.add(r); }
+  // Fold linked worktrees into the project they belong to — for the PICKER only.
+  //
+  // A user working the way worktrees are meant to be used has a dozen sibling
+  // checkouts of one repo (~/code/orbit, ~/code/orbit-WEB-1042, …); each has a
+  // `.git`, so the sweep called every one of them a project and "Open a project"
+  // showed thirteen entries for what the user has one name for, burying every
+  // other project on the machine. Choosing a *project* should offer projects.
+  //
+  // The panel lists (`/git/repos` without `all=1`) must NOT be folded, even
+  // though they run through this same branch when nothing is scoped. There the
+  // question is "which checkout do I want a shell / a diff / a chat in", and a
+  // worktree is a real answer — an unscoped cockpit has no other way to reach
+  // one, since those dropdowns have no free-text path box. They come back tagged
+  // with `worktreeOf` instead, and the UI indents them under their project.
+  const folded = new Map<string, number>();
+  if (opts.ignoreScope) {
+    // Only folded when the parent is in the list too. A worktree whose main repo
+    // lives outside the swept directories has nothing to fold into, and dropping
+    // it would make it unreachable rather than tidy.
+    for (const r of [...roots]) {
+      const parent = worktreeParent(r);
+      if (!parent || !roots.has(parent)) continue;
+      roots.delete(r);
+      folded.set(parent, (folded.get(parent) ?? 0) + 1);
+    }
+  }
   // One git call per repo, all of them at once. `--branch` prepends a `##`
   // header naming the branch, which is the other thing the dropdown shows —
   // asking separately doubled the process count for data already in hand.
   // ahead/behind stays 0 here; the header computes the real values for the
   // selected repo via workingTree().
   const out = (await Promise.all([...roots].map((r) => repoRef(r)))).filter((r): r is GitRepoRef => !!r);
+  for (const r of out) { const n = folded.get(r.root); if (n) r.worktrees = n; }
   const scoped = only.length ? within(out, only) : out;
-  scoped.sort((a, b) => b.dirty - a.dirty || a.name.localeCompare(b.name));
+  // Families stay together, dirtiest family first, the project ahead of its own
+  // worktrees. Sorting the flat list by dirty count alone scatters a repo's
+  // checkouts through the dropdown, so `orbit` and `orbit-WEB-1042` end up
+  // pages apart — the one arrangement that makes a worktree look like an
+  // unrelated project, which is the confusion this whole change is about.
+  const family = (r: GitRepoRef) => r.worktreeOf ?? r.root;
+  const rank = new Map<string, { dirty: number; name: string }>();
+  for (const r of scoped) {
+    const f = family(r);
+    const cur = rank.get(f);
+    // The family's name comes from the project itself, not from whichever
+    // worktree happens to sort first.
+    if (!cur || (!r.worktreeOf && cur.name !== r.name) || r.dirty > cur.dirty) {
+      rank.set(f, { dirty: Math.max(cur?.dirty ?? 0, r.dirty), name: r.worktreeOf ? cur?.name ?? r.name : r.name });
+    }
+  }
+  scoped.sort((a, b) => {
+    const fa = family(a), fb = family(b);
+    if (fa !== fb) {
+      const ra = rank.get(fa)!, rb = rank.get(fb)!;
+      return rb.dirty - ra.dirty || ra.name.localeCompare(rb.name);
+    }
+    return Number(!!a.worktreeOf) - Number(!!b.worktreeOf) || b.dirty - a.dirty || a.name.localeCompare(b.name);
+  });
   repoCache.set(key, { at: Date.now(), repos: scoped });
   return scoped;
 }
@@ -392,6 +487,10 @@ function validRels(root: string, rels: unknown): string[] | null {
 
 function run(root: string, args: string[]): GitActionResult {
   const r = git(root, args);
+  // Every mutating path goes through here, so this is the one place that has to
+  // know the merged-set may have moved — rather than each of the twenty callers
+  // remembering to say so.
+  invalidateMerged(root);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || r.stdout.trim() || `git ${args[0]} failed`, output: (r.stdout + r.stderr).trim() };
   return { ok: true, output: (r.stdout + r.stderr).trim() };
 }
@@ -471,6 +570,66 @@ export function pull(rootIn: string): GitActionResult {
   const g = guard(root); if (g) return g;
   return run(root, ["pull", "--ff-only"]);
 }
+/**
+ * Keep ahead/behind honest, in the background.
+ *
+ * `git status` and `for-each-ref` compare HEAD against the *local* `origin/*`
+ * refs, which only move when something fetches. Without this the counts are as
+ * old as the last manual fetch — which is why a branch could sit 500 commits
+ * behind its upstream and the panel would cheerfully show nothing at all.
+ * lazygit solves it the same way (`git.autoFetch`, 60s).
+ *
+ * Three things this must never do, all of which rule out reusing fetch():
+ *   * Block. fetch() is spawnSync, and this server is single-threaded — one
+ *     stalled network call would freeze every other request for its timeout.
+ *   * Prompt. A repo whose credentials expired would otherwise hang on a
+ *     terminal password prompt no one can answer, once a minute, forever.
+ *     GIT_TERMINAL_PROMPT=0 and an empty GIT_ASKPASS turn that into a fast
+ *     failure; SSH_ASKPASS_REQUIRE covers the ssh path.
+ *   * Complain. Being offline is the normal state of a laptop, not an error
+ *     worth logging every minute.
+ *
+ * Only the open project is fetched — never a sweep of the machine. Its linked
+ * worktrees come along for free: they share one object store and one set of
+ * remote refs, so a single fetch updates the counts for all of them.
+ */
+const AUTO_FETCH_MS = Number(process.env.AGENTGLASS_AUTOFETCH_SECONDS ?? 60) * 1000;
+let fetching = false;
+
+async function autoFetchOnce(): Promise<void> {
+  // Overlapping fetches would pile up on a slow remote; one in flight is enough.
+  if (fetching) return;
+  const root = workspaceRoot();
+  // Unscoped means "the whole machine", and fetching every repo on the machine
+  // once a minute is exactly the cost this feature must not have.
+  if (!root || !repoRoot(root)) return;
+  fetching = true;
+  try {
+    const proc = Bun.spawn(["git", "-C", root, "fetch", "--all", "--prune", "--quiet"], {
+      stdout: "ignore",
+      stderr: "ignore",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
+    });
+    const timer = setTimeout(() => proc.kill(), 20_000);
+    await proc.exited;
+    clearTimeout(timer);
+    // A fetch moves origin/*, which is exactly what "merged into the trunk" is
+    // measured against.
+    invalidateMerged(root);
+  } catch {
+    // Offline, no remote, no credentials — all ordinary. The counts simply stay
+    // where they were, which is the same as the old behaviour.
+  } finally {
+    fetching = false;
+  }
+}
+
+export function startAutoFetch(): void {
+  if (AUTO_FETCH_MS <= 0) return; // AGENTGLASS_AUTOFETCH_SECONDS=0 turns it off
+  setInterval(autoFetchOnce, AUTO_FETCH_MS).unref?.();
+  autoFetchOnce(); // don't make the first minute a lie
+}
+
 export function fetch(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
@@ -482,18 +641,82 @@ const US = "\x1f"; // field separator
 const validRef = (n: string) => typeof n === "string" && /^(?!-)(?!.*\.\.)[A-Za-z0-9._\/-]+$/.test(n) && !n.endsWith("/") && !n.endsWith(".lock");
 const validHash = (h: string) => typeof h === "string" && /^[0-9a-fA-F]{4,40}$/.test(h);
 
-export function branches(rootIn: unknown): { current: string; branches: GitBranch[] } {
+/**
+ * The repository's trunk — what "was this merged?" has to be asked against.
+ *
+ * `git branch -d` asks whether a branch is merged into **HEAD**, which is the
+ * wrong question the moment you work in worktrees: opened on a ticket branch,
+ * every merged PR looks unmerged, because it was merged into master and master
+ * isn't what you have checked out. The honest question is always "is it in the
+ * trunk", so we have to name the trunk ourselves.
+ *
+ * `origin/HEAD` is the remote's own answer and survives a repo whose default is
+ * neither `main` nor `master`. It's only a local symref though, so it can be
+ * missing on a clone made with `--single-branch`; the fallbacks cover that.
+ */
+export function defaultBranch(root: string): string | null {
+  const sym = git(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]).stdout.trim();
+  if (sym) return sym;
+  for (const ref of ["origin/main", "origin/master", "main", "master"]) {
+    if (git(root, ["rev-parse", "--verify", "--quiet", ref]).code === 0) return ref;
+  }
+  return null;
+}
+
+/**
+ * Branch names already contained in `ref` — one call, not one per branch.
+ *
+ * Cached, and it has to be: `--merged` walks history for every branch in the
+ * repo, which on a real one (57 branches, a few hundred thousand commits)
+ * measures 819ms. The branches view polls every 2.5s, so computing it live
+ * spent a third of every cycle answering a question whose answer only changes
+ * when something merges, rebases or fetches — none of which happen twice a
+ * second. Uncached, this alone took /git/branches from 90ms to 908ms.
+ *
+ * The TTL is the staleness anyone can perceive: merge a branch and it stops
+ * being marked deletable up to half a minute later, which is invisible next to
+ * the panel being usable.
+ */
+const MERGED_TTL_MS = 30_000;
+const mergedCache = new Map<string, { at: number; set: Set<string> }>();
+
+function mergedInto(root: string, ref: string): Set<string> {
+  const key = `${root} ${ref}`;
+  const hit = mergedCache.get(key);
+  if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.set;
+  const r = git(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
+  const set = new Set(r.stdout.split("\n").filter(Boolean));
+  mergedCache.set(key, { at: Date.now(), set });
+  return set;
+}
+
+/** Drop the cache after anything that can change what's merged, so the panel
+ *  reflects your own action immediately rather than up to a TTL later. */
+export function invalidateMerged(root?: string): void {
+  if (!root) return mergedCache.clear();
+  for (const k of mergedCache.keys()) if (k.startsWith(`${root} `)) mergedCache.delete(k);
+}
+
+export function branches(rootIn: unknown): { current: string; branches: GitBranch[]; trunk: string | null } {
   const root = repoRoot(rootIn);
-  if (!root) return { current: "", branches: [] };
+  if (!root) return { current: "", branches: [], trunk: null };
   const fmt = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)`;
   const r = git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]);
+  const trunk = defaultBranch(root);
+  const merged = trunk ? mergedInto(root, trunk) : null;
   const list: GitBranch[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
     const [name, head, upstream, track, date, subject] = line.split(US);
-    list.push({ name, current: head === "*", upstream: upstream || null, track: track || "", date: date || "", subject: subject || "" });
+    list.push({
+      name, current: head === "*", upstream: upstream || null, track: track || "",
+      date: date || "", subject: subject || "",
+      // Undefined rather than false when there's no trunk to compare against —
+      // "we don't know" and "not merged" must not look the same to the UI.
+      ...(merged ? { mergedIntoTrunk: merged.has(name) } : {}),
+    });
   }
-  return { current: currentBranch(root), branches: list };
+  return { current: currentBranch(root), branches: list, trunk };
 }
 
 // lazygit-style branch ops
@@ -632,6 +855,75 @@ export function commitDiff(rootIn: unknown, hash: string): GitFileChange[] {
   // vs first parent (matches the comment) + UTF-8 paths.
   const r = git(root, ["-c", "core.quotePath=false", "show", hash, "--no-color", "--first-parent", "--format=", "--unified=3"]);
   return parseDiff(root, r.stdout, false);
+}
+
+/** Configured remotes, with a branch count each so the list says something
+ *  before you drill into it. `remote -v` lists fetch and push separately, and
+ *  they differ on a fork setup (push to yours, fetch from upstream). */
+export function remotes(rootIn: unknown): GitRemote[] {
+  const root = repoRoot(rootIn);
+  if (!root) return [];
+  const counts = new Map<string, number>();
+  for (const line of git(root, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]).stdout.split("\n")) {
+    const name = line.split("/")[0];
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const byName = new Map<string, GitRemote>();
+  for (const line of git(root, ["remote", "-v"]).stdout.split("\n")) {
+    // "origin\tgit@host:owner/repo.git (fetch)"
+    const m = line.match(/^(\S+)\s+(\S+)\s+\((fetch|push)\)$/);
+    if (!m) continue;
+    const [, name, url, kind] = m;
+    const cur = byName.get(name) ?? { name, fetchUrl: "", pushUrl: "", branches: counts.get(name) ?? 0 };
+    if (kind === "fetch") cur.fetchUrl = url; else cur.pushUrl = url;
+    byName.set(name, cur);
+  }
+  return [...byName.values()];
+}
+
+/** Tags, newest first. `creatordate` rather than `taggerdate` so lightweight
+ *  tags — which have no tagger — sort by their commit instead of sorting last. */
+export function tags(rootIn: unknown, limit = 300): GitTag[] {
+  const root = repoRoot(rootIn);
+  if (!root) return [];
+  const fmt = `%(refname:short)${US}%(objecttype)${US}%(contents:subject)${US}%(creatordate:relative)${US}%(objectname:short)`;
+  const r = git(root, ["for-each-ref", "--sort=-creatordate", `--count=${Math.max(1, Math.min(1000, limit | 0))}`, "refs/tags", `--format=${fmt}`]);
+  const out: GitTag[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [name, type, subject, date, hash] = line.split(US);
+    out.push({ name, subject: subject || "", date: date || "", hash: hash || "", annotated: type === "tag" });
+  }
+  return out;
+}
+
+/**
+ * Where HEAD has been — the trail that makes a bad reset or rebase recoverable.
+ *
+ * The action is split out from the message because it's the useful column: a
+ * list of "commit / rebase (finish) / reset" tells you what happened at a
+ * glance, and it's how you find the commit you were on before things went
+ * wrong. `%gs` is "reset: moving to HEAD~3", so the action is everything up to
+ * the first colon.
+ */
+export function reflog(rootIn: unknown, limit = 200): GitReflogEntry[] {
+  const root = repoRoot(rootIn);
+  if (!root) return [];
+  const n = Math.max(1, Math.min(1000, limit | 0));
+  const fmt = `%gD${US}%h${US}%gs${US}%ar`;
+  const r = git(root, ["reflog", `-n${n}`, `--pretty=format:${fmt}`]);
+  const out: GitReflogEntry[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [ref, shortHash, gs, date] = line.split(US);
+    const at = (gs || "").indexOf(":");
+    out.push({
+      ref: ref || "", shortHash: shortHash || "", date: date || "",
+      action: at === -1 ? (gs || "") : gs.slice(0, at),
+      subject: at === -1 ? "" : gs.slice(at + 1).trim(),
+    });
+  }
+  return out;
 }
 
 export function stashList(rootIn: unknown): GitStash[] {

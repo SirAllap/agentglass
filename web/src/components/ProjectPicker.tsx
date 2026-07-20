@@ -182,6 +182,12 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                         <span className="block text-[12px] font-medium truncate" style={{ color: "var(--text)" }}>
                           {r.name}
                           {r.dirty > 0 && <span className="t-dim2 font-normal"> · {r.dirty} change{r.dirty === 1 ? "" : "s"}</span>}
+                          {/* The worktrees folded into this project. They aren't
+                              listed separately — they're the same project on
+                              another branch — but a dozen of them shouldn't be
+                              invisible either, and opening the project makes all
+                              of them available in git, terminal and chat. */}
+                          {!!r.worktrees && <span className="t-dim2 font-normal"> · {r.worktrees} worktree{r.worktrees === 1 ? "" : "s"}</span>}
                         </span>
                         <span className="block text-[10px] t-dim2 truncate" title={r.root}>{r.root}</span>
                       </span>

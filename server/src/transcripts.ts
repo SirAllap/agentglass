@@ -17,9 +17,11 @@ import { homedir } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import type { IngestBody } from "../../shared/types.ts";
 import { normalize } from "./ingest.ts";
-import { db, insertEvent, RETENTION_DAYS, type InsertResult } from "./db.ts";
+import { db, insertEvent, setSessionTitles, RETENTION_DAYS, type InsertResult } from "./db.ts";
+// safeAbs: translates Windows drive paths, so a WSL-side transcript groups
+// under its own folder rather than collapsing onto the server's cwd.
 import { projectRootOf, safeAbs } from "./git.ts";
-import { workspaceRoot } from "./config.ts";
+import { workspaceRoot, inScope } from "./config.ts";
 
 // One root by default; a path.delimiter-separated list (":" on POSIX, ";" on
 // Windows) sweeps several at once — e.g. a WSL home next to a Windows one.
@@ -147,6 +149,28 @@ function resultText(content: unknown): string {
 // Claude Code writes its own plumbing into the user role: slash-command echoes,
 // their stdout, image placeholders and injected context. None of it was typed
 // by the user, so it would only pollute the prompt stream.
+/**
+ * A slash command, as the user actually typed it.
+ *
+ * Claude Code records `/pr-resolve-reviews 16866` as three XML tags, which the
+ * meta filter below correctly refuses to show — but dropping the tags dropped
+ * the message with them, so a session driven entirely by slash commands had no
+ * user side at all: pages of assistant output answering a question that was
+ * nowhere on screen. Rebuilding the command line keeps the noise out and the
+ * intent in.
+ *
+ * `/clear` and friends stay filtered: they're session plumbing, not something
+ * anyone asked the agent to do.
+ */
+const NOISE_COMMANDS = new Set(["clear", "compact", "cost", "init", "resume", "exit", "quit"]);
+
+export function slashCommand(text: string): string | null {
+  const name = /<command-name>\s*\/?([^<\s]+)\s*<\/command-name>/.exec(text)?.[1];
+  if (!name || NOISE_COMMANDS.has(name)) return null;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim();
+  return `/${name}${args ? ` ${args}` : ""}`;
+}
+
 const META_PREFIXES = [
   "<local-command-caveat>",
   "<local-command-stdout>",
@@ -260,6 +284,10 @@ function lineToBodies(
 
   // --- user ---------------------------------------------------------------
   if (typeof content === "string") {
+    // A slash command is a real instruction wearing markup, so it's read before
+    // the meta filter gets to reject it for the tags it's made of.
+    const cmd = slashCommand(content);
+    if (cmd) return [{ ...base, hook_event_type: "UserPromptSubmit", timestamp: ts, payload: { ...common, prompt: cmd } }];
     return content.trim() && !isMetaPrompt(o, content)
       ? [{ ...base, hook_event_type: "UserPromptSubmit", timestamp: ts, payload: { ...common, prompt: content.slice(0, 4000) } }]
       : [];
@@ -361,15 +389,15 @@ async function ingestFile(
   // sweep (passed in), so a workspace switched mid-sweep can't suddenly widen
   // a *live* sweep into broadcasting months of backfill.
   //
-  // Match on the *resolved repo root*, not just the raw cwd: a session running
+  // Match on the *resolved repo root* as well as the raw cwd: a session running
   // in a project's own linked worktree (e.g. ~/code/app-wt, outside the scope
   // path) belongs to the scoped repo — `--git-common-dir` folds it back — and
-  // the git panel already lists such worktrees as part of the project. We still
-  // accept a raw-cwd match first, so scoping to a monorepo subdir (whose git
-  // root sits *above* the scope) keeps working.
+  // the git panel already lists such worktrees as part of the project. The raw
+  // cwd is tried first, so scoping to a monorepo subdir (whose git root sits
+  // *above* the scope) keeps working; inScope() also accepts the scope's own
+  // linked worktrees directly, which covers a cockpit opened *on* a worktree.
   if (scope && cwd) {
-    const inScope = (p: string) => p === scope || p.startsWith(scope + "/");
-    if (!inScope(cwd) && !inScope(resolvedRoot(cwd))) {
+    if (!inScope(cwd, scope) && !inScope(resolvedRoot(cwd), scope)) {
       return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true };
     }
   }
@@ -390,6 +418,12 @@ async function ingestFile(
   // back, leaving them showing rows the database never kept.
   const emitted: InsertResult[] = [];
   const fileMtime = statSync(path).mtimeMs;
+  // What the session is called. Both kinds are appended as their own lines and
+  // rewritten on every change, so the *last* one in the file is the current
+  // one — and because the loop below parses every line regardless of `from`, an
+  // incremental sweep still sees a rename that happened before its offset.
+  let customTitle: string | null = null;
+  let aiTitle: string | null = null;
 
   const run = db.transaction(() => {
     for (let i = 0; i < lines.length; i++) {
@@ -402,6 +436,10 @@ async function ingestFile(
       } catch {
         continue;
       }
+      // Not events, so lineToBodies drops them — but they're the only place the
+      // session's human name exists.
+      if (o.type === "custom-title") customTitle = str(o.customTitle) ?? customTitle;
+      else if (o.type === "ai-title") aiTitle = str(o.aiTitle) ?? aiTitle;
       const bodies = lineToBodies(o, ctx, fileMtime);
       if (i < from) continue; // already ingested — parsed only for tool names
       for (const body of bodies) {
@@ -411,6 +449,9 @@ async function ingestFile(
     }
   });
   run();
+  // After the transaction: the session row is created by the inserts above, and
+  // a title for a session with no events yet has nothing to attach to.
+  if (customTitle || aiTitle) setSessionTitles(session_id, customTitle, aiTitle);
   for (const r of emitted) onLive?.(r);
 
   return { lines: lines.length, ingested, source_app, project_path, session_id };
@@ -535,6 +576,49 @@ export async function resyncScope(): Promise<void> {
  * The initial sweep doesn't broadcast — it can be tens of thousands of events,
  * and no client is interested in replaying history frame by frame.
  */
+/**
+ * Give already-ingested sessions their names, once.
+ *
+ * The sweep only re-reads a transcript whose size or mtime moved, which is
+ * exactly right for events and exactly wrong for a field that didn't exist when
+ * those files were last read. Without this, every session on the machine keeps
+ * showing a uuid until it happens to be worked on again — which for a finished
+ * session is never.
+ *
+ * Only touches sessions with no title at all, so it's a no-op on every start
+ * after the first, and it reads just the title lines rather than re-ingesting:
+ * the events are already in, and re-parsing them would be minutes of work to
+ * change one column.
+ */
+async function backfillTitles(): Promise<number> {
+  const rows = db.query<{ path: string; session_id: string }, []>(`
+    SELECT f.path, f.session_id FROM transcript_files f
+    JOIN sessions s ON s.session_id = f.session_id
+    WHERE s.custom_title IS NULL AND s.ai_title IS NULL
+  `).all();
+  let named = 0;
+  for (const { path, session_id } of rows) {
+    let text: string;
+    try {
+      text = await Bun.file(path).text();
+    } catch { continue; } // deleted since — nothing to name
+    // Cheap reject: the overwhelming majority of transcripts are megabytes with
+    // no title line at all, and a substring test beats parsing every line.
+    if (!text.includes('"custom-title"') && !text.includes('"ai-title"')) continue;
+    let custom: string | null = null, ai: string | null = null;
+    for (const line of text.split("\n")) {
+      if (!line.includes("-title")) continue;
+      try {
+        const o = JSON.parse(line) as Record<string, unknown>;
+        if (o.type === "custom-title") custom = str(o.customTitle) ?? custom;
+        else if (o.type === "ai-title") ai = str(o.aiTitle) ?? ai;
+      } catch { /* skip malformed line */ }
+    }
+    if (custom || ai) { setSessionTitles(session_id, custom, ai); named++; }
+  }
+  return named;
+}
+
 export function startScanner(onLive: (r: InsertResult) => void): void {
   if (!SCAN_ENABLED) {
     console.log("📴 transcript scan disabled (AGENTGLASS_SCAN_DISABLED=1)");
@@ -553,6 +637,10 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
       console.log(
         `📚 scanned ${PROJECTS_DIRS.join(", ")} — ${n} events from ${projects} project${projects === 1 ? "" : "s"} in ${Date.now() - t0}ms`
       );
+      // After the sweep, so freshly-discovered sessions are already rows.
+      backfillTitles()
+        .then((named) => { if (named) console.log(`🏷  named ${named} session${named === 1 ? "" : "s"} from their transcripts`); })
+        .catch((e) => console.error(`[scan] title backfill failed: ${e instanceof Error ? e.message : e}`));
       setInterval(async () => {
         if (sweepBusy) return; // a slow sweep must not stack up behind the timer
         sweepBusy = true;

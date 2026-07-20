@@ -1,10 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the cockpit window is allowed to ask the native shell for. Only the launch-at-login toggle — everything else it needs comes from the server over HTTP.",
+  "description": "What the cockpit window is allowed to ask the native shell for. The launch-at-login toggle, its own zoom level, and going fullscreen — everything else it needs comes from the server over HTTP.",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:webview:allow-set-webview-zoom",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-is-fullscreen",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled"

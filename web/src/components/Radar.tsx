@@ -11,6 +11,20 @@ const STATUS_COLOR: Record<string, string> = {
   idle: "var(--text4)",
 };
 const STATUS_ORDER: AgentStatus[] = ["working", "waiting", "errored", "idle"];
+/**
+ * A finished blip, tinted by how it finished.
+ *
+ * The fleet wall and the radar show the same sessions, so they have to agree:
+ * a run marked as having stopped on an unanswered question over there must not
+ * be an anonymous grey dot here. Only idle blips are tinted — everything live
+ * keeps its status colour, because that is still the more urgent fact.
+ */
+const OUTCOME_COLOR: Record<string, string> = {
+  unanswered: "var(--warning)",
+  faulted: "var(--error)",
+  // settled and unclear both stay grey: neither wants anything from you, and
+  // a wall of green dots for "done" would drown the two that do.
+};
 
 // viewBox geometry — everything is authored in these units and scaled to fit.
 const VB = 240;
@@ -44,7 +58,8 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
     const angle = bearingOf(a.key);
     const busy = Math.min(1, a.spark.reduce((s, v) => s + v, 0) / 12);
     const [x, y] = P(angle, radius);
-    return { a, x, y, frac, size: 3.4 + busy * 4.2, color: STATUS_COLOR[a.status] ?? "var(--text4)" };
+    const color = (a.status === "idle" ? OUTCOME_COLOR[a.outcome] : undefined) ?? STATUS_COLOR[a.status] ?? "var(--text4)";
+    return { a, x, y, frac, size: 3.4 + busy * 4.2, color };
   });
 
   const counts = STATUS_ORDER.map((s) => ({ s, n: agents.filter((a) => a.status === s).length }));

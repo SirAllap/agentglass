@@ -32,8 +32,12 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktrees as gitWorktrees, addWorktree, removeWorktree,
+  worktrees as gitWorktrees, addWorktree, removeWorktree, startAutoFetch,
+  remotes as gitRemotes, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
+import { recent as gitCommandLog } from "./gitlog.ts";
+import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
+import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs,
@@ -43,7 +47,7 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
 import { chatStream, CHAT_ENABLED, CHAT_BYPASS_ALLOWED } from "./chat.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
-import { workspaceRoot, setWorkspaceRoot, CONFIG_PATH } from "./config.ts";
+import { workspaceRoot, setWorkspaceRoot, inScope, CONFIG_PATH } from "./config.ts";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { rateOk } from "./ratelimit.ts";
@@ -330,8 +334,10 @@ const server = Bun.serve<WsData>({
     if (pathname === "/projects") {
       // Scoped instance → scoped project list. The DB may hold other projects
       // from an earlier machine-wide run; they're not this cockpit's business.
+      // inScope rather than a prefix test, so a cockpit opened *on* a linked
+      // worktree still lists the project its sessions roll up to.
       const ws = workspaceRoot();
-      const projects = knownProjects().filter((p) => !ws || p.path === ws || p.path.startsWith(ws + "/"));
+      const projects = knownProjects().filter((p) => inScope(p.path, ws));
       return json({ projects, scanning: SCAN_ENABLED, workspace: ws });
     }
     // Pick the project this cockpit is about (or null → the whole machine).
@@ -425,6 +431,30 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
+    // Every git command this server has run — the command log panel.
+    if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
+    // Open a file at a line in the editor the user already has running.
+    if (pathname === "/editor/target") return json({ ...(await editorTarget(url.searchParams.get("path") || "")), hasNvim: HAS_NVIM });
+    if (pathname === "/git/remotes") return json({ remotes: gitRemotes(url.searchParams.get("root") || "") });
+    if (pathname === "/git/tags") return json({ tags: gitTags(url.searchParams.get("root") || "") });
+    if (pathname === "/git/reflog") return json({ entries: gitReflog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 200)) });
+    // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
+    if (pathname === "/editor/capability") return json(editorCapability());
+    if (pathname === "/theme/status") return json({ ...snippetStatus(), snippets: SNIPPETS });
+    if (pathname === "/theme/sync" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json(await syncTheme(b.vars ?? {}, String(b.name ?? "custom")));
+    }
+
+    if (pathname === "/editor/open" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json(await openInEditor(b.path, b.line));
+    }
+
     if (pathname.startsWith("/git/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
@@ -713,3 +743,5 @@ console.log(`   Stats API   → http://localhost:${server.port}/stats`);
 console.log(`   Retention   → ${RETENTION_DAYS ? `${RETENTION_DAYS} days` : "unlimited"}`);
 const ws = workspaceRoot();
 console.log(ws ? `   Project     → ${ws} (this project only)` : "   Project     → every project on this machine");
+// Only meaningful once a project is open — see startAutoFetch().
+startAutoFetch();

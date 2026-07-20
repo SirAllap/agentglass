@@ -4,6 +4,7 @@ import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from ".
 import { Portal } from "./Portal.tsx";
 import { CommitModal } from "./CommitModal.tsx";
 import { api } from "../lib/api.ts";
+import { buildTitles } from "../lib/derive.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { fmtTime, agentKey } from "../lib/format.ts";
 import { THEMES } from "../lib/highlight.ts";
@@ -333,12 +334,20 @@ const shortDir = (dir: string) => {
 
 /** Bucket the (already path-filtered) changes into groups, preserving first-seen
  *  order — the API returns newest-first, so recent activity floats to the top. */
-function groupChanges(list: FileChange[], by: GroupBy): FileGroup[] {
+function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>): FileGroup[] {
   const map = new Map<string, FileGroup>();
   const order: string[] = [];
   for (const c of list) {
     let key: string, label: string, sub: string | undefined;
-    if (by === "session") { key = `${c.source_app}:${c.session_id}`; label = agentKey({ source_app: c.source_app, session_id: c.session_id }); sub = c.source_app; }
+    if (by === "session") {
+      key = `${c.source_app}:${c.session_id}`;
+      // Named if the session has a name. Grouping by "session" and then
+      // labelling each group with a uuid means reading hex to tell two
+      // groups apart, which is the one thing the grouping was meant to
+      // save you from.
+      label = titles?.get(c.session_id) ?? agentKey({ source_app: c.source_app, session_id: c.session_id });
+      sub = c.source_app;
+    }
     else if (by === "agent") { key = c.source_app || "—"; label = c.source_app || "unknown"; }
     else if (by === "tool") { key = c.tool || "—"; label = c.tool || "unknown"; }
     else { const d = dirOf(c.file_path); key = d; label = shortDir(d); }
@@ -414,17 +423,28 @@ function GroupBlock({ g, collapsed, selId, reviewed, descMap, onToggleCollapse, 
   const allRev = revCount === g.items.length;
   return (
     <div className="mb-1">
-      <div className="flex items-center gap-1.5 px-1.5 py-1 rounded-md" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)" }}>
-        <button onClick={onToggleCollapse} className="flex items-center gap-1.5 min-w-0 flex-1 text-left">
-          <span className="text-[9px] t-dim2 transition-transform shrink-0" style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}>▾</span>
-          <span className="text-[11px] font-semibold truncate" style={{ color: "var(--text2, var(--text))" }}>{g.label}</span>
-          {g.sub && <span className="text-[9px] t-dim2 shrink-0 truncate">{g.sub}</span>}
+      {/* Two rows, not one. Grouping by session finally shows real names, and a
+          real name is a sentence — "Call duration is not showing for some UR
+          (unresponsive) calls" — which cannot share a 300px row with the repo,
+          a file count and two diff totals without being cut to "Call duration
+          is …". The name gets the full width and up to two lines; everything
+          numeric drops underneath, where it still reads fine. */}
+      <div className="flex items-start gap-1.5 px-1.5 py-1 rounded-md" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)" }}>
+        <button onClick={onToggleCollapse} className="flex items-start gap-1.5 min-w-0 flex-1 text-left">
+          <span className="text-[9px] t-dim2 transition-transform shrink-0 mt-[3px]" style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}>▾</span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[11px] font-semibold leading-snug" title={g.label}
+              style={{ color: "var(--text2, var(--text))", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
+              {g.label}
+            </span>
+            <span className="flex items-center gap-1.5 text-[9.5px] tabular-nums mt-0.5">
+              {g.sub && <span className="t-dim2 truncate">{g.sub}</span>}
+              <span className="t-dim2">{g.items.length}</span>
+              {g.add > 0 && <span style={{ color: "var(--success)" }}>+{g.add}</span>}
+              {g.del > 0 && <span style={{ color: "var(--error)" }}>−{g.del}</span>}
+            </span>
+          </span>
         </button>
-        <span className="shrink-0 text-[9.5px] tabular-nums flex items-center gap-1.5">
-          <span className="t-dim2">{g.items.length}</span>
-          {g.add > 0 && <span style={{ color: "var(--success)" }}>+{g.add}</span>}
-          {g.del > 0 && <span style={{ color: "var(--error)" }}>−{g.del}</span>}
-        </span>
         <button
           onClick={() => onToggleGroup(g, !allRev)}
           title={allRev ? "Mark group unreviewed" : "Mark whole group reviewed"}
@@ -554,6 +574,7 @@ export function writeWalkCache(sig: string, r: WalkthroughResult) {
 
 export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, presetTitle, presetPath }: { open: boolean; onClose: () => void; onBack?: () => void; backLabel?: string; presetChanges?: FileChange[]; presetTitle?: string; presetPath?: string }) {
   const [changes, setChanges] = useState<FileChange[] | null>(null);
+  const [titles, setTitles] = useState<ReadonlyMap<string, string>>(new Map());
   const [q, setQ] = useState("");
   const [selId, setSelId] = useState<number | null>(null);
   const [wrap, setWrap] = useState(false);
@@ -590,6 +611,11 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
         setSelId(r.changes[0]?.id ?? null);
       }).catch(() => setChanges([]));
     }
+    // Session names, so grouping by session shows what each one is rather than
+    // a uuid. Fetched here rather than passed in: this modal is opened from
+    // several places (the fleet, a session, the git panel) and threading a prop
+    // through all of them to display a label isn't worth the coupling.
+    api.sessions(200).then((ss) => setTitles(buildTitles(ss))).catch(() => { /* labels fall back to the uuid */ });
     // focus the frame so j/k nav works immediately (filter is opt-in via click)
     requestAnimationFrame(() => frameRef.current?.focus());
   }, [open]);
@@ -628,7 +654,7 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
 
   const all = changes ?? [];
   const filtered = useMemo(() => (q ? all.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : all), [all, q]);
-  const groups = useMemo(() => groupChanges(filtered, groupBy), [filtered, groupBy]);
+  const groups = useMemo(() => groupChanges(filtered, groupBy, titles), [filtered, groupBy, titles]);
   const shown = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const totals = useMemo(() => all.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }), [all]);
   const revCount = useMemo(() => all.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0), [all, reviewed]);
