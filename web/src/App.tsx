@@ -124,6 +124,15 @@ export default function App() {
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
 
+  // The workspace covers the dashboard, so the dashboard's ambient loops are
+  // animating for nobody. The stylesheet freezes them on `data-ws`, the same way
+  // it already does for a backgrounded tab. It is a play-state flip rather than
+  // an unmount, so closing the workspace resumes them instantly and switching
+  // between the two stays immediate.
+  useEffect(() => {
+    document.documentElement.dataset.ws = wsOpen ? "1" : "0";
+  }, [wsOpen]);
+
   // Which folder is this cockpit about? Ask once on first open when nothing is
   // scoped yet — picking a project up front is what gives the terminal, git
   // panel and command list their directory. Answering "whole machine" (or just
