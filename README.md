@@ -136,6 +136,15 @@ in a terminal — with its full context intact. Sessions that are still running
 are listed but can't be picked: a claude session has a single owner, and a
 second writer on the same transcript corrupts its history.
 
+**What a session shows:** the conversation is a **timeline**, not only a chat
+log. Tool runs interleave with messages, each tool card carries the head of its
+output (so a failing test is distinguishable from a passing one without leaving
+the panel), and **subagents** report the parent's session id — click one to
+filter the thread to it. Images are sent to the model as image blocks; other
+files are quoted into the message. Type `/` in the composer to list and insert
+skills/commands (slash commands are enabled in `-p`, they just weren't
+discoverable).
+
 ---
 
 ## Why
@@ -438,9 +447,12 @@ inference, prompt) to an event the same way.
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |
 **Scope is a boundary, not just a filter.** With a project open, git writes, the
 terminal and chat are all refused outside it — the same rule that decides what the
-dashboard shows. For genuinely multi-repo work, scope to the parent folder
-(`~/code`) rather than one repo: every repo beneath it is then in scope. An
-unscoped (whole-machine) instance is unaffected.
+dashboard shows. This is a *behaviour* boundary, not cosmetic: opening the app
+on `~/code` and then jumping to `/tmp` in the terminal is refused, and git
+writes outside the root are blocked by `AGENTGLASS_GIT_WRITE_DISABLED`/`AGENTGLASS_TERMINAL_DISABLED` knobs if set.
+For genuinely multi-repo work, scope to the parent folder (`~/code`) rather
+than one repo: every repo beneath it is then in scope. An unscoped (whole-machine)
+instance is unaffected.
 
 | `AGENTGLASS_TERMINAL_DISABLED` | — | `1` → disable the in-browser **Terminal** entirely (no PTY shells are spawned). |
 | `AGENTGLASS_FS_BROWSE_DISABLED` | — | `1` → disable directory completion in the project picker (`/fs/complete`). Separate from the terminal switch on purpose: disabling the shell should not leave the directory tree readable. |
