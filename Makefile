@@ -25,6 +25,9 @@ build: ## Production build of the web dashboard (web/dist)
 test: ## Run the server test suite (what CI runs)
 	cd server && bun test
 
+smoke: build ## Boot the production bundle in headless Chrome — fails on a blank screen or any console error
+	bun scripts/smoke.ts
+
 typecheck: ## Type-check both halves (vite build and bun both strip types without checking)
 	cd web && bunx tsc --noEmit
 	cd server && bunx tsc --noEmit
@@ -78,5 +81,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	~/.local/share/agentglass/agentglass "$(DIR)"
 
-.PHONY: help install dev server web build start setup setup-undo connect connect-undo demo-feed \
+.PHONY: help install dev server web build test smoke typecheck start setup setup-undo connect connect-undo demo-feed \
         desktop desktop-server desktop-web desktop-dev desktop-install desktop-open
