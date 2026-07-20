@@ -330,6 +330,94 @@ async function main() {
       if (!closed) failures.push("[workspace] Escape did not close the workspace");
 
       if (!failures.length) console.log("✓ smoke: workspace opens, all 5 views mount, keys switch and close");
+
+      // Chats have to outlive the page, which is a property no unit test can
+      // reach: the store restores at module load, from real storage, in a real
+      // document. So drive it the way the accident does, by opening tabs, typing
+      // into one and then actually reloading, rather than hand-writing storage,
+      // which the running app would rightly overwrite on its way out.
+      //
+      // This is the crash and the project switch both: that switch deliberately
+      // calls location.reload() to rescope every view, and it used to take every
+      // open conversation with it.
+      if (!(await evaluate(`!!document.querySelector('${railSel}')`))) await press("\\", true);
+      await press("c");
+
+      const listSel = '[role="listbox"][aria-label="open chats"]';
+      const rows = () => evaluate(`document.querySelectorAll('${listSel} [role="option"]').length`);
+
+      // A chat needs a repo to sit in, and that comes from the server. With no
+      // server behind the bundle there is nothing to persist and nothing to check.
+      let haveChat = false;
+      for (let i = 0; i < 30 && !haveChat; i++) {
+        haveChat = (await rows()) > 0;
+        if (!haveChat) await Bun.sleep(100);
+      }
+
+      if (!haveChat) {
+        console.log("• smoke: chat persistence not checked, no server behind the bundle so no chat exists to persist");
+      } else {
+        // A second tab, so the check cannot be satisfied by the panel simply
+        // seeding one fresh blank chat the way it does on a cold start.
+        await evaluate(`(() => {
+          [...document.querySelectorAll("button")].find((b) => b.textContent.includes("+ new"))?.click();
+          return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        })()`);
+        await Bun.sleep(300);
+        const before = await rows();
+
+        // The draft is the part that exists nowhere else. Claude's own transcript
+        // has the conversation, but never what you had not sent yet.
+        const DRAFT = "a half typed thing";
+        await evaluate(`(() => {
+          const ta = document.querySelector('textarea[aria-label="chat composer"]');
+          Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(ta, ${JSON.stringify(DRAFT)});
+          ta.dispatchEvent(new Event("input", { bubbles: true }));
+          return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        })()`);
+        // Past the store's debounced write, so the reload is not racing it.
+        await Bun.sleep(900);
+
+        await cdp.send("Page.navigate", { url }, sessionId);
+        // Same wait as the first mount: the reload throws the whole tree away.
+        const reDeadline = Date.now() + MOUNT_TIMEOUT_MS;
+        let remounted = false;
+        while (Date.now() < reDeadline && !remounted) {
+          remounted = (await evaluate(`!!document.querySelector("#root") && document.querySelector("#root").childElementCount > 0`)) === true;
+          if (!remounted) await Bun.sleep(250);
+        }
+
+        if (!remounted) failures.push("[chat-persist] the app never came back after the reload");
+        else {
+          await Bun.sleep(SETTLE_MS);
+          // The workspace remembers whether it was open, so toggling blind would
+          // close it half the time. Ask first.
+          // A freshly reloaded page can take a moment to attach the window
+          // keydown handler, so the first ⌘\\ may land on nothing. Keep asking
+          // until the rail is actually up rather than assuming one press took.
+          for (let i = 0; i < 30; i++) {
+            if (await evaluate(`!!document.querySelector('${railSel}')`)) break;
+            await press("\\", true);
+            await Bun.sleep(200);
+          }
+          for (let i = 0; i < 30; i++) {
+            if (await evaluate(`!!document.querySelector('${listSel}')`)) break;
+            await press("c");
+            await Bun.sleep(200);
+          }
+          await Bun.sleep(500);
+
+          const after = await rows();
+          if (after !== before)
+            failures.push(`[chat-persist] ${before} tab(s) were open, ${after} came back`);
+
+          const draft = await evaluate(`document.querySelector('textarea[aria-label="chat composer"]')?.value ?? ""`);
+          if (draft !== DRAFT)
+            failures.push(`[chat-persist] the draft did not come back, found: ${JSON.stringify(draft)}`);
+
+          if (!failures.length) console.log(`✓ smoke: ${after} chats and the composer draft survive a reload`);
+        }
+      }
     }
 
     console.log(`smoke: served ${DIST} at ${url}`);
