@@ -12,7 +12,7 @@
 // noticing a rename that happened before the offset, coping with a rewritten
 // file and with a line the writer has only half-flushed is the part that breaks.
 // Each test below is one of those.
-import { describe, expect, test, beforeAll } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,21 @@ beforeAll(async () => {
   const scope = (await import("../src/config.ts")).workspaceRoot();
   if (scope) CWD = join(scope, "agx-tail-fixture");
   mkdirSync(CWD, { recursive: true });
+});
+
+// `bun test` shares one process and db.ts opens its file at import, so an
+// earlier test file may already own the database — these fixtures then land in
+// it. Keying every assertion here by session id is not enough: other files
+// assert on what is *absent* (scope.test.ts uses not.toContain), and in CI,
+// where the files run in a different order than locally, these sessions showed
+// up in their results. So take the rows back out.
+const FIXTURES = ["s-append", "s-pair", "s-tool", "s-usage", "s-title", "s-rewrite", "s-partial", "s-nonewline", "s-cold"];
+afterAll(() => {
+  if (!db) return;
+  const marks = FIXTURES.map(() => "?").join(",");
+  for (const t of ["events", "sessions", "transcript_files"]) {
+    try { db.db.run(`DELETE FROM ${t} WHERE session_id IN (${marks})`, FIXTURES); } catch { /* table may not have the column */ }
+  }
 });
 
 const sweep = () => scan.scanOnce(null);
