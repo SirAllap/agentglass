@@ -30,6 +30,12 @@ const OUTCOME_COLOR: Record<string, string> = {
 const VB = 240;
 const C = VB / 2;
 const R = 104; // outer ring radius
+/** Compaction typically fires before the raw model max is reached.
+ *  Anchor the outer ring to this fraction of ctxLimit so "edge" means
+ *  "about to compact", not "model max". */
+const COMPACT_FRAC = 0.9;
+const INNER = 16;
+const OUTER = R - 10; // keep a small margin inside the drawn ring
 
 const P = (deg: number, rad: number): [number, number] => [
   C + rad * Math.cos((deg * Math.PI) / 180),
@@ -52,14 +58,21 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
   const now = Date.now();
 
   const blips = agents.slice(0, 24).map((a) => {
-    const frac = a.ctxTokens > 0 ? Math.min(1, a.ctxTokens / a.ctxLimit) : null;
+    // Raw fraction of model max, then re-anchor so 1.0 == compaction threshold.
+    const rawFrac = a.ctxTokens > 0 && a.ctxLimit > 0 ? Math.min(1, a.ctxTokens / a.ctxLimit) : null;
+    const compactFrac = rawFrac == null ? null : Math.min(1, rawFrac / COMPACT_FRAC);
+    // Mild ease-in: expand the outer band where compaction decisions live.
+    const eased = compactFrac == null ? null : Math.pow(compactFrac, 0.7);
     const age = Math.min(1, (now - a.lastSeen) / (5 * 60_000)); // recency fallback: 0 fresh → 1 old
-    const radius = 16 + (frac ?? age) * (R - 26);
+    const radius = INNER + (eased ?? age) * (OUTER - INNER);
     const angle = bearingOf(a.key);
     const busy = Math.min(1, a.spark.reduce((s, v) => s + v, 0) / 12);
     const [x, y] = P(angle, radius);
     const color = (a.status === "idle" ? OUTCOME_COLOR[a.outcome] : undefined) ?? STATUS_COLOR[a.status] ?? "var(--text4)";
-    return { a, x, y, frac, size: 3.4 + busy * 4.2, color };
+    // `frac` stays the raw fraction of the model max: it feeds the tooltip and
+    // the legend, which talk about context used. Only the *radius* is anchored
+    // to the compaction threshold.
+    return { a, x, y, frac: rawFrac, size: 3.4 + busy * 4.2, color };
   });
 
   const counts = STATUS_ORDER.map((s) => ({ s, n: agents.filter((a) => a.status === s).length }));
@@ -80,7 +93,7 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
     <Panel
       eyebrow="Radar"
       title="Live radar"
-      right={<span className="text-[10px] t-dim2">{agents.length} tracked · edge = context full</span>}
+      right={<span className="text-[10px] t-dim2">{agents.length} tracked · edge = about to compact</span>}
     >
       <div className="flex flex-col h-full">
         <div className="relative flex-1 min-h-0 flex items-center justify-center">
@@ -101,18 +114,33 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
             {/* field wash */}
             <circle cx={C} cy={C} r={R} fill="url(#rdr-field)" />
 
-            {/* range rings */}
-            {[0.34, 0.67, 1].map((r) => (
+            {/* range rings — inner guides only, anchored to the blip band
+                (OUTER). The edge itself is the dashed compaction ring below,
+                so no solid ring is drawn at r=1: it sat outside the band and
+                read as a second, redundant edge. */}
+            {[0.34, 0.67].map((r) => (
               <circle
                 key={r}
                 cx={C}
                 cy={C}
-                r={R * r}
+                r={OUTER * r}
                 fill="none"
                 stroke="color-mix(in srgb, var(--primary) 22%, transparent)"
                 strokeWidth={1}
               />
             ))}
+
+            {/* compaction threshold ring — the "danger line" blips cross */}
+            <circle
+              cx={C}
+              cy={C}
+              r={OUTER}
+              fill="none"
+              stroke="color-mix(in srgb, var(--warning) 70%, transparent)"
+              strokeWidth={1.4}
+              strokeDasharray="3 3"
+              opacity={0.9}
+            />
 
             {/* cross axes */}
             <line x1={C} y1={C - R} x2={C} y2={C + R} stroke="color-mix(in srgb, var(--primary) 14%, transparent)" />
@@ -127,9 +155,10 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
               );
             })}
 
-            {/* range labels — fraction of the context window used */}
-            <text x={C + 3} y={C - R * 0.34 + 8} fontSize={7} fill="var(--text4)" className="tabular-nums">⅓ ctx</text>
-            <text x={C + 3} y={C - R + 10} fontSize={7} fill="var(--text4)" className="tabular-nums">full</text>
+            {/* range labels — distance is fraction-to-compaction, not raw model
+                max; anchored to OUTER so `compact` sits on the dashed ring. */}
+            <text x={C + 3} y={C - OUTER * 0.34 + 8} fontSize={7} fill="var(--text4)" className="tabular-nums">⅓ →compact</text>
+            <text x={C + 3} y={C - OUTER + 10} fontSize={7} fill="var(--text4)" className="tabular-nums">compact</text>
 
             {/* (sweep lives in a separate, GPU-composited <svg> overlay below) */}
 
@@ -182,6 +211,9 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
           )}
         </div>
 
+        <p className="text-center text-[10px] t-dim2 mt-1 px-2">
+          center = fresh context · <span style={{ color: "var(--warning)" }}>edge = about to compact</span>
+        </p>
         <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-1 text-[10px] t-dim2">
           {counts.map(({ s, n }) => (
             <span key={s} className="flex items-center gap-1">
@@ -201,7 +233,7 @@ function Tooltip({ b }: { b: { a: AgentCard; x: number; y: number; frac: number 
     b.a.key,
     `${b.a.status} · ${b.a.lastType || "—"}`,
     b.frac != null
-      ? `ctx ${fmtTokens(b.a.ctxTokens)} / ${fmtTokens(b.a.ctxLimit)} (${Math.round(b.frac * 100)}%)`
+      ? `ctx ${fmtTokens(b.a.ctxTokens)} / ${fmtTokens(b.a.ctxLimit)} (${Math.round(b.frac * 100)}% · ${Math.round(Math.min(1, b.frac / COMPACT_FRAC) * 100)}%→compact)`
       : "ctx unknown — placed by recency",
     `${b.a.tools} tools · ${fmtUsd(b.a.cost)}`,
   ];
