@@ -1,6 +1,6 @@
 import { useRef, useState, useLayoutEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { THEMES, applyTheme, type Theme } from "../lib/themes.ts";
+import { THEMES, pickTheme, type Theme } from "../lib/themes.ts";
 import { Portal } from "./Portal.tsx";
 
 // Group themes by the luminance of their background — no per-theme flag needed.
@@ -75,7 +75,7 @@ export function ThemeSwitcher({ current, onChange }: { current: string; onChange
                         <button
                           key={t.id}
                           onClick={() => {
-                            applyTheme(t.id);
+                            pickTheme(t.id);
                             onChange(t.id);
                             setOpen(false);
                           }}
