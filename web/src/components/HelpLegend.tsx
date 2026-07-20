@@ -64,17 +64,27 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
                   <span><kbd className="chip">?</kbd> this help</span>
                   <span><kbd className="chip">s</kbd> statistics</span>
                   <span><kbd className="chip">k</kbd> skills explorer</span>
-                  <span><kbd className="chip">d</kbd> file changes / diffs</span>
-                  <span><kbd className="chip">g</kbd> source control (git)</span>
-                  <span><kbd className="chip">o</kbd> docker (containers)</span>
-                  <span><kbd className="chip">t</kbd> terminal (a real shell)</span>
-                  <span><kbd className="chip">c</kbd> chat (drive a claude session)</span>
                   <span><kbd className="chip">/</kbd> search all history</span>
                   {IS_DESKTOP && (
                     <span><kbd className="chip">{MOD_KEY}+</kbd> <kbd className="chip">{MOD_KEY}−</kbd> display size</span>
                   )}
                   <span>Click an event → full details</span>
                   <span>Click an agent → filter to it</span>
+                </div>
+                <div className="panel-eyebrow mt-3 mb-2">workspace</div>
+                <div className="grid grid-cols-2 gap-y-1 text-[11px] t-dim">
+                  <span><kbd className="chip">{MOD_KEY}\</kbd> open / close</span>
+                  <span><kbd className="chip">{MOD_KEY}1</kbd>…<kbd className="chip">{MOD_KEY}5</kbd> jump to a view</span>
+                  <span><kbd className="chip">g</kbd> git</span>
+                  <span><kbd className="chip">d</kbd> diff</span>
+                  <span><kbd className="chip">o</kbd> docker</span>
+                  <span><kbd className="chip">t</kbd> terminal</span>
+                  <span><kbd className="chip">c</kbd> chat</span>
+                  <span><kbd className="chip">{MOD_KEY}[</kbd> <kbd className="chip">{MOD_KEY}]</kbd> cycle views</span>
+                  {/* The distinction that actually bites: bare letters are
+                      swallowed by the shell and the composer, the ⌘ pair never
+                      is. */}
+                  <span className="col-span-2 t-dim2">letters switch views unless you're typing; {MOD_KEY} shortcuts always work</span>
                 </div>
               </div>
             </motion.div>

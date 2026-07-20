@@ -247,6 +247,46 @@
   border-radius: 6px;
 }
 
+/* Workspace rail.
+ *
+ * The rail is icon-only, so the tooltip is not decoration — it is the only
+ * place the view's name exists. The delay keeps it from strobing as the
+ * pointer crosses the rail on its way somewhere else. */
+.agw-tip:hover {
+  background: color-mix(in srgb, var(--primary) 10%, transparent) !important;
+  color: var(--text2) !important;
+}
+.agw-tip[aria-selected="true"]:hover {
+  background: color-mix(in srgb, var(--primary) 22%, transparent) !important;
+  color: var(--primary-hover) !important;
+}
+.agw-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 10px);
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 7px;
+  font-size: 10.5px;
+  color: var(--text2);
+  background: color-mix(in srgb, var(--bg) 96%, var(--bg2));
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, transparent);
+  box-shadow: 0 12px 30px -18px #000;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-3px);
+  transition: opacity 0.12s ease 0.25s, transform 0.12s ease 0.25s;
+  z-index: 5;
+}
+.agw-tip:hover::after,
+.agw-tip:focus-visible::after {
+  opacity: 1;
+  transform: translateX(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agw-tip::after { transition: opacity 0.12s ease 0.25s; transform: none; }
+}
+
 /* A chat that replied while you were elsewhere. Deliberately a slow, low-
    contrast breath rather than a hard blink: it sits in a header you look at
    all day, and something that flashes urgently for a message that can wait

@@ -26,11 +26,8 @@ import { CommandPalette } from "./components/CommandPalette.tsx";
 import { HelpLegend } from "./components/HelpLegend.tsx";
 import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
-import { ChangesModal } from "./components/ChangesModal.tsx";
-import { GitPanel } from "./components/GitPanel.tsx";
-import { DockerPanel } from "./components/DockerPanel.tsx";
-import { TerminalPanel } from "./components/TerminalPanel.tsx";
-import { ChatPanel } from "./components/ChatPanel.tsx";
+import { Workspace } from "./components/workspace/Workspace.tsx";
+import { LETTER_TO_VIEW, VIEW_IDS, loadLastView, type ViewId } from "./components/workspace/views.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
@@ -92,11 +89,11 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
-  const [changesOpen, setChangesOpen] = useState(false);
-  const [gitOpen, setGitOpen] = useState(false);
-  const [dockerOpen, setDockerOpen] = useState(false);
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
+  // One overlay replaced five modals. `wsView` is which view it shows, and it
+  // survives closing — reopening lands you where you left off, because
+  // switching views is the thing you do constantly.
+  const [wsOpen, setWsOpen] = useState(false);
+  const [wsView, setWsView] = useState<ViewId>(loadLastView);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chatFocus, setChatFocus] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -112,12 +109,20 @@ export default function App() {
   // A live snapshot of "is any panel/overlay open", read by the global key
   // handler so single-letter shortcuts can't stack a second panel on top of an
   // open one. Kept in a ref so the handler needn't re-subscribe on every toggle.
+  // NB: the workspace is deliberately NOT in this list. It used to be, back
+  // when it was five separate panels, and that guard is exactly what made the
+  // app unusable: with git open, `d` did nothing, so reaching the diff meant
+  // Escape, then `d`, losing the git panel's state on the way. Inside the
+  // workspace the letters now *switch views* instead of being swallowed.
   const anyPanelOpen =
-    paletteOpen || helpOpen || statsOpen || skillsOpen || changesOpen ||
-    gitOpen || dockerOpen || terminalOpen || chatOpen || searchOpen ||
+    paletteOpen || helpOpen || statsOpen || skillsOpen || searchOpen ||
     projectOpen || sessionView !== null || selected !== null;
   const anyPanelOpenRef = useRef(anyPanelOpen);
   anyPanelOpenRef.current = anyPanelOpen;
+  const wsOpenRef = useRef(wsOpen);
+  wsOpenRef.current = wsOpen;
+  const wsViewRef = useRef(wsView);
+  wsViewRef.current = wsView;
 
   // Which folder is this cockpit about? Ask once on first open when nothing is
   // scoped yet — picking a project up front is what gives the terminal, git
@@ -261,6 +266,26 @@ export default function App() {
         if (k === "=" || k === "+") { e.preventDefault(); setScale(nudgeScale(1)); return; }
         if (k === "-" || k === "_") { e.preventDefault(); setScale(nudgeScale(-1)); return; }
         if (k === "0") { e.preventDefault(); setScale(resetScale()); return; }
+
+        // Workspace navigation, and the reason it carries a modifier: these
+        // have to work while the caret sits in the chat composer or a commit
+        // message, where a bare letter is just a letter.
+        if (k >= "1" && k <= String(VIEW_IDS.length)) {
+          e.preventDefault();
+          setWsView(VIEW_IDS[Number(k) - 1]);
+          setWsOpen(true);
+          return;
+        }
+        if (k === "[" || k === "]") {
+          e.preventDefault();
+          setWsView((cur) => {
+            const i = VIEW_IDS.indexOf(cur);
+            return VIEW_IDS[(i + (k === "]" ? 1 : VIEW_IDS.length - 1)) % VIEW_IDS.length];
+          });
+          setWsOpen(true);
+          return;
+        }
+        if (k === "\\") { e.preventDefault(); setWsOpen((o) => !o); return; }
       }
       // F11, the way every desktop app binds it. Outside the modifier block —
       // it carries none — and before the bailout below, which would otherwise
@@ -279,11 +304,7 @@ export default function App() {
         setHelpOpen(false);
         setStatsOpen(false);
         setSkillsOpen(false);
-        setChangesOpen(false);
-        setGitOpen(false);
-        setDockerOpen(false);
-        setTerminalOpen(false);
-        setChatOpen(false);
+        setWsOpen(false);
         setSearchOpen(false);
         setSessionView(null);
         return;
@@ -298,17 +319,39 @@ export default function App() {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const a = document.activeElement;
       const focusFree = !a || a === document.body || a === document.documentElement;
-      if (!focusFree || anyPanelOpenRef.current) return;
 
+      // Inside the workspace the frame itself holds focus, so `focusFree` is
+      // false and the old guard would swallow every letter. What actually
+      // matters there is narrower: is the keystroke going into a field or a
+      // shell? If not, it's navigation.
+      const typing = !!a && (
+        /^(input|textarea|select)$/i.test(a.tagName) ||
+        (a as HTMLElement).isContentEditable ||
+        !!a.closest?.(".xterm")
+      );
+      const canNavigate = (focusFree && !anyPanelOpenRef.current) || (wsOpenRef.current && !typing);
+      if (!canNavigate) return;
+
+      // A workspace letter either opens the workspace on that view or, if it's
+      // already open, switches to it. Same five keys as before, except they no
+      // longer stop working the moment you're actually using one of them.
+      const view = LETTER_TO_VIEW[e.key];
+      if (view) {
+        e.preventDefault();
+        // Pressing the current view's own letter closes the workspace, so a
+        // key that opened something can also put it away.
+        if (wsOpenRef.current && view === wsViewRef.current) setWsOpen(false);
+        else { setWsView(view); setWsOpen(true); }
+        return;
+      }
+
+      // The remaining globals still open something *over* whatever you're in,
+      // so they keep the original strict guard: dashboard only.
+      if (!focusFree || anyPanelOpenRef.current || wsOpenRef.current) return;
       switch (e.key) {
         case "?": setHelpOpen((o) => !o); break;
         case "s": e.preventDefault(); setStatsOpen((o) => !o); break;
         case "k": e.preventDefault(); setSkillsOpen((o) => !o); break;
-        case "d": e.preventDefault(); setChangesOpen((o) => !o); break;
-        case "g": e.preventDefault(); setGitOpen((o) => !o); break;
-        case "o": e.preventDefault(); setDockerOpen((o) => !o); break;
-        case "t": e.preventDefault(); setTerminalOpen((o) => !o); break;
-        case "c": e.preventDefault(); setChatOpen((o) => !o); break;
         case "/": e.preventDefault(); setSearchOpen((o) => !o); break;
       }
     };
@@ -347,11 +390,7 @@ export default function App() {
         onOpenHelp={() => setHelpOpen(true)}
         onOpenStats={() => setStatsOpen(true)}
         onOpenSkills={() => setSkillsOpen(true)}
-        onOpenChanges={() => setChangesOpen(true)}
-        onOpenGit={() => setGitOpen(true)}
-        onOpenDocker={() => setDockerOpen(true)}
-        onOpenTerminal={() => setTerminalOpen(true)}
-        onOpenChat={() => setChatOpen(true)}
+        onOpenWorkspace={() => setWsOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
         onClear={clearFilters}
         showUsage={showUsage}
@@ -405,11 +444,7 @@ export default function App() {
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
-      <ChangesModal open={changesOpen} onClose={() => setChangesOpen(false)} />
-      <GitPanel open={gitOpen} onClose={() => setGitOpen(false)} />
-      <DockerPanel open={dockerOpen} onClose={() => setDockerOpen(false)} />
-      <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
-      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} focusId={chatFocus} />
+      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={() => setWsOpen(false)} chatFocusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
       <SettingsModal
         open={settingsOpen}
@@ -439,7 +474,8 @@ export default function App() {
             title: s.summary?.slice(0, 40) || `${s.source_app}:${s.session_id.slice(0, 8)}`,
           });
           setChatFocus(chat.id);
-          setChatOpen(true);
+          setWsView("chat");
+          setWsOpen(true);
         }}
       />
       <CommandPalette
@@ -452,11 +488,11 @@ export default function App() {
         onTheme={setTheme}
         onStats={() => setStatsOpen(true)}
         onSkills={() => setSkillsOpen(true)}
-        onChanges={() => setChangesOpen(true)}
-        onGit={() => setGitOpen(true)}
-        onDocker={() => setDockerOpen(true)}
-        onTerminal={() => setTerminalOpen(true)}
-        onChat={() => setChatOpen(true)}
+        onChanges={() => { setWsView("diff"); setWsOpen(true); }}
+        onGit={() => { setWsView("git"); setWsOpen(true); }}
+        onDocker={() => { setWsView("docker"); setWsOpen(true); }}
+        onTerminal={() => { setWsView("term"); setWsOpen(true); }}
+        onChat={() => { setWsView("chat"); setWsOpen(true); }}
         onSearch={() => setSearchOpen(true)}
         onClear={clearFilters}
         onZoom={zoom}

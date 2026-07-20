@@ -272,6 +272,66 @@ async function main() {
 
     if (mounted) await Bun.sleep(SETTLE_MS);
 
+    // The workspace is the app's main surface and all of it sits behind a
+    // keypress, so "the dashboard mounted" says nothing about it. Drive it the
+    // way a user does: open it, switch views, and check the views really are
+    // all mounted at once — the keep-state-alive property is the whole design,
+    // and it fails silently (you only notice a lost commit draft later).
+    if (mounted) {
+      const evaluate = async (expression: string) => {
+        const { result, exceptionDetails } = await cdp!.send(
+          "Runtime.evaluate",
+          { expression, returnByValue: true, awaitPromise: true },
+          sessionId
+        );
+        if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? exceptionDetails.text);
+        return result.value;
+      };
+
+      // A real window-level keydown, which is where App.tsx listens.
+      const press = (key: string, mod = false) =>
+        evaluate(`(() => {
+          window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(key)}, ctrlKey: ${mod}, bubbles: true, cancelable: true }));
+          return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        })()`);
+
+      const railSel = '[role="tablist"][aria-label="Workspace views"]';
+      const selectedView = () =>
+        evaluate(`document.querySelector('${railSel} [aria-selected="true"]')?.getAttribute("data-view") ?? null`);
+
+      await press("\\", true); // ⌘\ / Ctrl-\ opens it
+      const railTabs = await evaluate(`document.querySelectorAll('${railSel} [role="tab"]').length`);
+      if (railTabs !== 5) failures.push(`[workspace] expected 5 rail tabs after Ctrl-\\, found ${railTabs}`);
+
+      // Every view mounts up front; only one is visible.
+      const panes = await evaluate(`document.querySelectorAll('${railSel}')[0]?.parentElement?.querySelectorAll(':scope > div > [aria-hidden]').length ?? 0`);
+      if (panes !== 5) failures.push(`[workspace] expected all 5 views mounted, found ${panes}`);
+
+      await press("d"); // bare letter switches while the frame holds focus
+      const afterD = await selectedView();
+      if (afterD !== "diff") failures.push(`[workspace] "d" should select diff, selected ${afterD}`);
+
+      await press("t");
+      const afterT = await selectedView();
+      if (afterT !== "term") failures.push(`[workspace] "t" should select term, selected ${afterT}`);
+
+      await press("1", true); // ⌘1 works even from inside a field
+      const after1 = await selectedView();
+      if (after1 !== "git") failures.push(`[workspace] Ctrl-1 should select git, selected ${after1}`);
+
+      // Poll rather than check once: closing runs an AnimatePresence exit
+      // animation, so the rail outlives the state change by a few hundred ms.
+      await press("Escape");
+      let closed = false;
+      for (let i = 0; i < 20 && !closed; i++) {
+        closed = (await evaluate(`!document.querySelector('${railSel}')`)) === true;
+        if (!closed) await Bun.sleep(100);
+      }
+      if (!closed) failures.push("[workspace] Escape did not close the workspace");
+
+      if (!failures.length) console.log("✓ smoke: workspace opens, all 5 views mount, keys switch and close");
+    }
+
     console.log(`smoke: served ${DIST} at ${url}`);
     if (!mounted) {
       console.error(

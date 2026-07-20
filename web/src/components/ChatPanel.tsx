@@ -11,7 +11,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { GitRepoRef, SessionRollup } from "../../../shared/types.ts";
-import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
@@ -385,7 +384,16 @@ function ClipIcon() {
   );
 }
 
-export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: () => void; focusId?: string }) {
+/** Chat as a workspace view.
+ *
+ *  The conversations themselves already live outside React in chatStore, so
+ *  they survived the old panel closing. What didn't survive was everything
+ *  around them — which chat was selected, the draft in the composer, the
+ *  scroll position. Staying mounted fixes that. */
+// `active` is destructured as `visible` because this component already has an
+// `active` of its own — the currently selected chat.
+export function ChatView({ active: visible, focusId, onClose = () => {} }: { active: boolean; focusId?: string | null; onClose?: () => void }) {
+  const open = visible;
   const chats = useSyncExternalStore(subscribe, listChats, listChats);
   const [activeId, setActiveId] = useState("");
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
@@ -616,17 +624,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   );
 
   return (
-    <Portal>
-      <AnimatePresence>
-        {open && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
-            <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
-              <motion.div initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
-                transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="relative w-[95vw] h-[95vh] rounded-2xl flex pointer-events-auto overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+    <div className="relative flex-1 min-h-0 flex overflow-hidden">
                 <style>{SCROLLBAR_CSS}</style>
 
                 {/* Anchored inside the modal rather than portalled like Select:
@@ -942,11 +940,6 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                     </div>
                   </div>
                 </div>
-              </motion.div>
-            </div>
-          </>
-        )}
-      </AnimatePresence>
-    </Portal>
+    </div>
   );
 }

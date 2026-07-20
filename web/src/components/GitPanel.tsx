@@ -3,9 +3,7 @@
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
-import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { usePoll } from "../lib/usePoll.ts";
@@ -317,7 +315,13 @@ function Section({ title, count, tint, action, onAll, children }: { title: strin
   );
 }
 
-export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** Source control as a workspace view.
+ *
+ *  Staying mounted while hidden is worth more here than anywhere else: the
+ *  commit message drafts (`title`/`body`) used to be destroyed every time you
+ *  looked at something else, which is precisely what you do before committing. */
+export function GitView({ active }: { active: boolean }) {
+  const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
   const [tree, setTree] = useState<WorkingTree | null>(null);
@@ -860,18 +864,8 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
   );
 
   return (
-    <Portal>
-      <AnimatePresence>
-        {open && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
-            <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
-              <motion.div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
-                initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
-                transition={{ type: "spring", stiffness: 330, damping: 30 }}
-                className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+    <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
+      className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Source control</span>
@@ -934,7 +928,6 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
                       running={pending === "push"} disabled={!writeEnabled || busy} primary
                       onClick={() => act(() => api.gitPush(root), "pushed", "push")} />
                     <button onClick={() => loadTree(root)} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
-                    <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
                 </div>
 
@@ -1203,13 +1196,10 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
                 <ShortcutBar view={view} logOpen={logOpen} onToggleLog={() => setLogOpen((v) => !v)} editorName={editor?.editor} />
                 {helpOpen && <HelpSheet view={view} onClose={() => setHelpOpen(false)} />}
                 {toast && <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-lg text-[11px] shadow-xl" style={{ zIndex: 40, background: "var(--bg3)", border: `1px solid ${toast.ok ? "color-mix(in srgb, var(--success) 50%, transparent)" : "color-mix(in srgb, var(--error) 50%, transparent)"}`, color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</div>}
-              </motion.div>
-            </div>
-            {/* a commit's diff, reusing the full file-changes viewer */}
-            <ChangesModal open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" presetChanges={commitView?.changes} presetTitle={commitView?.title} />
-          </>
-        )}
-      </AnimatePresence>
-    </Portal>
+      {/* A commit's diff, reusing the full file-changes viewer. Still a modal:
+          it's a drill-down from a row you clicked, not a place you navigate
+          to — the rail's views are the destinations, this is a detour. */}
+      <ChangesModal open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" presetChanges={commitView?.changes} presetTitle={commitView?.title} />
+    </div>
   );
 }
