@@ -59,6 +59,16 @@ export interface SessionRollup {
   /** Directory the session ran in — what a resume needs to run in the right
    *  place. Null for rows recorded before the column existed. */
   project_path?: string | null;
+  /** The exact checkout it ran in, when that isn't the repo root — a linked
+   *  worktree or a monorepo subdir. This is what tells two agents apart when
+   *  several are working the same project on different branches. */
+  cwd_path?: string | null;
+  /** What this session is called. `custom_title` is a rename by hand and wins;
+   *  `ai_title` is the one the agent generated. Both come from the transcript,
+   *  so they're absent for hook-only sessions. Use sessionTitle() rather than
+   *  reading them directly — the precedence is the whole point. */
+  custom_title?: string | null;
+  ai_title?: string | null;
   started_at: number;
   ended_at: number | null;
   last_seen: number;
@@ -263,6 +273,11 @@ export interface SessionDetail {
   model_name: string | null;
   /** Where it ran — a resume has to start in the same directory. */
   project_path?: string | null;
+  /** The linked worktree / subdir it actually ran in, if not the repo root. */
+  cwd_path?: string | null;
+  /** See SessionRollup — same fields, same precedence. */
+  custom_title?: string | null;
+  ai_title?: string | null;
   started_at: number;
   ended_at: number | null;
   last_seen: number;
@@ -344,12 +359,18 @@ export interface GitFileChange extends FileChange {
   binary: boolean;
   oldPath?: string; // absolute, set for renames
 }
+/** What git is in the middle of. Half the commit operations are unavailable
+ *  during any of these, and the useful action becomes continue/abort/skip. */
+export type GitTreeState = "clean" | "rebasing" | "merging" | "cherry-picking" | "reverting" | "bisecting";
+
 export interface GitBranchInfo {
   name: string;
   upstream: string | null;
   ahead: number;
   behind: number;
   detached: boolean;
+  /** Absent on older payloads; treat as "clean". */
+  state?: GitTreeState;
 }
 export interface WorkingTree {
   root: string;
@@ -368,6 +389,14 @@ export interface GitRepoRef {
   dirty: number; // count of changed files
   ahead: number;
   behind: number;
+  /** Absolute path of the main repo, when this checkout is a *linked worktree*
+   *  rather than a project of its own. Set on the per-project lists (where the
+   *  worktrees belong and are selectable); the machine-wide picker folds them
+   *  into their project instead of listing them. */
+  worktreeOf?: string;
+  /** How many linked worktrees were folded into this project — what the picker
+   *  shows so a dozen hidden checkouts aren't invisible. */
+  worktrees?: number;
 }
 /** One candidate directory from the project picker's path completion. Names and
  *  a `.git` flag only — the completion endpoint never reports files. */
@@ -395,6 +424,13 @@ export interface GitBranch {
   track: string; // raw "[ahead 4, behind 53]" / "[gone]" / ""
   date: string;  // committerdate, relative
   subject: string;
+  /** Contained in the repo's trunk (origin/HEAD, or main/master). Absent when
+   *  there's no trunk to compare against — which is not the same as false.
+   *
+   *  This, not `git branch -d`, is the real "was it merged?": `-d` compares
+   *  against whatever is checked out, so from a worktree on a ticket branch
+   *  every merged PR looks unmerged. */
+  mergedIntoTrunk?: boolean;
 }
 export interface GitCommit {
   hash: string;
@@ -418,6 +454,42 @@ export interface GitStash {
   index: number;
   ref: string; // stash@{N}
   message: string;
+}
+/** One git command the server ran — the command log panel's row. */
+export interface GitLogEntry {
+  id: number;
+  at: number;
+  cwd: string;
+  args: string[];
+  exitCode: number;
+  ms: number;
+  /** Can it change the repository? The panel shows only these by default. */
+  write: boolean;
+  error?: string;
+}
+export interface GitRemote {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+  /** Branches on this remote, as short names ("main"), without the remote prefix. */
+  branches: number;
+}
+export interface GitTag {
+  name: string;
+  /** Annotated tags carry their own message; lightweight ones borrow the commit's. */
+  subject: string;
+  date: string;
+  hash: string;
+  annotated: boolean;
+}
+/** A reflog entry. Unlike a commit these are *local history* — where HEAD has
+ *  been — which is what makes them the undo trail after a bad reset or rebase. */
+export interface GitReflogEntry {
+  ref: string;      // HEAD@{3}
+  shortHash: string;
+  action: string;   // "commit", "rebase (finish)", "reset"
+  subject: string;
+  date: string;
 }
 export interface GitWorktree {
   path: string;    // absolute

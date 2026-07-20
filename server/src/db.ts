@@ -16,7 +16,7 @@ import type {
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel } from "./pricing.ts";
-import { workspaceRoot } from "./config.ts";
+import { workspaceRoot, scopeRoots } from "./config.ts";
 
 /**
  * Where the database lives.
@@ -55,6 +55,12 @@ for (const suffix of ["", "-wal", "-shm"]) {
 }
 db.exec("PRAGMA journal_mode = WAL;");
 db.exec("PRAGMA foreign_keys = ON;");
+// Wait for a lock instead of failing on it. WAL lets readers and one writer
+// work at once, but two writers still collide — and this database has several:
+// the ingest path, the transcript scanner's sweep, and the retention prune.
+// Without a timeout SQLite raises SQLITE_BUSY immediately, which surfaces as a
+// dropped event rather than as the momentary contention it actually is.
+db.exec("PRAGMA busy_timeout = 5000;");
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS events (
@@ -115,6 +121,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(text);
 // it is prepared. Harmless (throws "duplicate column") once it already exists.
 try { db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT"); } catch { /* already present */ }
 
+// What this session is *called*. Claude Code writes both into the transcript:
+// `custom-title` when you rename a session by hand, `ai-title` for the one it
+// generates. Stored separately rather than resolved on write, because a rename
+// arrives later than the AI title and must not be overwritten by it.
+//
+// Without these the only handle on a session is its uuid, and
+// "orbit:2a3ee05b-7cb5-4652-ac0b-785ed3751479" is not something a human can
+// pick out of a list of five.
+for (const col of ["custom_title", "ai_title"]) {
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col} TEXT`); } catch { /* already present */ }
+}
+
 // Where a row came from, promoted out of `payload` so scope can be a WHERE
 // clause instead of a JSON re-parse per query. Both are VIRTUAL generated
 // columns: they cost no storage and apply to rows written *before* this
@@ -130,17 +148,38 @@ for (const [col, path] of [["project_path", "$.project_path"], ["cwd_path", "$.c
   } catch { /* already present */ }
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_path)");
+// A scoped query now tests `cwd_path` once per checkout of the project, and a
+// virtual column is recomputed by json_extract for every row it touches. Without
+// this index, the user this change is for — a dozen worktrees open — is exactly
+// the one who pays a full table scan with a JSON parse per row on /events,
+// /stats and /changes. It also bounds the backfill below.
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd ON events(cwd_path)");
 
-// Sessions have no payload of their own, so this one is a real column, written
-// at upsert and backfilled from the session's events for rows that predate it.
-try { db.exec("ALTER TABLE sessions ADD COLUMN project_path TEXT"); } catch { /* already present */ }
+// Sessions have no payload of their own, so these are real columns, written at
+// upsert and backfilled from the session's events for rows that predate them.
+//
+// `cwd_path` is what makes an agent attributable to the worktree it ran in.
+// `project_path` folds every checkout onto the one repo — which is right for
+// grouping, and useless for telling two agents apart when a user has a dozen
+// worktrees open at once and wants to know which card each one is working.
+for (const col of ["project_path", "cwd_path"]) {
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN ${col} TEXT`); } catch { /* already present */ }
+  // The `IN` guard is what stops this from being a permanent startup cost.
+  // Most sessions legitimately have no cwd — it's only recorded when the turn
+  // ran somewhere other than the repo root — so `WHERE cwd_path IS NULL` alone
+  // never stops matching them, and the correlated subquery would re-run for
+  // every one of them on every single boot, forever. Driving from the indexed
+  // event columns bounds the work to sessions that actually have an answer,
+  // which after the first run is none.
+  db.exec(`
+    UPDATE sessions SET ${col} = (
+      SELECT e.${col} FROM events e
+       WHERE e.session_id = sessions.session_id AND e.${col} IS NOT NULL
+       ORDER BY e.id DESC LIMIT 1
+    ) WHERE ${col} IS NULL
+      AND session_id IN (SELECT session_id FROM events WHERE ${col} IS NOT NULL)`);
+}
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)");
-db.exec(`
-  UPDATE sessions SET project_path = (
-    SELECT e.project_path FROM events e
-     WHERE e.session_id = sessions.session_id AND e.project_path IS NOT NULL
-     ORDER BY e.id DESC LIMIT 1
-  ) WHERE project_path IS NULL`);
 
 /** Coarse vendor for a model name — the provider dimension. Returns null for an
  *  unknown/absent model so a session's known provider is never overwritten.
@@ -179,18 +218,29 @@ function providerScope(provider?: string | null): { clause: string; args: string
  *  honestly narrow. Empty clause when unscoped — the whole-machine view. */
 export function scopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
   if (!scope) return { clause: "", args: [] };
-  const under = scope + "/%";
-  return {
-    clause: " AND (project_path = ? OR project_path LIKE ? OR cwd_path = ? OR cwd_path LIKE ?)",
-    args: [scope, under, scope, under],
-  };
+  // One group per checkout of the project, not one for the scope path alone.
+  // Linked worktrees usually live in sibling directories, so `LIKE scope/%`
+  // matches none of them — a project opened at ~/code/orbit would show an empty
+  // dashboard for a day spent working in ~/code/orbit-WEB-1042, which is where
+  // the work actually happens. Column names stay unqualified: openToolCalls()
+  // rewrites them to `p.<col>` for its aliased query.
+  const args: string[] = [];
+  const groups = scopeRoots(scope).map((r) => {
+    args.push(r, r + "/%", r, r + "/%");
+    return "project_path = ? OR project_path LIKE ? OR cwd_path = ? OR cwd_path LIKE ?";
+  });
+  return { clause: ` AND (${groups.join(" OR ")})`, args };
 }
 
-/** Same restriction for the `sessions` table, which carries its own column. */
+/** Same restriction for the `sessions` table, which carries its own columns. */
 function sessionScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
-  return scope
-    ? { clause: " AND (project_path = ? OR project_path LIKE ?)", args: [scope, scope + "/%"] }
-    : { clause: "", args: [] };
+  if (!scope) return { clause: "", args: [] };
+  const args: string[] = [];
+  const groups = scopeRoots(scope).map((r) => {
+    args.push(r, r + "/%", r, r + "/%");
+    return "project_path = ? OR project_path LIKE ? OR cwd_path = ? OR cwd_path LIKE ?";
+  });
+  return { clause: ` AND (${groups.join(" OR ")})`, args };
 }
 
 /** The searchable text blob for an event — the fleet's collective memory. */
@@ -361,11 +411,11 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
 
 const upsertStmt = db.query(`
   INSERT INTO sessions (
-    session_id, source_app, model_name, provider, project_path, started_at, ended_at, last_seen,
+    session_id, source_app, model_name, provider, project_path, cwd_path, started_at, ended_at, last_seen,
     event_count, tool_count, error_count,
     input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd
   ) VALUES (
-    $sid, $src, $model, $provider, $project, $ts, $ended, $ts,
+    $sid, $src, $model, $provider, $project, $cwd, $ts, $ended, $ts,
     1, $tool, $err,
     $in, $out, $cw, $cr, $cost
   )
@@ -374,6 +424,7 @@ const upsertStmt = db.query(`
     model_name = COALESCE(excluded.model_name, sessions.model_name),
     provider = COALESCE(excluded.provider, sessions.provider),
     project_path = COALESCE(excluded.project_path, sessions.project_path),
+    cwd_path = COALESCE(excluded.cwd_path, sessions.cwd_path),
     ended_at = COALESCE(excluded.ended_at, sessions.ended_at),
     last_seen = excluded.last_seen,
     event_count = sessions.event_count + 1,
@@ -406,6 +457,10 @@ function upsertSession(
     // Carried in the payload by both the scanner and the hooks; null for an
     // event that never recorded where it ran, which COALESCE leaves alone.
     $project: typeof n.payload?.project_path === "string" ? n.payload.project_path : null,
+    // Only present when the turn ran somewhere other than the repo root — a
+    // linked worktree or a monorepo subdir. COALESCE keeps the last known one
+    // rather than letting a root-level turn erase it.
+    $cwd: typeof n.payload?.cwd === "string" ? n.payload.cwd : null,
     $ts: n.timestamp,
     $ended: isTerminal(n.hook_event_type) ? n.timestamp : null,
     $tool: isToolPost(n.hook_event_type) ? 1 : 0,
@@ -430,6 +485,19 @@ function upsertSession(
 const recentStmt = db.query<any, [number]>(
   `SELECT * FROM events ORDER BY timestamp DESC, id DESC LIMIT ?`
 );
+/**
+ * Record what a session is called.
+ *
+ * Each title is written only when we actually have one, so an AI title arriving
+ * on a later sweep can't blank a rename, and a rename can't be undone by the
+ * next AI title. COALESCE on the argument rather than on the column, because
+ * "no title in this file" and "the title is empty" have to behave differently.
+ */
+export function setSessionTitles(session_id: string, custom: string | null, ai: string | null): void {
+  if (custom) db.query("UPDATE sessions SET custom_title = ? WHERE session_id = ?").run(custom, session_id);
+  if (ai) db.query("UPDATE sessions SET ai_title = ? WHERE session_id = ?").run(ai, session_id);
+}
+
 export function getRecent(limit = 300, provider?: string): WatchEvent[] {
   const scope = scopeClause();
   const prov = providerScope(provider);
@@ -855,6 +923,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
   const roll = db.query<any, [string]>(`SELECT * FROM sessions WHERE session_id = ?`).get(sessionId);
   const agg = db.query<any, [string]>(
     `SELECT source_app, MAX(model_name) model_name, MAX(project_path) project_path,
+            MAX(cwd_path) cwd_path,
             MIN(timestamp) started_at, MAX(timestamp) last_seen,
             COUNT(*) events,
             SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) tools,
@@ -998,6 +1067,9 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     // Prefer the session row; fall back to the events for one that predates the
     // column. Without a directory the UI can't offer to resume the session.
     project_path: roll?.project_path ?? agg.project_path ?? null,
+    // The checkout it ran in, when that isn't the repo root — what a resume has
+    // to use, and what names the worktree in the header.
+    cwd_path: roll?.cwd_path ?? agg.cwd_path ?? null,
     started_at: agg.started_at,
     ended_at: roll?.ended_at ?? null,
     last_seen: agg.last_seen,

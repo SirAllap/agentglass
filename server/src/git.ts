@@ -11,7 +11,10 @@
 // root; and the whole feature can be killed with AGENTGLASS_COMMIT_DISABLED=1.
 
 import { resolve, dirname, relative, sep } from "node:path";
-import { statSync } from "node:fs";
+// readFileSync: /etc/wsl.conf, for the Windows drive translation below.
+import { readFileSync, statSync } from "node:fs";
+import { inScope } from "./config.ts";
+import { record } from "./gitlog.ts";
 import type { GitFileStatus, RepoStatus, CommitResult } from "../../shared/types.ts";
 
 export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
@@ -19,16 +22,20 @@ export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
 type GitResult = { code: number; stdout: string; stderr: string };
 
 export function git(cwd: string, args: string[]): GitResult {
+  const t0 = performance.now();
   try {
     // A hung git call (index.lock contention, a repo on a stalled mount) would
     // otherwise freeze the whole single-threaded server indefinitely.
     const proc = Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
-    return {
+    const r = {
       code: proc.exitCode ?? 1,
       stdout: proc.stdout?.toString() ?? "",
       stderr: proc.stderr?.toString() ?? "",
     };
+    record(cwd, args, r.code, performance.now() - t0, r.stderr);
+    return r;
   } catch (e) {
+    record(cwd, args, 1, performance.now() - t0, String(e));
     return { code: 1, stdout: "", stderr: String(e) };
   }
 }
@@ -37,6 +44,7 @@ export function git(cwd: string, args: string[]): GitResult {
  *  repo, but the repo picker asks every repo on the machine at once — run those
  *  concurrently or the panel waits for the sum of them. */
 export async function gitAsync(cwd: string, args: string[]): Promise<GitResult> {
+  const t0 = performance.now();
   try {
     const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([
@@ -44,15 +52,52 @@ export async function gitAsync(cwd: string, args: string[]): Promise<GitResult> 
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
+    record(cwd, args, code ?? 1, performance.now() - t0, stderr);
     return { code: code ?? 1, stdout, stderr };
   } catch (e) {
+    record(cwd, args, 1, performance.now() - t0, String(e));
     return { code: 1, stdout: "", stderr: String(e) };
   }
 }
 
+// Windows-side Claude Code records Windows cwds (`C:\Users\...`) in its
+// transcripts. On a posix host that string isn't absolute, so resolve() would
+// treat it as relative to the server's own cwd and git would then attribute
+// every such session to whatever repo the server runs from. Map drive-letter
+// paths onto the WSL automount (`/mnt/c/...` by default; /etc/wsl.conf's
+// [automount] root can move it) before any path or git logic sees them.
+const WINDOWS_DRIVE = /^([A-Za-z]):[\\/]/;
+const AUTOMOUNT_ROOT = (() => {
+  if (process.platform === "win32") return null; // native Windows resolves C:\ itself
+  let root = "/mnt/";
+  try {
+    const automount = readFileSync("/etc/wsl.conf", "utf8").match(/\[automount\]([^[]*)/)?.[1] ?? "";
+    const custom = automount.match(/^\s*root\s*=\s*(\S+)/m)?.[1];
+    if (custom) root = custom.endsWith("/") ? custom : custom + "/";
+  } catch { /* not WSL or no config — the conventional mount root still beats a relative path */ }
+  return root;
+})();
+
+function fromWindowsPath(p: string): string {
+  const drive = p.match(WINDOWS_DRIVE);
+  if (!drive || !AUTOMOUNT_ROOT) return p;
+  return AUTOMOUNT_ROOT + drive[1]!.toLowerCase() + "/" + p.slice(3).replaceAll("\\", "/");
+}
+
 export function safeAbs(p: unknown): string | null {
   if (typeof p !== "string" || !p || p.includes("\0")) return null;
-  return resolve(p);
+  const abs = resolve(fromWindowsPath(p));
+  // A translated drive path must stay inside the mount it maps to: `\` became
+  // a real separator, so `..` in a Windows-recorded path can now climb out —
+  // and safeAbs also sees request-supplied paths, so fail closed. Clamp to the
+  // drive's own mount (C: → <automount>/c), not the automount base, or
+  // `C:\..\d\...` could hop drives while staying under it.
+  const drive = p.match(WINDOWS_DRIVE);
+  if (drive && AUTOMOUNT_ROOT) {
+    const mount = AUTOMOUNT_ROOT + drive[1]!.toLowerCase();
+    if (abs !== mount && !abs.startsWith(mount + "/")) return null;
+  }
+  return abs;
 }
 
 /** Resolve the git top-level for a file/dir path (a real path from telemetry). */
@@ -169,6 +214,11 @@ export function commit(root: string, files: string[], title: string, body: strin
   if (!absRoot) return { ok: false, error: "invalid repo path" };
   const top = git(absRoot, ["rev-parse", "--show-toplevel"]);
   if (top.code !== 0 || top.stdout.trim() !== absRoot) return { ok: false, error: "not a git repository root" };
+  // The same boundary gitwork's guard() applies to staging, discarding and the
+  // Source Control panel's own commit. This is the older commit-composer path
+  // and it was the one mutating git endpoint that never checked: a cockpit
+  // opened for one project could still commit into any repo on the machine.
+  if (!inScope(absRoot)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   if (!title.trim()) return { ok: false, error: "commit title required" };
 
   const rels = (Array.isArray(files) ? files : []).map((f) => String(f)).filter(Boolean);

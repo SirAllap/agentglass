@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import type { Alert } from "../lib/derive.ts";
+import type { Alert, AgentCard } from "../lib/derive.ts";
+import { collectAttention } from "../lib/attention.ts";
+import { listChats, subscribe as subscribeChats } from "../lib/chatStore.ts";
 import type { Insight, PendingGate } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
 import { api } from "../lib/api.ts";
@@ -14,7 +16,7 @@ const LEVEL: Record<Alert["level"], { color: string; icon: string }> = {
 const SEV: Record<Insight["severity"], string> = { bad: "var(--error)", warn: "var(--warning)", info: "var(--info)" };
 const KIND_ICON: Record<Insight["kind"], string> = { loop: "↻", spend: "🔥", errors: "✕", burn: "⚡" };
 
-export function Alerts({ alerts, onSelectApp, bump }: { alerts: Alert[]; onSelectApp?: (app: string) => void; bump?: number }) {
+export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Alert[]; agents?: AgentCard[]; onSelectApp?: (app: string) => void; bump?: number }) {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [gates, setGates] = useState<PendingGate[]>([]);
   const [acting, setActing] = useState<Record<string, boolean>>({});
@@ -42,8 +44,22 @@ export function Alerts({ alerts, onSelectApp, bump }: { alerts: Alert[]; onSelec
     api.gateDecide(g.id, decision).catch(() => {});
   };
 
-  const openCount = gates.length + alerts.length + insights.filter((i) => i.severity !== "info").length;
-  const empty = gates.length === 0 && alerts.length === 0 && insights.length === 0;
+  /*
+   * One list, one count.
+   *
+   * This used to add up its own three sources, which meant the panel titled
+   * "What needs you" could say "2 open" while the header's chat badge said 3 —
+   * both right about their own corner, and neither about the whole. Now both
+   * read the same selector, so they cannot disagree, and a chat blocked on a
+   * refused tool finally shows up in the panel named for exactly that.
+   */
+  const chats = useSyncExternalStore(subscribeChats, listChats, listChats);
+  const attention = useMemo(
+    () => collectAttention({ gates, insights, alerts, chats, agents }),
+    [gates, insights, alerts, chats, agents],
+  );
+  const openCount = attention.length;
+  const empty = openCount === 0 && insights.length === 0;
 
   return (
     <Panel

@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, dirname } from "node:path";
+import { worktreeFamily } from "./worktree.ts";
 
 export const CONFIG_PATH = join(
   process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
@@ -21,6 +22,11 @@ interface Config {
   root?: string;
   /** Directories to sweep for git repos, e.g. ["~/code", "/mnt/hdd/code"]. */
   repoDirs?: string[];
+  /** Offer `bypassPermissions` — `claude --dangerously-skip-permissions` — as a
+   *  chat mode. Off unless stated, and stated *here* rather than only in the
+   *  environment: a desktop launcher passes no env, so AGENTGLASS_CHAT_BYPASS
+   *  alone made the mode unreachable for the surface that wants it most. */
+  chatBypass?: boolean;
 }
 
 function load(): Config {
@@ -85,12 +91,30 @@ export function workspaceRoot(): string | null {
  *
  * Unscoped (whole machine) allows everything, unchanged — this only narrows an
  * instance that was deliberately pointed at one project.
+ *
+ * A repo's linked worktrees count as inside it, wherever they sit on disk. They
+ * are the same project on another branch — the git panel has always listed them
+ * as part of it, and `--git-common-dir` folds their sessions back onto it — so
+ * refusing a shell or a commit in one was the app contradicting itself. The
+ * usual layout puts them in sibling directories (`~/code/orbit-WEB-1042`
+ * beside `~/code/orbit`), which no prefix test can ever match; that is the whole
+ * reason this consults git rather than the path alone.
  */
 export function inScope(path: string | null | undefined, scope = workspaceRoot()): boolean {
   if (!scope) return true; // whole-machine: nothing to enforce
   if (!path) return false;
   const p = resolve(expand(path));
-  return p === scope || p.startsWith(scope + "/");
+  // The plain prefix test first: it answers every non-worktree case without a
+  // subprocess, including the container-folder scope where the family is moot.
+  if (p === scope || p.startsWith(scope + "/")) return true;
+  return worktreeFamily(scope).some((r) => p === r || p.startsWith(r + "/"));
+}
+
+/** The directories a scoped instance is about: the project plus its linked
+ *  worktrees. Unscoped returns empty — "no scope" is not "a list of roots", and
+ *  callers branch on that rather than being handed the whole machine. */
+export function scopeRoots(scope = workspaceRoot()): string[] {
+  return scope ? worktreeFamily(scope) : [];
 }
 
 /** One rule for turning "what the user asked for" into a scope directory —
@@ -165,6 +189,20 @@ export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspac
   // choice on the next launch (e.g. the desktop app started with a directory).
   if (process.env.AGENTGLASS_ROOT) note = `AGENTGLASS_ROOT is set — it will override this choice on the next launch`;
   return { ok: true, workspace: next, persisted, note };
+}
+
+/**
+ * May a chat run with tool permissions skipped entirely?
+ *
+ * Deliberately opt-in and deliberately not a UI toggle: the chat endpoint is
+ * reachable from a browser behind a same-origin check, so "run everything
+ * unattended" has to be a decision made outside the thing it grants power to.
+ * The env var covers `bun run dev`; the config key covers the desktop app,
+ * which is launched from an icon and inherits no environment at all.
+ */
+export function chatBypassAllowed(): boolean {
+  if (process.env.AGENTGLASS_CHAT_BYPASS !== undefined) return process.env.AGENTGLASS_CHAT_BYPASS === "1";
+  return config.chatBypass === true;
 }
 
 export function configuredRepoDirs(): string[] {

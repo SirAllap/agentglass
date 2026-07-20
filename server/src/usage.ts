@@ -25,10 +25,20 @@ export interface UsagePayload {
 
 let cache: UsagePayload | null = null;
 let cacheAt = 0;
-const TTL = 60_000;
-// On failure, retry much sooner and keep serving the last good reading
-// (stale-while-error) so the UI meters never flicker out on a blip.
+// Matched to the client's poll interval. A shorter TTL here just means the
+// first of several open surfaces pays a network call the others don't need —
+// and against a rate-limited endpoint, every avoidable call is one that can
+// cost the whole feature.
+const TTL = 5 * 60_000;
+// On failure, retry sooner than the happy path — but back off, because the
+// most common failure here is a 429 and retrying every ten seconds against a
+// rate limiter is what *keeps* you rate-limited. Doubling from 10s to a 5m
+// ceiling turns a self-inflicted outage into a blip.
 const ERROR_TTL = 10_000;
+const ERROR_TTL_MAX = 5 * 60_000;
+let failures = 0;
+/** Honour an explicit Retry-After over our own guess — the server knows. */
+let retryAfterMs = 0;
 const STALE_MAX = 30 * 60_000; // stop serving stale data after 30m
 let lastGood: UsagePayload | null = null;
 
@@ -52,7 +62,11 @@ function win(w: any): UsageWindow | undefined {
 
 export async function getUsage(): Promise<UsagePayload> {
   const now = Date.now();
-  const ttl = cache?.available ? TTL : ERROR_TTL;
+  const backoff = Math.max(
+    retryAfterMs,
+    Math.min(ERROR_TTL_MAX, ERROR_TTL * 2 ** Math.max(0, failures - 1)),
+  );
+  const ttl = cache?.available ? TTL : backoff;
   if (cache && now - cacheAt < ttl) return cache;
 
   const t = await token();
@@ -70,7 +84,13 @@ export async function getUsage(): Promise<UsagePayload> {
       },
       signal: AbortSignal.timeout(8000),
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    if (!r.ok) {
+      // A 429 usually carries how long to wait. Believing it beats guessing,
+      // and ignoring it is how a client earns a longer ban.
+      const ra = Number(r.headers.get("retry-after"));
+      retryAfterMs = r.status === 429 && Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, ERROR_TTL_MAX) : 0;
+      throw new Error(`HTTP ${r.status}`);
+    }
     const j = (await r.json()) as any;
     cache = {
       available: true,
@@ -79,7 +99,10 @@ export async function getUsage(): Promise<UsagePayload> {
       fetched_at: now,
     };
     lastGood = cache;
+    failures = 0;
+    retryAfterMs = 0;
   } catch (e) {
+    failures++;
     cache = degrade(now, String(e));
   }
   cacheAt = now;

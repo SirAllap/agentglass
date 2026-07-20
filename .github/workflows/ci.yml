@@ -21,6 +21,11 @@ jobs:
         run: cd server && bunx tsc --noEmit
       - name: Tests (server)
         run: cd server && bun test
+      # web/test/ was never run by CI, so the dashboard's own tests — diff
+      # themes, the session-live rule, the file tree — could break on a PR and
+      # nothing would say so.
+      - name: Tests (web)
+        run: cd web && bun test
       - name: Build web
         run: cd web && bunx vite build
       - name: Server boots

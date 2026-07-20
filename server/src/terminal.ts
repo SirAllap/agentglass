@@ -77,6 +77,9 @@ type Session = {
   closed: boolean;
   exited: boolean;
   killTimer: ReturnType<typeof setTimeout> | null;
+  /** Cleared on close — a stray interval would keep reading /proc for a pty
+   *  that no longer exists, once per session, forever. */
+  tmuxPoll?: ReturnType<typeof setInterval> | null;
 };
 const sessions = new Map<PtyWs, Session>();
 
@@ -107,6 +110,38 @@ function killGroup(s: Session, sigNum: number) {
 
 const enc = new TextEncoder();
 const ctl = (ws: PtyWs, frame: Record<string, unknown>) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
+
+/**
+ * Is a tmux client running inside this shell?
+ *
+ * Worth knowing because tmux brings its own tabs, its own splits and its own
+ * status line — so the panel's versions of all three become a second, worse
+ * copy sitting above the real ones. Detecting it lets the panel get out of the
+ * way instead of forcing everyone into tmux, which would be a poor trade for
+ * anyone who doesn't use it.
+ *
+ * Reads /proc rather than asking the shell: the shell is busy being a terminal
+ * and injecting a command to interrogate it would echo into whatever the user
+ * is typing. Linux-only by design — on anything else the answer is "no" and
+ * the panel keeps its own chrome, which is the correct fallback.
+ */
+function tmuxRunning(pid: number, depth = 0): boolean {
+  if (process.platform !== "linux" || depth > 4) return false;
+  let children: string[];
+  try {
+    // `children` needs CONFIG_PROC_CHILDREN; when absent this simply reads
+    // empty and we report no tmux, rather than throwing.
+    children = readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim().split(/\s+/).filter(Boolean);
+  } catch { return false; }
+  for (const c of children) {
+    let comm: string;
+    try { comm = readFileSync(`/proc/${c}/comm`, "utf8").trim(); } catch { continue; }
+    // "tmux: client" / "tmux: server" both report as `tmux` in comm.
+    if (comm === "tmux" || comm.startsWith("tmux")) return true;
+    if (tmuxRunning(Number(c), depth + 1)) return true;
+  }
+  return false;
+}
 
 /** WebSocket opened at /terminal/pty — spawn the shell and start pumping. */
 export function ptyOpen(ws: PtyWs) {
@@ -156,6 +191,25 @@ export function ptyOpen(ws: PtyWs) {
   const session: Session = { proc, mode, grouped: HAS_SETSID, sizeDir, closed: false, exited: false, killTimer: null };
   sessions.set(ws, session);
   ctl(ws, { t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir });
+
+  /*
+   * Watch for tmux coming and going.
+   *
+   * Polled rather than detected once at startup, because the interesting case
+   * is exactly the one that changes: you open a plain shell, type `tmux`, and
+   * the panel's tabs and split button should stand down at that moment — and
+   * come back when you detach. Two seconds is well under the threshold where a
+   * stale layout is noticeable, and the check is a couple of small /proc reads.
+   */
+  let sawTmux = false;
+  const tmuxPoll = setInterval(() => {
+    if (session.closed || session.exited) return;
+    const now = tmuxRunning(proc.pid);
+    if (now === sawTmux) return;
+    sawTmux = now;
+    ctl(ws, { t: "tmux", active: now });
+  }, 2000);
+  session.tmuxPoll = tmuxPoll;
 
   const pump = async (readable: ReadableStream<Uint8Array> | null | undefined) => {
     if (!readable) return;
@@ -221,6 +275,7 @@ export function ptyClose(ws: PtyWs) {
 
 function cleanup(ws: PtyWs, s: Session) {
   sessions.delete(ws);
+  if (s.tmuxPoll) { clearInterval(s.tmuxPoll); s.tmuxPoll = null; }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
 }
 

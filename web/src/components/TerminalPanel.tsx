@@ -12,7 +12,9 @@ import "@xterm/xterm/css/xterm.css";
 import type { GitRepoRef, ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
+import { worktreeTag } from "../lib/worktree.ts";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
+import { UsageIsland } from "./UsageWidget.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 const QUICK = ["git status", "git log --oneline -15", "git diff --stat", "git branch -vv"];
@@ -54,6 +56,9 @@ type Sess = {
   shell: string;
   canResize: boolean;
   opened: boolean;
+  /** A tmux client is running in this shell — the panel hides its own tabs and
+   *  split while that's true, since tmux owns those. */
+  tmux: boolean;
   pending: string[]; // input queued while (re)connecting — flushed on ready
   createdAt: number;
   lastUsed: number;
@@ -92,6 +97,36 @@ function evictLru(exceptRoot: string) {
   sessions.delete(lru.id);
 }
 
+/**
+ * Keep a terminal's colours in step with the app's theme, while it's open.
+ *
+ * xterm takes a theme as a snapshot of concrete colours — it can't read a CSS
+ * variable. The theme was therefore only ever sampled when the session was
+ * created and when the panel was reopened, so switching theme with the terminal
+ * on screen left it painted in the old palette. The visible symptom is a strip
+ * down the right where the container (which follows `var(--bg)` live) no longer
+ * matches the terminal's own background — which reads as a layout bug rather
+ * than a stale colour.
+ *
+ * Watched at the root element, because that's where the theme toggle writes:
+ * both the `data-theme` attribute and the inline custom properties land there.
+ */
+function applyThemeLive(s: Sess): () => void {
+  if (typeof MutationObserver === "undefined") return () => {};
+  let raf = 0;
+  const restyle = () => {
+    // Coalesced: a theme switch rewrites several properties in one tick, and
+    // re-theming a terminal forces a full repaint of every cell.
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => { try { s.term.options.theme = themeFromCss(); } catch { /* disposed */ } });
+  };
+  const mo = new MutationObserver(restyle);
+  mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "class"] });
+  const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+  mq?.addEventListener?.("change", restyle);
+  return () => { cancelAnimationFrame(raf); mo.disconnect(); mq?.removeEventListener?.("change", restyle); };
+}
+
 function connect(s: Sess) {
   if (s.ws || IS_DEMO) return;
   s.status = "connecting";
@@ -102,7 +137,7 @@ function connect(s: Sess) {
   ws.onmessage = (ev) => {
     if (s.ws !== ws) return; // a stale socket (replaced by ⟲ new shell) must not touch the session
     if (typeof ev.data !== "string") { s.term.write(new Uint8Array(ev.data as ArrayBuffer)); return; }
-    let f: { t?: string; mode?: "pty" | "pipe"; shell?: string; resize?: boolean; code?: number; error?: string };
+    let f: { t?: string; mode?: "pty" | "pipe"; shell?: string; resize?: boolean; code?: number; error?: string; active?: boolean };
     try { f = JSON.parse(ev.data); } catch { return; }
     if (f.t === "ready") {
       reconnected(s);
@@ -111,6 +146,12 @@ function connect(s: Sess) {
       for (const d of s.pending.splice(0)) ws.send(JSON.stringify({ t: "in", d }));
       // the fit that ran while connecting may not have reached the server
       ws.send(JSON.stringify({ t: "resize", cols: s.term.cols, rows: s.term.rows }));
+      notify(s);
+    } else if (f.t === "tmux") {
+      // tmux brings its own tabs, splits and status line. Once it's running,
+      // the panel's copies of all three are a worse duplicate sitting on top of
+      // the real ones — so stand them down, and put them back on detach.
+      s.tmux = f.active === true;
       notify(s);
     } else if (f.t === "exit" || f.t === "fatal") {
       s.status = f.t === "exit" ? "exited" : "error";
@@ -215,7 +256,7 @@ function createSession(root: string): Sess {
   const holder = document.createElement("div");
   holder.style.cssText = "width:100%;height:100%";
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
     if (sess.status === "live" && sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(JSON.stringify({ t: "in", d }));
@@ -307,7 +348,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   useEffect(() => {
     if (!open || IS_DEMO) return;
     panelClose = onClose;
-    const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver }[] = [];
+    const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void }[] = [];
     paneIds.forEach((id, i) => {
       const s = sessions.get(id);
       const el = paneRefs.current[i];
@@ -315,20 +356,22 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
       el.appendChild(s.holder);
       if (!s.opened) { s.term.open(s.holder); s.opened = true; }
       s.term.options.theme = themeFromCss(); // pick up theme switches between opens
+      const unTheme = applyThemeLive(s);
       s.subs.add(force);
       const doFit = () => { try { s.fit.fit(); } catch { /* not measurable yet */ } };
       doFit();
       if (s.status === "idle") connect(s);
       const ro = new ResizeObserver(doFit);
       ro.observe(el);
-      mounted.push({ s, el, ro });
+      mounted.push({ s, el, ro, unTheme });
     });
     const focused = sessions.get(paneIds[focusIdx] ?? "");
     if (focused) requestAnimationFrame(() => focused.term.focus());
     return () => {
       panelClose = () => {};
-      for (const { s, el, ro } of mounted) {
+      for (const { s, el, ro, unTheme } of mounted) {
         ro.disconnect();
+        unTheme();
         s.subs.delete(force);
         if (s.holder.parentElement === el) el.removeChild(s.holder);
       }
@@ -336,6 +379,11 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   }, [open, paneIds, focusIdx, onClose]);
 
   const sess = sessions.get(paneIds[focusIdx] ?? "");
+  // tmux is running in the shell you're looking at, so it owns the tabs and the
+  // splits. Ours would be a second set of controls doing the same job worse —
+  // and two competing pane models is exactly how you end up with a split inside
+  // a split you didn't ask for.
+  const tmuxActive = !!sess?.tmux;
   const status: SessStatus = sess?.status ?? "idle";
 
   const addShell = useCallback(() => {
@@ -407,6 +455,11 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
+            {/* Above the panel, not inside it. Sitting within the terminal it
+                covered the first line of output and read as part of the shell;
+                floating over the modal's top edge it belongs to the app, which
+                is what it actually reports on. */}
+            <UsageIsland />
             <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
@@ -414,6 +467,20 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                 className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
                 style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
                 <style>{SCROLLBAR_CSS}</style>
+                {/* Pin xterm's own boxes flush. The stylesheet ships no padding
+                    today, but it has before and it is one release away from
+                    doing so again — and the symptom (a TUI missing its bottom
+                    border) reads as a bug in tmux, not as a stray CSS rule.
+
+                    The scrollbar rule is the one that reclaims the strip down
+                    the right: FitAddon subtracts the viewport's scrollbar width
+                    when it works out how many columns fit, so a classic 15px
+                    scrollbar costs a column and leaves the gap where it would
+                    have been. An overlay scrollbar takes no layout width, so
+                    the grid gets it back — and the wheel still scrolls. */}
+                <style>{`.xterm,.xterm-screen,.xterm-viewport{padding:0!important;margin:0!important}
+.xterm-viewport{scrollbar-width:none!important}
+.xterm-viewport::-webkit-scrollbar{width:0!important;height:0!important}`}</style>
 
                 {/* header: repo picker + command launcher + actions */}
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
@@ -426,11 +493,18 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                       <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 420, overflow: "hidden" }}>
                         <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="filter repos…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                         <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
-                          {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch).toLowerCase().includes(q); }).map((r) => {
+                          {/* The path is searchable too: with a worktree per card,
+                              "20343" is how you find one — it's in the directory
+                              name and the branch, not in the project name. */}
+                          {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch + " " + r.root).toLowerCase().includes(q); }).map((r) => {
                             const live = sessionsFor(r.root).some((s) => s.status === "live");
                             return (
                               <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                                <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }}>{r.name}{live && <span title="live shell" style={{ color: "var(--success, #98c379)" }}> ●</span>}</span>
+                                {/* Indented under its project — a shell in a
+                                    worktree is a shell in that branch, not in
+                                    some unrelated repo that looks similar. */}
+                                {r.worktreeOf && <span className="shrink-0 t-dim2 text-[9px]" title={`worktree of ${r.worktreeOf}`}>└</span>}
+                                <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }}>{worktreeTag(r) ?? r.name}{live && <span title="live shell" style={{ color: "var(--success, #98c379)" }}> ●</span>}</span>
                                 <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }}>{r.branch}</span>
                               </button>
                             );
@@ -484,7 +558,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                       title={status === "unauthorized" ? "this server needs an access token — click to enter it" : "shell status"}>
                       <span style={{ color: statusDot[status].color }}>●</span>{statusDot[status].label}
                     </span>
-                    <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ split</button>
+                    {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ split</button>}
                     <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ restart</button>
                     <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>clear</button>
                     <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
@@ -492,7 +566,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                 </div>
 
                 {/* shells open in this repo — scrolls, so the count can grow */}
-                {!IS_DEMO && !disabled && (
+                {!IS_DEMO && !disabled && !tmuxActive && (
                   <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
                     {tabs.map((t) => {
                       const shown = paneIds.includes(t.id);
@@ -517,7 +591,12 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
 
                 {/* the terminals — one slot per visible pane */}
                 <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}>
-                  <div className="absolute inset-0 p-1.5 grid gap-1.5"
+                  {/* The gap survives — it separates two panes and is doing real
+                      work. The outer padding does not: with one pane it is pure
+                      dead margin, and a full-screen TUI is drawn right to the
+                      edge. Only inset when there is more than one pane, so the
+                      split doesn't sit flush against the panel border. */}
+                  <div className={`absolute inset-0 grid gap-1.5 ${paneIds.length > 1 ? "p-1.5" : ""}`}
                     style={{
                       gridTemplateColumns: paneIds.length > 1 ? "1fr 1fr" : "1fr",
                       gridTemplateRows: paneIds.length > 2 ? "1fr 1fr" : "1fr",
@@ -526,8 +605,25 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                       <div key={id}
                         ref={(el) => { paneRefs.current[i] = el; }}
                         onMouseDown={() => setFocusIdx(i)}
-                        className="min-w-0 min-h-0 rounded-lg overflow-hidden px-2 py-1"
+                        // No padding. A full-screen TUI — tmux, nvim, htop —
+                        // draws its own borders and status lines flush to the
+                        // edge, so any inset here shows up as a dead margin
+                        // around the app and costs a column and a row of the
+                        // grid the shell was told it had.
+                        // Square under tmux. A rounded corner clips the corner
+                        // cell of a TUI that draws its own border right to the
+                        // edge, so tmux's frame and vim's status line come out
+                        // visibly chewed. Only round it when the pane is ours
+                        // to decorate.
+                        className={`min-w-0 min-h-0 overflow-hidden ${tmuxActive ? "" : "rounded-lg"}`}
                         style={{
+                          // Match the terminal's own background. xterm can only
+                          // draw whole character cells, so a container that
+                          // isn't an exact multiple of the cell size leaves a
+                          // strip of remainder down the right and along the
+                          // bottom — a few pixels wide, and glaringly obvious
+                          // when it shows the panel behind it instead.
+                          background: "var(--bg)",
                           border: paneIds.length > 1 && i === focusIdx
                             ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)"
                             : "1px solid transparent",
@@ -543,7 +639,26 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
 
                 {/* status line */}
                 <div className="shrink-0 flex items-center gap-3 px-4 py-1.5 border-t text-[9.5px] t-dim2" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <span>real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
+                  {/* Under tmux the panel's own advice is wrong — its tabs and
+                      split are gone, and the keys that matter are tmux's. Say
+                      those instead, since the prefix is the one thing you can't
+                      guess and everything else follows from it. */}
+                  {tmuxActive ? (
+                    <span className="flex items-center gap-2 flex-wrap">
+                      <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>tmux</span>
+                      <span>panel chrome hidden — tmux owns the panes</span>
+                      <span className="t-dim2">·</span>
+                      <b style={{ color: "var(--text2)" }}>^b c</b><span>window</span>
+                      <b style={{ color: "var(--text2)" }}>^b "</b><span>split ↓</span>
+                      <b style={{ color: "var(--text2)" }}>^b %</b><span>split →</span>
+                      <b style={{ color: "var(--text2)" }}>^b o</b><span>next pane</span>
+                      <b style={{ color: "var(--text2)" }}>^b z</b><span>zoom</span>
+                      <b style={{ color: "var(--text2)" }}>^b d</b><span>detach</span>
+                      <b style={{ color: "var(--text2)" }}>^b ?</b><span>all keys</span>
+                    </span>
+                  ) : (
+                    <span>real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
+                  )}
                   <span className="ml-auto">{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
                 </div>
               </motion.div>

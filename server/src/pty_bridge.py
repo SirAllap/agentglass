@@ -60,7 +60,24 @@ def main() -> int:
         try:
             rows, cols = open(size_file).read().split()[:2]
             fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", int(rows), int(cols), 0, 0))
-            os.kill(pid, signal.SIGWINCH)
+            # The whole foreground group, not just the shell.
+            #
+            # The shell is rarely what needs telling: a full-screen program —
+            # tmux, vim, htop — is running as its child, and bash does not
+            # forward SIGWINCH to it. Signalling only the shell left tmux
+            # convinced the terminal was still the size it was at attach, so it
+            # kept drawing to the old width and the extra columns showed up as
+            # a dead band down the right of the panel.
+            #
+            # The group is the reliable target: TIOCSWINSZ on the master should
+            # already make the kernel signal the slave's foreground group, but
+            # that depends on which end owns the tty and on the shell being a
+            # session leader — conditions that vary with how the shell was
+            # spawned. Sending it explicitly costs nothing and does not.
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGWINCH)
+            except Exception:
+                os.kill(pid, signal.SIGWINCH)  # no group (or it is gone) — shell only
         except Exception:
             pass  # size file missing/garbled — keep the old size
 

@@ -49,6 +49,29 @@ export const fmtTime = (ts: number) =>
 export const agentKey = (e: { source_app: string; session_id: string }) =>
   `${e.source_app}:${e.session_id}`;
 
+/**
+ * What to call a session on screen.
+ *
+ * A uuid is a correct identifier and a useless label: five agents on one repo
+ * render as five near-identical hex strings, and picking the right one means
+ * comparing characters. Claude Code already knows the answer — it writes an
+ * `ai-title` for every session and a `custom-title` when you rename one — so
+ * the fix is to use it.
+ *
+ * Precedence is the point: a rename is an explicit statement about what this
+ * session is, so it beats the generated one even when the generated one is
+ * newer. Falls back to `app:12345678` when there's no title at all, which is
+ * every hook-only session (titles live in the transcript).
+ */
+export const sessionTitle = (
+  s: { source_app?: string; session_id: string; custom_title?: string | null; ai_title?: string | null },
+  max = 60
+): string => {
+  const t = (s.custom_title || s.ai_title || "").trim();
+  if (t) return t.length > max ? t.slice(0, max - 1) + "…" : t;
+  return s.source_app ? `${s.source_app}:${s.session_id.slice(0, 8)}` : s.session_id.slice(0, 8);
+};
+
 // Deterministic color from a string (agent lanes, model chips).
 export function hashColor(s: string): string {
   let h = 0;

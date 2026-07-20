@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -172,10 +172,20 @@ const realApi = {
   gitPush: (root: string) => post<GitActionResult>("/git/push", { root }),
   gitPull: (root: string) => post<GitActionResult>("/git/pull", { root }),
   gitFetch: (root: string) => post<GitActionResult>("/git/fetch", { root }),
-  gitBranches: (root: string) => get<{ current: string; branches: GitBranch[] }>(`/git/branches?root=${encodeURIComponent(root)}`),
+  gitBranches: (root: string) => get<{ current: string; branches: GitBranch[]; trunk?: string | null }>(`/git/branches?root=${encodeURIComponent(root)}`),
   gitLog: (root: string, limit = 100) => get<{ commits: GitCommit[] }>(`/git/log?root=${encodeURIComponent(root)}&limit=${limit}`),
   gitCommitDiff: (root: string, hash: string) => get<{ changes: FileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
   gitStashes: (root: string) => get<{ stashes: GitStash[] }>(`/git/stashes?root=${encodeURIComponent(root)}`),
+  gitRemotes: (root: string) => get<{ remotes: GitRemote[] }>(`/git/remotes?root=${encodeURIComponent(root)}`),
+  gitTags: (root: string) => get<{ tags: GitTag[] }>(`/git/tags?root=${encodeURIComponent(root)}`),
+  gitReflog: (root: string) => get<{ entries: GitReflogEntry[] }>(`/git/reflog?root=${encodeURIComponent(root)}`),
+  gitCommandLog: (since = 0) => get<{ entries: GitLogEntry[] }>(`/git/commandlog?since=${since}`),
+  /** Is a running nvim reachable for this file? Lets the key be labelled
+   *  honestly before it's pressed. */
+  editorCapability: () => get<{ hasNvim: boolean; editor: string | null }>("/editor/capability"),
+  editorTarget: (path: string) => get<{ running: boolean; hasNvim: boolean }>(`/editor/target?path=${encodeURIComponent(path)}`),
+  editorOpen: (path: string, line: number) =>
+    post<{ ok: boolean; how?: "remote" | "spawn"; command?: string; otherCwds?: string[]; stuck?: number; error?: string }>("/editor/open", { path, line }),
   gitCheckout: (root: string, name: string) => post<GitActionResult>("/git/checkout", { root, name }),
   gitBranchCreate: (root: string, name: string) => post<GitActionResult>("/git/branch-create", { root, name }),
   gitBranchDelete: (root: string, name: string, force: boolean) => post<GitActionResult>("/git/branch-delete", { root, name, force }),
@@ -276,6 +286,15 @@ const demoApi: typeof realApi = {
   gitPull: (_root: string) => D(demo.gitActionUnavailable()),
   gitFetch: (_root: string) => D(demo.gitActionUnavailable()),
   gitBranches: (_root: string) => D(demo.gitBranches()),
+  // The demo has no real repo behind it; empty lists render as "none yet"
+  // rather than as an error, which is the right shape for a showcase.
+  gitRemotes: (_root: string) => D({ remotes: [] as GitRemote[] }),
+  gitTags: (_root: string) => D({ tags: [] as GitTag[] }),
+  gitReflog: (_root: string) => D({ entries: [] as GitReflogEntry[] }),
+  gitCommandLog: (_since?: number) => D({ entries: [] as GitLogEntry[] }),
+  editorCapability: () => D({ hasNvim: false, editor: null as string | null }),
+  editorTarget: (_path: string) => D({ running: false, hasNvim: false }),
+  editorOpen: (_path: string, _line: number) => D({ ok: false, error: "no editor in the demo" }),
   gitLog: (_root: string, _limit?: number) => D(demo.gitLog()),
   gitCommitDiff: (_root: string, hash: string) => D(demo.gitCommitDiff(hash)),
   gitStashes: (_root: string) => D(demo.gitStashes()),
