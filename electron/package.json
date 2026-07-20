@@ -4,6 +4,8 @@
   "version": "0.2.0",
   "description": "agentglass desktop shell (Electron)",
   "author": "SirAllap",
+  "homepage": "https://github.com/SirAllap/agentglass",
+  "repository": { "type": "git", "url": "https://github.com/SirAllap/agentglass.git" },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -19,16 +21,21 @@
     "appId": "app.agentglass.desktop",
     "productName": "agentglass",
     "executableName": "agentglass",
+    "artifactName": "agentglass_${version}_${arch}.${ext}",
     "directories": { "output": "dist-app" },
     "files": ["main.js", "preload.js", "icons/**"],
     "extraResources": [
       { "from": "../web/dist", "to": "web" },
       { "from": "staging", "to": "." }
     ],
+    "publish": [
+      { "provider": "github", "owner": "SirAllap", "repo": "agentglass" }
+    ],
     "linux": {
       "target": ["AppImage", "deb"],
       "category": "Development",
-      "icon": "icons/icon-512.png"
+      "icon": "icons/icon-512.png",
+      "maintainer": "SirAllap <noreply@users.noreply.github.com>"
     },
     "mac": { "target": ["dmg"], "icon": "icons/icon.icns" },
     "win": { "target": ["nsis"], "icon": "icons/icon.ico" }
