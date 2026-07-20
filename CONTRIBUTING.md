@@ -30,8 +30,8 @@ python3 hooks/seed_demo.py   # populate with demo data
 - **`hooks/`** — stdlib-only Python; keep it dependency-free.
 - **`src-tauri/`** — the Tauri v2 desktop shell (Rust). `make desktop` compiles
   the Bun server to a standalone sidecar, builds the web bundle, and runs
-  `tauri build`; `make desktop-dev` runs against the live dev server. Linux only
-  for now (`.deb`).
+  `tauri build`; `make desktop-dev` runs against the live dev server. Linux
+  (`.deb`) and macOS (`.app`).
 
 ## Ground rules
 

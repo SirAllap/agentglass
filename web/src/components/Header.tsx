@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import type { ConnState } from "../lib/useLive.ts";
 import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { MOD_KEY } from "../lib/format.ts";
+import { IS_MAC_DESKTOP } from "../lib/desktop.ts";
 import { ThemeSwitcher } from "./ThemeSwitcher.tsx";
 import { UsageWidget } from "./UsageWidget.tsx";
 import { Logo } from "./Logo.tsx";
@@ -151,13 +152,13 @@ export function Header({
   const hasFilter = filter.app || filter.type || filter.provider;
 
   return (
-    <header className="flex items-center gap-x-3 gap-y-2 px-3 sm:px-4 py-2.5 shrink-0 relative z-20 flex-wrap sm:flex-nowrap"
-      style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg2) 94%, var(--bg))" }}>
-      <div className="flex items-center gap-2.5 shrink-0">
-        <motion.span initial={{ rotate: -20, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 200 }} className="flex">
+    <header data-tauri-drag-region="" className="flex items-center gap-x-3 gap-y-2 px-3 sm:px-4 py-2.5 shrink-0 relative z-20 flex-wrap sm:flex-nowrap"
+      style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg2) 94%, var(--bg))", paddingLeft: IS_MAC_DESKTOP ? 76 : undefined }}>
+      <div data-tauri-drag-region="" className="flex items-center gap-2.5 shrink-0">
+        <motion.span initial={{ rotate: -20, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} transition={{ type: "spring", stiffness: 200 }} className="flex pointer-events-none">
           <Logo size={26} title="agentglass" />
         </motion.span>
-        <div className="leading-none">
+        <div className="leading-none pointer-events-none">
           <div className="text-[16px] font-bold tracking-tight" style={{ color: "var(--text)" }}>agent<span style={{ color: "var(--primary)" }}>glass</span></div>
         </div>
         {/* The project defines what every other number on screen means, so it
@@ -204,7 +205,7 @@ export function Header({
           wrapping, so the header stays a single line at any width / zoom.
           On phones it drops to its own full-width second row — otherwise the
           right-side controls get pushed off-screen and become unreachable. */}
-      <div className="flex items-center gap-2 grow min-w-0 overflow-x-auto agw-noscrollbar order-3 basis-full sm:order-none sm:basis-0">
+      <div data-tauri-drag-region="" className="flex items-center gap-2 grow min-w-0 overflow-x-auto agw-noscrollbar order-3 basis-full sm:order-none sm:basis-0">
       <div className="flex items-center gap-0.5 p-0.5 rounded-lg shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 35%, transparent)" }}>
         {WINDOWS.map((w) => (
           <button key={w.label} onClick={() => onWindow(w.ms)} className="px-2 py-1 rounded-md text-[11px] transition-all"
@@ -235,7 +236,7 @@ export function Header({
       {hasFilter && <button onClick={onClear} className="text-[11px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>clear ✕</button>}
       </div>{/* middle scroll zone */}
 
-      <div className="shrink-0 flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-0 max-w-full overflow-x-auto agw-noscrollbar">
+      <div data-tauri-drag-region="" className="shrink-0 flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-0 max-w-full overflow-x-auto agw-noscrollbar">
         {/* Anthropic plan meters — only shown when viewing Anthropic (it's the
             one provider with a usage API), and only where there's room. */}
         {showUsage && <div className="hidden 2xl:block"><UsageWidget /></div>}

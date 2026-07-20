@@ -10,6 +10,8 @@
 export const IS_DESKTOP =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+export const IS_MAC_DESKTOP = IS_DESKTOP && /mac/i.test(navigator.platform ?? "");
+
 type AutostartApi = {
   isEnabled: () => Promise<boolean>;
   enable: () => Promise<void>;

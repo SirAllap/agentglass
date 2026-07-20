@@ -256,7 +256,7 @@ the server goes with it.
 
 ```bash
 make desktop            # build: compiles the server sidecar + web, then `tauri build`
-make desktop-install    # install for this user under ~/.local (no root)
+make desktop-install    # install for this user (no root)
 ```
 
 Then launch **agentglass** from your desktop menu, or `agentglass` from a shell.
@@ -279,9 +279,7 @@ directory instead:
 make desktop-open DIR=~/code/my-project   # or: agentglass ~/code/my-project
 ```
 
-> Built for **Linux** today (`.deb` bundle, `x86_64`). The `src-tauri/` Tauri v2
-> shell + Bun sidecar is portable in principle, but only the Linux build is
-> wired up for now.
+> Works on **Linux** and **macOS**.
 
 ---
 

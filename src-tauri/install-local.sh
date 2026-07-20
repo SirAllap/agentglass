@@ -1,16 +1,44 @@
 #!/usr/bin/env bash
 # Install the desktop app for the current user only — no root, no packaging.
 #
-# Everything lands under ~/.local, which is already on the standard search
-# paths, so the launcher picks it up without touching system directories.
+# Linux: everything lands under ~/.local, which is already on the standard
+# search paths, so the launcher picks it up without touching system dirs.
+# macOS: the .app bundle goes to ~/Applications, with CLI entry points
+# symlinked under ~/.local so `agentglass` and `make desktop-open` work.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN_SRC="$REPO/src-tauri/target/release/agentglass"
-SIDECAR="$REPO/src-tauri/bin/agentglass-server-x86_64-unknown-linux-gnu"
 
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/.local/share/agentglass"
+
+if [ "$(uname)" = Darwin ]; then
+  APP_SRC="$REPO/src-tauri/target/release/bundle/macos/agentglass.app"
+  [ -d "$APP_SRC" ] || { echo "missing $APP_SRC — run 'make desktop' first" >&2; exit 1; }
+  [ -x "$APP_SRC/Contents/MacOS/agentglass-server" ] || {
+    echo "no server sidecar inside $APP_SRC — run 'make desktop' first" >&2; exit 1; }
+
+  mkdir -p "$HOME/Applications" "$BIN_DIR" "$APP_DIR"
+  rm -rf "$HOME/Applications/agentglass.app"
+  ditto "$APP_SRC" "$HOME/Applications/agentglass.app"
+
+  BIN="$HOME/Applications/agentglass.app/Contents/MacOS/agentglass"
+  ln -sf "$BIN" "$BIN_DIR/agentglass"
+  ln -sf "$BIN" "$APP_DIR/agentglass"
+
+  echo "installed:"
+  echo "  app      ~/Applications/agentglass.app"
+  echo "  command  agentglass"
+  echo
+  echo "Find it in Spotlight as 'agentglass'. To start it at login, use the"
+  echo "autostart toggle in the app rather than editing files by hand."
+  exit 0
+fi
+
+BIN_SRC="$REPO/src-tauri/target/release/agentglass"
+SIDECAR="$(find "$REPO/src-tauri/bin" -name 'agentglass-server-*-linux-*' -type f 2>/dev/null | head -n1)"
+[ -n "$SIDECAR" ] || { echo "no Linux server sidecar in src-tauri/bin — run 'make desktop' first" >&2; exit 1; }
+
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor"
 
