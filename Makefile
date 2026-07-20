@@ -71,7 +71,7 @@ desktop: desktop-server desktop-web ## Build the desktop app (icon + native wind
 desktop-dev: desktop-server ## Run the desktop app against the live dev server
 	bunx tauri dev
 
-desktop-install: ## Install the built app for this user (~/.local, no root)
+desktop-install: ## Install the built app for this user (no root)
 	src-tauri/install-local.sh
 
 # Open the cockpit for ONE project: only that repo (and its worktrees) appear,

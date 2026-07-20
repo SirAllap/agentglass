@@ -19,3 +19,4 @@ src-tauri/bin/
 src-tauri/icon-*.png
 src-tauri/gen/schemas/
 .claude/
+*.bun-build

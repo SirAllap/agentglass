@@ -41,6 +41,7 @@ fn already_serving() -> bool {
 /// The bundled server binary, which ships next to the app executable.
 fn server_path() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
+    let exe = std::fs::canonicalize(exe).ok()?;
     let path = exe.parent()?.join("agentglass-server");
     path.exists().then_some(path)
 }
