@@ -28,6 +28,21 @@ jobs:
         run: cd web && bun test
       - name: Build web
         run: cd web && bunx vite build
+      # Pinned rather than the runner's preinstalled Chrome: the ubuntu-latest
+      # image has dropped and re-added browsers before, and this also keeps the
+      # step working on container or self-hosted runners that ship none.
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+      # tsc, bun test and vite build all pass on a bundle that throws the
+      # instant a browser evaluates it — a use-before-declaration inside a
+      # component already shipped a black screen that way. This is the only
+      # step that actually runs the thing.
+      - name: Smoke (production bundle boots)
+        run: bun scripts/smoke.ts
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
       - name: Server boots
         run: |
           cd server
