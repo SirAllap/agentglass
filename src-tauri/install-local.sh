@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Install the desktop app for the current user only — no root, no packaging.
 #
-# Linux: everything lands under ~/.local, which is already on the standard
-# search paths, so the launcher picks it up without touching system dirs.
+# Linux: everything lands under ~/.local, which the desktop spec already covers,
+# so the launcher picks it up without touching system dirs.
 # macOS: the .app bundle goes to ~/Applications, with CLI entry points
 # symlinked under ~/.local so `agentglass` and `make desktop-open` work.
 set -euo pipefail
@@ -11,6 +11,20 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BIN_DIR="$HOME/.local/bin"
 APP_DIR="$HOME/.local/share/agentglass"
+
+# Resolving `agentglass` by name is the whole point of the symlink, and BIN_DIR
+# is only conventionally on the PATH: Linux distro profiles usually add it, and
+# on macOS nothing does — it's there only if some other tool's installer had you
+# add it by hand. Printing the command as installed when the shell can't find it
+# is the one failure that reads as the install itself having broken.
+path_note() {
+  case ":${PATH-}:" in
+    *":$BIN_DIR:"*) return ;;
+  esac
+  echo
+  echo "note: $BIN_DIR isn't on your PATH, so the 'agentglass' command won't"
+  echo "resolve yet — add it to your shell profile to use it by name."
+}
 
 if [ "$(uname)" = Darwin ]; then
   APP_SRC="$REPO/src-tauri/target/release/bundle/macos/agentglass.app"
@@ -32,12 +46,28 @@ if [ "$(uname)" = Darwin ]; then
   echo
   echo "Find it in Spotlight as 'agentglass'. To start it at login, use the"
   echo "autostart toggle in the app rather than editing files by hand."
+  path_note
   exit 0
 fi
 
 BIN_SRC="$REPO/src-tauri/target/release/agentglass"
-SIDECAR="$(find "$REPO/src-tauri/bin" -name 'agentglass-server-*-linux-*' -type f 2>/dev/null | head -n1)"
-[ -n "$SIDECAR" ] || { echo "no Linux server sidecar in src-tauri/bin — run 'make desktop' first" >&2; exit 1; }
+
+# The sidecar carries the triple it was built for, and src-tauri/bin keeps every
+# one ever built — it's gitignored, so nothing prunes it. Match this machine's
+# architecture rather than taking whichever the shell happens to list first: a
+# stale cross-build installs perfectly happily and then dies with an exec format
+# error, a long way from its cause. uname and the Rust triples agree on the
+# names that matter here; armv7l is the one that needs translating.
+ARCH="$(uname -m)"
+[ "$ARCH" = armv7l ] && ARCH=armv7
+
+SIDECAR=""
+for cand in "$REPO/src-tauri/bin/agentglass-server-$ARCH-"*-linux-*; do
+  [ -f "$cand" ] || continue   # no match: the glob comes back literal
+  SIDECAR="$cand"
+  break
+done
+[ -n "$SIDECAR" ] || { echo "no $ARCH Linux server sidecar in src-tauri/bin — run 'make desktop' first" >&2; exit 1; }
 
 DESKTOP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor"
@@ -76,3 +106,4 @@ echo "  command  agentglass"
 echo
 echo "Search your launcher for 'agentglass'. To start it at login, use the"
 echo "autostart toggle in the app rather than editing files by hand."
+path_note
