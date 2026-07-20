@@ -221,12 +221,23 @@
   .rdr-sweep, .shimmer { animation: none !important; }
   [style*="ping-ring"] { animation: none !important; }
 }
+/* `data-ws` joins `data-idle` here: the workspace covers the dashboard, so its
+   ambient loops are animating something nobody can see. That is not a rounding
+   error. The desktop webview composites in software (no GPU process, measured),
+   so every frame of these loops is a full repaint charged to the CPU: the UI
+   process and the web process together sit at ~172% while the server, doing the
+   actual work, uses 8%. Disabling the loops outright took the same page from
+   76% to 16% in WebKitGTK. */
 :root[data-idle="1"] .rdr-sweep,
 :root[data-idle="1"] .agw-float,
-:root[data-idle="1"] .shimmer {
+:root[data-idle="1"] .shimmer,
+:root[data-ws="1"] .rdr-sweep,
+:root[data-ws="1"] .agw-float,
+:root[data-ws="1"] .shimmer {
   animation-play-state: paused !important;
 }
-:root[data-idle="1"] [style*="ping-ring"] {
+:root[data-idle="1"] [style*="ping-ring"],
+:root[data-ws="1"] [style*="ping-ring"] {
   animation-play-state: paused !important;
 }
 @keyframes ping-ring {

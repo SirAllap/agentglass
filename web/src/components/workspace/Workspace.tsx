@@ -63,7 +63,13 @@ export function Workspace({
           <>
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }}
+              transition={{ duration: 0.12 }}
+              // No backdrop-filter. A blur re-runs over whatever sits beneath it
+              // every time that repaints, and beneath this is an animating
+              // dashboard in a software-composited webview, so the blur was
+              // charged to the CPU on every frame. The scrim alone reads the
+              // same at this opacity.
+              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.72)" }}
               onClick={onClose}
             />
             <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
@@ -72,8 +78,12 @@ export function Workspace({
                 tabIndex={-1}
                 role="dialog"
                 aria-label="Workspace"
-                initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
-                transition={{ type: "spring", stiffness: 330, damping: 30 }}
+                // Opacity only, and briefly. A spring on scale/y re-rasterises a
+                // 95vw x 95vh surface on every frame of the transition, which is
+                // what made opening the workspace feel like a stall instead of a
+                // switch.
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                transition={{ duration: 0.12, ease: "easeOut" }}
                 className="w-[95vw] h-[95vh] rounded-2xl flex pointer-events-auto outline-none overflow-hidden"
                 style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
@@ -88,8 +98,14 @@ export function Workspace({
                         key={v.id}
                         // `visibility`, not `display:none`: xterm's fit addon
                         // measures its container, and a display:none parent
-                        // measures 0x0 — which is how a hidden terminal comes
+                        // measures 0x0, which is how a hidden terminal comes
                         // back reflowed to a single column.
+                        //
+                        // NOT `content-visibility: hidden`: these views are
+                        // absolutely stacked and chat is last in the DOM, so a
+                        // content-visibility box still hit-tests and the hidden
+                        // top view swallows clicks meant for the active one
+                        // beneath it. `visibility: hidden` does not.
                         className="absolute inset-0 flex flex-col min-h-0"
                         style={{ visibility: active ? "visible" : "hidden" }}
                         aria-hidden={!active}
