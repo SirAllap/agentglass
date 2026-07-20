@@ -258,39 +258,45 @@ export function DynamicIsland() {
     <div className="fixed left-1/2 -translate-x-1/2 pointer-events-none" style={{ top: "2.5vh", zIndex: 10002 }}>
       <motion.div
         layout
-        transition={{ type: "spring", stiffness: 480, damping: 34, mass: 0.7 }}
+        transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.7 }}
         className="agx-notch flex items-center overflow-hidden"
-        style={{ borderRadius: note ? "20px" : "0 0 20px 20px" }}
+        // Always a notch: only the bottom corners are round, and it stays
+        // welded to the top edge. A toast never rounds it into a floating pill
+        // -- it is the same carved shape whether it is telling the time or
+        // telling you a chat finished.
+        style={{ borderRadius: "0 0 20px 20px" }}
       >
+        {/* A wipe, not a fade. The content sweeps in from one side and, when its
+            few seconds are up, sweeps out the same way -- a barrido that reads
+            as the notch "turning over" what it shows rather than swapping it. */}
         <AnimatePresence mode="wait" initial={false}>
           {note ? (
             <motion.div
               key={note.id}
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 6 }}
-              transition={{ duration: 0.16 }}
-              className="flex items-center gap-2.5 px-4 py-2"
-              style={{ minWidth: 260 }}
+              initial={{ clipPath: "inset(0 100% 0 0)" }}
+              animate={{ clipPath: "inset(0 0% 0 0)" }}
+              exit={{ clipPath: "inset(0 0 0 100%)" }}
+              transition={{ duration: 0.34, ease: [0.4, 0, 0.2, 1] }}
+              className="flex items-center gap-2.5 px-3.5 h-[34px]"
             >
               <span
                 className="grid place-items-center rounded-full shrink-0"
-                style={{ width: 26, height: 26, color: note.color, background: `color-mix(in srgb, ${note.color} 18%, transparent)` }}
+                style={{ width: 20, height: 20, color: note.color, background: `color-mix(in srgb, ${note.color} 18%, transparent)` }}
               >
                 <NoteIcon kind={note.kind} />
               </span>
-              <span className="flex flex-col leading-tight min-w-0">
-                <span className="text-[12px] font-semibold truncate" style={{ color: "#f4f4f6", maxWidth: 220 }}>{note.title}</span>
-                <span className="text-[10px] truncate" style={{ color: note.color, maxWidth: 220 }}>{note.sub}</span>
+              <span className="flex flex-col leading-none gap-[3px] min-w-0">
+                <span className="text-[12px] font-semibold truncate" style={{ color: "#f4f4f6", maxWidth: 260 }}>{note.title}</span>
+                <span className="text-[10px] truncate" style={{ color: note.color, maxWidth: 260 }}>{note.sub}</span>
               </span>
             </motion.div>
           ) : (
             <motion.div
               key="rest"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.16 }}
+              initial={{ clipPath: "inset(0 0 0 100%)" }}
+              animate={{ clipPath: "inset(0 0% 0 0)" }}
+              exit={{ clipPath: "inset(0 100% 0 0)" }}
+              transition={{ duration: 0.34, ease: [0.4, 0, 0.2, 1] }}
               className="flex items-center gap-3 px-3.5 h-[34px]"
             >
               {/* left: live-work pulse, plus a standing "behind" chip when a
