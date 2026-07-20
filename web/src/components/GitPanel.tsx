@@ -122,7 +122,7 @@ const VIEW_KEYS: Record<View, [string, string][]> = {
   remotes: [["j/k", "remote"]],
   tags: [["j/k", "tag"]],
   stashes: [["j/k", "stash"], ["space", "apply"], ["d", "drop"]],
-  worktrees: [["j/k", "worktree"], ["space", "open"]],
+  worktrees: [["j/k", "worktree"], ["space", "open"], ["d", "remove"]],
 };
 
 /**
@@ -535,7 +535,61 @@ export function GitView({ active }: { active: boolean }) {
   const reloadBranches = () => api.gitBranches(root).then(setBranchData).catch(() => {});
   const checkout = async (name: string) => { if (await act(() => api.gitCheckout(root, name), `on ${name}`)) { reloadBranches(); setView("changes"); } };
   const createBranch = async () => { const n = newBranch.trim(); if (!n) return; if (await act(() => api.gitBranchCreate(root, n), `created ${n}`)) { setNewBranch(""); reloadBranches(); setView("changes"); } };
-  const deleteBranch = (name: string) => { if (confirm(`Delete branch ${name}?`)) act(() => api.gitBranchDelete(root, name, false)).then((ok) => { if (ok) reloadBranches(); }); };
+  /**
+   * Delete a branch, and offer the repair when git refuses.
+   *
+   * Two of git's refusals aren't really refusals, they're a missing step, and
+   * the panel used to dead-end on both — it printed the stderr into a toast
+   * that clears itself after 2.6s and left you to finish the job in a terminal:
+   *
+   *   * "used by worktree at '<path>'" — the branch is checked out somewhere
+   *     else. The path is right there in the error, so parse it back out and
+   *     offer to remove that worktree first. Making the user read a vanishing
+   *     toast, switch to the Worktrees tab and match the path by eye is the
+   *     kind of thing this panel exists to avoid.
+   *   * "not fully merged" — true of every squash-merged branch, which is most
+   *     of them here: the PR landed as a new commit, so the branch tip is not
+   *     an ancestor of anything. Only offer the forced retry when we've already
+   *     verified the work is in the trunk (`mergedIntoTrunk`, computed against
+   *     the trunk rather than whatever HEAD happens to be). Without that proof
+   *     the refusal is correct and stands.
+   *
+   * Deliberately not routed through `act`: it reports failures by flashing the
+   * message and returns a bare boolean, and the whole point here is to branch
+   * on *which* failure came back.
+   */
+  const deleteBranch = async (b: GitBranch) => {
+    if (busy || !confirm(`Delete branch ${b.name}?`)) return;
+    setBusy(true);
+    setPending(`delete ${b.name}`);
+    try {
+      let r = await api.gitBranchDelete(root, b.name, false);
+      const wt = r.ok ? null : /worktree at '([^']+)'/.exec(r.error || "")?.[1];
+      if (wt) {
+        if (!confirm(`${b.name} is checked out in the worktree ${wtName(wt)}.\n\nRemove that worktree and delete the branch?`)) { flash(false, "kept"); return; }
+        let rm = await api.gitWorktreeRemove(root, wt, false);
+        // git refuses to drop a worktree holding work — modified tracked files
+        // or, as often, a stray untracked scratch file. Name the cost, then let
+        // them take it.
+        if (!rm.ok && /modified|untracked|not clean/i.test(rm.error || "")) {
+          if (!confirm(`${wtName(wt)} still has uncommitted or untracked files.\n\nRemove it anyway? That work is gone.`)) { flash(false, rm.error || "kept"); return; }
+          rm = await api.gitWorktreeRemove(root, wt, true);
+        }
+        if (!rm.ok) { flash(false, rm.error || "worktree remove failed"); return; }
+        reloadWorktrees();
+        r = await api.gitBranchDelete(root, b.name, false);
+      }
+      if (!r.ok && /not fully merged/i.test(r.error || "") && b.mergedIntoTrunk) {
+        const trunk = branchData.trunk ?? "the trunk";
+        if (confirm(`git says ${b.name} isn't merged, but its commits are already in ${trunk} — a squash merge rewrites them, so the tip never becomes an ancestor.\n\nDelete it anyway?`)) {
+          r = await api.gitBranchDelete(root, b.name, true);
+        }
+      }
+      flash(r.ok, r.ok ? `deleted ${b.name}` : r.error || "failed");
+      if (r.ok) reloadBranches();
+    } catch (e) { flash(false, String(e)); }
+    finally { setBusy(false); setPending(null); }
+  };
 
   // Branches whose upstream is gone. Never the current one: git refuses to
   // delete a checked-out branch anyway, and offering it is just a failed call.
@@ -605,7 +659,23 @@ export function GitView({ active }: { active: boolean }) {
     const path = `${root}-${br.replace(/[\/\s]+/g, "-")}`; // sibling dir named repo-branch
     if (await act(() => api.gitWorktreeAdd(root, path, br, true), `worktree ${wtName(path)}`)) { setNewWtBranch(""); reloadWorktrees(); }
   };
-  const removeWorktree = (w: GitWorktree) => { if (confirm(`Remove worktree ${wtName(w.path)}?`)) act(() => api.gitWorktreeRemove(root, w.path, false), "removed worktree").then((ok) => { if (ok) reloadWorktrees(); }); };
+  // Same shape as the worktree step inside deleteBranch: a dirty worktree is a
+  // question ("that work is gone — still?"), not a dead end.
+  const removeWorktree = async (w: GitWorktree) => {
+    if (busy || !confirm(`Remove worktree ${wtName(w.path)}?`)) return;
+    setBusy(true);
+    setPending(`remove ${wtName(w.path)}`);
+    try {
+      let r = await api.gitWorktreeRemove(root, w.path, false);
+      if (!r.ok && /modified|untracked|not clean/i.test(r.error || "")) {
+        if (!confirm(`${wtName(w.path)} still has uncommitted or untracked files.\n\nRemove it anyway? That work is gone.`)) { flash(false, r.error || "kept"); return; }
+        r = await api.gitWorktreeRemove(root, w.path, true);
+      }
+      flash(r.ok, r.ok ? "removed worktree" : r.error || "failed");
+      if (r.ok) { reloadWorktrees(); reloadBranches(); }
+    } catch (e) { flash(false, String(e)); }
+    finally { setBusy(false); setPending(null); }
+  };
   const openWorktree = (w: GitWorktree) => { setRoot(w.path); setRepoOpen(false); setSelKey(null); setView("changes"); };
   // stashes
   const reloadStashes = () => api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
@@ -823,14 +893,15 @@ export function GitView({ active }: { active: boolean }) {
     if (view === "branches") {
       const b = shownBranches[rowIdx];
       if (!b || b.current) return;
-      kind === "primary" ? checkout(b.name) : deleteBranch(b.name);
+      kind === "primary" ? checkout(b.name) : deleteBranch(b);
     } else if (view === "stashes") {
       const s = stashes[rowIdx];
       if (!s) return;
       stashOp(kind === "primary" ? "apply" : "drop", s.index);
-    } else if (view === "worktrees" && kind === "primary") {
+    } else if (view === "worktrees") {
       const w = worktrees[rowIdx];
-      if (w) openWorktree(w);
+      if (!w || (kind === "delete" && w.current)) return;
+      kind === "primary" ? openWorktree(w) : removeWorktree(w);
     }
   };
   const hasRowAction = view === "branches" || view === "stashes" || view === "worktrees";
@@ -1097,7 +1168,7 @@ export function GitView({ active }: { active: boolean }) {
                               <button onClick={() => mergeBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Merge ${b.name} into current`}>merge</button>
                               <button onClick={() => rebaseBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Rebase current onto ${b.name}`}>rebase</button>
                               <button onClick={() => renameBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>rename</button>
-                              <button onClick={() => deleteBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Delete branch">delete</button>
+                              <button onClick={() => deleteBranch(b)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Delete branch">delete</button>
                             </div>
                           )}
                         </div>
