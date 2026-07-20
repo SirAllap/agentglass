@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { MOD_KEY } from "../lib/format.ts";
+import { IS_DESKTOP } from "../lib/desktop.ts";
 
 const EVENTS: [string, string][] = [
   ["Running a tool", "#a78bfa"],
@@ -69,6 +70,9 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
                   <span><kbd className="chip">t</kbd> terminal (a real shell)</span>
                   <span><kbd className="chip">c</kbd> chat (drive a claude session)</span>
                   <span><kbd className="chip">/</kbd> search all history</span>
+                  {IS_DESKTOP && (
+                    <span><kbd className="chip">{MOD_KEY}+</kbd> <kbd className="chip">{MOD_KEY}−</kbd> display size</span>
+                  )}
                   <span>Click an event → full details</span>
                   <span>Click an agent → filter to it</span>
                 </div>

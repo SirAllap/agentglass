@@ -1,6 +1,8 @@
 // Ported from the Mission Control theme system — 22 palettes — 11 dark, each with a light twin.
 // Applied as CSS custom properties on :root by applyTheme().
 
+import { SERVER } from "./api.ts";
+
 export interface Theme {
   id: string;
   name: string;
@@ -43,6 +45,19 @@ export function applyTheme(id: string) {
   for (const [k, v] of Object.entries(t.vars)) root.style.setProperty(k, v);
   root.setAttribute("data-theme", t.id);
   try { localStorage.setItem("agentglass-theme", t.id); } catch {}
+  /*
+   * Carry the palette out to tmux and nvim.
+   *
+   * Fire-and-forget on purpose: this reaches across to other processes, and
+   * none of them are allowed to make changing the app's own theme feel slow or
+   * fail. The server writes two files and pushes to any editor it can reach —
+   * see server/src/themesync.ts.
+   */
+  void fetch(`${SERVER}/theme/sync`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: t.name, vars: t.vars }),
+  }).catch(() => { /* no server (the static demo), or it declined */ });
 }
 
 export function initialTheme(): string {

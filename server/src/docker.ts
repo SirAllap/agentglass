@@ -9,7 +9,7 @@ import type {
   DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork,
   DockerOverview, DockerScope, DockerActionResult,
 } from "../../shared/types.ts";
-import { workspaceRoot } from "./config.ts";
+import { workspaceRoot, scopeRoots } from "./config.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
@@ -155,10 +155,17 @@ const strip = (c: ScopedContainer): DockerContainer => {
  * teach people the panel is unreliable. Degrading to the host view *and saying
  * so* keeps the panel honest in both directions.
  */
-export function applyScope(all: ScopedContainer[], key: DockerScopeKey | null): { containers: DockerContainer[]; scope?: DockerScope } {
-  if (!key) return { containers: all.map(strip) };
-  const mine = all.filter((c) => containerInScope(c, key));
-  const scope: DockerScope = { workspace: key.dir, project: key.project, matched: mine.length, showingAll: mine.length === 0 };
+export function applyScope(all: ScopedContainer[], keyIn: DockerScopeKey | DockerScopeKey[] | null): { containers: DockerContainer[]; scope?: DockerScope } {
+  // A list, because a project is its main checkout *and* its linked worktrees.
+  // A stack brought up from ~/code/orbit-WEB-1042 has that as its working_dir
+  // and `orbit-web-1042` as its compose project — neither matches `orbit` by
+  // path or by name, so scoping to the project used to hide the containers the
+  // user had just started. The first key is the project itself, and it names
+  // the scope in the UI.
+  const keys = keyIn ? (Array.isArray(keyIn) ? keyIn : [keyIn]) : [];
+  if (!keys.length) return { containers: all.map(strip) };
+  const mine = all.filter((c) => keys.some((k) => containerInScope(c, k)));
+  const scope: DockerScope = { workspace: keys[0].dir, project: keys[0].project, matched: mine.length, showingAll: mine.length === 0 };
   return { containers: (mine.length ? mine : all).map(strip), scope };
 }
 
@@ -241,7 +248,9 @@ export async function overview(): Promise<DockerOverview> {
   // resources shared between projects — an image layer isn't "owned" by the
   // checkout that happened to build it — so filtering them would hide things
   // the user can legitimately act on without telling them anything true.
-  const { containers: scoped, scope } = applyScope(c, dockerScopeKey(root));
+  // Every checkout of the project, so a stack started in a worktree is still
+  // this project's stack.
+  const { containers: scoped, scope } = applyScope(c, scopeRoots(root).map(dockerScopeKey).filter((k): k is DockerScopeKey => !!k));
   const data: DockerOverview = { available: true, writeEnabled: DOCKER_WRITE_ENABLED, version, containers: scoped, images: i, volumes: v, networks: n, ...(scope ? { scope } : {}) };
   overviewCache = { at: Date.now(), root, data };
   return data;

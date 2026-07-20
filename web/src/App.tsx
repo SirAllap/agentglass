@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { WatchEvent } from "../../shared/types.ts";
+import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
 import { useStats } from "./lib/useStats.ts";
-import { deriveAgents, deriveAlerts } from "./lib/derive.ts";
+import { deriveAgents, deriveAlerts, buildTitles } from "./lib/derive.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
 import { initialTheme, applyTheme } from "./lib/themes.ts";
+import { currentScale, nudgeScale, resetScale } from "./lib/uiScale.ts";
+import { toggleFullscreen } from "./lib/desktop.ts";
 import { useAlertSound } from "./lib/useSound.ts";
 import { Header } from "./components/Header.tsx";
 import { Kpis } from "./components/Kpis.tsx";
@@ -29,7 +31,8 @@ import { GitPanel } from "./components/GitPanel.tsx";
 import { DockerPanel } from "./components/DockerPanel.tsx";
 import { TerminalPanel } from "./components/TerminalPanel.tsx";
 import { ChatPanel } from "./components/ChatPanel.tsx";
-import { newChat, chatResuming } from "./lib/chatStore.ts";
+import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
+import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
@@ -37,6 +40,13 @@ import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.t
 
 export default function App() {
   const { events, conn, lastEvent, openTools } = useLive();
+  // The live socket is the app's only real-time source, and until now the chat
+  // panel was the one view that never saw it — a resumed session sat frozen on
+  // whatever had been true when you opened it while the agent kept working.
+  // This is the whole subscription: the store decides which chat, if any, each
+  // event belongs to, and ignores everything else.
+  useEffect(() => { for (const e of events) applyLiveEvent(e); }, [events]);
+
   const [windowMs, setWindowMs] = useState(3_600_000);
   const [filter, setFilter] = useState({ app: "", type: "", provider: "" });
   const [theme, setTheme] = useState(initialTheme());
@@ -56,6 +66,9 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
   const [sound, setSound] = useState(false);
+  // Mirrors the window's zoom for the settings row to read. The scale itself
+  // lives in lib/uiScale.ts, applied before this component ever mounts.
+  const [scale, setScale] = useState(currentScale);
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
@@ -119,7 +132,23 @@ export default function App() {
   // Every session's provider, from the FULL buffer (so the list is stable and
   // never collapses when one provider is selected).
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const agentsAll = useMemo(() => deriveAgents(events, openTools), [events, openTools, tick]);
+  /**
+   * Session names, for the fleet cards.
+   *
+   * Cards are derived from the live event stream, which carries no title — it's
+   * session-level and only the sessions endpoint has it. Polled slowly on
+   * purpose: a session is renamed by hand once, if ever, so this is the one
+   * piece of the dashboard that genuinely doesn't need to be live.
+   */
+  const [sessions, setSessions] = useState<SessionRollup[]>([]);
+  useEffect(() => {
+    const load = () => api.sessions(200).then(setSessions).catch(() => { /* labels fall back to the uuid */ });
+    load();
+    const id = setInterval(load, 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const titles = useMemo(() => buildTitles(sessions), [sessions]);
+  const agentsAll = useMemo(() => deriveAgents(events, openTools, titles), [events, openTools, titles, tick]);
   const sessionProvider = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of agentsAll) if (a.model_name) map.set(a.session_id, providerOf(a.model_name));
@@ -142,14 +171,21 @@ export default function App() {
   const agents = useMemo(
     () =>
       filter.provider
-        ? deriveAgents(visibleEvents, openTools.filter((s) => sessionProvider.get(s.session_id) === filter.provider))
+        ? deriveAgents(visibleEvents, openTools.filter((s) => sessionProvider.get(s.session_id) === filter.provider), titles)
         : agentsAll,
-    [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider]
+    [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider, titles]
   );
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
   useAlertSound(alerts.length, sound);
 
   const clearFilters = useCallback(() => setFilter({ app: "", type: "", provider: "" }), []);
+
+  // Zoom steps through a fixed ladder rather than taking a target, so every
+  // caller (keys, settings, palette) lands on the same rungs. uiScale owns the
+  // real value; this only echoes it back for display.
+  const zoom = useCallback((dir: 1 | -1 | 0) => {
+    setScale(dir === 0 ? resetScale() : nudgeScale(dir));
+  }, []);
 
   // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, single-letter panels, Esc closes
   useEffect(() => {
@@ -159,6 +195,25 @@ export default function App() {
         e.preventDefault();
         setPaletteOpen((o) => !o);
         return;
+      }
+
+      // Zoom, on the usual browser keys — and like ⌘K, live everywhere: you
+      // want to size the window up while reading a diff, not only from an empty
+      // dashboard. Has to sit above the modifier bailout below, which would
+      // otherwise swallow it. `+`/`_` cover shifted layouts, and `=`/`-` the
+      // bare keys; a Spanish keyboard sends `+` and `-` directly.
+      // Calls uiScale directly rather than the `zoom` callback so this effect
+      // can keep its empty dep array and never re-subscribe.
+      if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+        const k = e.key;
+        if (k === "=" || k === "+") { e.preventDefault(); setScale(nudgeScale(1)); return; }
+        if (k === "-" || k === "_") { e.preventDefault(); setScale(nudgeScale(-1)); return; }
+        if (k === "0") { e.preventDefault(); setScale(resetScale()); return; }
+      }
+      // F11, the way every desktop app binds it. Outside the modifier block —
+      // it carries none — and before the bailout below, which would otherwise
+      // swallow it along with the rest of the plain function keys.
+      if (e.key === "F11") { e.preventDefault(); void toggleFullscreen(); return;
       }
 
       // Escape closes open panels, regardless of where focus rests. The real
@@ -278,7 +333,7 @@ export default function App() {
 
           <div className="xl:col-span-3 min-w-0 min-h-0 grid grid-rows-[3fr_2fr] gap-3 h-[420px] xl:h-[520px] tall:h-auto">
             <Radar agents={agents} onSelect={(a) => setFilter((f) => ({ ...f, app: a.source_app }))} />
-            <Alerts alerts={alerts} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
+            <Alerts alerts={alerts} agents={agents} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
           </div>
         </div>
 
@@ -309,6 +364,8 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         sound={sound}
         onSound={() => setSound((s) => !s)}
+        scale={scale}
+        onZoom={zoom}
         onOpenStats={() => setStatsOpen(true)}
         onOpenHelp={() => setHelpOpen(true)}
       />
@@ -318,11 +375,14 @@ export default function App() {
         onClose={() => setSessionView(null)}
         onFilter={(app) => setFilter((f) => ({ ...f, app }))}
         onResume={(s) => {
-          if (!s.project_path) return;
+          // The checkout it actually ran in — a worktree session resumed at the
+          // repo root would land on the wrong branch with none of its work.
+          const cwd = sessionCwd(s);
+          if (!cwd) return;
           // Reuse an open tab for the same session rather than starting a
           // second one: two chats resuming one id would both write to it.
           const existing = chatResuming(s.session_id);
-          const chat = existing ?? newChat(s.project_path, s.model_name || undefined, undefined, {
+          const chat = existing ?? newChat(cwd, s.model_name || undefined, undefined, {
             sessionId: s.session_id,
             title: s.summary?.slice(0, 40) || `${s.source_app}:${s.session_id.slice(0, 8)}`,
           });
@@ -347,6 +407,7 @@ export default function App() {
         onChat={() => setChatOpen(true)}
         onSearch={() => setSearchOpen(true)}
         onClear={clearFilters}
+        onZoom={zoom}
       />
       <HelpLegend open={helpOpen} onClose={() => setHelpOpen(false)} />
       <ProjectPicker open={projectOpen} workspace={workspace} onClose={() => setProjectOpen(false)} />

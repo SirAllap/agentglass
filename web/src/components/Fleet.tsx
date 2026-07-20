@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import type { AgentCard } from "../lib/derive.ts";
+import type { AgentCard, AgentOutcome } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
 import { fmtUsd, fmtTokens, fmtAgo, modelLabelOf } from "../lib/format.ts";
 
@@ -16,7 +16,31 @@ const STATUS: Record<string, { color: string; label: string }> = {
   errored: { color: "var(--error)", label: "errored" },
   idle: { color: "var(--text4)", label: "idle" },
 };
-const RANK: Record<string, number> = { working: 0, errored: 1, waiting: 2, idle: 3 };
+// `waiting` above `errored`: an agent stopped on a question needs a person, and
+// a person is the only thing that will move it. One that hit an error may well
+// have recovered on its own by the time you look.
+const RANK: Record<string, number> = { working: 0, waiting: 1, errored: 2, idle: 3 };
+// Within the idle pile, surface what still wants something from you.
+const OUTCOME_RANK: Record<AgentOutcome, number> = { unanswered: 0, faulted: 1, unclear: 2, settled: 3 };
+/**
+ * The outcome mark: a small glyph beside the metrics, never the status rail.
+ *
+ * The rail carries liveness. Painting a finished-clean card bright green there
+ * would put it in direct competition with a card that is actually working, and
+ * make the wall harder to scan rather than easier — so the two axes stay
+ * visually separate.
+ *
+ * Distinct glyphs rather than three coloured dots, so the meaning survives
+ * without colour.
+ */
+const OUTCOME: Record<AgentOutcome, { glyph: string; color: string; title: string } | null> = {
+  settled: { glyph: "✓", color: "var(--success)", title: "finished with nothing left trailing" },
+  faulted: { glyph: "✕", color: "var(--error)", title: "ended on an error, or stopped mid-tool" },
+  unanswered: { glyph: "◷", color: "var(--warning)", title: "stopped on a question nobody answered" },
+  // Nothing. No terminal event ever arrived, and the absence of a mark is the
+  // accurate report — inventing a glyph here would be a guess wearing a badge.
+  unclear: null,
+};
 // Compress the noisy subagent type names for the card chip.
 const shortType = (t: string) =>
   t.replace(/^workflow-subagent$/, "workflow").replace(/^general-purpose$/, "general");
@@ -72,8 +96,33 @@ function SessionCard({ a, selected, onSelect }: { a: AgentCard; selected: boolea
             )}
             <span className="relative inline-flex rounded-full h-2.5 w-2.5" style={{ background: st.color }} />
           </span>
-          <span className="truncate text-[13px]" style={{ color: "var(--text)" }}>{a.key}</span>
+          {/* The uuid is the identity, not the label — five agents on one repo
+              render as five near-identical hex strings otherwise. Keep it in the
+              tooltip, since it's what you paste into a resume command. */}
+          {/* Truncated on screen, whole in the tooltip — with the uuid under it,
+              since that's what you paste into a resume. */}
+          <span className="truncate text-[13px]" style={{ color: "var(--text)" }}
+            title={a.title ? `${a.title}\n${a.key}` : a.key}>{a.title ?? a.key}</span>
+          {/* Cards are grouped by project, so several agents on `orbit` sit side
+              by side; this is the only thing that says which branch each one is
+              actually working. */}
+          {a.worktree && (
+            <span className="chip shrink-0" title={`Working in the ${a.worktree} worktree`}
+              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>
+              ⑂ {a.worktree}
+            </span>
+          )}
         </div>
+        {/* How it ended, once it has. Only for idle cards: a session still
+            working hasn't got an outcome, and claiming one would be inventing
+            information. */}
+        {a.status === "idle" && OUTCOME[a.outcome] && (
+          <span className="shrink-0 text-[11px] leading-none" aria-label={OUTCOME[a.outcome]!.title}
+            title={OUTCOME[a.outcome]!.title}
+            style={{ color: OUTCOME[a.outcome]!.color, opacity: a.outcome === "settled" ? 0.6 : 0.95 }}>
+            {OUTCOME[a.outcome]!.glyph}
+          </span>
+        )}
         <span className="chip shrink-0" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{model}</span>
       </div>
       <div className="mt-1 flex items-center justify-between">
@@ -119,7 +168,10 @@ export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; ac
     }
     return [...by.entries()]
       .map(([app, list]) => {
-        list.sort((x, y) => (RANK[x.status] - RANK[y.status]) || y.lastSeen - x.lastSeen);
+        list.sort((x, y) =>
+          (RANK[x.status] - RANK[y.status]) ||
+          (OUTCOME_RANK[x.outcome] - OUTCOME_RANK[y.outcome]) ||
+          y.lastSeen - x.lastSeen);
         const live = list.filter((a) => a.status !== "idle").length;
         const subs = list.reduce((s, a) => s + a.subagents, 0);
         return { app, list, live, subs, lastSeen: Math.max(...list.map((a) => a.lastSeen)) };

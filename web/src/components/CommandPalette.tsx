@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { THEMES, applyTheme } from "../lib/themes.ts";
+import { IS_DESKTOP } from "../lib/desktop.ts";
 import { api } from "../lib/api.ts";
 
 interface Cmd {
@@ -29,6 +30,7 @@ export function CommandPalette({
   onChat,
   onSearch,
   onClear,
+  onZoom,
 }: {
   open: boolean;
   onClose: () => void;
@@ -46,6 +48,7 @@ export function CommandPalette({
   onChat: () => void;
   onSearch: () => void;
   onClear: () => void;
+  onZoom: (dir: 1 | -1 | 0) => void;
 }) {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
@@ -61,6 +64,13 @@ export function CommandPalette({
     list.push({ id: "chat", group: "View", label: "Chat — drive a Claude session in a repo/worktree", run: () => onChat() });
     list.push({ id: "stats", group: "View", label: "Show statistics — skills, tools, apps", run: () => onStats() });
     list.push({ id: "clear", group: "Filter", label: "Clear all filters", run: () => onClear() });
+    // Discoverability more than convenience — the keys are faster once you know
+    // them, but nothing on screen would ever have told you they exist.
+    if (IS_DESKTOP) {
+      list.push({ id: "zoom-in", group: "Display", label: "Bigger — scale the whole window up", run: () => onZoom(1) });
+      list.push({ id: "zoom-out", group: "Display", label: "Smaller — scale the whole window down", run: () => onZoom(-1) });
+      list.push({ id: "zoom-reset", group: "Display", label: "Reset display size to 100%", run: () => onZoom(0) });
+    }
     for (const a of apps) list.push({ id: "app:" + a, group: "Filter by app", label: a, run: () => onFilter({ app: a }) });
     for (const t of types) list.push({ id: "type:" + t, group: "Filter by event", label: t, run: () => onFilter({ type: t }) });
     for (const w of [["15m", 900000], ["1h", 3600000], ["6h", 21600000], ["24h", 86400000], ["7d", 604800000]] as const)
@@ -69,7 +79,7 @@ export function CommandPalette({
     list.push({ id: "csv", group: "Export", label: "Download CSV", run: () => window.open(api.exportUrl("csv")) });
     list.push({ id: "json", group: "Export", label: "Download JSON", run: () => window.open(api.exportUrl("json")) });
     return list;
-  }, [apps, types, onFilter, onWindow, onTheme, onStats, onSkills, onChanges, onGit, onDocker, onTerminal, onChat, onSearch, onClear]);
+  }, [apps, types, onFilter, onWindow, onTheme, onStats, onSkills, onChanges, onGit, onDocker, onTerminal, onChat, onSearch, onClear, onZoom]);
 
   const filtered = useMemo(
     () => (q ? cmds.filter((c) => (c.group + " " + c.label).toLowerCase().includes(q.toLowerCase())) : cmds),

@@ -12,7 +12,8 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
-import { autostartEnabled, setAutostart } from "../lib/desktop.ts";
+import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
+import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
@@ -36,6 +37,30 @@ function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void
         }} />
       </span>
     </button>
+  );
+}
+
+/** A −/value/+ stepper. A slider would imply the value is continuous and let
+ *  you drag the window into a size the cockpit grid can't lay out; the ladder
+ *  is short and every rung is one that works, so buttons say more. */
+function Stepper({ label, hint, value, onDec, onInc, canDec, canInc }: {
+  label: string; hint: string; value: string; onDec: () => void; onInc: () => void; canDec: boolean; canInc: boolean;
+}) {
+  const btn = "w-7 h-7 rounded-md text-[14px] leading-none flex items-center justify-center disabled:opacity-30 enabled:hover:bg-white/10";
+  const border = "1px solid color-mix(in srgb, var(--border) 55%, transparent)";
+  return (
+    <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left">
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="block text-[10.5px] t-dim2 mt-0.5">{hint}</span>
+      </span>
+      <span className="shrink-0 flex items-center gap-1">
+        <button onClick={onDec} disabled={!canDec} className={btn} style={{ border, color: "var(--text2)" }} aria-label="Smaller">−</button>
+        {/* Tabular width so stepping 100% → 125% doesn't shuffle the buttons. */}
+        <span className="text-[11.5px] tabular-nums text-center w-[42px]" style={{ color: "var(--text)" }}>{value}</span>
+        <button onClick={onInc} disabled={!canInc} className={btn} style={{ border, color: "var(--text2)" }} aria-label="Bigger">+</button>
+      </span>
+    </div>
   );
 }
 
@@ -64,14 +89,22 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function SettingsModal({ open, onClose, sound, onSound, onOpenStats, onOpenHelp }: {
-  open: boolean; onClose: () => void; sound: boolean; onSound: () => void; onOpenStats: () => void; onOpenHelp: () => void;
+export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp }: {
+  open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
+  scale: number; onZoom: (dir: 1 | -1 | 0) => void;
+  onOpenStats: () => void; onOpenHelp: () => void;
 }) {
   // Launch-at-login belongs to the installed app, so the row exists only in the
   // desktop window — and only once the shell has confirmed the current state,
   // rather than showing a switch that might be lying about it.
   const [autostart, setAutostartState] = useState<boolean | null>(null);
+  // Read once on open rather than tracked live: the window can also be put
+  // fullscreen by the OS (a window-manager shortcut), and a toggle that lied
+  // about the current state would be worse than one that is merely a moment
+  // stale.
+  const [fullscreen, setFullscreenState] = useState(false);
   useEffect(() => { if (open) autostartEnabled().then(setAutostartState); }, [open]);
+  useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -101,6 +134,19 @@ export function SettingsModal({ open, onClose, sound, onSound, onOpenStats, onOp
 
                 <div className="overflow-y-auto flex-1 divide-y" style={{ borderColor: "color-mix(in srgb, var(--border) 20%, transparent)" }}>
                   <Section title="Preferences">
+                    {/* Desktop only, like launch-at-login: in a browser tab the
+                        browser's own zoom already does this, and better. */}
+                    {IS_DESKTOP && (
+                      <Stepper
+                        label="Display size"
+                        hint={`Scales the whole window — ${MOD_KEY}+ / ${MOD_KEY}− anywhere, ${MOD_KEY}0 to reset`}
+                        value={fmtScale(scale)}
+                        onDec={() => onZoom(-1)} onInc={() => onZoom(1)}
+                        canDec={canZoomOut()} canInc={canZoomIn()} />
+                    )}
+                    <Toggle on={fullscreen} onClick={async () => setFullscreenState(await toggleFullscreen())}
+                      label="Fullscreen"
+                      hint="Hide the window frame — F11 anywhere" />
                     <Toggle on={sound} onClick={onSound}
                       label="Alert sounds"
                       hint="A chime when a session errors or needs you" />

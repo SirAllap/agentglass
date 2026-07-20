@@ -12,7 +12,7 @@
 // line carrying text and image content blocks together, which is the only
 // channel structured content has into a `claude -p` run.
 import { safeAbs, repoRootOf } from "./git.ts";
-import { inScope } from "./config.ts";
+import { inScope, chatBypassAllowed } from "./config.ts";
 import type { ChatImage, ChatImageMediaType } from "../../shared/types.ts";
 
 const claudeBin = () => Bun.which("claude");
@@ -28,8 +28,13 @@ const MODES = new Set(["default", "plan", "acceptEdits", "bypassPermissions"]);
 // unattended autonomy driven straight from a browser request. That is too much
 // to hand out on the same-origin check alone, so it is off unless the operator
 // explicitly opts in; otherwise the mode is downgraded to a prompting default.
-export const CHAT_BYPASS_ALLOWED = process.env.AGENTGLASS_CHAT_BYPASS === "1";
+// The opt-in lives in config.ts because it has to be reachable from both
+// surfaces — a .env only reaches a server started from a checkout.
+export const CHAT_BYPASS_ALLOWED = chatBypassAllowed();
 const BYPASS_ALLOWED = CHAT_BYPASS_ALLOWED;
+/** How long a turn may produce nothing at all before we assume the CLI is stuck
+ *  on something it can't ask us for. Only ever armed before the first byte. */
+const STARTUP_TIMEOUT_MS = Number(process.env.AGENTGLASS_CHAT_STARTUP_TIMEOUT_MS ?? 20_000);
 const MODEL_RE = /^[a-z0-9][a-z0-9.-]{2,48}$/;
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
 
@@ -241,13 +246,46 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
     async start(controller) {
       const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
       const stopKeepalive = startKeepalive(controller);
+      /*
+       * A first-run watchdog.
+       *
+       * A `claude` that has never been logged in blocks on an interactive
+       * auth prompt it can never receive — there is no terminal here. It emits
+       * nothing, exits never, and the panel sits on a spinner forever, which
+       * reads as agentglass having hung rather than as a CLI waiting for a
+       * login. Same shape for an unaccepted EULA or a broken install.
+       *
+       * So: if the process hasn't said a single word within the window, stop
+       * waiting and say what to do about it. Armed only until the first byte —
+       * a turn that takes ten minutes of thinking is fine, and common.
+       */
+      let firstByte = false;
+      const watchdog = setTimeout(async () => {
+        if (firstByte || cancelled) return;
+        const hint = (await Promise.race([stderrText, Promise.resolve("")])).trim();
+        try {
+          controller.enqueue(enc.encode(JSON.stringify({
+            type: "agx_error",
+            code: null,
+            errorType: "first_run_setup_required",
+            setupCommand: "claude",
+            error: hint
+              || `claude produced no output in ${STARTUP_TIMEOUT_MS / 1000}s — it is probably waiting for a login it can't ask for here. Run \`claude\` once in a terminal to sign in, then try again.`,
+          }) + "\n"));
+        } catch { /* the client already went away */ }
+        try {
+          if (setsid) process.kill(-proc.pid, "SIGTERM");
+          else proc.kill();
+        } catch { /* gone */ }
+      }, STARTUP_TIMEOUT_MS);
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (value) controller.enqueue(value);
+          if (value) { firstByte = true; clearTimeout(watchdog); controller.enqueue(value); }
         }
       } catch { /* closed */ }
+      clearTimeout(watchdog);
       stopKeepalive();
       const code = await proc.exited;
       // The reader loop ends on cancel too, and a cancelled controller throws

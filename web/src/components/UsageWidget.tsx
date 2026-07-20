@@ -17,6 +17,64 @@ function resetLabel(iso: string | null): string {
   return `${day} ${time}`;
 }
 
+/**
+ * The last usage we saw, shared by every consumer and outliving all of them.
+ *
+ * The server already caches for a minute, so this isn't about the network — it's
+ * about the mount. Both the header widget and the terminal island keep the
+ * payload in component state, which resets to null every time they unmount, so
+ * opening the terminal panel showed a spinner for a value the app had fetched
+ * thirty seconds earlier and still held. Hoisting it out of React means the
+ * second mount paints the real numbers immediately, and only ever shows a
+ * spinner on the genuinely cold first fetch of the session.
+ */
+let lastUsage: UsagePayload | null = null;
+/** Why the meters are missing, when they are. A feature that silently shows
+ *  nothing is indistinguishable from a feature that is broken. */
+let lastError: string | null = null;
+let firstFetchDone = false;
+const listeners = new Set<(u: UsagePayload | null) => void>();
+let poller: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * One poll for the whole app, however many meters are on screen.
+ *
+ * The header widget and the terminal island each ran their own 30s interval, so
+ * two components meant a request every fifteen seconds on average — against an
+ * endpoint that answers 429 when asked too often, and whose 429 then made both
+ * of them render nothing. Sharing the timer halves the traffic and, more
+ * importantly, makes the rate a property of the app rather than of how many
+ * places happen to be showing the number.
+ */
+function subscribeUsage(fn: (u: UsagePayload | null) => void): () => void {
+  listeners.add(fn);
+  if (!poller) {
+    const load = () => api.usage()
+      .then((next) => { if (next.available) { lastUsage = next; lastError = null; } else lastError = next.error ?? "unavailable"; })
+      .catch(() => { /* offline — the meters keep the last good reading */ })
+      .finally(() => { firstFetchDone = true; listeners.forEach((l) => l(lastUsage)); });
+    load();
+    /*
+     * Five minutes, not thirty seconds.
+     *
+     * These are a 5-hour window and a weekly one — the fastest of them moves by
+     * a fraction of a percent per minute. Polling twice a minute asked an
+     * endpoint that rate-limits roughly 600 times a day for a number that
+     * changes meaningfully a handful of times, and duly earned a 429 that made
+     * the meters vanish entirely. Being briefly stale about "83% of your week"
+     * costs nothing; being throttled costs the whole feature.
+     */
+    poller = setInterval(load, 5 * 60_000);
+  } else if (firstFetchDone) {
+    // A late subscriber gets what we already have instead of waiting a cycle.
+    queueMicrotask(() => fn(lastUsage));
+  }
+  return () => {
+    listeners.delete(fn);
+    if (!listeners.size && poller) { clearInterval(poller); poller = null; }
+  };
+}
+
 // Colour escalates with consumption (matches the "used" mental model).
 function usedColor(used: number): string {
   if (used >= 85) return "var(--error)";
@@ -39,22 +97,100 @@ function Meter({ label, used, resets }: { label: string; used: number; resets: s
   );
 }
 
+/**
+ * The plan meters, floating over a full-screen panel.
+ *
+ * The header's copy is the right place for them until something covers the
+ * header — which the terminal does, by design, because a terminal wants the
+ * whole window. But "how much of my 5-hour window is left" is *more* relevant
+ * there, not less: that's where the long agent runs happen.
+ *
+ * So the same numbers come back as an island over the top edge. Deliberately
+ * unclickable (`pointer-events: none`) — it sits above a terminal, and a strip
+ * that swallowed a click meant for the shell underneath would be worse than not
+ * having it. It also steps out of the way on hover, for the one line of output
+ * that ends up behind it.
+ */
+export function UsageIsland() {
+  const [u, setU] = useState<UsagePayload | null>(lastUsage);
+  // The first call is a real round trip to Anthropic — the server caches it for
+  // a minute afterwards, so only the cold one is slow. Rendering nothing while
+  // it's in flight is what makes that read as a bug: an empty strip where the
+  // numbers should be looks broken, whereas a spinner is just waiting.
+  const [loading, setLoading] = useState(!lastUsage);
+  useEffect(() => subscribeUsage((next) => { setU(next); setLoading(false); }), []);
+
+  if (!u?.available) {
+    // Only while the first fetch is out. Once it has answered and there is no
+    // usage to show — no Claude credentials, a non-Anthropic setup — the island
+    // disappears rather than sitting there as a permanent empty promise.
+    // Throttled by the upstream. Saying so beats vanishing — the meters going
+    // missing looks like a bug, and the actual state ("we're being rate
+    // limited, it'll come back") is both true and reassuring.
+    if (!loading && lastError?.includes("429")) {
+      return (
+        <div className="fixed top-1.5 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 10002 }}>
+          <div className="px-3 py-1 rounded-full text-[9px] t-dim2"
+            style={{ opacity: 0.7, background: "color-mix(in srgb, var(--bg2) 92%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", backdropFilter: "blur(6px)" }}>
+            plan usage — rate limited, retrying
+          </div>
+        </div>
+      );
+    }
+    if (!loading) return null;
+    return (
+      <div className="fixed top-1.5 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 10002 }}>
+        <div className="flex items-center gap-2 px-3 py-1 rounded-full"
+          style={{
+            opacity: 0.75,
+            background: "color-mix(in srgb, var(--bg2) 92%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+            backdropFilter: "blur(6px)",
+          }}>
+          <span className="h-2.5 w-2.5 rounded-full animate-spin"
+            style={{ border: "2px solid color-mix(in srgb, var(--primary) 25%, transparent)", borderTopColor: "var(--primary)" }} />
+          <span className="text-[9px] t-dim2">plan usage…</span>
+        </div>
+      </div>
+    );
+  }
+  const mini = (label: string, used: number, resets: string | null) => (
+    <span className="flex items-center gap-1.5" title={`${label}: ${used}% used — resets ${resetLabel(resets)}`}>
+      <span className="text-[8.5px] uppercase tracking-[0.14em] t-dim2">{label}</span>
+      <span className="h-1 w-10 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }}>
+        <span className="block h-full rounded-full transition-all duration-700" style={{ width: `${used}%`, background: usedColor(used) }} />
+      </span>
+      <span className="text-[10px] font-semibold tabular-nums" style={{ color: usedColor(used) }}>{used}%</span>
+    </span>
+  );
+  return (
+    // pointer-events: none all the way down. Hover-to-fade was tempting, but a
+    // strip that listens for the mouse is a strip that can swallow a click
+    // meant for the shell underneath — and there is no way to have both. A
+    // terminal never loses an interaction to this.
+    <div className="fixed top-1.5 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 10002 }}>
+      <div className="flex items-center gap-3 px-3 py-1 rounded-full"
+        style={{
+          opacity: 0.9,
+          background: "color-mix(in srgb, var(--bg2) 92%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)",
+          boxShadow: "0 6px 20px -8px rgba(0,0,0,.7)",
+          backdropFilter: "blur(6px)",
+        }}>
+        {u.five_hour && mini("5h", u.five_hour.utilization, u.five_hour.resets_at)}
+        {u.five_hour && u.seven_day && <span className="w-px h-3" style={{ background: "color-mix(in srgb, var(--border) 55%, transparent)" }} />}
+        {u.seven_day && mini("weekly", u.seven_day.utilization, u.seven_day.resets_at)}
+      </div>
+    </div>
+  );
+}
+
 export function UsageWidget() {
-  const [u, setU] = useState<UsagePayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    // Keep the last good payload through transient failures — the meters
-    // should never blink out because one poll errored.
-    const load = () =>
-      api
-        .usage()
-        .then((next) => setU((prev) => (next.available ? next : prev?.available ? prev : next)))
-        .catch(() => {})
-        .finally(() => setLoading(false));
-    load();
-    const id = setInterval(load, 30_000);
-    return () => clearInterval(id);
-  }, []);
+  const [u, setU] = useState<UsagePayload | null>(lastUsage);
+  const [loading, setLoading] = useState(!lastUsage);
+  // Keep the last good payload through transient failures — the meters should
+  // never blink out because one poll errored.
+  useEffect(() => subscribeUsage((next) => { if (next) setU(next); setLoading(false); }), []);
 
   // First fetch in flight — show a spinner so it's clearly loading, not missing.
   if (loading && !u) {
