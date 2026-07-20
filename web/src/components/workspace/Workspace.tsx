@@ -96,16 +96,18 @@ export function Workspace({
                     return (
                       <div
                         key={v.id}
-                        // `content-visibility`, not `display:none`: xterm's fit
-                        // addon measures its container, and a display:none
-                        // parent measures 0x0, which is how a hidden terminal
-                        // comes back reflowed to a single column. This keeps the
-                        // subtree mounted and its state alive the way
-                        // `visibility: hidden` did, and additionally skips
-                        // laying it out, so four idle views stop being
-                        // re-measured whenever the fifth changes size.
+                        // `visibility`, not `display:none`: xterm's fit addon
+                        // measures its container, and a display:none parent
+                        // measures 0x0, which is how a hidden terminal comes
+                        // back reflowed to a single column.
+                        //
+                        // NOT `content-visibility: hidden`: these views are
+                        // absolutely stacked and chat is last in the DOM, so a
+                        // content-visibility box still hit-tests and the hidden
+                        // top view swallows clicks meant for the active one
+                        // beneath it. `visibility: hidden` does not.
                         className="absolute inset-0 flex flex-col min-h-0"
-                        style={{ contentVisibility: active ? "visible" : "hidden" }}
+                        style={{ visibility: active ? "visible" : "hidden" }}
                         aria-hidden={!active}
                       >
                         {/* term and chat can dismiss the workspace from the
