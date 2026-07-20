@@ -625,6 +625,44 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     setHint(await addAttachments(active.id, files));
   };
 
+  // A drag crossing a child element fires `dragleave` on the parent, so the
+  // highlight is counted in and out rather than toggled — otherwise it flickers
+  // off the moment the cursor passes over the textarea it is inviting you to
+  // drop on.
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+  const onDragOver = (e: React.DragEvent) => {
+    if (!enabled || !active) return;
+    if (!Array.from(e.dataTransfer.items).some((i) => i.kind === "file")) return;
+    // Without this the browser answers the drop itself by navigating to the
+    // file, replacing the whole app with the image.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    dragDepth.current++;
+    setDragOver(true);
+  };
+  const onDragLeave = () => {
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (!dragDepth.current) setDragOver(false);
+  };
+  const onDrop = async (e: React.DragEvent) => {
+    if (!active) return;
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragOver(false);
+    // Files, not just images: `addAttachments` quotes a text file into the
+    // draft, which is the same thing the picker and the paste path already do.
+    const files = Array.from(e.dataTransfer.files);
+    if (!files.length) {
+      // A drag from another window can carry an image as bytes with no File
+      // behind it; `imagesFrom` reads the item list the paste path relies on.
+      const items = imagesFrom(e.dataTransfer);
+      if (items.length) setHint(await addAttachments(active.id, items));
+      return;
+    }
+    setHint(await addAttachments(active.id, files));
+  };
+
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // The skill menu owns the arrows, Tab and Enter while it is showing, or
     // Enter would send `/rev` as a message instead of completing it.
@@ -839,7 +877,16 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   )}
                   </div>
 
-                  <div className="shrink-0 border-t p-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                  <div className="shrink-0 border-t p-3 relative" onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+                    style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                    {dragOver && (
+                      // Drawn over the composer rather than around it: a border
+                      // swap reflows the textarea under the cursor mid-drag.
+                      <div className="absolute inset-0 z-10 grid place-items-center rounded-lg pointer-events-none text-[11px] font-semibold"
+                        style={{ background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px dashed color-mix(in srgb, var(--primary) 60%, transparent)", color: "var(--text)" }}>
+                        drop to attach
+                      </div>
+                    )}
                     {!!active?.attachments.length && (
                       <div className="flex flex-wrap gap-2 mb-2">
                         {active.attachments.map((a) => (

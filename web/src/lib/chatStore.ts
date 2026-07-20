@@ -649,7 +649,16 @@ export async function send(id: string, text: string, isActive: () => boolean, al
             break;
           }
         });
-        if (!/permission|requires approval|not allowed|denied/i.test(text)) continue;
+        // Bypass sends no allowlist and `--dangerously-skip-permissions`
+        // refuses nothing, so a refusal here can only be a misread — and it
+        // was one: the banner offered an "allow" button writing to a list
+        // that mode never sends.
+        if (chat.mode === "bypassPermissions") continue;
+        // Matched on what a refusal actually says rather than on words that
+        // turn up in ordinary output. A bare `permission`/`denied` raised the
+        // banner over any `Permission denied` a `find` or `grep` walked past,
+        // announcing a block on a turn where nothing had been blocked.
+        if (!/requires approval|requested permissions|permission to use|haven't granted/i.test(text)) continue;
         const tool = toolNames.get(useId);
         // Raised even while this chat is on screen: the composer's banner is
         // only visible if you are actually watching, and switching away must
