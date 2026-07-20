@@ -84,6 +84,9 @@ export type ChatUsage = {
   costUsd: number;
 };
 
+/** A message typed during someone else's turn, waiting for its own. */
+export type QueuedTurn = { id: string; text: string; images: ChatImage[] };
+
 export type Chat = {
   id: string;
   cwd: string;
@@ -95,6 +98,13 @@ export type Chat = {
   sending: boolean;
   draft: string;        // per-chat, so switching tabs doesn't lose what you typed
   attachments: Attachment[]; // pasted images, per-chat for the same reason as the draft
+  /** Turns typed while the model was still replying, sent in order as it frees
+   *  up. A turn is one `claude -p` subprocess reading a single message off
+   *  stdin, so there is nothing to interrupt mid-flight — the CLI does the same
+   *  thing, holding what you type until the turn boundary. Without this the
+   *  composer is dead for the length of a reply, which for a long tool-running
+   *  turn is minutes of watching and not being able to answer. */
+  queued: QueuedTurn[];
   createdAt: number;
   abort: AbortController | null;
   unread: boolean;      // replied while you were looking at another chat
@@ -161,7 +171,7 @@ export function newChat(
     id, cwd, model, mode,
     title: resume?.title || "new chat",
     messages: [], sessionId: resume?.sessionId ?? "",
-    sending: false, draft: "", attachments: [], createdAt: Date.now(), abort: null, unread: false,
+    sending: false, draft: "", attachments: [], queued: [], createdAt: Date.now(), abort: null, unread: false,
     attention: "none",
   };
   chats.set(id, chat);
@@ -438,12 +448,16 @@ const titleOf = (s: string) => {
  * `activeId` decides whether the reply counts as unread — a chat answering in
  * the background should say so, and the one on screen shouldn't.
  */
-export async function send(id: string, text: string, isActive: () => boolean, allowedTools: string[] = []) {
+export async function send(id: string, text: string, isActive: () => boolean, allowedTools: string[] = [], queuedImages?: ChatImage[]) {
   const chat = chats.get(id);
   const msg = text.trim();
   // An image alone is a complete turn, so the draft may be empty when something
   // is attached.
-  const images: ChatImage[] = chat ? chat.attachments.map((a) => ({ mediaType: a.mediaType, data: a.data })) : [];
+  //
+  // A queued turn carries its own images: it left the composer when it was
+  // typed, so by the time it is sent the attachments there belong to whatever
+  // is being written next.
+  const images: ChatImage[] = queuedImages ?? (chat ? chat.attachments.map((a) => ({ mediaType: a.mediaType, data: a.data })) : []);
   if (!chat || (!msg && !images.length) || chat.sending || !chat.cwd) return;
 
   update(id, (c) => {
@@ -452,11 +466,16 @@ export async function send(id: string, text: string, isActive: () => boolean, al
     c.messages.push({ role: "user", text: msg, tools: [], ts: Date.now(), images: images.length ? images : undefined });
     c.messages.push({ role: "assistant", text: "", tools: [], ts: Date.now(), streaming: true });
     c.sending = true;
-    c.draft = "";
-    // The thumbnails belong to the composer, not the sent message, so their
-    // object URLs are released as the attachments leave it.
-    for (const a of c.attachments) URL.revokeObjectURL(a.url);
-    c.attachments = [];
+    // A queued turn was taken out of the composer when it was typed. Whatever
+    // is in there now is the *next* message being written, and clearing it
+    // would delete it out from under the cursor.
+    if (!queuedImages) {
+      c.draft = "";
+      // The thumbnails belong to the composer, not the sent message, so their
+      // object URLs are released as the attachments leave it.
+      for (const a of c.attachments) URL.revokeObjectURL(a.url);
+      c.attachments = [];
+    }
   });
 
   const ac = new AbortController();
@@ -579,9 +598,13 @@ export async function send(id: string, text: string, isActive: () => boolean, al
     }
   };
 
+  let broke = false;
   try {
     await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images }, onEvent, ac.signal);
   } catch (e) {
+    // A queue must not keep firing into a turn that failed or one you just
+    // interrupted — the rest of it stays put, visible, for you to decide on.
+    broke = true;
     if (!(e instanceof DOMException && e.name === "AbortError")) {
       // A ChatStreamError already carries a sentence written for this spot;
       // anything else is unexpected and its own text is the best there is.
@@ -592,9 +615,12 @@ export async function send(id: string, text: string, isActive: () => boolean, al
       });
     }
   } finally {
+    // Read before the update, because draining pops it.
+    const next = broke ? undefined : chats.get(id)?.queued[0];
     update(id, (c) => {
       c.sending = false;
       c.abort = null;
+      if (next) c.queued = c.queued.filter((q) => q.id !== next.id);
       // This turn is fully drawn from the stream. The transcript scanner will
       // publish the same work on the socket moments from now, once it has read
       // the JSONL back off disk — move the watermark past it so the turn you
@@ -606,13 +632,50 @@ export async function send(id: string, text: string, isActive: () => boolean, al
         c.unread = true;
         // A refusal already asked for you by name; "done" must not overwrite it
         // with the weaker claim.
-        if (c.attention !== "blocked") c.attention = "done";
+        // With a queue behind it the chat isn't done either, it's between
+        // turns — calling you back for that would cry wolf on every message
+        // you queued yourself.
+        if (c.attention !== "blocked" && !next) c.attention = "done";
       }
     });
+    if (next) void send(id, next.text, isActive, allowedTools, next.images);
   }
 }
 
+/** Hold a turn until the current one ends. Same shape as `send`: it takes the
+ *  draft and the composer's attachments and empties both, so typing and Enter
+ *  feel identical whether or not something is already running. */
+export function enqueue(id: string, text: string) {
+  const chat = chats.get(id);
+  const msg = text.trim();
+  if (!chat) return;
+  const images: ChatImage[] = chat.attachments.map((a) => ({ mediaType: a.mediaType, data: a.data }));
+  if (!msg && !images.length) return;
+  update(id, (c) => {
+    c.queued.push({ id: `q${++seq}`, text: msg, images });
+    c.draft = "";
+    for (const a of c.attachments) URL.revokeObjectURL(a.url);
+    c.attachments = [];
+  });
+}
+
+/** Take a queued turn back out — either to drop it or, with `toDraft`, to put
+ *  it back in the composer and reword it. `toDraft` restores the text only, so
+ *  the panel offers it for text-only turns; an image would be silently lost. */
+export function unqueue(id: string, qid: string, toDraft = false) {
+  update(id, (c) => {
+    const q = c.queued.find((x) => x.id === qid);
+    if (!q) return;
+    c.queued = c.queued.filter((x) => x.id !== qid);
+    // Appended, not assigned: whatever is half-typed in there is still wanted.
+    if (toDraft && q.text) c.draft = c.draft ? `${c.draft}\n${q.text}` : q.text;
+  });
+}
+
 export function stop(id: string) {
+  // Stopping means stopping, not "stop this one and start the next" — a queue
+  // that survived the interrupt would fire the moment the stream tore down.
+  update(id, (c) => { c.queued = []; });
   chats.get(id)?.abort?.abort();
 }
 

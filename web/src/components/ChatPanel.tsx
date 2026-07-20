@@ -24,7 +24,7 @@ import { sessionIsLive } from "../lib/derive.ts";
 import { worktreeTag, sessionWorktree, sessionCwd } from "../lib/worktree.ts";
 import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
-  listChats, getChat, newChat, closeChat, update, send, stop, subscribe, chatResuming,
+  listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
 } from "../lib/chatStore.ts";
 
@@ -526,6 +526,10 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   const submit = () => {
     if (!active) return;
     const text = active.draft;
+    // Mid-turn, Enter queues instead of sending. The composer used to go dead
+    // for the length of a reply, so a long tool-running turn meant watching it
+    // work with an answer already typed and no way to hand it over.
+    if (active.sending) { enqueue(active.id, text); return; }
     send(active.id, text, () => openRef.current && activeIdRef.current === active.id, allowed.split(/\s+/).filter(Boolean));
   };
   const [hint, setHint] = useState("");
@@ -590,7 +594,6 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
     // send() returns early in both these cases; without saying so, Enter just
     // looks broken and the draft sits there.
     if (!active?.cwd) { setHint("pick a repo first"); return; }
-    if (active.sending) { setHint("still replying — press stop to interrupt"); return; }
     setHint("");
     submit();
   };
@@ -868,6 +871,32 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                         </div>
                       </div>
                     )}
+                    {/* What you have already handed over, above the composer
+                        and in the order it will go — a queued message is
+                        otherwise indistinguishable from one that vanished. */}
+                    {!!active?.queued.length && (
+                      <div className="mb-2 flex flex-col gap-1">
+                        {active.queued.map((q, i) => (
+                          <div key={q.id} className="flex items-baseline gap-2 px-2.5 py-1.5 rounded-lg"
+                            style={{ background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px dashed color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                            <span className="shrink-0 text-[9.5px] t-dim2">queued {i + 1}</span>
+                            <span className="flex-1 truncate text-[11.5px]" style={{ color: "var(--text3)" }}>
+                              {q.text || `${q.images.length} image${q.images.length > 1 ? "s" : ""}`}
+                            </span>
+                            {!!q.images.length && q.text && <span className="shrink-0 text-[9.5px] t-dim2">+{q.images.length} img</span>}
+                            {/* Editing puts the text back in the composer,
+                                which an attached image can't survive — so it
+                                is only offered where nothing is lost. */}
+                            {!q.images.length && (
+                              <button onClick={() => unqueue(active.id, q.id, true)} title="Put this back in the composer"
+                                className="shrink-0 text-[9.5px] t-dim2 hover:opacity-70">edit</button>
+                            )}
+                            <button onClick={() => unqueue(active.id, q.id)} aria-label="Remove queued message"
+                              className="shrink-0 px-1 t-dim2 hover:opacity-70">✕</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex items-end gap-2">
                       {/* Clipboard behaviour differs per engine and some
                           screenshot tools only put a file path on it, so the
@@ -890,11 +919,20 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                         onChange={(e) => active && update(active.id, (c) => { c.draft = e.target.value; })}
                         onKeyDown={onKey}
                         onPaste={onPaste}
-                        placeholder={!enabled ? "chat unavailable" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline)" : "message a new session… (Enter to send)"}
+                        placeholder={!enabled ? "chat unavailable" : active?.sending ? "still replying — type anyway, Enter queues it for the next turn" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline)" : "message a new session… (Enter to send)"}
                         className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
-                      {active?.sending
-                        ? <button onClick={() => stop(active.id)} className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ stop</button>
-                        : <button onClick={submit} disabled={!hasTurn || !active?.cwd || !enabled} className="shrink-0 px-4 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>send ↵</button>}
+                      {/* Stop stays reachable while a turn is queueing: the
+                          two are different intents — "answer this next" and
+                          "drop what you're doing" — and hiding either one
+                          behind the other is how you lose a turn you meant to
+                          keep. */}
+                      {active?.sending && (
+                        <button onClick={() => stop(active.id)} title="Interrupt the turn and clear anything queued"
+                          className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ stop</button>
+                      )}
+                      <button onClick={submit} disabled={!hasTurn || !active?.cwd || !enabled} className="shrink-0 px-4 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>
+                        {active?.sending ? "queue ↵" : "send ↵"}
+                      </button>
                     </div>
                     <div className="mt-1.5 text-[9.5px] t-dim2">
                       {hint
