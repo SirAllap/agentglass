@@ -74,7 +74,7 @@ def main():
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--seconds", type=int, default=30)
     args = ap.parse_args()
-    _agentglass_local_only(getattr(args, "server", None) or DEFAULT_SERVER)
+    _agentglass_local_only(SERVER)
     print(f"seeding → {SERVER}")
     if args.once:
         session()
