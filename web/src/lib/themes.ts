@@ -39,20 +39,39 @@ export const THEMES: Theme[] = [
 
 export const DEFAULT_THEME = "midnight-purple";
 
-export function applyTheme(id: string) {
-  const t = THEMES.find((x) => x.id === id) || THEMES[0];
+/**
+ * Paint the app in a theme.
+ *
+ * `sync` carries the palette out to tmux and nvim, and defaults to off because
+ * the files it writes are machine-global while the choice that drives it is
+ * per-browser. Only a deliberate pick may broadcast — see `pickTheme`.
+ */
+export function applyTheme(id: string, { sync = false } = {}) {
+  const known = THEMES.find((x) => x.id === id);
+  const t = known || THEMES[0];
   const root = document.documentElement;
   for (const [k, v] of Object.entries(t.vars)) root.style.setProperty(k, v);
   root.setAttribute("data-theme", t.id);
-  try { localStorage.setItem("agentglass-theme", t.id); } catch {}
-  /*
-   * Carry the palette out to tmux and nvim.
-   *
-   * Fire-and-forget on purpose: this reaches across to other processes, and
-   * none of them are allowed to make changing the app's own theme feel slow or
-   * fail. The server writes two files and pushes to any editor it can reach —
-   * see server/src/themesync.ts.
-   */
+  // Only ever persist a theme that exists. An id we don't recognise still gets
+  // painted in the fallback, but writing that fallback back to storage would
+  // turn one bad read into the permanent loss of a real choice.
+  if (known) { try { localStorage.setItem("agentglass-theme", t.id); } catch {} }
+  if (sync) syncTheme(t);
+}
+
+/**
+ * The user picked a theme, so tell the rest of the machine.
+ *
+ * Fire-and-forget on purpose: this reaches across to other processes, and none
+ * of them are allowed to make changing the app's own theme feel slow or fail.
+ * The server writes two files and pushes to any editor it can reach — see
+ * server/src/themesync.ts.
+ */
+export function pickTheme(id: string) {
+  applyTheme(id, { sync: true });
+}
+
+function syncTheme(t: Theme) {
   void fetch(`${SERVER}/theme/sync`, {
     method: "POST",
     headers: { "content-type": "application/json" },

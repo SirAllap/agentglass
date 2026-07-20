@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
-import { THEMES, applyTheme } from "../lib/themes.ts";
+import { THEMES, pickTheme } from "../lib/themes.ts";
 import { IS_DESKTOP } from "../lib/desktop.ts";
 import { api } from "../lib/api.ts";
 
@@ -75,7 +75,7 @@ export function CommandPalette({
     for (const t of types) list.push({ id: "type:" + t, group: "Filter by event", label: t, run: () => onFilter({ type: t }) });
     for (const w of [["15m", 900000], ["1h", 3600000], ["6h", 21600000], ["24h", 86400000], ["7d", 604800000]] as const)
       list.push({ id: "win:" + w[0], group: "Time window", label: w[0], run: () => onWindow(w[1] as number) });
-    for (const t of THEMES) list.push({ id: "theme:" + t.id, group: "Theme", label: t.name, run: () => { applyTheme(t.id); onTheme(t.id); } });
+    for (const t of THEMES) list.push({ id: "theme:" + t.id, group: "Theme", label: t.name, run: () => { pickTheme(t.id); onTheme(t.id); } });
     list.push({ id: "csv", group: "Export", label: "Download CSV", run: () => window.open(api.exportUrl("csv")) });
     list.push({ id: "json", group: "Export", label: "Download JSON", run: () => window.open(api.exportUrl("json")) });
     return list;
