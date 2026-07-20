@@ -28,10 +28,11 @@ python3 hooks/seed_demo.py   # populate with demo data
 - **`shared/types.ts`** — the event/analytics contract imported by both sides.
   Change it in one place.
 - **`hooks/`** — stdlib-only Python; keep it dependency-free.
-- **`src-tauri/`** — the Tauri v2 desktop shell (Rust). `make desktop` compiles
-  the Bun server to a standalone sidecar, builds the web bundle, and runs
-  `tauri build`; `make desktop-dev` runs against the live dev server. Linux
-  (`.deb`) and macOS (`.app`).
+- **`electron/`** — the Electron desktop shell. It runs the `web/` UI in
+  Chromium (GPU-composited) and brings the Bun server up with it. `make desktop`
+  builds the UI and launches it; `make desktop-dist` packages installers with
+  electron-builder (the sidecar is the Bun server compiled standalone, staged in
+  via `extraResources`). Linux (AppImage/`.deb`), macOS (`.dmg`), Windows.
 
 ## Ground rules
 

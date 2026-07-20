@@ -8,7 +8,7 @@
 
 [![▶ Live demo](https://img.shields.io/badge/▶%20Live%20demo-try%20it%20now-6366f1?style=for-the-badge)](https://sirallap.github.io/agentglass/demo/)
 
-![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Tauri%20app-ffc131) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
+![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Electron%20app-47848f) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
 
 ![agentglass in action — live cockpit, real terminal, diff review and source control, all one keystroke away](.github/assets/hero.gif)
 
@@ -248,14 +248,16 @@ the transcript. The raw hook blocks also live in
 
 ## Desktop app
 
-agentglass ships as a **native desktop app** — its own window and icon, plus a
+agentglass ships as a **desktop app** — its own window and icon, plus a
 **self-contained server** (the Bun backend compiled to a standalone binary and
-shipped as a [Tauri](https://tauri.app) v2 sidecar), so there's nothing to run
-in a terminal. Launch it from your app menu and the cockpit opens; close it and
-the server goes with it.
+shipped as an [Electron](https://electronjs.org) sidecar), so there's nothing to
+run in a terminal. Launch it from your app menu and the cockpit opens; close it
+and the server goes with it. The UI is the same web app, run in Chromium so it
+composites on the GPU.
 
 ```bash
-make desktop            # build: compiles the server sidecar + web, then `tauri build`
+make desktop            # build the UI and launch Electron + the sidecar
+make desktop-dist       # package installable binaries (electron-builder)
 make desktop-install    # install for this user (no root)
 ```
 
@@ -519,7 +521,7 @@ vars override it.
                                                        │      └─ WS /stream ─┐
                                                        │                      ▼
               web (React + Vite + Motion + Recharts + Shiki + xterm.js, :6180)
-              └─ also packaged as a Tauri v2 desktop app with a bundled Bun sidecar
+              └─ also packaged as an Electron desktop app with a bundled Bun sidecar
 ```
 
 **How cost stays correct:** transcripts report *cumulative* session tokens.
@@ -533,7 +535,7 @@ other by session, so the same turn is never counted twice.
 ## Contributing
 
 Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Small, fast, and
-dependency-light on purpose: a Bun/SQLite server, a React/Vite UI, a Tauri
+dependency-light on purpose: a Bun/SQLite server, a React/Vite UI, an Electron
 desktop shell, and a stdlib-only Python hook forwarder.
 
 ## About
