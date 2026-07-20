@@ -149,14 +149,38 @@ export function useLive(): LiveData {
     };
   }, [scheduleFlush]);
 
-  // Pause all ambient CSS animations while the tab is hidden — the stylesheet
-  // reads :root[data-idle="1"] and freezes the sweep/pulse/float/shimmer, so a
-  // backgrounded dashboard costs ~nothing on top of the browser's throttling.
+  // Pause all ambient CSS animations while nobody is looking at the window —
+  // the stylesheet reads :root[data-idle="1"] and freezes the
+  // sweep/pulse/float/shimmer.
+  //
+  // `document.hidden` alone was the whole test, and in the desktop app it is
+  // never true: a Tauri window has no tab to background, so the flag sat at "0"
+  // for the entire life of the process and none of these rules ever applied.
+  // The saving was real but only a browser ever collected it. That matters more
+  // here than in a tab, because WebKitGTK composites in software — every frame
+  // of every ambient loop is paid for on the CPU, and the dashboard idles hot
+  // with the radar sweep and a ping-ring per live session running forever.
+  //
+  // Focus is the signal that survives both environments: the dashboard's normal
+  // place is a second monitor or behind the terminal the agent is running in,
+  // so "not focused" is most of its life. Deliberately NOT an inactivity timer
+  // on top — this is a monitoring surface people leave on-screen and watch, and
+  // freezing the sweep under a still-visible, still-focused window would read as
+  // a hung app rather than a saving.
   useEffect(() => {
-    const sync = () => { document.documentElement.dataset.idle = document.hidden ? "1" : "0"; };
+    const sync = () => {
+      const looking = !document.hidden && document.hasFocus();
+      document.documentElement.dataset.idle = looking ? "0" : "1";
+    };
     sync();
     document.addEventListener("visibilitychange", sync);
-    return () => document.removeEventListener("visibilitychange", sync);
+    window.addEventListener("focus", sync);
+    window.addEventListener("blur", sync);
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+    };
   }, []);
 
   useEffect(() => {
