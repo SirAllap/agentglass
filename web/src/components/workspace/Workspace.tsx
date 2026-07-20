@@ -9,6 +9,7 @@ import { DiffView } from "../ChangesModal.tsx";
 import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { ChatView } from "../ChatPanel.tsx";
+import { DynamicIsland } from "./DynamicIsland.tsx";
 
 const BODY = {
   git: GitView,
@@ -124,6 +125,11 @@ export function Workspace({
                 </div>
               </motion.div>
             </div>
+            {/* One ambient status surface for the whole overlay -- clock, plan
+                meters, live-work pulse and the events worth looking up for. It
+                hangs off the frame's top edge and covers every view, which is
+                why it lives here rather than inside any one of them. */}
+            <DynamicIsland />
           </>
         )}
       </AnimatePresence>
