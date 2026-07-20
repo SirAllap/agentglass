@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.2.0",
   "description": "agentglass desktop shell (Electron)",
+  "author": "SirAllap",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -17,6 +18,7 @@
   "build": {
     "appId": "app.agentglass.desktop",
     "productName": "agentglass",
+    "executableName": "agentglass",
     "directories": { "output": "dist-app" },
     "files": ["main.js", "preload.js", "icons/**"],
     "extraResources": [
