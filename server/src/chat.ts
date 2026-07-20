@@ -35,7 +35,12 @@ const BYPASS_ALLOWED = CHAT_BYPASS_ALLOWED;
 /** How long a turn may produce nothing at all before we assume the CLI is stuck
  *  on something it can't ask us for. Only ever armed before the first byte. */
 const STARTUP_TIMEOUT_MS = Number(process.env.AGENTGLASS_CHAT_STARTUP_TIMEOUT_MS ?? 20_000);
-const MODEL_RE = /^[a-z0-9][a-z0-9.-]{2,48}$/;
+// A model id, with the optional window suffix Claude Code uses to ask for a
+// non-default context size: `claude-opus-4-8[1m]`. The suffix has to be allowed
+// through rather than sanitised away — without it the request silently fell
+// back to the 200k default, so a chat asking for the 1M window got a fifth of
+// it and the UI still measured against whatever the name implied.
+const MODEL_RE = /^[a-z0-9][a-z0-9.-]{2,48}(\[[a-z0-9]{1,8}\])?$/;
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
 
 // A pre-approved tool spec, e.g. `Read`, `Edit`, `Bash(git status)`,
