@@ -53,6 +53,25 @@ describe("safeAbs", () => {
     expect(safeAbs("/a/b/../c")).toBe("/a/c");
     expect(safeAbs("relative/x")?.startsWith("/")).toBe(true);
   });
+
+  test("maps Windows drive paths onto the automount", () => {
+    expect(safeAbs("C:\\Users\\Raide\\code\\app")).toBe("/mnt/c/Users/Raide/code/app");
+  });
+
+  test("clamps a translated drive path inside its own mount", () => {
+    // `\` became a real separator, so `..` could climb out of the automount…
+    expect(safeAbs("C:\\..\\..\\etc\\passwd")).toBeNull();
+    // …or hop to a sibling drive while staying under the automount base.
+    expect(safeAbs("C:\\..\\d\\thing")).toBeNull();
+    // Inner `..` that stays on the drive is legitimate and keeps resolving.
+    expect(safeAbs("C:\\Users\\Raide\\code\\..\\app")).toBe("/mnt/c/Users/Raide/app");
+  });
+
+  test("UNC paths are not translated: backslashes stay literal, as before", () => {
+    const unc = safeAbs("\\\\server\\share\\x");
+    expect(unc).not.toBeNull();
+    expect(unc!.endsWith("\\\\server\\share\\x")).toBe(true);
+  });
 });
 
 describe("shellSafeRel", () => {

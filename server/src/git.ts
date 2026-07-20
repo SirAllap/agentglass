@@ -76,7 +76,18 @@ function fromWindowsPath(p: string): string {
 
 export function safeAbs(p: unknown): string | null {
   if (typeof p !== "string" || !p || p.includes("\0")) return null;
-  return resolve(fromWindowsPath(p));
+  const abs = resolve(fromWindowsPath(p));
+  // A translated drive path must stay inside the mount it maps to: `\` became
+  // a real separator, so `..` in a Windows-recorded path can now climb out —
+  // and safeAbs also sees request-supplied paths, so fail closed. Clamp to the
+  // drive's own mount (C: → <automount>/c), not the automount base, or
+  // `C:\..\d\...` could hop drives while staying under it.
+  const drive = p.match(WINDOWS_DRIVE);
+  if (drive && AUTOMOUNT_ROOT) {
+    const mount = AUTOMOUNT_ROOT + drive[1]!.toLowerCase();
+    if (abs !== mount && !abs.startsWith(mount + "/")) return null;
+  }
+  return abs;
 }
 
 /** Resolve the git top-level for a file/dir path (a real path from telemetry). */
