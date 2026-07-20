@@ -21,7 +21,6 @@ app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
 
 const SERVER_PORT = Number(process.env.AGENTGLASS_PORT || 4000);
-const STATIC_PORT = 6199;
 
 // Paths differ between `electron .` (repo checkout) and a packaged app, where
 // electron-builder copies web/dist and the compiled sidecar into resources/.
@@ -41,9 +40,12 @@ const MIME = {
   ".ico": "image/x-icon", ".map": "application/json",
 };
 
+// Bind an ephemeral port (not a fixed one): a second instance, or anything else
+// already on a hardcoded port, would otherwise make listen() throw and the app
+// exit before a window ever shows. Resolves to the port actually assigned.
 function serveStatic() {
-  http
-    .createServer((req, res) => {
+  return new Promise((resolve, reject) => {
+    const srv = http.createServer((req, res) => {
       let p = decodeURIComponent(req.url.split("?")[0]);
       if (p === "/" || !path.extname(p)) p = "/index.html"; // SPA fallback
       const file = path.join(DIST, p);
@@ -53,8 +55,10 @@ function serveStatic() {
         res.writeHead(200, { "content-type": MIME[path.extname(file)] || "application/octet-stream" });
         res.end(data);
       });
-    })
-    .listen(STATIC_PORT, "127.0.0.1");
+    });
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => resolve(srv.address().port));
+  });
 }
 
 function health() {
@@ -117,7 +121,7 @@ function setAutostart(on) {
   return app.getLoginItemSettings().openAtLogin;
 }
 
-function createWindow() {
+function createWindow(staticPort) {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -128,13 +132,13 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, "preload.js") },
   });
   registerIpc(win);
-  win.loadURL(`http://127.0.0.1:${STATIC_PORT}/`);
+  win.loadURL(`http://127.0.0.1:${staticPort}/`);
 }
 
 app.whenReady().then(async () => {
-  serveStatic();
+  const staticPort = await serveStatic();
   await ensureServer();
-  createWindow();
+  createWindow(staticPort);
 });
 
 app.on("window-all-closed", () => {
