@@ -252,10 +252,11 @@ export function DynamicIsland() {
   const rateLimited = !u?.available && usageError()?.includes("429");
 
   return (
-    // Fixed at the frame's top edge, not the screen's: the workspace sits at
-    // 95vh centred, so ~2.5vh of scrim shows above it, and the notch reads as
-    // hanging off the frame rather than the window.
-    <div className="fixed left-1/2 -translate-x-1/2 pointer-events-none" style={{ top: "2.5vh", zIndex: 10002 }}>
+    // Welded to the very top edge of the screen, not the modal's. It is a
+    // property of the window, not of the frame beneath it -- it hangs off the
+    // top of the display the way a notch does, and reads the same no matter
+    // where the workspace frame happens to sit.
+    <div className="fixed top-0 left-1/2 -translate-x-1/2 pointer-events-none" style={{ zIndex: 10002 }}>
       <motion.div
         layout
         transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.7 }}
