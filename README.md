@@ -39,6 +39,7 @@ gate. No install, no server. *(Everything there is fake; it's a showcase.)*
 - [Control plane — approve / deny remotely](#control-plane--approve--deny-tool-calls-remotely-opt-in)
 - [Any provider — via OpenTelemetry](#any-provider--via-opentelemetry-openai-gemini-bedrock-)
 - [Configuration](#configuration-env) · [API](#api) · [Architecture](#architecture)
+- [Extending / make it yours](docs/EXTENDING.md)
 - [Contributing](#contributing) · [License](#license)
 
 ---
@@ -547,6 +548,8 @@ other by session, so the same turn is never counted twice.
 ---
 
 ## Contributing
+
+PRs welcome. If you want to adapt agentglass to another agent or harness without forking, start with [`docs/EXTENDING.md`](docs/EXTENDING.md) — OTLP ingest, the gate primitive, themes, and config surfaces are already there.
 
 Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Small, fast, and
 dependency-light on purpose: a Bun/SQLite server, a React/Vite UI, an Electron
