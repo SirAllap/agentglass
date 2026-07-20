@@ -1,0 +1,36 @@
+{
+  "name": "agentglass-electron",
+  "private": true,
+  "version": "0.2.0",
+  "description": "agentglass desktop shell (Electron)",
+  "author": "SirAllap",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "node build.mjs && electron-builder",
+    "dist:linux": "node build.mjs && electron-builder --linux",
+    "dist:dir": "node build.mjs && electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "app.agentglass.desktop",
+    "productName": "agentglass",
+    "executableName": "agentglass",
+    "directories": { "output": "dist-app" },
+    "files": ["main.js", "preload.js", "icons/**"],
+    "extraResources": [
+      { "from": "../web/dist", "to": "web" },
+      { "from": "staging", "to": "." }
+    ],
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Development",
+      "icon": "icons/icon-512.png"
+    },
+    "mac": { "target": ["dmg"], "icon": "icons/icon.icns" },
+    "win": { "target": ["nsis"], "icon": "icons/icon.ico" }
+  }
+}

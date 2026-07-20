@@ -51,35 +51,38 @@ demo-feed: ## Stream fabricated demo events into a running server
 	python3 hooks/seed_demo.py
 
 # --- desktop app -------------------------------------------------------------
-# The server is compiled to a standalone binary and shipped as a Tauri sidecar,
-# so the app carries its own backend. The frontend is pinned to the server's
-# real address because inside the app window `location.hostname` is the Tauri
-# scheme, not localhost.
+# The desktop app is Electron: it runs the exact web/ UI in Chromium (which
+# GPU-composites, where WebKitGTK fell back to software), and brings the Bun
+# server up with it. The web UI loads over loopback HTTP so it reaches the
+# server on :4000 the same way a browser tab does — no address pinning needed.
 
-TRIPLE := $(shell rustc -vV | sed -n 's/^host: //p')
+desktop: ## Run the desktop app (builds the UI, then launches Electron + sidecar)
+	cd web && bun run build
+	cd electron && bun run start
 
-desktop-server: ## Compile the server to a standalone binary (Tauri sidecar)
-	bun build --compile server/src/index.ts \
-	  --outfile src-tauri/bin/agentglass-server-$(TRIPLE)
+desktop-dev: ## Run the desktop app against an already-running dev server
+	cd electron && bun run start
 
-desktop-web: ## Build the dashboard for the desktop window
-	cd web && VITE_CW_SERVER=http://localhost:4000 bun run build
+desktop-dist: ## Package installable binaries for the host platform (electron-builder)
+	cd electron && bun run dist
 
-desktop: desktop-server desktop-web ## Build the desktop app (icon + native window)
-	bunx tauri build
-
-desktop-dev: desktop-server ## Run the desktop app against the live dev server
-	bunx tauri dev
+desktop-dist-linux: ## Package Linux binaries (AppImage + deb)
+	cd electron && bun run dist:linux
 
 desktop-install: ## Install the built app for this user (no root)
-	src-tauri/install-local.sh
+	electron/install-local.sh
+
+desktop-update: ## Pull the latest and reinstall the desktop app (fast-forward only)
+	git pull --ff-only
+	bun install
+	$(MAKE) desktop-install
 
 # Open the cockpit for ONE project: only that repo (and its worktrees) appear,
 # and the dashboard shows that project's work rather than the whole machine.
 # Without DIR it covers every project, as before.
 desktop-open: ## Open the desktop app scoped to a project — make desktop-open DIR=/path/to/repo
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
-	~/.local/share/agentglass/agentglass "$(DIR)"
+	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
 .PHONY: help install dev server web build test smoke typecheck start setup setup-undo connect connect-undo demo-feed \
-        desktop desktop-server desktop-web desktop-dev desktop-install desktop-open
+        desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open
