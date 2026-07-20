@@ -90,7 +90,14 @@ export type QueuedTurn = { id: string; text: string; images: ChatImage[] };
 export type Chat = {
   id: string;
   cwd: string;
+  /** What we ask for: the dropdown's pick, sent with every turn. */
   model: string;
+  /** What the CLI reported running, off the `init` frame. Differs from `model`
+   *  whenever an alias expands or a fallback takes over, and it is the only
+   *  place the window suffix (`[1m]`) is guaranteed to survive — so it, not
+   *  `model`, is what the context meter measures against. Absent until the
+   *  first turn has started. */
+  resolvedModel?: string;
   mode: string;
   title: string;        // derived from the first message; the tab label
   messages: ChatMsg[];
@@ -488,7 +495,16 @@ export async function send(id: string, text: string, isActive: () => boolean, al
       // `claude --resume` forks a new id, so this is usually a different session
       // from the one we adopted. Rebase the live watermark with it: nothing that
       // session did before this moment is ours to draw.
-      update(id, (c) => { c.sessionId = o.session_id as string; c.liveFrom = Date.now(); });
+      //
+      // The same frame reports the model the CLI actually resolved, which is not
+      // always the one we asked for — an alias (`opus`) expands, a fallback may
+      // have taken over, and the id carries the window suffix (`[1m]`) that
+      // decides how much context this chat really has.
+      update(id, (c) => {
+        c.sessionId = o.session_id as string;
+        c.liveFrom = Date.now();
+        if (typeof o.model === "string" && o.model) c.resolvedModel = o.model;
+      });
       return;
     }
     if (t === "assistant") {

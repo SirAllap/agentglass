@@ -20,6 +20,7 @@ import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
 import { fmtAgo, fmtUsd, fmtTokens, modelLabelOf, modelColor, providerOf } from "../lib/format.ts";
 import { sessionIsLive } from "../lib/derive.ts";
+import { ctxLimitOf } from "../lib/contextWindow.ts";
 import { worktreeTag, sessionWorktree, sessionCwd } from "../lib/worktree.ts";
 import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
@@ -27,8 +28,12 @@ import {
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
 } from "../lib/chatStore.ts";
 
+// Still hand-maintained, and still drifts every release — the runtime-sourced
+// list is its own job. The 1M entry is here because it is what this fix buys:
+// the suffix now survives the server, so the window is actually selectable.
 const MODELS = [
   { id: "claude-opus-4-8", label: "Opus 4.8" },
+  { id: "claude-opus-4-8[1m]", label: "Opus 4.8 · 1M" },
   { id: "claude-sonnet-5", label: "Sonnet 5" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5" },
 ];
@@ -90,13 +95,10 @@ function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
   );
 }
 
-/** Context ceiling by model — the same coarse table the radar uses. */
-function ctxLimitOf(model: string): number {
-  const m = model.toLowerCase();
-  if (m.includes("1m")) return 1_000_000;
-  if (m.includes("gemini")) return 1_000_000;
-  if (m.includes("gpt-5")) return 400_000;
-  return 200_000;
+/** What a chat's context is measured against: the model the CLI said it ran,
+ *  falling back to the one we asked for until the first turn reports back. */
+function chatLimit(chat: Chat, observed: number): number {
+  return ctxLimitOf(chat.resolvedModel ?? chat.model, observed);
 }
 
 /**
@@ -111,8 +113,8 @@ function ctxLimitOf(model: string): number {
 function Inspector({ chat }: { chat: Chat }) {
   const u = chat.usage;
   if (!u) return null;
-  const limit = ctxLimitOf(chat.model);
-  const pct = Math.min(100, (u.contextTokens / limit) * 100);
+  const limit = chatLimit(chat, u.contextTokens);
+  const pct = (u.contextTokens / limit) * 100;
   // Amber is "start thinking about wrapping up"; red is "the next turn may compact".
   const tone = pct >= 90 ? "var(--error)" : pct >= 70 ? "var(--warning)" : "var(--primary)";
   const Row = ({ k, v, c }: { k: string; v: string; c?: string }) => (
@@ -214,7 +216,7 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
               the number that decides which one you go back to first — the one
               at 88% is about to lose its own history to a compaction. */}
           {chat.usage && chat.usage.contextTokens > 0 && (() => {
-            const pct = Math.min(100, (chat.usage.contextTokens / ctxLimitOf(chat.model)) * 100);
+            const pct = (chat.usage.contextTokens / chatLimit(chat, chat.usage.contextTokens)) * 100;
             if (pct < 1) return null;
             return (
               <span className="ml-auto shrink-0 text-[9px] tabular-nums" title={`${fmtTokens(chat.usage.contextTokens)} of context used`}

@@ -1,6 +1,7 @@
 import type { WatchEvent, OpenToolCall } from "../../../shared/types.ts";
 import { agentKey, fmtMs, sessionTitle } from "./format.ts";
 import { sessionWorktree } from "./worktree.ts";
+import { ctxLimitOf } from "./contextWindow.ts";
 
 export type AgentStatus = "working" | "waiting" | "errored" | "idle";
 
@@ -61,16 +62,6 @@ export interface AgentCard {
    *  agents on one project are otherwise indistinguishable in the fleet — which
    *  is the normal case for anyone who works a worktree per ticket. */
   worktree: string | null;
-}
-
-/** Context-window ceiling by model — coarse, for the radar's "how close to
- *  compaction" scale. Unknown models get Claude's 200k. */
-function ctxLimitOf(model: string | null): number {
-  const m = (model || "").toLowerCase();
-  if (m.includes("gemini")) return 1_000_000;
-  if (m.includes("gpt-5")) return 400_000;
-  if (m.includes("gpt") || /^o[134]/.test(m)) return 128_000;
-  return 200_000;
 }
 
 const STALL_MS = 20_000;
@@ -268,7 +259,7 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     // thing the card can say — better than the stale "PreToolUse · Bash".
     if (a.status === "working" && running) a.lastAction = `running ${a.runningTool} · ${fmtMs(now - a.runningSince)}`;
 
-    a.ctxLimit = ctxLimitOf(a.model_name);
+    a.ctxLimit = ctxLimitOf(a.model_name, a.ctxTokens);
 
     const m = subs.get(a.key);
     if (m) {
