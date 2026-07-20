@@ -27,14 +27,22 @@ import { workspaceRoot, inScope } from "./config.ts";
 // Windows) sweeps several at once — e.g. a WSL home next to a Windows one.
 // The Set folds a root listed twice, which would otherwise ingest every
 // transcript in it twice.
-const PROJECTS_DIRS = [
-  ...new Set(
-    (process.env.AGENTGLASS_PROJECTS_DIR || join(homedir(), ".claude", "projects"))
-      .split(delimiter)
-      .map((d) => d.trim())
-      .filter(Boolean)
-  ),
-];
+//
+// Read per sweep rather than pinned at import: `bun test` runs every file in one
+// process, so a module-level constant would be decided by whichever test file
+// imported this module first — which for every other file means the developer's
+// real ~/.claude/projects, i.e. the scanner tests would sweep the machine
+// instead of their fixture. It is one env read every 3s.
+function projectsDirs(): string[] {
+  return [
+    ...new Set(
+      (process.env.AGENTGLASS_PROJECTS_DIR || join(homedir(), ".claude", "projects"))
+        .split(delimiter)
+        .map((d) => d.trim())
+        .filter(Boolean)
+    ),
+  ];
+}
 const POLL_MS = Math.max(500, Number(process.env.AGENTGLASS_SCAN_INTERVAL_MS || 3000));
 export const SCAN_ENABLED = process.env.AGENTGLASS_SCAN_DISABLED !== "1";
 
@@ -337,57 +345,181 @@ function lineToBodies(
 }
 
 /**
+ * Everything a from-zero re-parse used to rederive, kept per file so a sweep can
+ * read *only* the bytes appended since the last one.
+ *
+ * The sweep runs every 3s and used to `readFileSync` + split + `JSON.parse` the
+ * whole transcript each time, just to rebuild this state before skipping past
+ * the lines it had already ingested. On this machine's real transcripts (86 MB,
+ * 79 MB, 42 MB) that measured ~4ms/MB, ~9% steady CPU doing nothing — and since
+ * this single-threaded process also pumps the built-in terminal's PTY bytes, it
+ * is felt as the terminal stuttering, worse the longer a session runs. That is
+ * why restarting the app "fixed" it.
+ *
+ * Each field is load-bearing; dropping any of them changes output:
+ *  - toolCalls — a tool_result matches its call by id, and the call is usually
+ *    in a chunk ingested on an earlier tick. Without it PostToolUse loses
+ *    tool_name/tool_input, which the diff list and repo discovery read.
+ *  - seenUsage — Claude Code repeats one message's `usage` on every
+ *    content-block line of the same reply; deduping by message.id is what stops
+ *    tokens and cost coming out multiplied (measured 2.5x).
+ *  - customTitle/aiTitle — the last title line in the file wins, and a rename
+ *    can sit far before the offset.
+ *  - cwd/source_app/project_path/session_id — sniffed from the first line that
+ *    carries them, which a tail chunk usually does *not* contain, so a tail read
+ *    that re-sniffed would file the session under its own uuid instead of its
+ *    project.
+ *
+ * Deliberately *not* persisted, and no new `transcript_files` column: the byte
+ * offset is worthless without the maps above, which can't be cheaply written to
+ * SQLite, so a cold start has to re-read whole regardless. `lines_done` stays
+ * the only durable progress marker, and every path below keeps it exact so a
+ * restart with a warm DB and a cold cache is still correct.
+ */
+interface Tail {
+  /** Byte offset just past the last complete line processed. */
+  bytes: number;
+  /** Complete lines processed — must stay equal to transcript_files.lines_done. */
+  lines: number;
+  toolCalls: Map<string, { name: string; input: unknown }>;
+  seenUsage: Set<string>;
+  customTitle: string | null;
+  aiTitle: string | null;
+  cwd: string;
+  source_app: string;
+  project_path: string;
+  session_id: string;
+  touched: number;
+}
+const tails = new Map<string, Tail>();
+/** A transcript nobody has appended to in this long is finished, or close
+ *  enough; its cached tool inputs can be megabytes, so let them go. Dropping an
+ *  entry is always safe — the next sweep just re-reads the file whole. */
+const TAIL_IDLE_MS = 10 * 60_000;
+/** Hard ceiling on cached files, so a machine running dozens of sessions at once
+ *  can't grow this without bound between idle sweeps. Oldest-touched go first. */
+const MAX_TAILS = 24;
+/** Drop every cached tail. Exported for the tests, which use it to stand in for
+ *  a server restart — offsets gone, `lines_done` intact — and so to prove that
+ *  eviction can only cost time, never correctness. */
+export function __dropTailCache(): void {
+  tails.clear();
+}
+function evictTails(now: number): void {
+  for (const [path, t] of tails) if (now - t.touched > TAIL_IDLE_MS) tails.delete(path);
+  if (tails.size <= MAX_TAILS) return;
+  const byAge = [...tails].sort((a, b) => a[1].touched - b[1].touched);
+  for (const [path] of byAge.slice(0, tails.size - MAX_TAILS)) tails.delete(path);
+}
+
+/**
  * Ingest a transcript, emitting only lines past `from`.
  *
- * Earlier lines are still parsed (not emitted) because a PostToolUse needs the
- * tool name recorded by its PreToolUse, which may live in a chunk we ingested
- * on a previous tick.
+ * Two paths, same result. With a warm `Tail` for this file we read only from the
+ * cached byte offset to EOF; otherwise (cold cache, or `allowTail` false because
+ * the file was rewritten) we read it whole and skip the first `from` lines,
+ * still parsing them so a PostToolUse finds the tool name its PreToolUse
+ * recorded. Correctness never depends on the cache being warm.
  */
 async function ingestFile(
   path: string,
   fallbackSessionId: string,
   from: number,
   onLive: ((r: InsertResult) => void) | null,
-  scope: string | null
+  scope: string | null,
+  allowTail = true
 ): Promise<{ lines: number; ingested: number; source_app: string; project_path: string; session_id: string; skipped?: boolean }> {
-  const text = await Bun.file(path).text();
-  const lines = text.split("\n");
+  const file = Bun.file(path);
+  const cached = allowTail ? tails.get(path) : undefined;
+  // Only tail when the cache still agrees with the durable progress marker. If
+  // they ever drift — a DB row rewritten underneath us, a failed sweep, a file
+  // replaced at the same size — the offset points into content it wasn't taken
+  // from, which silently drops or duplicates records. Re-reading whole is slow,
+  // wrong numbers are forever.
+  const tail = cached && cached.lines === from && cached.bytes <= file.size ? cached : undefined;
+  if (!tail) tails.delete(path);
+
+  const baseByte = tail?.bytes ?? 0;
+  const baseLine = tail?.lines ?? 0;
+  const chunk = tail ? await file.slice(baseByte).text() : await file.text();
+
+  // Cut at the last newline. An active session is appended record by record and
+  // a sweep lands mid-write often enough to matter: parsing the half-flushed
+  // fragment would fail its JSON.parse *and* count it as done, so the record is
+  // lost for good once the writer finishes it. Holding it back means the next
+  // sweep, which sees the whole line, ingests it exactly once.
+  //
+  // A trailing fragment that does parse is a finished record whose newline just
+  // hasn't landed — a proper prefix of a JSON object never parses on its own —
+  // so it's taken now rather than held back forever, which is what a transcript
+  // whose final line has no trailing newline would otherwise do.
+  let complete = chunk;
+  const nl = chunk.lastIndexOf("\n");
+  if (nl < chunk.length - 1) {
+    const rest = chunk.slice(nl + 1).trim();
+    let restIsWholeRecord = false;
+    if (rest) {
+      try { JSON.parse(rest); restIsWholeRecord = true; } catch { /* half-written */ }
+    }
+    if (!restIsWholeRecord) complete = chunk.slice(0, nl + 1);
+  }
+  const lines = complete.split("\n");
   // JSONL ends with a newline, so split() leaves a phantom empty element. Left
   // in, lines_done ends up one past the real record count and the next sweep
   // skips the first line appended after it — which is *every* live line, since
   // sessions grow one record at a time.
   if (lines.length && lines[lines.length - 1] === "") lines.pop();
-  const toolCalls = new Map<string, { name: string; input: unknown }>();
+  // byteLength, not string length: a transcript is full of non-ASCII (paths,
+  // prose, emoji) and a character offset would land mid-codepoint, so the next
+  // tail read would start on a broken line.
+  const nextByte = baseByte + Buffer.byteLength(complete, "utf8");
+
+  const toolCalls = tail?.toolCalls ?? new Map<string, { name: string; input: unknown }>();
   // Claude Code splits one API response across several transcript lines (one
   // per content block) and repeats the identical `message.usage` on each. Only
   // the first line of a given message.id may carry it, or tokens and cost come
   // out multiplied by the number of blocks in the reply — measured at 2.5x.
-  const seenUsage = new Set<string>();
+  const seenUsage = tail?.seenUsage ?? new Set<string>();
 
-  // First pass: read the project path (cwd) and the session id off the
-  // transcript's own lines. Both beat inferring them from the file layout —
-  // the directory encoding is lossy (a dash in a folder name is
-  // indistinguishable from a separator), and a subagent transcript is named
-  // after the agent while reporting the *parent* session it belongs to.
-  let project_path = "";
-  let session_id = "";
-  for (const line of lines) {
-    if (!line) continue;
-    if (!line.includes('"cwd"') && !line.includes('"sessionId"')) continue;
-    try {
-      const o = JSON.parse(line) as Record<string, unknown>;
-      project_path ||= str(o.cwd) ?? "";
-      session_id ||= str(o.sessionId) ?? "";
-    } catch { /* skip malformed line */ }
-    if (project_path && session_id) break;
+  let cwd: string;
+  let session_id: string;
+  let source_app: string;
+  let project_path: string;
+  if (tail) {
+    ({ cwd, session_id, source_app, project_path } = tail);
+  } else {
+    // First pass: read the project path (cwd) and the session id off the
+    // transcript's own lines. Both beat inferring them from the file layout —
+    // the directory encoding is lossy (a dash in a folder name is
+    // indistinguishable from a separator), and a subagent transcript is named
+    // after the agent while reporting the *parent* session it belongs to.
+    let sniffedCwd = "";
+    let sniffedSid = "";
+    for (const line of lines) {
+      if (!line) continue;
+      if (!line.includes('"cwd"') && !line.includes('"sessionId"')) continue;
+      try {
+        const o = JSON.parse(line) as Record<string, unknown>;
+        sniffedCwd ||= str(o.cwd) ?? "";
+        sniffedSid ||= str(o.sessionId) ?? "";
+      } catch { /* skip malformed line */ }
+      if (sniffedCwd && sniffedSid) break;
+    }
+    cwd = sniffedCwd;
+    session_id = sniffedSid || fallbackSessionId;
+    if (cwd) ({ source_app, project_path } = projectOf(cwd));
+    else { source_app = fallbackSessionId.slice(0, 8); project_path = ""; }
   }
-  session_id ||= fallbackSessionId;
-  const cwd = project_path;
+
   // Opened for one project: a transcript from anywhere else isn't this
   // cockpit's business. Bail before naming it, or it would still show up in
   // the project list despite contributing no events. The scope is pinned per
   // sweep (passed in), so a workspace switched mid-sweep can't suddenly widen
   // a *live* sweep into broadcasting months of backfill.
+  //
+  // Re-tested on the tail path too, not just when the cwd is freshly sniffed:
+  // narrowing the workspace at runtime has to stop a file we were already
+  // tailing, or the cache would keep ingesting a project the user just left.
   //
   // Match on the *resolved repo root* as well as the raw cwd: a session running
   // in a project's own linked worktree (e.g. ~/code/app-wt, outside the scope
@@ -401,18 +533,10 @@ async function ingestFile(
       return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true };
     }
   }
-
-  let source_app: string;
-  if (cwd) {
-    ({ source_app, project_path } = projectOf(cwd));
-    projectPaths.set(source_app, project_path);
-  } else {
-    source_app = fallbackSessionId.slice(0, 8);
-  }
+  if (cwd) projectPaths.set(source_app, project_path);
 
   const ctx = { source_app, project_path, cwd, session_id, toolCalls, seenUsage };
   let ingested = 0;
-  let seen = 0;
   // Collected inside the transaction, delivered after it commits: broadcasting
   // mid-transaction would push events to clients that a later failure rolls
   // back, leaving them showing rows the database never kept.
@@ -420,16 +544,15 @@ async function ingestFile(
   const fileMtime = statSync(path).mtimeMs;
   // What the session is called. Both kinds are appended as their own lines and
   // rewritten on every change, so the *last* one in the file is the current
-  // one — and because the loop below parses every line regardless of `from`, an
-  // incremental sweep still sees a rename that happened before its offset.
-  let customTitle: string | null = null;
-  let aiTitle: string | null = null;
+  // one — carried across sweeps so a tail read that sees no title line still
+  // reports the rename that happened before its offset.
+  let customTitle: string | null = tail?.customTitle ?? null;
+  let aiTitle: string | null = tail?.aiTitle ?? null;
 
   const run = db.transaction(() => {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!.trim();
       if (!line) continue;
-      seen = i + 1;
       let o: Record<string, unknown>;
       try {
         o = JSON.parse(line) as Record<string, unknown>;
@@ -441,20 +564,45 @@ async function ingestFile(
       if (o.type === "custom-title") customTitle = str(o.customTitle) ?? customTitle;
       else if (o.type === "ai-title") aiTitle = str(o.aiTitle) ?? aiTitle;
       const bodies = lineToBodies(o, ctx, fileMtime);
-      if (i < from) continue; // already ingested — parsed only for tool names
+      // Absolute position in the file: on the tail path the chunk starts at
+      // baseLine, so `from` still means "lines already ingested".
+      if (baseLine + i < from) continue; // already ingested — parsed only for tool names
       for (const body of bodies) {
         emitted.push(insertEvent(normalize(body)));
         ingested++;
       }
     }
   });
-  run();
+  try {
+    run();
+  } catch (e) {
+    // The rollback undoes the inserts but not the in-memory maps, which
+    // lineToBodies already mutated — seenUsage in particular would suppress the
+    // usage of every message in this chunk on the retry, losing those tokens for
+    // good. Drop the entry so the retry rebuilds it from the file.
+    tails.delete(path);
+    throw e;
+  }
   // After the transaction: the session row is created by the inserts above, and
   // a title for a session with no events yet has nothing to attach to.
   if (customTitle || aiTitle) setSessionTitles(session_id, customTitle, aiTitle);
   for (const r of emitted) onLive?.(r);
 
-  return { lines: lines.length, ingested, source_app, project_path, session_id };
+  const doneLines = baseLine + lines.length;
+  tails.set(path, {
+    bytes: nextByte,
+    lines: doneLines,
+    toolCalls,
+    seenUsage,
+    customTitle,
+    aiTitle,
+    cwd,
+    source_app,
+    project_path,
+    session_id,
+    touched: Date.now(),
+  });
+  return { lines: doneLines, ingested, source_app, project_path, session_id };
 }
 
 /** Every *.jsonl under a project dir, at any depth.
@@ -476,8 +624,10 @@ function walkTranscripts(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** One sweep over every project directory under every root. */
-async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<number> {
+/** One sweep over every project directory under every root.
+ *  Exported for the scanner tests, which drive sweeps by hand rather than
+ *  waiting on the 3s timer. */
+export async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<number> {
   // Read the workspace once per sweep so every file in it sees the same scope.
   const scope = workspaceRoot();
   // Transcripts older than the retention window would be pruned on the next
@@ -485,7 +635,7 @@ async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<num
   const cutoff = RETENTION_DAYS ? Date.now() - RETENTION_DAYS * 86_400_000 : 0;
   let total = 0;
 
-  for (const root of PROJECTS_DIRS) {
+  for (const root of projectsDirs()) {
     let dirs: string[];
     try {
       dirs = readdirSync(root);
@@ -521,7 +671,9 @@ async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<num
           // rather than skipping past records that no longer exist.
           const rewritten = !!prev && st.size < prev.size;
           const from = rewritten ? 0 : prev?.lines_done ?? 0;
-          const r = await ingestFile(path, basename(path, ".jsonl"), from, onLive, scope);
+          // A rewrite also invalidates the cached tail: its byte offset and its
+          // carried tool calls describe content that no longer exists.
+          const r = await ingestFile(path, basename(path, ".jsonl"), from, onLive, scope, !rewritten);
           // Out of scope: claim nothing, so widening the scope later can still
           // pick it up, and the hook path isn't blocked for a session we skipped.
           if (r.skipped) continue;
@@ -542,6 +694,10 @@ async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<num
       }
     }
   }
+  // Once per sweep, not per file: the tail cache holds every tool call's input
+  // for each transcript it follows, which is the one collection here that can
+  // grow with session length rather than with the number of projects.
+  evictTails(Date.now());
   return total;
 }
 
@@ -635,7 +791,7 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
     .then((n) => {
       const projects = projectPaths.size;
       console.log(
-        `📚 scanned ${PROJECTS_DIRS.join(", ")} — ${n} events from ${projects} project${projects === 1 ? "" : "s"} in ${Date.now() - t0}ms`
+        `📚 scanned ${projectsDirs().join(", ")} — ${n} events from ${projects} project${projects === 1 ? "" : "s"} in ${Date.now() - t0}ms`
       );
       // After the sweep, so freshly-discovered sessions are already rows.
       backfillTitles()

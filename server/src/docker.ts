@@ -258,11 +258,28 @@ export async function overview(): Promise<DockerOverview> {
 
 const pct = (s?: string) => { const n = parseFloat((s || "").replace("%", "")); return Number.isFinite(n) ? n : 0; };
 
-/** Live-ish resource stats (a single --no-stream sample). Can take ~1-2s. */
-export function stats(): DockerStat[] {
-  const r = docker(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"], 12000);
+let statsCache: { at: number; data: DockerStat[] } | null = null;
+/** Long enough that a 5s poll never lands on a cold cache twice in a row. */
+const STATS_TTL_MS = 4000;
+
+/**
+ * Live-ish resource stats (a single --no-stream sample).
+ *
+ * Async, and it matters more here than anywhere else in this file: the command
+ * takes about two seconds, and run synchronously it stopped the whole server
+ * for that long — this process serves the terminal's PTY bytes on the same
+ * event loop, so an open Docker panel meant the terminal froze for two seconds
+ * out of every five and then dumped everything you had typed at once.
+ *
+ * Cached for the same reason `overview()` is: a 5s poll of a 2s command is
+ * close enough to continuous that two clients would otherwise keep one running
+ * permanently.
+ */
+export async function stats(): Promise<DockerStat[]> {
+  if (statsCache && Date.now() - statsCache.at < STATS_TTL_MS) return statsCache.data;
+  const r = await dockerAsync(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"], 12000);
   if (r.code !== 0) return [];
-  return jsonLines(r.stdout).map((s) => ({
+  const data = jsonLines(r.stdout).map((s) => ({
     id: (s.ID || "").slice(0, 12),
     cpu: pct(s.CPUPerc),
     mem: pct(s.MemPerc),
@@ -271,6 +288,8 @@ export function stats(): DockerStat[] {
     blockIO: s.BlockIO || "",
     pids: parseInt(s.PIDs || "0", 10) || 0,
   }));
+  statsCache = { at: Date.now(), data };
+  return data;
 }
 
 /** Last `tail` log lines for a container (bounded). Docker writes logs to stderr. */

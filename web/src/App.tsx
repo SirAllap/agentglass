@@ -38,6 +38,24 @@ import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
 
+/**
+ * Wrap a setState so a poll that answers the same thing twice doesn't commit.
+ *
+ * These endpoints return a fresh object every time, so `setX(result)` always
+ * changed identity and always re-rendered the whole cockpit — several times a
+ * minute, for data that had not moved. Comparing serialized form is far cheaper
+ * than the render it avoids.
+ */
+const keepIfSame = <T,>(set: (v: T) => void) => {
+  let last = "";
+  return (next: T) => {
+    const sig = JSON.stringify(next);
+    if (sig === last) return;
+    last = sig;
+    set(next);
+  };
+};
+
 export default function App() {
   const { events, conn, lastEvent, openTools } = useLive();
   // The live socket is the app's only real-time source, and until now the chat
@@ -45,7 +63,25 @@ export default function App() {
   // whatever had been true when you opened it while the agent kept working.
   // This is the whole subscription: the store decides which chat, if any, each
   // event belongs to, and ignores everything else.
-  useEffect(() => { for (const e of events) applyLiveEvent(e); }, [events]);
+  //
+  // Only the events past the high-water mark. `events` is a rolling buffer of
+  // two thousand and every socket flush replaces the array, so handing the
+  // whole thing to the store each time meant re-walking all of it — and the
+  // store's own "seen" guard doesn't help, because it only records events that
+  // matched an open chat. With no chat open, which is most of the time, nothing
+  // was ever marked and every flush paid for all two thousand. That work lands
+  // on the same thread that draws the terminal, which is where it showed up:
+  // sluggish output and dropped keystrokes.
+  const appliedThrough = useRef(0);
+  useEffect(() => {
+    let high = appliedThrough.current;
+    for (const e of events) {
+      if (e.id <= appliedThrough.current) continue;
+      applyLiveEvent(e);
+      if (e.id > high) high = e.id;
+    }
+    appliedThrough.current = high;
+  }, [events]);
 
   const [windowMs, setWindowMs] = useState(3_600_000);
   const [filter, setFilter] = useState({ app: "", type: "", provider: "" });
@@ -111,9 +147,13 @@ export default function App() {
     applyTheme(theme);
   }, [theme]);
 
-  // Filter options change rarely (a new app/event type) — poll slowly.
+  // Filter options change rarely (a new app/event type) — poll slowly, and only
+  // take the new object when it actually differs. Setting state to a fresh copy
+  // of the same data still commits the whole tree; on a poll that answers
+  // identically almost every time, that is a free re-render of the cockpit.
   useEffect(() => {
-    const load = () => api.filterOptions().then(setOpts).catch(() => {});
+    const take = keepIfSame(setOpts); // once per effect — inside load() its memory would reset each call
+    const load = () => api.filterOptions().then(take).catch(() => {});
     load();
     const id = setInterval(load, 20_000);
     return () => clearInterval(id);
@@ -142,16 +182,28 @@ export default function App() {
    */
   const [sessions, setSessions] = useState<SessionRollup[]>([]);
   useEffect(() => {
-    const load = () => api.sessions(200).then(setSessions).catch(() => { /* labels fall back to the uuid */ });
+    const take = keepIfSame(setSessions); // once per effect, not once per poll
+    const load = () => api.sessions(200).then(take).catch(() => { /* labels fall back to the uuid */ });
     load();
     const id = setInterval(load, 30_000);
     return () => clearInterval(id);
   }, []);
   const titles = useMemo(() => buildTitles(sessions), [sessions]);
   const agentsAll = useMemo(() => deriveAgents(events, openTools, titles), [events, openTools, titles, tick]);
+  // Kept identical across renders while its *contents* are. `agentsAll` is
+  // rebuilt on every socket flush and every tick, so a plain useMemo handed out
+  // a new Map several times a second — and everything downstream that depends
+  // on it, most expensively the feed's 120 rows, re-rendered for a value that
+  // had not actually changed. The signature is cheap; the re-render was not.
+  const providerRef = useRef(new Map<string, string>());
+  const providerSig = useRef("");
   const sessionProvider = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of agentsAll) if (a.model_name) map.set(a.session_id, providerOf(a.model_name));
+    const sig = [...map].map(([k, v]) => k + " " + v).join("");
+    if (sig === providerSig.current) return providerRef.current;
+    providerSig.current = sig;
+    providerRef.current = map;
     return map;
   }, [agentsAll]);
   const providers = useMemo(
