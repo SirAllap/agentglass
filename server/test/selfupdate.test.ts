@@ -191,7 +191,10 @@ describe("self update", () => {
   });
 
   it("ships an update script that refuses anything but a release tag", () => {
-    const real = join(cwd0, "electron", "self-update.sh");
+    // Resolved from this file, never from process.cwd(): the suite is run from
+    // the repo root by hand and from `server/` by CI, and a path that depends
+    // on which one passed locally and failed in CI.
+    const real = join(import.meta.dir, "..", "..", "electron", "self-update.sh");
     expect(existsSync(real)).toBe(true);
     const text = readFileSync(real, "utf8");
     expect(text).toContain("refusing a tag that is not a release");

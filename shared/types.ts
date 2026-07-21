@@ -647,7 +647,18 @@ export type BlockChoice = "ours" | "theirs" | "both" | "theirs-first";
 export type UpdateStatus = {
   ok: boolean;
   available: boolean;
-  info: { version: string; commit: string; builtAt: string; source: string };
+  info: {
+    version: string;
+    commit: string;
+    builtAt: string;
+    source: string;
+    /** Remote the updater clones from. */
+    origin: string;
+    /** Nearest release this build descends from, and how far past it — this,
+     *  not `version`, is what decides whether a published tag is newer. */
+    baseTag: string;
+    distance: number;
+  };
   branch: string;
   behind: number;
   ahead: number;
