@@ -1122,7 +1122,13 @@ export function GitView({ active }: { active: boolean }) {
                             to merge from and remembers it in the repo's own
                             config, so the choice sticks per branch. */}
                         <button
-                          onClick={() => setBaseOpen((o) => !o)}
+                          onClick={() => {
+                            // Load them on demand. Depending on the Branches
+                            // tab having been visited made the picker useless
+                            // exactly when you reach for it — the first time.
+                            if (!branchData.branches.length) api.gitBranches(root).then(setBranchData).catch(() => {});
+                            setBaseOpen((o) => !o);
+                          }}
                           disabled={!writeEnabled || busy}
                           className="text-[11px] px-1.5 py-1 rounded-r-lg"
                           style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", opacity: (!writeEnabled || busy) ? 0.5 : 1 }}
@@ -1141,7 +1147,7 @@ export function GitView({ active }: { active: boolean }) {
                                   style={{ background: b.name === branch.base ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", color: "var(--text)" }}
                                   title={b.name}>{b.name}</button>
                               ))}
-                              {!branchData.branches.length && <div className="px-2.5 py-2 t-dim2">open the Branches tab first</div>}
+                              {!branchData.branches.length && <div className="px-2.5 py-2 t-dim2">loading branches…</div>}
                             </div>
                           </div>
                         )}
