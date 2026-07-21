@@ -5,11 +5,19 @@
 // radar and streaming dashboard paint on the GPU instead of pinning a CPU core.
 // Same pixels as the web app.
 //
-// It hosts web/dist over loopback HTTP (so the SPA's origin is http and its
-// WS/API to :4000 pass the server's loopback origin check) and brings the Bun
-// server up with it unless one is already running.
+// It serves web/dist from the app's own `agentglass://` scheme and brings the
+// Bun server up with it unless one is already running.
+//
+// The scheme is not cosmetic. This used to be a loopback HTTP server on an
+// EPHEMERAL port, which meant the renderer's origin changed on every launch --
+// and localStorage is keyed by origin, so every restart handed the app an
+// empty store: theme, display size, chats, drafts, the saved token and every
+// preference, all silently reset. A fixed port would have fixed persistence
+// but reintroduced the bug the ephemeral port was chosen to avoid (a second
+// instance failing to bind). A custom scheme has neither problem: one stable
+// origin, no port, and any number of instances share it.
 
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, protocol } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -19,6 +27,18 @@ const os = require("os");
 // GPU compositing on Wayland.
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
+
+// Must run before `ready`. `standard` is what gives the scheme a real origin
+// (and therefore its own persistent localStorage); `secure` keeps it a trusted
+// context so the SPA behaves exactly as it does over https.
+const APP_SCHEME = "agentglass";
+const APP_ORIGIN = `${APP_SCHEME}://app`;
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: APP_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
+  },
+]);
 
 const SERVER_PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 
@@ -40,24 +60,27 @@ const MIME = {
   ".ico": "image/x-icon", ".map": "application/json",
 };
 
-// Bind an ephemeral port (not a fixed one): a second instance, or anything else
-// already on a hardcoded port, would otherwise make listen() throw and the app
-// exit before a window ever shows. Resolves to the port actually assigned.
-function serveStatic() {
-  return new Promise((resolve, reject) => {
-    const srv = http.createServer((req, res) => {
-      let p = decodeURIComponent(req.url.split("?")[0]);
-      if (p === "/" || !path.extname(p)) p = "/index.html"; // SPA fallback
-      const file = path.join(DIST, p);
-      if (!file.startsWith(DIST)) { res.writeHead(403); res.end(); return; }
-      fs.readFile(file, (err, data) => {
-        if (err) { res.writeHead(404); res.end(); return; }
-        res.writeHead(200, { "content-type": MIME[path.extname(file)] || "application/octet-stream" });
-        res.end(data);
+/**
+ * Serve web/dist under agentglass://app/.
+ *
+ * Same job the loopback server did — SPA fallback for extensionless paths, a
+ * traversal guard, a MIME table — minus the port, which is the entire point.
+ */
+function serveApp() {
+  protocol.handle(APP_SCHEME, async (request) => {
+    let p = decodeURIComponent(new URL(request.url).pathname);
+    if (p === "/" || !path.extname(p)) p = "/index.html"; // SPA fallback
+    const file = path.join(DIST, p);
+    // Still guard traversal: the path comes from the page, not from us.
+    if (!file.startsWith(DIST)) return new Response("forbidden", { status: 403 });
+    try {
+      const data = await fs.promises.readFile(file);
+      return new Response(data, {
+        headers: { "content-type": MIME[path.extname(file)] || "application/octet-stream" },
       });
-    });
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => resolve(srv.address().port));
+    } catch {
+      return new Response("not found", { status: 404 });
+    }
   });
 }
 
@@ -121,7 +144,7 @@ function setAutostart(on) {
   return app.getLoginItemSettings().openAtLogin;
 }
 
-function createWindow(staticPort) {
+function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -132,13 +155,13 @@ function createWindow(staticPort) {
     webPreferences: { preload: path.join(__dirname, "preload.js") },
   });
   registerIpc(win);
-  win.loadURL(`http://127.0.0.1:${staticPort}/`);
+  win.loadURL(`${APP_ORIGIN}/`);
 }
 
 app.whenReady().then(async () => {
-  const staticPort = await serveStatic();
+  serveApp();
   await ensureServer();
-  createWindow(staticPort);
+  createWindow();
 });
 
 app.on("window-all-closed", () => {
