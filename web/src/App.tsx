@@ -223,7 +223,7 @@ export default function App() {
   const sessionProvider = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of agentsAll) if (a.model_name) map.set(a.session_id, providerOf(a.model_name));
-    const sig = [...map].map(([k, v]) => k + " " + v).join("");
+    const sig = [...map].map(([k, v]) => k + "\u0000" + v).join("\u0001");
     if (sig === providerSig.current) return providerRef.current;
     providerSig.current = sig;
     providerRef.current = map;

@@ -325,7 +325,7 @@ async function pump(p: Subprocess<"ignore", "pipe", "pipe">) {
       for (const block of parseBlocks(done)) {
         const n = noteFrom(block);
         if (!n) continue;
-        const key = `${n.app} ${n.summary} ${n.body}`;
+        const key = `${n.app}\u0000${n.summary}\u0000${n.body}`;
         const now = Date.now();
         const prev = recent.get(key);
         if (prev && now - prev < DEDUP_MS) continue;
