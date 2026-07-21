@@ -687,6 +687,18 @@ export type ConflictBlock = {
 /** What to write for one block. `both` keeps ours then theirs. */
 export type BlockChoice = "ours" | "theirs" | "both" | "theirs-first";
 
+/** The notes for one release: the tag annotation the GitHub release was made
+ *  from, read from the update clone when there is one and from the releases API
+ *  otherwise. `source` says which, because "offline" is a useful thing to know
+ *  when the answer is empty. */
+export interface ReleaseNotes {
+  ok: boolean;
+  tag: string;
+  notes: string;
+  source: "clone" | "github" | "";
+  error?: string;
+}
+
 /** What the installed app was built from, and what is waiting upstream. */
 export type UpdateStatus = {
   ok: boolean;

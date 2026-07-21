@@ -45,7 +45,10 @@ export type BuildInfo = {
 
 /** A release looks like this. Anything else is somebody's private tag. */
 const TAG_RE = /^v\d+\.\d+\.\d+$/;
-const SRC = join(homedir(), ".cache", "agentglass", "source");
+// Overridable by the same env var the update script already reads, so a test
+// can point the clone at a fixture instead of writing into the developer's
+// real one — the mistake #144 fixed for the database.
+const SRC = process.env.AGENTGLASS_UPDATE_SRC || join(homedir(), ".cache", "agentglass", "source");
 const LOG = join(tmpdir(), "agentglass-update.log");
 const STAMP = join(homedir(), ".cache", "agentglass", "last-update.json");
 
@@ -190,4 +193,58 @@ export function startUpdate(): { ok: boolean; error?: string; log?: string } {
 export function updateLog(): { ok: boolean; text: string } {
   try { return { ok: true, text: readFileSync(LOG, "utf8").slice(-8000) }; }
   catch { return { ok: true, text: "" }; }
+}
+
+/**
+ * The notes for a release, so the app can say what changed after it updates
+ * itself.
+ *
+ * Two sources, in the order that keeps working when the network does not.
+ *
+ * The update clone under ~/.cache already has every tag, and the annotation IS
+ * the release notes (release.yml creates the GitHub release from it), so a
+ * machine that has updated once can answer this with no network at all. A
+ * machine installed from a downloaded binary has no clone, and falls back to
+ * the releases API.
+ *
+ * Cached for an hour: notes for a published tag do not change, and the only
+ * caller is a modal that opens once per version.
+ */
+const notesCache = new Map<string, { at: number; notes: string; source: string }>();
+const NOTES_TTL_MS = 60 * 60_000;
+
+export async function releaseNotes(tagIn?: string): Promise<{ ok: boolean; tag: string; notes: string; source: string; error?: string }> {
+  const tag = tagIn && TAG_RE.test(tagIn) ? tagIn : buildInfo().baseTag;
+  if (!tag || !TAG_RE.test(tag)) return { ok: false, tag: "", notes: "", source: "", error: "this build descends from no release" };
+
+  const hit = notesCache.get(tag);
+  if (hit && Date.now() - hit.at < NOTES_TTL_MS) return { ok: true, tag, notes: hit.notes, source: hit.source };
+
+  const keep = (notes: string, source: string) => {
+    if (notesCache.size > 20) notesCache.clear();
+    notesCache.set(tag, { at: Date.now(), notes, source });
+    return { ok: true, tag, notes, source };
+  };
+
+  // The tag object may be there without its annotation if the clone fetched it
+  // shallowly, hence the emptiness check rather than trusting exit status.
+  if (existsSync(join(SRC, ".git"))) {
+    const r = git(SRC, ["tag", "-l", "--format=%(contents)", tag]);
+    const local = r.status === 0 ? r.stdout.trim() : "";
+    if (local) return keep(local, "clone");
+  }
+
+  const repo = /github\.com[:/]+([^/]+)\/(.+?)(?:\.git)?$/.exec(buildInfo().origin);
+  if (!repo) return { ok: false, tag, notes: "", source: "", error: "no release notes available offline for this origin" };
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo[1]}/${repo[2]}/releases/tags/${tag}`, {
+      headers: { accept: "application/vnd.github+json", "user-agent": "agentglass" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return { ok: false, tag, notes: "", source: "", error: `github answered ${res.status}` };
+    const body = String(((await res.json()) as { body?: unknown }).body ?? "").trim();
+    return body ? keep(body, "github") : { ok: false, tag, notes: "", source: "", error: "that release has no notes" };
+  } catch {
+    return { ok: false, tag, notes: "", source: "", error: "could not reach github for the notes" };
+  }
 }

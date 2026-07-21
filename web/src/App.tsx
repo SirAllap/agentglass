@@ -34,6 +34,7 @@ import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
+import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
 
@@ -486,6 +487,10 @@ export default function App() {
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
       <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} chatFocusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
+      {/* Shows once when the app first runs a version it has not run before —
+          the update button restarts into a new build and otherwise says nothing
+          about what changed. */}
+      <WhatsNew />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
