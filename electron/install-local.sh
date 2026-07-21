@@ -42,41 +42,19 @@ done
 # (stopSidecar, then app.quit) wedges it: the window freezes for a long time,
 # and sometimes it never exits at all. That is how a rebuild ends up copying
 # over an app that is still running. Asked properly it goes down in under two
-# seconds.
+# seconds — eight processes, 0.2s, measured against the real tree.
 #
-# Matched against both paths it can be launched by: the desktop entry runs
-# $APP/agentglass, self-update.sh relaunches through the $BIN symlink, and the
-# main process carries whichever one was used in its cmdline.
-#
-# Every pattern here is anchored to the START of the command line, for the same
-# reason: unanchored, `-f` matches anything that merely mentions the path —
-# a shell that echoed it, an editor with the file open, the install script's own
-# parent. This script sends SIGKILL, so a loose pattern is not a cosmetic
-# problem. (It bit exactly that way while this fix was being tested.)
-MAIN_PAT="^($APP|$BIN)/agentglass$"
-TREE_PAT="^($APP|$BIN)/agentglass( |$)"       # main plus its gpu/zygote/renderer children
-SIDECAR_PAT="^$APP/resources/agentglass-server( |$)"
-
-if pgrep -f "$MAIN_PAT" >/dev/null 2>&1; then
-  echo "==> stopping the running instance"
-  pkill -TERM -f "$MAIN_PAT" 2>/dev/null || true
-  # Wait for it to actually go, rather than sleeping a fixed two seconds and
-  # assuming: the assumption is what left an app running on deleted inodes.
-  for _ in $(seq 1 40); do
-    pgrep -f "$MAIN_PAT" >/dev/null 2>&1 || break
-    sleep 0.25
-  done
-  # Anything still standing after ten seconds is not leaving on its own. Take
-  # the whole tree, then the sidecar it should have taken with it — a survivor
-  # holds the port and the next launch adopts a server from the old build.
-  pkill -9 -f "$TREE_PAT" 2>/dev/null || true
-  pkill -9 -f "$SIDECAR_PAT" 2>/dev/null || true
-  # Give the kernel a moment to release the port and the file handles.
-  sleep 0.5
-  if pgrep -f "$MAIN_PAT" >/dev/null 2>&1; then
-    echo "refusing to install over a running app: $(pgrep -f "$MAIN_PAT" | tr '\n' ' ')survived SIGKILL" >&2
-    exit 1
-  fi
+# Which pid is which comes from /proc/<pid>/exe rather than from the shape of
+# the command line, because every cmdline pattern precise enough to exclude the
+# helpers also excludes a main process that was started with an argument, and
+# `agentglass --ozone-platform=wayland` or `--no-sandbox` is an ordinary way to
+# start this app. A stop step that silently matches nothing is the original bug
+# with extra steps: the script would sail past it into rm -rf. See appctl.sh.
+# shellcheck source=appctl.sh
+. "$HERE/appctl.sh"
+if ! stop_app; then
+  echo "refusing to install over a running app: $(app_pids | tr '\n' ' ')survived SIGKILL" >&2
+  exit 1
 fi
 
 mkdir -p "$APP" "$BIN" "$DESKTOP"
