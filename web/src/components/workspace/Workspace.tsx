@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Portal } from "../Portal.tsx";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
@@ -37,6 +37,9 @@ export function Workspace({
   onClose: () => void;
   chatFocusId?: string | null;
 }) {
+  // Same reason as App's onClose: this reaches a view's effect dependencies,
+  // and a fresh arrow each render is a remount nobody asked for.
+  const openChat = useCallback(() => onView("chat"), [onView]);
   const frameRef = useRef<HTMLDivElement>(null);
 
   const chatWaiting = useSyncExternalStore(subscribeChats, attentionCount, attentionCount);
@@ -136,7 +139,7 @@ export function Workspace({
                         <View
                           active={active}
                           {...(v.id === "chat" ? { focusId: chatFocusId, onClose } : {})}
-                          {...(v.id === "git" ? { onOpenChat: () => onView("chat") } : {})}
+                          {...(v.id === "git" ? { onOpenChat: openChat } : {})}
                           {...(v.id === "term" ? { onClose } : {})}
                         />
                       </div>
