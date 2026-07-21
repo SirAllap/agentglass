@@ -15,6 +15,19 @@ const dir = mkdtempSync(join(tmpdir(), "agx-gate-"));
 process.env.AGENTGLASS_DB = join(dir, "gate.db");
 process.env.XDG_CONFIG_HOME = dir; // keep the developer's own scope out of it
 
+/**
+ * Ids are minted per run, not written down.
+ *
+ * db.ts binds its file at import, and whichever suite imports it first decides
+ * that file for the whole process — so in a full `bun test` this suite can end
+ * up on the developer's real database instead of the temp one above. With fixed
+ * ids that made the second run fail: the rows from the first were still there,
+ * and submitGate correctly replayed their recorded decisions instead of taking
+ * a new request. Deterministic per assertion, unique per run.
+ */
+let seq = 0;
+const newId = () => `${crypto.randomUUID().slice(0, 24)}${String(++seq).padStart(12, "0")}`;
+
 let gate: typeof import("../src/gate.ts");
 let db: typeof import("../src/db.ts");
 
@@ -33,7 +46,7 @@ beforeAll(async () => {
 
 describe("a gate request outlives the process that took it", () => {
   test("it is written to the database the moment it arrives", () => {
-    const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const id = newId();
     gate.submitGate(req({ id }), 60_000); // held: nobody decides it here
     const row = db.getGate(id);
     expect(row).not.toBeNull();
@@ -43,7 +56,7 @@ describe("a gate request outlives the process that took it", () => {
   });
 
   test("a decision is recorded, with who made it", async () => {
-    const id = "aaaaaaaa-bbbb-cccc-dddd-000000000001";
+    const id = newId();
     const held = gate.submitGate(req({ id }), 60_000);
     expect(gate.decideGate(id, "deny", "not on my watch")).toBe(true);
     await expect(held).resolves.toEqual({ decision: "deny", reason: "not on my watch" });
@@ -54,7 +67,7 @@ describe("a gate request outlives the process that took it", () => {
   });
 
   test("a timeout is an outcome with a record, not a disappearance", async () => {
-    const id = "aaaaaaaa-bbbb-cccc-dddd-000000000002";
+    const id = newId();
     // Floored to 1s by submitGate — a gate can never auto-resolve instantly.
     await gate.submitGate(req({ id }), 1);
     const row = db.getGate(id)!;
@@ -64,7 +77,7 @@ describe("a gate request outlives the process that took it", () => {
   });
 
   test("deciding twice is refused — the first answer stands", async () => {
-    const id = "aaaaaaaa-bbbb-cccc-dddd-000000000003";
+    const id = newId();
     const held = gate.submitGate(req({ id }), 60_000);
     expect(gate.decideGate(id, "allow", "ok")).toBe(true);
     await held;
@@ -73,13 +86,13 @@ describe("a gate request outlives the process that took it", () => {
   });
 
   test("an unknown id is not decidable", () => {
-    expect(gate.decideGate("aaaaaaaa-bbbb-cccc-dddd-00000000dead", "allow", "")).toBe(false);
+    expect(gate.decideGate(newId(), "allow", "")).toBe(false);
   });
 });
 
 describe("re-attaching after the connection drops", () => {
   test("a pending request can be waited on again, and the new waiter is the one answered", async () => {
-    const id = "bbbbbbbb-bbbb-cccc-dddd-000000000001";
+    const id = newId();
     gate.submitGate(req({ id }), 60_000); // the original connection, now "dropped"
     const again = gate.awaitGate(id) as Promise<{ decision: string; reason: string }>;
     expect(again).toBeInstanceOf(Promise);
@@ -88,19 +101,19 @@ describe("re-attaching after the connection drops", () => {
   });
 
   test("a decision made while the hook was away is replayed, not lost", async () => {
-    const id = "bbbbbbbb-bbbb-cccc-dddd-000000000002";
+    const id = newId();
     gate.submitGate(req({ id }), 60_000);
     gate.decideGate(id, "deny", "no");
     expect(gate.awaitGate(id)).toEqual({ decision: "deny", reason: "no" });
   });
 
   test("an id the server never saw returns null — the hook must not read that as approval", () => {
-    expect(gate.awaitGate("cccccccc-bbbb-cccc-dddd-000000000001")).toBeNull();
+    expect(gate.awaitGate(newId())).toBeNull();
     expect(gate.awaitGate("not-a-uuid")).toBeNull();
   });
 
   test("re-submitting the same id re-attaches instead of raising a second prompt", async () => {
-    const id = "bbbbbbbb-bbbb-cccc-dddd-000000000003";
+    const id = newId();
     gate.submitGate(req({ id }), 60_000);
     const before = gate.pendingGates().filter((g) => g.id === id).length;
     const retry = gate.submitGate(req({ id }), 60_000);
@@ -120,8 +133,8 @@ describe("restart", () => {
   // A second module registry = a second process, sharing only the database.
   // This is the actual claim under test: the queue comes back from disk.
   test("still-live requests return to the queue; expired ones resolve and are recorded", async () => {
-    const live = "dddddddd-bbbb-cccc-dddd-000000000001";
-    const stale = "dddddddd-bbbb-cccc-dddd-000000000002";
+    const live = newId();
+    const stale = newId();
     // Only gate.ts is re-imported: the database is the thing that survives, so
     // it stays shared on purpose. What comes back empty is the in-memory queue.
     // Indirected through a variable: the query string is what forces a second
