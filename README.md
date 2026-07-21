@@ -418,6 +418,13 @@ Safe by design — it **never blocks your agents by accident**:
 - no one decides within `AGENTGLASS_GATE_TIMEOUT` (default 60s) → **auto-allow**
 - only sessions wired to the gate are gated; everything else is untouched
 
+It also survives a restart. Pending requests are persisted, so restarting or
+crashing the server brings the queue back instead of quietly auto-allowing
+everything that was waiting on you — the hook re-attaches to the request it was
+already holding. A request whose window ran out while the server was down is
+resolved by your configured policy and **says so** in "What needs you", because
+an outcome nobody chose is the one worth showing.
+
 Scope it with the `matcher` (e.g. `Bash` only, or a specific tool) so you're not
 gating every call. Denying returns a `PreToolUse` deny with your reason.
 
