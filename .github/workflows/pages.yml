@@ -3,10 +3,17 @@ name: Deploy landing + demo to GitHub Pages
 # Publishes the static landing page (landing/) at the site root and the
 # web UI built in demo mode (VITE_DEMO=1 → fabricated data, no server)
 # under /demo/, on every push to main.
+#
+# Also runs when a release is published, because the landing page names the
+# current version and links straight at the installers for it. Those used to be
+# typed by hand, which meant every release made the site quietly wrong until
+# somebody noticed.
 
 on:
   push:
     branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -37,6 +44,13 @@ jobs:
           cp -r landing/. site/
           cp -r web/dist/. site/demo/
           touch site/.nojekyll
+      # Fills in the version and the per-OS download links. Never fatal: the
+      # page ships with copy that is true without it, so a missing release or an
+      # API hiccup costs precision, not correctness.
+      - name: Stamp the current release into the landing page
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/landing-release.mjs site/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
