@@ -28,6 +28,9 @@ beforeAll(async () => {
   (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
   sysNotify = await import("../src/lib/sysNotify.ts");
   gateStore = await import("../src/lib/gateStore.ts");
+  // Leave the singleton as this file found it, so running before or after
+  // gate-store.test.ts cannot change either file's result.
+  gateStore.__resetGateStore();
 });
 
 const gate = (id: string): PendingGate => ({
