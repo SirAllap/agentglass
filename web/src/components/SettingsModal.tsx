@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
+import { ingestUpdate } from "../lib/updateStore.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
@@ -214,7 +215,13 @@ function AboutPane({ open }: { open: boolean }) {
   useEffect(() => {
     if (!open) return;
     let live = true;
-    api.updateStatus().then((r) => { if (live) setSt(r); }).catch(() => { if (live) setSt(null); });
+    // Straight through the store, so the badge on the settings button and this
+    // pane can never disagree about whether an update exists — and so opening
+    // the pane refreshes what the background check knows rather than keeping a
+    // second, private answer.
+    api.updateStatus()
+      .then((r) => { ingestUpdate(r); if (live) setSt(r); })
+      .catch(() => { if (live) setSt(null); });
     return () => { live = false; };
   }, [open]);
 
