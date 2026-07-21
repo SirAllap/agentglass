@@ -10,7 +10,7 @@ import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/Vi
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { GitRepoRef, ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
+import type { GitRepoRef, ProjectCommand, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 
@@ -76,6 +76,12 @@ type Sess = {
   /** A tmux client is running in this shell — the panel hides its own tabs and
    *  split while that's true, since tmux owns those. */
   tmux: boolean;
+  /** tmux's own windows, as tmux reports them. The panel draws these as tabs so
+   *  the strip belongs to the app rather than to whatever .tmux.conf this
+   *  machine carries; tmux still decides what is in it and which is active. */
+  tmuxWindows: TmuxWindow[];
+  /** The session those windows belong to, for the status-line toggle. */
+  tmuxSession: string | null;
   pending: string[]; // input queued while (re)connecting — flushed on ready
   createdAt: number;
   lastUsed: number;
@@ -175,7 +181,7 @@ function connect(s: Sess) {
   ws.onmessage = (ev) => {
     if (s.ws !== ws) return; // a stale socket (replaced by ⟲ new shell) must not touch the session
     if (typeof ev.data !== "string") { s.term.write(new Uint8Array(ev.data as ArrayBuffer)); return; }
-    let f: { t?: string; mode?: "pty" | "pipe"; shell?: string; resize?: boolean; code?: number; error?: string; active?: boolean };
+    let f: { t?: string; mode?: "pty" | "pipe"; shell?: string; resize?: boolean; code?: number; error?: string; active?: boolean; windows?: TmuxWindow[]; session?: string | null };
     try { f = JSON.parse(ev.data); } catch { return; }
     if (f.t === "ready") {
       reconnected(s);
@@ -186,10 +192,15 @@ function connect(s: Sess) {
       ws.send(JSON.stringify({ t: "resize", cols: s.term.cols, rows: s.term.rows }));
       notify(s);
     } else if (f.t === "tmux") {
-      // tmux brings its own tabs, splits and status line. Once it's running,
-      // the panel's copies of all three are a worse duplicate sitting on top of
-      // the real ones — so stand them down, and put them back on detach.
+      // tmux brings its own tabs, splits and status line. The panel's split and
+      // its own shell tabs stand down while it runs, since two pane models is
+      // how you get a split inside a split you didn't ask for. The *window*
+      // list is different: we draw that one ourselves, from what tmux reports,
+      // so it stops being the one strip of the workspace styled by a config
+      // file the app has never seen.
       s.tmux = f.active === true;
+      s.tmuxWindows = Array.isArray(f.windows) ? f.windows : [];
+      s.tmuxSession = typeof f.session === "string" ? f.session : null;
       notify(s);
     } else if (f.t === "exit" || f.t === "fatal") {
       s.status = f.t === "exit" ? "exited" : "error";
@@ -294,7 +305,7 @@ function createSession(root: string): Sess {
   const holder = document.createElement("div");
   holder.style.cssText = "width:100%;height:100%";
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxSession: null, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
     if (sess.status === "live" && sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(JSON.stringify({ t: "in", d }));
@@ -592,6 +603,54 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const tmuxActive = !!sess?.tmux;
   const status: SessStatus = sess?.status ?? "idle";
 
+  /*
+   * tmux's windows, drawn by us.
+   *
+   * The panel stands down from tabs and splits while tmux runs, because two
+   * pane models fight. Its *window list* is a different case: it is the one
+   * strip of the workspace styled by a file the app has never seen, so the same
+   * user on two machines gets two different looking bars across an otherwise
+   * coherent panel. So the list comes from tmux and the pixels come from here.
+   *
+   * Nothing about the keyboard changes. Every button below sends a command tmux
+   * would have run anyway, and "which window is active" is always tmux's answer
+   * arriving on the next poll, never a local guess that could disagree with it.
+   */
+  const tmuxWindows = sess?.tmuxWindows ?? [];
+  const tmuxCmd = useCallback((cmd: string, extra: Record<string, unknown> = {}) => {
+    const s = sess;
+    if (!s || s.ws?.readyState !== WebSocket.OPEN) return;
+    s.ws.send(JSON.stringify({ t: "tmux", cmd, ...extra }));
+  }, [sess]);
+  const [renaming, setRenaming] = useState<number | null>(null);
+
+  /*
+   * Whether tmux keeps drawing its own status line underneath our tabs.
+   *
+   * Hidden by default, because leaving it on means two window lists stacked on
+   * top of each other and the point of this was to stop the workspace carrying
+   * a strip it does not control. It is only ever hidden when we actually have
+   * tabs to put in its place, it is one click to bring back, the choice is
+   * remembered, and the server restores it when the panel closes.
+   *
+   * The caveat, and the reason the button is right there in the strip rather
+   * than buried in settings: `status` is a session option, not a client one.
+   * Someone attached to the same session from a real terminal loses their
+   * status line too, and some people keep things there we do not draw — the
+   * session name, a battery, a prefix indicator.
+   */
+  const [tmuxBar, setTmuxBar] = useState<boolean>(() => {
+    try { return localStorage.getItem("agentglass-tmux-bar") === "on"; } catch { return false; }
+  });
+  useEffect(() => {
+    // Nothing to replace it with means nothing to hide: if the session never
+    // resolved (no /proc, an unusual socket, a tmux we could not reach), the
+    // user keeps exactly the bar they had.
+    if (!tmuxActive || !tmuxWindows.length) return;
+    tmuxCmd("status", { visible: tmuxBar });
+    try { localStorage.setItem("agentglass-tmux-bar", tmuxBar ? "on" : "off"); } catch { /* private mode */ }
+  }, [tmuxActive, tmuxBar, tmuxCmd, tmuxWindows.length]);
+
   const addShell = useCallback(() => {
     if (!root || IS_DEMO) return;
     const s = createSession(root);
@@ -830,6 +889,61 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       );
                     })}
                     <button onClick={addShell} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title="new shell in this repo">+</button>
+                  </div>
+                )}
+
+                {/* tmux's windows, as our own tabs.
+                    Same shape as the shell tabs above on purpose: from the
+                    user's side this is the same control, and which program is
+                    behind it should not change how the workspace looks. */}
+                {tmuxActive && tmuxWindows.length > 0 && (
+                  <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                    {tmuxWindows.map((w) => {
+                      // tmux's own marks, straight through: `!` is a bell, `#`
+                      // is activity in a window you are not looking at. Both
+                      // mean "something happened over here", which is the whole
+                      // reason the strip is worth looking at at all.
+                      const alerting = w.flags.includes("!") || w.flags.includes("#");
+                      return (
+                        <div key={w.index}
+                          onClick={() => { if (!w.active) tmuxCmd("select", { index: w.index }); }}
+                          onDoubleClick={() => setRenaming(w.index)}
+                          title={`window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
+                          className="group flex items-center gap-1.5 px-2 py-1 rounded-md text-[10.5px] cursor-pointer shrink-0"
+                          style={w.active
+                            ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
+                            : { background: "color-mix(in srgb, var(--bg3) 55%, transparent)", color: "var(--text2)" }}>
+                          <span className="tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>
+                          {renaming === w.index ? (
+                            <input
+                              autoFocus
+                              defaultValue={w.name}
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={() => setRenaming(null)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") { setRenaming(null); return; }
+                                if (e.key !== "Enter") return;
+                                const name = (e.target as HTMLInputElement).value.trim();
+                                if (name && name !== w.name) tmuxCmd("rename", { index: w.index, name });
+                                setRenaming(null);
+                              }}
+                              className="bg-transparent outline-none w-20 text-[10.5px]"
+                              style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" }}
+                            />
+                          ) : (
+                            <span>{w.name || "shell"}</span>
+                          )}
+                          {alerting && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="activity" />}
+                          <button onClick={(e) => { e.stopPropagation(); tmuxCmd("kill", { index: w.index }); }}
+                            className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="close window (kill-window)">✕</button>
+                        </div>
+                      );
+                    })}
+                    <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title="new tmux window (^b c)">+</button>
+                    <button onClick={() => setTmuxBar((v) => !v)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
+                      title={tmuxBar ? "hide tmux's own status line for this session" : "show tmux's own status line again"}>
+                      {tmuxBar ? "hide tmux bar" : "show tmux bar"}
+                    </button>
                   </div>
                 )}
 

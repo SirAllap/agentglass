@@ -187,6 +187,17 @@ export interface StatsSummary {
   server_started_at?: number;
 }
 
+/** One tmux window, as tmux itself reports it. The panel renders these as its
+ *  own tabs; tmux stays the source of truth for which is active. `flags` is
+ *  tmux's own marks (`*` current, `-` last, `!` bell, `#` activity, `Z` zoomed),
+ *  passed through rather than interpreted server-side. */
+export interface TmuxWindow {
+  index: number;
+  name: string;
+  active: boolean;
+  flags: string;
+}
+
 /** A tool call held at the gate, awaiting a remote approve/deny. */
 export interface PendingGate {
   id: string;

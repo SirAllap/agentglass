@@ -149,6 +149,15 @@ in the menu, each with the right runner (`bun` / `npm` / `pnpm` / `yarn`)
 detected from that folder's lockfile. agentglass's own `Makefile` is annotated
 this way — `make help` prints the same list in the shell.
 
+Run **tmux** in it and the panel adopts its windows as its own tabs. The list
+comes from tmux, the pixels come from agentglass: click to switch, `+` for a new
+window, double-click to rename, and tmux's own status line steps aside (one
+click brings it back, and it is restored when the panel closes). Nothing about
+the keyboard changes — `^b c`, `^b n`, `^b 2` and everything else still go
+straight to tmux, and the tabs follow. The point is that the window list stops
+being the one strip of the workspace themed by whichever `.tmux.conf` the
+machine happens to carry.
+
 ![terminal panel](.github/assets/terminal.png)
 
 ### 💬 Chat — drive Claude sessions from the browser &nbsp;`c`
