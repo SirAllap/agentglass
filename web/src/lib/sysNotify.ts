@@ -48,6 +48,48 @@ export function subscribeSysNotifyMode(fn: (m: SysNotifyMode) => void): () => vo
 }
 
 // ---------------------------------------------------------------------------
+// Quiet.
+//
+// agentglass reads notifications off the bus instead of being the daemon, so
+// the desktop's own Do Not Disturb has no effect on what lands here. That is
+// deliberate and it is what makes gate alerts reliable -- but it also means
+// the feature ignores the one instruction you gave your machine about being
+// interrupted. Verified: with DND on, WhatsApp messages the desktop silently
+// queued were still put on the notch, body and all.
+//
+// So agentglass gets its own switch rather than trying to read the system's.
+// There is no portable way to read that state (GetServerInformation returns a
+// name, not a state; `Inhibited` is a KDE convention absent elsewhere), and
+// six per-daemon adapters to infer something you can simply say directly is a
+// bad trade.
+//
+// Quiet stops mirrored notes from *interrupting*. It does not stop them being
+// collected: they keep landing in the history behind the notch, so nothing is
+// lost and you can look when you choose to. And it deliberately cannot reach
+// agentglass's own alerts -- a gate hold does not travel this path at all (see
+// gateStore.ts), so "quiet" can never mean "an agent blocked and nobody said".
+// That separation is the whole point of having the switch here rather than one
+// level up.
+// ---------------------------------------------------------------------------
+
+const QUIET_KEY = "agentglass.sysNotify.quiet";
+
+export function notifyQuiet(): boolean {
+  return localStorage.getItem(QUIET_KEY) === "1";
+}
+
+export function setNotifyQuiet(q: boolean) {
+  localStorage.setItem(QUIET_KEY, q ? "1" : "0");
+  for (const fn of quietListeners) fn(q);
+}
+
+const quietListeners = new Set<(q: boolean) => void>();
+export function subscribeNotifyQuiet(fn: (q: boolean) => void): () => void {
+  quietListeners.add(fn);
+  return () => quietListeners.delete(fn);
+}
+
+// ---------------------------------------------------------------------------
 // Capability. Asked once, cached, and never allowed to reject: a host that
 // cannot do this is a host where the feature is absent, not one where
 // something failed.
@@ -199,7 +241,10 @@ async function open() {
     history = [n, ...history].slice(0, HISTORY_MAX);
     unread++;
     historyChanged();
-    for (const fn of noteListeners) fn(n);
+    // Collected either way; only the interruption is optional. Quiet means the
+    // notch does not morph open for someone else's message, not that agentglass
+    // stopped listening -- the list behind the notch is still complete.
+    if (!notifyQuiet()) for (const fn of noteListeners) fn(n);
   };
   sock.onopen = () => { retry = 0; };
   sock.onclose = () => {

@@ -143,6 +143,21 @@ export function forgetGate(id: string) {
   changed();
 }
 
+/**
+ * Test seam: forget everything this module remembers.
+ *
+ * The store is a singleton whose behaviour is deliberately history-dependent --
+ * it announces a hold once and seeds a baseline on its first read -- so a test
+ * file that touches it changes what the next one sees. Without this the suite
+ * passes or fails on file ordering, which is how CI caught it and a local run
+ * did not.
+ */
+export function __resetGateStore(): void {
+  snapshot = [];
+  announced.clear();
+  seeded = false;
+}
+
 // ---------------------------------------------------------------------------
 // The poll.
 //

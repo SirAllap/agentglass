@@ -28,6 +28,11 @@ beforeAll(async () => {
   // poll: the tests drive ingestGates directly, which is the same seam.
   store = await import("../src/lib/gateStore.ts");
   sysNotify = await import("../src/lib/sysNotify.ts");
+  // The store is a singleton and these tests depend on being the first to
+  // touch it. Another test file importing it first would otherwise decide
+  // whether this one passes; see __resetGateStore.
+  store.__resetGateStore();
+  sysNotify.clearNotes();
 });
 
 const gate = (id: string, over: Partial<PendingGate> = {}): PendingGate => ({
