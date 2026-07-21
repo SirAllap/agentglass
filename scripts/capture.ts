@@ -27,8 +27,26 @@ const DIST = join(ROOT, "web", "dist");
 const OUT = join(ROOT, ".github", "assets");
 const STILLS_ONLY = process.argv.includes("--stills");
 
-/** 16:10 at 2× — sharp on a retina README without being a 4K download. */
-const W = 1440, H = 900, SCALE = 2;
+/**
+ * Wide, and as tall as the content actually is.
+ *
+ * 1440 was too narrow: the dashboard's grid is responsive, so a narrow viewport
+ * stacks it taller than the window and the bottom row — cost, performance,
+ * timeline — was sliced off every shot. Widening also fixes the other half of
+ * the complaint, that everything looked zoomed in: the same cards across 1920
+ * CSS pixels are proportionally smaller than across 1440.
+ *
+ * The height is not a constant because it cannot be. The dashboard needs
+ * whatever it needs (~0.84 of the width at every width tried), so it is
+ * measured after load and the viewport is resized to fit. A guessed number
+ * would go stale the first time a card is added.
+ */
+const W = 1920, SCALE = 2;
+/** Only until the real height is measured. */
+const H_PROBE = 1000;
+/** 16:9 for the workspace panels and every GIF frame — they fill their height,
+ *  so a taller viewport only adds empty floor beneath them. */
+const PANEL_H = 1080;
 /** The GIF is emitted at 1× and this width; 2× frames are downscaled into it,
  *  which is what makes text legible at a small file size. */
 const GIF_W = 1100, GIF_FPS = 12;
@@ -127,7 +145,7 @@ async function main() {
   const chrome = spawn({
     cmd: [findChrome(),
       "--headless=new", `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
-      `--window-size=${W},${H}`, `--force-device-scale-factor=${SCALE}`,
+      `--window-size=${W},${H_PROBE}`, `--force-device-scale-factor=${SCALE}`,
       "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
       "--disable-gpu", "--no-sandbox", "--force-color-profile=srgb",
       // Deterministic frames: without this the GIF picks up whatever the
@@ -147,6 +165,18 @@ async function main() {
     await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount");
     await Bun.sleep(2500); // let the demo stream seed a few events
 
+    // Size the viewport to the dashboard rather than cropping the dashboard to
+    // the viewport. setDeviceMetricsOverride rather than a window size: the
+    // window carries chrome of an unknown height, so asking for 1600 gives an
+    // innerHeight of about 1457 and the bottom is clipped again.
+    const setViewport = async (h: number) => {
+      await cdp.send("Emulation.setDeviceMetricsOverride", { width: W, height: h, deviceScaleFactor: SCALE, mobile: false });
+      await Bun.sleep(1200);
+    };
+    const need = Number(await cdp.ev(`(()=>{const a=document.querySelector('.aurora');return a?a.scrollHeight:0})()`)) || 1600;
+    const TALL = Math.min(2200, need + 8);
+    console.log(`dashboard needs ${need}px; panels shot at ${W}x${PANEL_H}`);
+
     /** Take a still, and optionally hold it in the GIF for `beats` frames. */
     const capture = async (name: string | null, beats = 0) => {
       const png = await cdp.shot();
@@ -154,8 +184,18 @@ async function main() {
       for (let i = 0; i < beats; i++) writeFileSync(join(framesDir, `f${String(n++).padStart(4, "0")}.png`), png);
     };
 
+    // Two viewports, because one cannot serve both. The dashboard is a grid
+    // simply taller than any sane window — cropping it to 16:9 sliced the cost,
+    // performance and timeline row off the bottom of every shot. The workspace
+    // panels are the opposite: they fill their height, so giving them the
+    // dashboard's 1494px leaves them floating in dead space.
     console.log("stills:");
-    await capture("dashboard", STILLS_ONLY ? 0 : 14);
+    await setViewport(TALL);
+    await capture("dashboard", 0);
+
+    // Everything else, and every GIF frame, at one consistent 16:9.
+    await setViewport(PANEL_H);
+    if (!STILLS_ONLY) await capture(null, 14); // the opening dashboard beat
 
     // The workspace, view by view. Ctrl+\ opens it; Ctrl+1..5 walk the rail in
     // whatever order it is shipped in.
@@ -193,6 +233,7 @@ async function main() {
       if (!ok) continue;
       await cdp.ev(`location.reload()`);
       await until(cdp, `document.querySelector('#root')?.children.length`, `the ${t} theme`);
+      await setViewport(PANEL_H);
       await Bun.sleep(2200);
       await capture(`theme-${t}`, 0);
     }
