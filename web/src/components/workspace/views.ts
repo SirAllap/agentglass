@@ -31,6 +31,58 @@ export const LETTER_TO_VIEW: Record<string, ViewId> = Object.fromEntries(
 
 export const isViewId = (v: unknown): v is ViewId => VIEW_IDS.includes(v as ViewId);
 
+const ORDER_KEY = "agentglass.workspace.order";
+
+/**
+ * The rail's order, as the user arranged it.
+ *
+ * Shipped order is one opinion about which view you reach for most, and it is
+ * wrong for anyone whose day is shaped differently — someone living in the
+ * terminal wants it under their thumb, not third from the top. Stored as ids
+ * and merged over the shipped list, so a view added in a later version appears
+ * rather than being silently dropped by an older saved order.
+ */
+/**
+ * Cached, and it has to be.
+ *
+ * This is the getSnapshot for a useSyncExternalStore, which compares snapshots
+ * by identity — returning a freshly built array on every call means every
+ * render reports a change, which loops until React gives up and renders
+ * nothing. A blank workspace, seconds after a drag. The same note is on
+ * liveSessionCount for the same reason; it is the standard way to get this
+ * wrong.
+ */
+let cachedOrder: ViewDef[] | null = null;
+
+export function loadViewOrder(): ViewDef[] {
+  if (cachedOrder) return cachedOrder;
+  let saved: unknown = null;
+  try { saved = JSON.parse(localStorage.getItem(ORDER_KEY) || "null"); } catch { /* absent or corrupt */ }
+  if (!Array.isArray(saved)) { cachedOrder = VIEWS; return cachedOrder; }
+  const byId = new Map(VIEWS.map((v) => [v.id, v]));
+  const out: ViewDef[] = [];
+  for (const id of saved) {
+    const v = byId.get(id as ViewId);
+    if (v && !out.includes(v)) out.push(v);
+  }
+  for (const v of VIEWS) if (!out.includes(v)) out.push(v);
+  cachedOrder = out;
+  return cachedOrder;
+}
+
+export function saveViewOrder(ids: ViewId[]) {
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(ids)); } catch { /* non-fatal */ }
+  cachedOrder = null; // rebuilt on the next read, once, and stable again after
+
+  for (const fn of orderListeners) fn();
+}
+
+const orderListeners = new Set<() => void>();
+export function subscribeViewOrder(fn: () => void): () => void {
+  orderListeners.add(fn);
+  return () => { orderListeners.delete(fn); };
+}
+
 const LAST_VIEW_KEY = "agentglass.workspace.view";
 
 /** The workspace reopens where you left it — switching views is the common

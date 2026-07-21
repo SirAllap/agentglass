@@ -9,6 +9,7 @@
 // usable somewhere around a dozen, and this is meant to hold far more than
 // that. It filters, and it says which chats answered while you were elsewhere.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import type { GitRepoRef, SessionRollup } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
@@ -28,6 +29,8 @@ import {
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
   restoredActiveId, setActiveChatId,
 } from "../lib/chatStore.ts";
+import { useSidebarWidth } from "../lib/sidebarWidth.ts";
+import { SidebarGrip } from "./SidebarGrip.tsx";
 
 // Still hand-maintained, and still drifts every release — the runtime-sourced
 // list is its own job. The 1M entry is here because it is what this fix buys:
@@ -396,6 +399,7 @@ function ClipIcon() {
 // `active` is destructured as `visible` because this component already has an
 // `active` of its own — the currently selected chat.
 export function ChatView({ active: visible, focusId, onClose = () => {} }: { active: boolean; focusId?: string | null; onClose?: () => void }) {
+  const sidebarW = useSidebarWidth();
   const open = visible;
   const allChats = useSyncExternalStore(subscribe, listChats, listChats);
   // `null` until we know, which is not the same as "unscoped". See the filter
@@ -717,7 +721,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   );
 
   return (
-    <div className="relative flex-1 min-h-0 flex overflow-hidden">
+    <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
                 <style>{SCROLLBAR_CSS}</style>
 
                 {/* Anchored inside the modal rather than portalled like Select:
@@ -727,22 +731,26 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   {resumeOpen && <ResumePicker onPick={resume} onClose={() => setResumeOpen(false)} />}
                 </AnimatePresence>
 
+                {/* The title belongs to the view, so it spans the view — the
+                    same bar every other section has. It used to sit inside the
+                    sidebar, which made Chat look like a different application:
+                    two half-width bars where the others have one. */}
+                <ViewHeader title="Chats" count={chats.length} actions={<>
+                  <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
+                    className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+                    title="continue a session that already exists — e.g. one you started in a terminal">↩ resume</button>
+                  <button onClick={add} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="new chat">+ new</button>
+                </>} />
+
+                <div className="flex-1 min-h-0 flex overflow-hidden">
                 {/* ---- sidebar: every open chat ---- */}
-                <div className="w-[236px] shrink-0 flex flex-col border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
-                  <div className="flex items-center gap-1.5 px-3 py-3 shrink-0">
-                    <span className="text-[13px] font-semibold shrink-0" style={{ color: "var(--text)" }}>💬 Chats</span>
-                    <span className="text-[10px] t-dim2 tabular-nums shrink-0">{chats.length}</span>
-                    <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
-                      className="ml-auto text-[11px] px-1.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
-                      title="continue a session that already exists — e.g. one you started in a terminal">↩ resume</button>
-                    <button onClick={add} className="text-[11px] px-1.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="new chat">+ new</button>
-                  </div>
+                <div className="shrink-0 flex flex-col" style={{ width: sidebarW, background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
                   {chats.length > 6 && (
                     <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="filter chats…"
-                      className="mx-2.5 mb-2 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
+                      className="mx-2.5 mt-2.5 mb-2 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                       style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
                   )}
-                  <div role="listbox" aria-label="open chats" className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-2 flex flex-col gap-0.5">
+                  <div role="listbox" aria-label="open chats" className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pt-2.5 pb-2 flex flex-col gap-0.5">
                     {shown.map((c) => (
                       <ChatRow key={c.id} chat={c} active={c.id === activeId} onPick={() => setActiveId(c.id)} onClose={() => drop(c.id)} />
                     ))}
@@ -768,6 +776,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       are reading stay on screen while you scroll its history. */}
                   {active && <Inspector chat={active} />}
                 </div>
+                <SidebarGrip />
 
                 {/* ---- the active conversation ---- */}
                 <div className="flex-1 min-w-0 flex flex-col">
@@ -794,7 +803,6 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                       </>
                     ) : <span className="text-[12px] t-dim2">no chat selected</span>}
-                    <button onClick={onClose} className="ml-auto text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
 
                   {/* Bottom-anchored: a short conversation sits above the input
@@ -1062,6 +1070,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       {active?.mode === "bypassPermissions" && <span style={{ color: "var(--warning)" }}> · ⚡ runs tools unattended</span>}
                     </div>
                   </div>
+                </div>
                 </div>
     </div>
   );

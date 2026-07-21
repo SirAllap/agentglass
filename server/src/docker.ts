@@ -324,3 +324,36 @@ export const startContainer = (id: string) => action("start", id);
 export const stopContainer = (id: string) => action("stop", id);
 export const restartContainer = (id: string) => action("restart", id);
 export const removeContainer = (id: string) => action("rm", id); // non-force: fails if running (stop first)
+
+/**
+ * The three things lazydocker shows that we did not.
+ *
+ * `env` and `config` come from one `inspect` — asking twice for the same JSON
+ * to render two tabs would double the latency of switching between them for no
+ * gain. `top` is a live process list, so it is its own call.
+ */
+export function inspect(id: string): { ok: boolean; env: string[]; config: string; error?: string } {
+  if (!ID_RE.test(id)) return { ok: false, env: [], config: "", error: "invalid container id" };
+  const r = docker(["inspect", id], 10000);
+  if (r.code !== 0) return { ok: false, env: [], config: "", error: r.stderr.trim() || "docker inspect failed" };
+  let env: string[] = [];
+  let config = r.stdout;
+  try {
+    const parsed = JSON.parse(r.stdout);
+    const one = Array.isArray(parsed) ? parsed[0] : parsed;
+    env = Array.isArray(one?.Config?.Env) ? one.Config.Env : [];
+    // Re-serialised at a readable indent: docker's own output is already
+    // pretty, but only sometimes, depending on version.
+    config = JSON.stringify(one, null, 2);
+  } catch { /* keep the raw text — unparseable is still readable */ }
+  return { ok: true, env, config };
+}
+
+export function top(id: string): { ok: boolean; text: string; error?: string } {
+  if (!ID_RE.test(id)) return { ok: false, text: "", error: "invalid container id" };
+  const r = docker(["top", id], 10000);
+  // A stopped container cannot be topped, and saying that is better than an
+  // empty table that looks like "no processes".
+  if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "the container is not running" };
+  return { ok: true, text: r.stdout };
+}

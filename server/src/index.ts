@@ -33,7 +33,7 @@ import {
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktrees as gitWorktrees, addWorktree, removeWorktree, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
-  conflicts as gitConflicts, resolveWith, mergeAbort, mergeContinue, baseCandidates, undoMerge,
+  conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
   remotes as gitRemotes, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
@@ -41,7 +41,7 @@ import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor
 import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
-  overview as dockerOverview, stats as dockerStats, logs as dockerLogs,
+  overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
   startContainer, stopContainer, restartContainer, removeContainer,
 } from "./docker.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
@@ -496,6 +496,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/graph") return json(logGraph(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 400)));
     if (pathname === "/git/worktrees") return json({ worktrees: gitWorktrees(url.searchParams.get("root") || "") });
     if (pathname === "/git/conflicts") return json(gitConflicts(url.searchParams.get("root") || ""));
+    if (pathname === "/git/conflict-blocks") return json(conflictBlocks(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
     if (pathname === "/git/base-candidates") return json(baseCandidates(url.searchParams.get("root") || ""));
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
@@ -560,6 +561,7 @@ const server = Bun.serve<WsData>({
         case "/git/sync-base": res = syncFromBase(root, b.base); break;
         case "/git/set-base": res = setBase(root, b.branch, b.base ?? null); break;
         case "/git/resolve": res = resolveWith(root, b.paths ?? b.path, b.side); break;
+        case "/git/resolve-blocks": res = resolveBlocks(root, b.path, b.choices); break;
         case "/git/merge-abort": res = mergeAbort(root); break;
         case "/git/merge-continue": res = mergeContinue(root); break;
         case "/git/undo-merge": res = undoMerge(root); break;
@@ -571,6 +573,8 @@ const server = Bun.serve<WsData>({
     // --- live docker panel (lazydocker-style) ---
     if (pathname === "/docker/overview") return json(await dockerOverview());
     if (pathname === "/docker/stats") return json({ stats: await dockerStats() });
+    if (pathname === "/docker/inspect") return json(dockerInspect(url.searchParams.get("id") || ""));
+    if (pathname === "/docker/top") return json(dockerTop(url.searchParams.get("id") || ""));
     if (pathname === "/docker/logs") {
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);

@@ -5,6 +5,8 @@
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useDismiss } from "../lib/useDismiss.ts";
+import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -307,6 +309,49 @@ function createSession(root: string): Sess {
   return sess;
 }
 
+/** xterm's private handle on its renderer. The exact CSS cell size lives only
+ *  in there — FitAddon reads the very same field. */
+type TermCore = {
+  _core?: {
+    _renderService?: {
+      dimensions?: { css?: { cell?: { width: number; height: number } } };
+      clear?: () => void;
+    };
+  };
+};
+
+/**
+ * Size a terminal to its slot. Ours, not `FitAddon.fit()`.
+ *
+ * The addon subtracts a flat 14px from the width whenever scrollback is on —
+ * `options.overviewRuler?.width || 14`. That is a constant, not a measurement
+ * of anything, so hiding the scrollbar in CSS cannot win it back, and asking
+ * for `{ width: 0 }` lands on 14 again because 0 is falsy. At this font size
+ * it costs two whole columns, and they show up as a dead strip down the right
+ * of anything that draws edge to edge: nano's title bar, vim's status line,
+ * tmux's border. Nothing is reserved here — the viewport's scrollbar is an
+ * overlay (see the style block below) and takes no layout width.
+ */
+function fitTerm(s: Sess) {
+  const el = s.term.element;
+  const parent = el?.parentElement;
+  const core = (s.term as unknown as TermCore)._core;
+  const cell = core?._renderService?.dimensions?.css?.cell;
+  // Before the first render there is no cell size to divide by; the addon has
+  // its own guards for that, so let it decide there's nothing to do yet.
+  if (!el || !parent || !cell?.width || !cell?.height) { s.fit.fit(); return; }
+  const box = getComputedStyle(parent);   // computed width/height are content-box px
+  const own = getComputedStyle(el);
+  const px = (v: string) => parseFloat(v) || 0;
+  const w = px(box.width) - px(own.paddingLeft) - px(own.paddingRight);
+  const h = px(box.height) - px(own.paddingTop) - px(own.paddingBottom);
+  const cols = Math.max(2, Math.floor(w / cell.width));
+  const rows = Math.max(1, Math.floor(h / cell.height));
+  if (cols === s.term.cols && rows === s.term.rows) return;
+  core?._renderService?.clear?.(); // as the addon does — drop the old grid before reflowing
+  s.term.resize(cols, rows);
+}
+
 /** Close a shell and drop it: its socket, its terminal and its pending retry. */
 function killSession(s: Sess) {
   if (s.retryTimer) { clearTimeout(s.retryTimer); s.retryTimer = null; }
@@ -326,6 +371,22 @@ function runInShell(s: Sess, cmd: string) {
   if (s.status === "live" && s.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ t: "in", d: line }));
   else { s.pending.push(line); if (!s.ws) connect(s); }
   s.term.focus();
+}
+
+/**
+ * Type a command into the docked console, opening its shell if needed.
+ *
+ * Finds the session the same way ConsoleStrip does — by title, per repo — so
+ * calling this before the strip has mounted converges on one shell rather than
+ * racing it into two. `runInShell` queues into `pending` when the socket is not
+ * up yet, so the command still runs once it connects.
+ */
+export function runInConsole(root: string, cmd: string) {
+  if (!root || IS_DEMO) return;
+  const existing = sessionsFor(root).find((x) => x.title === CONSOLE_TITLE);
+  const s = existing ?? createSession(root);
+  s.title = CONSOLE_TITLE;
+  runInShell(s, cmd);
 }
 
 // --- the panel ---------------------------------------------------------------
@@ -373,7 +434,7 @@ export function ConsoleStrip({ root, open, height, onHeight, onClose }: {
     s.term.options.theme = themeFromCss();
     const unTheme = applyThemeLive(s);
     s.subs.add(redraw);
-    const doFit = () => { try { s.fit.fit(); } catch { /* not measurable yet */ } };
+    const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
     doFit();
     if (s.status === "idle") connect(s);
     const ro = new ResizeObserver(doFit);
@@ -436,33 +497,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
 
-  // Click anywhere else and the dropdowns close, the way every menu on the
-  // machine behaves. They used to stay open until you picked something or
-  // toggled the same button again, so a picker you opened by accident sat over
-  // the shell you were trying to read. `mousedown` rather than `click` so it
-  // closes on press instead of waiting for the release, and Escape closes too.
-  useEffect(() => {
-    if (!repoOpen && !cmdsOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (pickersRef.current?.contains(e.target as Node)) return;
-      setRepoOpen(false);
-      setCmdsOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      // Stop it here: the workspace would otherwise close underneath, so one
-      // Escape would dismiss both the menu and the panel behind it.
-      e.stopPropagation();
-      setRepoOpen(false);
-      setCmdsOpen(false);
-    };
-    document.addEventListener("mousedown", onDown, true);
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("mousedown", onDown, true);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [repoOpen, cmdsOpen]);
+  useDismiss(repoOpen || cmdsOpen, pickersRef, () => { setRepoOpen(false); setCmdsOpen(false); });
 
   useEffect(() => {
     if (!open) return;
@@ -520,7 +555,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       s.term.options.theme = themeFromCss(); // pick up theme switches between opens
       const unTheme = applyThemeLive(s);
       s.subs.add(force);
-      const doFit = () => { try { s.fit.fit(); } catch { /* not measurable yet */ } };
+      const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
       doFit();
       if (s.status === "idle") connect(s);
       const ro = new ResizeObserver(doFit);
@@ -620,19 +655,20 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     doing so again — and the symptom (a TUI missing its bottom
                     border) reads as a bug in tmux, not as a stray CSS rule.
 
-                    The scrollbar rule is the one that reclaims the strip down
-                    the right: FitAddon subtracts the viewport's scrollbar width
-                    when it works out how many columns fit, so a classic 15px
-                    scrollbar costs a column and leaves the gap where it would
-                    have been. An overlay scrollbar takes no layout width, so
-                    the grid gets it back — and the wheel still scrolls. */}
+                    The scrollbar rule keeps the viewport from covering the last
+                    column with a real 15px gutter — an overlay scrollbar takes
+                    no layout width, and the wheel still scrolls. It does NOT
+                    win back the strip down the right on its own: the columns
+                    are counted in `fitTerm`, which is where that was actually
+                    fixed, because FitAddon reserves its 14px unconditionally
+                    and never looks at what the scrollbar really costs. */}
                 <style>{`.xterm,.xterm-screen,.xterm-viewport{padding:0!important;margin:0!important}
 .xterm-viewport{scrollbar-width:none!important}
 .xterm-viewport::-webkit-scrollbar{width:0!important;height:0!important}`}</style>
 
                 {/* header: repo picker + command launcher + actions */}
-                <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>▶ Terminal</span>
+                <div className={viewHeaderClass} style={viewHeaderStyle}>
+                  <span className={viewTitleClass} style={{ color: "var(--text)" }}>Terminal</span>
                   <div ref={pickersRef} className="flex items-center gap-3">
                   <div className="relative">
                     <button onClick={() => { setRepoOpen((o) => !o); setCmdsOpen(false); }} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
@@ -761,7 +797,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ split</button>}
                     <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ restart</button>
                     <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>clear</button>
-                    <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
                 </div>
 

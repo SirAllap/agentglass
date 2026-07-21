@@ -626,3 +626,19 @@ export interface TerminalCommands {
   make: ProjectCommand[];    // Makefile targets, with descriptions
   scripts: ProjectCommand[]; // package.json scripts, runner-aware
 }
+
+/** One `<<<<<<< / ======= / >>>>>>>` region of a conflicted file. */
+export type ConflictBlock = {
+  index: number;
+  /** 1-based line the `<<<<<<<` sits on. */
+  line: number;
+  ours: string[];
+  theirs: string[];
+  /** Only with merge.conflictStyle=diff3/zdiff3. */
+  base?: string[];
+  ourLabel: string;
+  theirLabel: string;
+};
+
+/** What to write for one block. `both` keeps ours then theirs. */
+export type BlockChoice = "ours" | "theirs" | "both" | "theirs-first";

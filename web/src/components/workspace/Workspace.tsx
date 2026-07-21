@@ -94,9 +94,14 @@ export function Workspace({
                 // switch.
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 transition={{ duration: 0.12, ease: "easeOut" }}
-                className="w-[95vw] rounded-2xl flex pointer-events-auto outline-none overflow-hidden"
+                // Fills its padding box rather than picking its own 95vw/95vh:
+                // the container already states the margins (12px at the sides
+                // and bottom, the notch's band at the top), and a viewport
+                // percentage on top of that made the side gaps four times the
+                // bottom one — 50px against 12px on this display.
+                className="w-full rounded-2xl flex pointer-events-auto outline-none overflow-hidden"
                 style={{
-                  height: `min(95vh, calc(100vh - ${NOTCH_BAND + 12}px))`,
+                  height: `calc(100vh - ${NOTCH_BAND + 12}px)`,
                   background: "var(--bg2)",
                   border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
                   boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)",

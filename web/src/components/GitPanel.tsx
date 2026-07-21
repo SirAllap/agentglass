@@ -3,7 +3,9 @@
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
+import { useDismiss } from "../lib/useDismiss.ts";
+import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
+import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
@@ -14,6 +16,8 @@ import { buildFileTree, visibleRows, allDirPaths } from "../lib/fileTree.ts";
 import { useIncremental } from "../lib/useIncremental.ts";
 import { CommandLog } from "./CommandLog.tsx";
 import { UnifiedDiff, SplitDiff, ThemePicker, Toggle, SCROLLBAR_CSS, ChangesModal, changesetSig, readWalkCache, writeWalkCache } from "./ChangesModal.tsx";
+import { useSidebarWidth } from "../lib/sidebarWidth.ts";
+import { SidebarGrip } from "./SidebarGrip.tsx";
 
 const unifiedText = (c: GitFileChange) => c.hunks.map((h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n${h.lines.join("\n")}`).join("\n");
 
@@ -353,8 +357,89 @@ function Section({ title, count, tint, action, onAll, children }: { title: strin
  *  Staying mounted while hidden is worth more here than anywhere else: the
  *  commit message drafts (`title`/`body`) used to be destroyed every time you
  *  looked at something else, which is precisely what you do before committing. */
+
+/**
+ * One conflict at a time, with both sides side by side.
+ *
+ * Every block must be answered before this applies anything. Defaulting the
+ * ones nobody looked at to "ours" is exactly the silent loss this screen exists
+ * to prevent, so unanswered blocks are counted and the button stays disabled
+ * rather than quietly choosing for you.
+ */
+function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
+  blocks: ConflictBlock[] | null;
+  error: string | null;
+  picks: Record<number, BlockChoice>;
+  onPick: (i: number, c: BlockChoice) => void;
+  onApply: () => void;
+  busy: boolean;
+}) {
+  if (error) return <div className="text-[10.5px] px-2 py-1.5 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>{error}</div>;
+  if (!blocks) return <div className="text-[10.5px] t-dim2 flex items-center gap-2 px-2 py-1.5"><span className="agx-spin" aria-hidden="true" />reading the file…</div>;
+  if (!blocks.length) return <div className="text-[10.5px] t-dim2 px-2 py-1.5">no conflict markers left in this file</div>;
+
+  const left = blocks.filter((b) => !picks[b.index]).length;
+  const Side = ({ label, lines, tone }: { label: string; lines: string[]; tone: string }) => (
+    <div className="min-w-0 flex-1">
+      <div className="text-[9px] mb-0.5 truncate" style={{ color: tone }}>{label}</div>
+      <pre className="text-[10px] leading-[1.5] px-1.5 py-1 rounded overflow-x-auto agx-scroll m-0"
+        style={{ background: "color-mix(in srgb, var(--bg) 60%, transparent)", color: "var(--text2)", maxHeight: 160 }}>
+        {lines.length ? lines.join("\n") : "(nothing — this side removes these lines)"}
+      </pre>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-2 pl-2 pb-1" style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+      {blocks.map((b) => {
+        const chosen = picks[b.index];
+        const Opt = ({ id, label }: { id: BlockChoice; label: string }) => (
+          <button onClick={() => onPick(b.index, id)} disabled={busy}
+            className="px-1.5 py-0.5 rounded text-[9.5px] shrink-0"
+            style={chosen === id
+              ? { color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
+              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+            {label}
+          </button>
+        );
+        return (
+          <div key={b.index} className="flex flex-col gap-1">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9.5px] t-dim2 tabular-nums shrink-0">line {b.line}</span>
+              <div className="flex items-center gap-1 ml-auto">
+                <Opt id="ours" label="ours" />
+                <Opt id="theirs" label="theirs" />
+                <Opt id="both" label="both" />
+                <Opt id="theirs-first" label="both \u21c5" />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Side label={b.ourLabel} lines={b.ours} tone="var(--success)" />
+              {/* Only when git recorded one: with the default conflict style
+                  there is no ancestor, and an empty column would read as "the
+                  base was empty" rather than "not recorded". */}
+              {b.base && <Side label="base" lines={b.base} tone="var(--text3)" />}
+              <Side label={b.theirLabel} lines={b.theirs} tone="var(--info)" />
+            </div>
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-2">
+        <span className="text-[9.5px] t-dim2">{left ? `${left} still to choose` : "every conflict answered"}</span>
+        <button onClick={onApply} disabled={busy || left > 0}
+          className="ml-auto px-2 py-0.5 rounded text-[10px] font-medium"
+          style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: left ? 0.4 : 1 }}
+          title={left ? "choose a side for every conflict first" : "write these choices and stage the file"}>
+          apply and stage
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: () => void }) {
   const open = active;
+  const sidebarW = useSidebarWidth();
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
   const [tree, setTree] = useState<WorkingTree | null>(null);
@@ -384,6 +469,22 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [baseOpen, setBaseOpen] = useState(false);
   /** Files git has stopped on. Only ever non-empty mid-merge. */
   const [conflicts, setConflicts] = useState<string[]>([]);
+  // The file whose blocks are open, and the choice made for each. Held here
+  // rather than in a child so closing the file and reopening it starts clean —
+  // a half-made set of choices restored from before is worse than none.
+  const [blockFile, setBlockFile] = useState<string | null>(null);
+  const [blocks, setBlocks] = useState<ConflictBlock[] | null>(null);
+  const [blockErr, setBlockErr] = useState<string | null>(null);
+  const [picks, setPicks] = useState<Record<number, BlockChoice>>({});
+
+  const openBlocks = useCallback(async (rel: string) => {
+    if (blockFile === rel) { setBlockFile(null); setBlocks(null); return; }
+    setBlockFile(rel); setBlocks(null); setBlockErr(null); setPicks({});
+    const r = await api.gitConflictBlocks(root, rel);
+    if (!r.ok) { setBlockErr(r.error || "cannot read that file"); return; }
+    setBlocks(r.blocks);
+  }, [root, blockFile]);
+
   /** Local heads and remote-tracking refs, for the "merge from…" list. */
   const [baseRefs, setBaseRefs] = useState<{ name: string; remote: boolean }[]>([]);
   const [baseQuery, setBaseQuery] = useState("");
@@ -784,6 +885,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); setPending(null); }
   };
+  // Source control's picker never had this; the terminal's did. Same bug, one
+  // file each, which is why it read as fixed.
+  const repoPickerRef = useRef<HTMLDivElement | null>(null);
+  useDismiss(repoOpen, repoPickerRef, () => { setRepoOpen(false); setRepoQuery(""); });
+
   const openWorktree = (w: GitWorktree) => { setRoot(w.path); setRepoOpen(false); setSelKey(null); setView("changes"); };
   // stashes
   const reloadStashes = () => api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
@@ -1072,9 +1178,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     clipped the menu to a sliver. Overflow is prevented by the
                     branch chip yielding space and the tab strip scrolling —
                     not by cutting off whatever escapes. */}
-                <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <span className="text-[15px] font-semibold whitespace-nowrap shrink-0" style={{ color: "var(--text)" }}>Source control</span>
-                  <div className="relative">
+                <div className={viewHeaderClass} style={viewHeaderStyle}>
+                  <span className={viewTitleClass} style={{ color: "var(--text)" }}>Source control</span>
+                  <div className="relative" ref={repoPickerRef}>
                     {/* Also one line. A worktree directory carries the whole
                         ticket name, and wrapped it made the button two rows
                         tall and shoved the tab strip down with it. */}
@@ -1320,15 +1426,36 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         migration, a file the other side deleted. */}
                     {conflicts.map((f) => {
                       const relPath = f.startsWith(root) ? f.slice(root.length + 1) : f;
+                      const open = blockFile === relPath;
                       return (
-                        <div key={f} className="flex items-center gap-2 text-[10.5px]">
+                        <div key={f} className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-[10.5px]">
                           <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text2)" }} title={f}>{relPath}</span>
+                          {/* Whole-file is still one click; this is for the file
+                              with two unrelated conflicts, where taking a side
+                              wholesale to fix one throws away the other. */}
+                          <button onClick={() => void openBlocks(relPath)} disabled={busy}
+                            className="px-1.5 py-0.5 rounded shrink-0"
+                            style={open
+                              ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
+                              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                            title="Choose a side for each conflict in this file">{open ? "hide" : "one by one"}</button>
                           <button onClick={() => act(() => api.gitResolve(root, [relPath], "ours"), `kept ours for ${relPath}`)} disabled={busy}
                             className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
                             title="Keep this branch's version">ours</button>
                           <button onClick={() => act(() => api.gitResolve(root, [relPath], "theirs"), `took theirs for ${relPath}`)} disabled={busy}
                             className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
                             title="Take the incoming version">theirs</button>
+                        </div>
+                        {open && <BlockResolver
+                          blocks={blocks} error={blockErr} picks={picks}
+                          onPick={(i: number, c: BlockChoice) => setPicks((p) => ({ ...p, [i]: c }))}
+                          busy={busy}
+                          onApply={() => {
+                            const list = (blocks ?? []).map((b) => picks[b.index] ?? "ours");
+                            void act(() => api.gitResolveBlocks(root, relPath, list), `resolved ${relPath}`)
+                              .then(() => { setBlockFile(null); setBlocks(null); setPicks({}); });
+                          }} />}
                         </div>
                       );
                     })}
@@ -1337,7 +1464,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
                 {view === "changes" ? (
                   <div className="flex-1 min-h-0 flex">
-                    <div className="w-[340px] shrink-0 border-r flex flex-col min-h-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                    <div className="shrink-0 flex flex-col min-h-0" style={{ width: sidebarW }}>
                       {!tree?.clean && (
                         <div className="shrink-0 px-2.5 py-2 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                           <button onClick={() => explain(!!walk)} disabled={walkLoading} className="text-[11px] px-2.5 py-1 rounded-lg w-full" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--info) 13%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 28%, transparent)", opacity: walkLoading ? 0.6 : 1 }}>
@@ -1381,6 +1508,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         {!writeEnabled && <div className="text-[9.5px] t-dim2 text-center">read-only (AGENTGLASS_GIT_WRITE_DISABLED)</div>}
                       </div>
                     </div>
+                    <SidebarGrip />
                     <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                       {selected ? (
                         <>

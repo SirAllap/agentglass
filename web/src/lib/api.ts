@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -215,6 +215,8 @@ const realApi = {
   gitStashPop: (root: string, index: number) => post<GitActionResult>("/git/stash-pop", { root, index }),
   gitStashDrop: (root: string, index: number) => post<GitActionResult>("/git/stash-drop", { root, index }),
   gitApplyHunk: (root: string, path: string, staged: boolean, action: "stage" | "unstage" | "discard", hunk: DiffHunk) => post<GitActionResult>("/git/apply-hunk", { root, path, staged, action, hunk }),
+  gitConflictBlocks: (root: string, path: string) => get<{ ok: boolean; blocks: ConflictBlock[]; error?: string }>(`/git/conflict-blocks?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+  gitResolveBlocks: (root: string, path: string, choices: BlockChoice[]) => post<GitActionResult>("/git/resolve-blocks", { root, path, choices }),
   gitGraph: (root: string, limit = 400) => get<{ lines: GitGraphLine[] }>(`/git/graph?root=${encodeURIComponent(root)}&limit=${limit}`),
   gitWorktrees: (root: string) => get<{ worktrees: GitWorktree[] }>(`/git/worktrees?root=${encodeURIComponent(root)}`),
   gitMerge: (root: string, name: string) => post<GitActionResult>("/git/merge", { root, name }),
@@ -239,6 +241,8 @@ const realApi = {
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
+  dockerInspect: (id: string) => get<{ ok: boolean; env: string[]; config: string; error?: string }>(`/docker/inspect?id=${encodeURIComponent(id)}`),
+  dockerTop: (id: string) => get<{ ok: boolean; text: string; error?: string }>(`/docker/top?id=${encodeURIComponent(id)}`),
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
@@ -339,6 +343,8 @@ const demoApi: typeof realApi = {
   gitStashPop: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
   gitStashDrop: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
   gitApplyHunk: (_root: string, _path: string, _staged: boolean, _action: "stage" | "unstage" | "discard", _hunk: DiffHunk) => D(demo.gitActionUnavailable()),
+  gitConflictBlocks: (_root: string, _path: string) => D({ ok: false, blocks: [] as ConflictBlock[], error: "not available in the demo" }),
+  gitResolveBlocks: (_root: string, _path: string, _choices: BlockChoice[]) => D(demo.gitActionUnavailable()),
   gitGraph: (_root: string, _limit?: number) => D(demo.gitGraph()),
   gitWorktrees: (_root: string) => D(demo.gitWorktrees()),
   gitMerge: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
@@ -358,6 +364,8 @@ const demoApi: typeof realApi = {
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
+  dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
+  dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
   chatEnabled: () => D({ enabled: false }),
   chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[] }, onEvent: (o: Record<string, unknown>) => void) => {

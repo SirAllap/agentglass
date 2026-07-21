@@ -395,6 +395,22 @@
 /* The inbox behind the strip. Continues the notch's shape downward rather than
    floating over the workspace: same black, same hairline, and only the bottom
    corners are round, so the strip reads as having grown. */
+/* The draggable seam between a list pane and its content. Wider than the
+   hairline it replaces so it can actually be grabbed, but invisible until you
+   approach it — a permanent visible handle in four panels would be four pieces
+   of furniture earning nothing. */
+.agx-grip {
+  width: 5px;
+  cursor: col-resize;
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+  transition: background 0.12s ease;
+}
+.agx-grip:hover,
+.agx-grip:focus-visible {
+  background: color-mix(in srgb, var(--primary) 55%, transparent);
+  outline: none;
+}
+
 /* A pending request, drawn rather than spelled. Border-only so it costs one
    element, and paused with every other ambient loop when the page is idle. */
 @keyframes agx-spin { to { transform: rotate(360deg); } }

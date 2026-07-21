@@ -1,5 +1,9 @@
-import { VIEWS, type ViewId } from "./views.ts";
+import { useSyncExternalStore, useState } from "react";
+import { VIEWS, loadViewOrder, saveViewOrder, subscribeViewOrder, type ViewId } from "./views.ts";
 import { MOD_KEY } from "../../lib/format.ts";
+import { chordFor, chords, subscribeBindings } from "../../lib/keybindings.ts";
+
+const EMPTY_CHORDS = {};
 
 export type RailPip = { dot?: boolean; count?: number };
 
@@ -22,11 +26,26 @@ export function ViewRail({
   // Arrow keys move between tabs, matching the tablist pattern. Without this
   // the rail is reachable by Tab but not traversable, which is the usual way
   // an icon rail fails a keyboard user.
+  // The rail's order is the user's. Read through a store so a drag updates
+  // every mounted rail at once rather than only the one being dragged.
+  const order = useSyncExternalStore(subscribeViewOrder, loadViewOrder, () => VIEWS);
+  // Re-render when a shortcut is rebound, so the tooltips keep telling the
+  // truth. chordFor reads the store itself; this only supplies the signal.
+  useSyncExternalStore(subscribeBindings, chords, () => EMPTY_CHORDS);
+  const [dragId, setDragId] = useState<ViewId | null>(null);
+
+  const moveTo = (from: ViewId, to: ViewId) => {
+    if (from === to) return;
+    const ids = order.map((v) => v.id).filter((id) => id !== from);
+    ids.splice(ids.indexOf(to), 0, from);
+    saveViewOrder(ids);
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
-    const i = VIEWS.findIndex((v) => v.id === view);
-    const n = VIEWS[(i + (e.key === "ArrowDown" ? 1 : VIEWS.length - 1)) % VIEWS.length];
+    const i = order.findIndex((v) => v.id === view);
+    const n = order[(i + (e.key === "ArrowDown" ? 1 : order.length - 1)) % order.length];
     onSelect(n.id);
     (e.currentTarget.querySelector(`[data-view="${n.id}"]`) as HTMLElement | null)?.focus();
   };
@@ -42,7 +61,7 @@ export function ViewRail({
         background: "color-mix(in srgb, var(--bg) 55%, transparent)",
       }}
     >
-      {VIEWS.map((v, i) => {
+      {order.map((v, i) => {
         const on = v.id === view;
         const pip = pips?.[v.id];
         const Icon = v.icon;
@@ -55,15 +74,27 @@ export function ViewRail({
             aria-label={v.label}
             tabIndex={on ? 0 : -1}
             onClick={() => onSelect(v.id)}
+            // Drag to reorder. HTML5 dnd rather than pointer maths: this is a
+            // single column of five, the browser already handles the pickup,
+            // the ghost and the drop, and reimplementing that by hand buys
+            // nothing here.
+            draggable
+            onDragStart={(e) => { setDragId(v.id); e.dataTransfer.effectAllowed = "move"; }}
+            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+            onDrop={(e) => { e.preventDefault(); if (dragId) moveTo(dragId, v.id); setDragId(null); }}
+            onDragEnd={() => setDragId(null)}
             className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
             // The modifier binding, not the bare letter. Inside the workspace
             // the letters no longer navigate — they belong to whatever has
             // focus, usually a shell — and a tooltip advertising a key that
             // does nothing is worse than no tooltip.
-            data-tip={`${v.label} · ${MOD_KEY}${i + 1}`}
+            data-tip={`${v.label} · ${MOD_KEY}${chordFor(v.id, order.map((x) => x.id)) || i + 1}`}
             style={{
               color: on ? "var(--primary-hover)" : "var(--text4)",
               background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+              // The one being dragged fades, so the gap it will leave is legible.
+              opacity: dragId === v.id ? 0.4 : undefined,
+              cursor: dragId ? "grabbing" : undefined,
             }}
           >
             <Icon size={17} />

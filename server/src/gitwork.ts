@@ -5,11 +5,12 @@
 // every mutating op is gated by AGENTGLASS_GIT_WRITE_DISABLED=1.
 
 import { resolve, basename, relative, dirname, sep, join } from "node:path";
-import { statSync, readFileSync, readdirSync, existsSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import type {
+  ConflictBlock, BlockChoice,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
   GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine, GitTreeState,
   GitRemote, GitTag, GitReflogEntry,
@@ -1373,4 +1374,140 @@ export function applyHunk(rootIn: string, pathAbs: unknown, staged: boolean, act
   const r = gitApplyStdin(root, args, patch);
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "git apply failed (the hunk may no longer apply cleanly)" };
   return { ok: true, output: `${action}d hunk` };
+}
+
+
+/* ------------------------------------------------- conflicts, block by block */
+
+/**
+ * One `<<<<<<< / ======= / >>>>>>>` region, and the file around it.
+ *
+ * Whole-file `ours`/`theirs` covers a lockfile or a generated migration, but it
+ * is the wrong tool the moment a file has two unrelated conflicts — taking one
+ * side wholesale to fix the first silently discards your work in the second.
+ * That is the failure this exists to prevent: not a finer-grained version of
+ * the same feature, but the case where the existing one loses code.
+ */
+
+const C_START = /^<<<<<<< ?(.*)$/;
+const C_BASE = /^\|\|\|\|\|\|\| ?(.*)$/;
+const C_MID = /^=======\s*$/;
+const C_END = /^>>>>>>> ?(.*)$/;
+
+/**
+ * Parse a conflicted file into blocks and the text between them.
+ *
+ * Returns segments rather than only the blocks so that resolving is a rebuild
+ * rather than an edit: reassembling from the parts cannot drift from what was
+ * shown, whereas patching the original by line number can if anything touched
+ * the file in between.
+ */
+function splitConflicts(text: string): { segments: (string | ConflictBlock)[]; blocks: ConflictBlock[] } {
+  const lines = text.split("\n");
+  const segments: (string | ConflictBlock)[] = [];
+  const blocks: ConflictBlock[] = [];
+  let plain: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const m = C_START.exec(lines[i]!);
+    if (!m) { plain.push(lines[i]!); continue; }
+
+    const ours: string[] = [], theirs: string[] = [];
+    let base: string[] | undefined;
+    let side: "ours" | "base" | "theirs" = "ours";
+    let theirLabel = "";
+    const startLine = i + 1;
+    let closed = false;
+
+    for (i++; i < lines.length; i++) {
+      const l = lines[i]!;
+      if (C_BASE.test(l)) { side = "base"; base = []; continue; }
+      if (C_MID.test(l)) { side = "theirs"; continue; }
+      const e = C_END.exec(l);
+      if (e) { theirLabel = e[1] ?? ""; closed = true; break; }
+      (side === "ours" ? ours : side === "base" ? base! : theirs).push(l);
+    }
+
+    // An unterminated marker is not a conflict, it is a file that happens to
+    // contain the characters — a diff pasted into a README, or this source
+    // file. Kept as ordinary text instead of swallowing the rest of the
+    // document into a block nobody can resolve.
+    if (!closed) {
+      plain.push(lines[startLine - 1]!);
+      for (const l of ours) plain.push(l);
+      if (base) { plain.push("|||||||"); for (const l of base) plain.push(l); }
+      if (side === "theirs") plain.push("=======");
+      for (const l of theirs) plain.push(l);
+      continue;
+    }
+
+    const block: ConflictBlock = {
+      index: blocks.length, line: startLine, ours, theirs,
+      ...(base ? { base } : {}),
+      ourLabel: m[1] || "ours", theirLabel: theirLabel || "theirs",
+    };
+    segments.push(plain.join("\n"));
+    plain = [];
+    segments.push(block);
+    blocks.push(block);
+  }
+  segments.push(plain.join("\n"));
+  return { segments, blocks };
+}
+
+export function conflictBlocks(rootIn: unknown, relIn: unknown): {
+  ok: boolean; blocks: ConflictBlock[]; error?: string;
+} {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, blocks: [], error: "not a git repository root" };
+  const rels = validRels(root, [relIn]);
+  if (!rels?.length) return { ok: false, blocks: [], error: "invalid path" };
+  let text: string;
+  try { text = readFileSync(join(root, rels[0]!), "utf8"); }
+  catch { return { ok: false, blocks: [], error: "cannot read that file" }; }
+  // A binary file has no lines to choose between, so whole-file is the only
+  // resolution — saying so beats rendering its bytes as a diff.
+  if (text.includes("\u0000")) return { ok: false, blocks: [], error: "binary file — resolve it whole" };
+  return { ok: true, blocks: splitConflicts(text).blocks };
+}
+
+
+/**
+ * Write one decision per block, then stage the file.
+ *
+ * The choice count must match what is in the file. A client holding a stale
+ * parse would otherwise apply choice N to a block that is no longer the Nth —
+ * resolving the wrong conflict with the wrong side, and looking like it worked.
+ * Refusing costs a reload; guessing costs code.
+ */
+export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const rels = validRels(root, [relIn]);
+  if (!rels?.length) return { ok: false, error: "invalid path" };
+  if (!Array.isArray(choicesIn)) return { ok: false, error: "choices must be a list" };
+  const allowed = new Set(["ours", "theirs", "both", "theirs-first"]);
+  if (!choicesIn.every((c) => typeof c === "string" && allowed.has(c))) return { ok: false, error: "unknown choice" };
+  const choices = choicesIn as BlockChoice[];
+
+  const abs = join(root, rels[0]!);
+  let text: string;
+  try { text = readFileSync(abs, "utf8"); } catch { return { ok: false, error: "cannot read that file" }; }
+  const { segments, blocks } = splitConflicts(text);
+  if (blocks.length !== choices.length) {
+    return { ok: false, error: `the file has ${blocks.length} conflicts, not ${choices.length} — reload it` };
+  }
+  if (!blocks.length) return { ok: false, error: "no conflicts left in that file" };
+
+  const out = segments.map((seg) => {
+    if (typeof seg === "string") return seg;
+    const c = choices[seg.index]!;
+    const lines = c === "ours" ? seg.ours
+      : c === "theirs" ? seg.theirs
+      : c === "both" ? [...seg.ours, ...seg.theirs]
+      : [...seg.theirs, ...seg.ours];
+    return lines.join("\n");
+  }).join("\n");
+
+  try { writeFileSync(abs, out); } catch { return { ok: false, error: "cannot write that file" }; }
+  return run(root, ["add", "--", rels[0]!]);
 }
