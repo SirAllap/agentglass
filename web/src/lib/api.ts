@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -241,6 +241,9 @@ const realApi = {
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
+  updateStatus: () => get<UpdateStatus>("/update/status"),
+  updateRun: () => post<{ ok: boolean; error?: string }>("/update/run", {}),
+  updateLog: () => get<{ ok: boolean; text: string }>("/update/log"),
   dockerInspect: (id: string) => get<{ ok: boolean; env: string[]; config: string; error?: string }>(`/docker/inspect?id=${encodeURIComponent(id)}`),
   dockerTop: (id: string) => get<{ ok: boolean; text: string; error?: string }>(`/docker/top?id=${encodeURIComponent(id)}`),
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
@@ -364,6 +367,9 @@ const demoApi: typeof realApi = {
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
+  updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "" }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
+  updateRun: () => D({ ok: false, error: "not available in the demo" }),
+  updateLog: () => D({ ok: true, text: "" }),
   dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
   dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),

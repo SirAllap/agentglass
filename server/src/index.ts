@@ -51,6 +51,7 @@ import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } f
 import { workspaceRoot, setWorkspaceRoot, inScope, CONFIG_PATH } from "./config.ts";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
+import { updateStatus, startUpdate, updateLog } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
@@ -153,6 +154,20 @@ function localOrigin(req: Request): boolean {
  * `websocat ws://host:4000/terminal/pty` case that otherwise hands a login
  * shell to anyone who can reach the port.
  */
+/**
+ * The strictest gate in the server: the desktop shell and nothing else.
+ *
+ * `trustedCaller` admits any private-network origin, which is right for a
+ * dashboard you might open from a laptop on the same wifi and wrong for a route
+ * that builds and runs code. This one requires the custom scheme, which only
+ * the packaged shell can present — a browser cannot forge it, because browsers
+ * cannot be served from it.
+ */
+function desktopOnly(req: Request): boolean {
+  const o = req.headers.get("origin");
+  return !!o && fromDesktopShell(o);
+}
+
 function trustedCaller(req: Request): boolean {
   const o = req.headers.get("origin");
   if (!o) return LOOPBACK_ONLY; // no origin is only safe when nobody remote can connect
@@ -495,6 +510,16 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/branches") return json(gitBranches(url.searchParams.get("root") || ""));
     if (pathname === "/git/graph") return json(logGraph(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 400)));
     if (pathname === "/git/worktrees") return json({ worktrees: gitWorktrees(url.searchParams.get("root") || "") });
+    // Update: reads are gated too, since the status alone reveals the source
+    // path on disk.
+    if (pathname === "/update/status") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      return json(updateStatus());
+    }
+    if (pathname === "/update/log") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      return json(updateLog());
+    }
     if (pathname === "/git/conflicts") return json(gitConflicts(url.searchParams.get("root") || ""));
     if (pathname === "/git/conflict-blocks") return json(conflictBlocks(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
     if (pathname === "/git/base-candidates") return json(baseCandidates(url.searchParams.get("root") || ""));
@@ -579,6 +604,10 @@ const server = Bun.serve<WsData>({
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);
       return json(dockerLogs(id, tail));
+    }
+    if (pathname === "/update/run" && req.method === "POST") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      return json(startUpdate());
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();

@@ -642,3 +642,16 @@ export type ConflictBlock = {
 
 /** What to write for one block. `both` keeps ours then theirs. */
 export type BlockChoice = "ours" | "theirs" | "both" | "theirs-first";
+
+/** What the installed app was built from, and what is waiting upstream. */
+export type UpdateStatus = {
+  ok: boolean;
+  available: boolean;
+  info: { version: string; commit: string; builtAt: string; source: string };
+  branch: string;
+  behind: number;
+  ahead: number;
+  incoming: { sha: string; subject: string }[];
+  blocked?: string;
+  last?: { at: string; ok: boolean; tail: string };
+};

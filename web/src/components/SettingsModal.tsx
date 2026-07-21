@@ -15,6 +15,7 @@ import { api } from "../lib/api.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
+import type { UpdateStatus } from "../../../shared/types.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
@@ -115,12 +116,13 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "prefs" | "keys" | "open" | "export";
+type Pane = "prefs" | "keys" | "open" | "export" | "about";
 const TABS: { id: Pane; label: string }[] = [
   { id: "prefs", label: "Preferences" },
   { id: "keys", label: "Shortcuts" },
   { id: "open", label: "Open" },
   { id: "export", label: "Export" },
+  { id: "about", label: "About" },
 ];
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -190,6 +192,107 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
         </button>
       </span>
     </div>
+  );
+}
+
+
+/**
+ * Version, and the update that goes with it.
+ *
+ * Deliberately shows what would arrive before offering to take it: this button
+ * builds and runs whatever is on the branch, and "3 commits behind" with the
+ * subjects listed is the difference between an informed click and a leap. When
+ * it cannot run — a dirty checkout, a diverged branch — it says which, because
+ * "update unavailable" sends people looking in the wrong place.
+ */
+function AboutPane({ open }: { open: boolean }) {
+  const [st, setSt] = useState<UpdateStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    api.updateStatus().then((r) => { if (live) setSt(r); }).catch(() => { if (live) setSt(null); });
+    return () => { live = false; };
+  }, [open]);
+
+  const run = async () => {
+    setBusy(true); setErr(null);
+    const r = await api.updateRun().catch(() => ({ ok: false, error: "could not reach the server" }));
+    setBusy(false);
+    if (!r.ok) { setErr(r.error || "update failed to start"); return; }
+    setStarted(true);
+  };
+
+  if (!st) return <Section title="About"><div className="px-3 py-2 text-[11px] t-dim2">reading version…</div></Section>;
+
+  const short = st.info.commit ? st.info.commit.slice(0, 7) : "unknown";
+  return (
+    <Section title="About">
+      <div className="px-3 py-2 flex flex-col gap-3">
+        <div className="flex items-baseline gap-3">
+          <span className="text-[12.5px]" style={{ color: "var(--text)" }}>agentglass {st.info.version}</span>
+          <span className="text-[10.5px] t-dim2 tabular-nums" title={st.info.commit}>{short}</span>
+          {st.info.builtAt && <span className="text-[10px] t-dim2">built {new Date(st.info.builtAt).toLocaleString()}</span>}
+        </div>
+
+        {/* The outcome of the previous run, which finished after the app it was
+            updating had already been stopped — so this is the only place it can
+            be reported at all. */}
+        {st.last && (
+          <div className="text-[10.5px] px-2.5 py-2 rounded-lg"
+            style={st.last.ok
+              ? { color: "var(--text2)", background: "color-mix(in srgb, var(--success) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }
+              : { color: "var(--text2)", background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>
+            last update {st.last.ok ? "succeeded" : "failed"} — {new Date(st.last.at).toLocaleString()}
+            {!st.last.ok && st.last.tail && (
+              <pre className="mt-1 text-[9.5px] whitespace-pre-wrap break-all m-0" style={{ color: "var(--text3)" }}>
+                {st.last.tail.split("~").filter(Boolean).slice(-6).join("\n")}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {started ? (
+          <div className="text-[11px] px-2.5 py-2 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+            Updating. The app will close and reopen on its own — this window going away is the update working, not crashing.
+          </div>
+        ) : st.blocked ? (
+          <div className="text-[11px] px-2.5 py-2 rounded-lg" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+            {st.blocked}
+          </div>
+        ) : st.behind === 0 ? (
+          <div className="text-[11px] t-dim2">
+            {st.branch ? `Up to date — ${st.branch} is the newest release.` : "Up to date."}
+          </div>
+        ) : (
+          <>
+            <div className="text-[11px]" style={{ color: "var(--text)" }}>
+              {st.branch} is available{st.behind > 1 ? ` — ${st.behind} releases newer than yours` : ""}
+            </div>
+            <div className="flex flex-col gap-0.5 max-h-[220px] overflow-y-auto agx-scroll">
+              {st.incoming.map((c) => (
+                <div key={c.sha} className="flex gap-2 text-[10.5px] min-w-0">
+                  <span className="tabular-nums shrink-0" style={{ color: "var(--primary-hover)" }}>{c.sha}</span>
+                  {c.subject && <span className="truncate t-dim2" title={c.subject}>{c.subject}</span>}
+                </div>
+              ))}
+            </div>
+            {err && <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>}
+            <button onClick={run} disabled={busy}
+              className="self-start text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
+              style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              {busy ? "starting…" : `install ${st.branch} & restart`}
+            </button>
+            <span className="text-[9.5px] t-dim2">
+              Builds the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.
+            </span>
+          </>
+        )}
+      </div>
+    </Section>
   );
 }
 
@@ -417,6 +520,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       href={api.skillsExportUrl()} download="agentglass-skills.md" />
                   </Section>
                   )}
+
+                  {pane === "about" && <AboutPane open={open} />}
                   </div>
                 </div>
               </motion.div>

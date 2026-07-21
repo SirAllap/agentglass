@@ -4,7 +4,7 @@
 // from current source, never a stale dist.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, copyFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -33,5 +33,28 @@ run("bun", [
   "build", "--compile", resolve(REPO, "server/src/index.ts"),
   "--outfile", resolve(HERE, "staging/agentglass-server"),
 ]);
+
+// Provenance, so the installed app knows what it was built from and can offer
+// to update itself. Without it the server would have to guess where the source
+// lives, and a wrong guess would build a stranger's repository.
+const commit = spawnSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout?.trim() ?? "";
+const version = JSON.parse(readFileSync(resolve(HERE, "package.json"), "utf8")).version ?? "0.0.0";
+// The remote, so the updater can clone it without ever needing this checkout.
+const origin = spawnSync("git", ["-C", REPO, "remote", "get-url", "origin"], { encoding: "utf8" }).stdout?.trim() ?? "";
+// `v0.2.1-48-g4a459f5`: the nearest release and the distance from it. This, not
+// package.json, is what says whether a published tag is actually newer than
+// this build — a version field nobody remembered to bump reads as older than a
+// tag it is in fact 48 commits ahead of.
+const described = spawnSync("git", ["-C", REPO, "describe", "--tags", "--long", "--always"], { encoding: "utf8" }).stdout?.trim() ?? "";
+const m = /^(v\d+\.\d+\.\d+)-(\d+)-g[0-9a-f]+$/.exec(described);
+const baseTag = m ? m[1] : "";
+const distance = m ? Number(m[2]) : 0;
+writeFileSync(resolve(HERE, "staging/build-info.json"), JSON.stringify({
+  version, commit, builtAt: new Date().toISOString(), source: REPO, origin, baseTag, distance,
+}, null, 2));
+// Shipped with the app rather than read from the source tree: the update must
+// work on a machine where this checkout has been moved or deleted.
+copyFileSync(resolve(HERE, "self-update.sh"), resolve(HERE, "staging/self-update.sh"));
+console.log(`==> build-info: ${version} ${commit.slice(0, 7)}${baseTag ? ` (${baseTag}+${distance})` : ""} from ${REPO}`);
 
 console.log("==> staging ready");
