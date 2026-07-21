@@ -88,6 +88,21 @@ const owned = new Set<string>();
 export function ownsSession(session_id: string): boolean {
   return SCAN_ENABLED && owned.has(session_id);
 }
+/** Where this session's transcript lives on disk, or null if we have never read
+ *  one for it (hook-only sessions, or a scan that has not reached it yet).
+ *
+ *  The file is appended to as a turn streams, so its mtime is the cheapest
+ *  honest answer to "is this session still alive" — see evidence.ts. Newest
+ *  first, because a session resumed into a second file has two rows and the
+ *  older one stopped growing when the first one ended. */
+const transcriptForSession = db.query<{ path: string }, [string]>(
+  "SELECT path FROM transcript_files WHERE session_id = ? ORDER BY mtime DESC LIMIT 1"
+);
+export function transcriptPathOf(session_id: string): string | null {
+  if (!session_id) return null;
+  return transcriptForSession.get(session_id)?.path ?? null;
+}
+
 // Seeded at startup: a backfill sweep walks every project on the machine, and
 // until it finishes the guard would let hook posts through for sessions the
 // scanner is about to read from disk — counting the same turns twice.

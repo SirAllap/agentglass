@@ -51,6 +51,12 @@ export interface AgentCard {
   /** A tool call that started (PreToolUse) and hasn't reported back yet. */
   runningTool: string | null;
   runningSince: number;
+  /** When this session last showed evidence of life while that call has been
+   *  open — the transcript growing, or the file the tool named changing. Read
+   *  and reported only: nothing here decides `status` yet. The point of showing
+   *  it first is to find out where it lies before anything depends on it. */
+  evidenceAt: number | null;
+  evidenceKind: "transcript" | "target" | "none" | null;
   /** Context-window estimate: the latest turn's full prompt size (input +
    *  cache read + cache write — each API call re-sends the conversation, so
    *  that sum IS the context). 0 = no turn seen yet. */
@@ -99,6 +105,8 @@ function blankCard(key: string, source_app: string, session_id: string, model_na
     subagentTypes: [],
     runningTool: null,
     runningSince: 0,
+    evidenceAt: null,
+    evidenceKind: null,
     ctxTokens: 0,
     ctxTs: 0,
     ctxLimit: 200_000,
@@ -223,7 +231,15 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
       a.lastType = "PreToolUse";
       map.set(key, a);
     }
-    if (s.since >= a.runningSince) { a.runningTool = s.tool_name; a.runningSince = s.since; }
+    if (s.since >= a.runningSince) {
+      a.runningTool = s.tool_name;
+      a.runningSince = s.since;
+      // Carried through untouched. The classifier below still runs on elapsed
+      // time alone; this rides alongside it so the two can be compared against
+      // real runs before either replaces the other.
+      a.evidenceAt = s.evidenceAt ?? null;
+      a.evidenceKind = s.evidenceKind ?? null;
+    }
   }
 
   // Spark buckets over the last 20 * 3s = 60s window.

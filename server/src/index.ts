@@ -58,6 +58,7 @@ import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
 import { markIgnored } from "./ignored.ts";
+import { withEvidence } from "./evidence.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 /** When this process came up. /stats ships it so the dashboard's uptime is
@@ -753,7 +754,10 @@ const server = Bun.serve<WsData>({
       // openTools seeds the client's "running" state for tools whose PreToolUse
       // predates the 300-event initial slice — otherwise a long job in flight
       // when the page loads shows as idle (or missing) until its Post arrives.
-      const frame: WsFrame = { type: "initial", data: getRecent(300), openTools: openToolCalls() };
+      // Each open call carries when its session last showed evidence of life —
+      // read here rather than in db.ts, which has no business touching the
+      // filesystem. See evidence.ts for why elapsed time alone cannot answer it.
+      const frame: WsFrame = { type: "initial", data: getRecent(300), openTools: withEvidence(openToolCalls()) };
       ws.send(JSON.stringify(frame));
     },
     close(ws: ServerWebSocket<WsData>) {
