@@ -227,6 +227,37 @@ export function DockerView({ active }: { active: boolean }) {
   // keep the log view pinned to the bottom.
   useEffect(() => { const el = logRef.current; if (el && stuckBottom.current) el.scrollTop = el.scrollHeight; }, [logs]);
 
+  /**
+   * The same verb across a whole compose project.
+   *
+   * Sequential, not parallel: `docker compose` brings a stack up in dependency
+   * order for a reason, and firing twelve starts at once asks the daemon to
+   * race a database against the things that need it. Slower, and it works.
+   *
+   * Reports what actually happened rather than assuming — one container
+   * failing to stop while eleven succeed is the case worth naming.
+   */
+  const doGroupAction = async (cs: DockerContainer[], verb: "start" | "stop" | "restart") => {
+    if (busy) return;
+    const targets = cs.filter((c) => (verb === "start" ? c.state !== "running" : c.state === "running"));
+    if (!targets.length) return;
+    if (verb !== "start" && !confirm(`${verb} ${targets.length} container${targets.length === 1 ? "" : "s"}?`)) return;
+    setBusy(true);
+    let ok = 0;
+    const failed: string[] = [];
+    try {
+      const fn = verb === "start" ? api.dockerStart : verb === "stop" ? api.dockerStop : api.dockerRestart;
+      for (const c of targets) {
+        try { (await fn(c.id)).ok ? ok++ : failed.push(c.name); }
+        catch { failed.push(c.name); }
+      }
+      flash(!failed.length, failed.length
+        ? `${verb}ed ${ok}, failed: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}`
+        : `${verb}ed ${ok} container${ok === 1 ? "" : "s"}`);
+      await loadOverview(); await loadStats();
+    } finally { setBusy(false); }
+  };
+
   const doAction = async (id: string, verb: "start" | "stop" | "restart" | "rm") => {
     if (busy) return;
     if ((verb === "rm" || verb === "stop") && !confirm(`${verb} this container?`)) return;
@@ -318,6 +349,23 @@ export function DockerView({ active }: { active: boolean }) {
                             {/* Names the columns once per project, in the same
                                 grid the rows use, so the figures below are not
                                 three anonymous numbers. */}
+                            {/* Whole-stack actions, where the stack is named.
+                                Each is hidden when it would do nothing — a
+                                "start all" on twelve running containers is a
+                                button that lies about having an effect. */}
+                            {writeEnabled && (
+                              <span className="flex items-center gap-1 ml-2">
+                                {cs.some((c) => c.state !== "running") && (
+                                  <DockerAction onClick={() => doGroupAction(cs, "start")} disabled={busy} tint="var(--success)" title={`Start every stopped container in ${proj}`}>▶</DockerAction>
+                                )}
+                                {cs.some((c) => c.state === "running") && (
+                                  <>
+                                    <DockerAction onClick={() => doGroupAction(cs, "restart")} disabled={busy} tint="var(--warning)" title={`Restart every running container in ${proj}`}>⟳</DockerAction>
+                                    <DockerAction onClick={() => doGroupAction(cs, "stop")} disabled={busy} tint="var(--error)" title={`Stop every running container in ${proj}`}>■</DockerAction>
+                                  </>
+                                )}
+                              </span>
+                            )}
                             <span className="ml-auto grid gap-x-2 text-[8.5px] t-dim2 uppercase tracking-wider" style={{ gridTemplateColumns: "46px 46px 52px 50px" }}>
                               <span className="text-right">cpu</span>
                               <span className="text-right">mem</span>
