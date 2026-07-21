@@ -104,6 +104,40 @@ export interface Theme {
 Add a palette to `THEMES`, restart the UI, pick it in the theme switcher.
 `applyTheme(id)` writes CSS vars and `localStorage["agentglass-theme"]`.
 
+### A view in the workspace
+
+The five views are a list, and the rail, the shortcuts and the tooltips all read
+from it — so adding one is a single entry rather than five places to keep in
+step:
+
+```ts
+// web/src/components/workspace/views.ts
+export const VIEWS: ViewDef[] = [
+  { id: "git", label: "git", key: "g", icon: GitIcon, hint: "stage, commit, push/pull" },
+  // …add yours here
+];
+```
+
+`key` is the bare letter that reaches it from the dashboard; the modified
+shortcut comes from its position in the rail, or from whatever the user has
+bound in **Settings ▸ Shortcuts**. A view added in a later version appears for
+someone whose saved rail order predates it, rather than being silently dropped.
+
+Give the panel the shared header so it cannot drift from the others:
+
+```tsx
+import { ViewHeader } from "./workspace/ViewHeader.tsx";
+
+<ViewHeader title="My view" count={items.length} actions={<button>…</button>}>
+  {/* controls that scope the view — a repo picker, an engine chip */}
+</ViewHeader>
+```
+
+The height is fixed rather than derived from padding, on purpose: a view that
+later adds a taller control would otherwise grow its own header and the frame
+would twitch when you switched to it. Use `useSidebarWidth()` and `SidebarGrip`
+for a list pane and it inherits the same draggable width as everything else.
+
 ### Scope and config
 
 Persisted at `~/.config/agentglass/config.json` (env vars still win):

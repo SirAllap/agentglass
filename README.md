@@ -10,15 +10,15 @@
 
 ![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Electron%20app-47848f) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
 
-![agentglass in action — live cockpit, real terminal, diff review and source control, all one keystroke away](.github/assets/hero.gif)
+![agentglass in action — the live cockpit, then the workspace: source control, diff review, Docker and chat, one keystroke away](.github/assets/hero.gif)
 
-<img width="2517" height="1372" alt="image" src="https://github.com/user-attachments/assets/489536c3-333f-4078-b2fa-fed9121d86ba" />
+![the cockpit — every session, spend, throughput, tool mix and what needs you](.github/assets/dashboard.png)
 
 </div>
 
 Point any AI coding agent at agentglass — via Claude Code hooks or any OpenTelemetry GenAI exporter (OpenAI Codex, Gemini CLI, Bedrock, LangChain, LiteLLM…) — and watch every agent, tool call, token, and dollar move in real time. Cost tracking, tool-latency percentiles, error timelines, session lifecycles, a filter-the-whole-cockpit-by-provider switch, and 22 themes. It persists across reloads (unlike a pure in-browser stream).
 
-And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — each one keystroke away. Runs in the browser or as a **native desktop app**.
+And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — all behind one keystroke, under a notch that mirrors your desktop notifications so nothing is lost while you are fullscreen. Runs in the browser or as a **native desktop app**.
 
 ### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/demo/)
 
@@ -34,7 +34,7 @@ gate. No install, no server. *(Everything there is fake; it's a showcase.)*
 - [More than a dashboard — a workspace](#more-than-a-dashboard--a-workspace)
 - [Why](#why) · [Themes](#themes)
 - [Quickstart](#quickstart)
-- [Desktop app](#desktop-app)
+- [Desktop app](#desktop-app) · [Updating](#updating)
 - [Security model — read this before installing](#security-model--read-this-before-installing)
 - [Control plane — approve / deny remotely](#control-plane--approve--deny-tool-calls-remotely-opt-in)
 - [Any provider — via OpenTelemetry](#any-provider--via-opentelemetry-openai-gemini-bedrock-)
@@ -84,7 +84,23 @@ config file:
 
 ## More than a dashboard — a workspace
 
-Watching is only half of it. agentglass grew a set of **lazygit / lazydocker-style panels** — plus a real terminal and a Claude chat — that live right in the cockpit, so you can go from *seeing* what the fleet did to *acting* on it without leaving the tab. Each is one keystroke away (`d` · `g` · `o` · `t` · `c`), keyboard-driven, and wears the same 22 themes.
+Watching is only half of it. agentglass grew a set of **lazygit / lazydocker-style panels** — plus a real terminal and a Claude chat — that live right in the cockpit, so you can go from *seeing* what the fleet did to *acting* on it without leaving the tab. Keyboard-driven, and they wear the same 22 themes.
+
+They live in one **workspace**: `Ctrl+\` (`⌘\`) opens it over the dashboard, a rail down the left switches between the five views, and `Esc` puts you back. Every view has the same fixed-height title bar and the same list width, so switching changes the panel and nothing else moves.
+
+**Two kinds of shortcut, because they answer different questions.** On the dashboard, bare letters jump straight in — `g` `d` `o` `t` `c`. Inside the workspace every keystroke belongs to whatever has focus, usually a shell, so navigation there carries a modifier: `Ctrl+1`–`Ctrl+5` for the rail in order, `Ctrl+[` / `Ctrl+]` to cycle. Both sets are rebindable in **Settings ▸ Shortcuts**, and the modified one takes any combination you like — `Ctrl+Alt+J` is recorded exactly as you hold it.
+
+![settings — every shortcut, rebindable, with the key that works anywhere beside the one that works on the dashboard](.github/assets/settings-shortcuts.png)
+
+**Drag the rail to reorder it.** Put the terminal at the bottom if that is where your thumb goes; `Ctrl+1`–`5` follow your arrangement, so the tooltips never start lying. Drag the seam beside any list to resize it — every view shares that width, and it is remembered.
+
+### 🔔 The notch — what is happening, above everything
+
+A strip across the top of the workspace, always visible, never themed: true black so it disappears into the bezel of an OLED display.
+
+It carries what you would otherwise go looking for — commits **to push** and **to pull**, live **shells**, sessions **waiting** on you, CPU and memory, a seven-segment clock — and it mirrors **desktop notifications**, so the Slack message that arrives while you are fullscreen is not lost. Click it and it opens downward into an inbox with the full text; click again and it closes. Capability-probed on the server, so a platform without a notification bus gets a notch with no inbox rather than a broken one.
+
+Notifications are off by default and opt-in per level in **Settings ▸ Preferences** — titles only, or the full body.
 
 ### 🔬 File changes — a syntax-highlighted diff & review workspace &nbsp;`d`
 
@@ -94,13 +110,23 @@ Every Edit/Write the fleet makes, gathered into one reviewable, chaptered list. 
 
 ### 🌿 Source control — lazygit, in the dashboard &nbsp;`g`
 
-A live view of any repo's working tree (repos are discovered from the fleet's own file paths). Stage / unstage / discard, **interactive hunk staging**, a commit composer, branches (checkout / create / delete), log and stashes — plus push / pull / fetch. Keyboard-driven (`j/k` move · `s/u` stage · `x` discard) and **write-gated**, so it's read-only until you opt in.
+A live view of any repo's working tree (repos are discovered from the fleet's own file paths). Stage / unstage / discard, **interactive hunk staging**, a commit composer, branches (checkout / create / delete), log, reflog, remotes, tags, worktrees and stashes — plus push / pull / fetch. Keyboard-driven (`j/k` move · `s/u` stage · `x` discard · `1`–`8` jump to a tab) and **write-gated**, so it's read-only until you opt in.
+
+It also does the three things you would otherwise drop to a terminal for:
+
+**Sync from base.** Pull `main` into the branch you are on, from the header, with the count of what is waiting. Disabled while the tree is dirty — merging over uncommitted work is how you lose it.
+
+**Resolve conflicts.** Conflicted files are listed as what they are — files git has stopped in the middle of, not ordinary edits — so you cannot commit one with `<<<<<<<` still in it. Take a whole file's `ours`/`theirs` for the lockfile case, or open it **one by one** and choose a side per conflict block, with both versions side by side and the common ancestor when git recorded one. Nothing is written until every block has an answer, because defaulting the ones you did not read is exactly how a merge quietly eats somebody's work.
+
+**Undo the merge**, while that is still exactly reversible — only when nothing is committed on top and nothing is pushed. If either is true the button explains why instead of offering you a lie.
 
 ![source control panel](.github/assets/git.png)
 
 ### 🐳 Docker — lazydocker, in the dashboard &nbsp;`o`
 
-Containers grouped by compose project with live CPU / memory, a streaming log viewer, and images / volumes / networks — with start / stop / restart / rm. Same keyboard-first feel, same write-gate.
+Containers, images, volumes and networks in one **stacked column** whose headers never leave — so "is anything dangling?" is answerable without navigating away from the container you are watching. Containers group by compose project with live CPU / memory in aligned columns, and a **dense** toggle drops the image line when you would rather fit more on screen.
+
+Select one and the pane beside it carries **logs · info · env · config · top**, with the logs coloured by level and pinned to the bottom while they stream. **exec** drops you into a shell inside that container — in the console already docked below, so your history and any running job survive it. Start / stop / restart / rm per container, or across a whole compose project at once, with each bulk action hidden when it would do nothing. Same keyboard-first feel, same write-gate.
 
 ![docker panel](.github/assets/docker.png)
 
@@ -147,6 +173,8 @@ skills/commands (slash commands are enabled in `-p`, they just weren't
 discoverable).
 
 ---
+
+![chat panel](.github/assets/chat.png)
 
 ## Why
 
@@ -307,6 +335,24 @@ make desktop-open DIR=~/code/my-project   # or: agentglass ~/code/my-project
 
 ---
 
+## Updating
+
+**Settings ▸ About** shows the version you are running, the commit it was built from, and whether a newer **release** is published. One click builds it and restarts.
+
+![settings — preferences, shortcuts, and the About pane that offers a newer release](.github/assets/settings.png)
+
+It tracks **tags**, never a branch tip. A tip is wherever development happened to stop — half a feature, a debugging commit — and tagging is the act of saying *this one is tested*. So nothing pushed after the last tag reaches an installed app until you tag it:
+
+```bash
+git tag v0.3.0 && git push --tags     # now every install is offered it
+```
+
+The build happens in agentglass's **own clone** under `~/.cache/agentglass/source`, never in your checkout — so a convenience button can never move your `HEAD` or touch work in progress. It works out what it already has from `git describe` rather than a version field, so a `package.json` nobody remembered to bump cannot make an older tag look like an upgrade.
+
+The route that runs it is the strictest in the server: reachable from the desktop shell's own origin and nothing else — not from a browser, not from another machine on your network. It is the one endpoint that executes arbitrary code, so the ordinary "local network is fine" rule is not enough for it.
+
+> Updating this way compiles on your machine, which is only reasonable because your machine already has the toolchain. It is not a substitute for a signed release feed, and it is deliberately not automatic — nothing is downloaded or run until you press the button.
+
 ## Security model — read this before installing
 
 agentglass is a **workspace, not just a viewer**: it can open a real shell,
@@ -458,6 +504,7 @@ inference, prompt) to an event the same way.
 | `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). Unset, the UI resolves same-origin when the server itself served it (single-port mode), `:4000` otherwise. |
 | `AGENTGLASS_GIT_WRITE_DISABLED` | — | `1` → make the **Source control** panel read-only (no stage / commit / push). |
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |
+| `AGENTGLASS_NOTIFY_DISABLED` | — | `1` → never watch the desktop notification bus, whatever the UI asks for. The notch keeps its counters and loses its inbox. |
 **Scope is a boundary, not just a filter.** With a project open, git writes, the
 terminal and chat are all refused outside it — the same rule that decides what the
 dashboard shows. This is a *behaviour* boundary, not cosmetic: with a project
@@ -511,8 +558,10 @@ vars override it.
 | `POST /walkthrough` | AI **Explain** — a local-Claude walkthrough of a set of diffs (per-file summary + review focus). |
 | `GET /git/tree · /repos · /branches · /log · /graph · /worktrees · /stashes · /commit-diff` · `POST /git/status` | Live working-tree, branches, log/graph, worktrees & stashes for a repo (read). `/repos` honours the active scope; `?all=1` lists the whole machine (what the project picker uses). |
 | `POST /git/{stage,unstage,discard,commit-staged,push,pull,fetch,checkout,branch-*,stash-*,apply-hunk,merge,rebase,reset,worktree-*}` | Mutating git ops — **gated** by `AGENTGLASS_GIT_WRITE_DISABLED`. |
-| `GET /docker/overview · /stats · /logs` | Containers / images / volumes / networks, live CPU-mem stats, container logs. |
+| `GET /docker/overview · /stats · /logs · /inspect · /top` | Containers / images / volumes / networks, live CPU-mem stats, container logs, environment & config, running processes. |
 | `POST /docker/{start,stop,restart,rm}` | Container actions — **gated** by `AGENTGLASS_DOCKER_WRITE_DISABLED`. |
+| `GET /git/conflicts · /conflict-blocks` · `POST /git/resolve · /resolve-blocks · /sync-base · /merge-abort · /merge-continue · /undo-merge` | Mid-merge state: which files are conflicted, the `<<<<<<<` blocks inside one, and taking a side per file or per block. Sync a branch from its base, and undo the last merge while that is still exactly reversible. Write-gated. |
+| `GET /update/status · /update/log` · `POST /update/run` | The running version, the newest published release tag, and building it. **Desktop-shell origin only** — refused (403) for a browser, another machine, or a caller with no `Origin` at all, because it is the one route that executes arbitrary code. |
 | `WS /terminal/pty?root=&cols=&rows=` | A **real PTY shell** in a repo/worktree — raw bytes out, `{t:"in"\|"resize"}` frames in. Gated by `AGENTGLASS_TERMINAL_DISABLED`. |
 | `GET /terminal/commands?root=` | Ready-to-run project commands: Makefile targets **with descriptions** + `package.json` scripts (runner-aware), from the repo root **and its subfolders** (`make -C …`), grouped by folder. |
 | `GET /chat/enabled` · `POST /chat/send` | Drive a local `claude` session in a repo (streamed JSONL) — gated by `AGENTGLASS_CHAT_DISABLED`. |
