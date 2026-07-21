@@ -402,6 +402,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // below, which must not run on a guess.
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [scopeKnown, setScopeKnown] = useState(false);
+  /** Whether the repo list has come back yet. Distinguishes "still finding your
+   *  projects" from "there are none" — the panel used to render both as the
+   *  same empty list, which reads as a broken feature rather than a pending one. */
+  const [reposKnown, setReposKnown] = useState(false);
+  /** Set when + new was pressed with nowhere to run. */
+  const [noRepo, setNoRepo] = useState(false);
 
   // Chats outlive the page now, so the panel can be holding tabs from a project
   // you are no longer in. They stay in the store, and stay saved, but a project
@@ -480,7 +486,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     api.gitRepos().then(({ repos }) => {
       setRepos(repos);
       setDefaultCwd((c) => c || repos[0]?.root || "");
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setReposKnown(true));
     api.chatEnabled().then((r) => { setEnabled(r.enabled); setBypassAllowed(!!r.bypass); }).catch(() => {});
     // Which project this instance is scoped to, if any. A failure here means we
     // never learn of a scope, so nothing is hidden, which is the safe direction.
@@ -542,11 +548,20 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     useStuckBottom(open ? active?.id ?? "" : null);
 
   const add = useCallback(() => {
-    const cwd = active?.cwd || defaultCwd || repos[0]?.root || "";
+    // `workspace` last: a scoped instance always has one, so the only way to
+    // reach "" now is a machine with no repo at all.
+    const cwd = active?.cwd || defaultCwd || repos[0]?.root || workspace || "";
+    // A chat with no directory cannot run — `claude` needs somewhere to start —
+    // so it used to appear in the list as "no repo" and fail at the first
+    // message. Before the repos call resolves every one of those fallbacks is
+    // empty, so clicking + new in that window produced exactly that dead tab
+    // and looked like new chats were broken. Refuse instead, and say why.
+    if (!cwd) { setNoRepo(true); return; }
+    setNoRepo(false);
     const c = newChat(cwd, active?.model ?? DEFAULT_MODEL, active?.mode ?? DEFAULT_MODE);
     setActiveId(c.id);
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [active, defaultCwd, repos]);
+  }, [active, defaultCwd, repos, workspace]);
 
   // Adopt an existing claude session. Focusing an already-open tab rather than
   // opening a second one is not a nicety: two chats resuming one session id
@@ -731,7 +746,23 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                     {shown.map((c) => (
                       <ChatRow key={c.id} chat={c} active={c.id === activeId} onPick={() => setActiveId(c.id)} onClose={() => drop(c.id)} />
                     ))}
-                    {!shown.length && <div className="px-2.5 py-3 text-[11px] t-dim2">no chats match</div>}
+                    {/* Three different situations that all used to say "no
+                        chats match": a filter that excluded everything, a list
+                        still being fetched, and a machine with no repo to run
+                        one in. Only the first is about matching. */}
+                    {!shown.length && (
+                      <div className="px-2.5 py-3 text-[11px] t-dim2">
+                        {query.trim() ? "no chats match"
+                          : !reposKnown || !scopeKnown ? "finding your projects…"
+                          : !repos.length ? "no git repository found to run a chat in"
+                          : "no chats yet — press + new"}
+                      </div>
+                    )}
+                    {noRepo && (
+                      <div className="px-2.5 py-2 text-[11px]" style={{ color: "var(--warning)" }}>
+                        nowhere to run a chat: no git repository was found
+                      </div>
+                    )}
                   </div>
                   {/* Pinned under the list, so context and spend for the chat you
                       are reading stay on screen while you scroll its history. */}
