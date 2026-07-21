@@ -9,7 +9,7 @@ import { DiffView } from "../ChangesModal.tsx";
 import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { ChatView } from "../ChatPanel.tsx";
-import { DynamicIsland } from "./DynamicIsland.tsx";
+import { DynamicIsland, NOTCH_BAND } from "./DynamicIsland.tsx";
 
 const BODY = {
   git: GitView,
@@ -73,7 +73,16 @@ export function Workspace({
               className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.72)" }}
               onClick={onClose}
             />
-            <div className="fixed inset-0 flex items-center justify-center p-3 pointer-events-none" style={{ zIndex: 10001 }}>
+            {/* The top padding is the notch's band, and the height is clamped
+                so the frame can never grow back into it. Centring alone was not
+                enough: 95vh leaves 2.5vh of clearance, which is 28px on a 1123px
+                window — less than the strip is tall, so it covered the view's
+                header and ate clicks meant for it. Reserving the band makes the
+                overlap zero at every window size instead of at most of them. */}
+            <div
+              className="fixed inset-0 flex items-center justify-center px-3 pb-3 pointer-events-none"
+              style={{ zIndex: 10001, paddingTop: NOTCH_BAND }}
+            >
               <motion.div
                 ref={frameRef}
                 tabIndex={-1}
@@ -85,8 +94,13 @@ export function Workspace({
                 // switch.
                 initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
                 transition={{ duration: 0.12, ease: "easeOut" }}
-                className="w-[95vw] h-[95vh] rounded-2xl flex pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                className="w-[95vw] rounded-2xl flex pointer-events-auto outline-none overflow-hidden"
+                style={{
+                  height: `min(95vh, calc(100vh - ${NOTCH_BAND + 12}px))`,
+                  background: "var(--bg2)",
+                  border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+                  boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)",
+                }}
               >
                 <ViewRail view={view} onSelect={onView} onClose={onClose} pips={pips} />
 

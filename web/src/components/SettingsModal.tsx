@@ -15,6 +15,7 @@ import { api } from "../lib/api.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
+import { sysNotifyMode, setSysNotifyMode, notifyCapability, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
   return (
@@ -37,6 +38,36 @@ function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void
         }} />
       </span>
     </button>
+  );
+}
+
+/** A row of mutually exclusive choices, for a preference with three answers
+ *  rather than two. A toggle would have forced "show me their message" and
+ *  "just tell me someone wrote" to be the same decision. */
+function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint }: {
+  label: string; hint: string; value: T; options: { v: T; label: string }[];
+  onPick: (v: T) => void; disabled?: boolean; disabledHint?: string;
+}) {
+  return (
+    <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left" style={{ opacity: disabled ? 0.55 : 1 }}>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="block text-[10.5px] t-dim2 mt-0.5">{disabled ? disabledHint ?? hint : hint}</span>
+      </span>
+      <span className="shrink-0 flex items-center gap-1 rounded-lg p-0.5"
+        style={{ background: "color-mix(in srgb, var(--border) 28%, transparent)" }}>
+        {options.map((o) => (
+          <button key={o.v} onClick={() => onPick(o.v)} disabled={disabled}
+            aria-pressed={value === o.v}
+            className="text-[10.5px] px-2 py-1 rounded-md transition-colors disabled:cursor-not-allowed"
+            style={value === o.v
+              ? { background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }
+              : { color: "var(--text3)" }}>
+            {o.label}
+          </button>
+        ))}
+      </span>
+    </div>
   );
 }
 
@@ -106,6 +137,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   useEffect(() => { if (open) autostartEnabled().then(setAutostartState); }, [open]);
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
+  const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
+  const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
+  useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -158,6 +193,23 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         label="Start at login"
                         hint="Open agentglass automatically when you log in" />
                     )}
+                    {/* Off is the default and off means nothing is watching:
+                        with no client subscribed the server never starts the
+                        D-Bus monitor at all. On a machine that cannot do this
+                        the row stays but says why, rather than vanishing and
+                        leaving you wondering whether you imagined it. */}
+                    <Choice<SysNotifyMode>
+                      label="Desktop notifications on the notch"
+                      hint="Slack and the rest, mirrored onto the strip you can still see in fullscreen"
+                      disabled={notifyCap ? !notifyCap.supported : true}
+                      disabledHint={notifyCap ? `Unavailable — ${notifyCap.reason}` : "Checking…"}
+                      value={sysNotify}
+                      onPick={(m) => { setSysNotifyMode(m); setSysNotifyState(m); }}
+                      options={[
+                        { v: "off", label: "Off" },
+                        { v: "titles", label: "Who" },
+                        { v: "full", label: "Full" },
+                      ]} />
                   </Section>
 
                   <Section title="Open">
