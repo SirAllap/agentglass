@@ -29,7 +29,7 @@ describe("markdown link hrefs", () => {
 
   test("rejects schemes that reach the local machine", () => {
     expect(isSafeHref("file:///etc/passwd")).toBe(false);
-    expect(isSafeHref("tauri://localhost/x")).toBe(false);
+    expect(isSafeHref("app://localhost/x")).toBe(false);
   });
 
   test("rejects a scheme-relative or relative href", () => {

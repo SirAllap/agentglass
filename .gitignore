@@ -13,10 +13,7 @@ web/dist/
 __pycache__/
 *.pyc
 
-# desktop app build output — the sidecar is a ~100MB compiled server binary
-src-tauri/target/
-src-tauri/bin/
-src-tauri/icon-*.png
-src-tauri/gen/schemas/
+# desktop app build output (electron-builder) lives in electron/ and is
+# ignored there — the sidecar is a ~100MB compiled server binary.
 .claude/
 *.bun-build

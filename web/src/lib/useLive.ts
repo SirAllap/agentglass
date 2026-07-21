@@ -154,12 +154,11 @@ export function useLive(): LiveData {
   // sweep/pulse/float/shimmer.
   //
   // `document.hidden` alone was the whole test, and in the desktop app it is
-  // never true: a Tauri window has no tab to background, so the flag sat at "0"
-  // for the entire life of the process and none of these rules ever applied.
-  // The saving was real but only a browser ever collected it. That matters more
-  // here than in a tab, because WebKitGTK composites in software — every frame
-  // of every ambient loop is paid for on the CPU, and the dashboard idles hot
-  // with the radar sweep and a ping-ring per live session running forever.
+  // never true: a desktop window has no tab to background, so the flag sat at
+  // "0" for the entire life of the process and none of these rules ever
+  // applied. The saving was real but only a browser ever collected it — every
+  // frame of every ambient loop keeps the radar sweep and a ping-ring per live
+  // session running forever, and the dashboard idles hot for no one watching.
   //
   // Focus is the signal that survives both environments: the dashboard's normal
   // place is a second monitor or behind the terminal the agent is running in,

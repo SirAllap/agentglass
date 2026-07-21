@@ -242,10 +242,10 @@ const realApi = {
     try {
       for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let nl; while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); } }
     } catch (e) {
-      // The turn was accepted and then the connection died under it. WebKitGTK
-      // (the Tauri shell) reports every such failure as "TypeError: Load
-      // failed", so the raw error says nothing about what happened — the cause
-      // is named here instead, where it is known.
+      // The turn was accepted and then the connection died under it. The raw
+      // error is opaque (a bare "TypeError: Load failed" or similar, depending
+      // on the engine) and says nothing about what happened — the cause is
+      // named here instead, where it is known.
       if (e instanceof DOMException && e.name === "AbortError") throw e;
       throw new ChatStreamError("dropped", "");
     }

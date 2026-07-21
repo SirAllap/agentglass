@@ -7,9 +7,6 @@ name: Desktop binaries
 #
 # Run it by hand (workflow_dispatch) to check the build still works without
 # cutting a tag; that path builds everything and uploads nothing.
-#
-# NOTE: rewritten for the Tauri -> Electron migration. Verify with one manual
-# dispatch before relying on it for a tagged release.
 
 on:
   push:

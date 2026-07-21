@@ -589,11 +589,10 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // intercepted when there is at least one image among them — a normal text
   // paste has to fall through to the textarea untouched.
   //
-  // Both `files` and `items` are read because the two engines this runs on
-  // disagree. Chromium populates `clipboardData.files` for a pasted image;
-  // WebKitGTK — which is what Tauri uses on Linux, i.e. the desktop app —
-  // delivers it through `items` and leaves `files` empty. Reading only `files`
-  // worked in a browser and silently did nothing in the app.
+  // Both `files` and `items` are read because engines disagree on where a
+  // pasted image lands. Chromium populates `clipboardData.files`; some engines
+  // deliver it only through `items` and leave `files` empty. Reading both
+  // covers either, so a paste never silently does nothing.
   const imagesFrom = (dt: DataTransfer): File[] => {
     const out = new Map<string, File>();
     for (const f of Array.from(dt.files)) {
