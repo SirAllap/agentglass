@@ -53,6 +53,8 @@ import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { rateOk } from "./ratelimit.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
+import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
+import { markIgnored } from "./ignored.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 /** When this process came up. /stats ships it so the dashboard's uptime is
@@ -77,9 +79,13 @@ const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
 // mints and prints one rather than running unauthenticated.
 const AUTH = resolveToken(LOOPBACK_ONLY);
 const AUTH_TOKEN = AUTH.token;
-/** One socket, two roles: the live event stream and PTY terminal shells. */
-type WsData = { kind: "events" } | PtyWsData;
+/** One socket, three roles: the live event stream, PTY terminal shells, and
+ *  the desktop-notification mirror. */
+type WsData = { kind: "events" } | { kind: "notify" } | PtyWsData;
 const clients = new Set<ServerWebSocket<WsData>>();
+/** Notification sockets, each holding the unsubscribe that keeps the D-Bus
+ *  monitor alive. Empty map => no monitor process. */
+const notifySubs = new Map<ServerWebSocket<WsData>, () => void>();
 
 // Reflect the caller's Origin instead of a blanket `*`. Foreign origins are
 // already turned away by localOrigin() before any body is served, so the old
@@ -111,9 +117,26 @@ const isPrivate = (h: string): boolean => privateHost(h, TRUST_LAN);
 // website is rejected. A request with NO Origin is not a browser, so it can't
 // be a drive-by — but it also can't be vouched for, which is why the routes
 // that hand out real capability check ORIGIN_REQUIRED instead.
+/**
+ * The desktop shell serves its renderer from its own scheme, not a loopback
+ * port — a port is assigned fresh on every launch, and localStorage is keyed
+ * by origin, so the app used to lose every preference each time it started.
+ *
+ * Trusting this origin is no weaker than trusting 127.0.0.1: nothing on the
+ * web can be served under a scheme that only exists inside the packaged app,
+ * and a page cannot forge an Origin header. Both origin gates below defer to
+ * it, so the two can never drift apart — which they did once already, and the
+ * app came up unable to reach its own API.
+ */
+const DESKTOP_ORIGIN_SCHEME = "agentglass:";
+function fromDesktopShell(origin: string): boolean {
+  try { return new URL(origin).protocol === DESKTOP_ORIGIN_SCHEME; } catch { return false; }
+}
+
 function localOrigin(req: Request): boolean {
   const o = req.headers.get("origin");
   if (!o) return true;
+  if (fromDesktopShell(o)) return true;
   try {
     return isPrivate(new URL(o).hostname);
   } catch { return false; }
@@ -132,6 +155,7 @@ function localOrigin(req: Request): boolean {
 function trustedCaller(req: Request): boolean {
   const o = req.headers.get("origin");
   if (!o) return LOOPBACK_ONLY; // no origin is only safe when nobody remote can connect
+  if (fromDesktopShell(o)) return true;
   try {
     return isPrivate(new URL(o).hostname);
   } catch { return false; }
@@ -273,8 +297,29 @@ const server = Bun.serve<WsData>({
       return new Response("upgrade failed", { status: 426 });
     }
 
+    // --- desktop notifications mirrored onto the notch ---
+    //
+    // The monitor runs only while a socket is open here, and the UI only opens
+    // one when the user has switched the feature on. Off means nothing is
+    // spawned and nothing is read — not "read it and don't show it".
+    if (pathname === "/notifications/capability") return json(notifyCapability());
+    if (pathname === "/notifications/open" && req.method === "POST") {
+      if (!trustedCaller(req)) return csrfBlocked();
+      let body: { id?: unknown };
+      try { body = (await req.json()) as { id?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = openNote(body?.id);
+      return json(r, r.ok ? 200 : 404);
+    }
+    if (pathname === "/notifications") {
+      if (!trustedCaller(req)) return csrfBlocked();
+      const cap = notifyCapability();
+      if (!cap.supported) return json({ error: cap.reason ?? "unsupported" }, 501);
+      if (srv.upgrade(req, { data: { kind: "notify" } })) return undefined as unknown as Response;
+      return new Response("upgrade failed", { status: 426 });
+    }
+
     // --- health ---
-    if (pathname === "/health") return json({ ok: true, clients: clients.size });
+    if (pathname === "/health") return json({ ok: true, clients: clients.size, notifyWatching: notifyWatching() });
 
     // --- ingest ---
     if (pathname === "/ingest" && req.method === "POST") {
@@ -397,7 +442,11 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/changes") {
       const limit = Math.min(500, Number(url.searchParams.get("limit") || 200));
-      return json({ changes: getChanges(limit) });
+      const changes = getChanges(limit);
+      // One `git check-ignore` per repo, not per file, so the client can fold
+      // away build output without having to guess at .gitignore semantics.
+      const ignored = markIgnored(changes.map((c) => c.file_path));
+      return json({ changes: changes.map((c) => ({ ...c, ignored: ignored.get(c.file_path) === true })) });
     }
 
     // --- commit composer: live git working-tree status + commit ---
@@ -626,6 +675,12 @@ const server = Bun.serve<WsData>({
   websocket: {
     open(ws: ServerWebSocket<WsData>) {
       if (ws.data?.kind === "pty") { ptyOpen(ws); return; }
+      if (ws.data?.kind === "notify") {
+        notifySubs.set(ws, subscribeNotifications((n) => {
+          try { ws.send(JSON.stringify(n)); } catch { /* closing */ }
+        }));
+        return;
+      }
       clients.add(ws);
       // openTools seeds the client's "running" state for tools whose PreToolUse
       // predates the 300-event initial slice — otherwise a long job in flight
@@ -635,6 +690,13 @@ const server = Bun.serve<WsData>({
     },
     close(ws: ServerWebSocket<WsData>) {
       if (ws.data?.kind === "pty") { ptyClose(ws); return; }
+      if (ws.data?.kind === "notify") {
+        // Unsubscribing is what stops the monitor process once the last
+        // listener goes, so this must run on every close path.
+        notifySubs.get(ws)?.();
+        notifySubs.delete(ws);
+        return;
+      }
       clients.delete(ws);
     },
     message(ws: ServerWebSocket<WsData>, msg) {

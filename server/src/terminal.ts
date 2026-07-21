@@ -293,6 +293,21 @@ export function shutdownTerminals() {
 
 // --- project commands: Makefile targets + package.json scripts ---------------
 
+/**
+ * How many targets to take from a single Makefile.
+ *
+ * Was 60, which is fewer than a real project's Makefile holds: a monorepo root
+ * here defines 153, so 93 of them — everything after the sixtieth line of the
+ * file — were dropped, silently, while the picker still advertised a total as
+ * though that were all of them. `make migrate` sat at line 851 and simply did
+ * not exist as far as the app was concerned.
+ *
+ * The cap exists to stop a generated Makefile from flooding the list, so it
+ * stays; it is now set above what a hand-written Makefile plausibly contains,
+ * and the picker has a filter, which is what actually makes a long list usable.
+ */
+const MAKE_MAX_PER_FILE = 400;
+
 /** Parse Makefile text into named targets WITH their descriptions. A
  * description is taken from the `target: ## comment` convention, or from the
  * `# comment` line(s) directly above the target. */
@@ -320,7 +335,7 @@ export function parseMakeTargets(text: string): { name: string; desc: string }[]
     }
     pendingComment = [];
   }
-  return out.slice(0, 60);
+  return out.slice(0, MAKE_MAX_PER_FILE);
 }
 
 /** How deep below the repo root to look for Makefiles / package.jsons. A
@@ -328,7 +343,12 @@ export function parseMakeTargets(text: string): { name: string; desc: string }[]
  *  deeper is almost always vendored code. */
 const CMD_SCAN_DEPTH = 3;
 const CMD_MAX_DIRS = 40; // dropdown budget — beyond this it's noise, not help
-const CMD_MAX_TOTAL = 120; // across all folders; per-manifest caps still apply
+// Across all folders; per-manifest caps still apply. Raised with the per-file
+// cap: a monorepo root Makefile alone can hold 150+ targets, and a list you can
+// filter is not made better by being short — it is made wrong by being
+// incomplete, because a missing target reads as "this project has no such
+// command" rather than "the picker stopped counting".
+const CMD_MAX_TOTAL = 500;
 
 /** Directories that never hold the *project's own* commands — the repo
  *  sweeper's list plus build-output names that don't contain git checkouts. */

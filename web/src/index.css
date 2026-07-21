@@ -300,32 +300,206 @@
 
 /* The workspace dynamic island.
  *
- * A near-black notch, so the LCD and the meters read as a lit display carved
- * from the top edge of the frame. It keeps its own dark ground rather than the
- * theme's --bg2, on purpose: an amber/green phosphor only looks like one over
- * black, and the notch is a device, not a panel. */
+ * The one piece of the app pretending to be hardware, and hardware does not
+ * repaint itself when you change your wallpaper. Its ground is true #000 --
+ * not "very dark purple", not --bg2 -- so on an OLED the pixels above the
+ * workspace are genuinely off and the strip runs into the bezel with no seam.
+ * A phosphor readout only looks like one over black, too.
+ *
+ * The theme still gets in, just never on the ground: it tints the lip along
+ * the bottom edge, the dividers, the captions, and the shadow the strip casts.
+ * Swap themes and almost nothing here moves -- that restraint is the point. */
+/* No cast glow and no veil behind it. Both were doing the same wrong thing:
+   spreading the strip's presence past its own edges, so it read as a bar of
+   chrome with a halo instead of a solid object sitting in the dark. What
+   defines it now is a hairline and its own black — nothing outside the
+   silhouette. */
 .agx-notch {
-  background: linear-gradient(180deg, #131316, #0a0a0c);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, #000 0%, #000 44%, #08080a 100%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-top: none;
-  box-shadow: 0 14px 34px -12px rgba(0, 0, 0, 0.85), inset 0 -1px 0 0 rgba(255, 255, 255, 0.04);
+  /* A readout, not a document and not a button: no I-beam over the digits, and
+     dragging across it must not paint a text selection. */
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  box-shadow: inset 0 -1px 0 0 color-mix(in srgb, var(--primary) 20%, transparent);
+  /* One declaration, not two: a second `transition` further down would silently
+     replace this one and the border-radius would snap. The radius squares off
+     when the inbox attaches beneath. */
+  transition: box-shadow 0.18s ease, border-color 0.18s ease, border-radius 0.18s ease;
+  /* A ceiling, or one long message drags the strip out to the width of the
+     screen. Comfortably wider than the resting readout, so closing never
+     squeezes the pills -- it only stops the inbox from growing sideways. */
+  max-width: min(92vw, 560px);
+}
+/* It is ambient information, not a control, so hovering firms up the hairline
+   rather than offering a button. The pill under the pointer answers with a
+   tint of its own -- enough to say "this thing is reading you" without
+   implying there is something to press. */
+.agx-notch:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 -1px 0 0 color-mix(in srgb, var(--primary) 45%, transparent);
 }
 
-/* Ghost-segment LCD. The lit layer glows; the ghost is the same glyph run at a
-   whisper of opacity so the unlit segments of an all-8s readout show through --
-   the tell of a real digital watch. A hair of skew gives the italic slant those
-   displays have. */
-.agx-lcd {
-  font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+/* One reading per pill: the caption names it, the value sits under it.
+   Hovering one lights it up and nothing else -- no box, no outline. Drawing a
+   container around the reading under the pointer put a second rectangle inside
+   a strip that is already a rectangle; brightness says the same thing without
+   adding an edge. The name of the thing still comes from the tooltip. */
+.agx-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  transition: filter 0.15s ease;
+}
+.agx-notch:hover .agx-pill:hover {
+  filter: brightness(1.45);
+}
+.agx-cap {
+  font-size: 7.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--primary) 30%, rgba(255, 255, 255, 0.46));
+}
+.agx-val {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
-  transform: skewX(-4deg);
 }
-.agx-lcd-ghost {
-  color: rgba(120, 255, 190, 0.1);
+.agx-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 9px 0;
+  background: color-mix(in srgb, var(--primary) 34%, rgba(255, 255, 255, 0.07));
 }
-.agx-lcd-lit {
-  color: #bcffd8;
-  text-shadow: 0 0 5px rgba(90, 255, 170, 0.55), 0 0 12px rgba(60, 220, 150, 0.3);
+.agx-bar {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.13);
+  overflow: hidden;
+}
+.agx-bar > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The inbox behind the strip. Continues the notch's shape downward rather than
+   floating over the workspace: same black, same hairline, and only the bottom
+   corners are round, so the strip reads as having grown. */
+/* A pending request, drawn rather than spelled. Border-only so it costs one
+   element, and paused with every other ambient loop when the page is idle. */
+@keyframes agx-spin { to { transform: rotate(360deg); } }
+.agx-spin {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--primary) 25%, transparent);
+  border-top-color: var(--primary);
+  animation: agx-spin 0.7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agx-spin { animation-duration: 2s; }
+}
+
+/* The inbox is part of the strip, not a panel under it: no border of its own,
+   no background of its own, no width of its own. It is simply what the notch
+   contains once it has grown, which is why the two never read as two things.
+   The only seam is one hairline separating the readout from the list. */
+.agx-inbox-body {
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.agx-inbox-list {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 0 6px 8px;
+}
+.agx-note-row {
+  padding: 8px 8px;
+  border-radius: 10px;
+}
+.agx-note-body {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: color-mix(in srgb, #fff 62%, transparent);
+  white-space: pre-wrap;
+  /* Long URLs are one unbreakable word; without this they set the container's
+     minimum width and the strip grows sideways again. */
+  overflow-wrap: anywhere;
+}
+/* Two lines closed. line-clamp rather than nowrap+ellipsis on purpose: it
+   crops vertically, so a long message never contributes its full length to the
+   width calculation. */
+.agx-note-body-clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.agx-note-row + .agx-note-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.agx-note-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+/* The one place in the strip that really is a control, so here a pointer and a
+   hover fill are honest rather than misleading. */
+.agx-note-btn {
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: color-mix(in srgb, #fff 55%, transparent);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.agx-note-btn:hover {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  color: #fff;
+}
+/* The link button says where it goes, so it is wider than an icon and belongs
+   under the message rather than in the corner with the row's controls. */
+.agx-note-link {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 26%, transparent);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.agx-note-link:hover {
+  background: color-mix(in srgb, var(--primary) 26%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+/* Seven-segment digits, drawn rather than typed: mitred bars with a gap at
+   every corner, over a ghost layer of the segments that are off. That ghost is
+   the tell of a real LCD -- on a cheap alarm clock you can always see the unlit
+   bars of the 8 behind whatever digit is showing. */
+.agx-lcd {
+  display: block;
+}
+.agx-seg {
+  fill: rgba(120, 255, 190, 0.085);
+}
+.agx-seg.on {
+  fill: #b8ffd6;
+  filter: drop-shadow(0 0 4px rgba(80, 255, 170, 0.55));
 }
 
 /* The live-work pips breathe when something is running, so a green shell dot is

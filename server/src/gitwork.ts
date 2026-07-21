@@ -726,35 +726,106 @@ function isSquashMerged(root: string, ref: string, name: string): boolean {
  */
 const SQUASH_PROBE_MAX = 20;
 
+/** How long a completed squash sweep is trusted. Far longer than the ancestry
+ *  TTL because it costs ~5 spawns per branch: re-running it every 30s burns a
+ *  second of CPU to learn nothing, and anything that could change the answer
+ *  calls invalidateMerged() anyway. */
+const SQUASH_TTL_MS = 5 * 60_000;
+/** Keys whose sweep has finished, and when. Separate from mergedCache so the
+ *  cheap ancestry answer can keep refreshing on its own clock. */
+const squashAt = new Map<string, number>();
+/** Keys with a sweep in flight, so a burst of polls starts one, not ten. */
+const squashRunning = new Set<string>();
+
 function mergedInto(root: string, ref: string): Set<string> {
-  const key = `${root} ${ref}`;
+  // \u0000 rather than a raw NUL byte: written literally it makes the whole
+  // file `data` to grep, which then skips it silently — you get no matches
+  // and no warning. Same separator, same keys, still greppable.
+  const key = `${root}\u0000${ref}`;
   const hit = mergedCache.get(key);
   if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.set;
   const r = git(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
   const set = new Set(r.stdout.split("\n").filter(Boolean));
-  // Recover the squash merges ancestry can't see. Folded into the same set, and
-  // so into the same cache entry and the same invalidation, because callers ask
-  // one question — "is this work already in the trunk" — and both tests answer
-  // it. Newest first: that's the order for-each-ref gives with this sort, and
-  // the order that spends the probe budget where deletes actually happen.
-  const all = git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", "--format=%(refname:short)"])
-    .stdout.split("\n").filter(Boolean);
-  let probes = 0;
-  for (const name of all) {
-    if (set.has(name)) continue;
-    if (probes++ >= SQUASH_PROBE_MAX) break;
-    if (isSquashMerged(root, ref, name)) set.add(name);
-  }
   mergedCache.set(key, { at: Date.now(), set });
+  sweepSquashed(root, ref, key, set);
   return set;
 }
+
+/**
+ * Recover the squash merges ancestry can't see — off the request path.
+ *
+ * This used to run inline, and it is what made the Branches tab take five
+ * seconds on a 44-branch repo (measured: 4.95s cold against a 30s TTL, which
+ * guaranteed you met the cold path constantly; 130ms warm). Each probe is ~5
+ * git spawns, up to twenty of them, all before the response could be written.
+ *
+ * None of that has to happen before the list is shown. Ancestry — one spawn —
+ * already answers for most branches, and `mergedIntoTrunk` is allowed to be
+ * absent: the UI reads that as "we don't know" and keeps the delete
+ * confirmation, which is the safe direction to be wrong in. So the list goes
+ * out immediately and the sweep fills the very Set the cache entry holds, in
+ * place, so the next poll serves the fuller answer with no extra request.
+ *
+ * Newest first: that's the order for-each-ref gives with this sort, and the
+ * order that spends the probe budget where deletes actually happen.
+ */
+function sweepSquashed(root: string, ref: string, key: string, set: Set<string>): void {
+  if (squashRunning.has(key)) return;
+  const done = squashAt.get(key);
+  if (done && Date.now() - done < SQUASH_TTL_MS) return;
+  squashRunning.add(key);
+
+  // One branch per tick, not the whole sweep in one.
+  //
+  // `git()` is spawnSync, so moving the loop into a timeout does not stop it
+  // blocking — it only chooses a different victim. Measured: the first request
+  // dropped from 4.9s to 0.8s, and the *next* one paid 3.3s instead, because it
+  // arrived while the twenty probes were still running on the one thread.
+  //
+  // Yielding between probes bounds that to a single probe (~150ms) instead of
+  // the whole sweep, so the panel stays responsive while it fills in behind.
+  let idx = 0;
+  let probes = 0;
+  let all: string[] = [];
+  const step = () => {
+    try {
+      if (!all.length) {
+        all = git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", "--format=%(refname:short)"])
+          .stdout.split("\n").filter(Boolean);
+      }
+      while (idx < all.length) {
+        const name = all[idx++]!;
+        if (set.has(name)) continue;
+        if (probes++ >= SQUASH_PROBE_MAX) { idx = all.length; break; }
+        // Mutates the Set the cache entry already holds, so the next read sees
+        // the fuller answer without another sweep.
+        if (isSquashMerged(root, ref, name)) set.add(name);
+        setTimeout(step, 0); // one probe per turn of the loop
+        return;
+      }
+      squashAt.set(key, Date.now());
+      squashRunning.delete(key);
+    } catch {
+      // A failed sweep just leaves the ancestry answer standing.
+      squashRunning.delete(key);
+    }
+  };
+  setTimeout(step, 0);
+}
+
 
 /** Drop the cache after anything that can change what's merged, so the panel
  *  reflects your own action immediately rather than up to a TTL later. */
 export function invalidateMerged(root?: string): void {
-  if (!root) return mergedCache.clear();
-  for (const k of mergedCache.keys()) if (k.startsWith(`${root} `)) mergedCache.delete(k);
+  // Both maps, always. The sweep stamp has a far longer TTL than the ancestry
+  // entry, so clearing only the latter would hand the rebuilt entry a "swept
+  // recently" mark and skip the squash pass for minutes — exactly the window
+  // after a merge, when the answer has just changed.
+  if (!root) { mergedCache.clear(); squashAt.clear(); return; }
+  for (const k of mergedCache.keys()) if (k.startsWith(`${root}\u0000`)) mergedCache.delete(k);
+  for (const k of squashAt.keys()) if (k.startsWith(`${root}\u0000`)) squashAt.delete(k);
 }
+
 
 export function branches(rootIn: unknown): { current: string; branches: GitBranch[]; trunk: string | null } {
   const root = repoRoot(rootIn);

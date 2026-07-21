@@ -306,6 +306,11 @@ export interface FileChange {
   additions: number;
   deletions: number;
   hunks: DiffHunk[];
+  /** git ignores this path. The list hides these by default — an agent's edit
+   *  to build output is recorded like any other, and on a busy session that
+   *  buries the edits worth reviewing. Absent means "not asked" / "unknown",
+   *  which is never hidden. */
+  ignored?: boolean;
 }
 
 /** A tool call the server sees as still running: a PreToolUse with no matching

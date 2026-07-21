@@ -593,6 +593,8 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [titles, setTitles] = useState<ReadonlyMap<string, string>>(new Map());
   const [q, setQ] = useState("");
+  /** Ignored files start folded away — see `visible` below. */
+  const [showIgnored, setShowIgnored] = useState(false);
   const [selId, setSelId] = useState<number | null>(null);
   const [wrap, setWrap] = useState(false);
   const [split, setSplit] = useState(true);
@@ -670,7 +672,18 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   useEffect(() => { try { localStorage.setItem(GROUPBY_KEY, groupBy); } catch { /* ignore */ } }, [groupBy]);
 
   const all = changes ?? [];
-  const filtered = useMemo(() => (q ? all.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : all), [all, q]);
+  /**
+   * Files git ignores are folded away by default.
+   *
+   * An agent's edit is recorded whether or not the repo tracks the result, so
+   * build output, caches and scratch files sit in the list beside the code you
+   * came to review — and on a busy session they outnumber it. Hidden, never
+   * silently: the count is shown and one click brings them back, because a list
+   * that quietly drops entries is worse than a long one.
+   */
+  const ignoredCount = useMemo(() => all.reduce((n, c) => n + (c.ignored ? 1 : 0), 0), [all]);
+  const visible = useMemo(() => (showIgnored ? all : all.filter((c) => !c.ignored)), [all, showIgnored]);
+  const filtered = useMemo(() => (q ? visible.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : visible), [visible, q]);
   const groups = useMemo(() => groupChanges(filtered, groupBy, titles), [filtered, groupBy, titles]);
   const shown = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const totals = useMemo(() => all.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }), [all]);
@@ -866,8 +879,25 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             }}
                           >{d.label}</button>
                         ))}
+                        {/* Says what it is hiding, and offers it back. A
+                            filter that silently drops rows makes the list lie
+                            about what the session touched. */}
+                        {ignoredCount > 0 && (
+                          <button
+                            onClick={() => setShowIgnored((v) => !v)}
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors"
+                            title={showIgnored
+                              ? "hide files git ignores"
+                              : `${ignoredCount} file${ignoredCount === 1 ? "" : "s"} git ignores ${ignoredCount === 1 ? "is" : "are"} hidden — build output, caches, scratch files`}
+                            style={{
+                              background: showIgnored ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                              color: showIgnored ? "var(--text)" : "var(--text3)",
+                              border: `1px solid color-mix(in srgb, var(--border) ${showIgnored ? 45 : 18}%, transparent)`,
+                            }}
+                          >{showIgnored ? `✕ ${ignoredCount} ignored` : `+ ${ignoredCount} ignored`}</button>
+                        )}
                         {changes && all.length > 0 && (
-                          <span className="ml-auto text-[9.5px] t-dim2 tabular-nums" title="files reviewed">{revCount}/{all.length}</span>
+                          <span className="ml-auto text-[9.5px] t-dim2 tabular-nums" title="files reviewed">{revCount}/{visible.length}</span>
                         )}
                       </div>
                     </div>

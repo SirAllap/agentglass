@@ -11,8 +11,18 @@ const SERVED_BY_API: boolean =
   typeof window !== "undefined" &&
   (window as unknown as { __AGENTGLASS_SAME_ORIGIN__?: boolean }).__AGENTGLASS_SAME_ORIGIN__ === true;
 
+/** The desktop shell's API origin. Needed because the packaged renderer is
+ *  served from `agentglass://app`, whose hostname says nothing about where the
+ *  sidecar listens — `http://${location.hostname}:4000` would resolve to the
+ *  nonsense `http://app:4000`. */
+const DESKTOP_API: string | undefined =
+  typeof window !== "undefined"
+    ? (window as unknown as { agentglass?: { apiOrigin?: string } }).agentglass?.apiOrigin
+    : undefined;
+
 export const SERVER: string =
   (import.meta.env.VITE_CW_SERVER as string | undefined)?.replace(/\/$/, "") ||
+  DESKTOP_API?.replace(/\/$/, "") ||
   (SERVED_BY_API ? location.origin : `http://${location.hostname}:4000`);
 
 /** Auth token for a server that requires one (exposed / multi-user box). Read
@@ -34,12 +44,12 @@ const TOKEN: string = (() => {
 })();
 
 /** Attach the bearer token to fetch headers when one is configured. */
-const authHeaders = (h: Record<string, string> = {}): Record<string, string> =>
+export const authHeaders = (h: Record<string, string> = {}): Record<string, string> =>
   TOKEN ? { ...h, authorization: `Bearer ${TOKEN}` } : h;
 
 /** Append ?token= to URLs a browser can't put a header on: WS upgrades and the
  *  download navigations (export links). */
-const withToken = (url: string): string =>
+export const withToken = (url: string): string =>
   TOKEN ? url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : url;
 
 /** Whether this client has a shared-secret token configured. */

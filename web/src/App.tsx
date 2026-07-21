@@ -6,6 +6,7 @@ import { deriveAgents, deriveAlerts, buildTitles } from "./lib/derive.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
 import { initialTheme, applyTheme } from "./lib/themes.ts";
+import { actionFor } from "./lib/keybindings.ts";
 import { currentScale, nudgeScale, resetScale } from "./lib/uiScale.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
 import { useAlertSound } from "./lib/useSound.ts";
@@ -27,7 +28,7 @@ import { HelpLegend } from "./components/HelpLegend.tsx";
 import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
-import { LETTER_TO_VIEW, VIEW_IDS, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import { VIEW_IDS, loadLastView, type ViewId } from "./components/workspace/views.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
@@ -333,19 +334,38 @@ export default function App() {
       // false and the old guard would swallow every letter. What actually
       // matters there is narrower: is the keystroke going into a field or a
       // shell? If not, it's navigation.
-      const typing = !!a && (
+      //
+      // The terminal is the exception, and it has to be the *view* that decides
+      // rather than what holds DOM focus. Asking `activeElement` worked only
+      // while the caret sat in xterm's helper textarea: click anything in the
+      // terminal's own toolbar — the repo picker, restart, clear — and focus
+      // parks on that button, so `typing` went false and the next letter of the
+      // command being typed was eaten as navigation. `t` closed the terminal
+      // mid-command, `g` jumped to git. While the terminal is the active view
+      // every bare letter belongs to the shell; ⌘1..5, ⌘\ and ⌘[/] still leave,
+      // which is exactly why they carry a modifier.
+      const termOwnsKeys = wsOpenRef.current && wsViewRef.current === "term";
+      const typing = termOwnsKeys || (!!a && (
         /^(input|textarea|select)$/i.test(a.tagName) ||
         (a as HTMLElement).isContentEditable ||
         !!a.closest?.(".xterm")
-      );
+      ));
       const canNavigate = (focusFree && !anyPanelOpenRef.current) || (wsOpenRef.current && !typing);
       if (!canNavigate) return;
 
+      // Which action owns this letter, according to the user's bindings —
+      // which default to the shipped ones, so nothing changes until they say
+      // so. Read per keystroke rather than captured in this effect's closure:
+      // the effect has an empty dep array on purpose (it must not re-subscribe
+      // on every render), and a rebind has to take effect immediately, not
+      // after the next remount.
+      const action = actionFor(e.key);
+
       // A workspace letter either opens the workspace on that view or, if it's
-      // already open, switches to it. Same five keys as before, except they no
-      // longer stop working the moment you're actually using one of them.
-      const view = LETTER_TO_VIEW[e.key];
-      if (view) {
+      // already open, switches to it. They no longer stop working the moment
+      // you're actually using one of them.
+      if (action?.startsWith("view.")) {
+        const view = action.slice(5) as ViewId;
         e.preventDefault();
         // Pressing the current view's own letter closes the workspace, so a
         // key that opened something can also put it away.
@@ -357,11 +377,11 @@ export default function App() {
       // The remaining globals still open something *over* whatever you're in,
       // so they keep the original strict guard: dashboard only.
       if (!focusFree || anyPanelOpenRef.current || wsOpenRef.current) return;
-      switch (e.key) {
-        case "?": setHelpOpen((o) => !o); break;
-        case "s": e.preventDefault(); setStatsOpen((o) => !o); break;
-        case "k": e.preventDefault(); setSkillsOpen((o) => !o); break;
-        case "/": e.preventDefault(); setSearchOpen((o) => !o); break;
+      switch (action) {
+        case "open.help": setHelpOpen((o) => !o); break;
+        case "open.stats": e.preventDefault(); setStatsOpen((o) => !o); break;
+        case "open.skills": e.preventDefault(); setSkillsOpen((o) => !o); break;
+        case "open.search": e.preventDefault(); setSearchOpen((o) => !o); break;
       }
     };
     window.addEventListener("keydown", onKey);

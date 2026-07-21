@@ -17,9 +17,45 @@ echo "==> packaging (fresh web build + sidecar, unpacked)"
 SRC="$HERE/dist-app/linux-unpacked"
 [ -x "$SRC/agentglass" ] || { echo "electron-builder did not produce $SRC/agentglass" >&2; exit 1; }
 
+# Refuse to install something that is not an executable.
+#
+# `bun build --compile` can write a file that is the right size, exits 0, and is
+# not an ELF binary at all — writing the outfile onto tmpfs produced exactly
+# that. Installed, it left the app with a server that started and immediately
+# vanished, no error anywhere: the UI came up and every request failed. Checking
+# the artifact is one line and turns that into a build that stops.
+for exe in "$SRC/agentglass" "$SRC/resources/agentglass-server"; do
+  [ -f "$exe" ] || { echo "missing $exe" >&2; exit 1; }
+  case "$(file -b "$exe")" in
+    ELF*executable*|ELF*shared\ object*|Mach-O*) ;;
+    *) echo "refusing to install: $exe is not an executable ($(file -b "$exe" | cut -c1-40))" >&2; exit 1 ;;
+  esac
+done
+
+# A running instance holds these files open, and `rm -rf` under it leaves the
+# app alive on deleted inodes — it keeps running the old code and its sidecar
+# keeps :4000, so the next launch adopts a stale server. Stop it first.
+if pgrep -f "$APP/agentglass" >/dev/null 2>&1; then
+  echo "==> stopping the running instance"
+  pkill -f "$APP/agentglass" 2>/dev/null || true
+  sleep 2
+  pkill -9 -f "$APP/resources/agentglass-server" 2>/dev/null || true
+  sleep 1
+fi
+
 mkdir -p "$APP" "$BIN" "$DESKTOP"
-rm -rf "$APP"
-cp -r "$SRC" "$APP"
+# Everything except chrome-sandbox, which must stay root-owned and setuid.
+# Replacing it drops those bits and Electron then refuses to start on any
+# distro that restricts unprivileged user namespaces (Ubuntu 24.04+), which
+# needs a sudo round trip to undo.
+if [ -u "$APP/chrome-sandbox" ] 2>/dev/null; then
+  find "$APP" -mindepth 1 -maxdepth 1 ! -name chrome-sandbox -exec rm -rf {} +
+  cp -r "$SRC/." "$APP/" 2>/dev/null || true
+  # cp will have failed on chrome-sandbox alone; the rest is in place.
+else
+  rm -rf "$APP"
+  cp -r "$SRC" "$APP"
+fi
 ln -sf "$APP/agentglass" "$BIN/agentglass"
 
 install -m644 "$HERE/icons/icon-512.png" "$APP/icon.png" 2>/dev/null || true

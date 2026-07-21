@@ -134,6 +134,25 @@ const VIEW_KEYS: Record<View, [string, string][]> = {
  * selection off the bottom of a 200-row reflog and you're following an
  * invisible cursor.
  */
+/**
+ * What a list pane shows when it has no rows.
+ *
+ * "no worktrees" is a claim about the repository, and these views made it while
+ * the request was still in flight — so the answer to "does this repo have
+ * worktrees" flipped from no to three a second later, and every slow tab looked
+ * like an empty one. Nothing here is new information; it is the difference
+ * between not knowing yet and knowing the answer is none.
+ */
+function PaneEmpty({ busy, what }: { busy: boolean; what: string }) {
+  return (
+    <div className="grid place-items-center py-10 t-dim2 text-[12px]">
+      {busy
+        ? <span className="flex items-center gap-2"><span className="agx-spin" aria-hidden="true" />loading {what}…</span>
+        : <>no {what}</>}
+    </div>
+  );
+}
+
 const rowProps = (active: boolean) => ({
   ref: active
     ? (el: HTMLDivElement | null) => el?.scrollIntoView({ block: "nearest" })
@@ -344,6 +363,9 @@ export function GitView({ active }: { active: boolean }) {
   const [remotes, setRemotes] = useState<GitRemote[]>([]);
   const [tags, setTags] = useState<GitTag[]>([]);
   const [reflog, setReflog] = useState<GitReflogEntry[]>([]);
+  /** Which view has a request in flight, so "still loading" and "genuinely
+   *  empty" stop rendering as the same blank pane. */
+  const [busyView, setBusyView] = useState<View | null>(null);
   // Only the branches whose upstream is gone — the merged-and-tidied ones. Off
   // by default: it's a cleanup mode, not a way to read the branch list.
   const [onlyGone, setOnlyGone] = useState(false);
@@ -461,15 +483,30 @@ export function GitView({ active }: { active: boolean }) {
   useEffect(() => { if (open && root) loadTree(root); }, [root, open, loadTree]);
 
   // load the data a non-Changes view needs when it (or the repo) becomes active
+  //
+  // Every one of these ends in `.catch(() => {})` and leaves the previous
+  // view's state in place, so an in-flight fetch and an empty result were the
+  // same picture: a blank pane, or worse "no worktrees" under a repo that has
+  // three. `busy` marks the view whose request is outstanding, which is all the
+  // empty states need to tell the two apart.
   const loadView = useCallback(() => {
     if (!open || !root) return;
-    if (view === "branches") api.gitBranches(root).then(setBranchData).catch(() => {});
-    else if (view === "log") api.gitGraph(root, 500).then((r) => setGraph(r.lines)).catch(() => {});
-    else if (view === "stashes") api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
-    else if (view === "worktrees") api.gitWorktrees(root).then((r) => setWorktrees(r.worktrees)).catch(() => {});
-    else if (view === "remotes") api.gitRemotes(root).then((r) => setRemotes(r.remotes)).catch(() => {});
-    else if (view === "tags") api.gitTags(root).then((r) => setTags(r.tags)).catch(() => {});
-    else if (view === "reflog") api.gitReflog(root).then((r) => setReflog(r.entries)).catch(() => {});
+    const track = <T,>(p: Promise<T>, use: (v: T) => void) => {
+      setBusyView(view);
+      p.then(use).catch(() => {}).finally(() => {
+        // Only clear if this is still the view being looked at: switching tabs
+        // mid-flight would otherwise have the old request turn off the new
+        // one's spinner.
+        setBusyView((b) => (b === view ? null : b));
+      });
+    };
+    if (view === "branches") track(api.gitBranches(root), setBranchData);
+    else if (view === "log") track(api.gitGraph(root, 500), (r) => setGraph(r.lines));
+    else if (view === "stashes") track(api.gitStashes(root), (r) => setStashes(r.stashes));
+    else if (view === "worktrees") track(api.gitWorktrees(root), (r) => setWorktrees(r.worktrees));
+    else if (view === "remotes") track(api.gitRemotes(root), (r) => setRemotes(r.remotes));
+    else if (view === "tags") track(api.gitTags(root), (r) => setTags(r.tags));
+    else if (view === "reflog") track(api.gitReflog(root), (r) => setReflog(r.entries));
   }, [open, root, view]);
   useEffect(() => { loadView(); }, [loadView]);
 
@@ -915,13 +952,34 @@ export function GitView({ active }: { active: boolean }) {
     const num = ALL_VIEWS.indexOf(id) + 1;
     return (
       <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]} — press ${num}`}
-        className="text-[10.5px] px-2 py-1 rounded-md transition-colors flex items-center gap-1"
+        aria-keyshortcuts={String(num)}
+        className="text-[10.5px] px-2 py-1 rounded-md transition-colors flex items-center gap-1.5"
         style={{ background: view === id ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: view === id ? "var(--text)" : "var(--text3)", border: `1px solid color-mix(in srgb, var(--border) ${view === id ? 40 : 15}%, transparent)` }}>
         {/* The key that gets you here. lazygit does the same in its panel titles
             (gui.showPanelJumps) — a shortcut nothing advertises is a shortcut
-            nobody uses. */}
-        <span className="tabular-nums" style={{ fontSize: 8.5, opacity: view === id ? 0.75 : 0.45 }}>{num}</span>
-        {VIEW_LABEL[id]}{n != null && n > 0 && <span className="tabular-nums opacity-70">{n}</span>}
+            nobody uses.
+
+            Drawn as a keycap rather than a bare digit. Bare, it read as a
+            count — "1 Changes" looked like one change — and next to a real one
+            ("4 Branches 44") the row became two numbers with a word wedged
+            between them. An outlined cap says "press this"; the count beside
+            it is a filled chip, so the two are different kinds of object
+            before either is read. */}
+        <span
+          className="tabular-nums leading-none rounded-[3px] px-1 py-[1px]"
+          style={{
+            fontSize: 8.5,
+            opacity: view === id ? 0.85 : 0.5,
+            border: "1px solid color-mix(in srgb, var(--text3) 45%, transparent)",
+          }}
+        >{num}</span>
+        {VIEW_LABEL[id]}
+        {n != null && n > 0 && (
+          <span
+            className="tabular-nums leading-none rounded-full px-1.5 py-[1px]"
+            style={{ fontSize: 9, background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--primary-hover)" }}
+          >{n}</span>
+        )}
       </button>
     );
   };
@@ -952,9 +1010,20 @@ export function GitView({ active }: { active: boolean }) {
                               ("20343"), which lives in the directory name. */}
                           {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch + " " + r.root).toLowerCase().includes(q); }).map((r) => (
                             <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); setSelKey(null); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-                              {/* Indented under the project it belongs to, so the
-                                  list reads as "the project, then its branches". */}
-                              {r.worktreeOf && <span className="shrink-0 t-dim2 text-[9px]" title={`worktree of ${r.worktreeOf}`}>└</span>}
+                              {/* Was "└", an indent meaning "child of the line
+                                  above" — which says nothing once you filter
+                                  the list and the parent is off screen, and
+                                  left projects marked by the absence of a
+                                  character. A badge names the kind outright,
+                                  and reads the same wherever the row lands.
+                                  The terminal's picker uses the same one. */}
+                              <span
+                                className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
+                                title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
+                                style={r.worktreeOf
+                                  ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
+                                  : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                              >{r.worktreeOf ? "WT" : "REPO"}</span>
                               {/* A worktree IS its branch — that's the whole point
                                   of having one per ticket. The directory name is
                                   a terse stub of it (`orbit-WEB-1188` for a
@@ -1096,7 +1165,7 @@ export function GitView({ active }: { active: boolean }) {
                         </div>
                       );
                     })}
-                    {!graph.length && <div className="grid place-items-center py-10 t-dim2 text-[12px]" style={{ fontFamily: "system-ui" }}>no commits</div>}
+                    {!graph.length && <PaneEmpty busy={busyView === "log"} what="commits" />}
                     <MoreRows shown={incGraph.rows.length} total={graph.length} onAll={incGraph.showAll} />
                   </div>
                 ) : view === "branches" ? (
@@ -1136,6 +1205,7 @@ export function GitView({ active }: { active: boolean }) {
                         )}
                       </div>
                     )}
+                    {!incBranches.rows.length && <PaneEmpty busy={busyView === "branches"} what="branches" />}
                     {incBranches.rows.map((b, i) => {
                       const t = trackChip(b.track);
                       const sel = i === rowIdx;
@@ -1192,7 +1262,7 @@ export function GitView({ active }: { active: boolean }) {
                         )}
                       </div>
                     ))}
-                    {!stashes.length && <div className="grid place-items-center py-10 t-dim2 text-[12px]">no stashes</div>}
+                    {!stashes.length && <PaneEmpty busy={busyView === "stashes"} what="stashes" />}
                   </div>
                 ) : view === "remotes" ? (
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
@@ -1206,7 +1276,7 @@ export function GitView({ active }: { active: boolean }) {
                         {r.pushUrl && r.pushUrl !== r.fetchUrl && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }} title={`pushes to ${r.pushUrl}`}>push ≠ fetch</span>}
                       </div>
                     ))}
-                    {!remotes.length && <div className="grid place-items-center py-10 t-dim2 text-[12px]">no remotes</div>}
+                    {!remotes.length && <PaneEmpty busy={busyView === "remotes"} what="remotes" />}
                   </div>
                 ) : view === "tags" ? (
                   <div onScroll={incTags.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
@@ -1218,7 +1288,7 @@ export function GitView({ active }: { active: boolean }) {
                         <span className="shrink-0 text-[9.5px] t-dim2">{t.date}</span>
                       </div>
                     ))}
-                    {!tags.length && <div className="grid place-items-center py-10 t-dim2 text-[12px]">no tags</div>}
+                    {!tags.length && <PaneEmpty busy={busyView === "tags"} what="tags" />}
                     <MoreRows shown={incTags.rows.length} total={tags.length} onAll={incTags.showAll} />
                   </div>
                 ) : view === "reflog" ? (
@@ -1235,7 +1305,7 @@ export function GitView({ active }: { active: boolean }) {
                         <span className="shrink-0 text-[9.5px] t-dim2">{e.date}</span>
                       </div>
                     ))}
-                    {!reflog.length && <div className="grid place-items-center py-10 t-dim2 text-[12px]">no reflog</div>}
+                    {!reflog.length && <PaneEmpty busy={busyView === "reflog"} what="reflog entries" />}
                     <MoreRows shown={incReflog.rows.length} total={reflog.length} onAll={incReflog.showAll} />
                   </div>
                 ) : (
@@ -1259,7 +1329,7 @@ export function GitView({ active }: { active: boolean }) {
                         {writeEnabled && !w.current && <button onClick={() => removeWorktree(w)} className="shrink-0 text-[10px] opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Remove worktree">remove</button>}
                       </div>
                     ))}
-                    {!worktrees.length && <div className="grid place-items-center py-10 t-dim2 text-[12px]">no worktrees</div>}
+                    {!worktrees.length && <PaneEmpty busy={busyView === "worktrees"} what="worktrees" />}
                   </div>
                 )}
 

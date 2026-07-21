@@ -15,6 +15,9 @@ import { api } from "../lib/api.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
+import { sysNotifyMode, setSysNotifyMode, notifyCapability, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
+import { clock24, setClock24 } from "../lib/clockPref.ts";
+import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId } from "../lib/keybindings.ts";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
   return (
@@ -37,6 +40,36 @@ function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void
         }} />
       </span>
     </button>
+  );
+}
+
+/** A row of mutually exclusive choices, for a preference with three answers
+ *  rather than two. A toggle would have forced "show me their message" and
+ *  "just tell me someone wrote" to be the same decision. */
+function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint }: {
+  label: string; hint: string; value: T; options: { v: T; label: string }[];
+  onPick: (v: T) => void; disabled?: boolean; disabledHint?: string;
+}) {
+  return (
+    <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left" style={{ opacity: disabled ? 0.55 : 1 }}>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="block text-[10.5px] t-dim2 mt-0.5">{disabled ? disabledHint ?? hint : hint}</span>
+      </span>
+      <span className="shrink-0 flex items-center gap-1 rounded-lg p-0.5"
+        style={{ background: "color-mix(in srgb, var(--border) 28%, transparent)" }}>
+        {options.map((o) => (
+          <button key={o.v} onClick={() => onPick(o.v)} disabled={disabled}
+            aria-pressed={value === o.v}
+            className="text-[10.5px] px-2 py-1 rounded-md transition-colors disabled:cursor-not-allowed"
+            style={value === o.v
+              ? { background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }
+              : { color: "var(--text3)" }}>
+            {o.label}
+          </button>
+        ))}
+      </span>
+    </div>
   );
 }
 
@@ -89,6 +122,37 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/**
+ * One rebindable shortcut.
+ *
+ * Capturing is a mode rather than a text field: you press the key you want,
+ * which is the only input method that cannot disagree with what will actually
+ * fire. `keydown` on the window during capture, so the key never reaches the
+ * app's own handler and rebinding `t` does not also open the terminal.
+ */
+function KeyRow({ id, keyName, capturing, onCapture, error }: {
+  id: ActionId; keyName: string; capturing: boolean; onCapture: () => void; error: string | null;
+}) {
+  const { label, hint } = LABELS[id];
+  return (
+    <button onClick={onCapture}
+      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-white/5">
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="block text-[10.5px] mt-0.5" style={{ color: error ? "var(--error)" : undefined }}>
+          <span className={error ? "" : "t-dim2"}>{error ?? hint}</span>
+        </span>
+      </span>
+      <kbd className="chip text-[10px] shrink-0 tabular-nums"
+        style={capturing
+          ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
+          : { color: "var(--text2)" }}>
+        {capturing ? "press a key…" : keyName === " " ? "space" : keyName}
+      </kbd>
+    </button>
+  );
+}
+
 export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp }: {
   open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
   scale: number; onZoom: (dir: 1 | -1 | 0) => void;
@@ -105,6 +169,33 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [fullscreen, setFullscreenState] = useState(false);
   useEffect(() => { if (open) autostartEnabled().then(setAutostartState); }, [open]);
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
+
+  const [h24, setH24] = useState<boolean>(() => clock24());
+  const [keys, setKeys] = useState(() => bindings());
+  const [capturing, setCapturing] = useState<ActionId | null>(null);
+  const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
+  useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
+
+  // While capturing, this window handler runs first and swallows the key, so
+  // rebinding "t" cannot also trigger whatever "t" is currently bound to.
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setCapturing(null); setKeyError(null); return; }
+      // Modifiers alone are not a binding; wait for the real key.
+      if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+      const r = rebind(capturing, e.key);
+      if (r.ok) { setCapturing(null); setKeyError(null); }
+      else setKeyError({ id: capturing, msg: r.error });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturing]);
+  const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
+  const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
+  useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -158,6 +249,51 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         label="Start at login"
                         hint="Open agentglass automatically when you log in" />
                     )}
+                    {/* Off is the default and off means nothing is watching:
+                        with no client subscribed the server never starts the
+                        D-Bus monitor at all. On a machine that cannot do this
+                        the row stays but says why, rather than vanishing and
+                        leaving you wondering whether you imagined it. */}
+                    <Choice<"12" | "24">
+                      label="Clock"
+                      hint="How the workspace strip shows the time"
+                      value={h24 ? "24" : "12"}
+                      onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
+                      options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
+                    <Choice<SysNotifyMode>
+                      label="Desktop notifications on the notch"
+                      hint="Slack and the rest, mirrored onto the strip you can still see in fullscreen"
+                      disabled={notifyCap ? !notifyCap.supported : true}
+                      disabledHint={notifyCap ? `Unavailable — ${notifyCap.reason}` : "Checking…"}
+                      value={sysNotify}
+                      onPick={(m) => { setSysNotifyMode(m); setSysNotifyState(m); }}
+                      options={[
+                        { v: "off", label: "Off" },
+                        { v: "titles", label: "Who" },
+                        { v: "full", label: "Full" },
+                      ]} />
+                  </Section>
+
+                  <Section title="Shortcuts">
+                    {(Object.keys(DEFAULTS) as ActionId[]).map((id) => (
+                      <KeyRow key={id} id={id} keyName={keys[id]}
+                        capturing={capturing === id}
+                        error={keyError?.id === id ? keyError.msg : null}
+                        onCapture={() => { setKeyError(null); setCapturing((c) => (c === id ? null : id)); }} />
+                    ))}
+                    <div className="px-3 pt-1 pb-1 flex items-center gap-3">
+                      <span className="text-[10px] t-dim2 flex-1">
+                        {/* Says why the rest of the keyboard is not on this list. */}
+                        Only the single-key shortcuts. {MOD_KEY}1–5, {MOD_KEY}\\ and {MOD_KEY}K are fixed — they are the ones that still work while you are typing.
+                      </span>
+                      {isCustomised() && (
+                        <button onClick={() => { resetBindings(); setKeyError(null); setCapturing(null); }}
+                          className="text-[10.5px] px-2 py-1 rounded-lg shrink-0"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          reset to defaults
+                        </button>
+                      )}
+                    </div>
                   </Section>
 
                   <Section title="Open">

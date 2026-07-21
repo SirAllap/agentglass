@@ -5,11 +5,19 @@
 // radar and streaming dashboard paint on the GPU instead of pinning a CPU core.
 // Same pixels as the web app.
 //
-// It hosts web/dist over loopback HTTP (so the SPA's origin is http and its
-// WS/API to :4000 pass the server's loopback origin check) and brings the Bun
-// server up with it unless one is already running.
+// It serves web/dist from the app's own `agentglass://` scheme and brings the
+// Bun server up with it unless one is already running.
+//
+// The scheme is not cosmetic. This used to be a loopback HTTP server on an
+// EPHEMERAL port, which meant the renderer's origin changed on every launch --
+// and localStorage is keyed by origin, so every restart handed the app an
+// empty store: theme, display size, chats, drafts, the saved token and every
+// preference, all silently reset. A fixed port would have fixed persistence
+// but reintroduced the bug the ephemeral port was chosen to avoid (a second
+// instance failing to bind). A custom scheme has neither problem: one stable
+// origin, no port, and any number of instances share it.
 
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, protocol } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -19,6 +27,18 @@ const os = require("os");
 // GPU compositing on Wayland.
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
+
+// Must run before `ready`. `standard` is what gives the scheme a real origin
+// (and therefore its own persistent localStorage); `secure` keeps it a trusted
+// context so the SPA behaves exactly as it does over https.
+const APP_SCHEME = "agentglass";
+const APP_ORIGIN = `${APP_SCHEME}://app`;
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: APP_SCHEME,
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
+  },
+]);
 
 const SERVER_PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 
@@ -40,24 +60,27 @@ const MIME = {
   ".ico": "image/x-icon", ".map": "application/json",
 };
 
-// Bind an ephemeral port (not a fixed one): a second instance, or anything else
-// already on a hardcoded port, would otherwise make listen() throw and the app
-// exit before a window ever shows. Resolves to the port actually assigned.
-function serveStatic() {
-  return new Promise((resolve, reject) => {
-    const srv = http.createServer((req, res) => {
-      let p = decodeURIComponent(req.url.split("?")[0]);
-      if (p === "/" || !path.extname(p)) p = "/index.html"; // SPA fallback
-      const file = path.join(DIST, p);
-      if (!file.startsWith(DIST)) { res.writeHead(403); res.end(); return; }
-      fs.readFile(file, (err, data) => {
-        if (err) { res.writeHead(404); res.end(); return; }
-        res.writeHead(200, { "content-type": MIME[path.extname(file)] || "application/octet-stream" });
-        res.end(data);
+/**
+ * Serve web/dist under agentglass://app/.
+ *
+ * Same job the loopback server did — SPA fallback for extensionless paths, a
+ * traversal guard, a MIME table — minus the port, which is the entire point.
+ */
+function serveApp() {
+  protocol.handle(APP_SCHEME, async (request) => {
+    let p = decodeURIComponent(new URL(request.url).pathname);
+    if (p === "/" || !path.extname(p)) p = "/index.html"; // SPA fallback
+    const file = path.join(DIST, p);
+    // Still guard traversal: the path comes from the page, not from us.
+    if (!file.startsWith(DIST)) return new Response("forbidden", { status: 403 });
+    try {
+      const data = await fs.promises.readFile(file);
+      return new Response(data, {
+        headers: { "content-type": MIME[path.extname(file)] || "application/octet-stream" },
       });
-    });
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => resolve(srv.address().port));
+    } catch {
+      return new Response("not found", { status: 404 });
+    }
   });
 }
 
@@ -121,7 +144,7 @@ function setAutostart(on) {
   return app.getLoginItemSettings().openAtLogin;
 }
 
-function createWindow(staticPort) {
+function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -132,16 +155,62 @@ function createWindow(staticPort) {
     webPreferences: { preload: path.join(__dirname, "preload.js") },
   });
   registerIpc(win);
-  win.loadURL(`http://127.0.0.1:${staticPort}/`);
+  win.loadURL(`${APP_ORIGIN}/`);
 }
 
-app.whenReady().then(async () => {
-  const staticPort = await serveStatic();
-  await ensureServer();
-  createWindow(staticPort);
+app.whenReady().then(() => {
+  serveApp();
+  // The window does not wait for the server.
+  //
+  // It used to: `await ensureServer()` sat between ready and createWindow, so
+  // nothing appeared on screen until the sidecar answered /health — measured at
+  // 376ms of a 588ms startup on a warm cache, and unbounded when the 103MB
+  // binary has to come off disk cold. Up to twelve seconds of *nothing*, since
+  // the poll runs 40 times at 300ms, and a launch that shows no window reads as
+  // an app that failed to start.
+  //
+  // Nothing in the shell needs the server before the window exists, and the UI
+  // already copes with it being briefly absent: the live socket reconnects with
+  // backoff and every panel's fetch has a retry or an honest loading state. So
+  // the window comes up first and the server arrives underneath it.
+  createWindow();
+  void ensureServer();
 });
 
+/**
+ * Stop the sidecar, once, however we are going down.
+ *
+ * `window-all-closed` covers closing the window and nothing else. Kill the app
+ * any other way — SIGTERM from a script, SIGINT from the terminal it was
+ * launched in, a crash in the main process — and the server outlived it,
+ * holding :4000. The next launch then found something already answering
+ * /health, adopted it, and ran against a server from the *previous* build:
+ * a UI talking to code that no longer matched it, with no sign anything was
+ * wrong. That cost real debugging time.
+ *
+ * SIGKILL is the one case this cannot cover; nothing in-process can.
+ */
+let stopped = false;
+function stopSidecar() {
+  if (stopped) return;
+  stopped = true;
+  if (!sidecar) return;
+  try { sidecar.kill(); } catch { /* already gone */ }
+  // A server mid-request can ignore SIGTERM for a moment. Follow up, but only
+  // if it is genuinely still there.
+  const child = sidecar;
+  setTimeout(() => { try { if (child.exitCode === null && !child.killed) child.kill("SIGKILL"); } catch { /* gone */ } }, 1500).unref?.();
+  sidecar = null;
+}
+
+app.on("before-quit", stopSidecar);
+app.on("will-quit", stopSidecar);
+process.on("exit", stopSidecar);
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.on(sig, () => { stopSidecar(); app.quit(); });
+}
+
 app.on("window-all-closed", () => {
-  if (sidecar) { try { sidecar.kill(); } catch {} }
+  stopSidecar();
   app.quit();
 });
