@@ -20,7 +20,11 @@ import { join, resolve } from "node:path";
 const ROOT = resolve(import.meta.dir, "..");
 const OUT = join(ROOT, ".github", "assets");
 const REPO = process.env.AGX_SHOT_REPO || "/tmp/shop-api";
-const W = 1440, H = 900, SCALE = 2;
+// Matches capture.ts, so the terminal shot sits beside the others in the README
+// at the same width and density rather than looking zoomed in next to them.
+const W = 1920, SCALE = 2;
+const H_PROBE = 1000;
+const PANEL_H = 1080;
 
 const CHROME = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"];
 function findChrome(): string {
@@ -56,7 +60,7 @@ async function connect(port: number) {
   const ev = async (expr: string) =>
     (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.value;
   const shot = async () => Buffer.from((await send("Page.captureScreenshot", { format: "png" })).data, "base64");
-  return { ev, shot, close: () => ws.close() };
+  return { send, ev, shot, close: () => ws.close() };
 }
 
 async function until(cdp: any, expr: string, what: string, ms = 25_000) {
@@ -109,7 +113,7 @@ async function main() {
     }
     chrome = spawn({
       cmd: [findChrome(), "--headless=new", `--remote-debugging-port=${dport}`, `--user-data-dir=${profile}`,
-        `--window-size=${W},${H}`, `--force-device-scale-factor=${SCALE}`, "--hide-scrollbars",
+        `--window-size=${W},${H_PROBE}`, `--force-device-scale-factor=${SCALE}`, "--hide-scrollbars",
         "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--no-sandbox",
         "--force-color-profile=srgb", "--force-prefers-reduced-motion",
         `http://127.0.0.1:${port}/`],
@@ -119,6 +123,10 @@ async function main() {
     const cdp = await connect(dport);
     await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount");
     await Bun.sleep(2500);
+    // 16:9, matching the other workspace panels in capture.ts — the terminal
+    // fills its height, so the dashboard's taller viewport would only add floor.
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: W, height: PANEL_H, deviceScaleFactor: SCALE, mobile: false });
+    await Bun.sleep(1200);
 
     await key(cdp, "\\", { ctrlKey: true });
     await until(cdp, `document.querySelector('[role="tablist"][aria-label="Workspace views"]')`, "the workspace");
