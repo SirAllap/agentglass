@@ -1,7 +1,6 @@
 import { useSyncExternalStore, useState } from "react";
 import { VIEWS, loadViewOrder, saveViewOrder, subscribeViewOrder, type ViewId } from "./views.ts";
-import { MOD_KEY } from "../../lib/format.ts";
-import { chordFor, chords, subscribeBindings } from "../../lib/keybindings.ts";
+import { chordFor, chordLabel, chords, subscribeBindings } from "../../lib/keybindings.ts";
 
 const EMPTY_CHORDS = {};
 
@@ -88,7 +87,7 @@ export function ViewRail({
             // the letters no longer navigate — they belong to whatever has
             // focus, usually a shell — and a tooltip advertising a key that
             // does nothing is worse than no tooltip.
-            data-tip={`${v.label} · ${MOD_KEY}${chordFor(v.id, order.map((x) => x.id)) || i + 1}`}
+            data-tip={`${v.label} · ${chordLabel(chordFor(v.id, order.map((x) => x.id)) || `mod+${i + 1}`)}`}
             style={{
               color: on ? "var(--primary-hover)" : "var(--text4)",
               background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",

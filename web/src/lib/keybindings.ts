@@ -1,5 +1,4 @@
 import { VIEWS, type ViewId } from "../components/workspace/views.ts";
-import { MOD_KEY as MOD_LABEL } from "./format.ts";
 
 /**
  * The single-letter shortcuts, and the ability to change them.
@@ -119,22 +118,67 @@ export const isCustomised = (): boolean =>
  *
  * Bare letters only work on the dashboard — inside the workspace every
  * keystroke belongs to whatever has focus, usually a shell. So the workspace
- * needs modified keys, and by default those are positional: the Nth icon in
- * the rail is MOD+N. Positional is a good default precisely because it is not
- * a preference — reorder the rail and the numbers follow, so the tooltip never
+ * needs modified keys, and by default those are positional: the Nth icon in the
+ * rail is MOD+N. Positional is a good default precisely because it is not a
+ * preference — reorder the rail and the numbers follow, so the tooltip never
  * lies.
  *
- * But positional is also an opinion, and someone who thinks of chat as MOD+C
- * should not have to drag their rail to get it. A custom chord overrides the
- * position for that view; everything unbound stays positional.
+ * A custom chord overrides the position, and may carry any combination of
+ * modifiers: `mod+alt+j` is as bindable as `mod+j`. Stored normalised —
+ * modifiers in a fixed order, key lowercased — because `Ctrl+Alt+J` and
+ * `alt+ctrl+j` are the same shortcut and storing both would let one key answer
+ * to two entries.
+ *
+ * `mod` rather than ctrl or meta: it is Ctrl here and ⌘ on a Mac, and a stored
+ * binding should survive being carried to a different machine.
  */
 const CHORD_KEY = "agentglass.chords";
 
+const IS_MAC = /mac/i.test(typeof navigator !== "undefined" ? (navigator.platform ?? "") : "");
+
 /** Chords the app itself owns. Rebinding these would take away zoom, the
- *  palette, the workspace toggle, or cycling — with no way back. */
-const CHORD_RESERVED = new Set(["k", "\\", "[", "]", "0", "=", "+", "-", "_"]);
+ *  palette, the workspace toggle or cycling, with no way back. */
+const CHORD_RESERVED = new Set(["mod+k", "mod+\\", "mod+[", "mod+]", "mod+0", "mod+=", "mod+-", "mod+_", "mod++"]);
+
+/** `Ctrl+Alt+J` -> `mod+alt+j`. Null when nothing but modifiers is held, or
+ *  when no modifier is — a bare key is the other binding, not this one. */
+export function chordFromEvent(e: { key: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean }): string | null {
+  const k = e.key;
+  if (!k || ["Shift", "Control", "Alt", "Meta"].includes(k)) return null;
+  const mod = IS_MAC ? e.metaKey : e.ctrlKey;
+  // Ctrl on a Mac is a distinct modifier from ⌘; treating it as `mod` there
+  // would make ⌃J and ⌘J the same binding.
+  const other = IS_MAC ? e.ctrlKey : e.metaKey;
+  if (!mod && !e.altKey && !other) return null;
+  const parts: string[] = [];
+  if (mod) parts.push("mod");
+  if (other) parts.push(IS_MAC ? "ctrl" : "meta");
+  if (e.altKey) parts.push("alt");
+  // Only for keys that have no shifted form of their own: Shift+1 already
+  // arrives as "!", and recording both would never match.
+  if (e.shiftKey && k.length > 1) parts.push("shift");
+  parts.push(k.length === 1 ? k.toLowerCase() : k);
+  return parts.join("+");
+}
+
+/** `mod+alt+j` -> `Ctrl+Alt+J`, or `⌘⌥J` on a Mac. */
+export function chordLabel(chord: string): string {
+  const parts = chord.split("+");
+  const key = parts.pop() ?? "";
+  const mods = parts.map((m) =>
+    m === "mod" ? (IS_MAC ? "⌘" : "Ctrl+")
+    : m === "alt" ? (IS_MAC ? "⌥" : "Alt+")
+    : m === "shift" ? (IS_MAC ? "⇧" : "Shift+")
+    : m === "ctrl" ? "⌃"
+    : m === "meta" ? "Meta+"
+    : m + "+");
+  return mods.join("") + (key.length === 1 ? key.toUpperCase() : key);
+}
 
 let chordCache: Partial<Record<ViewId, string>> | null = null;
+
+/** A chord must carry at least one modifier and exactly one key. */
+const VALID_CHORD = /^(mod\+|alt\+|shift\+|ctrl\+|meta\+)+[^+]+$/;
 
 export function chords(): Partial<Record<ViewId, string>> {
   if (chordCache) return chordCache;
@@ -143,7 +187,7 @@ export function chords(): Partial<Record<ViewId, string>> {
   const out: Partial<Record<ViewId, string>> = {};
   if (stored && typeof stored === "object") {
     for (const [id, k] of Object.entries(stored as Record<string, unknown>)) {
-      if (VIEWS.some((v) => v.id === id) && typeof k === "string" && k.length === 1) out[id as ViewId] = k;
+      if (VIEWS.some((v) => v.id === id) && typeof k === "string" && VALID_CHORD.test(k)) out[id as ViewId] = k;
     }
   }
   chordCache = out;
@@ -155,35 +199,34 @@ export function chordFor(id: ViewId, order: ViewId[]): string {
   const custom = chords()[id];
   if (custom) return custom;
   const i = order.indexOf(id);
-  return i >= 0 && i < 9 ? String(i + 1) : "";
+  return i >= 0 && i < 9 ? `mod+${i + 1}` : "";
 }
 
 /**
- * Which view a modified key opens, or null.
+ * Which view a chord opens, or null.
  *
- * Custom chords are resolved first, so binding MOD+2 to chat takes that key
- * away from whatever sits second in the rail rather than being shadowed by it
- * — the explicit choice has to win over the implicit one, or setting it looks
- * broken.
+ * Custom chords resolve first, so binding mod+2 to chat takes that key from
+ * whatever sits second in the rail rather than being shadowed by it — the
+ * explicit choice has to beat the implicit one, or setting it looks broken.
  */
-export function viewForChord(key: string, order: ViewId[]): ViewId | null {
+export function viewForChord(chord: string, order: ViewId[]): ViewId | null {
   const map = chords();
-  for (const id of order) if (map[id] === key) return id;
-  if (key >= "1" && key <= "9") {
-    const at = order[Number(key) - 1];
-    // A digit still held by a custom chord elsewhere is not also positional.
+  for (const id of order) if (map[id] === chord) return id;
+  const m = /^mod\+([1-9])$/.exec(chord);
+  if (m) {
+    const at = order[Number(m[1]) - 1];
+    // A position whose view has its own chord is no longer reachable by number.
     if (at && !map[at]) return at;
   }
   return null;
 }
 
-export function rebindChord(id: ViewId, key: string, order: ViewId[]): RebindResult {
-  if (key.length !== 1) return { ok: false, error: "pick a single character" };
-  const k = key.toLowerCase();
-  if (CHORD_RESERVED.has(k)) return { ok: false, error: `${MOD_LABEL}${key} belongs to the app` };
-  const taken = order.find((v) => v !== id && chordFor(v, order) === k);
+export function rebindChord(id: ViewId, chord: string, order: ViewId[]): RebindResult {
+  if (!VALID_CHORD.test(chord)) return { ok: false, error: "hold a modifier — Ctrl, Alt or both" };
+  if (CHORD_RESERVED.has(chord)) return { ok: false, error: `${chordLabel(chord)} belongs to the app` };
+  const taken = order.find((v) => v !== id && chordFor(v, order) === chord);
   if (taken) return { ok: false, error: `already opens ${taken}` };
-  chordCache = { ...chords(), [id]: k };
+  chordCache = { ...chords(), [id]: chord };
   persistChords();
   return { ok: true };
 }

@@ -18,7 +18,7 @@ import { MOD_KEY } from "../lib/format.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
-         chordFor, rebindChord, clearChord, resetChords, chordsCustomised } from "../lib/keybindings.ts";
+         chordFor, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
 import { loadViewOrder, type ViewId } from "./workspace/views.ts";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
@@ -115,6 +115,14 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
+type Pane = "prefs" | "keys" | "open" | "export";
+const TABS: { id: Pane; label: string }[] = [
+  { id: "prefs", label: "Preferences" },
+  { id: "keys", label: "Shortcuts" },
+  { id: "open", label: "Open" },
+  { id: "export", label: "Export" },
+];
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="px-2 py-2">
@@ -147,33 +155,40 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
           <span className={error ? "" : "t-dim2"}>{error ?? hint}</span>
         </span>
       </button>
+      {/* Two keys, labelled, because they answer different questions and the
+          unlabelled pair read as one shortcut written twice. */}
       {chord && (
-        // Two keys, because they answer different questions: the bare letter
-        // is for the dashboard, this one works with the caret in a shell.
-        // Shown as one chip you can click, with a way back to positional.
-        <button onClick={chord.onCapture}
-          title={chord.custom
-            ? `${MOD_KEY}${chord.key} opens this — click to change, or clear to go back to its rail position`
-            : `${MOD_KEY}${chord.key} opens this, from its position in the rail — click to set your own`}
-          className="chip text-[10px] shrink-0 tabular-nums"
-          style={chord.capturing
+        <span className="shrink-0 flex items-center gap-1.5">
+          <span className="text-[9px] t-dim2 w-[52px] text-right">anywhere</span>
+          <button onClick={chord.onCapture}
+            title={chord.custom
+              ? `${chordLabel(chord.key)} opens this — click to record another, ✕ to go back to its rail position`
+              : `${chordLabel(chord.key)} opens this, from its position in the rail — click to record your own`}
+            className="chip text-[10px] tabular-nums min-w-[74px] text-center"
+            style={chord.capturing
+              ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
+              : chord.custom
+                ? { color: "var(--primary-hover)" }
+                : { color: "var(--text2)", opacity: 0.6 }}>
+            {chord.capturing ? "hold a combo…" : chordLabel(chord.key)}
+          </button>
+          <span className="w-3 shrink-0">
+            {chord.custom && !chord.capturing && (
+              <button onClick={chord.onClear} title="back to its position in the rail"
+                className="text-[11px] px-0.5 t-dim2 hover:opacity-70" aria-label="reset this shortcut">✕</button>
+            )}
+          </span>
+        </span>
+      )}
+      <span className="shrink-0 flex items-center gap-1.5">
+        <span className="text-[9px] t-dim2 w-[62px] text-right">{chord ? "dashboard" : "press"}</span>
+        <button onClick={onCapture} className="chip text-[10px] tabular-nums min-w-[74px] text-center"
+          style={capturing
             ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
-            : chord.custom
-              ? { color: "var(--primary-hover)" }
-              : { color: "var(--text2)", opacity: 0.65 }}>
-          {chord.capturing ? `${MOD_KEY}…` : `${MOD_KEY}${chord.key}`}
+            : { color: "var(--text2)" }}>
+          {capturing ? "press a key…" : keyName === " " ? "space" : keyName}
         </button>
-      )}
-      {chord?.custom && !chord.capturing && (
-        <button onClick={chord.onClear} title="back to its position in the rail"
-          className="text-[11px] shrink-0 px-1 t-dim2 hover:opacity-70" aria-label="reset this shortcut">✕</button>
-      )}
-      <button onClick={onCapture} className="chip text-[10px] shrink-0 tabular-nums"
-        style={capturing
-          ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
-          : { color: "var(--text2)" }}>
-        {capturing ? "press a key…" : keyName === " " ? "space" : keyName}
-      </button>
+      </span>
     </div>
   );
 }
@@ -198,6 +213,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [h24, setH24] = useState<boolean>(() => clock24());
   const [keys, setKeys] = useState(() => bindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
+  const [pane, setPane] = useState<Pane>("prefs");
   const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
   useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
 
@@ -228,11 +244,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
       e.preventDefault();
       e.stopPropagation();
       if (e.key === "Escape") { setCapturingChord(null); setKeyError(null); return; }
-      if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
-      // The modifier is implied — this shortcut is always MOD + something, so
-      // asking someone to hold it during capture only risks the OS eating the
-      // combination first.
-      const r = rebindChord(capturingChord, e.key, loadViewOrder().map((v) => v.id));
+      // The whole combination, exactly as held: Ctrl+Alt+J binds Ctrl+Alt+J.
+      // Recording only the letter and implying the modifier meant Alt could
+      // never be part of a binding at all.
+      const chord = chordFromEvent(e);
+      if (!chord) return; // modifiers alone, or a bare key — keep listening
+      const r = rebindChord(capturingChord, chord, loadViewOrder().map((v) => v.id));
       if (r.ok) { setCapturingChord(null); setKeyError(null); }
       else setKeyError({ id: `view.${capturingChord}`, msg: r.error });
     };
@@ -261,15 +278,36 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
               <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[460px] max-w-[95vw] max-h-[85vh] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+                className="w-[820px] max-w-[95vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
+                // Fixed, not max: with tabs the pane's height would otherwise
+                // change with whichever section you picked, and a dialog that
+                // resizes under the cursor is disorienting in a way a little
+                // empty space never is.
+                                style={{ height: "min(78vh, 620px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Settings</span>
                   <button onClick={onClose} className="ml-auto text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                 </div>
 
-                <div className="overflow-y-auto flex-1 divide-y" style={{ borderColor: "color-mix(in srgb, var(--border) 20%, transparent)" }}>
+                <div className="flex-1 min-h-0 flex">
+                  {/* One page per concern instead of one long scroll: four
+                      sections stacked vertically meant the shortcuts, the part
+                      you come here to change, were always below the fold. */}
+                  <div className="shrink-0 w-[168px] py-2 px-2 flex flex-col gap-0.5 border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+                    {TABS.map((t) => (
+                      <button key={t.id} onClick={() => setPane(t.id)}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-[12px] flex items-center gap-2"
+                        style={pane === t.id
+                          ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
+                          : { color: "var(--text3)" }}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+                  {pane === "prefs" && (
                   <Section title="Preferences">
                     {/* Desktop only, like launch-at-login: in a browser tab the
                         browser's own zoom already does this, and better. */}
@@ -319,7 +357,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         { v: "full", label: "Full" },
                       ]} />
                   </Section>
+                  )}
 
+                  {pane === "keys" && (
                   <Section title="Shortcuts">
                     {(Object.keys(DEFAULTS) as ActionId[]).map((id) => {
                       const view = id.startsWith("view.") ? (id.slice(5) as ViewId) : null;
@@ -331,7 +371,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                           onCapture={() => { setKeyError(null); setCapturingChord(null); setCapturing((c) => (c === id ? null : id)); }}
                           chord={view ? {
                             key: chordFor(view, order),
-                            custom: chordFor(view, order) !== String(order.indexOf(view) + 1),
+                            custom: chordFor(view, order) !== `mod+${order.indexOf(view) + 1}`,
                             capturing: capturingChord === view,
                             onCapture: () => { setKeyError(null); setCapturing(null); setCapturingChord((c) => (c === view ? null : view)); },
                             onClear: () => { clearChord(view); setKeys({ ...bindings() }); },
@@ -341,7 +381,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <div className="px-3 pt-1 pb-1 flex items-center gap-3">
                       <span className="text-[10px] t-dim2 flex-1">
                         {/* Says why the rest of the keyboard is not on this list. */}
-                        Two keys per view. The bare letter works on the dashboard only — inside the workspace every keystroke belongs to whatever has focus, usually a shell. The {MOD_KEY.replace("+", "")} one works anywhere; unset, it follows the view's position in the rail, so reordering keeps it true. {MOD_KEY}\\ and {MOD_KEY}[ / {MOD_KEY}] stay put.
+                        <b style={{ color: "var(--text2)" }}>anywhere</b> — hold any combination you like ({MOD_KEY}J, {MOD_KEY}Alt+J, Alt+Shift+J) and it is recorded as held. Left alone it follows the view's position in the rail, so reordering keeps it true. <b style={{ color: "var(--text2)" }}>dashboard</b> — a single key, and only on the dashboard: inside the workspace every keystroke belongs to whatever has focus, usually a shell. {MOD_KEY}\\, {MOD_KEY}K and {MOD_KEY}[ / {MOD_KEY}] stay put.
                       </span>
                       {(isCustomised() || chordsCustomised()) && (
                         <button onClick={() => { resetBindings(); resetChords(); setKeyError(null); setCapturing(null); setCapturingChord(null); }}
@@ -352,7 +392,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       )}
                     </div>
                   </Section>
+                  )}
 
+                  {pane === "open" && (
                   <Section title="Open">
                     <Row label="Statistics" hint="Totals, tool latency and cost breakdowns" kbd="s"
                       onClick={() => { onOpenStats(); onClose(); }} />
@@ -361,7 +403,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Row label="Command palette" hint="Jump to any panel, filter or session" kbd={`${MOD_KEY}K`}
                       onClick={onClose} />
                   </Section>
+                  )}
 
+                  {pane === "export" && (
                   <Section title="Export">
                     {/* Scoped like everything else: with a project open these
                         carry that project's rows, not the whole machine's. */}
@@ -372,6 +416,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Row label="Skills catalog — Markdown" hint="Every skill the fleet has available"
                       href={api.skillsExportUrl()} download="agentglass-skills.md" />
                   </Section>
+                  )}
+                  </div>
                 </div>
               </motion.div>
             </div>

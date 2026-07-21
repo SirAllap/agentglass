@@ -29,7 +29,7 @@ import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
 import { VIEW_IDS, loadViewOrder, loadLastView, type ViewId } from "./components/workspace/views.ts";
-import { viewForChord } from "./lib/keybindings.ts";
+import { chordFromEvent, viewForChord } from "./lib/keybindings.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
@@ -272,6 +272,20 @@ export default function App() {
       // bare keys; a Spanish keyboard sends `+` and `-` directly.
       // Calls uiScale directly rather than the `zoom` callback so this effect
       // can keep its empty dep array and never re-subscribe.
+      // Before the fixed bindings below, because a view chord may carry Alt and
+      // that block deliberately ignores anything Alt-modified. Reserved chords
+      // cannot be bound, so nothing here can shadow zoom or the palette.
+      const chord = chordFromEvent(e);
+      if (chord) {
+        const target = viewForChord(chord, loadViewOrder().map((v) => v.id));
+        if (target) {
+          e.preventDefault();
+          setWsView(target);
+          setWsOpen(true);
+          return;
+        }
+      }
+
       if ((e.metaKey || e.ctrlKey) && !e.altKey) {
         const k = e.key;
         if (k === "=" || k === "+") { e.preventDefault(); setScale(nudgeScale(1)); return; }
@@ -284,15 +298,7 @@ export default function App() {
         // The user's rail order, not the shipped one: the rail labels each
         // icon with the number that reaches it, and a tooltip that stops being
         // true after a reorder is worse than no tooltip.
-        // ...unless the user bound their own, which wins over the position.
         const railIds = loadViewOrder().map((v) => v.id);
-        const target = viewForChord(k.length === 1 ? k.toLowerCase() : k, railIds);
-        if (target) {
-          e.preventDefault();
-          setWsView(target);
-          setWsOpen(true);
-          return;
-        }
         if (k === "[" || k === "]") {
           e.preventDefault();
           setWsView((cur) => {
