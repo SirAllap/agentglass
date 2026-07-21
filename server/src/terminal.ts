@@ -270,7 +270,7 @@ export function ptyOpen(ws: PtyWs) {
 export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   const s = sessions.get(ws);
   if (!s) return;
-  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; index?: number; name?: string; visible?: boolean };
+  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean };
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
     try {
@@ -304,7 +304,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     }
     const action = msg.cmd as TmuxAction;
     if (!["select", "new", "kill", "rename"].includes(action)) return;
-    runAction(s.tmux, action, msg.index, msg.name);
+    runAction(s.tmux, action, msg.window, msg.name);
   }
 }
 

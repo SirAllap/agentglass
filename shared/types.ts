@@ -192,6 +192,10 @@ export interface StatsSummary {
  *  tmux's own marks (`*` current, `-` last, `!` bell, `#` activity, `Z` zoomed),
  *  passed through rather than interpreted server-side. */
 export interface TmuxWindow {
+  /** tmux's own id for the window (`@3`). Stable for the window's whole life,
+   *  which the index is not: killing a window renumbers the ones after it when
+   *  `renumber-windows` is on. Commands target this; the index is for display. */
+  id: string;
   index: number;
   name: string;
   active: boolean;
