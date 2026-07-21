@@ -61,6 +61,25 @@ function LogLine({ line }: { line: string }) {
   );
 }
 
+/** One container action. Sized and bordered like every other control in the
+ *  app, so a row of them reads as a row of buttons. */
+function DockerAction({ onClick, disabled, tint, title, children }: {
+  onClick: () => void; disabled: boolean; tint: string; title: string; children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={title}
+      className="w-[22px] h-[22px] grid place-items-center rounded-md text-[10px] leading-none transition-colors disabled:opacity-30"
+      style={{ color: tint, border: `1px solid color-mix(in srgb, ${tint} 32%, transparent)`, background: `color-mix(in srgb, ${tint} 8%, transparent)` }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = `color-mix(in srgb, ${tint} 24%, transparent)`; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = `color-mix(in srgb, ${tint} 8%, transparent)`; }}
+    >{children}</button>
+  );
+}
+
 function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction }: {
   c: DockerContainer; stat?: DockerStat; active: boolean; writeEnabled: boolean; busy: boolean;
   onSelect: () => void; onAction: (verb: "start" | "stop" | "restart" | "rm") => void;
@@ -76,7 +95,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
       // columns, which is what makes a list of twelve scannable instead of
       // twelve individually-arranged lines. lazydocker does the same.
       style={{
-        gridTemplateColumns: "10px minmax(0,1fr) 46px 46px 52px auto",
+        gridTemplateColumns: "10px minmax(0,1fr) 46px 46px 52px 50px",
         background: active ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent",
       }}
       title={`${c.name}\n${c.image}\n${c.status}${c.ports ? `\n${c.ports}` : ""}`}>
@@ -105,18 +124,21 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
         {running ? (port ? `:${port}` : "") : c.state}
       </span>
 
-      {/* Always visible, dimmed until hovered. Hidden entirely, they were
-          undiscoverable — the row looked inert, and start/stop/restart is the
-          reason to be in this panel at all. */}
-      <div className="flex items-center gap-0.5 opacity-45 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+      {/* Real buttons, not floating glyphs. Bare icons at 45% opacity read as
+          decoration — they had no edge, no hit area you could see, and an
+          emoji bin sitting next to line-art squares. Each one is now a chip
+          with a border and a tinted hover, the same language every other
+          control in the app uses, so it is obvious they can be pressed and
+          obvious where. */}
+      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
         {writeEnabled && (running
           ? <>
-              <button disabled={busy} onClick={() => onAction("restart")} title="Restart" className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--warning)" }}>⟳</button>
-              <button disabled={busy} onClick={() => onAction("stop")} title="Stop" className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--error)" }}>■</button>
+              <DockerAction onClick={() => onAction("restart")} disabled={busy} tint="var(--warning)" title="Restart">⟳</DockerAction>
+              <DockerAction onClick={() => onAction("stop")} disabled={busy} tint="var(--error)" title="Stop">■</DockerAction>
             </>
           : <>
-              <button disabled={busy} onClick={() => onAction("start")} title="Start" className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--success)" }}>▶</button>
-              <button disabled={busy} onClick={() => onAction("rm")} title="Remove" className="w-5 h-5 grid place-items-center rounded text-[12px]" style={{ color: "var(--error)" }}>🗑</button>
+              <DockerAction onClick={() => onAction("start")} disabled={busy} tint="var(--success)" title="Start">▶</DockerAction>
+              <DockerAction onClick={() => onAction("rm")} disabled={busy} tint="var(--error)" title="Remove this container">✕</DockerAction>
             </>)}
       </div>
     </div>
@@ -296,10 +318,11 @@ export function DockerView({ active }: { active: boolean }) {
                             {/* Names the columns once per project, in the same
                                 grid the rows use, so the figures below are not
                                 three anonymous numbers. */}
-                            <span className="ml-auto grid gap-x-2 text-[8.5px] t-dim2 uppercase tracking-wider" style={{ gridTemplateColumns: "46px 46px 52px" }}>
+                            <span className="ml-auto grid gap-x-2 text-[8.5px] t-dim2 uppercase tracking-wider" style={{ gridTemplateColumns: "46px 46px 52px 50px" }}>
                               <span className="text-right">cpu</span>
                               <span className="text-right">mem</span>
                               <span>port</span>
+                              <span />
                             </span>
                           </div>
                           <div className="px-1">
