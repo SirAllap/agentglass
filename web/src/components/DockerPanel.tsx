@@ -99,9 +99,16 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
         title={stat ? `memory ${stat.mem}% (${stat.memUsage})` : undefined}>
         {stat && running ? `${stat.mem.toFixed(0)}%` : ""}
       </span>
-      <span className="text-[9px] tabular-nums truncate" style={{ color: "var(--info)" }}>{port ? `:${port}` : ""}</span>
+      <span className="text-[9px] tabular-nums truncate" style={{ color: running ? "var(--info)" : "var(--text4)" }}>
+        {/* A stopped container has no numbers, and three blank columns read as
+            missing data rather than as "this is not running". */}
+        {running ? (port ? `:${port}` : "") : c.state}
+      </span>
 
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+      {/* Always visible, dimmed until hovered. Hidden entirely, they were
+          undiscoverable — the row looked inert, and start/stop/restart is the
+          reason to be in this panel at all. */}
+      <div className="flex items-center gap-0.5 opacity-45 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
         {writeEnabled && (running
           ? <>
               <button disabled={busy} onClick={() => onAction("restart")} title="Restart" className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--warning)" }}>⟳</button>
@@ -379,16 +386,24 @@ export function DockerView({ active }: { active: boolean }) {
                     <span><b className="font-semibold">j/k</b> container</span>
                     <span><b className="font-semibold">s</b> start/stop</span>
                     <span><b className="font-semibold">r</b> restart</span>
+                    {/* Loud on purpose. As a ghost chip among the keyboard
+                        hints nobody found it — and a shell docked under the
+                        logs is the sort of thing you only use if you know it
+                        is there. It reads as an action, not as a legend. */}
                     <button
                       onClick={() => setConsoleOpen((v) => !v)}
-                      className="px-2 py-0.5 rounded text-[9.5px] whitespace-nowrap transition-colors"
-                      title="a shell in this project, docked under the logs — it keeps running while you look around"
+                      className="ml-1 px-2.5 py-1 rounded-lg text-[10.5px] font-medium whitespace-nowrap transition-colors flex items-center gap-1.5"
+                      title="A shell in this project, docked under the logs — run make targets, migrations or tests without leaving Docker. It keeps running while you look around."
                       style={{
-                        background: consoleOpen ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
-                        color: consoleOpen ? "var(--text)" : "var(--text3)",
-                        border: `1px solid color-mix(in srgb, var(--border) ${consoleOpen ? 45 : 20}%, transparent)`,
+                        background: consoleOpen ? "color-mix(in srgb, var(--primary) 22%, transparent)" : "color-mix(in srgb, var(--primary) 12%, transparent)",
+                        color: consoleOpen ? "var(--text)" : "var(--primary-hover)",
+                        border: `1px solid color-mix(in srgb, var(--primary) ${consoleOpen ? 55 : 35}%, transparent)`,
                       }}
-                    >{consoleOpen ? "▾ console" : "▸ console"}</button>
+                    >
+                      <span style={{ fontSize: 11 }}>{consoleOpen ? "▾" : "▸"}</span>
+                      <span>console</span>
+                      <kbd className="text-[8.5px] px-1 py-[1px] rounded" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: 0.85 }}>shell</kbd>
+                    </button>
                     <span className="ml-auto">logs auto-refresh · stats every 5s</span>
                   </div>
                 )}
