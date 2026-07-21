@@ -8,7 +8,7 @@
 // What is unit-tested is everything that turns tmux's text into our shapes, and
 // everything that decides whether a command is allowed to run at all.
 import { describe, expect, test } from "bun:test";
-import { parseWindows, socketFromArgv, runAction, sanitizeWindowName, type TmuxTarget } from "../src/tmuxctl.ts";
+import { parseWindows, socketFromArgv, runAction, sanitizeWindowName, prefixKeys, type TmuxTarget } from "../src/tmuxctl.ts";
 
 describe("reading tmux's window list", () => {
   test("id, index, name, active flag and tmux's own marks", () => {
@@ -115,5 +115,15 @@ describe("window names", () => {
 
   test("absurdly long names are cut, not passed on", () => {
     expect(sanitizeWindowName("x".repeat(500))!.length).toBe(64);
+  });
+});
+
+describe("the prefix the panel advertises", () => {
+  // The "tmux is listening" mark has to know which key that is. Hardcoding C-b
+  // would light up for everyone except the people who rebound it, who are the
+  // ones who use tmux enough to have missed the indicator in the first place.
+  test("an unreachable server yields no prefix rather than a guessed one", () => {
+    const t: TmuxTarget = { pid: 1, socket: ["-L", "nonexistent-agx-test"], session: "s", id: "$0" };
+    expect(prefixKeys(t)).toEqual([]);
   });
 });

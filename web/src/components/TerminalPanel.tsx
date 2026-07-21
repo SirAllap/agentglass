@@ -82,6 +82,12 @@ type Sess = {
   tmuxWindows: TmuxWindow[];
   /** The session those windows belong to, for the status-line toggle. */
   tmuxSession: string | null;
+  /** The keys tmux treats as its prefix, as tmux spells them ("C-f"). */
+  tmuxPrefix: string[];
+  /** When one of them was last pressed. The status line most configs draw
+   *  flashes to say "tmux is listening"; hiding it for our tabs took that away,
+   *  so the strip says it instead. */
+  tmuxPrefixAt: number;
   pending: string[]; // input queued while (re)connecting — flushed on ready
   createdAt: number;
   lastUsed: number;
@@ -89,6 +95,28 @@ type Sess = {
   retryTimer: number | null;
   subs: Set<() => void>;
 };
+/** How long the "listening" mark stays up with no second key. tmux itself waits
+ *  indefinitely, but a mark that never clears is a mark nobody reads. */
+const PREFIX_MS = 2000;
+
+/**
+ * The byte a terminal sends for a key spelled the way tmux spells it.
+ *
+ * Only the two forms a prefix is ever bound to: `C-x` (the control byte) and
+ * `M-x` (escape then the key). Anything else returns null and simply never
+ * matches, which is the right failure — a missing indicator, not a wrong one.
+ */
+function keyByte(k: string): string | null {
+  const m = /^([CM])-(.)$/.exec(k);
+  if (!m) return null;
+  const [, mod, ch] = m;
+  if (mod === "C") {
+    const code = ch!.toUpperCase().charCodeAt(0);
+    return code >= 64 && code <= 95 ? String.fromCharCode(code & 0x1f) : null;
+  }
+  return "\u001b" + ch;
+}
+
 const sessions = new Map<string, Sess>();
 let seq = 0;
 /** Shells for one repo, in creation order. */
@@ -181,7 +209,7 @@ function connect(s: Sess) {
   ws.onmessage = (ev) => {
     if (s.ws !== ws) return; // a stale socket (replaced by ⟲ new shell) must not touch the session
     if (typeof ev.data !== "string") { s.term.write(new Uint8Array(ev.data as ArrayBuffer)); return; }
-    let f: { t?: string; mode?: "pty" | "pipe"; shell?: string; resize?: boolean; code?: number; error?: string; active?: boolean; windows?: TmuxWindow[]; session?: string | null };
+    let f: { t?: string; mode?: "pty" | "pipe"; shell?: string; resize?: boolean; code?: number; error?: string; active?: boolean; windows?: TmuxWindow[]; session?: string | null; prefix?: string[] };
     try { f = JSON.parse(ev.data); } catch { return; }
     if (f.t === "ready") {
       reconnected(s);
@@ -201,6 +229,7 @@ function connect(s: Sess) {
       s.tmux = f.active === true;
       s.tmuxWindows = Array.isArray(f.windows) ? f.windows : [];
       s.tmuxSession = typeof f.session === "string" ? f.session : null;
+      s.tmuxPrefix = Array.isArray(f.prefix) ? f.prefix : [];
       notify(s);
     } else if (f.t === "exit" || f.t === "fatal") {
       s.status = f.t === "exit" ? "exited" : "error";
@@ -305,9 +334,33 @@ function createSession(root: string): Sess {
   const holder = document.createElement("div");
   holder.style.cssText = "width:100%;height:100%";
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxSession: null, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxSession: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
+    /*
+     * "tmux is listening."
+     *
+     * Read off the keystroke on its way past rather than asked of tmux,
+     * because this has to land on the same frame as the keypress: a poll, at
+     * any interval anyone would accept, answers after the moment it is meant
+     * to describe. tmux is told which key it is (see prefixKeys), so a rebound
+     * prefix — and anyone who rebinds it is exactly who notices this missing —
+     * lights up the same as the default.
+     *
+     * A best-effort mirror of tmux's own state, not a model of it: the byte is
+     * also the prefix when it is being sent *through* to a nested tmux or to
+     * an application that wants it. Wrong in that case for two seconds, and it
+     * never touches what the shell receives.
+     */
+    if (sess.tmux && d.length === 1 && sess.tmuxPrefix.some((k) => keyByte(k) === d)) {
+      sess.tmuxPrefixAt = Date.now();
+      notify(sess);
+      setTimeout(() => { if (Date.now() - sess.tmuxPrefixAt >= PREFIX_MS) notify(sess); }, PREFIX_MS + 50);
+    } else if (sess.tmuxPrefixAt) {
+      // The next key is the one the prefix was for: tmux has stopped waiting.
+      sess.tmuxPrefixAt = 0;
+      notify(sess);
+    }
     if (sess.status === "live" && sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(JSON.stringify({ t: "in", d }));
     else if (sess.status === "connecting") sess.pending.push(d); // don't drop keys typed before the shell is up
     else if (sess.status === "unauthorized" && d.includes("\r")) reauthPrompt(); // Enter → re-enter the token
@@ -617,6 +670,20 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * arriving on the next poll, never a local guess that could disagree with it.
    */
   const tmuxWindows = sess?.tmuxWindows ?? [];
+  // Lit while tmux is waiting for the second half of a prefix sequence.
+  const prefixLive = !!sess?.tmuxPrefixAt && Date.now() - sess.tmuxPrefixAt < PREFIX_MS;
+  /*
+   * The tab you clicked highlights now, not when tmux confirms it.
+   *
+   * The server re-reads tmux the moment the command returns, so the real answer
+   * is a round trip away rather than a poll away — but a round trip is still
+   * long enough to feel like the click missed, and this is the one interaction
+   * where the user already knows what the answer will be. Cleared on the next
+   * frame, so if tmux disagrees (the window went away underneath), tmux wins.
+   */
+  const [pendingWindow, setPendingWindow] = useState<string | null>(null);
+  useEffect(() => { setPendingWindow(null); }, [tmuxWindows]);
+  const activeWindow = pendingWindow ?? tmuxWindows.find((w) => w.active)?.id ?? null;
   const tmuxCmd = useCallback((cmd: string, extra: Record<string, unknown> = {}) => {
     const s = sess;
     if (!s || s.ws?.readyState !== WebSocket.OPEN) return;
@@ -900,6 +967,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     behind it should not change how the workspace looks. */}
                 {tmuxActive && tmuxWindows.length > 0 && (
                   <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                    <span
+                      title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
+                      className="shrink-0 px-1.5 py-1 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
+                      style={prefixLive
+                        ? { background: "var(--primary)", color: "var(--bg2)" }
+                        : { color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                      {(sess?.tmuxPrefix[0] ?? "tmux")}
+                    </span>
                     {tmuxWindows.map((w) => {
                       // tmux's own marks, straight through: `!` is a bell, `#`
                       // is activity in a window you are not looking at. Both
@@ -908,11 +983,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       const alerting = w.flags.includes("!") || w.flags.includes("#");
                       return (
                         <div key={w.id}
-                          onClick={() => { if (!w.active) tmuxCmd("select", { window: w.id }); }}
+                          onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd("select", { window: w.id }); } }}
                           onDoubleClick={() => setRenaming(w.id)}
                           title={`window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
                           className="group flex items-center gap-1.5 px-2 py-1 rounded-md text-[10.5px] cursor-pointer shrink-0"
-                          style={w.active
+                          style={w.id === activeWindow
                             ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
                             : { background: "color-mix(in srgb, var(--bg3) 55%, transparent)", color: "var(--text2)" }}>
                           <span className="tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>

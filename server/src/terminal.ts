@@ -82,6 +82,9 @@ type Session = {
   tmuxPoll?: ReturnType<typeof setInterval> | null;
   /** The tmux session this shell is attached to, once one is found. */
   tmux?: TmuxTarget | null;
+  /** Re-read tmux and push if anything moved. Held so an action can refresh
+   *  immediately instead of leaving the strip stale until the next tick. */
+  tmuxSweep?: () => void;
   /** Whether we hid tmux's own status line, so it can be given back on the way
    *  out. Restoring is not optional: a session left with `status off` after the
    *  panel closed would look broken in the user's real terminal, and they would
@@ -115,7 +118,7 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveTarget, listWindows, runAction, setStatusLine, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveTarget, listWindows, runAction, setStatusLine, prefixKeys, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 
 const enc = new TextEncoder();
 const ctl = (ws: PtyWs, frame: Record<string, unknown>) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
@@ -212,7 +215,7 @@ export function ptyOpen(ws: PtyWs) {
    */
   let sawTmux = false;
   let sentWindows = "";
-  const tmuxPoll = setInterval(() => {
+  const sweep = () => {
     if (session.closed || session.exited) return;
     const now = tmuxRunning(proc.pid);
     if (now !== sawTmux) {
@@ -232,13 +235,25 @@ export function ptyOpen(ws: PtyWs) {
     // list-clients, and neither answer changes while the same client is up.
     if (!session.tmux) session.tmux = resolveTarget(proc.pid);
     const windows = session.tmux ? listWindows(session.tmux) : [];
-    // Only speak when something changed. A tab strip that re-renders every two
-    // seconds is a tab strip that drops the click you were halfway through.
+    // Only speak when something changed. A tab strip that re-renders on every
+    // tick is a tab strip that drops the click you were halfway through.
     const shape = JSON.stringify(windows);
     if (shape === sentWindows && sawTmux === now) return;
     sentWindows = shape;
-    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, windows });
-  }, 2000);
+    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, prefix: prefixKeys(session.tmux), windows });
+  };
+  session.tmuxSweep = sweep;
+  /*
+   * How often to look.
+   *
+   * Two seconds was chosen for "has tmux appeared", where being a beat late
+   * costs nothing. It is far too slow for a tab strip: `^b n` moved the focus
+   * instantly in the terminal and the tabs sat on the old answer for up to two
+   * seconds, which reads as the app being broken rather than behind. Half a
+   * second is the ceiling for "instant" and the check is one small tmux call
+   * that only speaks when something actually changed.
+   */
+  const tmuxPoll = setInterval(sweep, 500);
   session.tmuxPoll = tmuxPoll;
 
   const pump = async (readable: ReadableStream<Uint8Array> | null | undefined) => {
@@ -304,7 +319,12 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     }
     const action = msg.cmd as TmuxAction;
     if (!["select", "new", "kill", "rename"].includes(action)) return;
-    runAction(s.tmux, action, msg.window, msg.name);
+    if (!runAction(s.tmux, action, msg.window, msg.name)) return;
+    // Answer now rather than at the next tick. The command has already been
+    // applied by the time it returns, so the strip can be correct within a
+    // round trip instead of within half a second — and the click that caused
+    // it is exactly when a stale answer is most obvious.
+    s.tmuxSweep?.();
   }
 }
 
