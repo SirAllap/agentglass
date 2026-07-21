@@ -81,7 +81,7 @@ function BranchChip({ branch, onCopied }: { branch: GitBranchInfo; onCopied?: (n
     // pushed everything else down. The name truncates, the counts never do —
     // they are the part you are actually reading — and the full name is one
     // hover or one click away.
-    <span className="px-2 py-0.5 rounded-md text-[11px] inline-flex items-center gap-1 max-w-[min(46vw,520px)] cursor-pointer"
+    <span className="px-2 py-0.5 rounded-md text-[11px] inline-flex items-center gap-1 min-w-0 max-w-[min(30vw,340px)] cursor-pointer"
       style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary-hover)" }}
       onClick={() => {
         navigator.clipboard?.writeText(branch.name).then(() => onCopied?.(branch.name)).catch(() => { /* no clipboard permission */ });
@@ -182,8 +182,12 @@ function RemoteButton({ label, runningLabel, running, disabled, primary, onClick
   label: string; runningLabel?: string; running: boolean; disabled: boolean; primary?: boolean; onClick: () => void;
 }) {
   return (
+    // nowrap + shrink-0: this row holds a 60-character branch name, and flex
+    // was solving the overflow by breaking "↑ push (1)" across two lines and
+    // making the whole header taller. The branch chip is the one thing here
+    // that may shrink; the controls are not negotiable.
     <button onClick={onClick} disabled={disabled}
-      className="text-[11px] px-2.5 py-1 rounded-lg transition-opacity active:scale-[0.97]"
+      className="text-[11px] px-2.5 py-1 rounded-lg transition-opacity active:scale-[0.97] whitespace-nowrap shrink-0"
       style={{
         color: primary ? "var(--text)" : "var(--text2)",
         fontWeight: primary ? 500 : undefined,
@@ -981,7 +985,7 @@ export function GitView({ active }: { active: boolean }) {
     return (
       <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]} — press ${num}`}
         aria-keyshortcuts={String(num)}
-        className="text-[10.5px] px-2 py-1 rounded-md transition-colors flex items-center gap-1.5"
+        className="text-[10.5px] px-2 py-1 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
         style={{ background: view === id ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: view === id ? "var(--text)" : "var(--text3)", border: `1px solid color-mix(in srgb, var(--border) ${view === id ? 40 : 15}%, transparent)` }}>
         {/* The key that gets you here. lazygit does the same in its panel titles
             (gui.showPanelJumps) — a shortcut nothing advertises is a shortcut
@@ -1024,13 +1028,18 @@ export function GitView({ active }: { active: boolean }) {
     <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
       className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
+                {/* No overflow-hidden here, ever: the repo picker's dropdown is
+                    absolutely positioned inside this row, and clipping the row
+                    clipped the menu to a sliver. Overflow is prevented by the
+                    branch chip yielding space and the tab strip scrolling —
+                    not by cutting off whatever escapes. */}
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Source control</span>
+                  <span className="text-[15px] font-semibold whitespace-nowrap shrink-0" style={{ color: "var(--text)" }}>Source control</span>
                   <div className="relative">
                     {/* Also one line. A worktree directory carries the whole
                         ticket name, and wrapped it made the button two rows
                         tall and shoved the tab strip down with it. */}
-                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[240px]" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
+                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[240px] shrink-0 whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
                       title={repoRef ? `${repoRef.name}\n${repoRef.root}` : undefined}>
                       <span className="font-medium truncate min-w-0">{repoRef?.name ?? "repo"}</span><span className="t-dim2 shrink-0">▼</span>
                     </button>
@@ -1083,10 +1092,14 @@ export function GitView({ active }: { active: boolean }) {
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 ml-1">
+                  {/* Scrolls rather than shoves. Eight tabs plus a long branch
+                      name will not fit a narrow window, and something has to
+                      give — a strip you can flick is better than controls
+                      pushed off the right edge. */}
+                  <div className="flex items-center gap-2 ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
                     {VIEW_GROUPS.map((g) => <ViewGroup key={g.label} views={g.views} />)}
                   </div>
-                  <div className="ml-auto flex items-center gap-1.5">
+                  <div className="ml-auto flex items-center gap-1.5 min-w-0">
                     {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
                     {/* Update from base — merge master's latest into the branch
                         you are on, in this checkout. Sits with fetch/pull/push
