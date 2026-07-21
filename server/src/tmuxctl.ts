@@ -174,6 +174,31 @@ export function listWindows(t: TmuxTarget): TmuxWindow[] {
 }
 
 /**
+ * The keys tmux is waiting for as its prefix, as tmux spells them (`C-b`,
+ * `C-f`, `M-a`), including `prefix2` when one is set.
+ *
+ * The panel needs this to say "tmux is listening" the instant the key is
+ * pressed. That indicator used to come free: it lives in the status line most
+ * configs draw, and hiding that line to make room for our tabs took it away
+ * with everything else. Asking tmux which key it is beats hardcoding `C-b`,
+ * because the people most likely to have rebound it are exactly the people who
+ * use tmux enough to notice the indicator missing.
+ *
+ * Read once per attach and carried on the frame: the prefix does not change
+ * while a client is up unless someone sources a config mid-session, and the
+ * next attach picks that up.
+ */
+export function prefixKeys(t: TmuxTarget): string[] {
+  const keys: string[] = [];
+  for (const opt of ["prefix", "prefix2"]) {
+    const v = (tmux(t.socket, ["show-options", "-gv", opt]) || "").trim();
+    // "None" is how tmux says a second prefix is unset.
+    if (v && v !== "None") keys.push(v);
+  }
+  return keys;
+}
+
+/**
  * The commands a tab strip is allowed to send.
  *
  * A closed list, and every one of them is something the user could already do
