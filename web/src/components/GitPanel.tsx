@@ -3,6 +3,7 @@
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
@@ -507,15 +508,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const c = newChat(root);
     update(c.id, (ch) => {
       ch.title = "resolve merge conflicts";
+      // Read from `tree`/`repos` rather than the `branch`/`repoRef` consts
+      // declared further down: same values, no dependence on where in this
+      // component the declarations happen to sit.
       ch.draft = [
-        `I am mid-merge in ${root} and git has left ${rels.length} file(s) conflicted:`,
-        "",
-        ...rels.map((r) => `- ${r}`),
-        "",
-        "Please resolve each conflict, keeping both sides' intent where they do",
-        "different things and preferring the incoming change where they do the",
-        "same thing differently. Explain anything you had to choose between.",
-        "Do not commit — leave the resolution staged so I can review it.",
+        ...conflictBriefing(root, tree?.branch, repos.find((r) => r.root === root), mergeState, rels),
+        ...CONFLICT_ASK,
       ].join("\n");
     });
     setActiveChatId(c.id);
