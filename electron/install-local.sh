@@ -34,13 +34,15 @@ done
 
 # A running instance holds these files open, and `rm -rf` under it leaves the
 # app alive on deleted inodes — it keeps running the old code and its sidecar
-# keeps :4000, so the next launch adopts a stale server. Stop it first.
-if pgrep -f "$APP/agentglass" >/dev/null 2>&1; then
-  echo "==> stopping the running instance"
-  pkill -f "$APP/agentglass" 2>/dev/null || true
-  sleep 2
-  pkill -9 -f "$APP/resources/agentglass-server" 2>/dev/null || true
-  sleep 1
+# keeps :4000, so the next launch adopts a stale server. Stop it first, and
+# refuse to continue if it will not stop: an install that fails loudly is worth
+# more than one that quietly produces that state.
+# shellcheck source=appctl.sh
+. "$HERE/appctl.sh"
+if ! stop_app; then
+  echo "refusing to install over a running instance — still alive: $(app_pids | tr '\n' ' ')" >&2
+  echo "  kill -9 those pids and run this again" >&2
+  exit 1
 fi
 
 mkdir -p "$APP" "$BIN" "$DESKTOP"
