@@ -4,6 +4,7 @@ import { api, type UsagePayload, type UsageWindow } from "../../lib/api.ts";
 import { subscribeUsage, usedColor, usageError, resetLabel } from "../UsageWidget.tsx";
 import { subscribe as subscribeChats, listChats } from "../../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
+import { clock24, subscribeClock24 } from "../../lib/clockPref.ts";
 import {
   subscribeSystemNotes, subscribeNotifyHistory, notifyHistory, notifyUnread,
   markNotifyRead, dismissNote, clearNotes, openNote, type SystemNote,
@@ -52,6 +53,7 @@ const NOTCH_H = 40;
 // ---------------------------------------------------------------------------
 function useClock(): { hhmm: string; ampm: string; colon: boolean; label: string } {
   const [now, setNow] = useState(() => new Date());
+  const h24 = useSyncExternalStore(subscribeClock24, clock24, () => false);
   useEffect(() => {
     let id: ReturnType<typeof setInterval> | null = null;
     const start = () => { if (!id) id = setInterval(() => setNow(new Date()), 1000); };
@@ -61,13 +63,15 @@ function useClock(): { hhmm: string; ampm: string; colon: boolean; label: string
     document.addEventListener("visibilitychange", onVis);
     return () => { stop(); document.removeEventListener("visibilitychange", onVis); };
   }, []);
-  let h = now.getHours();
-  const ampm = h >= 12 ? "PM" : "AM";
-  h = h % 12 || 12;
   const p2 = (n: number) => String(n).padStart(2, "0");
+  const raw = now.getHours();
+  // On 24h the meridiem has nothing to say, and an empty caption would leave
+  // the clock the only pill without a top line. The seconds take the slot —
+  // the one reading the strip doesn't show anywhere else.
+  const h = h24 ? raw : raw % 12 || 12;
   return {
     hhmm: `${p2(h)}:${p2(now.getMinutes())}`,
-    ampm,
+    ampm: h24 ? p2(now.getSeconds()) : raw >= 12 ? "PM" : "AM",
     colon: now.getSeconds() % 2 === 0,
     label: now.toLocaleString([], { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }),
   };

@@ -54,6 +54,7 @@ import { rateOk } from "./ratelimit.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
+import { markIgnored } from "./ignored.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 /** When this process came up. /stats ships it so the dashboard's uptime is
@@ -441,7 +442,11 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/changes") {
       const limit = Math.min(500, Number(url.searchParams.get("limit") || 200));
-      return json({ changes: getChanges(limit) });
+      const changes = getChanges(limit);
+      // One `git check-ignore` per repo, not per file, so the client can fold
+      // away build output without having to guess at .gitignore semantics.
+      const ignored = markIgnored(changes.map((c) => c.file_path));
+      return json({ changes: changes.map((c) => ({ ...c, ignored: ignored.get(c.file_path) === true })) });
     }
 
     // --- commit composer: live git working-tree status + commit ---

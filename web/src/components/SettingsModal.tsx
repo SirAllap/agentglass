@@ -16,6 +16,7 @@ import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESK
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
+import { clock24, setClock24 } from "../lib/clockPref.ts";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
   return (
@@ -137,6 +138,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   useEffect(() => { if (open) autostartEnabled().then(setAutostartState); }, [open]);
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
+  const [h24, setH24] = useState<boolean>(() => clock24());
   const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
   useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
@@ -198,6 +200,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         D-Bus monitor at all. On a machine that cannot do this
                         the row stays but says why, rather than vanishing and
                         leaving you wondering whether you imagined it. */}
+                    <Choice<"12" | "24">
+                      label="Clock"
+                      hint="How the workspace strip shows the time"
+                      value={h24 ? "24" : "12"}
+                      onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
+                      options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
                     <Choice<SysNotifyMode>
                       label="Desktop notifications on the notch"
                       hint="Slack and the rest, mirrored onto the strip you can still see in fullscreen"
