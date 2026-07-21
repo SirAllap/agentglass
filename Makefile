@@ -47,6 +47,15 @@ connect: ## Auto-connect OTel-capable CLIs (Codex, Gemini, …) to agentglass
 connect-undo: ## Undo the OTel auto-connect
 	python3 hooks/connect_otel.py --undo
 
+assets: ## Regenerate the README screenshots and hero GIF (demo data only)
+	@echo "==> demo stills + hero.gif"
+	cd web && bun run build:demo
+	bun scripts/capture.ts
+	@echo "==> the terminal, against a throwaway repo"
+	cd web && bun run build
+	bun scripts/capture-live.ts
+	@echo "==> done — review .github/assets before committing"
+
 demo-feed: ## Stream fabricated demo events into a running server
 	python3 hooks/seed_demo.py
 
@@ -84,5 +93,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test smoke typecheck start setup setup-undo connect connect-undo demo-feed \
+.PHONY: help install dev server web build test smoke typecheck start setup setup-undo connect connect-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open
