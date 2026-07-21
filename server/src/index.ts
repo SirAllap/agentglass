@@ -52,6 +52,7 @@ import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { rateOk } from "./ratelimit.ts";
 import { parseWindowMs } from "./params.ts";
+import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 /** When this process came up. /stats ships it so the dashboard's uptime is
@@ -217,6 +218,18 @@ const server = Bun.serve<WsData>({
     // missing Origin is a non-browser caller (curl, the hooks), not a drive-by,
     // so it's allowed; a foreign website is turned away here.
     if (!localOrigin(req)) return csrfBlocked();
+
+    // --- built web UI (single-port mode) ---
+    // Exact files only, GET/HEAD only, and ahead of the token gate: the bundle
+    // is the same public code that ships in the repo, and the ?token= flow
+    // needs index.html and its assets to load before the app can pick the
+    // token up and attach it — every data route below stays gated. API paths
+    // never collide here: none of them maps to a real file under web/dist, so
+    // for them this falls straight through to the routes.
+    if (req.method === "GET" || req.method === "HEAD") {
+      const asset = serveWeb(pathname, cors);
+      if (asset) return asset;
+    }
 
     // Shared-secret gate. When a token is configured, every route but the
     // append-only intake sinks needs it — this is what closes the door on other
@@ -597,6 +610,16 @@ const server = Bun.serve<WsData>({
       });
     }
 
+    // --- SPA fallback ---
+    // Every API route above has declined by now. A GET that asks for html is a
+    // browser navigating to a UI deep-link (or a bookmark of one) — hand it
+    // index.html and let the bundle take it from there. Anything else — curl,
+    // fetch, an exporter probing a bad path — still gets the JSON 404.
+    if (req.method === "GET" && (req.headers.get("accept") || "").includes("text/html")) {
+      const page = serveIndex(cors);
+      if (page) return page;
+    }
+
     return json({ error: "not found" }, 404);
   },
 
@@ -737,6 +760,7 @@ if (AUTH_TOKEN) {
     console.log(`🔑 AGENTGLASS_TOKEN set — clients must pass ?token= or Authorization: Bearer`);
   }
 }
+if (WEB_UI_ENABLED) console.log(`   Web UI      → http://localhost:${server.port}/ (serving web/dist)`);
 console.log(`   POST events → http://localhost:${server.port}/ingest`);
 console.log(`   WebSocket   → ws://localhost:${server.port}/stream`);
 console.log(`   Stats API   → http://localhost:${server.port}/stats`);
