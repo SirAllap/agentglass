@@ -313,15 +313,14 @@ function fileType(c: FileChange): { label: string; color: string } {
   return { label, color: TYPE_STYLE[label] ?? "var(--info)" };
 }
 
-type GroupBy = "session" | "date" | "agent" | "folder" | "tool";
+type GroupBy = "session" | "agent" | "folder" | "tool";
 const GROUP_DIMS: { id: GroupBy; label: string }[] = [
   { id: "session", label: "Session" },
-  { id: "date", label: "Date" },
   { id: "agent", label: "Agent" },
   { id: "folder", label: "Folder" },
   { id: "tool", label: "Tool" },
 ];
-type FileGroup = { key: string; label: string; sub?: string; items: FileChange[]; add: number; del: number };
+type FileGroup = { key: string; label: string; sub?: string; /** Set when split by day, so the list can head each run of groups. */ day?: string; items: FileChange[]; add: number; del: number };
 
 const dirOf = (path: string) => {
   const base = path.split("/").pop() ?? "";
@@ -347,7 +346,16 @@ function dayLabel(d: Date): string {
   return d.toLocaleDateString([], { day: "numeric", month: "short" });
 }
 
-function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>): FileGroup[] {
+/**
+ * Group by a dimension, optionally split by day first.
+ *
+ * Date was one of the mutually exclusive dimensions, which made it useless in
+ * practice: choosing it told you *when* and took away *who* — a day's worth of
+ * edits with no session, agent or folder to make sense of them. It is a second
+ * axis, not a fifth option, so it layers: sections stay Session (or Agent, or
+ * Folder), and each one is scoped to a day when the split is on.
+ */
+function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>, byDate = false): FileGroup[] {
   const map = new Map<string, FileGroup>();
   const order: string[] = [];
   for (const c of list) {
@@ -361,20 +369,21 @@ function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<stri
       label = titles?.get(c.session_id) ?? agentKey({ source_app: c.source_app, session_id: c.session_id });
       sub = c.source_app;
     }
-    else if (by === "date") {
-      // Keyed on the local calendar day, not on the raw timestamp: the point is
-      // "what did we do on Tuesday", and the rows are already newest-first, so
-      // the days come out in order without a second sort.
-      const d = new Date(c.timestamp);
-      key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-      label = dayLabel(d);
-      sub = d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
-    }
     else if (by === "agent") { key = c.source_app || "—"; label = c.source_app || "unknown"; }
     else if (by === "tool") { key = c.tool || "—"; label = c.tool || "unknown"; }
     else { const d = dirOf(c.file_path); key = d; label = shortDir(d); }
+    // The day, when the split is on, is part of the identity — so one session
+    // spanning midnight becomes two sections rather than one that lies about
+    // which day it belongs to. `day` also rides along so the list can draw a
+    // heading when it changes.
+    let day: string | undefined;
+    if (byDate) {
+      const d = new Date(c.timestamp);
+      day = dayLabel(d);
+      key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${key}`;
+    }
     let g = map.get(key);
-    if (!g) { g = { key, label, sub, items: [], add: 0, del: 0 }; map.set(key, g); order.push(key); }
+    if (!g) { g = { key, label, sub, day, items: [], add: 0, del: 0 }; map.set(key, g); order.push(key); }
     g.items.push(c); g.add += c.additions; g.del += c.deletions;
   }
   // Newest first *within* a group, stated rather than inherited. The rows
@@ -627,6 +636,8 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const [q, setQ] = useState("");
   /** Ignored files start folded away — see `visible` below. */
   const [showIgnored, setShowIgnored] = useState(false);
+  /** Split whichever grouping is chosen by day as well. */
+  const [byDate, setByDate] = useState(false);
   const [selId, setSelId] = useState<number | null>(null);
   const [wrap, setWrap] = useState(false);
   const [split, setSplit] = useState(true);
@@ -716,7 +727,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const ignoredCount = useMemo(() => all.reduce((n, c) => n + (c.ignored ? 1 : 0), 0), [all]);
   const visible = useMemo(() => (showIgnored ? all : all.filter((c) => !c.ignored)), [all, showIgnored]);
   const filtered = useMemo(() => (q ? visible.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : visible), [visible, q]);
-  const groups = useMemo(() => groupChanges(filtered, groupBy, titles), [filtered, groupBy, titles]);
+  const groups = useMemo(() => groupChanges(filtered, groupBy, titles, byDate), [filtered, groupBy, titles, byDate]);
   const shown = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const totals = useMemo(() => all.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }), [all]);
   const revCount = useMemo(() => all.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0), [all, reviewed]);
@@ -915,6 +926,20 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             }}
                           >{d.label}</button>
                         ))}
+                        {/* A modifier, not a fifth dimension — it sits after a
+                            separator because it changes what the four to its
+                            left do rather than replacing them. */}
+                        <span className="w-px h-4 mx-0.5 shrink-0" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                        <button
+                          onClick={() => setByDate((v) => !v)}
+                          className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
+                          title={byDate ? "one section per group" : "split each group by day"}
+                          style={{
+                            background: byDate ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                            color: byDate ? "var(--text)" : "var(--text3)",
+                            border: `1px solid color-mix(in srgb, var(--border) ${byDate ? 45 : 18}%, transparent)`,
+                          }}
+                        >by date</button>
                         {/* Says what it is hiding, and offers it back. A
                             filter that silently drops rows makes the list lie
                             about what the session touched. */}
@@ -944,7 +969,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                     <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-2">
                       {!changes && <div className="t-dim2 text-center py-10 text-[12px]">loading changes…</div>}
                       {changes && shown.length === 0 && <div className="t-dim2 text-center py-10 text-[12px]">{q ? "no files match your filter" : "no file changes captured yet"}</div>}
-                      {groups.map((g) => (
+                      {groups.map((g, gi) => (
+                        <div key={`w:${g.key}`}>
+                          {/* Only when it changes: repeating "Today" above every
+                              session turns a heading into wallpaper. */}
+                          {g.day && g.day !== groups[gi - 1]?.day && (
+                            <div className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wider" style={{ color: "var(--primary-hover)" }}>{g.day}</div>
+                          )}
                         <GroupBlock
                           key={g.key}
                           g={g}
@@ -957,6 +988,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           onToggleReviewed={toggleReviewed}
                           onToggleGroup={toggleGroup}
                         />
+                        </div>
                       ))}
                     </div>
                   </div>
