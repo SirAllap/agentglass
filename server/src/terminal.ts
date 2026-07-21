@@ -240,7 +240,7 @@ export function ptyOpen(ws: PtyWs) {
     const shape = JSON.stringify(windows);
     if (shape === sentWindows && sawTmux === now) return;
     sentWindows = shape;
-    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, prefix: prefixKeys(session.tmux), windows });
+    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, prefix: session.tmux ? prefixKeys(session.tmux) : [], windows });
   };
   session.tmuxSweep = sweep;
   /*
