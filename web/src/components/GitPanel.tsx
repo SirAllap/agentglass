@@ -1165,7 +1165,7 @@ export function GitView({ active }: { active: boolean }) {
                         </div>
                       );
                     })}
-                    {!graph.length && <div className="grid place-items-center py-10 t-dim2 text-[12px]" style={{ fontFamily: "system-ui" }}>no commits</div>}
+                    {!graph.length && <PaneEmpty busy={busyView === "log"} what="commits" />}
                     <MoreRows shown={incGraph.rows.length} total={graph.length} onAll={incGraph.showAll} />
                   </div>
                 ) : view === "branches" ? (
@@ -1205,6 +1205,7 @@ export function GitView({ active }: { active: boolean }) {
                         )}
                       </div>
                     )}
+                    {!incBranches.rows.length && <PaneEmpty busy={busyView === "branches"} what="branches" />}
                     {incBranches.rows.map((b, i) => {
                       const t = trackChip(b.track);
                       const sel = i === rowIdx;
@@ -1304,7 +1305,7 @@ export function GitView({ active }: { active: boolean }) {
                         <span className="shrink-0 text-[9.5px] t-dim2">{e.date}</span>
                       </div>
                     ))}
-                    {!reflog.length && <div className="grid place-items-center py-10 t-dim2 text-[12px]">no reflog</div>}
+                    {!reflog.length && <PaneEmpty busy={busyView === "reflog"} what="reflog entries" />}
                     <MoreRows shown={incReflog.rows.length} total={reflog.length} onAll={incReflog.showAll} />
                   </div>
                 ) : (
