@@ -22,6 +22,8 @@ import { join } from "node:path";
  */
 
 const ROOTS = ["web/src", "server/src", "shared", "electron", "hooks", "scripts"];
+/** Directories that only ever hold generated or vendored files. */
+const SKIP = new Set(["node_modules", "dist", "dist-app", "build", "out", "release"]);
 const EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".json", ".css", ".html", ".py", ".sh"];
 
 /** Tab, newline and carriage return are the only control characters that
@@ -36,7 +38,14 @@ function walk(dir: string, hits: string[]) {
   let entries;
   try { entries = readdirSync(dir); } catch { return; }
   for (const name of entries) {
-    if (name === "node_modules" || name === "dist" || name.startsWith(".")) continue;
+    // Skip anything generated. `electron/` is in ROOTS for its own source, and
+    // it is also where electron-builder drops an unpacked Chromium: 180 MB of
+    // vendored HTML and minified JS, every bit of it full of the bytes this
+    // test is looking for. Nobody committed those, so a machine that has run
+    // `make desktop` should not fail a source-hygiene check for having built
+    // the app — which is the same green-in-CI, red-on-your-laptop shape this
+    // file exists to prevent.
+    if (SKIP.has(name) || name.startsWith(".")) continue;
     const p = join(dir, name);
     let s;
     try { s = statSync(p); } catch { continue; }
