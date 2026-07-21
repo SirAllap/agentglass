@@ -177,6 +177,10 @@ function branchInfo(root: string): GitBranchInfo {
     name, upstream, ahead, behind, detached, state: treeState(root),
     base,
     behindBase: base ? behindBase(root, name, base) : 0,
+    // Two rev-parses, so only when the answer can change a decision: the
+    // panel asks it to decide whether being behind upstream is a reason to
+    // refuse a base merge, and that question only exists while behind.
+    upstreamIsBase: upstream && base && behind > 0 ? sameBranch(root, upstream, base) : undefined,
     canUndoMerge: undoableMerge(root, ahead, upstream),
   };
 }
@@ -960,6 +964,31 @@ export function baseOf(root: string, branch: string): string | null {
   // A branch is not its own base; the trunk checkout simply has none.
   if (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch) return null;
   return trunk;
+}
+
+/**
+ * Do two refs name the same branch, ignoring which remote they came through?
+ *
+ * `origin/main` and `main` are one branch wearing two names, and telling them
+ * apart matters: a branch that tracks the trunk directly — every local-only
+ * branch made with `git branch --track main`, and every worktree cut from one —
+ * has `@{upstream}` pointing at the trunk rather than at a remote copy of
+ * itself. Comparing the strings says "different"; comparing what they resolve
+ * to says "the same", and only the second answer is useful.
+ *
+ * Compared as full ref names rather than by stripping a slash, because branch
+ * names contain slashes too: chopping the first segment off `native/egui-shell`
+ * leaves `egui-shell`, which is not a branch anyone has.
+ */
+function sameBranch(root: string, a: string, b: string): boolean {
+  const short = (ref: string): string => {
+    const full = git(root, ["rev-parse", "--symbolic-full-name", ref]).stdout.trim();
+    return full
+      .replace(/^refs\/heads\//, "")
+      .replace(/^refs\/remotes\/[^/]+\//, "");
+  };
+  const x = short(a);
+  return !!x && x === short(b);
 }
 
 export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitActionResult {

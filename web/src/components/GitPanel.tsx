@@ -1046,6 +1046,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
   const repoRef = repos.find((r) => r.root === root);
   const branch = tree?.branch;
+  /**
+   * Behind a remote copy *of this branch* — the only case where merging the
+   * base is the wrong move, because that copy has already merged what you are
+   * about to merge again.
+   *
+   * A branch that tracks the trunk directly is not that case: its upstream IS
+   * the base, so "behind upstream" and "behind base" are the same commits and
+   * the merge is exactly how you close them. Treating the two alike disabled
+   * the button on every local-only branch and sent people to a pull that
+   * cannot run — `pull --ff-only` refuses the moment you are also ahead.
+   *
+   * `undefined` means a server too old to answer: keep the old, careful
+   * behaviour rather than assuming.
+   */
+  const twinBehind = !!branch && branch.behind > 0 && branch.upstreamIsBase !== true;
   const toggleDir = (path: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -1284,18 +1299,18 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             and the reason is the fix. */}
                         <button
                           onClick={() => act(() => api.gitSyncBase(root), `merged ${branch.base}`, "sync")}
-                          disabled={!writeEnabled || busy || !tree?.clean || branch.behind > 0}
+                          disabled={!writeEnabled || busy || !tree?.clean || twinBehind}
                           className="text-[11px] px-2 py-1 rounded-l-lg whitespace-nowrap"
-                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy || !tree?.clean || branch.behind > 0) ? 0.45 : 1 }}
+                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy || !tree?.clean || twinBehind) ? 0.45 : 1 }}
                           title={!tree?.clean
                             ? "Commit or stash your changes first — merging over uncommitted work is how you lose it"
-                            : branch.behind > 0
+                            : twinBehind
                             // Syncing while behind your own remote makes a
                             // second merge commit for content the remote has
                             // already merged — the two then have to be
                             // reconciled. Pull is the move; sync afterwards if
                             // anything is still missing.
-                            ? `Pull first — ${branch.behind} commit${branch.behind === 1 ? "" : "s"} on your remote branch you do not have. Syncing now would make a duplicate merge and diverge from it.`
+                            ? `Pull first — ${branch.behind} commit${branch.behind === 1 ? "" : "s"} on ${branch.upstream} you do not have. Syncing now would make a duplicate merge and diverge from it.`
                             : `Merge ${branch.base} into ${branch.name}. Brings the base branch's latest commits into this one — a merge, not a rebase, so nothing already pushed is rewritten.`}>
                           {pending === "sync" ? "syncing…" : `⇣ sync ↓${branch.behindBase}`}
                         </button>
