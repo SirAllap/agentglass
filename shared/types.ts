@@ -385,6 +385,12 @@ export interface GitBranchInfo {
   base?: string | null;
   /** Commits the base has that this branch does not. */
   behindBase?: number;
+  /** `@{upstream}` and the base are the same branch under two names —
+   *  a local-only branch tracking the trunk (upstream `origin/main`, base
+   *  `main`). Then "behind upstream" and "behind base" count the same commits,
+   *  and merging the base is the way to close both. Only computed while it
+   *  could matter (behind > 0, base known); absent otherwise. */
+  upstreamIsBase?: boolean;
   /** The tip is an unpushed merge on a clean tree — so it can be undone
    *  exactly, by resetting to its first parent. */
   canUndoMerge?: boolean;
