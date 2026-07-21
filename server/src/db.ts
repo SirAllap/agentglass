@@ -618,7 +618,8 @@ export function getRecent(limit = 300, provider?: string): WatchEvent[] {
 const OPEN_TOOL_MAX_MS = 30 * 60_000;
 const openToolSql = (scoped: string) =>
   `SELECT p.session_id AS session_id, p.source_app AS source_app,
-          COALESCE(p.tool_name, 'tool') AS tool_name, p.timestamp AS since
+          COALESCE(p.tool_name, 'tool') AS tool_name, p.timestamp AS since,
+          json_extract(p.payload, '$.tool_input.file_path') AS target
      FROM events p
     WHERE p.hook_event_type = 'PreToolUse'
       AND p.timestamp >= ?

@@ -334,6 +334,17 @@ export interface OpenToolCall {
   source_app: string;
   tool_name: string;
   since: number; // ms — the PreToolUse timestamp
+  /** The file this tool's own input said it would touch, when it named one.
+   *  Null for Bash and for anything that writes nowhere in particular. */
+  target?: string | null;
+  /** When this session last showed evidence of being alive: the transcript
+   *  growing, or the file above changing. Independent of the hook stream, which
+   *  by definition has gone quiet while a call is open. Absent when there was
+   *  nothing to read. */
+  evidenceAt?: number;
+  /** Which evidence the timestamp came from. `none` means no source was
+   *  readable — deliberately not the same claim as "nothing happened". */
+  evidenceKind?: "transcript" | "target" | "none";
 }
 
 /** WebSocket frames. */
