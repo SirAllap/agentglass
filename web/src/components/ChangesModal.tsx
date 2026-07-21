@@ -320,7 +320,7 @@ const GROUP_DIMS: { id: GroupBy; label: string }[] = [
   { id: "folder", label: "Folder" },
   { id: "tool", label: "Tool" },
 ];
-type FileGroup = { key: string; label: string; sub?: string; items: FileChange[]; add: number; del: number };
+type FileGroup = { key: string; label: string; sub?: string; /** Set when split by day, so the list can head each run of groups. */ day?: string; items: FileChange[]; add: number; del: number };
 
 const dirOf = (path: string) => {
   const base = path.split("/").pop() ?? "";
@@ -334,7 +334,28 @@ const shortDir = (dir: string) => {
 
 /** Bucket the (already path-filtered) changes into groups, preserving first-seen
  *  order — the API returns newest-first, so recent activity floats to the top. */
-function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>): FileGroup[] {
+/** "Today" / "Yesterday" / "Tuesday" for the last week, then a plain date.
+ *  A weekday is how you actually remember recent work; past that it stops
+ *  being unambiguous and the date is the only honest label. */
+function dayLabel(d: Date): string {
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOf(new Date()) - startOf(d)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
+  return d.toLocaleDateString([], { day: "numeric", month: "short" });
+}
+
+/**
+ * Group by a dimension, optionally split by day first.
+ *
+ * Date was one of the mutually exclusive dimensions, which made it useless in
+ * practice: choosing it told you *when* and took away *who* — a day's worth of
+ * edits with no session, agent or folder to make sense of them. It is a second
+ * axis, not a fifth option, so it layers: sections stay Session (or Agent, or
+ * Folder), and each one is scoped to a day when the split is on.
+ */
+function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>, byDate = false): FileGroup[] {
   const map = new Map<string, FileGroup>();
   const order: string[] = [];
   for (const c of list) {
@@ -351,10 +372,25 @@ function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<stri
     else if (by === "agent") { key = c.source_app || "—"; label = c.source_app || "unknown"; }
     else if (by === "tool") { key = c.tool || "—"; label = c.tool || "unknown"; }
     else { const d = dirOf(c.file_path); key = d; label = shortDir(d); }
+    // The day, when the split is on, is part of the identity — so one session
+    // spanning midnight becomes two sections rather than one that lies about
+    // which day it belongs to. `day` also rides along so the list can draw a
+    // heading when it changes.
+    let day: string | undefined;
+    if (byDate) {
+      const d = new Date(c.timestamp);
+      day = dayLabel(d);
+      key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${key}`;
+    }
     let g = map.get(key);
-    if (!g) { g = { key, label, sub, items: [], add: 0, del: 0 }; map.set(key, g); order.push(key); }
+    if (!g) { g = { key, label, sub, day, items: [], add: 0, del: 0 }; map.set(key, g); order.push(key); }
     g.items.push(c); g.add += c.additions; g.del += c.deletions;
   }
+  // Newest first *within* a group, stated rather than inherited. The rows
+  // arrive in timestamp order today, so this changes nothing — until something
+  // upstream reorders them and a day's work silently stops reading
+  // chronologically, which is the one thing a date grouping is for.
+  for (const g of map.values()) g.items.sort((a, b) => b.timestamp - a.timestamp);
   return order.map((k) => map.get(k)!);
 }
 
@@ -403,7 +439,12 @@ function FileItem({ c, active, reviewed, info, onSelect, onToggleReviewed }: { c
         </span>
       </div>
       {info?.description ? (
-        <div className="mt-0.5 text-[10px] pl-[22px] truncate" style={{ color: "var(--text3)" }} title={info.description}>{info.description}</div>
+        // The clock stays even when a description takes the line: with the list
+        // grouped by day, "when" is half of what you are reading it for.
+        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] pl-[22px]" style={{ color: "var(--text3)" }}>
+          <span className="truncate min-w-0" title={info.description}>{info.description}</span>
+          <span className="ml-auto shrink-0 tabular-nums opacity-80">{fmtTime(c.timestamp)}</span>
+        </div>
       ) : (
         <div className="flex items-center gap-1.5 mt-0.5 text-[9.5px] t-dim2 pl-[22px]">
           <span className="truncate min-w-0" title={c.file_path}>{dirOf(c.file_path)}</span>
@@ -595,6 +636,8 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const [q, setQ] = useState("");
   /** Ignored files start folded away — see `visible` below. */
   const [showIgnored, setShowIgnored] = useState(false);
+  /** Split whichever grouping is chosen by day as well. */
+  const [byDate, setByDate] = useState(false);
   const [selId, setSelId] = useState<number | null>(null);
   const [wrap, setWrap] = useState(false);
   const [split, setSplit] = useState(true);
@@ -684,7 +727,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const ignoredCount = useMemo(() => all.reduce((n, c) => n + (c.ignored ? 1 : 0), 0), [all]);
   const visible = useMemo(() => (showIgnored ? all : all.filter((c) => !c.ignored)), [all, showIgnored]);
   const filtered = useMemo(() => (q ? visible.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : visible), [visible, q]);
-  const groups = useMemo(() => groupChanges(filtered, groupBy, titles), [filtered, groupBy, titles]);
+  const groups = useMemo(() => groupChanges(filtered, groupBy, titles, byDate), [filtered, groupBy, titles, byDate]);
   const shown = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const totals = useMemo(() => all.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }), [all]);
   const revCount = useMemo(() => all.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0), [all, reviewed]);
@@ -866,12 +909,16 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         className="w-full px-3 py-1.5 rounded-lg text-[11px] outline-none"
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
                       />
-                      <div className="flex items-center gap-1">
+                      {/* One row, one height. `flex-wrap` rather than letting a
+                          chip grow: on a narrow panel the row wraps as a row,
+                          which is legible, instead of one button becoming two
+                          lines tall and dragging its neighbours' baseline. */}
+                      <div className="flex items-center flex-wrap gap-1">
                         {GROUP_DIMS.map((d) => (
                           <button
                             key={d.id}
                             onClick={() => setGroupBy(d.id)}
-                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors"
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
                             style={{
                               background: groupBy === d.id ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
                               color: groupBy === d.id ? "var(--text)" : "var(--text3)",
@@ -879,13 +926,31 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             }}
                           >{d.label}</button>
                         ))}
+                        {/* A modifier, not a fifth dimension — it sits after a
+                            separator because it changes what the four to its
+                            left do rather than replacing them. */}
+                        <span className="w-px h-4 mx-0.5 shrink-0" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                        <button
+                          onClick={() => setByDate((v) => !v)}
+                          className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
+                          title={byDate ? "one section per group" : "split each group by day"}
+                          style={{
+                            background: byDate ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                            color: byDate ? "var(--text)" : "var(--text3)",
+                            border: `1px solid color-mix(in srgb, var(--border) ${byDate ? 45 : 18}%, transparent)`,
+                          }}
+                        >by date</button>
                         {/* Says what it is hiding, and offers it back. A
                             filter that silently drops rows makes the list lie
                             about what the session touched. */}
                         {ignoredCount > 0 && (
                           <button
                             onClick={() => setShowIgnored((v) => !v)}
-                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors"
+                            // nowrap: "+ 23 ignored" broke across two lines and
+                            // made this chip taller than the four beside it.
+                            // A button that changes height with its own label
+                            // is never worth the width it saves.
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
                             title={showIgnored
                               ? "hide files git ignores"
                               : `${ignoredCount} file${ignoredCount === 1 ? "" : "s"} git ignores ${ignoredCount === 1 ? "is" : "are"} hidden — build output, caches, scratch files`}
@@ -904,7 +969,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                     <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-2">
                       {!changes && <div className="t-dim2 text-center py-10 text-[12px]">loading changes…</div>}
                       {changes && shown.length === 0 && <div className="t-dim2 text-center py-10 text-[12px]">{q ? "no files match your filter" : "no file changes captured yet"}</div>}
-                      {groups.map((g) => (
+                      {groups.map((g, gi) => (
+                        <div key={`w:${g.key}`}>
+                          {/* Only when it changes: repeating "Today" above every
+                              session turns a heading into wallpaper. */}
+                          {g.day && g.day !== groups[gi - 1]?.day && (
+                            <div className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wider" style={{ color: "var(--primary-hover)" }}>{g.day}</div>
+                          )}
                         <GroupBlock
                           key={g.key}
                           g={g}
@@ -917,6 +988,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           onToggleReviewed={toggleReviewed}
                           onToggleGroup={toggleGroup}
                         />
+                        </div>
                       ))}
                     </div>
                   </div>

@@ -330,27 +330,22 @@ export default function App() {
       const a = document.activeElement;
       const focusFree = !a || a === document.body || a === document.documentElement;
 
-      // Inside the workspace the frame itself holds focus, so `focusFree` is
-      // false and the old guard would swallow every letter. What actually
-      // matters there is narrower: is the keystroke going into a field or a
-      // shell? If not, it's navigation.
+      // Bare letters belong to the dashboard, and only to it.
       //
-      // The terminal is the exception, and it has to be the *view* that decides
-      // rather than what holds DOM focus. Asking `activeElement` worked only
-      // while the caret sat in xterm's helper textarea: click anything in the
-      // terminal's own toolbar — the repo picker, restart, clear — and focus
-      // parks on that button, so `typing` went false and the next letter of the
-      // command being typed was eaten as navigation. `t` closed the terminal
-      // mid-command, `g` jumped to git. While the terminal is the active view
-      // every bare letter belongs to the shell; ⌘1..5, ⌘\ and ⌘[/] still leave,
-      // which is exactly why they carry a modifier.
-      const termOwnsKeys = wsOpenRef.current && wsViewRef.current === "term";
-      const typing = termOwnsKeys || (!!a && (
-        /^(input|textarea|select)$/i.test(a.tagName) ||
-        (a as HTMLElement).isContentEditable ||
-        !!a.closest?.(".xterm")
-      ));
-      const canNavigate = (focusFree && !anyPanelOpenRef.current) || (wsOpenRef.current && !typing);
+      // They used to switch views inside the workspace too, guarded by asking
+      // `document.activeElement` whether the keystroke was going into a field
+      // or a shell. That guard could not hold: focus inside the workspace falls
+      // back to <body> constantly — xterm losing it, a click landing on padding
+      // — and a body-focused keystroke read as "not typing", so a `g` typed
+      // into the terminal jumped to git. Intermittently, which is the worst
+      // way for a keyboard to be wrong: you stop trusting every key you press.
+      //
+      // There is no version of "is this keystroke meant for the app or for the
+      // shell" that a heuristic answers reliably, so the rule is positional
+      // instead of behavioural. Inside the workspace, navigation carries a
+      // modifier — ⌘1..5, ⌘\, ⌘[/] — which no shell will ever consume, and the
+      // rail is a click away.
+      const canNavigate = focusFree && !anyPanelOpenRef.current && !wsOpenRef.current;
       if (!canNavigate) return;
 
       // Which action owns this letter, according to the user's bindings —
@@ -361,22 +356,18 @@ export default function App() {
       // after the next remount.
       const action = actionFor(e.key);
 
-      // A workspace letter either opens the workspace on that view or, if it's
-      // already open, switches to it. They no longer stop working the moment
-      // you're actually using one of them.
+      // A workspace letter opens the workspace on that view. Only from the
+      // dashboard now — the guard above has already established that — so it
+      // opens rather than toggles: there is no open workspace to close from
+      // here, and ⌘\ is the key that puts it away from inside.
       if (action?.startsWith("view.")) {
         const view = action.slice(5) as ViewId;
         e.preventDefault();
-        // Pressing the current view's own letter closes the workspace, so a
-        // key that opened something can also put it away.
-        if (wsOpenRef.current && view === wsViewRef.current) setWsOpen(false);
-        else { setWsView(view); setWsOpen(true); }
+        setWsView(view);
+        setWsOpen(true);
         return;
       }
 
-      // The remaining globals still open something *over* whatever you're in,
-      // so they keep the original strict guard: dashboard only.
-      if (!focusFree || anyPanelOpenRef.current || wsOpenRef.current) return;
       switch (action) {
         case "open.help": setHelpOpen((o) => !o); break;
         case "open.stats": e.preventDefault(); setStatsOpen((o) => !o); break;

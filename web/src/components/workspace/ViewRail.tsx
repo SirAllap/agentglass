@@ -1,4 +1,5 @@
 import { VIEWS, type ViewId } from "./views.ts";
+import { MOD_KEY } from "../../lib/format.ts";
 
 export type RailPip = { dot?: boolean; count?: number };
 
@@ -41,7 +42,7 @@ export function ViewRail({
         background: "color-mix(in srgb, var(--bg) 55%, transparent)",
       }}
     >
-      {VIEWS.map((v) => {
+      {VIEWS.map((v, i) => {
         const on = v.id === view;
         const pip = pips?.[v.id];
         const Icon = v.icon;
@@ -55,7 +56,11 @@ export function ViewRail({
             tabIndex={on ? 0 : -1}
             onClick={() => onSelect(v.id)}
             className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
-            data-tip={`${v.label} · ${v.key}`}
+            // The modifier binding, not the bare letter. Inside the workspace
+            // the letters no longer navigate — they belong to whatever has
+            // focus, usually a shell — and a tooltip advertising a key that
+            // does nothing is worse than no tooltip.
+            data-tip={`${v.label} · ${MOD_KEY}${i + 1}`}
             style={{
               color: on ? "var(--primary-hover)" : "var(--text4)",
               background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",

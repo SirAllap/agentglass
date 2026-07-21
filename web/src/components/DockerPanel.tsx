@@ -6,6 +6,7 @@ import type { DockerOverview, DockerContainer, DockerStat } from "../../../share
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
+import { ConsoleStrip, lastTerminalRoot } from "./TerminalPanel.tsx";
 
 // Strip ANSI CSI (colors, cursor moves, erases) + OSC sequences, not just SGR.
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g; // eslint-disable-line no-control-regex
@@ -30,21 +31,42 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
   onSelect: () => void; onAction: (verb: "start" | "stop" | "restart" | "rm") => void;
 }) {
   const running = c.state === "running";
+  // The first published port, which is the one you actually reach the service
+  // on. The full list is in the tooltip; the row is not a table.
+  const port = /(\d+)->/.exec(c.ports || "")?.[1];
   return (
     <div onClick={onSelect} data-cid={active ? "active" : undefined}
-      className="group flex items-center gap-2 pl-2 pr-1.5 py-1 rounded-md cursor-pointer"
-      style={{ background: active ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
-      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: STATE_TINT[c.state] ?? "var(--text3)" }} title={c.status} />
-      <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: active ? "var(--text)" : "var(--text2)" }}>
-        {c.service || c.name}
-        {c.service && <span className="t-dim2 text-[9.5px] ml-1.5 truncate">{c.image}</span>}
+      className="group grid items-center gap-x-2 pl-2 pr-1.5 py-1 rounded-md cursor-pointer"
+      // A grid, not a flex row: every container's numbers line up in the same
+      // columns, which is what makes a list of twelve scannable instead of
+      // twelve individually-arranged lines. lazydocker does the same.
+      style={{
+        gridTemplateColumns: "10px minmax(0,1fr) 46px 46px 52px auto",
+        background: active ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent",
+      }}
+      title={`${c.name}\n${c.image}\n${c.status}${c.ports ? `\n${c.ports}` : ""}`}>
+      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: STATE_TINT[c.state] ?? "var(--text3)" }} />
+
+      <span className="min-w-0 flex flex-col leading-tight">
+        <span className="truncate text-[11.5px]" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{c.service || c.name}</span>
+        {/* The image was competing with the name on one line and both lost.
+            Underneath, dimmer, it reads as what it is — provenance, not
+            identity. */}
+        <span className="truncate text-[9px] t-dim2">{c.image}</span>
       </span>
-      {stat && running && (
-        <span className="shrink-0 flex items-center gap-1 text-[8.5px] t-dim2 tabular-nums" title={`CPU ${stat.cpu}% · MEM ${stat.mem}% (${stat.memUsage})`}>
-          <Bar pct={stat.cpu} tint="var(--info)" /><Bar pct={stat.mem} tint="var(--warning)" />
-        </span>
-      )}
-      <div className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+
+      {/* Numbers, not two unlabelled bars. A bar with no scale and no figure
+          says "something is happening"; 0.24% says which container is busy. */}
+      <span className="text-[9.5px] tabular-nums text-right" style={{ color: stat && running && stat.cpu >= 50 ? "var(--warning)" : "var(--text3)" }}>
+        {stat && running ? `${stat.cpu.toFixed(1)}%` : ""}
+      </span>
+      <span className="text-[9.5px] tabular-nums text-right" style={{ color: stat && running && stat.mem >= 80 ? "var(--warning)" : "var(--text3)" }}
+        title={stat ? `memory ${stat.mem}% (${stat.memUsage})` : undefined}>
+        {stat && running ? `${stat.mem.toFixed(0)}%` : ""}
+      </span>
+      <span className="text-[9px] tabular-nums truncate" style={{ color: "var(--info)" }}>{port ? `:${port}` : ""}</span>
+
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
         {writeEnabled && (running
           ? <>
               <button disabled={busy} onClick={() => onAction("restart")} title="Restart" className="w-5 h-5 grid place-items-center rounded text-[11px]" style={{ color: "var(--warning)" }}>⟳</button>
@@ -59,9 +81,21 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
   );
 }
 
+
 /** Docker as a workspace view. `active` means "visible right now" — the view
  *  stays mounted while you're off in the diff, it just stops polling. */
+const CONSOLE_KEY = "agentglass.docker.console";
+
 export function DockerView({ active }: { active: boolean }) {
+  // A shell docked under the logs, for the `make migrate` you always end up
+  // needing while watching a container. Its height is remembered and it is
+  // keyed on the repo, not on the container, so selecting a different one
+  // above never disturbs what is running below.
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleH, setConsoleH] = useState<number>(() => {
+    try { return Math.min(0.85, Math.max(0.08, Number(localStorage.getItem(CONSOLE_KEY)) || 0.1)); } catch { return 0.1; }
+  });
+  useEffect(() => { try { localStorage.setItem(CONSOLE_KEY, String(consoleH)); } catch { /* non-fatal */ } }, [consoleH]);
   const [ov, setOv] = useState<DockerOverview | null>(null);
   const [stats, setStats] = useState<Record<string, DockerStat>>({});
   const [view, setView] = useState<View>("containers");
@@ -216,6 +250,14 @@ export function DockerView({ active }: { active: boolean }) {
                           <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--bg2)" }}>
                             <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: "var(--text2)" }}>{proj}</span>
                             <span className="text-[9px] t-dim2 tabular-nums">{cs.filter((c) => c.state === "running").length}/{cs.length}</span>
+                            {/* Names the columns once per project, in the same
+                                grid the rows use, so the figures below are not
+                                three anonymous numbers. */}
+                            <span className="ml-auto grid gap-x-2 text-[8.5px] t-dim2 uppercase tracking-wider" style={{ gridTemplateColumns: "46px 46px 52px" }}>
+                              <span className="text-right">cpu</span>
+                              <span className="text-right">mem</span>
+                              <span>port</span>
+                            </span>
                           </div>
                           <div className="px-1">
                             {cs.map((c) => <ContainerRow key={c.id} c={c} stat={stats[c.id]} active={selected?.id === c.id} writeEnabled={writeEnabled} busy={busy} onSelect={() => { setSelId(c.id); setTab("logs"); }} onAction={(v) => doAction(c.id, v)} />)}
@@ -282,11 +324,32 @@ export function DockerView({ active }: { active: boolean }) {
                   </div>
                 )}
 
+                {/* Docked shell. Sits above the hint bar and below everything
+                    else, so opening it takes room from the logs rather than
+                    covering them. */}
+                <ConsoleStrip
+                  root={lastTerminalRoot()}
+                  open={consoleOpen}
+                  height={consoleH}
+                  onHeight={setConsoleH}
+                  onClose={() => setConsoleOpen(false)}
+                />
+
                 {ov?.available && view === "containers" && (
                   <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                     <span><b className="font-semibold">j/k</b> container</span>
                     <span><b className="font-semibold">s</b> start/stop</span>
                     <span><b className="font-semibold">r</b> restart</span>
+                    <button
+                      onClick={() => setConsoleOpen((v) => !v)}
+                      className="px-2 py-0.5 rounded text-[9.5px] whitespace-nowrap transition-colors"
+                      title="a shell in this project, docked under the logs — it keeps running while you look around"
+                      style={{
+                        background: consoleOpen ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                        color: consoleOpen ? "var(--text)" : "var(--text3)",
+                        border: `1px solid color-mix(in srgb, var(--border) ${consoleOpen ? 45 : 20}%, transparent)`,
+                      }}
+                    >{consoleOpen ? "▾ console" : "▸ console"}</button>
                     <span className="ml-auto">logs auto-refresh · stats every 5s</span>
                   </div>
                 )}

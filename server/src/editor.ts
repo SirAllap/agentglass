@@ -14,8 +14,8 @@
 // up — which matters, because a feature that needs setup is a feature nobody
 // turns on.
 
-import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { safeAbs } from "./git.ts";
 import { inScope } from "./config.ts";
@@ -82,27 +82,73 @@ async function ask(sock: string, expr: string): Promise<string> {
  * `orbit-WEB-1042` would be worse than opening a new window — it lands in
  * someone else's session, silently.
  */
-async function socketFor(absPath: string): Promise<{ sock: string | null; otherCwds: string[]; stuck: number }> {
+/**
+ * The repository family a path belongs to: the main checkout's path, shared by
+ * a repo and all of its linked worktrees.
+ *
+ * A worktree lives in a *sibling* directory — `orbit` and `orbit-WEB-1042` —
+ * so no prefix test will ever relate them, which is why an nvim open on the
+ * main checkout refused files from a worktree of the same project.
+ *
+ * `.git` is a directory in a normal checkout and a file in a linked worktree,
+ * and that file names the main repo: `gitdir: /path/to/main/.git/worktrees/x`.
+ * That is the whole trick, and it needs no subprocess.
+ */
+function familyOf(absPath: string): string | null {
+  let dir = absPath;
+  for (let i = 0; i < 40; i++) {
+    const dotGit = join(dir, ".git");
+    try {
+      const st = statSync(dotGit);
+      if (st.isDirectory()) return dir;
+      if (st.isFile()) {
+        const m = /gitdir:\s*(.+)/.exec(readFileSync(dotGit, "utf8"));
+        const g = m?.[1]?.trim();
+        const wt = g ? /^(.*)\/\.git\/worktrees\//.exec(g) : null;
+        return wt?.[1] ?? dir;
+      }
+    } catch { /* keep walking up */ }
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+  return null;
+}
+
+async function socketFor(absPath: string): Promise<{ sock: string | null; otherCwds: string[]; stuck: number; viaFamily: string | null }> {
   // All at once: probing serially means the worst case is the sum of every
   // stuck editor's timeout, and the whole point of the timeout is to bound it.
   const socks = nvimSockets();
   const cwds = await Promise.all(socks.map((s) => ask(s, "getcwd()")));
   const otherCwds: string[] = [];
+  const family: { sock: string; cwd: string }[] = [];
+  const mine = familyOf(absPath);
   let stuck = 0;
   for (let i = 0; i < socks.length; i++) {
     const cwd = cwds[i];
     if (!cwd) { stuck++; continue; } // dead or wedged — left behind by a crash
-    if (absPath === cwd || absPath.startsWith(cwd.replace(/\/$/, "") + "/")) return { sock: socks[i], otherCwds, stuck };
-    otherCwds.push(cwd);
+    // The editor actually rooted in this checkout always wins.
+    if (absPath === cwd || absPath.startsWith(cwd.replace(/\/$/, "") + "/")) {
+      return { sock: socks[i], otherCwds, stuck, viaFamily: null };
+    }
+    // Otherwise remember it if it is the same project by another checkout: one
+    // worktree per ticket means the nvim you have open is often the main one,
+    // and refusing there sent you to the clipboard for a file that editor can
+    // open perfectly well.
+    if (mine && familyOf(cwd) === mine) family.push({ sock: socks[i], cwd });
+    else otherCwds.push(cwd);
   }
-  return { sock: null, otherCwds, stuck };
+  // Deliberately after the loop, so a later exact match still beats an earlier
+  // family one however the sockets happen to be ordered.
+  if (family.length) return { sock: family[0]!.sock, otherCwds, stuck, viaFamily: family[0]!.cwd };
+  return { sock: null, otherCwds, stuck, viaFamily: null };
 }
 
 /** Escape for the inside of a `:edit` typed into nvim. */
 const esc = (p: string) => p.replace(/([ \\|"'%#])/g, "\\$1");
 
 export type OpenResult =
-  | { ok: true; how: "remote"; socket: string }
+  | { ok: true; how: "remote"; socket: string; viaFamily?: string }
   /** Nothing reachable for this file. `otherCwds` names the editors that ARE
    *  running elsewhere — "no nvim running" is a lie when one is open two panes
    *  away, and the real reason (it's editing another repo) is the useful one. */
@@ -126,7 +172,7 @@ export async function openInEditor(pathIn: unknown, lineIn: unknown): Promise<Op
   try { statSync(abs); } catch { return { ok: false, error: "file does not exist" }; }
   const line = Math.max(1, Math.min(10_000_000, Math.floor(Number(lineIn)) || 1));
 
-  const { sock, otherCwds, stuck } = await socketFor(abs);
+  const { sock, otherCwds, stuck, viaFamily } = await socketFor(abs);
   if (sock) {
     // <C-\><C-N> first: the editor may be in insert or terminal mode, and a
     // bare `:edit` typed into insert mode inserts the literal text instead.
@@ -136,7 +182,7 @@ export async function openInEditor(pathIn: unknown, lineIn: unknown): Promise<Op
       const timer = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, 2000);
       await proc.exited;
       clearTimeout(timer);
-      return { ok: true, how: "remote", socket: sock };
+      return { ok: true, how: "remote", socket: sock, ...(viaFamily ? { viaFamily } : {}) };
     } catch { /* fall through to spawning one */ }
   }
 

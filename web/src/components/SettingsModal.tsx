@@ -284,7 +284,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <div className="px-3 pt-1 pb-1 flex items-center gap-3">
                       <span className="text-[10px] t-dim2 flex-1">
                         {/* Says why the rest of the keyboard is not on this list. */}
-                        Only the single-key shortcuts. {MOD_KEY}1–5, {MOD_KEY}\\ and {MOD_KEY}K are fixed — they are the ones that still work while you are typing.
+                        Single keys, and they work from the dashboard only — inside the workspace every keystroke belongs to whatever has focus, usually a shell. There, navigation is {MOD_KEY}1–5, {MOD_KEY}\\ and {MOD_KEY}[ / {MOD_KEY}], which no shell consumes.
                       </span>
                       {isCustomised() && (
                         <button onClick={() => { resetBindings(); setKeyError(null); setCapturing(null); }}

@@ -102,6 +102,29 @@ function historyChanged() {
   for (const fn of historyListeners) fn();
 }
 
+/**
+ * Record something agentglass itself raised — a chat that finished, a branch
+ * that fell behind — into the same history the mirrored ones land in.
+ *
+ * They share the notch's toast lane already, so they should share its memory:
+ * a toast holds "3755 commits to pull" for five seconds and is then gone, and
+ * the number was the whole message. One inbox, whatever raised it.
+ */
+export function recordNote(n: { app: string; summary: string; body: string; urgency?: 0 | 1 | 2 }) {
+  const note: SystemNote = {
+    id: `app-${++localSeq}`,
+    app: n.app,
+    summary: n.summary,
+    body: n.body,
+    urgency: n.urgency ?? 1,
+    at: Date.now(),
+  };
+  history = [note, ...history].slice(0, HISTORY_MAX);
+  unread++;
+  historyChanged();
+}
+let localSeq = 0;
+
 export function markNotifyRead() {
   if (!unread) return;
   unread = 0;

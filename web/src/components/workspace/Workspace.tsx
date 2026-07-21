@@ -131,6 +131,7 @@ export function Workspace({
                         <View
                           active={active}
                           {...(v.id === "chat" ? { focusId: chatFocusId, onClose } : {})}
+                          {...(v.id === "git" ? { onOpenChat: () => onView("chat") } : {})}
                           {...(v.id === "term" ? { onClose } : {})}
                         />
                       </div>

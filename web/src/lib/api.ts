@@ -203,7 +203,10 @@ const realApi = {
   editorCapability: () => get<{ hasNvim: boolean; editor: string | null }>("/editor/capability"),
   editorTarget: (path: string) => get<{ running: boolean; hasNvim: boolean }>(`/editor/target?path=${encodeURIComponent(path)}`),
   editorOpen: (path: string, line: number) =>
-    post<{ ok: boolean; how?: "remote" | "spawn"; command?: string; otherCwds?: string[]; stuck?: number; error?: string }>("/editor/open", { path, line }),
+    post<{ ok: boolean; how?: "remote" | "spawn"; command?: string; otherCwds?: string[]; stuck?: number; error?: string;
+      /** Set when the file went to an nvim rooted in a *sibling* checkout of the
+       *  same project — a worktree of the repo you are looking at. */
+      viaFamily?: string }>("/editor/open", { path, line }),
   gitCheckout: (root: string, name: string) => post<GitActionResult>("/git/checkout", { root, name }),
   gitBranchCreate: (root: string, name: string) => post<GitActionResult>("/git/branch-create", { root, name }),
   gitBranchDelete: (root: string, name: string, force: boolean) => post<GitActionResult>("/git/branch-delete", { root, name, force }),
@@ -220,6 +223,18 @@ const realApi = {
   gitReset: (root: string, ref: string, mode: "soft" | "mixed" | "hard") => post<GitActionResult>("/git/reset", { root, ref, mode }),
   gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch }),
   gitWorktreeRemove: (root: string, path: string, force: boolean) => post<GitActionResult>("/git/worktree-remove", { root, path, force }),
+  /** Merge a checkout's base branch into it — "update from base". `root` is the
+   *  checkout doing the updating, since the merge runs where the branch is. */
+  gitSyncBase: (root: string, base?: string) => post<GitActionResult>("/git/sync-base", { root, base }),
+  /** Remember which branch this one was cut from. Written to the repo's own
+   *  config, so it survives restarts and is readable with plain `git config`. */
+  gitSetBase: (root: string, branch: string, base: string | null) => post<GitActionResult>("/git/set-base", { root, branch, base }),
+  gitBaseCandidates: (root: string) => get<{ ok: boolean; refs: { name: string; remote: boolean }[] }>(`/git/base-candidates?root=${encodeURIComponent(root)}`),
+  gitConflicts: (root: string) => get<{ ok: boolean; state: string; files: string[]; error?: string }>(`/git/conflicts?root=${encodeURIComponent(root)}`),
+  gitResolve: (root: string, paths: string[], side: "ours" | "theirs") => post<GitActionResult>("/git/resolve", { root, paths, side }),
+  gitMergeAbort: (root: string) => post<GitActionResult>("/git/merge-abort", { root }),
+  gitUndoMerge: (root: string) => post<GitActionResult>("/git/undo-merge", { root }),
+  gitMergeContinue: (root: string) => post<GitActionResult>("/git/merge-continue", { root }),
   // --- live docker panel (lazydocker-style) ---
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
@@ -331,6 +346,14 @@ const demoApi: typeof realApi = {
   gitBranchRename: (_root: string, _name: string, _to: string) => D(demo.gitActionUnavailable()),
   gitReset: (_root: string, _ref: string, _mode: "soft" | "mixed" | "hard") => D(demo.gitActionUnavailable()),
   gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean) => D(demo.gitActionUnavailable()),
+  gitSyncBase: (_root: string, _base?: string) => D(demo.gitActionUnavailable()),
+  gitSetBase: (_root: string, _branch: string, _base: string | null) => D(demo.gitActionUnavailable()),
+  gitBaseCandidates: (_root: string) => D({ ok: true, refs: [] }),
+  gitConflicts: (_root: string) => D({ ok: true, state: "clean", files: [] }),
+  gitResolve: (_root: string, _paths: string[], _side: "ours" | "theirs") => D(demo.gitActionUnavailable()),
+  gitMergeAbort: (_root: string) => D(demo.gitActionUnavailable()),
+  gitUndoMerge: (_root: string) => D(demo.gitActionUnavailable()),
+  gitMergeContinue: (_root: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),

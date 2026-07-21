@@ -5,9 +5,10 @@ import { subscribeUsage, usedColor, usageError, resetLabel } from "../UsageWidge
 import { subscribe as subscribeChats, listChats } from "../../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../../lib/clockPref.ts";
+import { subscribeGitChanged } from "../../lib/gitBus.ts";
 import {
   subscribeSystemNotes, subscribeNotifyHistory, notifyHistory, notifyUnread,
-  markNotifyRead, dismissNote, clearNotes, openNote, type SystemNote,
+  markNotifyRead, dismissNote, clearNotes, openNote, recordNote, type SystemNote,
 } from "../../lib/sysNotify.ts";
 
 /**
@@ -243,8 +244,10 @@ function useNotes(): { note: Note | null; behind: number } {
         if (first || c.attention === prev || c.attention === "none") continue;
         if (c.attention === "blocked") {
           push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error)", title: c.title || "chat", sub: c.blockedTool ? `needs "${c.blockedTool}"` : "waiting on you" });
+          recordNote({ app: "chat", summary: c.title || "chat", body: c.blockedTool ? `blocked — needs "${c.blockedTool}"` : "blocked — waiting on you", urgency: 2 });
         } else if (c.attention === "done") {
           push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success)", title: c.title || "chat", sub: "turn finished" });
+          recordNote({ app: "chat", summary: c.title || "chat", body: "turn finished" });
         }
       }
       first = false;
@@ -292,6 +295,7 @@ function useNotes(): { note: Note | null; behind: number } {
           seen.set(r.root, r.behind);
           if (!first && r.behind > prev) {
             push({ id: `${r.root}-${r.behind}`, kind: "pull", color: "var(--info)", title: r.name, sub: `${r.behind} to pull on ${r.branch}` });
+            recordNote({ app: "git", summary: r.name, body: `${r.behind} commit${r.behind === 1 ? "" : "s"} to pull on ${r.branch}` });
           }
         }
         setBehind(total);
@@ -300,7 +304,12 @@ function useNotes(): { note: Note | null; behind: number } {
     };
     void poll();
     const id = setInterval(poll, 90_000);
-    return () => { dead = true; clearInterval(id); };
+    // 90s is right for "someone else pushed", and far too slow for "you just
+    // pulled" — the strip went on advertising commits you had already taken
+    // until the workspace was closed and opened again. The server says when a
+    // repo moved, so read it then too.
+    const off = subscribeGitChanged(() => { void poll(); });
+    return () => { dead = true; clearInterval(id); off(); };
   }, []);
 
   return { note, behind };

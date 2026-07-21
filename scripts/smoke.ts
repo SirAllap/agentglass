@@ -326,10 +326,23 @@ async function main() {
         return false;
       };
 
-      if (!(await pressUntilView("d", "diff"))) failures.push(`[workspace] "d" should select diff, selected ${await selectedView()}`);
-      if (!(await pressUntilView("t", "term"))) failures.push(`[workspace] "t" should select term, selected ${await selectedView()}`);
-      // ⌘1 works even from inside a field
+      // Inside the workspace, navigation carries a modifier. VIEWS order is
+      // git, diff, docker, term, chat — so ⌘2 and ⌘4.
+      if (!(await pressUntilView("2", "diff", true))) failures.push(`[workspace] Ctrl-2 should select diff, selected ${await selectedView()}`);
+      if (!(await pressUntilView("4", "term", true))) failures.push(`[workspace] Ctrl-4 should select term, selected ${await selectedView()}`);
       if (!(await pressUntilView("1", "git", true))) failures.push(`[workspace] Ctrl-1 should select git, selected ${await selectedView()}`);
+
+      // And the property this replaced a heuristic to guarantee: a bare letter
+      // inside the workspace belongs to whatever has focus — a shell, a commit
+      // message — and must never navigate. It used to, whenever focus happened
+      // to sit on <body>, which is why typing `g` in the terminal jumped to git
+      // at random. Pressed with focus deliberately on the body: the worst case
+      // for the old guard.
+      await evaluate(`document.activeElement?.blur?.(); document.body.focus?.(); true`);
+      await press("d");
+      await Bun.sleep(400);
+      const afterBare = await selectedView();
+      if (afterBare !== "git") failures.push(`[workspace] a bare letter must not navigate inside the workspace — "d" moved to ${afterBare}`);
 
       // Poll rather than check once: closing runs an AnimatePresence exit
       // animation, so the rail outlives the state change by a few hundred ms.

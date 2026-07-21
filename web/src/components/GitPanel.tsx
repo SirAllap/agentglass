@@ -5,6 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
+import { subscribeGitChanged } from "../lib/gitBus.ts";
+import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { worktreeTag } from "../lib/worktree.ts";
@@ -71,14 +73,22 @@ const STATE_LABEL: Record<string, string> = {
  * "never fetched" look identical, and the whole point of the auto-fetch is that
  * you can now trust the difference.
  */
-function BranchChip({ branch }: { branch: GitBranchInfo }) {
+function BranchChip({ branch, onCopied }: { branch: GitBranchInfo; onCopied?: (name: string) => void }) {
   const { ahead, behind, upstream, state } = branch;
   const busy = state && state !== "clean" ? STATE_LABEL[state] : null;
   return (
-    <span className="px-2 py-0.5 rounded-md text-[11px] inline-flex items-center gap-1"
+    // One line, always. A ticket-shaped branch name is 60 characters and used
+    // to wrap inside the chip, which made the whole header two rows tall and
+    // pushed everything else down. The name truncates, the counts never do —
+    // they are the part you are actually reading — and the full name is one
+    // hover or one click away.
+    <span className="px-2 py-0.5 rounded-md text-[11px] inline-flex items-center gap-1 min-w-0 max-w-[min(30vw,340px)] cursor-pointer"
       style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary-hover)" }}
-      title={upstream ? `tracking ${upstream}` : "no upstream — nothing to compare against"}>
-      <span>⎇ {branch.name}</span>
+      onClick={() => {
+        navigator.clipboard?.writeText(branch.name).then(() => onCopied?.(branch.name)).catch(() => { /* no clipboard permission */ });
+      }}
+      title={`${branch.name}${upstream ? `\ntracking ${upstream}` : "\nno upstream — nothing to compare against"}\n\nclick to copy the branch name`}>
+      <span className="truncate min-w-0">⎇ {branch.name}</span>
       {busy && <span style={{ color: "var(--warning)" }}>({busy})</span>}
       {/* Behind first, then ahead — it reads as "pull this many, push that many",
           and it's the order lazygit uses, so the shape is already familiar. */}
@@ -173,8 +183,12 @@ function RemoteButton({ label, runningLabel, running, disabled, primary, onClick
   label: string; runningLabel?: string; running: boolean; disabled: boolean; primary?: boolean; onClick: () => void;
 }) {
   return (
+    // nowrap + shrink-0: this row holds a 60-character branch name, and flex
+    // was solving the overflow by breaking "↑ push (1)" across two lines and
+    // making the whole header taller. The branch chip is the one thing here
+    // that may shrink; the controls are not negotiable.
     <button onClick={onClick} disabled={disabled}
-      className="text-[11px] px-2.5 py-1 rounded-lg transition-opacity active:scale-[0.97]"
+      className="text-[11px] px-2.5 py-1 rounded-lg transition-opacity active:scale-[0.97] whitespace-nowrap shrink-0"
       style={{
         color: primary ? "var(--text)" : "var(--text2)",
         fontWeight: primary ? 500 : undefined,
@@ -339,7 +353,7 @@ function Section({ title, count, tint, action, onAll, children }: { title: strin
  *  Staying mounted while hidden is worth more here than anywhere else: the
  *  commit message drafts (`title`/`body`) used to be destroyed every time you
  *  looked at something else, which is precisely what you do before committing. */
-export function GitView({ active }: { active: boolean }) {
+export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: () => void }) {
   const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
@@ -366,6 +380,46 @@ export function GitView({ active }: { active: boolean }) {
   /** Which view has a request in flight, so "still loading" and "genuinely
    *  empty" stop rendering as the same blank pane. */
   const [busyView, setBusyView] = useState<View | null>(null);
+  /** The "merge from…" list on the header's sync button. */
+  const [baseOpen, setBaseOpen] = useState(false);
+  /** Files git has stopped on. Only ever non-empty mid-merge. */
+  const [conflicts, setConflicts] = useState<string[]>([]);
+  /** Local heads and remote-tracking refs, for the "merge from…" list. */
+  const [baseRefs, setBaseRefs] = useState<{ name: string; remote: boolean }[]>([]);
+  const [baseQuery, setBaseQuery] = useState("");
+  const mergeState = tree?.branch.state ?? "clean";
+  useEffect(() => {
+    if (!open || !root || mergeState === "clean") { setConflicts([]); return; }
+    api.gitConflicts(root).then((r) => setConflicts(r.files ?? [])).catch(() => {});
+  }, [open, root, mergeState, tree]);
+
+  /**
+   * Hand the conflict to Claude, in the repo it happened in.
+   *
+   * The expensive part of a conflict is understanding two intents well enough
+   * to reconcile them, which is the one thing an agent sitting in this repo is
+   * genuinely good at — and the chat already runs `claude` in a given cwd, so
+   * this is a prompt and a tab rather than a feature.
+   */
+  const askClaude = () => {
+    const rels = conflicts.map((p) => p.startsWith(root) ? p.slice(root.length + 1) : p);
+    const c = newChat(root);
+    update(c.id, (ch) => {
+      ch.title = "resolve merge conflicts";
+      ch.draft = [
+        `I am mid-merge in ${root} and git has left ${rels.length} file(s) conflicted:`,
+        "",
+        ...rels.map((r) => `- ${r}`),
+        "",
+        "Please resolve each conflict, keeping both sides' intent where they do",
+        "different things and preferring the incoming change where they do the",
+        "same thing differently. Explain anything you had to choose between.",
+        "Do not commit — leave the resolution staged so I can review it.",
+      ].join("\n");
+    });
+    setActiveChatId(c.id);
+    onOpenChat?.();
+  };
   // Only the branches whose upstream is gone — the merged-and-tidied ones. Off
   // by default: it's a cleanup mode, not a way to read the branch list.
   const [onlyGone, setOnlyGone] = useState(false);
@@ -423,8 +477,13 @@ export function GitView({ active }: { active: boolean }) {
       if (!r.ok) return flash(false, r.error || "could not open the editor");
       if (r.how === "remote") {
         // It landed in a window that may be behind this one, so say so —
-        // otherwise pressing `e` looks like it did nothing at all.
-        flash(true, `sent to your open nvim · ${baseName(c.file_path)}:${line}`);
+        // otherwise pressing `e` looks like it did nothing at all. And when it
+        // went to a sibling checkout of the same project rather than this one,
+        // name it: the file opens in the nvim you have, which is the point, but
+        // you should not have to work out which window it appeared in.
+        flash(true, r.viaFamily
+          ? `sent to your nvim in ${r.viaFamily.split("/").pop()} · ${baseName(c.file_path)}:${line}`
+          : `sent to your open nvim · ${baseName(c.file_path)}:${line}`);
       } else if (r.command) {
         // Nothing reachable for *this* file. Saying "no nvim running" when one
         // is open two panes away sends you looking for a bug; naming the repo
@@ -509,6 +568,18 @@ export function GitView({ active }: { active: boolean }) {
     else if (view === "reflog") track(api.gitReflog(root), (r) => setReflog(r.entries));
   }, [open, root, view]);
   useEffect(() => { loadView(); }, [loadView]);
+
+  // Any repository mutation, from anywhere — this panel, another window, or a
+  // `git pull` typed into the app's own terminal — re-reads what is on screen.
+  // The dropdown's counts in particular came from a 5s server cache that the
+  // panel re-fetched *immediately* after an action, so it kept answering with
+  // numbers from before it.
+  useEffect(() => subscribeGitChanged(() => {
+    if (!open) return;
+    if (root) loadTree(root);
+    loadView();
+    api.gitRepos().then((r) => setRepos(r.repos)).catch(() => {});
+  }), [open, root, loadTree, loadView]);
 
   // The working tree changes from outside this app — a commit in a terminal, a
   // branch switch, an agent editing files — and none of that emits an event we
@@ -953,7 +1024,7 @@ export function GitView({ active }: { active: boolean }) {
     return (
       <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]} — press ${num}`}
         aria-keyshortcuts={String(num)}
-        className="text-[10.5px] px-2 py-1 rounded-md transition-colors flex items-center gap-1.5"
+        className="text-[10.5px] px-2 py-1 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
         style={{ background: view === id ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: view === id ? "var(--text)" : "var(--text3)", border: `1px solid color-mix(in srgb, var(--border) ${view === id ? 40 : 15}%, transparent)` }}>
         {/* The key that gets you here. lazygit does the same in its panel titles
             (gui.showPanelJumps) — a shortcut nothing advertises is a shortcut
@@ -996,11 +1067,20 @@ export function GitView({ active }: { active: boolean }) {
     <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
       className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
+                {/* No overflow-hidden here, ever: the repo picker's dropdown is
+                    absolutely positioned inside this row, and clipping the row
+                    clipped the menu to a sliver. Overflow is prevented by the
+                    branch chip yielding space and the tab strip scrolling —
+                    not by cutting off whatever escapes. */}
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Source control</span>
+                  <span className="text-[15px] font-semibold whitespace-nowrap shrink-0" style={{ color: "var(--text)" }}>Source control</span>
                   <div className="relative">
-                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
-                      <span className="font-medium">{repoRef?.name ?? "repo"}</span><span className="t-dim2">▼</span>
+                    {/* Also one line. A worktree directory carries the whole
+                        ticket name, and wrapped it made the button two rows
+                        tall and shoved the tab strip down with it. */}
+                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[240px] shrink-0 whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
+                      title={repoRef ? `${repoRef.name}\n${repoRef.root}` : undefined}>
+                      <span className="font-medium truncate min-w-0">{repoRef?.name ?? "repo"}</span><span className="t-dim2 shrink-0">▼</span>
                     </button>
                     {repoOpen && (
                       <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 420, overflow: "hidden" }}>
@@ -1051,11 +1131,146 @@ export function GitView({ active }: { active: boolean }) {
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 ml-1">
+                  {/* Scrolls rather than shoves. Eight tabs plus a long branch
+                      name will not fit a narrow window, and something has to
+                      give — a strip you can flick is better than controls
+                      pushed off the right edge. */}
+                  <div className="flex items-center gap-2 ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
                     {VIEW_GROUPS.map((g) => <ViewGroup key={g.label} views={g.views} />)}
                   </div>
-                  <div className="ml-auto flex items-center gap-1.5">
-                    {branch && <BranchChip branch={branch} />}
+                  <div className="ml-auto flex items-center gap-1.5 min-w-0">
+                    {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
+                    {/* Offered only while undoing is exact: an unpushed merge
+                        at the tip, on a clean tree. Once anything is committed
+                        on top the tip is no longer the merge; once it is
+                        pushed the honest undo is a revert, not a rewrite.
+                        Deliberately a sibling of the sync block rather than
+                        inside it — nested there it inherited "there is
+                        something to merge" as a visibility condition and so
+                        vanished the instant a sync succeeded, which is exactly
+                        the moment it exists for. */}
+                    {branch?.canUndoMerge && (
+                      <button
+                        onClick={() => {
+                          if (!confirm(`Undo the last merge on ${branch.name}?\n\nThe branch goes back to exactly where it was. Nothing has been pushed, so nothing anyone else has is affected.`)) return;
+                          void act(() => api.gitUndoMerge(root), "merge undone", "undo");
+                        }}
+                        disabled={!writeEnabled || busy}
+                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
+                    style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}
+                    title="Undo the last merge — the branch returns to exactly where it was. Offered only because it is unpushed and nothing sits on top of it.">
+                    {pending === "undo" ? "undoing…" : "⎌ undo merge"}
+                      </button>
+                    )}
+
+                    {/* Update from base — merge master's latest into the branch
+                        you are on, in this checkout. Sits with fetch/pull/push
+                        because it belongs to the same family of "bring this
+                        checkout up to date"; it was only on the Worktrees tab
+                        before, which is not where anyone looks for it.
+                        Hidden when there is nothing to merge, and on the trunk
+                        itself, which has no base. */}
+                    {branch?.base && (branch.behindBase ?? 0) > 0 && (
+                      <div className="relative flex items-center">
+                    {/* A merge over uncommitted work is refused by the
+                            server, so the button should not offer it. Saying
+                            why beats a click that produces an error toast —
+                            and the reason is the fix. */}
+                        <button
+                          onClick={() => act(() => api.gitSyncBase(root), `merged ${branch.base}`, "sync")}
+                          disabled={!writeEnabled || busy || !tree?.clean || branch.behind > 0}
+                          className="text-[11px] px-2 py-1 rounded-l-lg whitespace-nowrap"
+                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy || !tree?.clean || branch.behind > 0) ? 0.45 : 1 }}
+                          title={!tree?.clean
+                            ? "Commit or stash your changes first — merging over uncommitted work is how you lose it"
+                            : branch.behind > 0
+                            // Syncing while behind your own remote makes a
+                            // second merge commit for content the remote has
+                            // already merged — the two then have to be
+                            // reconciled. Pull is the move; sync afterwards if
+                            // anything is still missing.
+                            ? `Pull first — ${branch.behind} commit${branch.behind === 1 ? "" : "s"} on your remote branch you do not have. Syncing now would make a duplicate merge and diverge from it.`
+                            : `Merge ${branch.base} into ${branch.name}. Brings the base branch's latest commits into this one — a merge, not a rebase, so nothing already pushed is rewritten.`}>
+                          {pending === "sync" ? "syncing…" : `⇣ sync ↓${branch.behindBase}`}
+                        </button>
+                        {/* Not every branch is cut from trunk. This picks what
+                            to merge from and remembers it in the repo's own
+                            config, so the choice sticks per branch. */}
+                        <button
+                          onClick={() => {
+                            // Load them on demand. Depending on the Branches
+                            // tab having been visited made the picker useless
+                            // exactly when you reach for it — the first time.
+                            if (!baseRefs.length) api.gitBaseCandidates(root).then((r) => setBaseRefs(r.refs ?? [])).catch(() => {});
+                            setBaseOpen((o) => !o);
+                          }}
+                          disabled={!writeEnabled || busy}
+                          className="text-[11px] px-1.5 py-1 rounded-r-lg"
+                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", opacity: (!writeEnabled || busy) ? 0.5 : 1 }}
+                          title={`Merging from ${branch.base} — pick a different base`}>▾</button>
+                        {baseOpen && (
+                          <div className="absolute right-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
+                            style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 260, maxHeight: 320, overflow: "hidden" }}>
+                            <div className="px-2.5 py-1.5 t-dim2 text-[9.5px] uppercase tracking-wider shrink-0">merge into {branch.name} from…</div>
+                            {/* The base it will actually use, pinned and above
+                                the search — the answer to "what does this
+                                button do" should not require scrolling a list
+                                of 800 to find the highlighted row. */}
+                            <div className="mx-1.5 mb-1 px-2 py-1.5 rounded-md flex items-center gap-2 shrink-0"
+                              style={{ background: "color-mix(in srgb, var(--primary) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                              <span className="shrink-0" style={{ color: "var(--primary-hover)" }}>✓</span>
+                              <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }} title={branch.base ?? ""}>{branch.base}</span>
+                              <span className="shrink-0 text-[9px] t-dim2">current base</span>
+                            </div>
+                            <div className="px-2.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider shrink-0">or change to…</div>
+                            {/* A real repo has hundreds of refs — this one
+                                offers 827 — so the list is only usable with a
+                                filter, and only sane with the answer you
+                                probably want already at the top. */}
+                            <input autoFocus value={baseQuery} onChange={(e) => setBaseQuery(e.target.value)}
+                              placeholder="filter branches…"
+                              className="mx-1.5 mb-1 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
+                              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                            <div className="agx-scroll overflow-y-auto pb-1">
+                              {baseRefs
+                                .filter((b) => b.name !== branch.name && b.name !== branch.base)
+                                .filter((b) => { const q = baseQuery.trim().toLowerCase(); return !q || b.name.toLowerCase().includes(q); })
+                                // Current base first, then the trunk, then the
+                                // rest as git ordered them (most recent first).
+                                .sort((a, b) => Number(b.name === branch.base) - Number(a.name === branch.base)
+                                  || Number(/(^|\/)(master|main)$/.test(b.name)) - Number(/(^|\/)(master|main)$/.test(a.name)))
+                                .slice(0, 200)
+                                .map((b) => (
+                                <button key={b.name} onClick={async () => {
+                                  setBaseOpen(false);
+                                  await act(() => api.gitSetBase(root, branch.name, b.name), `base set to ${b.name}`, "sync");
+                                }}
+                                  className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
+                                  style={{ background: b.name === branch.base ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", color: "var(--text)" }}
+                                  title={b.name}>
+                                  {/* Which kind of ref this is, because it
+                                      changes what you get: `master` is your
+                                      copy, which may be weeks behind the
+                                      `origin/master` the default base uses. */}
+                                  <span className="shrink-0 text-[8.5px] px-1 py-[1px] rounded"
+                                    style={b.remote
+                                      ? { color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
+                                      : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                                    {b.remote ? "REMOTE" : "LOCAL"}
+                                  </span>
+                                  <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                                  {b.name === branch.base && <span className="shrink-0 text-[9px]" style={{ color: "var(--primary-hover)" }}>current</span>}
+                                </button>
+                              ))}
+                              {!baseRefs.length && <div className="px-2.5 py-2 t-dim2">loading branches…</div>}
+                              {baseRefs.length > 200 && !baseQuery.trim() && (
+                                <div className="px-2.5 py-1.5 t-dim2 text-[9.5px]">showing 200 of {baseRefs.length} — type to find the rest</div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {/* Each says what it's doing while it does it. A pull over a
                         slow network is several seconds of nothing otherwise, and
                         the honest reading of that is "the button is broken". */}
@@ -1070,6 +1285,55 @@ export function GitView({ active }: { active: boolean }) {
                     <button onClick={() => loadTree(root)} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
                   </div>
                 </div>
+
+                {/* Git has stopped in the middle of something. It used to say
+                    so in the header chip and offer nothing — leaving you in a
+                    conflicted repo with a toast and no way forward, which is
+                    the worst moment for the app to go quiet. */}
+                {mergeState !== "clean" && (
+                  <div className="shrink-0 px-4 py-2 border-b flex flex-col gap-1.5"
+                    style={{ borderColor: "color-mix(in srgb, var(--warning) 45%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] font-semibold whitespace-nowrap" style={{ color: "var(--warning)" }}>
+                        {mergeState} — {conflicts.length} conflicted file{conflicts.length === 1 ? "" : "s"}
+                      </span>
+                      {/* Abort first, and always available: it is the only move
+                          that is guaranteed safe, and the one you reach for
+                          when you did not mean to start this. */}
+                      <button onClick={() => act(() => api.gitMergeAbort(root), "merge aborted", "abort")} disabled={busy}
+                        className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
+                        style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}
+                        title="Throw the merge away and put the tree back exactly as it was">abort</button>
+                      <button onClick={() => act(() => api.gitMergeContinue(root), "merge completed", "continue")} disabled={busy || conflicts.length > 0}
+                        className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
+                        style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: conflicts.length ? 0.4 : 1 }}
+                        title={conflicts.length ? "resolve every file first" : "commit the merge"}>continue</button>
+                      {conflicts.length > 0 && (
+                        <button onClick={askClaude}
+                          className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
+                          style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                          title="Open a chat in this repo, asking Claude to resolve them">✦ ask claude</button>
+                      )}
+                    </div>
+                    {/* Whole-file resolutions: the two that need no editor, and
+                        between them most conflicts — a lockfile, a generated
+                        migration, a file the other side deleted. */}
+                    {conflicts.map((f) => {
+                      const relPath = f.startsWith(root) ? f.slice(root.length + 1) : f;
+                      return (
+                        <div key={f} className="flex items-center gap-2 text-[10.5px]">
+                          <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text2)" }} title={f}>{relPath}</span>
+                          <button onClick={() => act(() => api.gitResolve(root, [relPath], "ours"), `kept ours for ${relPath}`)} disabled={busy}
+                            className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                            title="Keep this branch's version">ours</button>
+                          <button onClick={() => act(() => api.gitResolve(root, [relPath], "theirs"), `took theirs for ${relPath}`)} disabled={busy}
+                            className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                            title="Take the incoming version">theirs</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {view === "changes" ? (
                   <div className="flex-1 min-h-0 flex">
@@ -1326,6 +1590,29 @@ export function GitView({ active }: { active: boolean }) {
                         <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{w.head}</span>
                         {w.locked && <span className="shrink-0 text-[9px]" style={{ color: "var(--warning)" }}>locked</span>}
                         <span className="min-w-0 flex-1 truncate text-[9.5px] t-dim2">{w.path}</span>
+                        {/* How far this checkout has drifted from what it was
+                            branched off, and the one-click way to close the
+                            gap. Shown only when there is a gap: a checkout
+                            level with its base needs no button, and the trunk
+                            has no base at all. */}
+                        {!!w.base && (w.behindBase ?? 0) > 0 && (
+                          <>
+                            <span className="shrink-0 text-[9.5px] tabular-nums" style={{ color: "var(--warning)" }}
+                              title={`${w.behindBase} commit${w.behindBase === 1 ? "" : "s"} on ${w.base} that this branch does not have`}>
+                              ↓{w.behindBase} behind {w.base}
+                            </span>
+                            {writeEnabled && (
+                              <button
+                                onClick={() => act(() => api.gitSyncBase(w.path, w.base ?? undefined), `merged ${w.base}`, "sync")}
+                                disabled={busy}
+                                className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                                style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: busy ? 0.5 : 1 }}
+                                title={`Merge ${w.base} into ${w.branch}, in that worktree. A merge, not a rebase — nothing already pushed gets rewritten. Refused if that checkout has uncommitted changes.`}>
+                                {pending === "sync" ? "syncing…" : "sync"}
+                              </button>
+                            )}
+                          </>
+                        )}
                         {writeEnabled && !w.current && <button onClick={() => removeWorktree(w)} className="shrink-0 text-[10px] opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Remove worktree">remove</button>}
                       </div>
                     ))}

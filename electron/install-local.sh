@@ -58,6 +58,35 @@ else
 fi
 ln -sf "$APP/agentglass" "$BIN/agentglass"
 
+# Chromium won't run unsandboxed: it wants chrome-sandbox owned by root with
+# the setuid bit, and the namespace sandbox it would otherwise fall back to is
+# disabled on Ubuntu 24.04+ (kernel.apparmor_restrict_unprivileged_userns=1).
+# So this is not optional there — without it the app aborts at launch instead
+# of opening a window. A fresh install lays the helper down with our uid, so it
+# has to be granted then.
+#
+# A reinstall does not: the copy above deliberately steps around an existing
+# setuid helper rather than replacing it, so a machine that has been through
+# this once needs no root again. Hence the first test — asking for a password
+# that is not needed, or warning about a bit that is already set, trains people
+# to ignore both.
+#
+# Never fatal, and kept out of `set -e`'s reach by living in `if` conditions:
+# leaving a half-installed app with no launcher would be worse than one that
+# needs a single manual command.
+sandbox_ok=false
+if [ -u "$APP/chrome-sandbox" ] && [ "$(stat -c %U "$APP/chrome-sandbox" 2>/dev/null)" = root ]; then
+  sandbox_ok=true
+elif sudo -n true 2>/dev/null || [ -t 0 ]; then
+  if sudo chown root:root "$APP/chrome-sandbox" && sudo chmod 4755 "$APP/chrome-sandbox"; then
+    sandbox_ok=true
+  fi
+fi
+if [ "$sandbox_ok" = false ]; then
+  echo "warn: chrome-sandbox needs root, or the app will abort at launch. Run:" >&2
+  echo "  sudo chown root:root $APP/chrome-sandbox && sudo chmod 4755 $APP/chrome-sandbox" >&2
+fi
+
 install -m644 "$HERE/icons/icon-512.png" "$APP/icon.png" 2>/dev/null || true
 cat > "$DESKTOP/agentglass.desktop" <<EOF
 [Desktop Entry]

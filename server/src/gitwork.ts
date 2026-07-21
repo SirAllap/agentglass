@@ -169,7 +169,15 @@ function branchInfo(root: string): GitBranchInfo {
     behind = Number(c[0]) || 0;
     ahead = Number(c[1]) || 0;
   }
-  return { name, upstream, ahead, behind, detached, state: treeState(root) };
+  // What this branch was cut from, and how far it has drifted — the header's
+  // "sync" affordance. Cheap and cached; nothing here is per-branch fan-out.
+  const base = detached ? null : baseOf(root, name);
+  return {
+    name, upstream, ahead, behind, detached, state: treeState(root),
+    base,
+    behindBase: base ? behindBase(root, name, base) : 0,
+    canUndoMerge: undoableMerge(root, ahead, upstream),
+  };
 }
 
 /** Full working-tree state for one repo. */
@@ -330,6 +338,13 @@ const REPO_CACHE_MS = 5_000;
 // sweep plus a git subprocess per repo).
 const repoCache = new Map<string, { at: number; repos: GitRepoRef[] }>();
 
+/** Drop cached repo listings touching `root`. Keys are scope-dependent and a
+ *  worktree's counts live in its parent's listing too, so this clears the lot:
+ *  the list is one directory sweep and is about to be asked for again anyway. */
+export function invalidateRepos(_root?: string): void {
+  repoCache.clear();
+}
+
 export async function discoverRepos(paths: string[], knownRoots: string[] = [], opts: { ignoreScope?: boolean } = {}): Promise<GitRepoRef[]> {
   // The workspace is part of the key: switching projects at runtime must not
   // serve the old scope's answer for the next five seconds.
@@ -485,12 +500,34 @@ function validRels(root: string, rels: unknown): string[] | null {
   return out;
 }
 
+/**
+ * Told when a repository mutates, so the server can push a nudge to every
+ * client. A hook rather than an import: gitwork must not depend on the HTTP
+ * layer, and this keeps the direction of that dependency honest.
+ */
+let onGitChange: (() => void) | null = null;
+export function setGitChangeHook(fn: (() => void) | null): void { onGitChange = fn; }
+
 function run(root: string, args: string[]): GitActionResult {
   const r = git(root, args);
   // Every mutating path goes through here, so this is the one place that has to
   // know the merged-set may have moved — rather than each of the twenty callers
   // remembering to say so.
   invalidateMerged(root);
+  // And the repo list, for the same reason. It is cached for 5s, and the panel
+  // re-fetches the instant an action returns — so a pull answered from the
+  // cache written moments earlier, and the picker went on showing "behind 351"
+  // against a header that already said the branch was up to date. Nothing
+  // re-fetched afterwards, so it stayed wrong until the next action.
+  invalidateRepos(root);
+  // And the behind-the-base counts. They have their own 15s TTL, so after a
+  // sync the header went on advertising "↓370" against a branch that had just
+  // taken those very commits — while the push count beside it had already
+  // updated, which is worse than both being stale.
+  behindCache.clear();
+  // One signal out to every panel. Without it each of them discovered the
+  // change on its own clock — 5s, 90s, or not until it was remounted.
+  try { onGitChange?.(); } catch { /* a broken listener must not fail the op */ }
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || r.stdout.trim() || `git ${args[0]} failed`, output: (r.stdout + r.stderr).trim() };
   return { ok: true, output: (r.stdout + r.stderr).trim() };
 }
@@ -898,6 +935,207 @@ export function logGraph(rootIn: unknown, limit = 400): { lines: GitGraphLine[] 
 }
 
 // --- worktrees (the user's per-card unit of work) ----------------------------
+/**
+ * The branch this one was cut from — what a PR would call its base.
+ *
+ * Git does not record it. `@{upstream}` is the *remote* tracking branch, not
+ * the branch the work forked off, and nothing else in the repository stores
+ * the answer: it lives in the pull request, on a server we are not talking to.
+ *
+ * So: an explicit answer if there is one, the trunk otherwise. The override is
+ * written to the repository's own config (`branch.<name>.agentglassbase`), so
+ * it survives restarts, travels with the checkout, and can be read or changed
+ * with plain `git config` by someone who has never heard of this app.
+ *
+ * Deliberately not inferred by walking merge-bases against every other branch:
+ * that is one subprocess per branch for a guess that is wrong exactly when
+ * branches are stacked — the case where being wrong costs you a bad merge.
+ */
+export function baseOf(root: string, branch: string): string | null {
+  if (!branch || branch === "(detached)") return null;
+  const cfg = git(root, ["config", "--get", `branch.${branch}.agentglassbase`]).stdout.trim();
+  if (cfg && validRef(cfg) && git(root, ["rev-parse", "--verify", "--quiet", cfg]).code === 0) return cfg;
+  const trunk = defaultBranch(root);
+  // A branch is not its own base; the trunk checkout simply has none.
+  if (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch) return null;
+  return trunk;
+}
+
+export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (typeof branch !== "string" || !validRef(branch)) return { ok: false, error: "invalid branch" };
+  if (base === null || base === "") return run(root, ["config", "--unset", `branch.${branch}.agentglassbase`]);
+  if (typeof base !== "string" || !validRef(base)) return { ok: false, error: "invalid base" };
+  return run(root, ["config", `branch.${branch}.agentglassbase`, base]);
+}
+
+/** How many commits the base has that this branch does not. Cached: it moves
+ *  only when something fetches or merges, and these views poll. */
+const BEHIND_TTL_MS = 15_000;
+const behindCache = new Map<string, { at: number; n: number }>();
+export function behindBase(root: string, branch: string, base: string): number {
+  const key = `${root}\u0000${branch}\u0000${base}`;
+  const hit = behindCache.get(key);
+  if (hit && Date.now() - hit.at < BEHIND_TTL_MS) return hit.n;
+  const r = git(root, ["rev-list", "--count", `${branch}..${base}`]);
+  const n = r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
+  if (behindCache.size > 400) behindCache.clear();
+  behindCache.set(key, { at: Date.now(), n });
+  return n;
+}
+
+/**
+ * Bring the base's commits into a checkout — "update from base", the action a
+ * pull request page offers as "Update branch".
+ *
+ * A merge, not a rebase. Rebase rewrites commits that may already be pushed,
+ * which turns a one-click convenience into a force-push and somebody else's
+ * bad afternoon. The merge runs *in the worktree that has the branch checked
+ * out*, which is what makes this possible at all: you cannot merge into a
+ * branch you are not on, and a worktree per card means every branch is on one.
+ */
+export function syncFromBase(dirIn: unknown, baseIn?: unknown): GitActionResult {
+  const dir = repoRoot(dirIn); if (!dir) return { ok: false, error: "not a git repository root" };
+  const g = guard(dir); if (g) return g;
+  const branch = currentBranch(dir);
+  if (!branch || branch === "(detached)") return { ok: false, error: "this checkout is not on a branch" };
+  const base = typeof baseIn === "string" && baseIn ? baseIn : baseOf(dir, branch);
+  if (!base) return { ok: false, error: "no base branch is known for this checkout" };
+  if (!validRef(base)) return { ok: false, error: "invalid base" };
+  // Refuse on a dirty tree rather than merging over uncommitted work: git would
+  // usually stop anyway, but "usually" is not a promise worth making with
+  // somebody's changes.
+  if (git(dir, ["status", "--porcelain"]).stdout.trim()) return { ok: false, error: "commit or stash your changes first" };
+  return run(dir, ["merge", "--no-edit", base]);
+}
+
+/**
+ * Files git has left conflicted, from `--diff-filter=U`.
+ *
+ * A conflicted file is not "modified": it is a file git has stopped in the
+ * middle of and will not commit until you say what it should contain. The
+ * working-tree lists showed them alongside ordinary edits with no way to tell,
+ * which is how you end up committing a file with `<<<<<<<` in it.
+ */
+export function conflicts(rootIn: unknown): { ok: boolean; state: GitTreeState; files: string[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, state: "clean", files: [], error: "not a git repository root" };
+  const r = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]);
+  const files = r.stdout.split("\u0000").filter(Boolean).map((rel) => join(root, rel));
+  return { ok: true, state: treeState(root), files };
+}
+
+/** Take one side of a conflicted file wholesale, and stage it — the two
+ *  resolutions that need no editor and cover most conflicts (a lockfile, a
+ *  generated migration, a file the other branch deleted). */
+export function resolveWith(rootIn: unknown, relIn: unknown, side: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (side !== "ours" && side !== "theirs") return { ok: false, error: "side must be ours or theirs" };
+  const rels = validRels(root, Array.isArray(relIn) ? relIn : [relIn]);
+  if (!rels?.length) return { ok: false, error: "invalid path" };
+  const co = run(root, ["checkout", `--${side}`, "--", ...rels]);
+  if (!co.ok) return co;
+  return run(root, ["add", "--", ...rels]);
+}
+
+/** Abandon the merge and put the tree back exactly as it was. The only move
+ *  that is always safe, and the one someone reaches for first. */
+export function mergeAbort(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const state = treeState(root);
+  if (state === "rebasing") return run(root, ["rebase", "--abort"]);
+  if (state === "cherry-picking") return run(root, ["cherry-pick", "--abort"]);
+  if (state === "reverting") return run(root, ["revert", "--abort"]);
+  return run(root, ["merge", "--abort"]);
+}
+
+/** Finish once every conflict is staged. Refuses while any remain rather than
+ *  letting git fail with a message nobody reads. */
+export function mergeContinue(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const left = git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
+  if (left) return { ok: false, error: `still conflicted: ${left.split("\n").length} file(s) to resolve` };
+  const state = treeState(root);
+  if (state === "rebasing") return run(root, ["-c", "core.editor=true", "rebase", "--continue"]);
+  if (state === "cherry-picking") return run(root, ["-c", "core.editor=true", "cherry-pick", "--continue"]);
+  // `merge --continue` needs an editor; --no-edit keeps git's own message.
+  return run(root, ["commit", "--no-edit"]);
+}
+
+/**
+ * What you can sensibly merge from.
+ *
+ * Local heads *and* remote-tracking refs, because the default base is a remote
+ * one — `origin/master`, the master that has actually been fetched. Offering
+ * only local branches meant the picker's `master` was a different, usually
+ * staler commit than the base it was replacing, and nothing said so.
+ *
+ * Remotes first: on a repo where every branch is a ticket, the thing you merge
+ * from is nearly always upstream.
+ */
+export function baseCandidates(rootIn: unknown): { ok: boolean; refs: { name: string; remote: boolean }[] } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, refs: [] };
+  const read = (ref: string) =>
+    git(root, ["for-each-ref", "--sort=-committerdate", ref, "--format=%(refname:short)"])
+      .stdout.split("\n").filter(Boolean);
+  // Drop `origin/HEAD` and the bare `origin` symref: neither is a branch you
+  // merge from, and the bare one reads as if it were.
+  const remotes = read("refs/remotes").filter((n) => !n.endsWith("/HEAD") && n.includes("/"));
+  const locals = read("refs/heads");
+  const seen = new Set<string>();
+  const refs: { name: string; remote: boolean }[] = [];
+  for (const n of remotes) if (!seen.has(n)) { seen.add(n); refs.push({ name: n, remote: true }); }
+  for (const n of locals) if (!seen.has(n)) { seen.add(n); refs.push({ name: n, remote: false }); }
+  return { ok: true, refs };
+}
+
+/**
+ * Is the tip an undoable merge?
+ *
+ * Three conditions, all about not destroying anything you cannot get back:
+ *
+ *  - the tip is a merge commit (two parents), so there is a "before" to return
+ *    to that is exactly the branch as it was;
+ *  - nothing is committed on top of it, which the first condition already
+ *    guarantees — a later commit would be the tip instead;
+ *  - it has not been pushed. Rewriting local history is free; rewriting
+ *    published history is somebody else's problem tomorrow.
+ *
+ * A dirty tree disqualifies it too: the undo is a hard reset, and there is no
+ * version of "discard your uncommitted work as a side effect" worth offering.
+ */
+export function undoableMerge(root: string, ahead: number, upstream: string | null): boolean {
+  // Pushed work is never undone this way. `ahead` is already computed for the
+  // header, so this costs nothing for a branch level with its remote.
+  //
+  // No upstream at all is the *safest* case, not the most dangerous: nothing
+  // has been published anywhere, so there is nobody to surprise. Reading
+  // ahead===0 as "already pushed" got that exactly backwards and refused the
+  // one situation where the undo is unambiguously free.
+  if (upstream && ahead < 1) return false;
+  const parents = git(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).stdout.trim().split(/\s+/);
+  if (parents.length < 3) return false; // sha + two parents = a merge
+  return !git(root, ["status", "--porcelain"]).stdout.trim();
+}
+
+/** Put the branch back exactly as it stood before its last merge. */
+export function undoMerge(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  // Re-checked here, never trusted from the client: this is a hard reset, and
+  // these conditions are the only thing making it safe.
+  const info = branchInfo(root);
+  if (!undoableMerge(root, info.ahead, info.upstream)) {
+    return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
+  }
+  return run(root, ["reset", "--hard", "HEAD^1"]);
+}
+
 export function worktrees(rootIn: unknown): GitWorktree[] {
   const root = repoRoot(rootIn);
   if (!root) return [];
@@ -919,6 +1157,13 @@ export function worktrees(rootIn: unknown): GitWorktree[] {
     else if (line.startsWith("locked")) cur.locked = true;
   }
   flush();
+  // How far each checkout has drifted from what it was branched off. One
+  // rev-list per worktree, cached, and only for the ones on a real branch.
+  for (const w of out) {
+    const base = w.branch === "(detached)" ? null : baseOf(root, w.branch);
+    w.base = base;
+    w.behindBase = base ? behindBase(root, w.branch, base) : 0;
+  }
   return out;
 }
 export function addWorktree(rootIn: string, pathIn: unknown, branch: string, newBranch: boolean): GitActionResult {
