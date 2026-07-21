@@ -1178,11 +1178,18 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             and the reason is the fix. */}
                         <button
                           onClick={() => act(() => api.gitSyncBase(root), `merged ${branch.base}`, "sync")}
-                          disabled={!writeEnabled || busy || !tree?.clean}
+                          disabled={!writeEnabled || busy || !tree?.clean || branch.behind > 0}
                           className="text-[11px] px-2 py-1 rounded-l-lg whitespace-nowrap"
-                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy || !tree?.clean) ? 0.45 : 1 }}
+                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy || !tree?.clean || branch.behind > 0) ? 0.45 : 1 }}
                           title={!tree?.clean
                             ? "Commit or stash your changes first — merging over uncommitted work is how you lose it"
+                            : branch.behind > 0
+                            // Syncing while behind your own remote makes a
+                            // second merge commit for content the remote has
+                            // already merged — the two then have to be
+                            // reconciled. Pull is the move; sync afterwards if
+                            // anything is still missing.
+                            ? `Pull first — ${branch.behind} commit${branch.behind === 1 ? "" : "s"} on your remote branch you do not have. Syncing now would make a duplicate merge and diverge from it.`
                             : `Merge ${branch.base} into ${branch.name}. Brings the base branch's latest commits into this one — a merge, not a rebase, so nothing already pushed is rewritten.`}>
                           {pending === "sync" ? "syncing…" : `⇣ sync ↓${branch.behindBase}`}
                         </button>
