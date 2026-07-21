@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { Alert, AgentCard } from "../lib/derive.ts";
 import { collectAttention } from "../lib/attention.ts";
 import { listChats, subscribe as subscribeChats } from "../lib/chatStore.ts";
+import { listGates, subscribeGates, forgetGate } from "../lib/gateStore.ts";
 import type { Insight, PendingGate, GateRecord } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
 import { api } from "../lib/api.ts";
@@ -18,8 +19,17 @@ const KIND_ICON: Record<Insight["kind"], string> = { loop: "↻", spend: "🔥",
 
 export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Alert[]; agents?: AgentCard[]; onSelectApp?: (app: string) => void; bump?: number }) {
   const [insights, setInsights] = useState<Insight[]>([]);
-  const [gates, setGates] = useState<PendingGate[]>([]);
   const [acting, setActing] = useState<Record<string, boolean>>({});
+
+  /*
+   * Read, not polled.
+   *
+   * The watching moved to gateStore, which keeps going while this panel is
+   * unmounted. A hold that arrives while you are in the workspace is what the
+   * notch is for, and it cannot be raised by a poll that only runs on the
+   * dashboard.
+   */
+  const gates = useSyncExternalStore(subscribeGates, listGates, listGates);
 
   useEffect(() => {
     let alive = true;
@@ -28,15 +38,6 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
     const id = setInterval(load, 15_000);
     return () => { alive = false; clearInterval(id); };
   }, [bump]);
-
-  // Pending gate requests are the most urgent thing — poll fast.
-  useEffect(() => {
-    let alive = true;
-    const load = () => api.gatePending().then((r) => alive && setGates(r.gates)).catch(() => {});
-    load();
-    const id = setInterval(load, 2000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
 
   /*
    * The gates you didn't decide.
@@ -66,7 +67,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
 
   const decide = (g: PendingGate, decision: "allow" | "deny") => {
     setActing((a) => ({ ...a, [g.id]: true }));
-    setGates((gs) => gs.filter((x) => x.id !== g.id)); // optimistic
+    forgetGate(g.id); // optimistic
     api.gateDecide(g.id, decision).catch(() => {});
   };
 

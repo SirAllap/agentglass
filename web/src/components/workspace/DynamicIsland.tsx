@@ -6,6 +6,7 @@ import { subscribe as subscribeChats, listChats } from "../../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../../lib/clockPref.ts";
 import { subscribeGitChanged } from "../../lib/gitBus.ts";
+import { subscribeNewGates } from "../../lib/gateStore.ts";
 import {
   subscribeSystemNotes, subscribeNotifyHistory, notifyHistory, notifyUnread,
   markNotifyRead, dismissNote, clearNotes, openNote, recordNote, type SystemNote,
@@ -266,6 +267,23 @@ function useNotes(): { note: Note | null; behind: number; ahead: number } {
     read();
     return subscribeChats(read);
   }, []);
+
+  // A tool call held at the gate. The most interrupting thing the notch shows,
+  // because an agent is stopped until it is answered, and unlike everything
+  // else here it cannot be caught up on later: the hold expires on its own.
+  //
+  // The store raises the history entry; this is only the toast. The Approve
+  // buttons live on the dashboard's "What needs you", so the toast names the
+  // tool and points there rather than pretending to be actionable itself.
+  useEffect(() => subscribeNewGates((g) => {
+    push({
+      id: `gate-${g.id}`,
+      kind: "blocked",
+      color: "var(--warning)",
+      title: `Approve ${g.tool_name}?`,
+      sub: `${g.source_app}:${g.session_id.slice(0, 8)} is waiting on you`,
+    });
+  }), []);
 
   // Desktop notifications, read off the D-Bus session bus by the server and
   // mirrored here. They share the lane with agentglass's own events on
