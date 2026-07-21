@@ -866,12 +866,16 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         className="w-full px-3 py-1.5 rounded-lg text-[11px] outline-none"
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
                       />
-                      <div className="flex items-center gap-1">
+                      {/* One row, one height. `flex-wrap` rather than letting a
+                          chip grow: on a narrow panel the row wraps as a row,
+                          which is legible, instead of one button becoming two
+                          lines tall and dragging its neighbours' baseline. */}
+                      <div className="flex items-center flex-wrap gap-1">
                         {GROUP_DIMS.map((d) => (
                           <button
                             key={d.id}
                             onClick={() => setGroupBy(d.id)}
-                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors"
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
                             style={{
                               background: groupBy === d.id ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
                               color: groupBy === d.id ? "var(--text)" : "var(--text3)",
@@ -885,7 +889,11 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         {ignoredCount > 0 && (
                           <button
                             onClick={() => setShowIgnored((v) => !v)}
-                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors"
+                            // nowrap: "+ 23 ignored" broke across two lines and
+                            // made this chip taller than the four beside it.
+                            // A button that changes height with its own label
+                            // is never worth the width it saves.
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
                             title={showIgnored
                               ? "hide files git ignores"
                               : `${ignoredCount} file${ignoredCount === 1 ? "" : "s"} git ignores ${ignoredCount === 1 ? "is" : "are"} hidden — build output, caches, scratch files`}

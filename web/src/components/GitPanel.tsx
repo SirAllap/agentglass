@@ -72,14 +72,22 @@ const STATE_LABEL: Record<string, string> = {
  * "never fetched" look identical, and the whole point of the auto-fetch is that
  * you can now trust the difference.
  */
-function BranchChip({ branch }: { branch: GitBranchInfo }) {
+function BranchChip({ branch, onCopied }: { branch: GitBranchInfo; onCopied?: (name: string) => void }) {
   const { ahead, behind, upstream, state } = branch;
   const busy = state && state !== "clean" ? STATE_LABEL[state] : null;
   return (
-    <span className="px-2 py-0.5 rounded-md text-[11px] inline-flex items-center gap-1"
+    // One line, always. A ticket-shaped branch name is 60 characters and used
+    // to wrap inside the chip, which made the whole header two rows tall and
+    // pushed everything else down. The name truncates, the counts never do —
+    // they are the part you are actually reading — and the full name is one
+    // hover or one click away.
+    <span className="px-2 py-0.5 rounded-md text-[11px] inline-flex items-center gap-1 max-w-[min(46vw,520px)] cursor-pointer"
       style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary-hover)" }}
-      title={upstream ? `tracking ${upstream}` : "no upstream — nothing to compare against"}>
-      <span>⎇ {branch.name}</span>
+      onClick={() => {
+        navigator.clipboard?.writeText(branch.name).then(() => onCopied?.(branch.name)).catch(() => { /* no clipboard permission */ });
+      }}
+      title={`${branch.name}${upstream ? `\ntracking ${upstream}` : "\nno upstream — nothing to compare against"}\n\nclick to copy the branch name`}>
+      <span className="truncate min-w-0">⎇ {branch.name}</span>
       {busy && <span style={{ color: "var(--warning)" }}>({busy})</span>}
       {/* Behind first, then ahead — it reads as "pull this many, push that many",
           and it's the order lazygit uses, so the shape is already familiar. */}
@@ -424,8 +432,13 @@ export function GitView({ active }: { active: boolean }) {
       if (!r.ok) return flash(false, r.error || "could not open the editor");
       if (r.how === "remote") {
         // It landed in a window that may be behind this one, so say so —
-        // otherwise pressing `e` looks like it did nothing at all.
-        flash(true, `sent to your open nvim · ${baseName(c.file_path)}:${line}`);
+        // otherwise pressing `e` looks like it did nothing at all. And when it
+        // went to a sibling checkout of the same project rather than this one,
+        // name it: the file opens in the nvim you have, which is the point, but
+        // you should not have to work out which window it appeared in.
+        flash(true, r.viaFamily
+          ? `sent to your nvim in ${r.viaFamily.split("/").pop()} · ${baseName(c.file_path)}:${line}`
+          : `sent to your open nvim · ${baseName(c.file_path)}:${line}`);
       } else if (r.command) {
         // Nothing reachable for *this* file. Saying "no nvim running" when one
         // is open two panes away sends you looking for a bug; naming the repo
@@ -1012,8 +1025,12 @@ export function GitView({ active }: { active: boolean }) {
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Source control</span>
                   <div className="relative">
-                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
-                      <span className="font-medium">{repoRef?.name ?? "repo"}</span><span className="t-dim2">▼</span>
+                    {/* Also one line. A worktree directory carries the whole
+                        ticket name, and wrapped it made the button two rows
+                        tall and shoved the tab strip down with it. */}
+                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[240px]" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
+                      title={repoRef ? `${repoRef.name}\n${repoRef.root}` : undefined}>
+                      <span className="font-medium truncate min-w-0">{repoRef?.name ?? "repo"}</span><span className="t-dim2 shrink-0">▼</span>
                     </button>
                     {repoOpen && (
                       <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 420, overflow: "hidden" }}>
@@ -1068,7 +1085,7 @@ export function GitView({ active }: { active: boolean }) {
                     {VIEW_GROUPS.map((g) => <ViewGroup key={g.label} views={g.views} />)}
                   </div>
                   <div className="ml-auto flex items-center gap-1.5">
-                    {branch && <BranchChip branch={branch} />}
+                    {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
                     {/* Each says what it's doing while it does it. A pull over a
                         slow network is several seconds of nothing otherwise, and
                         the honest reading of that is "the button is broken". */}

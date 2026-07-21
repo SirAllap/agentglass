@@ -203,7 +203,10 @@ const realApi = {
   editorCapability: () => get<{ hasNvim: boolean; editor: string | null }>("/editor/capability"),
   editorTarget: (path: string) => get<{ running: boolean; hasNvim: boolean }>(`/editor/target?path=${encodeURIComponent(path)}`),
   editorOpen: (path: string, line: number) =>
-    post<{ ok: boolean; how?: "remote" | "spawn"; command?: string; otherCwds?: string[]; stuck?: number; error?: string }>("/editor/open", { path, line }),
+    post<{ ok: boolean; how?: "remote" | "spawn"; command?: string; otherCwds?: string[]; stuck?: number; error?: string;
+      /** Set when the file went to an nvim rooted in a *sibling* checkout of the
+       *  same project — a worktree of the repo you are looking at. */
+      viaFamily?: string }>("/editor/open", { path, line }),
   gitCheckout: (root: string, name: string) => post<GitActionResult>("/git/checkout", { root, name }),
   gitBranchCreate: (root: string, name: string) => post<GitActionResult>("/git/branch-create", { root, name }),
   gitBranchDelete: (root: string, name: string, force: boolean) => post<GitActionResult>("/git/branch-delete", { root, name, force }),
