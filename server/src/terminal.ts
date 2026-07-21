@@ -80,6 +80,13 @@ type Session = {
   /** Cleared on close — a stray interval would keep reading /proc for a pty
    *  that no longer exists, once per session, forever. */
   tmuxPoll?: ReturnType<typeof setInterval> | null;
+  /** The tmux session this shell is attached to, once one is found. */
+  tmux?: TmuxTarget | null;
+  /** Whether we hid tmux's own status line, so it can be given back on the way
+   *  out. Restoring is not optional: a session left with `status off` after the
+   *  panel closed would look broken in the user's real terminal, and they would
+   *  have no reason to connect it to us. */
+  tmuxStatusHidden?: boolean;
 };
 const sessions = new Map<PtyWs, Session>();
 
@@ -107,6 +114,8 @@ function killGroup(s: Session, sigNum: number) {
     else s.proc.kill(sigNum);
   } catch { /* already gone */ }
 }
+
+import { resolveTarget, listWindows, runAction, setStatusLine, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 
 const enc = new TextEncoder();
 const ctl = (ws: PtyWs, frame: Record<string, unknown>) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
@@ -202,12 +211,33 @@ export function ptyOpen(ws: PtyWs) {
    * stale layout is noticeable, and the check is a couple of small /proc reads.
    */
   let sawTmux = false;
+  let sentWindows = "";
   const tmuxPoll = setInterval(() => {
     if (session.closed || session.exited) return;
     const now = tmuxRunning(proc.pid);
-    if (now === sawTmux) return;
-    sawTmux = now;
-    ctl(ws, { t: "tmux", active: now });
+    if (now !== sawTmux) {
+      sawTmux = now;
+      if (!now) {
+        // Detached. Forget the session rather than keep polling a target that
+        // is no longer ours, and stop describing windows nobody is looking at.
+        session.tmux = null;
+        session.tmuxStatusHidden = false;
+        sentWindows = "";
+        ctl(ws, { t: "tmux", active: false, windows: [] });
+        return;
+      }
+    }
+    if (!now) return;
+    // Resolved once per attach: the join walks /proc and shells out to
+    // list-clients, and neither answer changes while the same client is up.
+    if (!session.tmux) session.tmux = resolveTarget(proc.pid);
+    const windows = session.tmux ? listWindows(session.tmux) : [];
+    // Only speak when something changed. A tab strip that re-renders every two
+    // seconds is a tab strip that drops the click you were halfway through.
+    const shape = JSON.stringify(windows);
+    if (shape === sentWindows && sawTmux === now) return;
+    sentWindows = shape;
+    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, windows });
   }, 2000);
   session.tmuxPoll = tmuxPoll;
 
@@ -240,7 +270,7 @@ export function ptyOpen(ws: PtyWs) {
 export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   const s = sessions.get(ws);
   if (!s) return;
-  let msg: { t?: string; d?: string; cols?: number; rows?: number };
+  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; index?: number; name?: string; visible?: boolean };
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
     try {
@@ -256,6 +286,25 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       writeSizeFile(s.sizeDir, rows, cols);
       process.kill(s.proc.pid, "SIGWINCH"); // bridge applies TIOCSWINSZ + forwards
     } catch { /* shell gone */ }
+  } else if (msg.t === "tmux") {
+    /*
+     * A tab was clicked.
+     *
+     * Everything here is something a keybinding could already do, so this adds
+     * no capability to a socket that already carries a shell — it adds a second
+     * way to reach four commands. The target is the session *we* resolved from
+     * /proc, never one the client names, so a page cannot address somebody
+     * else's tmux by asking nicely.
+     */
+    if (!s.tmux) return;
+    if (msg.cmd === "status") {
+      const visible = msg.visible !== false;
+      if (setStatusLine(s.tmux, visible)) s.tmuxStatusHidden = !visible;
+      return;
+    }
+    const action = msg.cmd as TmuxAction;
+    if (!["select", "new", "kill", "rename"].includes(action)) return;
+    runAction(s.tmux, action, msg.index, msg.name);
   }
 }
 
@@ -276,6 +325,10 @@ export function ptyClose(ws: PtyWs) {
 function cleanup(ws: PtyWs, s: Session) {
   sessions.delete(ws);
   if (s.tmuxPoll) { clearInterval(s.tmuxPoll); s.tmuxPoll = null; }
+  // Give the status line back before letting go. The panel borrowed it; a
+  // session left with `status off` after the panel closed looks broken in the
+  // user's real terminal, and nothing there would point back at us.
+  if (s.tmuxStatusHidden && s.tmux) { setStatusLine(s.tmux, true); s.tmuxStatusHidden = false; }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
 }
 
