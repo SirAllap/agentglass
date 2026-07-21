@@ -10,7 +10,7 @@ import { fmtTime, fmtUsd, fmtMs, agentKey } from "../lib/format.ts";
 function Snippet({ text }: { text: string }) {
   const clean = text.replace(/\s*\n\s*/g, " · ");
   const segs: { t: string; h: boolean }[] = [];
-  const re = /([^]*)/g;
+  const re = /\u0001([^\u0002]*)\u0002/g;
   let last = 0, m: RegExpExecArray | null;
   while ((m = re.exec(clean))) {
     if (m.index > last) segs.push({ t: clean.slice(last, m.index), h: false });
