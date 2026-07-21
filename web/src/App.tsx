@@ -333,11 +333,22 @@ export default function App() {
       // false and the old guard would swallow every letter. What actually
       // matters there is narrower: is the keystroke going into a field or a
       // shell? If not, it's navigation.
-      const typing = !!a && (
+      //
+      // The terminal is the exception, and it has to be the *view* that decides
+      // rather than what holds DOM focus. Asking `activeElement` worked only
+      // while the caret sat in xterm's helper textarea: click anything in the
+      // terminal's own toolbar — the repo picker, restart, clear — and focus
+      // parks on that button, so `typing` went false and the next letter of the
+      // command being typed was eaten as navigation. `t` closed the terminal
+      // mid-command, `g` jumped to git. While the terminal is the active view
+      // every bare letter belongs to the shell; ⌘1..5, ⌘\ and ⌘[/] still leave,
+      // which is exactly why they carry a modifier.
+      const termOwnsKeys = wsOpenRef.current && wsViewRef.current === "term";
+      const typing = termOwnsKeys || (!!a && (
         /^(input|textarea|select)$/i.test(a.tagName) ||
         (a as HTMLElement).isContentEditable ||
         !!a.closest?.(".xterm")
-      );
+      ));
       const canNavigate = (focusFree && !anyPanelOpenRef.current) || (wsOpenRef.current && !typing);
       if (!canNavigate) return;
 
