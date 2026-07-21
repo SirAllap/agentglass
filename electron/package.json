@@ -1,7 +1,7 @@
 {
   "name": "agentglass-electron",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "agentglass desktop shell (Electron)",
   "author": "SirAllap",
   "homepage": "https://github.com/SirAllap/agentglass",
