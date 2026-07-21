@@ -1,6 +1,9 @@
 import { useSyncExternalStore, useState } from "react";
 import { VIEWS, loadViewOrder, saveViewOrder, subscribeViewOrder, type ViewId } from "./views.ts";
 import { MOD_KEY } from "../../lib/format.ts";
+import { chordFor, chords, subscribeBindings } from "../../lib/keybindings.ts";
+
+const EMPTY_CHORDS = {};
 
 export type RailPip = { dot?: boolean; count?: number };
 
@@ -26,6 +29,9 @@ export function ViewRail({
   // The rail's order is the user's. Read through a store so a drag updates
   // every mounted rail at once rather than only the one being dragged.
   const order = useSyncExternalStore(subscribeViewOrder, loadViewOrder, () => VIEWS);
+  // Re-render when a shortcut is rebound, so the tooltips keep telling the
+  // truth. chordFor reads the store itself; this only supplies the signal.
+  useSyncExternalStore(subscribeBindings, chords, () => EMPTY_CHORDS);
   const [dragId, setDragId] = useState<ViewId | null>(null);
 
   const moveTo = (from: ViewId, to: ViewId) => {
@@ -82,7 +88,7 @@ export function ViewRail({
             // the letters no longer navigate — they belong to whatever has
             // focus, usually a shell — and a tooltip advertising a key that
             // does nothing is worse than no tooltip.
-            data-tip={`${v.label} · ${MOD_KEY}${i + 1}`}
+            data-tip={`${v.label} · ${MOD_KEY}${chordFor(v.id, order.map((x) => x.id)) || i + 1}`}
             style={{
               color: on ? "var(--primary-hover)" : "var(--text4)",
               background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",

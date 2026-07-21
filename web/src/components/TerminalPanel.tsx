@@ -5,6 +5,7 @@
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -631,8 +632,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 .xterm-viewport::-webkit-scrollbar{width:0!important;height:0!important}`}</style>
 
                 {/* header: repo picker + command launcher + actions */}
-                <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Terminal</span>
+                <div className={viewHeaderClass} style={viewHeaderStyle}>
+                  <span className={viewTitleClass} style={{ color: "var(--text)" }}>Terminal</span>
                   <div ref={pickersRef} className="flex items-center gap-3">
                   <div className="relative">
                     <button onClick={() => { setRepoOpen((o) => !o); setCmdsOpen(false); }} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>

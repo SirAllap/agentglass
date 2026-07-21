@@ -17,7 +17,9 @@ import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
-import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId } from "../lib/keybindings.ts";
+import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
+         chordFor, rebindChord, clearChord, resetChords, chordsCustomised } from "../lib/keybindings.ts";
+import { loadViewOrder, type ViewId } from "./workspace/views.ts";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
   return (
@@ -130,26 +132,49 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  * fire. `keydown` on the window during capture, so the key never reaches the
  * app's own handler and rebinding `t` does not also open the terminal.
  */
-function KeyRow({ id, keyName, capturing, onCapture, error }: {
+function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
   id: ActionId; keyName: string; capturing: boolean; onCapture: () => void; error: string | null;
+  /** Present only for workspace views, which are the ones reachable from
+   *  inside the workspace and so the ones that need a modified key too. */
+  chord?: { key: string; custom: boolean; capturing: boolean; onCapture: () => void; onClear: () => void };
 }) {
   const { label, hint } = LABELS[id];
   return (
-    <button onClick={onCapture}
-      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-white/5">
-      <span className="min-w-0 flex-1">
+    <div className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-white/5">
+      <button onClick={onCapture} className="min-w-0 flex-1 text-left">
         <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
         <span className="block text-[10.5px] mt-0.5" style={{ color: error ? "var(--error)" : undefined }}>
           <span className={error ? "" : "t-dim2"}>{error ?? hint}</span>
         </span>
-      </span>
-      <kbd className="chip text-[10px] shrink-0 tabular-nums"
+      </button>
+      {chord && (
+        // Two keys, because they answer different questions: the bare letter
+        // is for the dashboard, this one works with the caret in a shell.
+        // Shown as one chip you can click, with a way back to positional.
+        <button onClick={chord.onCapture}
+          title={chord.custom
+            ? `${MOD_KEY}${chord.key} opens this — click to change, or clear to go back to its rail position`
+            : `${MOD_KEY}${chord.key} opens this, from its position in the rail — click to set your own`}
+          className="chip text-[10px] shrink-0 tabular-nums"
+          style={chord.capturing
+            ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
+            : chord.custom
+              ? { color: "var(--primary-hover)" }
+              : { color: "var(--text2)", opacity: 0.65 }}>
+          {chord.capturing ? `${MOD_KEY}…` : `${MOD_KEY}${chord.key}`}
+        </button>
+      )}
+      {chord?.custom && !chord.capturing && (
+        <button onClick={chord.onClear} title="back to its position in the rail"
+          className="text-[11px] shrink-0 px-1 t-dim2 hover:opacity-70" aria-label="reset this shortcut">✕</button>
+      )}
+      <button onClick={onCapture} className="chip text-[10px] shrink-0 tabular-nums"
         style={capturing
           ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
           : { color: "var(--text2)" }}>
         {capturing ? "press a key…" : keyName === " " ? "space" : keyName}
-      </kbd>
-    </button>
+      </button>
+    </div>
   );
 }
 
@@ -193,6 +218,27 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [capturing]);
+
+  // The same capture, for the modified key. Held apart from `capturing` so the
+  // two chips on one row cannot both be listening at once.
+  const [capturingChord, setCapturingChord] = useState<ViewId | null>(null);
+  useEffect(() => {
+    if (!capturingChord) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setCapturingChord(null); setKeyError(null); return; }
+      if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+      // The modifier is implied — this shortcut is always MOD + something, so
+      // asking someone to hold it during capture only risks the OS eating the
+      // combination first.
+      const r = rebindChord(capturingChord, e.key, loadViewOrder().map((v) => v.id));
+      if (r.ok) { setCapturingChord(null); setKeyError(null); }
+      else setKeyError({ id: `view.${capturingChord}`, msg: r.error });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturingChord]);
   const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
   useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
@@ -275,19 +321,30 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   </Section>
 
                   <Section title="Shortcuts">
-                    {(Object.keys(DEFAULTS) as ActionId[]).map((id) => (
-                      <KeyRow key={id} id={id} keyName={keys[id]}
-                        capturing={capturing === id}
-                        error={keyError?.id === id ? keyError.msg : null}
-                        onCapture={() => { setKeyError(null); setCapturing((c) => (c === id ? null : id)); }} />
-                    ))}
+                    {(Object.keys(DEFAULTS) as ActionId[]).map((id) => {
+                      const view = id.startsWith("view.") ? (id.slice(5) as ViewId) : null;
+                      const order = loadViewOrder().map((v) => v.id);
+                      return (
+                        <KeyRow key={id} id={id} keyName={keys[id]}
+                          capturing={capturing === id}
+                          error={keyError?.id === id ? keyError.msg : null}
+                          onCapture={() => { setKeyError(null); setCapturingChord(null); setCapturing((c) => (c === id ? null : id)); }}
+                          chord={view ? {
+                            key: chordFor(view, order),
+                            custom: chordFor(view, order) !== String(order.indexOf(view) + 1),
+                            capturing: capturingChord === view,
+                            onCapture: () => { setKeyError(null); setCapturing(null); setCapturingChord((c) => (c === view ? null : view)); },
+                            onClear: () => { clearChord(view); setKeys({ ...bindings() }); },
+                          } : undefined} />
+                      );
+                    })}
                     <div className="px-3 pt-1 pb-1 flex items-center gap-3">
                       <span className="text-[10px] t-dim2 flex-1">
                         {/* Says why the rest of the keyboard is not on this list. */}
-                        Single keys, and they work from the dashboard only — inside the workspace every keystroke belongs to whatever has focus, usually a shell. There, navigation is {MOD_KEY}1–5, {MOD_KEY}\\ and {MOD_KEY}[ / {MOD_KEY}], which no shell consumes.
+                        Two keys per view. The bare letter works on the dashboard only — inside the workspace every keystroke belongs to whatever has focus, usually a shell. The {MOD_KEY.replace("+", "")} one works anywhere; unset, it follows the view's position in the rail, so reordering keeps it true. {MOD_KEY}\\ and {MOD_KEY}[ / {MOD_KEY}] stay put.
                       </span>
-                      {isCustomised() && (
-                        <button onClick={() => { resetBindings(); setKeyError(null); setCapturing(null); }}
+                      {(isCustomised() || chordsCustomised()) && (
+                        <button onClick={() => { resetBindings(); resetChords(); setKeyError(null); setCapturing(null); setCapturingChord(null); }}
                           className="text-[10.5px] px-2 py-1 rounded-lg shrink-0"
                           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
                           reset to defaults

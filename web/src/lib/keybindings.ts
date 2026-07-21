@@ -1,4 +1,5 @@
 import { VIEWS, type ViewId } from "../components/workspace/views.ts";
+import { MOD_KEY as MOD_LABEL } from "./format.ts";
 
 /**
  * The single-letter shortcuts, and the ability to change them.
@@ -110,3 +111,98 @@ export function subscribeBindings(fn: () => void): () => void {
 /** Whether anything has been changed from the shipped defaults. */
 export const isCustomised = (): boolean =>
   (Object.keys(DEFAULTS) as ActionId[]).some((id) => bindings()[id] !== DEFAULTS[id]);
+
+/* ------------------------------------------------------------------ chords */
+
+/**
+ * The workspace shortcuts, and why these are a second mechanism.
+ *
+ * Bare letters only work on the dashboard — inside the workspace every
+ * keystroke belongs to whatever has focus, usually a shell. So the workspace
+ * needs modified keys, and by default those are positional: the Nth icon in
+ * the rail is MOD+N. Positional is a good default precisely because it is not
+ * a preference — reorder the rail and the numbers follow, so the tooltip never
+ * lies.
+ *
+ * But positional is also an opinion, and someone who thinks of chat as MOD+C
+ * should not have to drag their rail to get it. A custom chord overrides the
+ * position for that view; everything unbound stays positional.
+ */
+const CHORD_KEY = "agentglass.chords";
+
+/** Chords the app itself owns. Rebinding these would take away zoom, the
+ *  palette, the workspace toggle, or cycling — with no way back. */
+const CHORD_RESERVED = new Set(["k", "\\", "[", "]", "0", "=", "+", "-", "_"]);
+
+let chordCache: Partial<Record<ViewId, string>> | null = null;
+
+export function chords(): Partial<Record<ViewId, string>> {
+  if (chordCache) return chordCache;
+  let stored: unknown = null;
+  try { stored = JSON.parse(localStorage.getItem(CHORD_KEY) || "null"); } catch { /* corrupt */ }
+  const out: Partial<Record<ViewId, string>> = {};
+  if (stored && typeof stored === "object") {
+    for (const [id, k] of Object.entries(stored as Record<string, unknown>)) {
+      if (VIEWS.some((v) => v.id === id) && typeof k === "string" && k.length === 1) out[id as ViewId] = k;
+    }
+  }
+  chordCache = out;
+  return chordCache;
+}
+
+/** What actually reaches a view: the custom chord, else its rail position. */
+export function chordFor(id: ViewId, order: ViewId[]): string {
+  const custom = chords()[id];
+  if (custom) return custom;
+  const i = order.indexOf(id);
+  return i >= 0 && i < 9 ? String(i + 1) : "";
+}
+
+/**
+ * Which view a modified key opens, or null.
+ *
+ * Custom chords are resolved first, so binding MOD+2 to chat takes that key
+ * away from whatever sits second in the rail rather than being shadowed by it
+ * — the explicit choice has to win over the implicit one, or setting it looks
+ * broken.
+ */
+export function viewForChord(key: string, order: ViewId[]): ViewId | null {
+  const map = chords();
+  for (const id of order) if (map[id] === key) return id;
+  if (key >= "1" && key <= "9") {
+    const at = order[Number(key) - 1];
+    // A digit still held by a custom chord elsewhere is not also positional.
+    if (at && !map[at]) return at;
+  }
+  return null;
+}
+
+export function rebindChord(id: ViewId, key: string, order: ViewId[]): RebindResult {
+  if (key.length !== 1) return { ok: false, error: "pick a single character" };
+  const k = key.toLowerCase();
+  if (CHORD_RESERVED.has(k)) return { ok: false, error: `${MOD_LABEL}${key} belongs to the app` };
+  const taken = order.find((v) => v !== id && chordFor(v, order) === k);
+  if (taken) return { ok: false, error: `already opens ${taken}` };
+  chordCache = { ...chords(), [id]: k };
+  persistChords();
+  return { ok: true };
+}
+
+export function clearChord(id: ViewId) {
+  const next = { ...chords() };
+  delete next[id];
+  chordCache = next;
+  persistChords();
+}
+
+export function resetChords() {
+  chordCache = {};
+  persistChords();
+}
+
+export const chordsCustomised = (): boolean => Object.keys(chords()).length > 0;
+
+function persistChords() {
+  try { localStorage.setItem(CHORD_KEY, JSON.stringify(chordCache)); } catch { /* non-fatal */ }
+  for (const fn of listeners) fn();
+}

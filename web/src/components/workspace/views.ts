@@ -42,10 +42,23 @@ const ORDER_KEY = "agentglass.workspace.order";
  * and merged over the shipped list, so a view added in a later version appears
  * rather than being silently dropped by an older saved order.
  */
+/**
+ * Cached, and it has to be.
+ *
+ * This is the getSnapshot for a useSyncExternalStore, which compares snapshots
+ * by identity — returning a freshly built array on every call means every
+ * render reports a change, which loops until React gives up and renders
+ * nothing. A blank workspace, seconds after a drag. The same note is on
+ * liveSessionCount for the same reason; it is the standard way to get this
+ * wrong.
+ */
+let cachedOrder: ViewDef[] | null = null;
+
 export function loadViewOrder(): ViewDef[] {
+  if (cachedOrder) return cachedOrder;
   let saved: unknown = null;
   try { saved = JSON.parse(localStorage.getItem(ORDER_KEY) || "null"); } catch { /* absent or corrupt */ }
-  if (!Array.isArray(saved)) return VIEWS;
+  if (!Array.isArray(saved)) { cachedOrder = VIEWS; return cachedOrder; }
   const byId = new Map(VIEWS.map((v) => [v.id, v]));
   const out: ViewDef[] = [];
   for (const id of saved) {
@@ -53,11 +66,14 @@ export function loadViewOrder(): ViewDef[] {
     if (v && !out.includes(v)) out.push(v);
   }
   for (const v of VIEWS) if (!out.includes(v)) out.push(v);
-  return out;
+  cachedOrder = out;
+  return cachedOrder;
 }
 
 export function saveViewOrder(ids: ViewId[]) {
   try { localStorage.setItem(ORDER_KEY, JSON.stringify(ids)); } catch { /* non-fatal */ }
+  cachedOrder = null; // rebuilt on the next read, once, and stable again after
+
   for (const fn of orderListeners) fn();
 }
 

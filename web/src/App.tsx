@@ -29,6 +29,7 @@ import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
 import { VIEW_IDS, loadViewOrder, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import { viewForChord } from "./lib/keybindings.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
@@ -283,10 +284,12 @@ export default function App() {
         // The user's rail order, not the shipped one: the rail labels each
         // icon with the number that reaches it, and a tooltip that stops being
         // true after a reorder is worse than no tooltip.
+        // ...unless the user bound their own, which wins over the position.
         const railIds = loadViewOrder().map((v) => v.id);
-        if (k >= "1" && k <= String(railIds.length)) {
+        const target = viewForChord(k.length === 1 ? k.toLowerCase() : k, railIds);
+        if (target) {
           e.preventDefault();
-          setWsView(railIds[Number(k) - 1]!);
+          setWsView(target);
           setWsOpen(true);
           return;
         }

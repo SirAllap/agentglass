@@ -3,6 +3,7 @@
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
@@ -1075,8 +1076,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     clipped the menu to a sliver. Overflow is prevented by the
                     branch chip yielding space and the tab strip scrolling —
                     not by cutting off whatever escapes. */}
-                <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <span className="text-[15px] font-semibold whitespace-nowrap shrink-0" style={{ color: "var(--text)" }}>Source control</span>
+                <div className={viewHeaderClass} style={viewHeaderStyle}>
+                  <span className={viewTitleClass} style={{ color: "var(--text)" }}>Source control</span>
                   <div className="relative">
                     {/* Also one line. A worktree directory carries the whole
                         ticket name, and wrapped it made the button two rows

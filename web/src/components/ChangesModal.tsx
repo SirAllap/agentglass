@@ -1,4 +1,5 @@
 import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
@@ -851,16 +852,20 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
       className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
-                <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <div className="flex items-baseline gap-2.5 flex-wrap">
-                    <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>File changes</span>
+                <div className={viewHeaderClass} style={viewHeaderStyle}>
+                  {/* No wrapping: the bar is a fixed height now, so a second
+                      line does not make it taller — it gets clipped. The meta
+                      truncates instead, which loses the tail of a preset name
+                      rather than half the row. */}
+                  <div className="flex items-baseline gap-2.5 min-w-0">
+                    <span className={viewTitleClass} style={{ color: "var(--text)" }}>File changes</span>
                     {changes && (
-                      <span className="text-[10px] t-dim2 tabular-nums">
+                      <span className="text-[10px] t-dim2 tabular-nums truncate">
                         {all.length} edits · <span style={{ color: "var(--success)" }}>+{totals.add}</span> <span style={{ color: "var(--error)" }}>−{totals.del}</span> · {presetTitle || "what the fleet changed"}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="ml-auto flex items-center gap-2">
                     {onBack && (
                       <button
                         onClick={onBack}
