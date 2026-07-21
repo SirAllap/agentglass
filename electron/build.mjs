@@ -38,7 +38,22 @@ run("bun", [
 // to update itself. Without it the server would have to guess where the source
 // lives, and a wrong guess would build a stranger's repository.
 const commit = spawnSync("git", ["-C", REPO, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout?.trim() ?? "";
-const version = JSON.parse(readFileSync(resolve(HERE, "package.json"), "utf8")).version ?? "0.0.0";
+// Two manifests carry a version and only one of them is synced from the tag by
+// CI (electron/package.json), so they drift: the v0.4.0 release shipped correct
+// installers while every local and self-update build stamped 0.2.0 and the
+// About pane reported it for weeks. Read both, take the higher, and say so when
+// they disagree — a build that quietly reports the wrong version is how nobody
+// notices the bump was half-done.
+const readVersion = (p) => {
+  try { return JSON.parse(readFileSync(p, "utf8")).version ?? ""; } catch { return ""; }
+};
+const rank = (v) => (v.match(/\d+/g) ?? []).map(Number).reduce((n, part) => n * 1000 + part, 0);
+const shellVersion = readVersion(resolve(HERE, "package.json"));
+const rootVersion = readVersion(resolve(REPO, "package.json"));
+const version = (rank(rootVersion) > rank(shellVersion) ? rootVersion : shellVersion) || "0.0.0";
+if (shellVersion && rootVersion && shellVersion !== rootVersion) {
+  console.warn(`warn: package.json versions disagree (root ${rootVersion}, electron ${shellVersion}) — using ${version}`);
+}
 // The remote, so the updater can clone it without ever needing this checkout.
 const origin = spawnSync("git", ["-C", REPO, "remote", "get-url", "origin"], { encoding: "utf8" }).stdout?.trim() ?? "";
 // `v0.2.1-48-g4a459f5`: the nearest release and the distance from it. This, not
