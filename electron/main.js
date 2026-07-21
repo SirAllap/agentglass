@@ -158,10 +158,23 @@ function createWindow() {
   win.loadURL(`${APP_ORIGIN}/`);
 }
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   serveApp();
-  await ensureServer();
+  // The window does not wait for the server.
+  //
+  // It used to: `await ensureServer()` sat between ready and createWindow, so
+  // nothing appeared on screen until the sidecar answered /health — measured at
+  // 376ms of a 588ms startup on a warm cache, and unbounded when the 103MB
+  // binary has to come off disk cold. Up to twelve seconds of *nothing*, since
+  // the poll runs 40 times at 300ms, and a launch that shows no window reads as
+  // an app that failed to start.
+  //
+  // Nothing in the shell needs the server before the window exists, and the UI
+  // already copes with it being briefly absent: the live socket reconnects with
+  // backoff and every panel's fetch has a retry or an honest loading state. So
+  // the window comes up first and the server arrives underneath it.
   createWindow();
+  void ensureServer();
 });
 
 /**

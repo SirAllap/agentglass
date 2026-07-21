@@ -4,7 +4,7 @@
 // from current source, never a stale dist.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,6 +23,11 @@ console.log("==> building web UI");
 run("bun", ["run", "build"], resolve(REPO, "web"));
 
 console.log("==> compiling server sidecar");
+// Wipe staging first. electron-builder copies *everything* in here into the
+// app's resources (extraResources: { from: "staging", to: "." }), so anything
+// left behind ships — a stray build of the sidecar is 100MB, and six of them
+// once made it into an installed app before anyone noticed the size.
+rmSync(resolve(HERE, "staging"), { recursive: true, force: true });
 mkdirSync(resolve(HERE, "staging"), { recursive: true });
 run("bun", [
   "build", "--compile", resolve(REPO, "server/src/index.ts"),
