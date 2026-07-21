@@ -338,6 +338,42 @@
   @keyframes blink{50%{opacity:0}}
 
   /* ============ stat band ============ */
+  /* ============ download ============ */
+  .dlgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:26px;}
+  @media(max-width:900px){.dlgrid{grid-template-columns:1fr;}}
+  .dl{
+    position:relative; background:color-mix(in srgb, var(--bg2) 92%, transparent);
+    border:1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius:14px; padding:20px;
+    display:flex; flex-direction:column; gap:12px;
+  }
+  /* The one that matches the visitor's machine, decided in JS. */
+  .dl.you{border-color:var(--primary); box-shadow:0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent), 0 10px 40px var(--glow);}
+  .dl .os{display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px;}
+  .dl .os .ico{font-size:18px;}
+  .dl .yours{
+    margin-left:auto; font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; font-weight:700;
+    color:var(--bg2); background:var(--primary); border-radius:999px; padding:3px 9px; display:none;
+  }
+  .dl.you .yours{display:inline-block;}
+  .dl a.get{
+    display:flex; align-items:center; gap:10px; padding:11px 14px; border-radius:10px;
+    border:1px solid var(--border2); font-size:13px; font-weight:600; color:var(--text2);
+    transition:border-color .18s, background .18s;
+  }
+  .dl a.get:hover{border-color:var(--primary); background:color-mix(in srgb, var(--primary) 10%, transparent);}
+  .dl a.get.pri{background:var(--primary); color:var(--bg); border-color:transparent; font-weight:800;}
+  .dl a.get .sz{margin-left:auto; font-size:11px; font-weight:400; opacity:.75; font-variant-numeric:tabular-nums;}
+  .dl .first{font-size:11.5px; line-height:1.65; color:var(--text3); border-top:1px dashed color-mix(in srgb, var(--border) 60%, transparent); padding-top:11px;}
+  .dl .first b{color:var(--text2); font-weight:600;}
+  .dl code{
+    display:block; margin-top:6px; padding:7px 9px; border-radius:7px; font-size:11px; overflow-x:auto;
+    background:color-mix(in srgb, var(--bg) 70%, transparent); color:var(--text2);
+    border:1px solid color-mix(in srgb, var(--border) 50%, transparent); white-space:pre;
+  }
+  .dlnote{margin-top:18px; font-size:12.5px; color:var(--text3); line-height:1.8;}
+  .dlnote b{color:var(--text2);}
+  .dlnote a{text-decoration:underline;}
+
   .band{
     max-width:1200px; margin:84px auto 0; padding:0 28px;
     display:grid; grid-template-columns:repeat(4,1fr); gap:14px;
@@ -484,7 +520,8 @@
   <div class="in">
     <span class="logo"><span class="sat" aria-hidden="true"><svg viewBox="0 0 32 32" width="24" height="24" style="display:block; color:var(--primary)"><line x1="20.2" y1="20.2" x2="27" y2="27" stroke="currentColor" stroke-width="3.1" stroke-linecap="round"/><circle cx="13.5" cy="13.5" r="9" fill="currentColor" fill-opacity="0.1"/><circle cx="13.5" cy="13.5" r="5.6" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1"/><path d="M13.5 5.6 V21.4 M5.6 13.5 H21.4" stroke="currentColor" stroke-opacity="0.16" stroke-width="1"/><path d="M13.5 13.5 L13.5 4.6 A8.9 8.9 0 0 1 19.7 7 Z" fill="currentColor" fill-opacity="0.2"/><line x1="13.5" y1="13.5" x2="19.7" y2="7" stroke="currentColor" stroke-width="1" stroke-opacity="0.8"/><circle cx="9" cy="16.4" r="3" fill="none" stroke="var(--success)" stroke-opacity="0.5" stroke-width="1"/><circle cx="9" cy="16.4" r="1.7" fill="var(--success)"/><circle cx="16.4" cy="16" r="1.1" fill="currentColor" fill-opacity="0.75"/><circle cx="13.5" cy="13.5" r="9.6" fill="none" stroke="currentColor" stroke-width="2.3"/></svg></span><span>agentglass<small>a loupe for your agents</small></span></span>
     <span class="lamp"></span>
-    <span class="links"><a href="#workspace">Workspace</a><a href="#fleet">Fleet</a><a href="#quickstart">Quickstart</a></span>
+    <span class="links"><a href="#workspace">Workspace</a><a href="#fleet">Fleet</a><a href="#download">Download</a>
+      <a href="#quickstart">Quickstart</a></span>
     <span class="sp"></span>
     <a class="gh" href="https://github.com/SirAllap/agentglass" target="_blank" rel="noopener">★ <b>GitHub</b></a>
   </div>
@@ -723,6 +760,68 @@ bun test v1.2.19
   </div>
 </section>
 
+<!-- ══════════ DOWNLOAD ══════════ -->
+<section class="sec" id="download">
+  <div class="rv">
+    <span class="plabel">Download</span>
+    <h2>The desktop app, for your machine.</h2>
+    <p class="note">Version and links are stamped from the latest release when this page deploys — they are never a hand-typed guess. Same app as the browser build, with its own window and a background update check.</p>
+  </div>
+  <div class="dlgrid">
+
+    <div class="dl rv" data-os="mac">
+      <div class="os"><span class="ico">&#127822;</span> macOS <span class="yours">your machine</span></div>
+      <a class="get pri" data-dl="mac-arm" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        Apple silicon <span class="sz" data-size="mac-arm">.dmg</span>
+      </a>
+      <a class="get" data-dl="mac-x64" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        Intel <span class="sz" data-size="mac-x64">.dmg</span>
+      </a>
+      <div class="first">
+        <b>First run:</b> the build is unsigned, so Gatekeeper quarantines it and says the app is
+        <i>damaged</i>. It is not. Right-click the app &rarr; <b>Open</b>, or clear the flag:
+        <code>xattr -dr com.apple.quarantine /Applications/agentglass.app</code>
+      </div>
+    </div>
+
+    <div class="dl rv d1" data-os="linux">
+      <div class="os"><span class="ico">&#128039;</span> Linux <span class="yours">your machine</span></div>
+      <a class="get pri" data-dl="linux-appimage" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        AppImage <span class="sz" data-size="linux-appimage">any distro</span>
+      </a>
+      <a class="get" data-dl="linux-deb" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        .deb <span class="sz" data-size="linux-deb">Debian / Ubuntu</span>
+      </a>
+      <div class="first">
+        <b>First run:</b> mark the AppImage executable, or install the .deb:
+        <code>chmod +x agentglass_*.AppImage &amp;&amp; ./agentglass_*.AppImage
+sudo apt install ./agentglass_*.deb</code>
+      </div>
+    </div>
+
+    <div class="dl rv d2" data-os="win">
+      <div class="os"><span class="ico">&#129003;</span> Windows <span class="yours">your machine</span></div>
+      <a class="get pri" data-dl="win-exe" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        Installer <span class="sz" data-size="win-exe">.exe</span>
+      </a>
+      <div class="first">
+        <b>First run:</b> unsigned, so SmartScreen warns. <b>More info</b> &rarr; <b>Run anyway</b>.
+        <br><b>Known gap:</b> the terminal panel is POSIX-only and does not work here yet
+        (<a href="https://github.com/SirAllap/agentglass/issues/98" target="_blank" rel="noopener">#98</a>).
+        Everything else runs.
+      </div>
+    </div>
+
+  </div>
+  <p class="dlnote">
+    Prefer to run it from source, or want the hooks wired for every project? <b>git clone</b>, <b>bun install</b>, <b>bun run dev</b> — see the
+    <a href="https://github.com/SirAllap/agentglass#quickstart" target="_blank" rel="noopener">quickstart</a>.
+    The app is local-first either way: SQLite on your own disk, nothing phones home. Every installer is built by
+    <a href="https://github.com/SirAllap/agentglass/actions" target="_blank" rel="noopener">CI from a tagged commit</a>, and
+    <a href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">every asset is on the release</a> if you want a different one.
+  </p>
+</section>
+
 <!-- ══════════ QUICKSTART ══════════ -->
 <section class="sec" id="quickstart">
   <div class="rv">
@@ -893,6 +992,25 @@ bun test v1.2.19
       applyTheme(pool[Math.floor(Math.random()*pool.length)]);
     });
     applyTheme(current); /* re-sync active state now that options exist */
+  })();
+
+  /* ── which download is yours ──
+     Highlights one card rather than hiding the others: the guess is a user-agent
+     string, which is wrong often enough (a Mac told to report Windows, a Linux
+     browser on ChromeOS) that hiding the rest would strand people. Apple silicon
+     is offered first because the UA cannot tell it from Intel, and it is the
+     larger half of Macs now. */
+  (function(){
+    var ua = navigator.userAgent || '';
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    var hay = (plat + ' ' + ua).toLowerCase();
+    var os = /mac|iphone|ipad/.test(hay) ? 'mac'
+           : /win/.test(hay) ? 'win'
+           : /linux|x11|cros|android/.test(hay) ? 'linux'
+           : null;
+    if(!os) return;
+    var card = document.querySelector('.dl[data-os="' + os + '"]');
+    if(card) card.classList.add('you');
   })();
 
   /* ── copy the command the button is showing ── */

@@ -46,17 +46,29 @@ async function latestRelease() {
 }
 
 /**
- * Pick the asset a visitor on this OS wants.
+ * Which asset answers to which slot on the page.
  *
- * Ordered, because more than one can match and the first is the one most
- * people should get: Apple silicon before Intel, and the AppImage before the
- * .deb since it runs on any distribution.
+ * Ordered, because more than one pattern can match and the first is the one
+ * that slot should get. The coarse slots (`mac`, `linux`, `win`) are for the
+ * one-button-per-OS rows; the specific ones back the download section, where
+ * the whole point is that someone on an Intel Mac or a Debian box can take the
+ * file they actually need instead of the one we guessed for them.
  */
 const PICKS = {
   mac: [/arm64.*\.dmg$/i, /\.dmg$/i],
   linux: [/\.AppImage$/i, /\.deb$/i],
   win: [/\.exe$/i, /\.msi$/i],
+  "mac-arm": [/arm64.*\.dmg$/i],
+  "mac-x64": [/(x64|x86_64|intel).*\.dmg$/i],
+  "linux-appimage": [/\.AppImage$/i],
+  "linux-deb": [/\.deb$/i],
+  "win-exe": [/\.exe$/i, /\.msi$/i],
 };
+
+/** Bytes as something a human reads before clicking a 150 MB link. */
+const human = (bytes) => (bytes >= 1024 ** 3
+  ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  : `${Math.round(bytes / 1024 ** 2)} MB`);
 
 function assetFor(assets, os) {
   for (const pattern of PICKS[os] ?? []) {
@@ -82,13 +94,21 @@ if (version) {
   );
 }
 
-for (const os of ["mac", "linux", "win"]) {
-  const asset = assetFor(assets, os);
+for (const slot of Object.keys(PICKS)) {
+  const asset = assetFor(assets, slot);
   if (!asset?.browser_download_url) continue;
   html = html.replace(
-    new RegExp(`(<a[^>]*data-dl="${os}"[^>]*href=")([^"]*)(")`, "g"),
+    new RegExp(`(<a[^>]*data-dl="${slot}"[^>]*href=")([^"]*)(")`, "g"),
     (_m, open, _old, close) => { stamped++; return `${open}${asset.browser_download_url}${close}`; },
   );
+  // The size label keeps whatever it shipped with when there is no asset, so a
+  // missing build reads as ".dmg" rather than as "0 MB".
+  if (asset.size) {
+    html = html.replace(
+      new RegExp(`(<span[^>]*data-size="${slot}"[^>]*>)([^<]*)(</span>)`, "g"),
+      (_m, open, _old, close) => { stamped++; return `${open}${human(asset.size)}${close}`; },
+    );
+  }
 }
 
 if (!stamped) {
