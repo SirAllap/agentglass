@@ -20,18 +20,17 @@ let hp: Promise<Highlighter> | null = null;
  * The one shared highlighter, tokenizing with shiki's **JavaScript** RegExp
  * engine rather than its default Oniguruma one.
  *
- * Oniguruma is WebAssembly, and the desktop shell serves the bundle under the
- * CSP in `src-tauri/tauri.conf.json`, whose `script-src 'self'` omits
- * `'wasm-unsafe-eval'` — so the webview refuses to instantiate the module and
- * `createHighlighter` rejects before a theme or a language is ever requested.
- * That is why the diff was monochrome in the app but coloured in a browser,
- * and why the theme picker showed no complaint: the theme step never ran.
+ * Oniguruma is WebAssembly, and a packaged desktop shell can serve the bundle
+ * under a strict `script-src 'self'` CSP with no `'wasm-unsafe-eval'` — the
+ * webview then refuses to instantiate the module and `createHighlighter`
+ * rejects before a theme or a language is ever requested. That is what once
+ * made the diff monochrome in the app but coloured in a browser, with no
+ * complaint from the theme picker: the theme step never ran.
  *
  * The engine swap is preferred over widening the CSP because it keeps the
- * desktop app's script policy as tight as it is today, and because relying on
- * `'wasm-unsafe-eval'` would put us at the mercy of whether the host's
- * WebKitGTK recognises that token — an unknown source expression is simply
- * ignored, which would silently leave wasm blocked on older systems.
+ * script policy as tight as possible and stays correct no matter how strict
+ * the host's CSP is — the JavaScript engine needs no wasm eval at all, so a
+ * hostile or minimal policy can never silently leave highlighting broken.
  */
 export function getHighlighter(): Promise<Highlighter> {
   if (!hp) hp = shiki().then((m) => m.createHighlighter({ themes: [], langs: [], engine: createJavaScriptRegexEngine() }));

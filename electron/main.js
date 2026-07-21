@@ -1,9 +1,9 @@
 // agentglass Electron shell.
 //
 // Runs the EXACT web UI (web/dist) in Chromium, which GPU-composites on Linux
-// where WebKitGTK (Tauri) fell back to software — the live radar and streaming
-// dashboard paint on the GPU instead of pinning a CPU core. Same pixels as the
-// web app.
+// where the previous WebKitGTK-based shell fell back to software — the live
+// radar and streaming dashboard paint on the GPU instead of pinning a CPU core.
+// Same pixels as the web app.
 //
 // It hosts web/dist over loopback HTTP (so the SPA's origin is http and its
 // WS/API to :4000 pass the server's loopback origin check) and brings the Bun

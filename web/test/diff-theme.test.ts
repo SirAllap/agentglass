@@ -14,8 +14,8 @@ const CODE = 'const greeting = "hello"; // note';
 
 // Stand in for the desktop shell's CSP for this whole file.
 //
-// The regression: shiki's default Oniguruma engine is WebAssembly, and
-// `src-tauri/tauri.conf.json` sets `script-src 'self'` with no
+// The regression: shiki's default Oniguruma engine is WebAssembly, and a
+// packaged desktop shell can serve the bundle under `script-src 'self'` with no
 // `'wasm-unsafe-eval'`, so the webview refuses to instantiate it and
 // `createHighlighter` rejects before a theme or grammar is ever asked for —
 // every diff in the app came out monochrome while browsers were fine. The
