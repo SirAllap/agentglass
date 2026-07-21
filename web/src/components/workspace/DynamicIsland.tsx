@@ -10,7 +10,8 @@ import { subscribeNewGates } from "../../lib/gateStore.ts";
 import { enqueue, dequeue } from "../../lib/toastQueue.ts";
 import {
   subscribeSystemNotes, subscribeNotifyHistory, notifyHistory, notifyUnread,
-  markNotifyRead, dismissNote, clearNotes, openNote, recordNote, type SystemNote,
+  markNotifyRead, dismissNote, clearNotes, openNote, recordNote,
+  notifyQuiet, setNotifyQuiet, subscribeNotifyQuiet, type SystemNote,
 } from "../../lib/sysNotify.ts";
 
 /**
@@ -447,6 +448,7 @@ export function DynamicIsland() {
   const [inbox, setInbox] = useState(false);
   const hist = useSyncExternalStore(subscribeNotifyHistory, notifyHistory, notifyHistory);
   const unread = useSyncExternalStore(subscribeNotifyHistory, notifyUnread, () => 0);
+  const quiet = useSyncExternalStore(subscribeNotifyQuiet, notifyQuiet, () => false);
   useEffect(() => { if (inbox) markNotifyRead(); }, [inbox, hist]);
   useEffect(() => {
     if (!inbox) return;
@@ -620,6 +622,19 @@ export function DynamicIsland() {
             <div className="flex items-center gap-2 px-3 pt-1 pb-1.5">
               <span className="agx-cap">NOTIFICATIONS</span>
               <span className="agx-cap" style={{ opacity: 0.5 }}>{hist.length}</span>
+              {/* Silencing without saying so is how you end up asking why you
+                  were never told. It is also the switch, so the place that
+                  reveals the state is the place that undoes it. */}
+              <button
+                className="agx-note-btn"
+                onClick={() => setNotifyQuiet(!quiet)}
+                title={quiet
+                  ? "Mirrored notifications are quiet — they still collect here. Click to let them interrupt again."
+                  : "Quiet mirrored notifications: keep collecting them, stop letting them interrupt"}
+                style={quiet ? { color: "var(--warning)" } : undefined}
+              >
+                {quiet ? "quiet on" : "quiet"}
+              </button>
               <button className="agx-note-btn ml-auto" onClick={() => { clearNotes(); setInbox(false); }}>clear all</button>
               <button className="agx-note-btn" onClick={() => setInbox(false)} title="close (Esc)">✕</button>
             </div>

@@ -17,7 +17,7 @@ import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESK
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import type { UpdateStatus } from "../../../shared/types.ts";
-import { sysNotifyMode, setSysNotifyMode, notifyCapability, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
+import { sysNotifyMode, setSysNotifyMode, notifyCapability, notifyQuiet, setNotifyQuiet, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
@@ -367,6 +367,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
     return () => window.removeEventListener("keydown", onKey, true);
   }, [capturingChord]);
   const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
+  const [quiet, setQuietState] = useState(() => notifyQuiet());
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
   useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
 
@@ -466,6 +467,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         { v: "titles", label: "Who" },
                         { v: "full", label: "Full" },
                       ]} />
+                    {/* agentglass reads the bus rather than being the daemon,
+                        so the desktop's own Do Not Disturb cannot reach what
+                        lands here. This is the switch that can. It silences
+                        other people's messages only: a gate hold never travels
+                        this path, so quiet can't mean an agent blocked and
+                        nobody said. */}
+                    {sysNotify !== "off" && (
+                      <Toggle on={quiet} onClick={() => { setNotifyQuiet(!quiet); setQuietState(!quiet); }}
+                        label="Quiet mirrored notifications"
+                        hint="Keep collecting them, stop letting them interrupt — agentglass's own alerts still come through" />
+                    )}
                   </Section>
                   )}
 
