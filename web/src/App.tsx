@@ -28,7 +28,7 @@ import { HelpLegend } from "./components/HelpLegend.tsx";
 import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
-import { VIEW_IDS, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import { VIEW_IDS, loadViewOrder, loadLastView, type ViewId } from "./components/workspace/views.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
@@ -280,17 +280,21 @@ export default function App() {
         // Workspace navigation, and the reason it carries a modifier: these
         // have to work while the caret sits in the chat composer or a commit
         // message, where a bare letter is just a letter.
-        if (k >= "1" && k <= String(VIEW_IDS.length)) {
+        // The user's rail order, not the shipped one: the rail labels each
+        // icon with the number that reaches it, and a tooltip that stops being
+        // true after a reorder is worse than no tooltip.
+        const railIds = loadViewOrder().map((v) => v.id);
+        if (k >= "1" && k <= String(railIds.length)) {
           e.preventDefault();
-          setWsView(VIEW_IDS[Number(k) - 1]);
+          setWsView(railIds[Number(k) - 1]!);
           setWsOpen(true);
           return;
         }
         if (k === "[" || k === "]") {
           e.preventDefault();
           setWsView((cur) => {
-            const i = VIEW_IDS.indexOf(cur);
-            return VIEW_IDS[(i + (k === "]" ? 1 : VIEW_IDS.length - 1)) % VIEW_IDS.length];
+            const i = railIds.indexOf(cur);
+            return railIds[(i + (k === "]" ? 1 : railIds.length - 1)) % railIds.length]!;
           });
           setWsOpen(true);
           return;

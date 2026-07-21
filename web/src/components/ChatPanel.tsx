@@ -733,7 +733,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                 {/* ---- sidebar: every open chat ---- */}
                 <div className="shrink-0 flex flex-col" style={{ width: sidebarW, background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
                   <div className="flex items-center gap-1.5 px-3 py-3 shrink-0">
-                    <span className="text-[13px] font-semibold shrink-0" style={{ color: "var(--text)" }}>💬 Chats</span>
+                    <span className="text-[15px] font-semibold shrink-0" style={{ color: "var(--text)" }}>Chats</span>
                     <span className="text-[10px] t-dim2 tabular-nums shrink-0">{chats.length}</span>
                     <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
                       className="ml-auto text-[11px] px-1.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
@@ -798,7 +798,6 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                       </>
                     ) : <span className="text-[12px] t-dim2">no chat selected</span>}
-                    <button onClick={onClose} className="ml-auto text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
 
                   {/* Bottom-anchored: a short conversation sits above the input

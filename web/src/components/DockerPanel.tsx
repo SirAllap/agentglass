@@ -308,7 +308,7 @@ export function DockerView({ active }: { active: boolean }) {
       className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>🐳 Docker</span>
+                  <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Docker</span>
                   {ov?.version && <span className="text-[10px] t-dim2">engine {ov.version}</span>}
                   {/* Scoped to the open project. The fallback case is spelled out
                       rather than shown as an empty list, so an unlabelled stack
