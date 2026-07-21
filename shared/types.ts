@@ -328,7 +328,11 @@ export interface OpenToolCall {
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
   | { type: "event"; data: WatchEvent }
-  | { type: "session"; data: SessionRollup };
+  | { type: "session"; data: SessionRollup }
+  /** Something mutated a repository. Carries no payload on purpose: the panels
+   *  each need a different slice of git state, so they re-read what they show
+   *  rather than the server guessing which of them cares about what. */
+  | { type: "git" };
 
 // --- commit composer (live git working-tree) ---------------------------------
 export interface GitFileStatus {
@@ -503,6 +507,11 @@ export interface GitWorktree {
   current: boolean;
   bare: boolean;
   locked: boolean;
+  /** The branch this one was cut from — trunk unless overridden per branch.
+   *  Null on the trunk checkout itself, which has no base. */
+  base?: string | null;
+  /** Commits the base has that this checkout does not. */
+  behindBase?: number;
 }
 
 // --- live docker panel (lazydocker replacement) ------------------------------

@@ -220,6 +220,9 @@ const realApi = {
   gitReset: (root: string, ref: string, mode: "soft" | "mixed" | "hard") => post<GitActionResult>("/git/reset", { root, ref, mode }),
   gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch }),
   gitWorktreeRemove: (root: string, path: string, force: boolean) => post<GitActionResult>("/git/worktree-remove", { root, path, force }),
+  /** Merge a checkout's base branch into it — "update from base". `root` is the
+   *  checkout doing the updating, since the merge runs where the branch is. */
+  gitSyncBase: (root: string, base?: string) => post<GitActionResult>("/git/sync-base", { root, base }),
   // --- live docker panel (lazydocker-style) ---
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
@@ -331,6 +334,7 @@ const demoApi: typeof realApi = {
   gitBranchRename: (_root: string, _name: string, _to: string) => D(demo.gitActionUnavailable()),
   gitReset: (_root: string, _ref: string, _mode: "soft" | "mixed" | "hard") => D(demo.gitActionUnavailable()),
   gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean) => D(demo.gitActionUnavailable()),
+  gitSyncBase: (_root: string, _base?: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),

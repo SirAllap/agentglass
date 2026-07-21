@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts";
 import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
+import { gitChanged } from "./gitBus.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -120,6 +121,11 @@ export function useLive(): LiveData {
       try {
         frame = JSON.parse(msg.data);
       } catch {
+        return;
+      }
+      if (frame.type === "git") {
+        // Not our data — a nudge for whoever is showing git state.
+        gitChanged();
         return;
       }
       if (frame.type === "initial") {

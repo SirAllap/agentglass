@@ -32,7 +32,7 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktrees as gitWorktrees, addWorktree, removeWorktree, startAutoFetch,
+  worktrees as gitWorktrees, addWorktree, removeWorktree, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
   remotes as gitRemotes, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
@@ -177,6 +177,10 @@ const ALLOWED_HOSTS = new Set(
   (process.env.AGENTGLASS_ALLOWED_HOSTS || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean)
 );
 const trustedHost = (url: URL) => isPrivate(url.hostname) || ALLOWED_HOSTS.has(url.hostname.toLowerCase());
+
+// Every git mutation nudges the clients that are showing git state. Registered
+// here rather than in gitwork so that module stays unaware of the socket.
+setGitChangeHook(() => broadcast({ type: "git" }));
 
 function broadcast(frame: WsFrame) {
   const msg = JSON.stringify(frame);
@@ -548,6 +552,10 @@ const server = Bun.serve<WsData>({
         case "/git/reset": res = resetTo(root, String(b.ref || ""), b.mode); break;
         case "/git/worktree-add": res = addWorktree(root, b.path, String(b.branch || ""), !!b.newBranch); break;
         case "/git/worktree-remove": res = removeWorktree(root, b.path, !!b.force); break;
+        // `root` here is the checkout being updated — a worktree updates
+        // itself, because the merge has to run where the branch is checked out.
+        case "/git/sync-base": res = syncFromBase(root, b.base); break;
+        case "/git/set-base": res = setBase(root, b.branch, b.base ?? null); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);

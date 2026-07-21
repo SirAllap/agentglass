@@ -5,6 +5,7 @@ import { subscribeUsage, usedColor, usageError, resetLabel } from "../UsageWidge
 import { subscribe as subscribeChats, listChats } from "../../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../../lib/clockPref.ts";
+import { subscribeGitChanged } from "../../lib/gitBus.ts";
 import {
   subscribeSystemNotes, subscribeNotifyHistory, notifyHistory, notifyUnread,
   markNotifyRead, dismissNote, clearNotes, openNote, type SystemNote,
@@ -300,7 +301,12 @@ function useNotes(): { note: Note | null; behind: number } {
     };
     void poll();
     const id = setInterval(poll, 90_000);
-    return () => { dead = true; clearInterval(id); };
+    // 90s is right for "someone else pushed", and far too slow for "you just
+    // pulled" — the strip went on advertising commits you had already taken
+    // until the workspace was closed and opened again. The server says when a
+    // repo moved, so read it then too.
+    const off = subscribeGitChanged(() => { void poll(); });
+    return () => { dead = true; clearInterval(id); off(); };
   }, []);
 
   return { note, behind };

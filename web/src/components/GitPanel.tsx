@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
+import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { worktreeTag } from "../lib/worktree.ts";
@@ -509,6 +510,18 @@ export function GitView({ active }: { active: boolean }) {
     else if (view === "reflog") track(api.gitReflog(root), (r) => setReflog(r.entries));
   }, [open, root, view]);
   useEffect(() => { loadView(); }, [loadView]);
+
+  // Any repository mutation, from anywhere — this panel, another window, or a
+  // `git pull` typed into the app's own terminal — re-reads what is on screen.
+  // The dropdown's counts in particular came from a 5s server cache that the
+  // panel re-fetched *immediately* after an action, so it kept answering with
+  // numbers from before it.
+  useEffect(() => subscribeGitChanged(() => {
+    if (!open) return;
+    if (root) loadTree(root);
+    loadView();
+    api.gitRepos().then((r) => setRepos(r.repos)).catch(() => {});
+  }), [open, root, loadTree, loadView]);
 
   // The working tree changes from outside this app — a commit in a terminal, a
   // branch switch, an agent editing files — and none of that emits an event we
@@ -1326,6 +1339,29 @@ export function GitView({ active }: { active: boolean }) {
                         <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{w.head}</span>
                         {w.locked && <span className="shrink-0 text-[9px]" style={{ color: "var(--warning)" }}>locked</span>}
                         <span className="min-w-0 flex-1 truncate text-[9.5px] t-dim2">{w.path}</span>
+                        {/* How far this checkout has drifted from what it was
+                            branched off, and the one-click way to close the
+                            gap. Shown only when there is a gap: a checkout
+                            level with its base needs no button, and the trunk
+                            has no base at all. */}
+                        {!!w.base && (w.behindBase ?? 0) > 0 && (
+                          <>
+                            <span className="shrink-0 text-[9.5px] tabular-nums" style={{ color: "var(--warning)" }}
+                              title={`${w.behindBase} commit${w.behindBase === 1 ? "" : "s"} on ${w.base} that this branch does not have`}>
+                              ↓{w.behindBase} behind {w.base}
+                            </span>
+                            {writeEnabled && (
+                              <button
+                                onClick={() => act(() => api.gitSyncBase(w.path, w.base ?? undefined), `merged ${w.base}`, "sync")}
+                                disabled={busy}
+                                className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                                style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: busy ? 0.5 : 1 }}
+                                title={`Merge ${w.base} into ${w.branch}, in that worktree. A merge, not a rebase — nothing already pushed gets rewritten.`}>
+                                {pending === "sync" ? "syncing…" : "sync"}
+                              </button>
+                            )}
+                          </>
+                        )}
                         {writeEnabled && !w.current && <button onClick={() => removeWorktree(w)} className="shrink-0 text-[10px] opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Remove worktree">remove</button>}
                       </div>
                     ))}
