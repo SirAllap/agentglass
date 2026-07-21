@@ -35,12 +35,48 @@ done
 # A running instance holds these files open, and `rm -rf` under it leaves the
 # app alive on deleted inodes — it keeps running the old code and its sidecar
 # keeps :4000, so the next launch adopts a stale server. Stop it first.
-if pgrep -f "$APP/agentglass" >/dev/null 2>&1; then
+#
+# Signal the MAIN process, and only it. `pkill -f "$APP/agentglass"` also
+# matches every Electron child — gpu-process, the zygotes, the renderer — and
+# tearing those out while the main process is running its own quit path
+# (stopSidecar, then app.quit) wedges it: the window freezes for a long time,
+# and sometimes it never exits at all. That is how a rebuild ends up copying
+# over an app that is still running. Asked properly it goes down in under two
+# seconds.
+#
+# Matched against both paths it can be launched by: the desktop entry runs
+# $APP/agentglass, self-update.sh relaunches through the $BIN symlink, and the
+# main process carries whichever one was used in its cmdline.
+#
+# Every pattern here is anchored to the START of the command line, for the same
+# reason: unanchored, `-f` matches anything that merely mentions the path —
+# a shell that echoed it, an editor with the file open, the install script's own
+# parent. This script sends SIGKILL, so a loose pattern is not a cosmetic
+# problem. (It bit exactly that way while this fix was being tested.)
+MAIN_PAT="^($APP|$BIN)/agentglass$"
+TREE_PAT="^($APP|$BIN)/agentglass( |$)"       # main plus its gpu/zygote/renderer children
+SIDECAR_PAT="^$APP/resources/agentglass-server( |$)"
+
+if pgrep -f "$MAIN_PAT" >/dev/null 2>&1; then
   echo "==> stopping the running instance"
-  pkill -f "$APP/agentglass" 2>/dev/null || true
-  sleep 2
-  pkill -9 -f "$APP/resources/agentglass-server" 2>/dev/null || true
-  sleep 1
+  pkill -TERM -f "$MAIN_PAT" 2>/dev/null || true
+  # Wait for it to actually go, rather than sleeping a fixed two seconds and
+  # assuming: the assumption is what left an app running on deleted inodes.
+  for _ in $(seq 1 40); do
+    pgrep -f "$MAIN_PAT" >/dev/null 2>&1 || break
+    sleep 0.25
+  done
+  # Anything still standing after ten seconds is not leaving on its own. Take
+  # the whole tree, then the sidecar it should have taken with it — a survivor
+  # holds the port and the next launch adopts a server from the old build.
+  pkill -9 -f "$TREE_PAT" 2>/dev/null || true
+  pkill -9 -f "$SIDECAR_PAT" 2>/dev/null || true
+  # Give the kernel a moment to release the port and the file handles.
+  sleep 0.5
+  if pgrep -f "$MAIN_PAT" >/dev/null 2>&1; then
+    echo "refusing to install over a running app: $(pgrep -f "$MAIN_PAT" | tr '\n' ' ')survived SIGKILL" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$APP" "$BIN" "$DESKTOP"
