@@ -1149,12 +1149,18 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         itself, which has no base. */}
                     {branch?.base && (branch.behindBase ?? 0) > 0 && (
                       <div className="relative flex items-center">
+                        {/* A merge over uncommitted work is refused by the
+                            server, so the button should not offer it. Saying
+                            why beats a click that produces an error toast —
+                            and the reason is the fix. */}
                         <button
                           onClick={() => act(() => api.gitSyncBase(root), `merged ${branch.base}`, "sync")}
-                          disabled={!writeEnabled || busy}
+                          disabled={!writeEnabled || busy || !tree?.clean}
                           className="text-[11px] px-2 py-1 rounded-l-lg whitespace-nowrap"
-                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy) ? 0.5 : 1 }}
-                          title={`Merge ${branch.base} into ${branch.name}. Brings the base branch's latest commits into this one — a merge, not a rebase, so nothing already pushed is rewritten.`}>
+                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy || !tree?.clean) ? 0.45 : 1 }}
+                          title={!tree?.clean
+                            ? "Commit or stash your changes first — merging over uncommitted work is how you lose it"
+                            : `Merge ${branch.base} into ${branch.name}. Brings the base branch's latest commits into this one — a merge, not a rebase, so nothing already pushed is rewritten.`}>
                           {pending === "sync" ? "syncing…" : `⇣ sync ↓${branch.behindBase}`}
                         </button>
                         {/* Not every branch is cut from trunk. This picks what
@@ -1571,7 +1577,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                 disabled={busy}
                                 className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
                                 style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: busy ? 0.5 : 1 }}
-                                title={`Merge ${w.base} into ${w.branch}, in that worktree. A merge, not a rebase — nothing already pushed gets rewritten.`}>
+                                title={`Merge ${w.base} into ${w.branch}, in that worktree. A merge, not a rebase — nothing already pushed gets rewritten. Refused if that checkout has uncommitted changes.`}>
                                 {pending === "sync" ? "syncing…" : "sync"}
                               </button>
                             )}
