@@ -138,6 +138,10 @@ export function resolveTarget(shellPid: number): TmuxTarget | null {
   return null;
 }
 
+/** tmux window ids are `@` and digits, and nothing a client sends is trusted to
+ *  be one without being checked: these go on a command line. */
+const WINDOW_ID = /^@\d+$/;
+
 /**
  * The session's windows, in tmux's own order.
  *
@@ -152,10 +156,10 @@ export function parseWindows(out: string): TmuxWindow[] {
     if (!line.trim()) continue;
     // Tab-separated, because window names routinely contain spaces and a
     // space-separated format would split "npm run dev" into three windows.
-    const [index, name, active, flags] = line.split("\t");
+    const [id, index, name, active, flags] = line.split("\t");
     const i = Number(index);
-    if (!Number.isInteger(i)) continue;
-    windows.push({ index: i, name: name ?? "", active: active === "1", flags: (flags ?? "").trim() });
+    if (!WINDOW_ID.test(id ?? "") || !Number.isInteger(i)) continue;
+    windows.push({ id: id!, index: i, name: name ?? "", active: active === "1", flags: (flags ?? "").trim() });
   }
   return windows;
 }
@@ -164,7 +168,7 @@ export function listWindows(t: TmuxTarget): TmuxWindow[] {
   const out = tmux(t.socket, [
     "list-windows",
     "-t", t.id,
-    "-F", "#{window_index}\t#{window_name}\t#{window_active}\t#{window_flags}",
+    "-F", "#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}",
   ]);
   return out ? parseWindows(out) : [];
 }
@@ -189,22 +193,27 @@ export const sanitizeWindowName = (s: unknown): string | null => {
   return name || null;
 };
 
-export function runAction(t: TmuxTarget, action: TmuxAction, index?: number, name?: string): boolean {
-  const target = (i: number) => `${t.id}:${i}`;
-  const idx = Number.isInteger(index) ? (index as number) : null;
+export function runAction(t: TmuxTarget, action: TmuxAction, window?: string, name?: string): boolean {
+  // Windows are addressed by tmux's id, never by the index the tab is showing.
+  // The strip is up to a poll out of date, and an index is not a name: kill
+  // window 2 with `renumber-windows` on and what was 3 becomes 2, so a click
+  // landing a moment later selects, renames or kills something the user was not
+  // pointing at. An id refers to the same window for as long as it exists, and
+  // to nothing at all once it does not.
+  const id = WINDOW_ID.test(window ?? "") ? window! : null;
   switch (action) {
     case "select":
-      return idx === null ? false : tmux(t.socket, ["select-window", "-t", target(idx)]) !== null;
+      return id === null ? false : tmux(t.socket, ["select-window", "-t", id]) !== null;
     case "new":
       // After the current window rather than at the end, which is where `^b c`
       // puts it when `renumber-windows` is on and where the eye expects it.
       return tmux(t.socket, ["new-window", "-a", "-t", t.id]) !== null;
     case "kill":
-      return idx === null ? false : tmux(t.socket, ["kill-window", "-t", target(idx)]) !== null;
+      return id === null ? false : tmux(t.socket, ["kill-window", "-t", id]) !== null;
     case "rename": {
       const clean = sanitizeWindowName(name);
-      if (idx === null || !clean) return false;
-      return tmux(t.socket, ["rename-window", "-t", target(idx), clean]) !== null;
+      if (id === null || !clean) return false;
+      return tmux(t.socket, ["rename-window", "-t", id, clean]) !== null;
     }
     default:
       return false;

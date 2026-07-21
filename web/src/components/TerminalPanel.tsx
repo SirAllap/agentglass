@@ -622,7 +622,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (!s || s.ws?.readyState !== WebSocket.OPEN) return;
     s.ws.send(JSON.stringify({ t: "tmux", cmd, ...extra }));
   }, [sess]);
-  const [renaming, setRenaming] = useState<number | null>(null);
+  // Keyed by tmux's window id, not the index: a rename in flight must follow the
+  // window even if killing another one renumbers the strip underneath it.
+  const [renaming, setRenaming] = useState<string | null>(null);
 
   /*
    * Whether tmux keeps drawing its own status line underneath our tabs.
@@ -905,16 +907,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       // reason the strip is worth looking at at all.
                       const alerting = w.flags.includes("!") || w.flags.includes("#");
                       return (
-                        <div key={w.index}
-                          onClick={() => { if (!w.active) tmuxCmd("select", { index: w.index }); }}
-                          onDoubleClick={() => setRenaming(w.index)}
+                        <div key={w.id}
+                          onClick={() => { if (!w.active) tmuxCmd("select", { window: w.id }); }}
+                          onDoubleClick={() => setRenaming(w.id)}
                           title={`window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
                           className="group flex items-center gap-1.5 px-2 py-1 rounded-md text-[10.5px] cursor-pointer shrink-0"
                           style={w.active
                             ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
                             : { background: "color-mix(in srgb, var(--bg3) 55%, transparent)", color: "var(--text2)" }}>
                           <span className="tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>
-                          {renaming === w.index ? (
+                          {renaming === w.id ? (
                             <input
                               autoFocus
                               defaultValue={w.name}
@@ -924,7 +926,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 if (e.key === "Escape") { setRenaming(null); return; }
                                 if (e.key !== "Enter") return;
                                 const name = (e.target as HTMLInputElement).value.trim();
-                                if (name && name !== w.name) tmuxCmd("rename", { index: w.index, name });
+                                if (name && name !== w.name) tmuxCmd("rename", { window: w.id, name });
                                 setRenaming(null);
                               }}
                               className="bg-transparent outline-none w-20 text-[10.5px]"
@@ -934,7 +936,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             <span>{w.name || "shell"}</span>
                           )}
                           {alerting && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="activity" />}
-                          <button onClick={(e) => { e.stopPropagation(); tmuxCmd("kill", { index: w.index }); }}
+                          <button onClick={(e) => { e.stopPropagation(); tmuxCmd("kill", { window: w.id }); }}
                             className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="close window (kill-window)">✕</button>
                         </div>
                       );
