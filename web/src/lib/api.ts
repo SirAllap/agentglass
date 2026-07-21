@@ -3,9 +3,17 @@ import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
 
+/** Set when the agentglass server itself served this page (single-port mode) —
+ *  it plants the marker into index.html on the way out (server/src/webui.ts).
+ *  Serve-time, not build-time, so the same bundle still resolves :4000 under
+ *  vite dev/preview and the desktop shell's static server. */
+const SERVED_BY_API: boolean =
+  typeof window !== "undefined" &&
+  (window as unknown as { __AGENTGLASS_SAME_ORIGIN__?: boolean }).__AGENTGLASS_SAME_ORIGIN__ === true;
+
 export const SERVER: string =
   (import.meta.env.VITE_CW_SERVER as string | undefined)?.replace(/\/$/, "") ||
-  `http://${location.hostname}:4000`;
+  (SERVED_BY_API ? location.origin : `http://${location.hostname}:4000`);
 
 /** Auth token for a server that requires one (exposed / multi-user box). Read
  *  once from `?token=` — then stripped from the URL bar so it isn't shoulder-

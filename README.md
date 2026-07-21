@@ -210,6 +210,18 @@ Open **http://localhost:6180**. Then see it move without wiring a real project:
 python3 hooks/seed_demo.py            # streams demo agents for ~30s
 ```
 
+**Single-port deploys** (a headless box, a systemd unit): build the UI once and
+the server serves it itself — one process, one port, API and dashboard on the
+same origin:
+
+```bash
+bun run build                         # web/dist
+cd server && bun run src/index.ts     # dashboard AND API on :4000
+```
+
+When `web/dist` doesn't exist (plain `bun run dev`), nothing changes — the
+server is API-only and the vite dev server owns the UI as before.
+
 Prefer `make`? Every entry point is a described Makefile target — `make help`
 lists them all (`make dev`, `make setup`, `make demo-feed`, `make desktop`, …),
 and the in-app terminal (`t` → **⚙ commands**) surfaces the same list, ready to
@@ -443,7 +455,7 @@ inference, prompt) to an event the same way.
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` alerts here (Slack/Discord compatible). |
 | `AGENTGLASS_NOTIFY` | — | `1` → fire `notify-send` desktop alerts. |
 | `AGENTGLASS_SERVER` | `http://localhost:4000` | Used by the hook/seed scripts. |
-| `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). |
+| `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). Unset, the UI resolves same-origin when the server itself served it (single-port mode), `:4000` otherwise. |
 | `AGENTGLASS_GIT_WRITE_DISABLED` | — | `1` → make the **Source control** panel read-only (no stage / commit / push). |
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |
 **Scope is a boundary, not just a filter.** With a project open, git writes, the
