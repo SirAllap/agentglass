@@ -28,6 +28,8 @@ import {
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
   restoredActiveId, setActiveChatId,
 } from "../lib/chatStore.ts";
+import { useSidebarWidth } from "../lib/sidebarWidth.ts";
+import { SidebarGrip } from "./SidebarGrip.tsx";
 
 // Still hand-maintained, and still drifts every release — the runtime-sourced
 // list is its own job. The 1M entry is here because it is what this fix buys:
@@ -396,6 +398,7 @@ function ClipIcon() {
 // `active` is destructured as `visible` because this component already has an
 // `active` of its own — the currently selected chat.
 export function ChatView({ active: visible, focusId, onClose = () => {} }: { active: boolean; focusId?: string | null; onClose?: () => void }) {
+  const sidebarW = useSidebarWidth();
   const open = visible;
   const allChats = useSyncExternalStore(subscribe, listChats, listChats);
   // `null` until we know, which is not the same as "unscoped". See the filter
@@ -728,7 +731,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                 </AnimatePresence>
 
                 {/* ---- sidebar: every open chat ---- */}
-                <div className="w-[236px] shrink-0 flex flex-col border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
+                <div className="shrink-0 flex flex-col" style={{ width: sidebarW, background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
                   <div className="flex items-center gap-1.5 px-3 py-3 shrink-0">
                     <span className="text-[13px] font-semibold shrink-0" style={{ color: "var(--text)" }}>💬 Chats</span>
                     <span className="text-[10px] t-dim2 tabular-nums shrink-0">{chats.length}</span>
@@ -768,6 +771,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       are reading stay on screen while you scroll its history. */}
                   {active && <Inspector chat={active} />}
                 </div>
+                <SidebarGrip />
 
                 {/* ---- the active conversation ---- */}
                 <div className="flex-1 min-w-0 flex flex-col">

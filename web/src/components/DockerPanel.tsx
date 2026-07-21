@@ -7,6 +7,8 @@ import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
 import { ConsoleStrip, lastTerminalRoot } from "./TerminalPanel.tsx";
+import { useSidebarWidth } from "../lib/sidebarWidth.ts";
+import { SidebarGrip } from "./SidebarGrip.tsx";
 
 // Strip ANSI CSI (colors, cursor moves, erases) + OSC sequences, not just SGR.
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g; // eslint-disable-line no-control-regex
@@ -91,6 +93,7 @@ export function DockerView({ active }: { active: boolean }) {
   // needing while watching a container. Its height is remembered and it is
   // keyed on the repo, not on the container, so selecting a different one
   // above never disturbs what is running below.
+  const sidebarW = useSidebarWidth();
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleH, setConsoleH] = useState<number>(() => {
     try { return Math.min(0.85, Math.max(0.08, Number(localStorage.getItem(CONSOLE_KEY)) || 0.1)); } catch { return 0.1; }
@@ -244,7 +247,7 @@ export function DockerView({ active }: { active: boolean }) {
                 ) : view === "containers" ? (
                   <div className="flex-1 min-h-0 flex">
                     {/* left: containers grouped by project */}
-                    <div className="w-[340px] shrink-0 border-r agx-scroll overflow-y-auto py-1" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                    <div className="shrink-0 agx-scroll overflow-y-auto py-1" style={{ width: sidebarW }}>
                       {groups.map(([proj, cs]) => (
                         <div key={proj} className="mb-1">
                           <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--bg2)" }}>
@@ -265,6 +268,7 @@ export function DockerView({ active }: { active: boolean }) {
                         </div>
                       ))}
                     </div>
+                    <SidebarGrip />
                     {/* right: detail */}
                     <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                       {selected ? (

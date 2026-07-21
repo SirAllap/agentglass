@@ -10,6 +10,8 @@ import { fmtTime, agentKey } from "../lib/format.ts";
 import { THEMES } from "../lib/highlight.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import type { Hilite } from "../lib/diffHighlight.ts";
+import { useSidebarWidth } from "../lib/sidebarWidth.ts";
+import { SidebarGrip } from "./SidebarGrip.tsx";
 
 const HATCH = "repeating-linear-gradient(45deg, transparent, transparent 5px, color-mix(in srgb, var(--border) 10%, transparent) 5px, color-mix(in srgb, var(--border) 10%, transparent) 6px)";
 // Typical diff/coding font stack (honors an app --font-mono override if set).
@@ -630,6 +632,7 @@ type DiffViewProps = {
  *  it as a modal to drill into one commit. Hence `DiffView` plus the
  *  `ChangesModal` wrapper at the bottom of this file. */
 export function DiffView({ active, onClose, onBack, backLabel, presetChanges, presetTitle, presetPath }: DiffViewProps) {
+  const sidebarW = useSidebarWidth();
   const open = active;
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [titles, setTitles] = useState<ReadonlyMap<string, string>>(new Map());
@@ -901,7 +904,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
 
                 <div className="flex-1 min-h-0 flex">
                   {/* master — grouped file list */}
-                  <div className="w-[300px] shrink-0 flex flex-col border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                  <div className="shrink-0 flex flex-col" style={{ width: sidebarW }}>
                     <div className="p-2.5 pb-1.5 shrink-0 space-y-2">
                       <input
                         value={q} onChange={(e) => setQ(e.target.value)}
@@ -992,6 +995,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                       ))}
                     </div>
                   </div>
+                  <SidebarGrip />
 
                   {/* detail — full diff */}
                   <div className="flex-1 min-w-0 min-h-0 flex flex-col">

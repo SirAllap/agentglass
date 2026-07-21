@@ -14,6 +14,8 @@ import { buildFileTree, visibleRows, allDirPaths } from "../lib/fileTree.ts";
 import { useIncremental } from "../lib/useIncremental.ts";
 import { CommandLog } from "./CommandLog.tsx";
 import { UnifiedDiff, SplitDiff, ThemePicker, Toggle, SCROLLBAR_CSS, ChangesModal, changesetSig, readWalkCache, writeWalkCache } from "./ChangesModal.tsx";
+import { useSidebarWidth } from "../lib/sidebarWidth.ts";
+import { SidebarGrip } from "./SidebarGrip.tsx";
 
 const unifiedText = (c: GitFileChange) => c.hunks.map((h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n${h.lines.join("\n")}`).join("\n");
 
@@ -355,6 +357,7 @@ function Section({ title, count, tint, action, onAll, children }: { title: strin
  *  looked at something else, which is precisely what you do before committing. */
 export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: () => void }) {
   const open = active;
+  const sidebarW = useSidebarWidth();
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
   const [tree, setTree] = useState<WorkingTree | null>(null);
@@ -1337,7 +1340,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
                 {view === "changes" ? (
                   <div className="flex-1 min-h-0 flex">
-                    <div className="w-[340px] shrink-0 border-r flex flex-col min-h-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                    <div className="shrink-0 flex flex-col min-h-0" style={{ width: sidebarW }}>
                       {!tree?.clean && (
                         <div className="shrink-0 px-2.5 py-2 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                           <button onClick={() => explain(!!walk)} disabled={walkLoading} className="text-[11px] px-2.5 py-1 rounded-lg w-full" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--info) 13%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 28%, transparent)", opacity: walkLoading ? 0.6 : 1 }}>
@@ -1381,6 +1384,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         {!writeEnabled && <div className="text-[9.5px] t-dim2 text-center">read-only (AGENTGLASS_GIT_WRITE_DISABLED)</div>}
                       </div>
                     </div>
+                    <SidebarGrip />
                     <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                       {selected ? (
                         <>
