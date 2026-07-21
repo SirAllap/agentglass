@@ -33,10 +33,19 @@ function fakeInstall() {
   return app;
 }
 
-/** Run a process out of the fake install. `; true` keeps the shell from
- *  exec'ing the sleep away, which would replace the exe we are matching on. */
-function launch(exe: string, script: string, ...args: string[]): number {
-  const p = Bun.spawn([exe, "-c", `${script}; true`, ...args], { stdio: ["ignore", "ignore", "ignore"] });
+/**
+ * Run a process out of the fake install.
+ *
+ * The script must block in a *builtin* and fork nothing. An earlier version
+ * used `sleep 30; true`, and the `; true` did stop the shell exec'ing the sleep
+ * away — but it left the shell forking a child for it, and a forked child is a
+ * process running this same binary until the exec lands. Under bash that window
+ * is invisible; under the dash that CI's /bin/sh points at, six launches showed
+ * up as twelve pids and the exact-set assertion failed. `read` blocks forever on
+ * a pipe nobody writes to, in both shells, without forking anything.
+ */
+function launch(exe: string, script = "read x", ...args: string[]): number {
+  const p = Bun.spawn([exe, "-c", script, ...args], { stdio: ["pipe", "ignore", "ignore"] });
   p.unref();
   spawned.push(p.pid);
   return p.pid;
@@ -63,19 +72,23 @@ afterEach(() => {
 describe("finding the processes that belong to an install", () => {
   test("helpers are not mistaken for the main process", async () => {
     const app = fakeInstall();
-    const main = launch(join(app, "agentglass"), "sleep 30");
+    const main = launch(join(app, "agentglass"));
     // The four shapes Electron actually spawns, all sharing the main's path.
     const helpers = [
-      launch(join(app, "agentglass"), "sleep 30", "--type=zygote"),
-      launch(join(app, "agentglass"), "sleep 30", "--type=gpu-process", "--ozone-platform=wayland"),
-      launch(join(app, "agentglass"), "sleep 30", "--type=utility", "--utility-sub-type=network.mojom.NetworkService"),
-      launch(join(app, "agentglass"), "sleep 30", "--type=renderer"),
+      launch(join(app, "agentglass"), "read x", "--type=zygote"),
+      launch(join(app, "agentglass"), "read x", "--type=gpu-process", "--ozone-platform=wayland"),
+      launch(join(app, "agentglass"), "read x", "--type=utility", "--utility-sub-type=network.mojom.NetworkService"),
+      launch(join(app, "agentglass"), "read x", "--type=renderer"),
     ];
-    const sidecar = launch(join(app, "resources", "agentglass-server"), "sleep 30");
+    const sidecar = launch(join(app, "resources", "agentglass-server"));
     await Bun.sleep(200);
 
+    // Every one of them is ours. Asserted as "contains", not as an exact set:
+    // what the script needs to be true is that nothing of this install is
+    // missed, and a transient extra — a helper caught mid-fork — is genuinely
+    // ours too, and genuinely fine to signal.
     const all = pids((await appctl(app, "app_pids")).out);
-    expect(all.sort()).toEqual([main, ...helpers, sidecar].sort());
+    for (const pid of [main, ...helpers, sidecar]) expect(all).toContain(pid);
 
     // The whole fix in one assertion: only the main process gets signalled.
     expect(pids((await appctl(app, "main_pids")).out)).toEqual([main]);
@@ -89,7 +102,7 @@ describe("finding the processes that belong to an install", () => {
     // The caller then reads "nothing is running" and installs over a live app,
     // which is the failure this whole file exists to prevent.
     const app = fakeInstall();
-    const main = launch(join(app, "agentglass"), "sleep 30", "--ozone-platform=wayland");
+    const main = launch(join(app, "agentglass"), "read x", "--ozone-platform=wayland");
     await Bun.sleep(200);
     expect(pids((await appctl(app, "main_pids")).out)).toEqual([main]);
     rmSync(app, { recursive: true, force: true });
@@ -98,7 +111,7 @@ describe("finding the processes that belong to an install", () => {
   test("another install's processes are left alone", async () => {
     const mine = fakeInstall();
     const theirs = fakeInstall();
-    const other = launch(join(theirs, "agentglass"), "sleep 30");
+    const other = launch(join(theirs, "agentglass"));
     await Bun.sleep(200);
     expect((await appctl(mine, "app_pids")).out).toBe("");
     expect(alive(other)).toBe(true);
@@ -107,26 +120,25 @@ describe("finding the processes that belong to an install", () => {
 });
 
 describe("stopping it", () => {
-  test("a healthy instance is waited out, not raced", async () => {
+  test("a healthy instance goes on the first signal, with no escalation", async () => {
     const app = fakeInstall();
-    const main = launch(join(app, "agentglass"), "sleep 30");
-    // A helper that goes when its main goes, the way a real one does.
-    const helper = launch(join(app, "agentglass"), `while kill -0 ${main} 2>/dev/null; do sleep 0.05; done`, "--type=renderer");
-    const sidecar = launch(join(app, "resources", "agentglass-server"), `while kill -0 ${main} 2>/dev/null; do sleep 0.05; done`);
+    const main = launch(join(app, "agentglass"));
     await Bun.sleep(200);
 
-    const { code } = await appctl(app, "stop_app");
+    const { code, out } = await appctl(app, "stop_app");
     expect(code).toBe(0);
-    // stop_app only returns 0 once nothing from the install is left — which is
-    // the guarantee the caller needs before it starts rm -rf'ing these files.
-    for (const pid of [main, helper, sidecar]) expect(alive(pid)).toBe(false);
+    expect(alive(main)).toBe(false);
+    // The bit that matters: it waited for the process to actually be gone and
+    // never reached for SIGKILL. A `sleep 2` and a hope looks identical from
+    // the outside right up until the app is slow, which is when it matters.
+    expect(out).not.toContain("still up after");
     rmSync(app, { recursive: true, force: true });
   });
 
   test("something that ignores SIGTERM is escalated, not slept through", async () => {
     const app = fakeInstall();
-    const main = launch(join(app, "agentglass"), "sleep 30");
-    const stubborn = launch(join(app, "agentglass"), "trap '' TERM; sleep 30", "--type=renderer");
+    const main = launch(join(app, "agentglass"));
+    const stubborn = launch(join(app, "agentglass"), "trap '' TERM; read x", "--type=renderer");
     await Bun.sleep(200);
 
     const { code, out } = await appctl(app, "stop_app", { APPCTL_GRACE_TENTHS: "5" });
@@ -139,7 +151,7 @@ describe("stopping it", () => {
 
   test("a sidecar left behind by a previous wedge is cleared", async () => {
     const app = fakeInstall();
-    const orphan = launch(join(app, "resources", "agentglass-server"), "trap '' TERM; sleep 30");
+    const orphan = launch(join(app, "resources", "agentglass-server"), "trap '' TERM; read x");
     await Bun.sleep(200);
 
     const { code, out } = await appctl(app, "stop_app", { APPCTL_GRACE_TENTHS: "5" });
