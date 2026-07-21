@@ -4,9 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>agentglass — mission control for every AI coding agent on your machine</title>
-<meta name="description" content="Open-source real-time dashboard and workspace for AI coding agents. Claude Code, Codex, Gemini CLI — every tool call, token and dollar on one radar, plus diff, git, docker and a real terminal." />
+<meta name="description" content="Open-source mission control and workspace for AI coding agents. Claude Code, Codex, Gemini CLI — every tool call, token and dollar on one radar, plus diff review, git, docker, a real terminal with native tmux tabs, and a control plane that holds risky tool calls for your approval. Desktop app for macOS, Linux and Windows." />
 <meta property="og:title" content="agentglass — every agent, one tower" />
-<meta property="og:description" content="Open-source mission control for AI coding agents. Watch the whole fleet live, then act — without leaving the glass." />
+<meta property="og:description" content="Open-source mission control for AI coding agents. Watch the whole fleet live, hold risky tool calls for approval, then act — diff, git, docker, terminal and chat, without leaving the glass." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://sirallap.github.io/agentglass/" />
 <meta property="og:image" content="https://sirallap.github.io/agentglass/og.png" />
@@ -15,7 +15,7 @@
 <meta property="og:image:alt" content="agentglass — a loupe whose lens is a mission-control radar, tracking your fleet of AI coding agents" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="agentglass — every agent, one tower" />
-<meta name="twitter:description" content="Open-source mission control for AI coding agents. Watch the whole fleet live, then act — without leaving the glass." />
+<meta name="twitter:description" content="Open-source mission control for AI coding agents. Watch the whole fleet live, hold risky tool calls for approval, then act — diff, git, docker, terminal and chat, without leaving the glass." />
 <meta name="twitter:image" content="https://sirallap.github.io/agentglass/og.png" />
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2032%2032%22%3E%3Cline%20x1=%2220.2%22%20y1=%2220.2%22%20x2=%2227%22%20y2=%2227%22%20stroke=%22%237c3aed%22%20stroke-width=%223.4%22%20stroke-linecap=%22round%22/%3E%3Ccircle%20cx=%2213.5%22%20cy=%2213.5%22%20r=%229%22%20fill=%22%23a78bfa%22%20fill-opacity=%220.14%22/%3E%3Ccircle%20cx=%2213.5%22%20cy=%2213.5%22%20r=%225.6%22%20fill=%22none%22%20stroke=%22%23a78bfa%22%20stroke-opacity=%220.35%22%20stroke-width=%221%22/%3E%3Cpath%20d=%22M13.5%2013.5%20L13.5%204.6%20A8.9%208.9%200%200%201%2019.7%207%20Z%22%20fill=%22%23a78bfa%22%20fill-opacity=%220.28%22/%3E%3Cline%20x1=%2213.5%22%20y1=%2213.5%22%20x2=%2219.7%22%20y2=%227%22%20stroke=%22%23c4b5fd%22%20stroke-width=%221%22/%3E%3Ccircle%20cx=%229%22%20cy=%2216.4%22%20r=%221.9%22%20fill=%22%2334d399%22/%3E%3Ccircle%20cx=%2213.5%22%20cy=%2213.5%22%20r=%229.6%22%20fill=%22none%22%20stroke=%22%237c3aed%22%20stroke-width=%222.5%22/%3E%3C/svg%3E" />
 <style>
@@ -502,14 +502,17 @@
     <p class="sub">
       Claude Code, Codex, Gemini CLI — every AI coding agent on your machine, on one radar.
       But <b>agentglass</b> is not a viewer: it's mission control <b>and a full workspace</b>.
-      The dashboard watches every tool call, token and dollar live; the cockpit acts —
-      review diffs, stage &amp; push, drive docker, drop into a <b>real terminal</b>,
-      chat with Claude — without leaving the glass.
+      The dashboard watches every tool call, token and dollar live. The control plane can
+      <b>hold a risky tool call until you approve it</b>, from any device, and it survives a
+      restart. And the cockpit acts — review diffs, stage &amp; push, drive docker, drop into
+      a <b>real terminal</b> (with your tmux windows as native tabs), chat with Claude —
+      without leaving the glass. Runs in the browser, or as a desktop app.
     </p>
 
     <div class="ctas">
       <a class="btn-a" href="./demo/">▶ Enter the live demo</a>
-      <button class="btn-b" id="copy-npx" title="Copy to clipboard"><span class="c">$</span> <span id="npx-txt">npx agentglass</span></button>
+      <a class="btn-b" data-dl="any" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ Download <span data-agx="version">the desktop app</span></a>
+      <button class="btn-b" id="copy-npx" data-copy="git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run dev" title="Copy: git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run dev"><span class="c">$</span> <span id="npx-txt">git clone … &amp;&amp; bun install &amp;&amp; bun run dev</span></button>
     </div>
 
     <div class="keys" aria-label="Workspace panels, one keystroke away">
@@ -535,6 +538,10 @@
       <span><b>o</b> api-worker <i>restarted</i> · logs streaming</span>
       <span><b>t</b> make test · <i>running</i> in a real PTY</span>
       <span><b>c</b> claude replied · shop-web chat</span>
+      <span>✓ approved · gate restored after restart, agent still held</span>
+      <span><b>t</b> tmux · 3 windows as native tabs · C-f listening</span>
+      <span>◷ AG-5F6D open 9m · transcript still growing — working, not stuck</span>
+      <span>⬇ <span data-agx="version">a new release</span> available · release notes in Settings ▸ About</span>
     </div>
   </div>
 </header>
@@ -588,7 +595,7 @@
           <div class="m-row"><span style="color:var(--warning)">M</span> web/src/components/Cart.tsx</div>
           <div class="m-hd">Commit</div>
           <div class="m-row" style="border:1px solid color-mix(in srgb, var(--border) 60%, transparent); border-radius:8px; color:var(--text2)">fix: round prices at checkout<span style="margin-left:auto"></span><button class="m-btn pri">Commit</button></div>
-          <div class="m-keys">lazygit-style, write-gated · <b>s</b> stage · <b>u</b> unstage · <b>x</b> discard · interactive hunk staging · branches, log, stashes</div>
+          <div class="m-keys">lazygit-style, write-gated · <b>s</b> stage · <b>u</b> unstage · <b>x</b> discard · interactive hunk staging · branches, log, stashes, worktrees · resolve conflicts, or hand them to a chat</div>
         </div>
 
         <div class="wpane" id="wp-o" role="tabpanel">
@@ -613,7 +620,7 @@ bun test v1.2.19
 
  <span class="ok">3 pass</span> · 0 fail · 41 expect() calls
 <span style="color:var(--success)">dev@machine</span> <span style="color:var(--info)">shop-api</span> % <span class="caret"></span></div>
-          <div class="m-keys">a real PTY — your login shell over a WebSocket, not an emulation · per-repo, persistent · <b>⚙</b> discovers Makefile targets &amp; package.json scripts</div>
+          <div class="m-keys">a real PTY — your login shell over a WebSocket, not an emulation · per-repo, persistent · <b>⚙</b> discovers Makefile targets &amp; package.json scripts · run <b>tmux</b> and its windows become native tabs, keybindings untouched</div>
         </div>
 
         <div class="wpane" id="wp-c" role="tabpanel">
@@ -624,7 +631,7 @@ bun test v1.2.19
             Found it — totals were summed before rounding. Patched <b>round()</b> into <b>pricing.ts</b> and added a guard in checkout. Running the tests now.
           </div>
           <div class="m-msg ai m-typing"><i></i><i></i><i></i></div>
-          <div class="m-keys">drives your local <b>claude</b> CLI · pick repo, model, permission mode · sessions join the fleet like any other agent</div>
+          <div class="m-keys">drives your local <b>claude</b> CLI · pick repo, model, permission mode · queue a message mid-turn · chats survive a crash or a project switch · sessions join the fleet like any other agent</div>
         </div>
 
       </div>
@@ -684,9 +691,9 @@ bun test v1.2.19
       <div class="read">Opus 352.0k <span class="a">$188.00</span> · GPT-4o 275.2k <span class="a">$94.42</span> · Sonnet <span class="a">$34.42</span></div>
     </div>
     <div class="card arm rv d1">
-      <div class="head"><span class="led"></span><span class="klabel">Alerts</span></div>
+      <div class="head"><span class="led"></span><span class="klabel">Control plane</span></div>
       <h3>What needs you</h3>
-      <p>Dangerous tool calls <b>hold for your clearance</b>. Approve or deny remotely — opt-in, audited.</p>
+      <p>Dangerous tool calls <b>hold for your clearance</b>. Approve or deny remotely — opt-in, audited, and <b>durable</b>: restart the server and the request is still there, still held.</p>
       <div class="read"><span class="w">✋ Approve Bash?</span> kubectl delete deploy api <span class="g">[Approve]</span> <span class="r">[Deny]</span></div>
     </div>
     <div class="card rv d2">
@@ -694,6 +701,24 @@ bun test v1.2.19
       <h3>Any aircraft, any fleet</h3>
       <p>Claude Code hooks, or <b>any OpenTelemetry GenAI exporter</b>: Codex, Gemini CLI, Bedrock, LangChain, LiteLLM.</p>
       <div class="read">otel/genai ▸ rx <span class="a">1.33 events/sec</span> · peak 2/s</div>
+    </div>
+    <div class="card rv">
+      <div class="head"><span class="led"></span><span class="klabel">Stuck or slow</span></div>
+      <h3>Evidence of life</h3>
+      <p>A tool call open for nine minutes is a long build or a wedged CLI, and elapsed time cannot tell you which. So the glass reads what the session is <b>still doing</b> — the transcript growing, the file a write tool named changing — instead of guessing from a stopwatch.</p>
+      <div class="read">AG-5F6D · Bash <span class="a">9m 12s</span> · transcript touched <span class="a">3s ago</span></div>
+    </div>
+    <div class="card rv d1">
+      <div class="head"><span class="led"></span><span class="klabel">The notch</span></div>
+      <h3>Above everything</h3>
+      <p>Approvals, finished turns and desktop notifications land in a notch that hangs from the top of the frame, wherever you are in the app. One switch mutes it without touching your system's Do Not Disturb.</p>
+      <div class="read">✋ 1 waiting · <span class="a">2 turns finished</span> · quiet <span class="g">off</span></div>
+    </div>
+    <div class="card rv d2">
+      <div class="head"><span class="led"></span><span class="klabel">Desktop</span></div>
+      <h3>Not just a tab</h3>
+      <p>Installers for <b>macOS</b> (Apple silicon and Intel), <b>Linux</b> (deb and AppImage) and <b>Windows</b>. It checks for new releases in the background and shows you the incoming commits before you take them.</p>
+      <div class="read"><span data-agx="version">a new release</span> available · <span class="a">the commits it brings</span>, listed before you take them</div>
     </div>
   </div>
 </section>
@@ -708,16 +733,18 @@ bun test v1.2.19
   <div class="txgrid">
     <div class="txlog rv">
       <div><span class="who p">pilot ▸</span> request startup.</div>
-      <div><span class="who">tower ▸</span> cleared. run <span class="cmd">npx agentglass</span></div>
-      <div class="dim">◇ server listening on :4177</div>
+      <div><span class="who">tower ▸</span> cleared. two ways in —</div>
+      <div class="dim">◇ <a href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener" style="text-decoration:underline">download the desktop app</a> · macOS, Linux, Windows</div>
+      <div class="dim">◇ or <span class="cmd">git clone</span> · <span class="cmd">bun install</span> · <span class="cmd">bun run dev</span></div>
       <div class="dim">◇ scanning ~/.claude/projects … 18 sessions found</div>
-      <div class="dim">◇ claude code hooks installed</div>
+      <div class="dim">◇ <span class="cmd">bun run setup</span> wires the Claude Code hooks — opt-in</div>
       <div><span class="who p">pilot ▸</span> tower in sight. <span class="caret"></span></div>
     </div>
     <div class="txlog rv d1">
       <div><span class="who">tower ▸</span> a note on security —</div>
       <div class="dim">◇ local-first: SQLite on your disk, nothing phones home</div>
       <div class="dim">◇ the control plane is opt-in and audited</div>
+      <div class="dim">◇ the approval queue is persisted — a crash cannot silently auto-allow</div>
       <div class="dim">◇ MIT license · Bun server · React UI · Electron desktop app</div>
       <div class="dim">◇ read <a href="https://github.com/SirAllap/agentglass/blob/main/SECURITY.md" target="_blank" rel="noopener" style="text-decoration:underline">SECURITY.md</a> before installing — we mean it</div>
       <div><span class="who">tower ▸</span> <a href="https://github.com/SirAllap/agentglass/issues" target="_blank" rel="noopener" style="text-decoration:underline">github issues</a> welcome, frequency monitored.</div>
@@ -727,8 +754,8 @@ bun test v1.2.19
 
 <!-- ══════════ STAT BAND ══════════ -->
 <div class="band">
-  <div class="tile rv"><div class="n">1 <em>cmd</em></div><div class="k">from zero to cockpit — npx agentglass</div></div>
-  <div class="tile rv d1"><div class="n">p50/<em>p95</em></div><div class="k">tool-latency percentiles, live</div></div>
+  <div class="tile rv"><div class="n">3 <em>OSes</em></div><div class="k">desktop installers — macOS (Apple silicon &amp; Intel), Linux (deb &amp; AppImage), Windows</div></div>
+  <div class="tile rv d1"><div class="n">p50/<em>p95</em></div><div class="k">tool-latency percentiles, live — measured PreToolUse ▸ PostToolUse</div></div>
   <div class="tile rv d2"><div class="n">22</div><div class="k">themes — this page rolled <b id="th-tile">Ember</b>; hit 🎲 below to reroll</div></div>
   <div class="tile rv"><div class="n"><em>100%</em></div><div class="k">local-first — your data never leaves your machine</div></div>
 </div>
@@ -738,9 +765,12 @@ bun test v1.2.19
   <div class="rv">
     <span class="stamp">Cleared for takeoff</span>
     <h2>Your agents are already flying.<br><em>Get a tower.</em></h2>
-    <button class="cmdline" id="copy-npx2" title="Copy to clipboard"><span class="p">$</span> <span id="npx-txt2">npx agentglass</span></button>
+    <button class="cmdline" id="copy-npx2" data-copy="git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run dev" title="Copy: git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run dev"><span class="p">$</span> <span id="npx-txt2">git clone … &amp;&amp; bun install &amp;&amp; bun run dev</span></button>
     <div class="row">
       <a class="btn-a" href="./demo/">▶ Live demo — no install</a>
+      <a class="btn-b" data-dl="mac" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ macOS</a>
+      <a class="btn-b" data-dl="linux" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ Linux</a>
+      <a class="btn-b" data-dl="win" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ Windows</a>
       <a class="btn-b" href="https://github.com/SirAllap/agentglass" target="_blank" rel="noopener">★ Star on GitHub</a>
     </div>
     <p class="meta">Open source · MIT · Bun + SQLite · React + Vite · Electron desktop · 22 themes</p>
@@ -865,16 +895,23 @@ bun test v1.2.19
     applyTheme(current); /* re-sync active state now that options exist */
   })();
 
-  /* ── copy npx command ── */
+  /* ── copy the command the button is showing ── */
   function wireCopy(btnId, txtId){
     var btn = document.getElementById(btnId);
-    if(!btn) return;
+    var txt = document.getElementById(txtId);
+    if(!btn || !txt) return;
+    /* Captured once, at wire time. The label is swapped to "copied ✓" while the
+       toast is up, so reading it at click time can copy the toast — and it used
+       to copy a hardcoded string, which meant the button could paste something
+       other than what it was showing. */
+    /* The label may be abbreviated with an ellipsis to fit the button; what
+       gets copied is the whole command, carried on the element itself. */
+    var cmd = btn.getAttribute('data-copy') || txt.textContent;
     btn.addEventListener('click', function(){
-      var txt = document.getElementById(txtId);
-      navigator.clipboard && navigator.clipboard.writeText('npx agentglass').then(function(){
-        var old = txt.textContent;
+      if(!navigator.clipboard) return;
+      navigator.clipboard.writeText(cmd).then(function(){
         txt.textContent = 'copied ✓';
-        setTimeout(function(){ txt.textContent = old; }, 1400);
+        setTimeout(function(){ txt.textContent = cmd; }, 1400);
       });
     });
   }
