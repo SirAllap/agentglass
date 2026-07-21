@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
+import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { worktreeTag } from "../lib/worktree.ts";
@@ -352,7 +353,7 @@ function Section({ title, count, tint, action, onAll, children }: { title: strin
  *  Staying mounted while hidden is worth more here than anywhere else: the
  *  commit message drafts (`title`/`body`) used to be destroyed every time you
  *  looked at something else, which is precisely what you do before committing. */
-export function GitView({ active }: { active: boolean }) {
+export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: () => void }) {
   const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
@@ -381,6 +382,41 @@ export function GitView({ active }: { active: boolean }) {
   const [busyView, setBusyView] = useState<View | null>(null);
   /** The "merge from…" list on the header's sync button. */
   const [baseOpen, setBaseOpen] = useState(false);
+  /** Files git has stopped on. Only ever non-empty mid-merge. */
+  const [conflicts, setConflicts] = useState<string[]>([]);
+  const mergeState = tree?.branch.state ?? "clean";
+  useEffect(() => {
+    if (!open || !root || mergeState === "clean") { setConflicts([]); return; }
+    api.gitConflicts(root).then((r) => setConflicts(r.files ?? [])).catch(() => {});
+  }, [open, root, mergeState, tree]);
+
+  /**
+   * Hand the conflict to Claude, in the repo it happened in.
+   *
+   * The expensive part of a conflict is understanding two intents well enough
+   * to reconcile them, which is the one thing an agent sitting in this repo is
+   * genuinely good at — and the chat already runs `claude` in a given cwd, so
+   * this is a prompt and a tab rather than a feature.
+   */
+  const askClaude = () => {
+    const rels = conflicts.map((p) => p.startsWith(root) ? p.slice(root.length + 1) : p);
+    const c = newChat(root);
+    update(c.id, (ch) => {
+      ch.title = "resolve merge conflicts";
+      ch.draft = [
+        `I am mid-merge in ${root} and git has left ${rels.length} file(s) conflicted:`,
+        "",
+        ...rels.map((r) => `- ${r}`),
+        "",
+        "Please resolve each conflict, keeping both sides' intent where they do",
+        "different things and preferring the incoming change where they do the",
+        "same thing differently. Explain anything you had to choose between.",
+        "Do not commit — leave the resolution staged so I can review it.",
+      ].join("\n");
+    });
+    setActiveChatId(c.id);
+    onOpenChat?.();
+  };
   // Only the branches whose upstream is gone — the merged-and-tidied ones. Off
   // by default: it's a cleanup mode, not a way to read the branch list.
   const [onlyGone, setOnlyGone] = useState(false);
@@ -1167,6 +1203,55 @@ export function GitView({ active }: { active: boolean }) {
                     <button onClick={() => loadTree(root)} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
                   </div>
                 </div>
+
+                {/* Git has stopped in the middle of something. It used to say
+                    so in the header chip and offer nothing — leaving you in a
+                    conflicted repo with a toast and no way forward, which is
+                    the worst moment for the app to go quiet. */}
+                {mergeState !== "clean" && (
+                  <div className="shrink-0 px-4 py-2 border-b flex flex-col gap-1.5"
+                    style={{ borderColor: "color-mix(in srgb, var(--warning) 45%, transparent)", background: "color-mix(in srgb, var(--warning) 8%, transparent)" }}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[11px] font-semibold whitespace-nowrap" style={{ color: "var(--warning)" }}>
+                        {mergeState} — {conflicts.length} conflicted file{conflicts.length === 1 ? "" : "s"}
+                      </span>
+                      {/* Abort first, and always available: it is the only move
+                          that is guaranteed safe, and the one you reach for
+                          when you did not mean to start this. */}
+                      <button onClick={() => act(() => api.gitMergeAbort(root), "merge aborted", "abort")} disabled={busy}
+                        className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
+                        style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}
+                        title="Throw the merge away and put the tree back exactly as it was">abort</button>
+                      <button onClick={() => act(() => api.gitMergeContinue(root), "merge completed", "continue")} disabled={busy || conflicts.length > 0}
+                        className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
+                        style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: conflicts.length ? 0.4 : 1 }}
+                        title={conflicts.length ? "resolve every file first" : "commit the merge"}>continue</button>
+                      {conflicts.length > 0 && (
+                        <button onClick={askClaude}
+                          className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
+                          style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                          title="Open a chat in this repo, asking Claude to resolve them">✦ ask claude</button>
+                      )}
+                    </div>
+                    {/* Whole-file resolutions: the two that need no editor, and
+                        between them most conflicts — a lockfile, a generated
+                        migration, a file the other side deleted. */}
+                    {conflicts.map((f) => {
+                      const relPath = f.startsWith(root) ? f.slice(root.length + 1) : f;
+                      return (
+                        <div key={f} className="flex items-center gap-2 text-[10.5px]">
+                          <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text2)" }} title={f}>{relPath}</span>
+                          <button onClick={() => act(() => api.gitResolve(root, [relPath], "ours"), `kept ours for ${relPath}`)} disabled={busy}
+                            className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                            title="Keep this branch's version">ours</button>
+                          <button onClick={() => act(() => api.gitResolve(root, [relPath], "theirs"), `took theirs for ${relPath}`)} disabled={busy}
+                            className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                            title="Take the incoming version">theirs</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {view === "changes" ? (
                   <div className="flex-1 min-h-0 flex">

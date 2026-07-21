@@ -1004,6 +1004,62 @@ export function syncFromBase(dirIn: unknown, baseIn?: unknown): GitActionResult 
   return run(dir, ["merge", "--no-edit", base]);
 }
 
+/**
+ * Files git has left conflicted, from `--diff-filter=U`.
+ *
+ * A conflicted file is not "modified": it is a file git has stopped in the
+ * middle of and will not commit until you say what it should contain. The
+ * working-tree lists showed them alongside ordinary edits with no way to tell,
+ * which is how you end up committing a file with `<<<<<<<` in it.
+ */
+export function conflicts(rootIn: unknown): { ok: boolean; state: GitTreeState; files: string[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, state: "clean", files: [], error: "not a git repository root" };
+  const r = git(root, ["diff", "--name-only", "--diff-filter=U", "-z"]);
+  const files = r.stdout.split("\u0000").filter(Boolean).map((rel) => join(root, rel));
+  return { ok: true, state: treeState(root), files };
+}
+
+/** Take one side of a conflicted file wholesale, and stage it — the two
+ *  resolutions that need no editor and cover most conflicts (a lockfile, a
+ *  generated migration, a file the other branch deleted). */
+export function resolveWith(rootIn: unknown, relIn: unknown, side: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  if (side !== "ours" && side !== "theirs") return { ok: false, error: "side must be ours or theirs" };
+  const rels = validRels(root, Array.isArray(relIn) ? relIn : [relIn]);
+  if (!rels?.length) return { ok: false, error: "invalid path" };
+  const co = run(root, ["checkout", `--${side}`, "--", ...rels]);
+  if (!co.ok) return co;
+  return run(root, ["add", "--", ...rels]);
+}
+
+/** Abandon the merge and put the tree back exactly as it was. The only move
+ *  that is always safe, and the one someone reaches for first. */
+export function mergeAbort(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const state = treeState(root);
+  if (state === "rebasing") return run(root, ["rebase", "--abort"]);
+  if (state === "cherry-picking") return run(root, ["cherry-pick", "--abort"]);
+  if (state === "reverting") return run(root, ["revert", "--abort"]);
+  return run(root, ["merge", "--abort"]);
+}
+
+/** Finish once every conflict is staged. Refuses while any remain rather than
+ *  letting git fail with a message nobody reads. */
+export function mergeContinue(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const left = git(root, ["diff", "--name-only", "--diff-filter=U"]).stdout.trim();
+  if (left) return { ok: false, error: `still conflicted: ${left.split("\n").length} file(s) to resolve` };
+  const state = treeState(root);
+  if (state === "rebasing") return run(root, ["-c", "core.editor=true", "rebase", "--continue"]);
+  if (state === "cherry-picking") return run(root, ["-c", "core.editor=true", "cherry-pick", "--continue"]);
+  // `merge --continue` needs an editor; --no-edit keeps git's own message.
+  return run(root, ["commit", "--no-edit"]);
+}
+
 export function worktrees(rootIn: unknown): GitWorktree[] {
   const root = repoRoot(rootIn);
   if (!root) return [];
