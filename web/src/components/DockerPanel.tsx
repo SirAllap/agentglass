@@ -6,6 +6,7 @@ import type { DockerOverview, DockerContainer, DockerStat } from "../../../share
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
+import { ConsoleStrip, lastTerminalRoot } from "./TerminalPanel.tsx";
 
 // Strip ANSI CSI (colors, cursor moves, erases) + OSC sequences, not just SGR.
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g; // eslint-disable-line no-control-regex
@@ -61,7 +62,18 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
 
 /** Docker as a workspace view. `active` means "visible right now" — the view
  *  stays mounted while you're off in the diff, it just stops polling. */
+const CONSOLE_KEY = "agentglass.docker.console";
+
 export function DockerView({ active }: { active: boolean }) {
+  // A shell docked under the logs, for the `make migrate` you always end up
+  // needing while watching a container. Its height is remembered and it is
+  // keyed on the repo, not on the container, so selecting a different one
+  // above never disturbs what is running below.
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleH, setConsoleH] = useState<number>(() => {
+    try { return Math.min(0.85, Math.max(0.08, Number(localStorage.getItem(CONSOLE_KEY)) || 0.1)); } catch { return 0.1; }
+  });
+  useEffect(() => { try { localStorage.setItem(CONSOLE_KEY, String(consoleH)); } catch { /* non-fatal */ } }, [consoleH]);
   const [ov, setOv] = useState<DockerOverview | null>(null);
   const [stats, setStats] = useState<Record<string, DockerStat>>({});
   const [view, setView] = useState<View>("containers");
@@ -282,11 +294,32 @@ export function DockerView({ active }: { active: boolean }) {
                   </div>
                 )}
 
+                {/* Docked shell. Sits above the hint bar and below everything
+                    else, so opening it takes room from the logs rather than
+                    covering them. */}
+                <ConsoleStrip
+                  root={lastTerminalRoot()}
+                  open={consoleOpen}
+                  height={consoleH}
+                  onHeight={setConsoleH}
+                  onClose={() => setConsoleOpen(false)}
+                />
+
                 {ov?.available && view === "containers" && (
                   <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                     <span><b className="font-semibold">j/k</b> container</span>
                     <span><b className="font-semibold">s</b> start/stop</span>
                     <span><b className="font-semibold">r</b> restart</span>
+                    <button
+                      onClick={() => setConsoleOpen((v) => !v)}
+                      className="px-2 py-0.5 rounded text-[9.5px] whitespace-nowrap transition-colors"
+                      title="a shell in this project, docked under the logs — it keeps running while you look around"
+                      style={{
+                        background: consoleOpen ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                        color: consoleOpen ? "var(--text)" : "var(--text3)",
+                        border: `1px solid color-mix(in srgb, var(--border) ${consoleOpen ? 45 : 20}%, transparent)`,
+                      }}
+                    >{consoleOpen ? "▾ console" : "▸ console"}</button>
                     <span className="ml-auto">logs auto-refresh · stats every 5s</span>
                   </div>
                 )}

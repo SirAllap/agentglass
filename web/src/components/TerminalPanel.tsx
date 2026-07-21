@@ -13,6 +13,25 @@ import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../li
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
+/** The repo the terminal view last used — what a docked console should open
+ *  in, so the console and the terminal are the same shell in the same place. */
+export function lastTerminalRoot(): string {
+  try { return localStorage.getItem(ROOT_KEY) || ""; } catch { return ""; }
+}
+
+/** Marks the one shell per repo that belongs to a docked console strip. */
+const CONSOLE_TITLE = "console";
+
+/** Status dot, for anywhere that shows a shell's state. TermView builds a
+ *  richer one that names the shell; this is the shared minimum. */
+const SESS_DOT: Record<SessStatus, { color: string; label: string }> = {
+  idle: { color: "var(--text2)", label: "idle" },
+  connecting: { color: "var(--warning)", label: "connecting…" },
+  live: { color: "var(--success, #98c379)", label: "live" },
+  exited: { color: "var(--text2)", label: "exited" },
+  error: { color: "var(--error)", label: "disconnected" },
+  unauthorized: { color: "var(--error)", label: "unauthorized ⚿" },
+};
 const QUICK = ["git status", "git log --oneline -15", "git diff --stat", "git branch -vv"];
 const repoName = (p: string) => p.split("/").pop() || p;
 
@@ -314,6 +333,94 @@ function runInShell(s: Sess, cmd: string) {
  *
  *  `onClose` is still needed here (unlike the other views) because the shell
  *  itself can dismiss the workspace with Shift+Esc — see `panelClose`. */
+/**
+ * A shell strip that lives at the bottom of another panel.
+ *
+ * Same machinery as the terminal view — same module-level session store, same
+ * PTY, same xterm — deliberately: a second, lesser terminal would be a second
+ * set of bugs, and a console you cannot run `make migrate` in properly is not
+ * worth the room it takes.
+ *
+ * Keyed on the repo, not on the panel's selection, which is the point. Docker's
+ * console must not restart because you clicked a different container: the whole
+ * value of a console under the logs is that it keeps its history and its
+ * running job while you look around above it.
+ */
+export function ConsoleStrip({ root, open, height, onHeight, onClose }: {
+  root: string; open: boolean; height: number; onHeight: (h: number) => void; onClose: () => void;
+}) {
+  const slot = useRef<HTMLDivElement>(null);
+  const [, redraw] = useReducer((x: number) => x + 1, 0);
+  const [sid, setSid] = useState<string>("");
+
+  // One console shell per repo, reused. `sessionsFor` already orders by
+  // creation, so the first console-tagged one is stable across remounts.
+  useEffect(() => {
+    if (!open || !root || IS_DEMO) return;
+    const existing = sessionsFor(root).find((x) => x.title === CONSOLE_TITLE);
+    const s = existing ?? createSession(root);
+    s.title = CONSOLE_TITLE;
+    setSid(s.id);
+  }, [open, root]);
+
+  useEffect(() => {
+    if (!open || IS_DEMO) return;
+    const s = sessions.get(sid);
+    const el = slot.current;
+    if (!s || !el) return;
+    el.appendChild(s.holder);
+    if (!s.opened) { s.term.open(s.holder); s.opened = true; }
+    s.term.options.theme = themeFromCss();
+    const unTheme = applyThemeLive(s);
+    s.subs.add(redraw);
+    const doFit = () => { try { s.fit.fit(); } catch { /* not measurable yet */ } };
+    doFit();
+    if (s.status === "idle") connect(s);
+    const ro = new ResizeObserver(doFit);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      unTheme();
+      s.subs.delete(redraw);
+      // Detached, never killed: the shell and its scrollback outlive the strip
+      // being closed, so reopening lands you back in the same session.
+      if (s.holder.parentElement === el) el.removeChild(s.holder);
+    };
+  }, [open, sid]);
+
+  // Drag the top edge. Bounded so it can neither vanish nor swallow the panel
+  // it is a strip of.
+  const drag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = height;
+    const move = (ev: MouseEvent) => {
+      const next = Math.min(0.85, Math.max(0.08, startH + (startY - ev.clientY) / window.innerHeight));
+      onHeight(next);
+    };
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
+  const sess = sessions.get(sid);
+  if (!open) return null;
+  return (
+    <div className="shrink-0 flex flex-col" style={{ height: `${Math.round(height * 100)}%`, borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+      <div onMouseDown={drag}
+        className="shrink-0 flex items-center gap-2 px-3 py-1 cursor-row-resize select-none"
+        style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>
+        <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--primary-hover)" }}>console</span>
+        <span className="text-[9.5px] t-dim2 truncate">{root ? repoName(root) : "no repo"}</span>
+        {sess && <span className="text-[9px]" style={{ color: SESS_DOT[sess.status].color }}>● {SESS_DOT[sess.status].label}</span>}
+        <span className="ml-auto text-[9px] t-dim2">drag to resize</span>
+        <button onClick={(e) => { e.stopPropagation(); onClose(); }} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70" title="hide the console (the shell keeps running)">✕</button>
+      </div>
+      <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--bg)" }} onClick={() => sess?.term.focus()} />
+    </div>
+  );
+}
+
 export function TermView({ active, onClose = () => {} }: { active: boolean; onClose?: () => void }) {
   const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
