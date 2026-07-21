@@ -313,9 +313,10 @@ function fileType(c: FileChange): { label: string; color: string } {
   return { label, color: TYPE_STYLE[label] ?? "var(--info)" };
 }
 
-type GroupBy = "session" | "agent" | "folder" | "tool";
+type GroupBy = "session" | "date" | "agent" | "folder" | "tool";
 const GROUP_DIMS: { id: GroupBy; label: string }[] = [
   { id: "session", label: "Session" },
+  { id: "date", label: "Date" },
   { id: "agent", label: "Agent" },
   { id: "folder", label: "Folder" },
   { id: "tool", label: "Tool" },
@@ -334,6 +335,18 @@ const shortDir = (dir: string) => {
 
 /** Bucket the (already path-filtered) changes into groups, preserving first-seen
  *  order — the API returns newest-first, so recent activity floats to the top. */
+/** "Today" / "Yesterday" / "Tuesday" for the last week, then a plain date.
+ *  A weekday is how you actually remember recent work; past that it stops
+ *  being unambiguous and the date is the only honest label. */
+function dayLabel(d: Date): string {
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOf(new Date()) - startOf(d)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
+  return d.toLocaleDateString([], { day: "numeric", month: "short" });
+}
+
 function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>): FileGroup[] {
   const map = new Map<string, FileGroup>();
   const order: string[] = [];
@@ -348,6 +361,15 @@ function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<stri
       label = titles?.get(c.session_id) ?? agentKey({ source_app: c.source_app, session_id: c.session_id });
       sub = c.source_app;
     }
+    else if (by === "date") {
+      // Keyed on the local calendar day, not on the raw timestamp: the point is
+      // "what did we do on Tuesday", and the rows are already newest-first, so
+      // the days come out in order without a second sort.
+      const d = new Date(c.timestamp);
+      key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+      label = dayLabel(d);
+      sub = d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
+    }
     else if (by === "agent") { key = c.source_app || "—"; label = c.source_app || "unknown"; }
     else if (by === "tool") { key = c.tool || "—"; label = c.tool || "unknown"; }
     else { const d = dirOf(c.file_path); key = d; label = shortDir(d); }
@@ -355,6 +377,11 @@ function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<stri
     if (!g) { g = { key, label, sub, items: [], add: 0, del: 0 }; map.set(key, g); order.push(key); }
     g.items.push(c); g.add += c.additions; g.del += c.deletions;
   }
+  // Newest first *within* a group, stated rather than inherited. The rows
+  // arrive in timestamp order today, so this changes nothing — until something
+  // upstream reorders them and a day's work silently stops reading
+  // chronologically, which is the one thing a date grouping is for.
+  for (const g of map.values()) g.items.sort((a, b) => b.timestamp - a.timestamp);
   return order.map((k) => map.get(k)!);
 }
 
@@ -403,7 +430,12 @@ function FileItem({ c, active, reviewed, info, onSelect, onToggleReviewed }: { c
         </span>
       </div>
       {info?.description ? (
-        <div className="mt-0.5 text-[10px] pl-[22px] truncate" style={{ color: "var(--text3)" }} title={info.description}>{info.description}</div>
+        // The clock stays even when a description takes the line: with the list
+        // grouped by day, "when" is half of what you are reading it for.
+        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] pl-[22px]" style={{ color: "var(--text3)" }}>
+          <span className="truncate min-w-0" title={info.description}>{info.description}</span>
+          <span className="ml-auto shrink-0 tabular-nums opacity-80">{fmtTime(c.timestamp)}</span>
+        </div>
       ) : (
         <div className="flex items-center gap-1.5 mt-0.5 text-[9.5px] t-dim2 pl-[22px]">
           <span className="truncate min-w-0" title={c.file_path}>{dirOf(c.file_path)}</span>

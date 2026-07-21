@@ -375,6 +375,8 @@ export function GitView({ active }: { active: boolean }) {
   /** Which view has a request in flight, so "still loading" and "genuinely
    *  empty" stop rendering as the same blank pane. */
   const [busyView, setBusyView] = useState<View | null>(null);
+  /** The "merge from…" list on the header's sync button. */
+  const [baseOpen, setBaseOpen] = useState(false);
   // Only the branches whose upstream is gone — the merged-and-tidied ones. Off
   // by default: it's a cleanup mode, not a way to read the branch list.
   const [onlyGone, setOnlyGone] = useState(false);
@@ -1086,6 +1088,52 @@ export function GitView({ active }: { active: boolean }) {
                   </div>
                   <div className="ml-auto flex items-center gap-1.5">
                     {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
+                    {/* Update from base — merge master's latest into the branch
+                        you are on, in this checkout. Sits with fetch/pull/push
+                        because it belongs to the same family of "bring this
+                        checkout up to date"; it was only on the Worktrees tab
+                        before, which is not where anyone looks for it.
+                        Hidden when there is nothing to merge, and on the trunk
+                        itself, which has no base. */}
+                    {branch?.base && (branch.behindBase ?? 0) > 0 && (
+                      <div className="relative flex items-center">
+                        <button
+                          onClick={() => act(() => api.gitSyncBase(root), `merged ${branch.base}`, "sync")}
+                          disabled={!writeEnabled || busy}
+                          className="text-[11px] px-2 py-1 rounded-l-lg whitespace-nowrap"
+                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", borderRight: "none", opacity: (!writeEnabled || busy) ? 0.5 : 1 }}
+                          title={`Merge ${branch.base} into ${branch.name}. Brings the base branch's latest commits into this one — a merge, not a rebase, so nothing already pushed is rewritten.`}>
+                          {pending === "sync" ? "syncing…" : `⇣ sync ↓${branch.behindBase}`}
+                        </button>
+                        {/* Not every branch is cut from trunk. This picks what
+                            to merge from and remembers it in the repo's own
+                            config, so the choice sticks per branch. */}
+                        <button
+                          onClick={() => setBaseOpen((o) => !o)}
+                          disabled={!writeEnabled || busy}
+                          className="text-[11px] px-1.5 py-1 rounded-r-lg"
+                          style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", opacity: (!writeEnabled || busy) ? 0.5 : 1 }}
+                          title={`Merging from ${branch.base} — pick a different base`}>▾</button>
+                        {baseOpen && (
+                          <div className="absolute right-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
+                            style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 260, maxHeight: 320, overflow: "hidden" }}>
+                            <div className="px-2.5 py-1.5 t-dim2 text-[9.5px] uppercase tracking-wider shrink-0">merge into {branch.name} from…</div>
+                            <div className="agx-scroll overflow-y-auto pb-1">
+                              {branchData.branches.filter((b) => b.name !== branch.name).map((b) => (
+                                <button key={b.name} onClick={async () => {
+                                  setBaseOpen(false);
+                                  await act(() => api.gitSetBase(root, branch.name, b.name), `base set to ${b.name}`, "sync");
+                                }}
+                                  className="w-full text-left px-2.5 py-1.5 truncate"
+                                  style={{ background: b.name === branch.base ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", color: "var(--text)" }}
+                                  title={b.name}>{b.name}</button>
+                              ))}
+                              {!branchData.branches.length && <div className="px-2.5 py-2 t-dim2">open the Branches tab first</div>}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {/* Each says what it's doing while it does it. A pull over a
                         slow network is several seconds of nothing otherwise, and
                         the honest reading of that is "the button is broken". */}

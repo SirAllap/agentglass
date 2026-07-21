@@ -169,7 +169,14 @@ function branchInfo(root: string): GitBranchInfo {
     behind = Number(c[0]) || 0;
     ahead = Number(c[1]) || 0;
   }
-  return { name, upstream, ahead, behind, detached, state: treeState(root) };
+  // What this branch was cut from, and how far it has drifted — the header's
+  // "sync" affordance. Cheap and cached; nothing here is per-branch fan-out.
+  const base = detached ? null : baseOf(root, name);
+  return {
+    name, upstream, ahead, behind, detached, state: treeState(root),
+    base,
+    behindBase: base ? behindBase(root, name, base) : 0,
+  };
 }
 
 /** Full working-tree state for one repo. */

@@ -226,6 +226,9 @@ const realApi = {
   /** Merge a checkout's base branch into it — "update from base". `root` is the
    *  checkout doing the updating, since the merge runs where the branch is. */
   gitSyncBase: (root: string, base?: string) => post<GitActionResult>("/git/sync-base", { root, base }),
+  /** Remember which branch this one was cut from. Written to the repo's own
+   *  config, so it survives restarts and is readable with plain `git config`. */
+  gitSetBase: (root: string, branch: string, base: string | null) => post<GitActionResult>("/git/set-base", { root, branch, base }),
   // --- live docker panel (lazydocker-style) ---
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
@@ -338,6 +341,7 @@ const demoApi: typeof realApi = {
   gitReset: (_root: string, _ref: string, _mode: "soft" | "mixed" | "hard") => D(demo.gitActionUnavailable()),
   gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean) => D(demo.gitActionUnavailable()),
   gitSyncBase: (_root: string, _base?: string) => D(demo.gitActionUnavailable()),
+  gitSetBase: (_root: string, _branch: string, _base: string | null) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),

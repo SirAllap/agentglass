@@ -380,6 +380,11 @@ export interface GitBranchInfo {
   detached: boolean;
   /** Absent on older payloads; treat as "clean". */
   state?: GitTreeState;
+  /** The branch this one was cut from — what a PR calls its base. Null on the
+   *  trunk itself. Merging it in is "update from base". */
+  base?: string | null;
+  /** Commits the base has that this branch does not. */
+  behindBase?: number;
 }
 export interface WorkingTree {
   root: string;
