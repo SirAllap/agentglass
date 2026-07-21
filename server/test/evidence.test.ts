@@ -28,6 +28,13 @@ const call = (over: Partial<OpenToolCall> = {}): OpenToolCall => ({
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-evidence-"));
   process.env.AGENTGLASS_ROOT = dir;
+  // A database of its own, and a config directory of its own. Without them this
+  // suite reads whatever the machine already has: on a fresh CI checkout that is
+  // nothing and every assertion holds, while on any developer's machine the real
+  // database answers first and the same three tests fail. A test that only passes
+  // where there is no history is not testing what it claims to.
+  process.env.AGENTGLASS_DB = join(dir, "evidence.db");
+  process.env.XDG_CONFIG_HOME = dir;
   transcript = join(dir, "session.jsonl");
   target = join(dir, "target.ts");
   writeFileSync(transcript, "{}\n");
