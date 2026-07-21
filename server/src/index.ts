@@ -339,7 +339,11 @@ const server = Bun.serve<WsData>({
     }
 
     // --- health ---
-    if (pathname === "/health") return json({ ok: true, clients: clients.size, notifyWatching: notifyWatching() });
+    // `service` is the identity marker: the desktop shell probes :4000 before
+    // spawning its sidecar, and "answers 200" is not the same as "is us". Any
+    // other local dev server squatting the port answers 200 too, and adopting
+    // it pointed the whole cockpit at a stranger's API. See electron/main.js.
+    if (pathname === "/health") return json({ ok: true, service: "agentglass", clients: clients.size, notifyWatching: notifyWatching() });
 
     // --- ingest ---
     if (pathname === "/ingest" && req.method === "POST") {

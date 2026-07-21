@@ -40,7 +40,13 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-const SERVER_PORT = Number(process.env.AGENTGLASS_PORT || 4000);
+// Where the sidecar is asked to listen. Resolved at startup (see pickPort) --
+// the preferred port is only the first candidate, not a promise.
+const PREFERRED_PORT = Number(process.env.AGENTGLASS_PORT || 4000);
+// How far to walk when the preferred port is taken by something that is not us.
+const PORT_CANDIDATES = 8;
+let SERVER_PORT = PREFERRED_PORT;
+let apiOrigin = `http://127.0.0.1:${SERVER_PORT}`;
 
 // Paths differ between `electron .` (repo checkout) and a packaged app, where
 // electron-builder copies web/dist and the compiled sidecar into resources/.
@@ -84,24 +90,79 @@ function serveApp() {
   });
 }
 
-function health() {
+/**
+ * What is answering on a port: our server, someone else's, or nothing.
+ *
+ * "Answers 200" is NOT proof it is us, and treating it as proof is a bug with
+ * teeth: a machine that autostarts any other local dev server on :4000 -- an
+ * observability server, an API stub, anything -- handed agentglass a stranger,
+ * which the shell then adopted. Every panel fetched from it, got whatever it
+ * says, and the app came up empty ("no repos found") with no error anywhere.
+ * That is why /health names itself and why this reads the body.
+ */
+function probe(port, timeoutMs = 1000) {
   return new Promise((resolve) => {
-    const req = http.get(`http://127.0.0.1:${SERVER_PORT}/health`, (r) => {
-      resolve(r.statusCode === 200);
-      r.resume();
+    const req = http.get(`http://127.0.0.1:${port}/health`, (r) => {
+      if (r.statusCode !== 200) { r.resume(); return resolve("foreign"); }
+      let body = "";
+      r.setEncoding("utf8");
+      // Bounded: a foreign server may stream something enormous at us.
+      r.on("data", (c) => { body += c; if (body.length > 4096) req.destroy(); });
+      r.on("end", () => {
+        try {
+          const j = JSON.parse(body);
+          // `service` is the marker; the shape check keeps a sidecar built
+          // before that field existed adoptable rather than orphaned.
+          const ours = j.service === "agentglass" || (j.ok === true && typeof j.clients === "number");
+          resolve(ours ? "ours" : "foreign");
+        } catch { resolve("foreign"); }
+      });
+      r.on("error", () => resolve("foreign"));
     });
-    req.on("error", () => resolve(false));
-    req.setTimeout(1000, () => { req.destroy(); resolve(false); });
+    req.on("error", () => resolve("free")); // refused == nothing listening
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve("foreign") });
   });
 }
 
-async function ensureServer() {
-  if (await health()) return; // a dev server or another instance is already up
+/**
+ * Pick the port to talk to: ours if one is already up, else the first free one.
+ *
+ * Probed in parallel, so this costs one round trip on loopback rather than one
+ * per candidate -- it runs before the window opens and must not be felt.
+ */
+async function pickPort() {
+  const ports = Array.from({ length: PORT_CANDIDATES }, (_, i) => PREFERRED_PORT + i);
+  const states = await Promise.all(ports.map((p) => probe(p, 400)));
+  const ours = ports.find((_, i) => states[i] === "ours");
+  if (ours !== undefined) return { port: ours, adopt: true };
+  const free = ports.find((_, i) => states[i] === "free");
+  // Everything taken by strangers is not a state worth guessing around: fall
+  // back to the preferred port and let the sidecar report the bind failure.
+  return { port: free ?? PREFERRED_PORT, adopt: false };
+}
+
+/** Settle the API origin. Must finish before the window opens -- the renderer
+ *  reads it synchronously at module load and cannot be told again later. */
+async function resolvePort() {
+  const { port, adopt } = await pickPort();
+  SERVER_PORT = port;
+  apiOrigin = `http://127.0.0.1:${port}`;
+  if (port !== PREFERRED_PORT) {
+    console.log(`[agentglass] :${PREFERRED_PORT} is in use by another app; using :${port}. ` +
+      `Hooks posting to :${PREFERRED_PORT} need AGENTGLASS_SERVER=${apiOrigin}.`);
+  }
+  return adopt;
+}
+
+async function ensureServer(adopt) {
+  const port = SERVER_PORT;
+  if (adopt) return; // a dev server or another instance is already up
+  const env = { ...process.env, AGENTGLASS_PORT: String(port) };
   sidecar = PACKAGED
-    ? spawn(SIDECAR_BIN, [], { stdio: "ignore" })
-    : spawn("bun", ["run", path.join(REPO, "server", "src", "index.ts")], { stdio: "ignore" });
+    ? spawn(SIDECAR_BIN, [], { stdio: "ignore", env })
+    : spawn("bun", ["run", path.join(REPO, "server", "src", "index.ts")], { stdio: "ignore", env });
   for (let i = 0; i < 40; i++) {
-    if (await health()) return;
+    if ((await probe(port)) === "ours") return;
     await new Promise((r) => setTimeout(r, 300));
   }
 }
@@ -158,8 +219,19 @@ function createWindow() {
   win.loadURL(`${APP_ORIGIN}/`);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   serveApp();
+  // Synchronous on purpose: the preload publishes `apiOrigin` as a plain value
+  // because web/src/lib/api.ts reads it while its module body runs, before any
+  // promise could resolve. Safe because the port is settled just below, before
+  // any window (and therefore any preload) exists.
+  ipcMain.on("ag:apiOrigin", (e) => { e.returnValue = apiOrigin; });
+
+  // Which port, decided before the window — the renderer bakes the origin in at
+  // load and there is no second chance to correct it. This is a parallel round
+  // trip on loopback (~ms), not the sidecar boot the comment below is about.
+  const adopt = await resolvePort();
+
   // The window does not wait for the server.
   //
   // It used to: `await ensureServer()` sat between ready and createWindow, so
@@ -174,7 +246,7 @@ app.whenReady().then(() => {
   // backoff and every panel's fetch has a retry or an honest loading state. So
   // the window comes up first and the server arrives underneath it.
   createWindow();
-  void ensureServer();
+  void ensureServer(adopt);
 });
 
 /**
