@@ -52,7 +52,7 @@ import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } f
 import { workspaceRoot, setWorkspaceRoot, inScope, CONFIG_PATH } from "./config.ts";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
-import { updateStatus, startUpdate, updateLog } from "./selfupdate.ts";
+import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
@@ -536,6 +536,12 @@ const server = Bun.serve<WsData>({
     if (pathname === "/update/status") {
       if (!desktopOnly(req)) return csrfBlocked();
       return json(updateStatus());
+    }
+    // What changed in the release this build came from. Same desktop-only gate
+    // as the rest of /update: the build's origin and tag are in the answer.
+    if (pathname === "/update/notes") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      return json(await releaseNotes(url.searchParams.get("tag") || undefined));
     }
     if (pathname === "/update/log") {
       if (!desktopOnly(req)) return csrfBlocked();
