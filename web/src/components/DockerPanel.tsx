@@ -28,6 +28,39 @@ function Bar({ pct, tint }: { pct: number; tint: string }) {
   );
 }
 
+/**
+ * Container logs, coloured by what each line is.
+ *
+ * Monochrome output is a wall: the one ERROR you opened the panel for sits in
+ * three hundred identical grey lines. This is a level pass, not a syntax
+ * highlighter — the structure that matters in a log is severity and time, and
+ * a tokeniser would spend far more to say less.
+ *
+ * Timestamps are dimmed rather than dropped: they are the one column you scan
+ * by, and at full contrast they compete with the message they belong to.
+ */
+const LEVEL_TINT: [RegExp, string][] = [
+  [/\b(ERROR|ERR|FATAL|CRITICAL|PANIC|Traceback|Exception)\b/, "var(--error)"],
+  [/\b(WARN|WARNING|DeprecationWarning|FutureWarning)\b/, "var(--warning)"],
+  [/\b(INFO|NOTICE)\b/, "var(--info)"],
+  [/\b(DEBUG|TRACE)\b/, "var(--text3)"],
+];
+// Leading ISO-ish stamp, which is what docker prepends with --timestamps.
+const STAMP = /^(\S*\d{4}-\d{2}-\d{2}[T ][\d:.]+Z?)\s?/;
+
+function LogLine({ line }: { line: string }) {
+  const m = STAMP.exec(line);
+  const stamp = m?.[1];
+  const rest = stamp ? line.slice(m![0].length) : line;
+  const tint = LEVEL_TINT.find(([re]) => re.test(rest))?.[1];
+  return (
+    <div style={tint ? { color: tint } : undefined}>
+      {stamp && <span style={{ color: "var(--text4)", opacity: 0.55 }}>{stamp} </span>}
+      {rest}
+    </div>
+  );
+}
+
 function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction }: {
   c: DockerContainer; stat?: DockerStat; active: boolean; writeEnabled: boolean; busy: boolean;
   onSelect: () => void; onAction: (verb: "start" | "stop" | "restart" | "rm") => void;
@@ -290,7 +323,9 @@ export function DockerView({ active }: { active: boolean }) {
                             </div>
                           </div>
                           {tab === "logs" ? (
-                            <pre ref={logRef} onScroll={(e) => { const el = e.currentTarget; stuckBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 28; }} className="agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre-wrap break-all" style={{ ...CODE_FONT_STYLE, background: "var(--bg)", color: "var(--text2)" }}>{logs || "…"}</pre>
+                            <pre ref={logRef} onScroll={(e) => { const el = e.currentTarget; stuckBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 28; }} className="agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre-wrap break-all" style={{ ...CODE_FONT_STYLE, background: "var(--bg)", color: "var(--text2)" }}>{logs
+                              ? logs.split("\n").map((l, i) => <LogLine key={i} line={l} />)
+                              : "…"}</pre>
                           ) : (
                             <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4 text-[11.5px] space-y-1.5" style={{ color: "var(--text2)" }}>
                               {[["Name", selected.name], ["Id", selected.id], ["Image", selected.image], ["State", selected.state], ["Status", selected.status], ["Ports", selected.ports || "—"], ["Compose project", selected.project || "—"], ["Service", selected.service || "—"], ["Uptime", selected.runningFor]].map(([k, v]) => (

@@ -197,6 +197,15 @@ function NoteIcon({ kind }: { kind: NoteKind }) {
   return <svg {...p}><path d="M12 4v11M6 11l6 6 6-6" /><path d="M4.5 20h15" /></svg>; // pull: a download arrow
 }
 
+/** Commits going the other way — the mirror of the pull arrow. */
+function PushIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20V9M6 13l6-6 6 6" /><path d="M4.5 4h15" />
+    </svg>
+  );
+}
+
 /** A chat waiting on you. Its own glyph rather than a coloured dot, so the
  *  three left-hand pills are told apart by shape and not only by hue. */
 function ChatIcon() {
@@ -215,9 +224,11 @@ function ChatIcon() {
  * finished chats does not fire three stale toasts. Those show as the resting
  * pill; a toast means "this just happened, while you were looking away".
  */
-function useNotes(): { note: Note | null; behind: number } {
+function useNotes(): { note: Note | null; behind: number; ahead: number } {
   const [note, setNote] = useState<Note | null>(null);
   const [behind, setBehind] = useState(0);
+  /** Commits that exist only on this machine. */
+  const [ahead, setAhead] = useState(0);
   const queue = useRef<Note[]>([]);
   const showing = useRef(false);
 
@@ -289,8 +300,10 @@ function useNotes(): { note: Note | null; behind: number } {
         const { repos } = await api.gitRepos();
         if (dead) return;
         let total = 0;
+        let mine = 0;
         for (const r of repos) {
           total += r.behind;
+          mine += r.ahead;
           const prev = seen.get(r.root) ?? 0;
           seen.set(r.root, r.behind);
           if (!first && r.behind > prev) {
@@ -299,6 +312,7 @@ function useNotes(): { note: Note | null; behind: number } {
           }
         }
         setBehind(total);
+        setAhead(mine);
         first = false;
       } catch { /* offline or no repos -- the pill just stays put */ }
     };
@@ -312,7 +326,7 @@ function useNotes(): { note: Note | null; behind: number } {
     return () => { dead = true; clearInterval(id); off(); };
   }, []);
 
-  return { note, behind };
+  return { note, behind, ahead };
 }
 
 // ---------------------------------------------------------------------------
@@ -384,7 +398,7 @@ function HistoryRow({ n, onGone }: { n: SystemNote; onGone: () => void }) {
 
 export function DynamicIsland() {
   const clock = useClock();
-  const { note, behind } = useNotes();
+  const { note, behind, ahead } = useNotes();
 
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
   const waiting = useSyncExternalStore(subscribeChats, () => listChats().reduce((n, c) => n + (c.attention !== "none" ? 1 : 0), 0), () => 0);
@@ -393,7 +407,7 @@ export function DynamicIsland() {
   useEffect(() => subscribeUsage(setU), []);
   const rateLimited = !u?.available && usageError()?.includes("429");
 
-  const anyLive = shells > 0 || waiting > 0 || behind > 0;
+  const anyLive = shells > 0 || waiting > 0 || behind > 0 || ahead > 0;
 
   // The inbox behind the strip. Clicking the notch opens it, which is also
   // what finally gives the notch a reason to take a click at all.
@@ -502,6 +516,16 @@ export function DynamicIsland() {
                 <Pill cap="WAITING" title={`${waiting} chat${waiting === 1 ? "" : "s"} finished or waiting on you`}>
                   <span style={{ color: "var(--warning)", display: "flex" }}><ChatIcon /></span>
                   <span className="agx-val" style={{ color: "var(--warning)" }}>{waiting}</span>
+                </Pill>
+              )}
+              {/* Work that exists only here. It had no indicator at all: a
+                  branch you have committed to and not pushed looked exactly
+                  like one with nothing outstanding, and that is the state
+                  where losing a laptop costs you the work. */}
+              {ahead > 0 && (
+                <Pill cap="TO PUSH" title={`${ahead} commit${ahead === 1 ? "" : "s"} committed here and not pushed anywhere`}>
+                  <span style={{ color: "var(--success)", display: "flex" }}><PushIcon /></span>
+                  <span className="agx-val" style={{ color: "var(--success)" }}>{ahead}</span>
                 </Pill>
               )}
               {behind > 0 && (
