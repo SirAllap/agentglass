@@ -618,7 +618,19 @@ const server = Bun.serve<WsData>({
 
     // --- live docker panel (lazydocker-style) ---
     if (pathname === "/docker/overview") return json(await dockerOverview());
-    if (pathname === "/docker/stats") return json({ stats: await dockerStats() });
+    if (pathname === "/docker/stats") {
+      // Sample what the panel is showing. The overview is cached and scoped, so
+      // this costs nothing extra and keeps the two answers about the same set of
+      // containers — a scoped panel asking the daemon about the whole host was
+      // the inconsistency worth removing.
+      // Running and paused: those are the states `docker stats` has numbers for.
+      // A restarting container is deliberately left out — it is between processes
+      // often enough that naming it can take the whole sample down with a "no such
+      // container", and it has nothing to report either way.
+      const shown = await dockerOverview();
+      const sampleable = shown.containers.filter((c) => c.state === "running" || c.state === "paused").map((c) => c.id);
+      return json({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
+    }
     if (pathname === "/docker/inspect") return json(dockerInspect(url.searchParams.get("id") || ""));
     if (pathname === "/docker/top") return json(dockerTop(url.searchParams.get("id") || ""));
     if (pathname === "/docker/logs") {

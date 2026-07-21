@@ -69,27 +69,11 @@ export async function dockerVersion(): Promise<string | null> {
   return cachedVersion;
 }
 
-function parseLabels(s: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const kv of (s || "").split(",")) {
-    const i = kv.indexOf("=");
-    if (i > 0) out[kv.slice(0, i)] = kv.slice(i + 1);
-  }
-  return out;
-}
-
 // Every field is named explicitly instead of using `{{json .}}`, which looks
 // equivalent but silently includes `Size` — and asking for a container's size
 // makes the daemon walk its filesystem layers. That one field took this call
 // from 19ms to 4.9s here, on a poll, blocking every other request behind it.
 // The panel doesn't show per-container size, so it isn't requested.
-const PS_FIELDS = ["ID", "Names", "Image", "State", "Status", "Ports", "Labels", "RunningFor"] as const;
-// Tab-separated, not hand-built JSON. Interpolating values straight into a JSON
-// template looked equivalent but isn't: a container whose name, image or labels
-// contain a quote or a backslash produces invalid JSON, and jsonLines() drops
-// the row silently — the container vanishes from the panel with no error. Real
-// labels do this (a cloudflared image here embeds a JSON blob in one).
-const PS_FORMAT = PS_FIELDS.map((f) => `{{.${f}}}`).join("\t");
 
 // --- project scope ----------------------------------------------------------
 // The rest of the cockpit (events, sessions, git, diffs) narrows to the open
@@ -169,33 +153,61 @@ export function applyScope(all: ScopedContainer[], keyIn: DockerScopeKey | Docke
   return { containers: (mine.length ? mine : all).map(strip), scope };
 }
 
+// One column per field, tab-separated, and every label asked for **by name**.
+//
+// Not hand-built JSON: a container whose name, image or labels contain a quote
+// or a backslash produces invalid JSON, jsonLines() drops the row silently, and
+// the container vanishes from the panel with no error. Real labels do this (a
+// cloudflared image here embeds a JSON blob in one).
+//
+// And not `{{.Labels}}` either, which is where the labels used to come from.
+// That field is every label joined with commas and no escaping, so a value
+// containing a comma cannot be read back: `desc=a,b` splits into `desc=a` and a
+// stray `b`, and a value containing both a comma and an `=` invents a key that
+// was never on the container. Harmless-looking until you remember scoping now
+// *depends* on reading these labels correctly — a working_dir label sitting
+// next to a comma-bearing one is a container that quietly stops matching its
+// own project. `{{.Label "x"}}` asks the daemon for one label and gets its value
+// verbatim, which sidesteps the ambiguity rather than trying to parse it.
+const PS_COLUMNS = [
+  ["id", "{{.ID}}"],
+  ["name", "{{.Names}}"],
+  ["image", "{{.Image}}"],
+  ["state", "{{.State}}"],
+  ["status", "{{.Status}}"],
+  ["ports", "{{.Ports}}"],
+  ["runningFor", "{{.RunningFor}}"],
+  ["project", `{{.Label "com.docker.compose.project"}}`],
+  ["service", `{{.Label "com.docker.compose.service"}}`],
+  ["workingDir", `{{.Label "${WORKING_DIR_LABEL}"}}`],
+] as const;
+const PS_FORMAT = PS_COLUMNS.map(([, tmpl]) => tmpl).join("\t");
+
+/** One `docker ps` line to a container. Exported for the tests: the interesting
+ *  failures here are label values that a joined-and-split format destroys. */
+export function parsePsLine(line: string): ScopedContainer | null {
+  if (!line.trim()) return null;
+  const parts = line.split("\t");
+  const col = (name: string) => parts[PS_COLUMNS.findIndex(([n]) => n === name)] ?? "";
+  return {
+    id: col("id").slice(0, 12),
+    name: col("name"),
+    image: col("image"),
+    state: col("state").toLowerCase(),
+    status: col("status"),
+    ports: col("ports"),
+    project: col("project") || null,
+    service: col("service") || null,
+    workingDir: col("workingDir") || null,
+    runningFor: col("runningFor"),
+    size: "",
+  };
+}
+
 async function containers(): Promise<ScopedContainer[]> {
   const r = await dockerAsync(["ps", "--all", "--no-trunc", "--format", PS_FORMAT]);
   if (r.code !== 0) return [];
-  const rows: Record<string, string>[] = [];
-  for (const line of r.stdout.split("\n")) {
-    if (!line.trim()) continue;
-    const parts = line.split("\t");
-    const row: Record<string, string> = {};
-    PS_FIELDS.forEach((f, i) => { row[f] = parts[i] ?? ""; });
-    rows.push(row);
-  }
-  return rows.map((c) => {
-    const labels = parseLabels(c.Labels || "");
-    return {
-      id: (c.ID || "").slice(0, 12),
-      name: c.Names || "",
-      image: c.Image || "",
-      state: (c.State || "").toLowerCase(),
-      status: c.Status || "",
-      ports: c.Ports || "",
-      project: labels["com.docker.compose.project"] || null,
-      service: labels["com.docker.compose.service"] || null,
-      workingDir: labels[WORKING_DIR_LABEL] || null,
-      runningFor: c.RunningFor || "",
-      size: c.Size || "",
-    };
-  });
+  return r.stdout.split("\n").map(parsePsLine).filter((c): c is ScopedContainer => !!c);
 }
 
 async function images(): Promise<DockerImage[]> {
@@ -258,7 +270,7 @@ export async function overview(): Promise<DockerOverview> {
 
 const pct = (s?: string) => { const n = parseFloat((s || "").replace("%", "")); return Number.isFinite(n) ? n : 0; };
 
-let statsCache: { at: number; data: DockerStat[] } | null = null;
+let statsCache: { at: number; key: string; data: DockerStat[] } | null = null;
 /** Long enough that a 5s poll never lands on a cold cache twice in a row. */
 const STATS_TTL_MS = 4000;
 
@@ -275,10 +287,29 @@ const STATS_TTL_MS = 4000;
  * close enough to continuous that two clients would otherwise keep one running
  * permanently.
  */
-export async function stats(): Promise<DockerStat[]> {
-  if (statsCache && Date.now() - statsCache.at < STATS_TTL_MS) return statsCache.data;
-  const r = await dockerAsync(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"], 12000);
-  if (r.code !== 0) return [];
+export async function stats(ids?: string[]): Promise<DockerStat[]> {
+  // Sample the containers the panel is showing, not the machine.
+  //
+  // `docker stats` with no arguments samples every running container on the
+  // host, and the panel then threw away the ones it had already decided not to
+  // show. That is work the daemon does on a five-second poll, growing with
+  // everything else running on the machine and having nothing to do with this
+  // project — and a panel that has scoped itself is still touching containers
+  // it scoped out, which is the part that shouldn't be true.
+  //
+  // An explicitly empty list means "nothing in scope is running", and the right
+  // number of daemon round-trips for that is zero. `undefined` still means the
+  // whole host, so a caller with no scope to offer keeps the old behaviour.
+  const targets = ids ? [...new Set(ids)].filter((id) => ID_RE.test(id)) : null;
+  if (targets && !targets.length) return [];
+  const key = targets ? targets.join(",") : "*";
+  if (statsCache && statsCache.key === key && Date.now() - statsCache.at < STATS_TTL_MS) return statsCache.data;
+  const r = await dockerAsync(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}", ...(targets ?? [])], 12000);
+  // A container removed between the overview and this call takes the whole
+  // command down with it ("No such container"). Falling back to the host sample
+  // costs one extra round-trip on a rare race and keeps the panel populated,
+  // which beats blanking every gauge until the next poll.
+  if (r.code !== 0) return targets ? stats() : [];
   const data = jsonLines(r.stdout).map((s) => ({
     id: (s.ID || "").slice(0, 12),
     cpu: pct(s.CPUPerc),
@@ -288,7 +319,7 @@ export async function stats(): Promise<DockerStat[]> {
     blockIO: s.BlockIO || "",
     pids: parseInt(s.PIDs || "0", 10) || 0,
   }));
-  statsCache = { at: Date.now(), data };
+  statsCache = { at: Date.now(), key, data };
   return data;
 }
 
