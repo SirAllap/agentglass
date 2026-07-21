@@ -17,6 +17,7 @@ import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
+import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId } from "../lib/keybindings.ts";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
   return (
@@ -121,6 +122,37 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/**
+ * One rebindable shortcut.
+ *
+ * Capturing is a mode rather than a text field: you press the key you want,
+ * which is the only input method that cannot disagree with what will actually
+ * fire. `keydown` on the window during capture, so the key never reaches the
+ * app's own handler and rebinding `t` does not also open the terminal.
+ */
+function KeyRow({ id, keyName, capturing, onCapture, error }: {
+  id: ActionId; keyName: string; capturing: boolean; onCapture: () => void; error: string | null;
+}) {
+  const { label, hint } = LABELS[id];
+  return (
+    <button onClick={onCapture}
+      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-white/5">
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="block text-[10.5px] mt-0.5" style={{ color: error ? "var(--error)" : undefined }}>
+          <span className={error ? "" : "t-dim2"}>{error ?? hint}</span>
+        </span>
+      </span>
+      <kbd className="chip text-[10px] shrink-0 tabular-nums"
+        style={capturing
+          ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
+          : { color: "var(--text2)" }}>
+        {capturing ? "press a key…" : keyName === " " ? "space" : keyName}
+      </kbd>
+    </button>
+  );
+}
+
 export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp }: {
   open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
   scale: number; onZoom: (dir: 1 | -1 | 0) => void;
@@ -139,6 +171,28 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
   const [h24, setH24] = useState<boolean>(() => clock24());
+  const [keys, setKeys] = useState(() => bindings());
+  const [capturing, setCapturing] = useState<ActionId | null>(null);
+  const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
+  useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
+
+  // While capturing, this window handler runs first and swallows the key, so
+  // rebinding "t" cannot also trigger whatever "t" is currently bound to.
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setCapturing(null); setKeyError(null); return; }
+      // Modifiers alone are not a binding; wait for the real key.
+      if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+      const r = rebind(capturing, e.key);
+      if (r.ok) { setCapturing(null); setKeyError(null); }
+      else setKeyError({ id: capturing, msg: r.error });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturing]);
   const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
   useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
@@ -218,6 +272,28 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         { v: "titles", label: "Who" },
                         { v: "full", label: "Full" },
                       ]} />
+                  </Section>
+
+                  <Section title="Shortcuts">
+                    {(Object.keys(DEFAULTS) as ActionId[]).map((id) => (
+                      <KeyRow key={id} id={id} keyName={keys[id]}
+                        capturing={capturing === id}
+                        error={keyError?.id === id ? keyError.msg : null}
+                        onCapture={() => { setKeyError(null); setCapturing((c) => (c === id ? null : id)); }} />
+                    ))}
+                    <div className="px-3 pt-1 pb-1 flex items-center gap-3">
+                      <span className="text-[10px] t-dim2 flex-1">
+                        {/* Says why the rest of the keyboard is not on this list. */}
+                        Only the single-key shortcuts. {MOD_KEY}1–5, {MOD_KEY}\\ and {MOD_KEY}K are fixed — they are the ones that still work while you are typing.
+                      </span>
+                      {isCustomised() && (
+                        <button onClick={() => { resetBindings(); setKeyError(null); setCapturing(null); }}
+                          className="text-[10.5px] px-2 py-1 rounded-lg shrink-0"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          reset to defaults
+                        </button>
+                      )}
+                    </div>
                   </Section>
 
                   <Section title="Open">
