@@ -7,7 +7,7 @@ import type { DockerOverview, DockerContainer, DockerStat } from "../../../share
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
-import { ConsoleStrip, lastTerminalRoot } from "./TerminalPanel.tsx";
+import { ConsoleStrip, lastTerminalRoot, runInConsole } from "./TerminalPanel.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 
@@ -81,8 +81,50 @@ function DockerAction({ onClick, disabled, tint, title, children }: {
   );
 }
 
-function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction }: {
+
+/**
+ * One section of the stacked left column.
+ *
+ * The header stays put whether or not the body is open, which is the whole
+ * point: tabs hid the fact that there were images at all until you went
+ * looking, and "is anything dangling?" should be answerable without leaving the
+ * container you are watching.
+ */
+function Stack({ id, label, n, open, active, onToggle, onActivate, children }: {
+  id: View; label: string; n: number; open: boolean; active: boolean;
+  onToggle: (id: View) => void; onActivate: (id: View) => void; children: React.ReactNode;
+}) {
+  return (
+    <div className="mb-1 shrink-0">
+      <button
+        onClick={() => { onActivate(id); onToggle(id); }}
+        className="w-full flex items-center gap-2 px-2.5 py-1 sticky top-0 z-20 text-left"
+        style={{ background: "var(--bg2)", borderLeft: `2px solid ${active ? "var(--primary)" : "transparent"}` }}
+        aria-expanded={open}>
+        <span className="text-[8px] t-dim2 w-2 shrink-0">{open ? "▾" : "▸"}</span>
+        <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{label}</span>
+        <span className="text-[9px] t-dim2 tabular-nums">{n}</span>
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
+/** A one-line entry in the sections that are not containers. */
+function StackRow({ label, meta, dim, onClick }: { label: string; meta?: string; dim?: boolean; onClick: () => void }) {
+  return (
+    <div onClick={onClick} title={label}
+      className="flex items-center gap-2 pl-6 pr-2 py-[3px] cursor-pointer rounded-md"
+      style={{ opacity: dim ? 0.5 : 1 }}>
+      <span className="min-w-0 flex-1 truncate text-[10.5px]" style={{ color: "var(--text2)" }}>{label}</span>
+      {meta && <span className="text-[9px] t-dim2 shrink-0 tabular-nums">{meta}</span>}
+    </div>
+  );
+}
+
+function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, onAction }: {
   c: DockerContainer; stat?: DockerStat; active: boolean; writeEnabled: boolean; busy: boolean;
+  dense: boolean;
   onSelect: () => void; onAction: (verb: "start" | "stop" | "restart" | "rm") => void;
 }) {
   const running = c.state === "running";
@@ -91,7 +133,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
   const port = /(\d+)->/.exec(c.ports || "")?.[1];
   return (
     <div onClick={onSelect} data-cid={active ? "active" : undefined}
-      className="group grid items-center gap-x-2 pl-2 pr-1.5 py-1 rounded-md cursor-pointer"
+      className={`group grid items-center gap-x-2 pl-2 pr-1.5 rounded-md cursor-pointer ${dense ? "py-[2px]" : "py-1"}`}
       // A grid, not a flex row: every container's numbers line up in the same
       // columns, which is what makes a list of twelve scannable instead of
       // twelve individually-arranged lines. lazydocker does the same.
@@ -106,8 +148,9 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
         <span className="truncate text-[11.5px]" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{c.service || c.name}</span>
         {/* The image was competing with the name on one line and both lost.
             Underneath, dimmer, it reads as what it is — provenance, not
-            identity. */}
-        <span className="truncate text-[9px] t-dim2">{c.image}</span>
+            identity. In dense mode it goes back to the tooltip, which is the
+            trade: half the rows, one less thing per row. */}
+        {!dense && <span className="truncate text-[9px] t-dim2">{c.image}</span>}
       </span>
 
       {/* Numbers, not two unlabelled bars. A bar with no scale and no figure
@@ -151,6 +194,57 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, onSelect, onAction 
  *  stays mounted while you're off in the diff, it just stops polling. */
 const CONSOLE_KEY = "agentglass.docker.console";
 
+type DetailTab = "logs" | "info" | "env" | "config" | "top";
+const DETAIL_TABS: DetailTab[] = ["logs", "info", "env", "config", "top"];
+
+const SECTIONS_KEY = "agentglass.docker.sections";
+// Containers open, the rest closed: with 40 images the column is unusable if
+// everything starts expanded, and the counts on the headers already answer the
+// question most of the time.
+const SECTIONS_DEFAULT: Record<View, boolean> = { containers: true, images: false, volumes: false, networks: false };
+
+const DENSITY_KEY = "agentglass.docker.dense";
+
+
+/**
+ * Env, config and top — the read-only tabs.
+ *
+ * Env is rendered as key/value rather than the raw `KEY=value` strings docker
+ * hands back, because the value is the part you are looking for and it is
+ * routinely a URL long enough to hide the name it belongs to.
+ */
+function DetailPane({ tab, env, config, top, error }: {
+  tab: "env" | "config" | "top";
+  env: string[] | null; config: string | null; top: string | null; error: string | null;
+}) {
+  if (error) return <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{error}</div>;
+  const text = tab === "config" ? config : tab === "top" ? top : null;
+  if (tab !== "env" && text == null) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
+  if (tab === "env") {
+    if (!env) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
+    if (!env.length) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]">this container has no environment set</div>;
+    return (
+      <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4 text-[11px] flex flex-col gap-1" style={{ color: "var(--text2)" }}>
+        {env.map((line, i) => {
+          const eq = line.indexOf("=");
+          const k = eq === -1 ? line : line.slice(0, eq);
+          const v = eq === -1 ? "" : line.slice(eq + 1);
+          return (
+            <div key={i} className="flex gap-3 min-w-0">
+              <span className="shrink-0 tabular-nums" style={{ color: "var(--primary-hover)", minWidth: 180 }}>{k}</span>
+              <span className="min-w-0 break-all" style={{ color: "var(--text)" }}>{v}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  return (
+    <pre className="agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre m-0"
+      style={{ ...CODE_FONT_STYLE, background: "var(--bg)", color: "var(--text2)" }}>{text}</pre>
+  );
+}
+
 export function DockerView({ active }: { active: boolean }) {
   // A shell docked under the logs, for the `make migrate` you always end up
   // needing while watching a container. Its height is remembered and it is
@@ -165,8 +259,31 @@ export function DockerView({ active }: { active: boolean }) {
   const [ov, setOv] = useState<DockerOverview | null>(null);
   const [stats, setStats] = useState<Record<string, DockerStat>>({});
   const [view, setView] = useState<View>("containers");
+  const [openSections, setOpenSections] = useState<Record<View, boolean>>(() => {
+    try { return { ...SECTIONS_DEFAULT, ...JSON.parse(localStorage.getItem(SECTIONS_KEY) || "{}") }; }
+    catch { return SECTIONS_DEFAULT; }
+  });
+  const toggleSection = useCallback((id: View) => {
+    setOpenSections((cur) => {
+      const next = { ...cur, [id]: !cur[id] };
+      try { localStorage.setItem(SECTIONS_KEY, JSON.stringify(next)); } catch { /* non-fatal */ }
+      return next;
+    });
+  }, []);
+  // One line per container instead of two. The image drops to the tooltip,
+  // which is where it was before it got its own line, and a stack of twelve
+  // stops needing a scroll.
+  const [dense, setDense] = useState<boolean>(() => { try { return localStorage.getItem(DENSITY_KEY) === "1"; } catch { return false; } });
+  useEffect(() => { try { localStorage.setItem(DENSITY_KEY, dense ? "1" : "0"); } catch { /* non-fatal */ } }, [dense]);
   const [selId, setSelId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"logs" | "info">("logs");
+  const [tab, setTab] = useState<DetailTab>("logs");
+  // Fetched per tab rather than all at once: `top` shells out to the container
+  // and `inspect` returns a few hundred KB of JSON, and paying for both every
+  // time someone clicks a container to read its logs is the wrong trade.
+  const [env, setEnv] = useState<string[] | null>(null);
+  const [config, setConfig] = useState<string | null>(null);
+  const [top, setTop] = useState<string | null>(null);
+  const [detailErr, setDetailErr] = useState<string | null>(null);
   const [logs, setLogs] = useState("");
   const [tail, setTail] = useState(400);
   const [busy, setBusy] = useState(false);
@@ -227,6 +344,30 @@ export function DockerView({ active }: { active: boolean }) {
 
   // keep the log view pinned to the bottom.
   useEffect(() => { const el = logRef.current; if (el && stuckBottom.current) el.scrollTop = el.scrollHeight; }, [logs]);
+
+  // Cleared on selection change so a tab never shows the previous container's
+  // environment for the moment before the new one arrives — with two similar
+  // stacks that is indistinguishable from the real thing.
+  useEffect(() => { setEnv(null); setConfig(null); setTop(null); setDetailErr(null); }, [selId]);
+  useEffect(() => {
+    if (!selId) return;
+    let live = true;
+    if (tab === "env" || tab === "config") {
+      if (env && config) return;
+      void api.dockerInspect(selId).then((r) => {
+        if (!live) return;
+        if (!r.ok) { setDetailErr(r.error || "docker inspect failed"); return; }
+        setEnv(r.env); setConfig(r.config); setDetailErr(null);
+      });
+    } else if (tab === "top") {
+      void api.dockerTop(selId).then((r) => {
+        if (!live) return;
+        if (!r.ok) { setDetailErr(r.error || "not running"); setTop(null); return; }
+        setTop(r.text); setDetailErr(null);
+      });
+    }
+    return () => { live = false; };
+  }, [selId, tab, env, config]);
 
   /**
    * The same verb across a whole compose project.
@@ -297,12 +438,6 @@ export function DockerView({ active }: { active: boolean }) {
     else if (k === "s" && writeEnabled) { e.preventDefault(); doAction(selected.id, selected.state === "running" ? "stop" : "start"); }
   };
 
-  const TabBtn = ({ id, label, n }: { id: View; label: string; n: number }) => (
-    <button onClick={() => setView(id)} className="text-[10.5px] px-2 py-1 rounded-md transition-colors"
-      style={{ background: view === id ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: view === id ? "var(--text)" : "var(--text3)", border: `1px solid color-mix(in srgb, var(--border) ${view === id ? 40 : 15}%, transparent)` }}>
-      {label} <span className="tabular-nums opacity-70">{n}</span>
-    </button>
-  );
 
   return (
     <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
@@ -324,24 +459,33 @@ export function DockerView({ active }: { active: boolean }) {
                       {ov.scope.showingAll ? `no ${ov.scope.project} containers · showing all` : ov.scope.project}
                     </span>
                   )}
-                  <div className="flex items-center gap-1 ml-2">
-                    <TabBtn id="containers" label="Containers" n={containers.length} />
-                    <TabBtn id="images" label="Images" n={ov?.images.length ?? 0} />
-                    <TabBtn id="volumes" label="Volumes" n={ov?.volumes.length ?? 0} />
-                    <TabBtn id="networks" label="Networks" n={ov?.networks.length ?? 0} />
-                  </div>
+                  {/* The tabs used to live here and are now the stacked
+                      column's headers — two ways to switch the same thing, one
+                      of which hid three quarters of what docker was doing. */}
                   <div className="ml-auto flex items-center gap-1.5">
                     {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">read-only</span>}
+                    <button onClick={() => setDense((v) => !v)} title={dense ? "Show each container's image" : "Fit more containers on screen"}
+                      className="text-[10px] px-2 py-0.5 rounded-lg"
+                      style={dense
+                        ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
+                        : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+                      dense
+                    </button>
                     <button onClick={() => { loadOverview(); loadStats(); }} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
                   </div>
                 </div>
 
                 {!ov?.available ? (
                   <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{ov?.error || "connecting to docker…"}</div>
-                ) : view === "containers" ? (
+                ) : (
                   <div className="flex-1 min-h-0 flex">
-                    {/* left: containers grouped by project */}
-                    <div className="shrink-0 agx-scroll overflow-y-auto py-1" style={{ width: sidebarW }}>
+                    {/* Everything at once down the left, the way lazydocker
+                        does it: four stacked sections whose headers never
+                        leave, so you can see there are 12 images without
+                        navigating away from the container you are watching.
+                        Each collapses independently and remembers it. */}
+                    <div className="shrink-0 agx-scroll overflow-y-auto py-1 flex flex-col" style={{ width: sidebarW }}>
+                      <Stack id="containers" label="Containers" n={containers.length} open={openSections.containers} onToggle={toggleSection} active={view === "containers"} onActivate={setView}>
                       {groups.map(([proj, cs]) => (
                         <div key={proj} className="mb-1">
                           <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--bg2)" }}>
@@ -375,22 +519,71 @@ export function DockerView({ active }: { active: boolean }) {
                             </span>
                           </div>
                           <div className="px-1">
-                            {cs.map((c) => <ContainerRow key={c.id} c={c} stat={stats[c.id]} active={selected?.id === c.id} writeEnabled={writeEnabled} busy={busy} onSelect={() => { setSelId(c.id); setTab("logs"); }} onAction={(v) => doAction(c.id, v)} />)}
+                            {cs.map((c) => <ContainerRow key={c.id} c={c} stat={stats[c.id]} active={selected?.id === c.id} writeEnabled={writeEnabled} busy={busy} dense={dense} onSelect={() => { setSelId(c.id); setTab("logs"); }} onAction={(v) => doAction(c.id, v)} />)}
                           </div>
                         </div>
                       ))}
+                      </Stack>
+                      <Stack id="images" label="Images" n={ov.images.length} open={openSections.images} onToggle={toggleSection} active={view === "images"} onActivate={setView}>
+                        {ov.images.map((i) => (
+                          <StackRow key={i.id} onClick={() => setView("images")} dim={i.dangling}
+                            label={i.repository === "<none>" ? i.id.slice(0, 12) : `${i.repository}:${i.tag}`} meta={i.size} />
+                        ))}
+                      </Stack>
+                      <Stack id="volumes" label="Volumes" n={ov.volumes.length} open={openSections.volumes} onToggle={toggleSection} active={view === "volumes"} onActivate={setView}>
+                        {ov.volumes.map((v) => (
+                          <StackRow key={v.name} onClick={() => setView("volumes")} label={v.name} meta={v.driver} />
+                        ))}
+                      </Stack>
+                      <Stack id="networks" label="Networks" n={ov.networks.length} open={openSections.networks} onToggle={toggleSection} active={view === "networks"} onActivate={setView}>
+                        {ov.networks.map((n) => (
+                          <StackRow key={n.id} onClick={() => setView("networks")} label={n.name} meta={n.driver} />
+                        ))}
+                      </Stack>
                     </div>
                     <SidebarGrip />
-                    {/* right: detail */}
                     <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-                      {selected ? (
+                    {view !== "containers" ? (
+                      <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4">
+                        <table className="w-full text-[11px]" style={{ color: "var(--text2)" }}>
+                          <thead className="text-[9.5px] uppercase tracking-wider t-dim2 text-left">
+                            {view === "images" && <tr>{["Repository", "Tag", "Image id", "Size", "Created", "In use"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
+                            {view === "volumes" && <tr>{["Volume", "Driver"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
+                            {view === "networks" && <tr>{["Network", "Id", "Driver", "Scope"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
+                          </thead>
+                          <tbody className="tabular-nums">
+                            {view === "images" && ov.images.map((i) => (
+                              <tr key={i.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", opacity: i.dangling ? 0.55 : 1 }}>
+                                <td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{i.repository}</td><td className="py-1.5 pr-4">{i.tag}</td><td className="py-1.5 pr-4">{i.id.slice(0, 12)}</td><td className="py-1.5 pr-4">{i.size}</td><td className="py-1.5 pr-4">{i.created}</td><td className="py-1.5 pr-4">{i.containers}</td>
+                              </tr>
+                            ))}
+                            {view === "volumes" && ov.volumes.map((v) => (
+                              <tr key={v.name} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}><td className="py-1.5 pr-4 break-all" style={{ color: "var(--text)" }}>{v.name}</td><td className="py-1.5 pr-4">{v.driver}</td></tr>
+                            ))}
+                            {view === "networks" && ov.networks.map((n) => (
+                              <tr key={n.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}><td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{n.name}</td><td className="py-1.5 pr-4">{n.id}</td><td className="py-1.5 pr-4">{n.driver}</td><td className="py-1.5 pr-4">{n.scope}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : selected ? (
                         <>
                           <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                             <span className="w-2 h-2 rounded-full shrink-0" style={{ background: STATE_TINT[selected.state] ?? "var(--text3)" }} />
                             <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={selected.name}>{selected.name}</span>
                             <span className="text-[10px] t-dim2 truncate">{selected.status}</span>
                             <div className="ml-auto flex items-center gap-1">
-                              {(["logs", "info"] as const).map((t) => (
+                              {/* Runs in the console already docked below, in
+                                  the same shell you would have typed it into.
+                                  A second, container-only terminal would be a
+                                  second set of bugs for no extra reach. */}
+                              {writeEnabled && selected.state === "running" && (
+                                <button onClick={() => { setConsoleOpen(true); runInConsole(lastTerminalRoot(), `docker exec -it ${selected.id.slice(0, 12)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'`); }}
+                                  className="text-[10px] px-2 py-0.5 rounded mr-1"
+                                  style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
+                                  title={`Open a shell inside ${selected.name}`}>exec</button>
+                              )}
+                              {DETAIL_TABS.map((t) => (
                                 <button key={t} onClick={() => setTab(t)} className="text-[10px] px-2 py-0.5 rounded" style={{ background: tab === t ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: tab === t ? "var(--text)" : "var(--text3)" }}>{t}</button>
                               ))}
                               {tab === "logs" && (
@@ -401,7 +594,9 @@ export function DockerView({ active }: { active: boolean }) {
                               )}
                             </div>
                           </div>
-                          {tab === "logs" ? (
+                          {tab === "env" || tab === "config" || tab === "top" ? (
+                            <DetailPane tab={tab} env={env} config={config} top={top} error={detailErr} />
+                          ) : tab === "logs" ? (
                             <pre ref={logRef} onScroll={(e) => { const el = e.currentTarget; stuckBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 28; }} className="agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre-wrap break-all" style={{ ...CODE_FONT_STYLE, background: "var(--bg)", color: "var(--text2)" }}>{logs
                               ? logs.split("\n").map((l, i) => <LogLine key={i} line={l} />)
                               : "…"}</pre>
@@ -414,31 +609,8 @@ export function DockerView({ active }: { active: boolean }) {
                             </div>
                           )}
                         </>
-                      ) : <div className="flex-1 grid place-items-center t-dim2 text-[12px]">no containers</div>}
+                    ) : <div className="flex-1 grid place-items-center t-dim2 text-[12px]">no containers</div>}
                     </div>
-                  </div>
-                ) : (
-                  <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4">
-                    <table className="w-full text-[11px]" style={{ color: "var(--text2)" }}>
-                      <thead className="text-[9.5px] uppercase tracking-wider t-dim2 text-left">
-                        {view === "images" && <tr>{["Repository", "Tag", "Image id", "Size", "Created", "In use"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
-                        {view === "volumes" && <tr>{["Volume", "Driver"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
-                        {view === "networks" && <tr>{["Network", "Id", "Driver", "Scope"].map((h) => <th key={h} className="py-1.5 pr-4 font-semibold">{h}</th>)}</tr>}
-                      </thead>
-                      <tbody className="tabular-nums">
-                        {view === "images" && ov.images.map((i) => (
-                          <tr key={i.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", opacity: i.dangling ? 0.55 : 1 }}>
-                            <td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{i.repository}</td><td className="py-1.5 pr-4">{i.tag}</td><td className="py-1.5 pr-4">{i.id.slice(0, 12)}</td><td className="py-1.5 pr-4">{i.size}</td><td className="py-1.5 pr-4">{i.created}</td><td className="py-1.5 pr-4">{i.containers}</td>
-                          </tr>
-                        ))}
-                        {view === "volumes" && ov.volumes.map((v) => (
-                          <tr key={v.name} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}><td className="py-1.5 pr-4 break-all" style={{ color: "var(--text)" }}>{v.name}</td><td className="py-1.5 pr-4">{v.driver}</td></tr>
-                        ))}
-                        {view === "networks" && ov.networks.map((n) => (
-                          <tr key={n.id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}><td className="py-1.5 pr-4" style={{ color: "var(--text)" }}>{n.name}</td><td className="py-1.5 pr-4">{n.id}</td><td className="py-1.5 pr-4">{n.driver}</td><td className="py-1.5 pr-4">{n.scope}</td></tr>
-                        ))}
-                      </tbody>
-                    </table>
                   </div>
                 )}
 
