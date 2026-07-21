@@ -2,6 +2,16 @@
 // Delivery channels are opt-in via env:
 //   AGENTGLASS_WEBHOOK   — POST {text} to this URL (Slack/Discord-compatible)
 //   AGENTGLASS_NOTIFY=1  — run `notify-send` (Linux desktop) if available
+//
+// Both of these leave the process, and neither is guaranteed to arrive. In
+// particular `notify-send` hands the notification to the desktop's daemon,
+// which is free to hold it: with Do Not Disturb on it is queued silently and
+// the command still exits 0, so there is no failure for this file to see. That
+// is fine for "an agent errored", and not fine for a gate hold, where an agent
+// is stopped until a human answers. The durable route for those is in-app --
+// web/src/lib/gateStore.ts raises every new hold onto the notch, which no
+// desktop setting can suppress. Treat everything below as best-effort reach
+// for when nobody is looking at agentglass at all.
 import type { WatchEvent } from "../../shared/types.ts";
 
 const WEBHOOK = process.env.AGENTGLASS_WEBHOOK;
@@ -33,12 +43,21 @@ async function deliver(title: string, body: string) {
   }
   if (DESKTOP) {
     try {
-      Bun.spawn(["notify-send", "-u", "critical", "--", title, body], { stdout: "ignore" });
-    } catch {
-      /* notify-send not installed — ignore */
+      Bun.spawn(["notify-send", "-a", "agentglass", "-u", "critical", "--", title, body], { stdout: "ignore" });
+    } catch (e) {
+      // Said once, not on every alert: the cause is a missing binary, so it
+      // will be just as true the next thousand times and the log is the only
+      // place anyone would find out. Silence here used to make "notify-send is
+      // not installed" look exactly like "your ping was delivered".
+      if (!warnedNoNotifySend) {
+        warnedNoNotifySend = true;
+        console.warn("[alerts] AGENTGLASS_NOTIFY=1 but notify-send could not be run:", e);
+      }
     }
   }
 }
+
+let warnedNoNotifySend = false;
 
 /** A tool call is being held at the control-plane gate — ping the human. */
 export function pushGate(agent: string, tool: string, summary: string) {
