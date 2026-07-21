@@ -13,9 +13,19 @@ import type { OpenToolCall } from "../../shared/types.ts";
  */
 let dir: string, transcript: string, target: string, ev: typeof import("../src/evidence.ts");
 
-/** Sessions the fixture transcript belongs to. Registered in the same table the
- *  scanner writes, since that is what the lookup reads. */
-const SESSION = "sess-alive";
+/**
+ * The session the fixture transcript belongs to, registered in the same table
+ * the scanner writes, since that is what the lookup reads.
+ *
+ * Minted per run rather than fixed. db.ts binds its file at import and the
+ * first suite to import it decides that file for the whole process, so in a
+ * full `bun test` this one can land on the developer's real database — where
+ * every previous run of this test has left a row pointing at a temp directory
+ * that no longer exists. The lookup takes the newest row for the session, hands
+ * back a deleted path, and the evidence this file is about reads as "none".
+ * A fresh id cannot collide with its own history.
+ */
+const SESSION = `sess-alive-${crypto.randomUUID().slice(0, 8)}`;
 
 const call = (over: Partial<OpenToolCall> = {}): OpenToolCall => ({
   session_id: SESSION,
@@ -50,7 +60,16 @@ beforeAll(async () => {
   ev = await import("../src/evidence.ts");
 });
 
-afterAll(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ } });
+afterAll(async () => {
+  // Take the fixture row out again. On a machine where the temp database above
+  // did not win, this row lands in the real one, and a test that leaves debris
+  // in the database it borrowed is a test that breaks the next run.
+  try {
+    const { db } = await import("../src/db.ts");
+    db.query("DELETE FROM transcript_files WHERE session_id = ?").run(SESSION);
+  } catch { /* nothing to clean */ }
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
+});
 
 /** Backdate a file, so "fresh" and "stale" are facts rather than timing luck. */
 const age = (path: string, secondsAgo: number) => {
