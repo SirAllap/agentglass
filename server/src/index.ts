@@ -33,7 +33,7 @@ import {
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktrees as gitWorktrees, addWorktree, removeWorktree, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
-  conflicts as gitConflicts, resolveWith, mergeAbort, mergeContinue,
+  conflicts as gitConflicts, resolveWith, mergeAbort, mergeContinue, baseCandidates,
   remotes as gitRemotes, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
@@ -496,6 +496,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/graph") return json(logGraph(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 400)));
     if (pathname === "/git/worktrees") return json({ worktrees: gitWorktrees(url.searchParams.get("root") || "") });
     if (pathname === "/git/conflicts") return json(gitConflicts(url.searchParams.get("root") || ""));
+    if (pathname === "/git/base-candidates") return json(baseCandidates(url.searchParams.get("root") || ""));
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });

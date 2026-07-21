@@ -229,6 +229,7 @@ const realApi = {
   /** Remember which branch this one was cut from. Written to the repo's own
    *  config, so it survives restarts and is readable with plain `git config`. */
   gitSetBase: (root: string, branch: string, base: string | null) => post<GitActionResult>("/git/set-base", { root, branch, base }),
+  gitBaseCandidates: (root: string) => get<{ ok: boolean; refs: { name: string; remote: boolean }[] }>(`/git/base-candidates?root=${encodeURIComponent(root)}`),
   gitConflicts: (root: string) => get<{ ok: boolean; state: string; files: string[]; error?: string }>(`/git/conflicts?root=${encodeURIComponent(root)}`),
   gitResolve: (root: string, paths: string[], side: "ours" | "theirs") => post<GitActionResult>("/git/resolve", { root, paths, side }),
   gitMergeAbort: (root: string) => post<GitActionResult>("/git/merge-abort", { root }),
@@ -346,6 +347,7 @@ const demoApi: typeof realApi = {
   gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean) => D(demo.gitActionUnavailable()),
   gitSyncBase: (_root: string, _base?: string) => D(demo.gitActionUnavailable()),
   gitSetBase: (_root: string, _branch: string, _base: string | null) => D(demo.gitActionUnavailable()),
+  gitBaseCandidates: (_root: string) => D({ ok: true, refs: [] }),
   gitConflicts: (_root: string) => D({ ok: true, state: "clean", files: [] }),
   gitResolve: (_root: string, _paths: string[], _side: "ours" | "theirs") => D(demo.gitActionUnavailable()),
   gitMergeAbort: (_root: string) => D(demo.gitActionUnavailable()),

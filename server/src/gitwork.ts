@@ -1060,6 +1060,34 @@ export function mergeContinue(rootIn: unknown): GitActionResult {
   return run(root, ["commit", "--no-edit"]);
 }
 
+/**
+ * What you can sensibly merge from.
+ *
+ * Local heads *and* remote-tracking refs, because the default base is a remote
+ * one — `origin/master`, the master that has actually been fetched. Offering
+ * only local branches meant the picker's `master` was a different, usually
+ * staler commit than the base it was replacing, and nothing said so.
+ *
+ * Remotes first: on a repo where every branch is a ticket, the thing you merge
+ * from is nearly always upstream.
+ */
+export function baseCandidates(rootIn: unknown): { ok: boolean; refs: { name: string; remote: boolean }[] } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, refs: [] };
+  const read = (ref: string) =>
+    git(root, ["for-each-ref", "--sort=-committerdate", ref, "--format=%(refname:short)"])
+      .stdout.split("\n").filter(Boolean);
+  // Drop `origin/HEAD` and the bare `origin` symref: neither is a branch you
+  // merge from, and the bare one reads as if it were.
+  const remotes = read("refs/remotes").filter((n) => !n.endsWith("/HEAD") && n.includes("/"));
+  const locals = read("refs/heads");
+  const seen = new Set<string>();
+  const refs: { name: string; remote: boolean }[] = [];
+  for (const n of remotes) if (!seen.has(n)) { seen.add(n); refs.push({ name: n, remote: true }); }
+  for (const n of locals) if (!seen.has(n)) { seen.add(n); refs.push({ name: n, remote: false }); }
+  return { ok: true, refs };
+}
+
 export function worktrees(rootIn: unknown): GitWorktree[] {
   const root = repoRoot(rootIn);
   if (!root) return [];

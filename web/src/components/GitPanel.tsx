@@ -384,6 +384,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [baseOpen, setBaseOpen] = useState(false);
   /** Files git has stopped on. Only ever non-empty mid-merge. */
   const [conflicts, setConflicts] = useState<string[]>([]);
+  /** Local heads and remote-tracking refs, for the "merge from…" list. */
+  const [baseRefs, setBaseRefs] = useState<{ name: string; remote: boolean }[]>([]);
+  const [baseQuery, setBaseQuery] = useState("");
   const mergeState = tree?.branch.state ?? "clean";
   useEffect(() => {
     if (!open || !root || mergeState === "clean") { setConflicts([]); return; }
@@ -1162,7 +1165,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             // Load them on demand. Depending on the Branches
                             // tab having been visited made the picker useless
                             // exactly when you reach for it — the first time.
-                            if (!branchData.branches.length) api.gitBranches(root).then(setBranchData).catch(() => {});
+                            if (!baseRefs.length) api.gitBaseCandidates(root).then((r) => setBaseRefs(r.refs ?? [])).catch(() => {});
                             setBaseOpen((o) => !o);
                           }}
                           disabled={!writeEnabled || busy}
@@ -1173,17 +1176,60 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           <div className="absolute right-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
                             style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 260, maxHeight: 320, overflow: "hidden" }}>
                             <div className="px-2.5 py-1.5 t-dim2 text-[9.5px] uppercase tracking-wider shrink-0">merge into {branch.name} from…</div>
+                            {/* The base it will actually use, pinned and above
+                                the search — the answer to "what does this
+                                button do" should not require scrolling a list
+                                of 800 to find the highlighted row. */}
+                            <div className="mx-1.5 mb-1 px-2 py-1.5 rounded-md flex items-center gap-2 shrink-0"
+                              style={{ background: "color-mix(in srgb, var(--primary) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+                              <span className="shrink-0" style={{ color: "var(--primary-hover)" }}>✓</span>
+                              <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }} title={branch.base ?? ""}>{branch.base}</span>
+                              <span className="shrink-0 text-[9px] t-dim2">current base</span>
+                            </div>
+                            <div className="px-2.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider shrink-0">or change to…</div>
+                            {/* A real repo has hundreds of refs — this one
+                                offers 827 — so the list is only usable with a
+                                filter, and only sane with the answer you
+                                probably want already at the top. */}
+                            <input autoFocus value={baseQuery} onChange={(e) => setBaseQuery(e.target.value)}
+                              placeholder="filter branches…"
+                              className="mx-1.5 mb-1 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
+                              style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                             <div className="agx-scroll overflow-y-auto pb-1">
-                              {branchData.branches.filter((b) => b.name !== branch.name).map((b) => (
+                              {baseRefs
+                                .filter((b) => b.name !== branch.name && b.name !== branch.base)
+                                .filter((b) => { const q = baseQuery.trim().toLowerCase(); return !q || b.name.toLowerCase().includes(q); })
+                                // Current base first, then the trunk, then the
+                                // rest as git ordered them (most recent first).
+                                .sort((a, b) => Number(b.name === branch.base) - Number(a.name === branch.base)
+                                  || Number(/(^|\/)(master|main)$/.test(b.name)) - Number(/(^|\/)(master|main)$/.test(a.name)))
+                                .slice(0, 200)
+                                .map((b) => (
                                 <button key={b.name} onClick={async () => {
                                   setBaseOpen(false);
                                   await act(() => api.gitSetBase(root, branch.name, b.name), `base set to ${b.name}`, "sync");
                                 }}
-                                  className="w-full text-left px-2.5 py-1.5 truncate"
+                                  className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
                                   style={{ background: b.name === branch.base ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent", color: "var(--text)" }}
-                                  title={b.name}>{b.name}</button>
+                                  title={b.name}>
+                                  {/* Which kind of ref this is, because it
+                                      changes what you get: `master` is your
+                                      copy, which may be weeks behind the
+                                      `origin/master` the default base uses. */}
+                                  <span className="shrink-0 text-[8.5px] px-1 py-[1px] rounded"
+                                    style={b.remote
+                                      ? { color: "var(--info)", border: "1px solid color-mix(in srgb, var(--info) 35%, transparent)" }
+                                      : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                                    {b.remote ? "REMOTE" : "LOCAL"}
+                                  </span>
+                                  <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                                  {b.name === branch.base && <span className="shrink-0 text-[9px]" style={{ color: "var(--primary-hover)" }}>current</span>}
+                                </button>
                               ))}
-                              {!branchData.branches.length && <div className="px-2.5 py-2 t-dim2">loading branches…</div>}
+                              {!baseRefs.length && <div className="px-2.5 py-2 t-dim2">loading branches…</div>}
+                              {baseRefs.length > 200 && !baseQuery.trim() && (
+                                <div className="px-2.5 py-1.5 t-dim2 text-[9.5px]">showing 200 of {baseRefs.length} — type to find the rest</div>
+                              )}
                             </div>
                           </div>
                         )}
