@@ -7,6 +7,7 @@ import { subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../../lib/clockPref.ts";
 import { subscribeGitChanged } from "../../lib/gitBus.ts";
 import { subscribeNewGates } from "../../lib/gateStore.ts";
+import { enqueue, dequeue } from "../../lib/toastQueue.ts";
 import {
   subscribeSystemNotes, subscribeNotifyHistory, notifyHistory, notifyUnread,
   markNotifyRead, dismissNote, clearNotes, openNote, recordNote, type SystemNote,
@@ -186,7 +187,13 @@ function MeterPill({ tag, w }: { tag: string; w: UsageWindow }) {
 // is for the transition, the pill is for the standing state.
 // ---------------------------------------------------------------------------
 type NoteKind = "done" | "blocked" | "pull" | "system";
-type Note = { id: string; kind: NoteKind; title: string; sub: string; color: string; app?: string };
+type Note = {
+  id: string; kind: NoteKind; title: string; sub: string; color: string; app?: string;
+  /** When it was queued. The lane drops what went stale waiting; see toastQueue.ts. */
+  at: number;
+  /** Something is blocked until you answer. Jumps the queue, never dropped. */
+  urgent?: boolean;
+};
 
 const NOTE_MS = 4800;
 
@@ -233,12 +240,13 @@ function useNotes(): { note: Note | null; behind: number; ahead: number } {
   const queue = useRef<Note[]>([]);
   const showing = useRef(false);
 
-  const push = (n: Note) => {
-    queue.current.push(n);
+  /** Callers describe the note; the lane stamps when it arrived. */
+  const push = (n: Omit<Note, "at">) => {
+    enqueue(queue.current, { ...n, at: Date.now() });
     if (!showing.current) advance();
   };
   const advance = () => {
-    const next = queue.current.shift();
+    const next = dequeue(queue.current, Date.now());
     if (!next) { showing.current = false; setNote(null); return; }
     showing.current = true;
     setNote(next);
@@ -255,7 +263,8 @@ function useNotes(): { note: Note | null; behind: number; ahead: number } {
         seen.set(c.id, c.attention);
         if (first || c.attention === prev || c.attention === "none") continue;
         if (c.attention === "blocked") {
-          push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error)", title: c.title || "chat", sub: c.blockedTool ? `needs "${c.blockedTool}"` : "waiting on you" });
+          // Blocked, not merely finished: the chat cannot continue without you.
+          push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error)", title: c.title || "chat", sub: c.blockedTool ? `needs "${c.blockedTool}"` : "waiting on you", urgent: true });
           recordNote({ app: "chat", summary: c.title || "chat", body: c.blockedTool ? `blocked — needs "${c.blockedTool}"` : "blocked — waiting on you", urgency: 2 });
         } else if (c.attention === "done") {
           push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success)", title: c.title || "chat", sub: "turn finished" });
@@ -282,6 +291,9 @@ function useNotes(): { note: Note | null; behind: number; ahead: number } {
       color: "var(--warning)",
       title: `Approve ${g.tool_name}?`,
       sub: `${g.source_app}:${g.session_id.slice(0, 8)} is waiting on you`,
+      // Ahead of the chatter, and never dropped for being late: the hold is
+      // still holding. This is what keeps #138 working during a burst.
+      urgent: true,
     });
   }), []);
 
@@ -302,6 +314,9 @@ function useNotes(): { note: Note | null; behind: number; ahead: number } {
       title: n.summary || n.app,
       sub: n.body || n.app,
       app: n.app,
+      // A sender marked it critical. Rare from third-party apps, and the one
+      // signal we have that it is not chatter.
+      urgent: n.urgency === 2,
     });
   }), []);
 
