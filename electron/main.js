@@ -164,7 +164,40 @@ app.whenReady().then(async () => {
   createWindow();
 });
 
+/**
+ * Stop the sidecar, once, however we are going down.
+ *
+ * `window-all-closed` covers closing the window and nothing else. Kill the app
+ * any other way — SIGTERM from a script, SIGINT from the terminal it was
+ * launched in, a crash in the main process — and the server outlived it,
+ * holding :4000. The next launch then found something already answering
+ * /health, adopted it, and ran against a server from the *previous* build:
+ * a UI talking to code that no longer matched it, with no sign anything was
+ * wrong. That cost real debugging time.
+ *
+ * SIGKILL is the one case this cannot cover; nothing in-process can.
+ */
+let stopped = false;
+function stopSidecar() {
+  if (stopped) return;
+  stopped = true;
+  if (!sidecar) return;
+  try { sidecar.kill(); } catch { /* already gone */ }
+  // A server mid-request can ignore SIGTERM for a moment. Follow up, but only
+  // if it is genuinely still there.
+  const child = sidecar;
+  setTimeout(() => { try { if (child.exitCode === null && !child.killed) child.kill("SIGKILL"); } catch { /* gone */ } }, 1500).unref?.();
+  sidecar = null;
+}
+
+app.on("before-quit", stopSidecar);
+app.on("will-quit", stopSidecar);
+process.on("exit", stopSidecar);
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.on(sig, () => { stopSidecar(); app.quit(); });
+}
+
 app.on("window-all-closed", () => {
-  if (sidecar) { try { sidecar.kill(); } catch {} }
+  stopSidecar();
   app.quit();
 });

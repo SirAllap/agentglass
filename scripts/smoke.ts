@@ -307,17 +307,29 @@ async function main() {
       const panes = await evaluate(`document.querySelectorAll('${railSel}')[0]?.parentElement?.querySelectorAll(':scope > div > [aria-hidden]').length ?? 0`);
       if (panes !== 5) failures.push(`[workspace] expected all 5 views mounted, found ${panes}`);
 
-      await press("d"); // bare letter switches while the frame holds focus
-      const afterD = await selectedView();
-      if (afterD !== "diff") failures.push(`[workspace] "d" should select diff, selected ${afterD}`);
+      /**
+       * Press a key and wait for the view to actually be the one expected.
+       *
+       * Two animation frames is not a synchronisation primitive. Under load —
+       * a parallel build, a busy runner — React had not always committed the
+       * previous switch before the next key was read, and the run failed with
+       * `"t" should select term, selected diff`. The app was fine; the test was
+       * racing it. Poll for the outcome instead, with a ceiling so a genuine
+       * regression still fails rather than hanging.
+       */
+      const pressUntilView = async (key: string, want: string, mod = false) => {
+        await press(key, mod);
+        for (let i = 0; i < 40; i++) {
+          if ((await selectedView()) === want) return true;
+          await Bun.sleep(50);
+        }
+        return false;
+      };
 
-      await press("t");
-      const afterT = await selectedView();
-      if (afterT !== "term") failures.push(`[workspace] "t" should select term, selected ${afterT}`);
-
-      await press("1", true); // ⌘1 works even from inside a field
-      const after1 = await selectedView();
-      if (after1 !== "git") failures.push(`[workspace] Ctrl-1 should select git, selected ${after1}`);
+      if (!(await pressUntilView("d", "diff"))) failures.push(`[workspace] "d" should select diff, selected ${await selectedView()}`);
+      if (!(await pressUntilView("t", "term"))) failures.push(`[workspace] "t" should select term, selected ${await selectedView()}`);
+      // ⌘1 works even from inside a field
+      if (!(await pressUntilView("1", "git", true))) failures.push(`[workspace] Ctrl-1 should select git, selected ${await selectedView()}`);
 
       // Poll rather than check once: closing runs an AnimatePresence exit
       // animation, so the rail outlives the state change by a few hundred ms.
