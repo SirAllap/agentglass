@@ -542,9 +542,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // Mount each pane's terminal into its slot. xterm keeps its own DOM, so the
   // holder is moved between slots rather than re-created — that's what keeps
   // scrollback and running jobs intact across splits and reopens.
+  // Held in a ref and read through it, so `onClose` can change identity without
+  // this effect — the one that moves the live xterm DOM between slots — tearing
+  // down. Callers pass what they like; terminals do not remount for it.
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
+
   useEffect(() => {
     if (!open || IS_DEMO) return;
-    panelClose = onClose;
+    panelClose = () => closeRef.current();
     const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void }[] = [];
     paneIds.forEach((id, i) => {
       const s = sessions.get(id);
@@ -573,7 +579,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
         if (s.holder.parentElement === el) el.removeChild(s.holder);
       }
     };
-  }, [open, paneIds, focusIdx, onClose]);
+    // `onClose` deliberately absent: see closeRef above. Re-running this for a
+    // callback identity detaches a live terminal, which loses the selection you
+    // were dragging and cycles focus mid-keystroke.
+  }, [open, paneIds, focusIdx]);
 
   const sess = sessions.get(paneIds[focusIdx] ?? "");
   // tmux is running in the shell you're looking at, so it owns the tabs and the

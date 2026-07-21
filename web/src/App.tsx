@@ -105,6 +105,13 @@ export default function App() {
   // lives in lib/uiScale.ts, applied before this component ever mounts.
   const [scale, setScale] = useState(currentScale);
   const [workspace, setWorkspace] = useState<string | null>(null);
+
+  // Stable, and it has to be. This is passed down to the terminal, whose mount
+  // effect lists it as a dependency — an inline arrow is a new identity on
+  // every render of this component, which made that effect tear down and
+  // re-run, detaching and re-appending the live xterm DOM. Measured at eleven
+  // times in twenty seconds on a completely idle app.
+  const closeWorkspace = useCallback(() => setWsOpen(false), []);
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
 
@@ -477,7 +484,7 @@ export default function App() {
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
-      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={() => setWsOpen(false)} chatFocusId={chatFocus} />
+      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} chatFocusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
       <SettingsModal
         open={settingsOpen}
