@@ -10,7 +10,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { GitRepoRef, ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
-import { worktreeTag } from "../lib/worktree.ts";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
@@ -323,8 +322,40 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [repoQuery, setRepoQuery] = useState("");
   const [cmds, setCmds] = useState<TerminalCommands | null>(null);
   const [cmdsOpen, setCmdsOpen] = useState(false);
+  const [cmdQuery, setCmdQuery] = useState("");
+  /** Both dropdowns live in here, so one listener can tell "clicked outside"
+   *  from "clicked a row". */
+  const pickersRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
+
+  // Click anywhere else and the dropdowns close, the way every menu on the
+  // machine behaves. They used to stay open until you picked something or
+  // toggled the same button again, so a picker you opened by accident sat over
+  // the shell you were trying to read. `mousedown` rather than `click` so it
+  // closes on press instead of waiting for the release, and Escape closes too.
+  useEffect(() => {
+    if (!repoOpen && !cmdsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (pickersRef.current?.contains(e.target as Node)) return;
+      setRepoOpen(false);
+      setCmdsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // Stop it here: the workspace would otherwise close underneath, so one
+      // Escape would dismiss both the menu and the panel behind it.
+      e.stopPropagation();
+      setRepoOpen(false);
+      setCmdsOpen(false);
+    };
+    document.addEventListener("mousedown", onDown, true);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown, true);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [repoOpen, cmdsOpen]);
 
   useEffect(() => {
     if (!open) return;
@@ -495,12 +526,19 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 {/* header: repo picker + command launcher + actions */}
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>▶ Terminal</span>
+                  <div ref={pickersRef} className="flex items-center gap-3">
                   <div className="relative">
                     <button onClick={() => { setRepoOpen((o) => !o); setCmdsOpen(false); }} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
                       <span className="font-medium">{repoRef ? repoName(repoRef.root) : "pick a repo"}</span><span className="t-dim2">▼</span>
                     </button>
                     {repoOpen && (
-                      <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 420, overflow: "hidden" }}>
+                      /* Wide enough for the whole worktree name and its branch.
+                         It used to be 320px with the branch clipped at 150, so
+                         a card-per-worktree checkout showed as "orbit-WEB-1042"
+                         beside an elided branch — the two pieces that tell them
+                         apart, both cut off. Source control shows them in full;
+                         this now matches it. */
+                      <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 460, maxWidth: "min(86vw, 760px)", maxHeight: 420, overflow: "hidden" }}>
                         <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="filter repos…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                         <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
                           {/* The path is searchable too: with a worktree per card,
@@ -513,9 +551,39 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 {/* Indented under its project — a shell in a
                                     worktree is a shell in that branch, not in
                                     some unrelated repo that looks similar. */}
-                                {r.worktreeOf && <span className="shrink-0 t-dim2 text-[9px]" title={`worktree of ${r.worktreeOf}`}>└</span>}
-                                <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }}>{worktreeTag(r) ?? r.name}{live && <span title="live shell" style={{ color: "var(--success, #98c379)" }}> ●</span>}</span>
-                                <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }}>{r.branch}</span>
+                                {/* A worktree gets its own mark rather than an
+                                    indent. "└" only says "child of the line
+                                    above", which stops meaning anything once
+                                    the list is filtered and the parent is off
+                                    screen — and it reads as tree drawing, not
+                                    as a kind of thing. */}
+                                <span
+                                  className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
+                                  title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
+                                  style={r.worktreeOf
+                                    ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
+                                    : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                                >{r.worktreeOf ? "WT" : "REPO"}</span>
+                                {/* A worktree IS its branch — one per ticket is
+                                    the whole point — so the branch is the name
+                                    worth the wide column, and the directory is
+                                    only a terse stub of it. A project is the
+                                    other way round: the folder is the identity
+                                    and the branch is just what happens to be
+                                    checked out. Same rule Source control uses,
+                                    so the two pickers read alike.
+
+                                    `truncate` matters: without it a long
+                                    worktree name wrapped to seven lines and
+                                    collided with the branch beside it. */}
+                                <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.worktreeOf ? `${r.branch}\n${r.root}` : r.root}>
+                                  {r.worktreeOf ? r.branch : r.name}
+                                  {live && <span title="live shell" style={{ color: "var(--success, #98c379)" }}> ●</span>}
+                                </span>
+                                {!r.worktreeOf && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>}
+                                {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
+                                {r.behind > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
+                                {r.ahead > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
                               </button>
                             );
                           })}
@@ -535,25 +603,40 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     </button>
                     {cmdsOpen && cmds && (
                       <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", width: 460, maxHeight: 480, overflow: "hidden" }}>
+                        {/* A real project has more targets than fit on a screen
+                            — this repo's own reference monorepo has 150 in one
+                            Makefile — so scrolling to find `migrate` was the
+                            only way to run it. Matches the name and what the
+                            target says it does, since half of them are only
+                            recognisable by their description. */}
+                        <input autoFocus value={cmdQuery} onChange={(e) => setCmdQuery(e.target.value)}
+                          placeholder="filter commands…"
+                          className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
+                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                         <div className="agx-scroll overflow-y-auto py-1" style={{ minHeight: 0 }}>
                           {/* commands come from the whole selected project — the
                               root Makefile/package.json plus any in subfolders —
                               so each folder gets its own labelled group */}
-                          {groupByDir(cmds.make).map(([dir, list]) => (
+                          {groupByDir(matchCommands(cmds.make, cmdQuery)).map(([dir, list]) => (
                             <div key={"m:" + dir}>
                               <div className="px-3 pt-1.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">make — {dir ? `${dir}/Makefile` : "Makefile"}</div>
                               {list.map((c) => <CommandRow key={"m:" + dir + ":" + c.name} c={c} onRun={run} />)}
                             </div>
                           ))}
-                          {groupByDir(cmds.scripts).map(([dir, list]) => (
+                          {groupByDir(matchCommands(cmds.scripts, cmdQuery)).map(([dir, list]) => (
                             <div key={"s:" + dir}>
                               <div className="px-3 pt-2 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">scripts — {dir ? `${dir}/package.json` : "package.json"}</div>
                               {list.map((c) => <CommandRow key={"s:" + dir + ":" + c.name} c={c} onRun={run} />)}
                             </div>
                           ))}
+                          {!matchCommands(cmds.make, cmdQuery).length && !matchCommands(cmds.scripts, cmdQuery).length && (
+                            <div className="px-3 py-2 t-dim2">no command matches “{cmdQuery.trim()}”</div>
+                          )}
                         </div>
                       </div>
                     )}
+                  </div>
+
                   </div>
 
                   <div className="flex items-center gap-1 overflow-x-auto agx-scroll">
@@ -673,6 +756,19 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 </div>
     </div>
   );
+}
+
+/**
+ * Filter the command list by name, description or folder.
+ *
+ * Description included deliberately: a Makefile names things like `infra.up`
+ * and `check.build_id`, so what you remember is usually what it *does*, not
+ * what it is called.
+ */
+function matchCommands(list: ProjectCommand[], query: string): ProjectCommand[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((c) => `${c.name} ${c.desc ?? ""} ${c.dir ?? ""}`.toLowerCase().includes(q));
 }
 
 /** Bucket commands by the project folder they belong to, repo root first. */
