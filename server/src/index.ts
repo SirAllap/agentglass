@@ -17,12 +17,13 @@ import {
   searchEvents,
   ftsText,
   providerOf,
+  gateHistory,
 } from "./db.ts";
 import { maybeAlert } from "./alerts.ts";
 import { getSkills, catalogMarkdown, catalogCsv } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getUsage } from "./usage.ts";
-import { submitGate, decideGate, pendingGates, GATE_MAX_MS } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
 import { statusForPaths, commit as gitCommit, COMMIT_ENABLED } from "./git.ts";
@@ -446,12 +447,27 @@ const server = Bun.serve<WsData>({
       const ti = b.tool_input ?? {};
       const summary = String(ti.command || ti.file_path || ti.path || ti.pattern || ti.query || ti.description || b.tool_name || "").slice(0, 300);
       const decision = await submitGate(
-        { source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
+        // The hook picks the id so it can re-attach to this exact request after
+        // a dropped connection (see /gate/status). Shape-checked in gate.ts;
+        // anything else falls back to a server-generated one.
+        { id: typeof b.id === "string" ? b.id : undefined, source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
         Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000)
       );
       return json(decision);
     }
+    // Re-attach to a request whose connection dropped — a server restart, a
+    // proxy hanging up. Holds open like /gate does when it's still pending,
+    // answers immediately when it's already decided, and 404s on an id it has
+    // never heard of so the hook falls back to its own policy instead of
+    // reading "no answer" as an approval.
+    if (pathname === "/gate/status") {
+      const out = await awaitGate(String(url.searchParams.get("id") || ""));
+      return out ? json(out) : json({ decision: null, reason: "unknown gate" }, 404);
+    }
     if (pathname === "/gate/pending") return json({ gates: pendingGates() });
+    // What was decided while you weren't looking — including the requests a
+    // timeout or a restart resolved for you.
+    if (pathname === "/gate/history") return json({ gates: gateHistory(Number(url.searchParams.get("limit") || 50)) });
     if (pathname === "/gate/decide" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
@@ -850,6 +866,14 @@ startScanner(({ event, session }) => {
   broadcast({ type: "session", data: session });
   maybeAlert(event);
 });
+
+// Bring back the gate requests that were in flight when this process last
+// stopped. Anything still inside its window returns to "what needs you"; the
+// rest is resolved by the configured policy and recorded, never dropped.
+const gates = restoreGates();
+if (gates.restored || gates.expired) {
+  console.log(`✋ gate: ${gates.restored} pending restored, ${gates.expired} expired while down (${process.env.AGENTGLASS_GATE_FAILCLOSED === "1" ? "denied" : "allowed"})`);
+}
 
 // Hang up shells and clean temp dirs on the way out — a bare kill leaves them
 // orphaned. Re-raise so the default disposition still terminates the process.

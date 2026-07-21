@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -148,6 +148,7 @@ const realApi = {
   insights: () => get<{ insights: Insight[] }>(`/insights`),
   search: (q: string) => get<{ hits: SearchHit[] }>(`/search?q=${encodeURIComponent(q)}`),
   gatePending: () => get<{ gates: PendingGate[] }>(`/gate/pending`),
+  gateHistory: (limit = 25) => get<{ gates: GateRecord[] }>(`/gate/history?limit=${limit}`),
   gateDecide: (id: string, decision: "allow" | "deny", reason = "") =>
     fetch(SERVER + "/gate/decide", {
       method: "POST",
@@ -306,6 +307,7 @@ const demoApi: typeof realApi = {
   insights: () => D(demo.insights()),
   search: (q: string) => D(demo.search(q)),
   gatePending: () => D(demo.gatePending()),
+  gateHistory: () => D({ gates: [] as GateRecord[] }),
   gateDecide: (id: string) => D(demo.gateDecide(id)),
   gitStatus: (_paths: string[]) => D(demo.gitStatus()),
   gitCommit: (_payload: { root: string; files: string[]; title: string; body: string }) => D(demo.gitCommit()),

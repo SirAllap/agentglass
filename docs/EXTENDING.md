@@ -82,6 +82,18 @@ Contract:
 - Dashboard list: `GET /gate/pending`. Decide: `POST /gate/decide`
   with `{ "id", "decision": "allow"|"deny", "reason"? }` (CSRF-protected for
   browser origins).
+- **Durable.** Every request is persisted on arrival, so a server restart
+  re-hydrates the queue instead of stranding held agents. Send your own uuid as
+  `"id"` and the POST becomes idempotent: re-sending it re-attaches to the same
+  request rather than raising a second prompt.
+- **Reconnect** with `GET /gate/status?id=<your uuid>` when a held connection
+  drops. It holds open while the request is pending, answers immediately once
+  decided, and **404s on an id it has no record of** — treat that as "no answer"
+  and apply your own policy, never as an approval.
+- Resolved requests: `GET /gate/history?limit=50`. `resolution` says who decided
+  — `human`, `timeout`, or `restart` (the window closed while the server was
+  down). The last two are the outcomes nobody chose, which is exactly why they
+  are recorded rather than dropped.
 
 Claude Code wiring lives in `hooks/gate_event.py` (see README control-plane
 section). Any harness can long-poll the same endpoint.

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { Alert, AgentCard } from "../lib/derive.ts";
 import { collectAttention } from "../lib/attention.ts";
 import { listChats, subscribe as subscribeChats } from "../lib/chatStore.ts";
-import type { Insight, PendingGate } from "../../../shared/types.ts";
+import type { Insight, PendingGate, GateRecord } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
@@ -38,6 +38,32 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
     return () => { alive = false; clearInterval(id); };
   }, []);
 
+  /*
+   * The gates you didn't decide.
+   *
+   * A request resolved by the timeout — or by a restart that found its window
+   * already closed — used to leave no trace at all: the card simply left the
+   * panel, indistinguishable from one you approved. For the feature whose whole
+   * purpose is human oversight, an outcome nobody chose is the single most
+   * important one to say out loud, so the recent ones stay visible here.
+   */
+  const [autoResolved, setAutoResolved] = useState<GateRecord[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .gateHistory(25)
+        .then((r) => {
+          if (!alive) return;
+          const cutoff = Date.now() - 30 * 60_000;
+          setAutoResolved(r.gates.filter((g) => g.resolution !== "human" && (g.decided_at ?? 0) > cutoff).slice(0, 3));
+        })
+        .catch(() => {});
+    load();
+    const id = setInterval(load, 15_000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
   const decide = (g: PendingGate, decision: "allow" | "deny") => {
     setActing((a) => ({ ...a, [g.id]: true }));
     setGates((gs) => gs.filter((x) => x.id !== g.id)); // optimistic
@@ -59,7 +85,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
     [gates, insights, alerts, chats, agents],
   );
   const openCount = attention.length;
-  const empty = openCount === 0 && insights.length === 0;
+  const empty = openCount === 0 && insights.length === 0 && autoResolved.length === 0;
 
   return (
     <Panel
@@ -120,6 +146,30 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
             </motion.div>
           ))}
         </AnimatePresence>
+
+        {autoResolved.length > 0 && (
+          <div className="mb-2">
+            {autoResolved.map((g) => (
+              <div
+                key={g.id}
+                className="flex items-start gap-2 rounded-xl px-2.5 py-1.5 mb-1.5"
+                style={{ background: "color-mix(in srgb, var(--text4) 10%, transparent)", border: "1px dashed color-mix(in srgb, var(--text4) 45%, transparent)" }}
+                title={g.summary}
+              >
+                <span className="shrink-0 t-dim2">{g.decision === "deny" ? "✕" : "✓"}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[11px]" style={{ color: "var(--text2)" }}>
+                    {g.tool_name} {g.decision === "deny" ? "denied" : "allowed"} without you
+                  </div>
+                  <div className="text-[9.5px] t-dim2 truncate">
+                    {g.resolution === "restart" ? "window closed while the server was down" : "no decision before the timeout"} · {g.source_app}
+                  </div>
+                </div>
+                <span className="text-[9.5px] t-dim2 shrink-0">{fmtAgo(g.decided_at ?? g.created)}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         <AnimatePresence initial={false}>
           {alerts.map((a) => {

@@ -181,6 +181,99 @@ for (const col of ["project_path", "cwd_path"]) {
 }
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)");
 
+// ---------------------------------------------------------------------------
+// Control plane: gate requests.
+//
+// The gate used to live only in memory, which made the one feature whose job is
+// human oversight the least durable thing in the server: a restart dropped
+// every held request, the hook's long-poll fell into its timeout branch, and
+// "waiting for a human" silently became "auto-allowed". Every request is now
+// written on arrival and updated when it resolves, so a restart can re-hydrate
+// the queue and every outcome — including the ones nobody decided — has a row.
+//
+// `decision` NULL means still pending. `resolution` records *who* decided:
+// human, timeout, or restart (expired while the server was down).
+// ---------------------------------------------------------------------------
+db.exec(`
+CREATE TABLE IF NOT EXISTS gates (
+  id TEXT PRIMARY KEY,
+  source_app TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  created INTEGER NOT NULL,
+  expires INTEGER NOT NULL,
+  decision TEXT,
+  reason TEXT,
+  resolution TEXT,
+  decided_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_gates_pending ON gates(decision, expires);
+CREATE INDEX IF NOT EXISTS idx_gates_created ON gates(created);
+`);
+
+export interface GateRow {
+  id: string;
+  source_app: string;
+  session_id: string;
+  tool_name: string;
+  summary: string;
+  created: number;
+  expires: number;
+  decision: "allow" | "deny" | null;
+  reason: string | null;
+  resolution: "human" | "timeout" | "restart" | null;
+  decided_at: number | null;
+}
+
+const gateInsert = db.query(`
+  INSERT OR REPLACE INTO gates (id, source_app, session_id, tool_name, summary, created, expires)
+  VALUES ($id, $source_app, $session_id, $tool_name, $summary, $created, $expires)`);
+// Only ever resolves a still-pending row: a decision already recorded wins over
+// a late timeout, so a human's approve can't be overwritten by the clock.
+const gateResolve = db.query(`
+  UPDATE gates SET decision = $decision, reason = $reason, resolution = $resolution, decided_at = $decided_at
+   WHERE id = $id AND decision IS NULL`);
+const gateById = db.query<GateRow, [string]>(`SELECT * FROM gates WHERE id = ?`);
+const gatesPending = db.query<GateRow, []>(`SELECT * FROM gates WHERE decision IS NULL ORDER BY created ASC`);
+const gatesRecent = db.query<GateRow, [number]>(
+  `SELECT * FROM gates WHERE decision IS NOT NULL ORDER BY decided_at DESC LIMIT ?`);
+
+export function recordGate(g: {
+  id: string; source_app: string; session_id: string; tool_name: string;
+  summary: string; created: number; expires: number;
+}): void {
+  gateInsert.run({
+    $id: g.id, $source_app: g.source_app, $session_id: g.session_id, $tool_name: g.tool_name,
+    $summary: g.summary, $created: g.created, $expires: g.expires,
+  } as any);
+}
+
+export function resolveGateRow(
+  id: string,
+  decision: "allow" | "deny",
+  reason: string,
+  resolution: "human" | "timeout" | "restart",
+  decided_at = Date.now(),
+): void {
+  gateResolve.run({ $id: id, $decision: decision, $reason: reason, $resolution: resolution, $decided_at: decided_at } as any);
+}
+
+export function getGate(id: string): GateRow | null {
+  return gateById.get(id) ?? null;
+}
+
+/** Gate requests written but never resolved — the queue to re-hydrate on boot. */
+export function undecidedGates(): GateRow[] {
+  return gatesPending.all();
+}
+
+/** Recently resolved gates, newest first — the "what happened while you were
+ *  away" record, including the ones a timeout or a restart decided for you. */
+export function gateHistory(limit = 50): GateRow[] {
+  return gatesRecent.all(Math.max(1, Math.min(500, limit)));
+}
+
 /** Coarse vendor for a model name — the provider dimension. Returns null for an
  *  unknown/absent model so a session's known provider is never overwritten.
  *  Kept in sync with the web's providerOf() in web/src/lib/format.ts. */
@@ -336,6 +429,9 @@ export function pruneOldRows(): { events: number; sessions: number } {
   db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
   const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
   const se = db.run(`DELETE FROM sessions WHERE last_seen < ?`, [cutoff]);
+  // Resolved gates only — a pending one is a live request, never retention's
+  // business no matter how old its row looks.
+  db.run(`DELETE FROM gates WHERE decision IS NOT NULL AND created < ?`, [cutoff]);
   return { events: ev.changes, sessions: se.changes };
 }
 

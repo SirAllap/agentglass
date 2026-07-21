@@ -197,6 +197,18 @@ export interface PendingGate {
   created: number;
 }
 
+/** A gate request that has been resolved. `resolution` is who resolved it:
+ *  a human from the dashboard, the timeout, or a restart that found the window
+ *  already closed. The last one is why this record exists — an outcome nobody
+ *  chose is exactly the one that must not disappear. */
+export interface GateRecord extends PendingGate {
+  expires: number;
+  decision: "allow" | "deny";
+  reason: string | null;
+  resolution: "human" | "timeout" | "restart" | null;
+  decided_at: number | null;
+}
+
 export interface SearchHit {
   id: number;
   timestamp: number;
