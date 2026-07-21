@@ -519,6 +519,11 @@ function run(root: string, args: string[]): GitActionResult {
   // against a header that already said the branch was up to date. Nothing
   // re-fetched afterwards, so it stayed wrong until the next action.
   invalidateRepos(root);
+  // And the behind-the-base counts. They have their own 15s TTL, so after a
+  // sync the header went on advertising "↓370" against a branch that had just
+  // taken those very commits — while the push count beside it had already
+  // updated, which is worse than both being stale.
+  behindCache.clear();
   // One signal out to every panel. Without it each of them discovered the
   // change on its own clock — 5s, 90s, or not until it was remounted.
   try { onGitChange?.(); } catch { /* a broken listener must not fail the op */ }
