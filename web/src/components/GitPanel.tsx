@@ -1149,7 +1149,24 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         itself, which has no base. */}
                     {branch?.base && (branch.behindBase ?? 0) > 0 && (
                       <div className="relative flex items-center">
-                        {/* A merge over uncommitted work is refused by the
+                        {/* Only while it is safe and exact: an unpushed merge at
+                        the tip, on a clean tree. Once anything is committed on
+                        top the tip is no longer the merge, and once it is
+                        pushed the honest undo is a revert, not a rewrite. */}
+                    {branch?.canUndoMerge && (
+                      <button
+                        onClick={() => {
+                          if (!confirm(`Undo the last merge on ${branch.name}?\n\nThe branch goes back to exactly where it was. Nothing has been pushed, so nothing anyone else has is affected.`)) return;
+                          void act(() => api.gitUndoMerge(root), "merge undone", "undo");
+                        }}
+                        disabled={!writeEnabled || busy}
+                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap shrink-0"
+                        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}
+                        title="Undo the last merge — the branch returns to exactly where it was. Offered only because it is unpushed and nothing sits on top of it.">
+                        {pending === "undo" ? "undoing…" : "⎌ undo merge"}
+                      </button>
+                    )}
+                    {/* A merge over uncommitted work is refused by the
                             server, so the button should not offer it. Saying
                             why beats a click that produces an error toast —
                             and the reason is the fix. */}

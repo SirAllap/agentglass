@@ -385,6 +385,9 @@ export interface GitBranchInfo {
   base?: string | null;
   /** Commits the base has that this branch does not. */
   behindBase?: number;
+  /** The tip is an unpushed merge on a clean tree — so it can be undone
+   *  exactly, by resetting to its first parent. */
+  canUndoMerge?: boolean;
 }
 export interface WorkingTree {
   root: string;

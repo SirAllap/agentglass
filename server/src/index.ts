@@ -33,7 +33,7 @@ import {
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktrees as gitWorktrees, addWorktree, removeWorktree, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
-  conflicts as gitConflicts, resolveWith, mergeAbort, mergeContinue, baseCandidates,
+  conflicts as gitConflicts, resolveWith, mergeAbort, mergeContinue, baseCandidates, undoMerge,
   remotes as gitRemotes, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
@@ -562,6 +562,7 @@ const server = Bun.serve<WsData>({
         case "/git/resolve": res = resolveWith(root, b.paths ?? b.path, b.side); break;
         case "/git/merge-abort": res = mergeAbort(root); break;
         case "/git/merge-continue": res = mergeContinue(root); break;
+        case "/git/undo-merge": res = undoMerge(root); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);

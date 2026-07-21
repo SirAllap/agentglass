@@ -72,6 +72,58 @@ describe("base branch", () => {
   });
 });
 
+describe("undo merge", () => {
+  it("offers nothing when the tip is an ordinary commit", () => {
+    // Not a merge: there is no single "before" to return to.
+    expect(gw.undoableMerge(repo, 1, null)).toBe(false);
+  });
+
+  it("offers nothing for work that has been pushed", () => {
+    // ahead === 0 means the remote already has it, and rewriting published
+    // history is a different, worse problem than undoing a local mistake.
+    // Upstream present and nothing ahead of it: the remote already has this.
+    expect(gw.undoableMerge(repo, 0, "origin/main")).toBe(false);
+  });
+
+  it("undoes an unpushed merge exactly, and refuses once there is nothing to undo", () => {
+    // Two branches that genuinely diverge, or the merge is a no-op and there
+    // is nothing to undo.
+    run(repo, "checkout", "-q", "-b", "undo-side");
+    writeFileSync(join(repo, "side.txt"), "from the side\n");
+    run(repo, "add", "-A"); run(repo, "commit", "-qm", "side work");
+    run(repo, "checkout", "-q", "main");
+    run(repo, "checkout", "-q", "-b", "undo-me");
+    writeFileSync(join(repo, "mine.txt"), "from mine\n");
+    run(repo, "add", "-A"); run(repo, "commit", "-qm", "my work");
+
+    const before = run(repo, "rev-parse", "HEAD").stdout.trim();
+    run(repo, "merge", "--no-edit", "undo-side");
+    const merged = run(repo, "rev-parse", "HEAD").stdout.trim();
+    expect(merged).not.toBe(before);
+    expect(gw.undoableMerge(repo, 1, null)).toBe(true);
+
+    expect(gw.undoMerge(repo).ok).toBe(true);
+    expect(run(repo, "rev-parse", "HEAD").stdout.trim()).toBe(before);
+
+    // And now there is nothing to undo, which it says rather than resetting
+    // another commit off the branch.
+    const second = gw.undoMerge(repo);
+    expect(second.ok).toBe(false);
+    expect(second.error).toMatch(/nothing to undo/i);
+    run(repo, "checkout", "-q", "main");
+  });
+
+  it("refuses while the tree is dirty, since the undo is a hard reset", () => {
+    run(repo, "checkout", "-q", "-b", "undo-dirty");
+    run(repo, "merge", "--no-edit", "undo-side");
+    writeFileSync(join(repo, "scratch.txt"), "work in progress\n");
+    expect(gw.undoableMerge(repo, 1, null)).toBe(false);
+    expect(gw.undoMerge(repo).ok).toBe(false);
+    rmSync(join(repo, "scratch.txt"));
+    run(repo, "checkout", "-q", "main");
+  });
+});
+
 describe("syncFromBase", () => {
   it("refuses when the checkout has uncommitted work", () => {
     writeFileSync(join(wt, "scratch.txt"), "wip\n");

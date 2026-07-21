@@ -233,6 +233,7 @@ const realApi = {
   gitConflicts: (root: string) => get<{ ok: boolean; state: string; files: string[]; error?: string }>(`/git/conflicts?root=${encodeURIComponent(root)}`),
   gitResolve: (root: string, paths: string[], side: "ours" | "theirs") => post<GitActionResult>("/git/resolve", { root, paths, side }),
   gitMergeAbort: (root: string) => post<GitActionResult>("/git/merge-abort", { root }),
+  gitUndoMerge: (root: string) => post<GitActionResult>("/git/undo-merge", { root }),
   gitMergeContinue: (root: string) => post<GitActionResult>("/git/merge-continue", { root }),
   // --- live docker panel (lazydocker-style) ---
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
@@ -351,6 +352,7 @@ const demoApi: typeof realApi = {
   gitConflicts: (_root: string) => D({ ok: true, state: "clean", files: [] }),
   gitResolve: (_root: string, _paths: string[], _side: "ours" | "theirs") => D(demo.gitActionUnavailable()),
   gitMergeAbort: (_root: string) => D(demo.gitActionUnavailable()),
+  gitUndoMerge: (_root: string) => D(demo.gitActionUnavailable()),
   gitMergeContinue: (_root: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   dockerOverview: () => D(demo.dockerOverview()),

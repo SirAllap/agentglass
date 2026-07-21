@@ -176,6 +176,7 @@ function branchInfo(root: string): GitBranchInfo {
     name, upstream, ahead, behind, detached, state: treeState(root),
     base,
     behindBase: base ? behindBase(root, name, base) : 0,
+    canUndoMerge: undoableMerge(root, ahead, upstream),
   };
 }
 
@@ -1091,6 +1092,48 @@ export function baseCandidates(rootIn: unknown): { ok: boolean; refs: { name: st
   for (const n of remotes) if (!seen.has(n)) { seen.add(n); refs.push({ name: n, remote: true }); }
   for (const n of locals) if (!seen.has(n)) { seen.add(n); refs.push({ name: n, remote: false }); }
   return { ok: true, refs };
+}
+
+/**
+ * Is the tip an undoable merge?
+ *
+ * Three conditions, all about not destroying anything you cannot get back:
+ *
+ *  - the tip is a merge commit (two parents), so there is a "before" to return
+ *    to that is exactly the branch as it was;
+ *  - nothing is committed on top of it, which the first condition already
+ *    guarantees — a later commit would be the tip instead;
+ *  - it has not been pushed. Rewriting local history is free; rewriting
+ *    published history is somebody else's problem tomorrow.
+ *
+ * A dirty tree disqualifies it too: the undo is a hard reset, and there is no
+ * version of "discard your uncommitted work as a side effect" worth offering.
+ */
+export function undoableMerge(root: string, ahead: number, upstream: string | null): boolean {
+  // Pushed work is never undone this way. `ahead` is already computed for the
+  // header, so this costs nothing for a branch level with its remote.
+  //
+  // No upstream at all is the *safest* case, not the most dangerous: nothing
+  // has been published anywhere, so there is nobody to surprise. Reading
+  // ahead===0 as "already pushed" got that exactly backwards and refused the
+  // one situation where the undo is unambiguously free.
+  if (upstream && ahead < 1) return false;
+  const parents = git(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).stdout.trim().split(/\s+/);
+  if (parents.length < 3) return false; // sha + two parents = a merge
+  return !git(root, ["status", "--porcelain"]).stdout.trim();
+}
+
+/** Put the branch back exactly as it stood before its last merge. */
+export function undoMerge(rootIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  // Re-checked here, never trusted from the client: this is a hard reset, and
+  // these conditions are the only thing making it safe.
+  const info = branchInfo(root);
+  if (!undoableMerge(root, info.ahead, info.upstream)) {
+    return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
+  }
+  return run(root, ["reset", "--hard", "HEAD^1"]);
 }
 
 export function worktrees(rootIn: unknown): GitWorktree[] {
