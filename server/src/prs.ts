@@ -592,7 +592,7 @@ const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     number title url state isDraft createdAt updatedAt
     additions deletions changedFiles
     baseRefName headRefName body
-    mergeable mergeStateStatus reviewDecision
+    mergeable mergeStateStatus reviewDecision viewerDidAuthor
     author{login}
     labels(first:20){nodes{name color}}
     assignees(first:10){nodes{login}}
@@ -635,6 +635,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
   const cap = await ghCapability();
   if (!cap.available || !cap.authed) return { ok: false, error: cap.reason };
 
+  const viewerLogin = cap.login || "";
   const data = await ghJson<any>([
     "api", "graphql",
     "-f", `query=${DETAIL_QUERY}`,
@@ -743,6 +744,12 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     assignees: (p.assignees?.nodes || []).map((n: any) => n.login),
     reviews, comments, threads, commits, files,
     forcePushedSinceReview,
+    // Who you are on this pull request. Offering "approve" on your own work is
+    // a control GitHub does not give you either, and a review button on every
+    // row makes the ones that are actually waiting on you invisible.
+    viewerDidAuthor: !!p.viewerDidAuthor,
+    viewerRequested: (p.reviewRequests?.nodes || [])
+      .some((n: any) => (n.requestedReviewer?.login || "") === viewerLogin && !!viewerLogin),
   };
 
   detailCache.set(key, { at: Date.now(), detail });

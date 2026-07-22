@@ -242,3 +242,24 @@ describe("markdown, the parts a PR body actually uses", () => {
     expect(b!.html).not.toContain("<script>");
   });
 });
+
+describe("table cells are markdown", () => {
+  /** A RED/GREEN comparison leans on bold inside the cells, and returning the
+   *  raw text put `**Drift**` on screen with its asterisks. */
+  test("bold and code inside a cell render", () => {
+    const blocks = parseBody("| a | b |\n|---|---|\n| **Drift** | `150 s` |\n");
+    const t = blocks.find((b) => b.kind === "table");
+    if (t?.kind !== "table") throw new Error("no table");
+    expect(t.rows[0]![0]).toContain("<strong>Drift</strong>");
+    expect(t.rows[0]![1]).toContain("<code>150 s</code>");
+    expect(t.rows[0]![0]).not.toContain("**");
+  });
+
+  test("a header cell renders too, and is escaped", () => {
+    const blocks = parseBody("| **RED** | <b>x</b> |\n|---|---|\n| 1 | 2 |\n");
+    const t = blocks.find((b) => b.kind === "table");
+    if (t?.kind !== "table") throw new Error("no table");
+    expect(t.head[0]).toContain("<strong>RED</strong>");
+    expect(t.head[1]).toContain("&lt;b&gt;");
+  });
+});

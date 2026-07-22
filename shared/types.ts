@@ -1013,6 +1013,11 @@ export interface PrDetail extends PrSummary {
   /** The author force-pushed after a review was submitted: that review is
    *  stale and the reviewer should be told rather than left guessing. */
   forcePushedSinceReview: boolean;
+  /** You opened this one. GitHub will not let you review your own work, and
+   *  neither should the panel. */
+  viewerDidAuthor: boolean;
+  /** Somebody asked you for a review. This is what the review tab is for. */
+  viewerRequested: boolean;
 }
 
 export interface PrListResponse {

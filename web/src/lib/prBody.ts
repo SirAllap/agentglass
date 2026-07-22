@@ -72,7 +72,10 @@ export type MdBlock =
   | { kind: "image"; src: string; alt: string }
   | { kind: "rule" };
 
-const cells = (l: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+/** A table cell is markdown too. Returning the raw text put `**Drift**` on
+ *  screen with its asterisks — the bold that a RED/GREEN comparison leans on
+ *  was exactly what stopped rendering. */
+const cells = (l: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => renderInline(c.trim()));
 const isDivider = (l: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
 const IMG_MD = /^\s*!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)\s*$/;
 const IMG_HTML = /<img[^>]*\bsrc="(https?:\/\/[^"]+)"[^>]*>/i;

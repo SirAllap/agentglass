@@ -32,7 +32,7 @@ import { SCROLLBAR_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle } from "
 import { parseBody, parseUnifiedDiff, newLineNumbers, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
 
 type Filter = "mine" | "review" | "all";
-type Tab = "overview" | "conversation" | "commits" | "files" | "checks";
+type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
 
 const FILTERS: { id: Filter; label: string; hint: string }[] = [
   { id: "mine", label: "mine", hint: "pull requests you opened" },
@@ -356,7 +356,6 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const [commitBusy, setCommitBusy] = useState(false);
   const [split, setSplit] = useState(true);
   const [wrap, setWrap] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
   const detailReq = useRef(0);
   /** Which list request is current. A filter's answer takes seconds, and
    *  without this the slower reply from the filter you just left overwrites the
@@ -447,14 +446,14 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
   useEffect(() => {
     if (!active || !root || selected == null) { setDetail(null); return; }
-    setDiff(""); setSelFile(null); setSelCommit(null); setCommitText(""); setReviewOpen(false);
+    setDiff(""); setSelFile(null); setSelCommit(null); setCommitText("");
     loadDetail(selected);
   }, [active, root, selected, loadDetail]);
 
   useEffect(() => {
-    if ((tab !== "files" && !reviewOpen) || !detail || diff || !root) return;
+    if ((tab !== "files" && tab !== "review") || !detail || diff || !root) return;
     api.prDiff(root, detail.number).then((r) => setDiff(r.ok ? (r.text || "") : "")).catch(() => {});
-  }, [tab, reviewOpen, detail, diff, root]);
+  }, [tab, detail, diff, root]);
 
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const byPath = useMemo(() => {
@@ -531,7 +530,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     const ok = await act("review", () => api.prReviewWith(root, detail.number, verb, body, myDrafts));
     if (ok && key) {
       setDrafts((cur) => { const next = { ...cur, [key]: [] }; saveMap(DRAFT_KEY, next); return next; });
-      setReviewOpen(false);
+      setTab("conversation");
     }
   };
 
@@ -584,12 +583,17 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const openThreads = useMemo(() => (detail?.threads ?? []).filter((t) => !t.isResolved), [detail]);
   const d = detail;
 
+  // You cannot review your own pull request — GitHub does not offer it either,
+  // and a review control on every row buries the ones actually waiting on you.
+  const canReview = !!d && !d.viewerDidAuthor;
+
   const TABS: { id: Tab; label: string; n?: number; warn?: boolean }[] = d ? [
     { id: "overview", label: "overview", warn: d.checklist.some((c) => !c.checked) },
     { id: "conversation", label: "conversation", n: lanes.humans.length + lanes.humanComments.length + d.threads.length + lanes.bots.length },
     { id: "commits", label: "commits", n: d.commits.length },
     { id: "files", label: "files", n: d.files.length },
     { id: "checks", label: "checks", n: d.checks.total, warn: d.checks.failure > 0 },
+    ...(canReview ? [{ id: "review" as Tab, label: "review", n: myDrafts.length || undefined, warn: d.viewerRequested }] : []),
   ] : [];
 
   return (
@@ -682,7 +686,9 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                 ))}
                 <div className="ml-auto flex items-center gap-1.5 px-2 shrink-0">
                   {myDrafts.length > 0 && <Chip text={`${myDrafts.length} pending`} tint="var(--warning)" title="line comments queued but not sent" />}
-                  <Btn onClick={() => setReviewOpen(true)} primary small>review</Btn>
+                  {d.viewerRequested && tab !== "review" && (
+                    <Btn onClick={() => setTab("review")} primary small>add your review</Btn>
+                  )}
                 </div>
               </div>
 
@@ -754,14 +760,15 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                 )}
 
                 {tab === "checks" && <Checks d={d} busy={busy} onRerun={() => act("re-run checks", () => api.prRerun(root, d.number))} />}
+
+                {tab === "review" && canReview && (
+                  <ReviewTab
+                    d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy}
+                    onDrop={dropDraft} onSubmit={submitReview} onGoFiles={() => setTab("files")}
+                  />
+                )}
               </div>
 
-              {reviewOpen && (
-                <ReviewSheet
-                  d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy}
-                  onDrop={dropDraft} onCancel={() => setReviewOpen(false)} onSubmit={submitReview}
-                />
-              )}
             </>
           )}
         </div>
@@ -1071,6 +1078,41 @@ function ThreadSnippet({ file, line }: { file?: FileChange; line: number | null 
   );
 }
 
+/** One review thread: where it is anchored, the code it sits on, the exchange,
+ *  and the two things you can do about it. */
+function Thread({ t, fileOf, onResolve, onReply, busy }: {
+  t: PrThread; fileOf: (p: string) => FileChange | undefined;
+  onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void; busy: boolean;
+}) {
+  return (
+    <div className="rounded-md overflow-hidden mb-2" style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
+      <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
+        style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+        <span style={{ color: "var(--primary)" }}>{t.path}{t.line ? `:${t.line}` : ""}</span>
+        {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="the code under this comment has changed since" />}
+        <span className="ml-auto">{t.isResolved ? <Chip text="resolved" tint="var(--success)" /> : <Chip text="open" tint="var(--warning)" />}</span>
+      </div>
+      <ThreadSnippet file={fileOf(t.path)} line={t.line} />
+      {t.comments.map((c, i) => (
+        <div key={c.id} className="px-3 py-2"
+          style={{ paddingLeft: i ? 26 : 12, background: i ? "color-mix(in srgb, var(--border) 9%, transparent)" : undefined }}>
+          <div className="flex items-center gap-1.5 mb-1 text-[10px]">
+            <Avatar login={c.author} size={15} />
+            <b style={{ color: "var(--text)", fontWeight: 500 }}>{c.author}</b>
+            {c.isBot && <Chip text="automation" tint="var(--info)" />}
+            <span className="ml-auto" style={{ color: "var(--text3)" }}>{ago(c.createdAt)}</span>
+          </div>
+          <Md body={c.body} />
+        </div>
+      ))}
+      <div className="flex gap-1.5 px-3 py-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
+        <Btn onClick={() => onReply(t)} disabled={busy} small>reply</Btn>
+        <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "unresolve" : "resolve conversation"}</Btn>
+      </div>
+    </div>
+  );
+}
+
 function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy, fileOf }: {
   d: PrDetail;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
@@ -1079,7 +1121,10 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy, fileOf }
   fileOf: (path: string) => FileChange | undefined;
 }) {
   const kb = Math.round(lanes.bots.reduce((n, c) => n + c.body.length, 0) / 1024);
-  const openN = d.threads.filter((t) => !t.isResolved).length;
+  // Threads whose author never submitted a review of their own — a bot's
+  // findings, or a comment left outside a review. They still need a home.
+  const reviewAuthors = new Set(lanes.humans.map((r) => r.author));
+  const orphanThreads = d.threads.filter((t) => !reviewAuthors.has(t.comments[0]?.author ?? ""));
 
   return (
     <div className="text-[11px]">
@@ -1087,47 +1132,39 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy, fileOf }
       {lanes.humans.length === 0 && lanes.humanComments.length === 0 && (
         <div style={{ color: "var(--text3)" }}>Nobody has said anything yet.</div>
       )}
-      {lanes.humans.map((r, i) => (
-        <Card key={`r${i}`} who={r.author} when={ago(r.submittedAt)}
-          tone={r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined}
-          chip={r.state === "CHANGES_REQUESTED" ? <Chip text="changes requested" tint="var(--error)" />
-            : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
-          {r.body ? <Md body={r.body} /> : <span style={{ color: "var(--text3)" }}>({r.state.toLowerCase().replace("_", " ")}, no note)</span>}
-        </Card>
-      ))}
+      {lanes.humans.map((r, i) => {
+        // The line comments that belong to THIS review. GitHub nests them under
+        // the review they were submitted with, and that grouping is most of the
+        // meaning: a "requested changes" is a verdict, and the threads beneath
+        // it are the reasons. Split apart into separate lanes, you get a
+        // verdict with no reasons and a pile of reasons with no verdict.
+        const mine = d.threads.filter((t) => t.comments[0]?.author === r.author);
+        return (
+          <div key={`r${i}`} className="mb-2">
+            <Card who={r.author} when={ago(r.submittedAt)}
+              tone={r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined}
+              chip={r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
+                : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
+              {r.body ? <Md body={r.body} /> : <span style={{ color: "var(--text3)" }}>({r.state.toLowerCase().replace("_", " ")}, no note)</span>}
+            </Card>
+            {mine.length > 0 && (
+              <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                {mine.map((t) => <Thread key={t.id} t={t} fileOf={fileOf} onResolve={onResolve} onReply={onReply} busy={busy} />)}
+              </div>
+            )}
+          </div>
+        );
+      })}
       {lanes.humanComments.map((c) => (
         <Card key={c.id} who={c.author} when={ago(c.createdAt)}><Md body={c.body} /></Card>
       ))}
 
-      <Lane label="line threads" extra={d.threads.length ? `${openN} open of ${d.threads.length}` : undefined} />
-      {d.threads.length === 0 && <div style={{ color: "var(--text3)" }}>No line comments.</div>}
-      {d.threads.map((t) => (
-        <div key={t.id} className="rounded-md overflow-hidden mb-2" style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
-          <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
-            style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
-            <span style={{ color: "var(--primary)" }}>{t.path}{t.line ? `:${t.line}` : ""}</span>
-            {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="the code under this comment has changed since" />}
-            <span className="ml-auto">{t.isResolved ? <Chip text="resolved" tint="var(--success)" /> : <Chip text="open" tint="var(--warning)" />}</span>
-          </div>
-          <ThreadSnippet file={fileOf(t.path)} line={t.line} />
-          {t.comments.map((c, i) => (
-            <div key={c.id} className="px-3 py-2"
-              style={{ paddingLeft: i ? 26 : 12, background: i ? "color-mix(in srgb, var(--border) 9%, transparent)" : undefined }}>
-              <div className="flex items-center gap-1.5 mb-1 text-[10px]">
-                <Avatar login={c.author} size={15} />
-                <b style={{ color: "var(--text)", fontWeight: 500 }}>{c.author}</b>
-                {c.isBot && <Chip text="automation" tint="var(--info)" />}
-                <span className="ml-auto" style={{ color: "var(--text3)" }}>{ago(c.createdAt)}</span>
-              </div>
-              <Md body={c.body} />
-            </div>
-          ))}
-          <div className="flex gap-1.5 px-3 py-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
-            <Btn onClick={() => onReply(t)} disabled={busy} small>reply</Btn>
-            <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "unresolve" : "resolve conversation"}</Btn>
-          </div>
-        </div>
-      ))}
+      {orphanThreads.length > 0 && (
+        <>
+          <Lane label="line threads" extra={`${orphanThreads.filter((t) => !t.isResolved).length} open of ${orphanThreads.length}`} />
+          {orphanThreads.map((t) => <Thread key={t.id} t={t} fileOf={fileOf} onResolve={onResolve} onReply={onReply} busy={busy} />)}
+        </>
+      )}
 
       <Lane label="automation" extra={lanes.bots.length ? `${lanes.bots.length} comments · ${kb} KB` : undefined} />
       {lanes.botReviews.map((r, i) => (
@@ -1268,98 +1305,116 @@ function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: 
 /**
  * Finishing a review: a verdict, a note, and everything queued while reading.
  *
- * The queued comments are the point. GitHub calls this a pending review, and it
- * exists so a reviewer leaves one notification rather than a dozen — the
- * comments and the verdict travel in a single request.
+ * A tab rather than a sheet, because reviewing is a place you go, not a dialog
+ * you dismiss — and because it only exists on pull requests that are somebody
+ * else's. The queued comments are the point: GitHub calls this a pending
+ * review, and it exists so a reviewer leaves one notification rather than a
+ * dozen. The comments and the verdict travel in a single request.
  */
-function ReviewSheet({ d, drafts, seen, busy, onDrop, onCancel, onSubmit }: {
+function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
   d: PrDetail; drafts: DraftComment[]; seen: number; busy: boolean;
-  onDrop: (i: number) => void; onCancel: () => void;
+  onDrop: (i: number) => void;
   onSubmit: (verb: "approve" | "request_changes" | "comment", body: string) => void;
+  onGoFiles: () => void;
 }) {
   const [verb, setVerb] = useState<"comment" | "approve" | "request_changes">("comment");
   const [body, setBody] = useState("");
   const [preview, setPreview] = useState(false);
+  const nothing = !body.trim() && drafts.length === 0;
 
   return (
-    <div className="shrink-0 flex flex-col" style={{
-      borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
-      background: "color-mix(in srgb, var(--border) 8%, transparent)", maxHeight: "62%",
-    }}>
-      <div className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
-        style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
-        <b style={{ color: "var(--text)", fontWeight: 500 }}>Finish your review</b>
-        <span style={{ color: "var(--text3)" }}>#{d.number}</span>
-        <span className="ml-auto tabular-nums text-[10px]" style={{ color: "var(--text3)" }}>{seen}/{d.files.length} files viewed</span>
-      </div>
+    <div className="flex flex-col gap-3">
+      {d.viewerRequested && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-[11.5px]"
+          style={{ border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)", background: "color-mix(in srgb, var(--warning) 9%, transparent)" }}>
+          <Avatar login={d.author} size={18} />
+          <span style={{ color: "var(--text2)" }}>
+            <b style={{ color: "var(--text)", fontWeight: 500 }}>{d.author}</b> requested your review on this pull request
+          </span>
+        </div>
+      )}
 
-      <div className="flex-1 overflow-y-auto min-h-0 agx-scroll p-3 flex flex-col gap-2">
-        {drafts.length > 0 && (
-          <div className="rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
-            <div className="px-2.5 py-1 text-[10px] uppercase tracking-wider"
-              style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
-              {drafts.length} pending comment{drafts.length === 1 ? "" : "s"} — sent with this review
-            </div>
-            {drafts.map((c, i) => (
-              <div key={i} className="flex items-start gap-2 px-2.5 py-1.5 text-[11px]"
-                style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}>
-                <span className="shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.path.split("/").pop()}:{c.line}</span>
-                <span className="min-w-0 flex-1" style={{ color: "var(--text2)" }}>{c.body}</span>
-                <button onClick={() => onDrop(i)} className="shrink-0 text-[10px]" style={{ color: "var(--error)" }}>drop</button>
+      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+        <div className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
+          style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+          <b style={{ color: "var(--text)", fontWeight: 500 }}>Finish your review</b>
+          <span style={{ color: "var(--text3)" }}>#{d.number}</span>
+          <button onClick={onGoFiles} className="ml-auto tabular-nums text-[10px]" style={{ color: seen < d.files.length ? "var(--primary)" : "var(--text3)" }}>
+            {seen}/{d.files.length} files viewed
+          </button>
+        </div>
+
+        <div className="p-3 flex flex-col gap-2">
+          {drafts.length > 0 ? (
+            <div className="rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+              <div className="px-2.5 py-1 text-[10px] uppercase tracking-wider"
+                style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+                {drafts.length} pending comment{drafts.length === 1 ? "" : "s"} — sent with this review
               </div>
+              {drafts.map((c, i) => (
+                <div key={i} className="flex items-start gap-2 px-2.5 py-1.5 text-[11px]"
+                  style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}>
+                  <span className="shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.path.split("/").pop()}:{c.line}</span>
+                  <span className="min-w-0 flex-1" style={{ color: "var(--text2)" }}>{c.body}</span>
+                  <button onClick={() => onDrop(i)} className="shrink-0 text-[10px]" style={{ color: "var(--error)" }}>drop</button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
+              No line comments queued. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
+              use “+ comment” on a hunk to attach one to a line.
+            </div>
+          )}
+
+          <div className="flex gap-0 text-[10.5px]" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+            {(["write", "preview"] as const).map((m) => (
+              <button key={m} onClick={() => setPreview(m === "preview")} className="px-3 py-1"
+                style={{
+                  color: (m === "preview") === preview ? "var(--text)" : "var(--text3)",
+                  borderBottom: `2px solid ${(m === "preview") === preview ? "var(--primary)" : "transparent"}`,
+                }}>{m}</button>
             ))}
           </div>
-        )}
 
-        <div className="flex gap-0 text-[10.5px]" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
-          {(["write", "preview"] as const).map((m) => (
-            <button key={m} onClick={() => setPreview(m === "preview")}
-              className="px-3 py-1"
-              style={{
-                color: (m === "preview") === preview ? "var(--text)" : "var(--text3)",
-                borderBottom: `2px solid ${(m === "preview") === preview ? "var(--primary)" : "transparent"}`,
-              }}>{m}</button>
-          ))}
-        </div>
+          {preview ? (
+            <div className="rounded p-2.5 min-h-[80px]" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+              {body.trim() ? <Md body={body} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
+            </div>
+          ) : (
+            <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5}
+              placeholder="Leave a comment — markdown works here."
+              className="w-full rounded p-2.5 text-[11.5px] bg-transparent resize-y"
+              style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }} />
+          )}
 
-        {preview ? (
-          <div className="rounded p-2.5 min-h-[76px]" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
-            {body.trim() ? <Md body={body} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
+          <div className="flex flex-col gap-1 text-[11.5px]" style={{ color: "var(--text2)" }}>
+            {([
+              ["comment", "Comment", "General feedback without explicit approval.", "var(--text)"],
+              ["approve", "Approve", "Submit feedback and approve merging these changes.", "var(--success)"],
+              ["request_changes", "Request changes", "Submit feedback that must be addressed first.", "var(--error)"],
+            ] as const).map(([id, label, hint, tint]) => (
+              <label key={id} className="flex items-start gap-2 cursor-pointer">
+                <input type="radio" name="agx-review-verb" checked={verb === id} onChange={() => setVerb(id)}
+                  style={{ accentColor: "var(--primary)", marginTop: 3 }} />
+                <span>
+                  <b style={{ color: tint, fontWeight: 500 }}>{label}</b>
+                  <span className="block text-[10.5px]" style={{ color: "var(--text3)" }}>{hint}</span>
+                </span>
+              </label>
+            ))}
           </div>
-        ) : (
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={4}
-            placeholder="Leave a comment — markdown works here."
-            className="w-full rounded p-2.5 text-[11.5px] bg-transparent resize-y"
-            style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }} />
-        )}
 
-        <div className="flex flex-col gap-1 text-[11.5px]" style={{ color: "var(--text2)" }}>
-          {([
-            ["comment", "Comment", "General feedback without explicit approval.", "var(--text)"],
-            ["approve", "Approve", "Submit feedback and approve merging these changes.", "var(--success)"],
-            ["request_changes", "Request changes", "Submit feedback that must be addressed first.", "var(--error)"],
-          ] as const).map(([id, label, hint, tint]) => (
-            <label key={id} className="flex items-start gap-2 cursor-pointer">
-              <input type="radio" name="agx-review-verb" checked={verb === id} onChange={() => setVerb(id)}
-                style={{ accentColor: "var(--primary)", marginTop: 3 }} />
-              <span>
-                <b style={{ color: tint, fontWeight: 500 }}>{label}</b>
-                <span className="block text-[10.5px]" style={{ color: "var(--text3)" }}>{hint}</span>
-              </span>
-            </label>
-          ))}
+          <div className="flex items-center gap-2 pt-1">
+            <span className="text-[10px]" style={{ color: "var(--text3)" }}>
+              Posted publicly to your team{drafts.length ? `, with ${drafts.length} line comment${drafts.length === 1 ? "" : "s"}` : ""}.
+            </span>
+            <span className="ml-auto">
+              <Btn onClick={() => onSubmit(verb, body)} disabled={busy || (verb !== "approve" && nothing)} primary
+                title={verb !== "approve" && nothing ? "say something, or queue a line comment" : undefined}>submit review</Btn>
+            </span>
+          </div>
         </div>
-      </div>
-
-      <div className="flex items-center gap-2 px-3 py-2 shrink-0"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
-        <span className="text-[10px]" style={{ color: "var(--text3)" }}>
-          {verb === "approve" ? "Posted publicly to your team." : "Posted publicly. Say what needs to change."}
-        </span>
-        <span className="ml-auto flex gap-1.5">
-          <Btn onClick={onCancel} disabled={busy} small>cancel</Btn>
-          <Btn onClick={() => onSubmit(verb, body)} disabled={busy} primary>submit review</Btn>
-        </span>
       </div>
     </div>
   );
