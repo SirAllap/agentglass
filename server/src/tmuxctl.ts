@@ -332,16 +332,23 @@ export function runAction(t: TmuxTarget, action: TmuxAction, window?: string, na
 const BORROWED = ["status", "status-format[0]", "status-style"];
 
 /**
- * What `status` this session actually resolves to, set on the session or
- * inherited from the global options.
+ * Whether this user's tmux normally has a status line at all, read from the
+ * *global* options rather than the session's.
  *
- * Needed because "already off" is a real answer and a different one from "on":
- * a user who runs tmux with no status line has nothing for us to hide, and
- * turning one *on* to blank it would cost them a row for no reason.
+ * The question being answered is "does this person run tmux with a status
+ * line", and the global options are where that is written — a `.tmux.conf`
+ * with `set -g status off` is someone who has decided, and borrowing a row from
+ * them would be the panel deciding it knows better.
+ *
+ * The session's own value cannot answer it, because the panel is the thing most
+ * likely to have set it. Every session a previous version of this touched is
+ * carrying `status off` that *we* put there, and a session left that way by a
+ * server that was killed rather than closed is indistinguishable from a
+ * deliberate one. Reading the session would make an old bug look like a
+ * preference and quietly refuse to fix it.
  */
-function effectiveStatus(t: TmuxTarget): string {
-  const own = (tmux(t.socket, ["show-options", "-t", t.id, "-v", "status"]) || "").trim();
-  return own || (tmux(t.socket, ["show-options", "-gv", "status"]) || "").trim();
+function statusInConfig(t: TmuxTarget): string {
+  return (tmux(t.socket, ["show-options", "-gv", "status"]) || "").trim();
 }
 
 /**
@@ -376,10 +383,10 @@ export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
     // session with an invisible status line and no way to know why.
     return BORROWED.map((opt) => tmux(t.socket, ["set-option", "-t", t.id, "-u", opt]) !== null).every(Boolean);
   }
-  // Nothing to borrow from someone who runs without one. They already live with
-  // prompts drawing over their shell in every other terminal they use, and
-  // adding a row here would be the panel deciding it knows better.
-  if (effectiveStatus(t) === "off") return false;
+  // Nothing to borrow from someone whose config runs without one. They already
+  // live with prompts drawing over their shell in every other terminal they
+  // use, and adding a row here would be the panel deciding it knows better.
+  if (statusInConfig(t) === "off") return false;
   const set = (opt: string, val: string) => tmux(t.socket, ["set-option", "-t", t.id, opt, val]) !== null;
   const on = set("status", "on");
   // `bg=default` is the terminal's background, which is the panel's background,
