@@ -9,9 +9,11 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import type { GitRepoRef, ProjectCommand, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
+import type { GitRepoRef, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
+import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
@@ -24,6 +26,21 @@ export function lastTerminalRoot(): string {
 /** Marks the one shell per repo that belongs to a docked console strip. */
 const CONSOLE_TITLE = "console";
 
+/**
+ * Where the docked console is pointed, remembered separately from the terminal
+ * view's own repo.
+ *
+ * They are not the same question. The view is "where am I working"; the console
+ * under Docker's logs is "which checkout do I want to run migrations in", and
+ * on a machine with a worktree per ticket those are routinely different
+ * directories. Sharing one key made picking a repo in the console silently move
+ * the terminal view too.
+ */
+const CONSOLE_ROOT_KEY = "agentglass.consoleRoot";
+export function consoleRoot(): string {
+  try { return localStorage.getItem(CONSOLE_ROOT_KEY) || lastTerminalRoot(); } catch { return lastTerminalRoot(); }
+}
+
 /** Status dot, for anywhere that shows a shell's state. TermView builds a
  *  richer one that names the shell; this is the shared minimum. */
 const SESS_DOT: Record<SessStatus, { color: string; label: string }> = {
@@ -34,7 +51,6 @@ const SESS_DOT: Record<SessStatus, { color: string; label: string }> = {
   error: { color: "var(--error)", label: "disconnected" },
   unauthorized: { color: "var(--error)", label: "unauthorized ⚿" },
 };
-const QUICK = ["git status", "git log --oneline -15", "git diff --stat", "git branch -vv"];
 const repoName = (p: string) => p.split("/").pop() || p;
 
 // xterm draws in its own DOM — resolve theme vars to concrete colors for it.
@@ -320,12 +336,47 @@ function createSession(root: string): Sess {
     fontSize: 13,
     lineHeight: 1.2,
     cursorBlink: true,
-    scrollback: 10_000,
+    /*
+     * Scrollback, and why it is not ten thousand any more.
+     *
+     * xterm keeps every line as cell data, so a wide window at 10k lines is
+     * tens of megabytes per shell — and this app holds several open at once,
+     * deliberately, so a build in one keeps running while you work in another.
+     * It is also what a resize has to reflow: every line, on every fit, which
+     * is the multi-second freeze people report when dragging a pane.
+     *
+     * Four thousand lines is still more than a screenful of build output by two
+     * orders of magnitude, and it is what the scroll bar can realistically be
+     * dragged through.
+     */
+    scrollback: 4_000,
     theme: themeFromCss(),
     macOptionIsMeta: true,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  /*
+   * Draw on the GPU when the machine will let us.
+   *
+   * xterm's default renderer builds DOM for every cell, which is the single
+   * biggest source of multi-second stalls when a shell is producing output
+   * quickly — a build log or `cat` on anything large. The WebGL renderer draws
+   * the same cells as textured quads and does not care how fast they arrive.
+   *
+   * Guarded twice, because a GPU is not a promise. The constructor throws where
+   * there is no WebGL2 context at all (a software-rendered session, a remote
+   * desktop, `--disable-gpu`), and a context can be lost *later* — a driver
+   * reset, the compositor reclaiming memory, waking from suspend. Both paths
+   * fall back to the DOM renderer, which is slower and always works; a terminal
+   * that renders slowly is a terminal, a terminal that renders nothing is a
+   * bug report. Neither case is worth a message: the shell keeps running and
+   * the user has nothing to decide.
+   */
+  try {
+    const gl = new WebglAddon();
+    gl.onContextLoss(() => { try { gl.dispose(); } catch { /* already gone */ } });
+    term.loadAddon(gl);
+  } catch { /* no WebGL2 here — the DOM renderer stays */ }
   // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === "keydown" && e.key === "Escape" && e.shiftKey) { panelClose(); return false; }
@@ -471,12 +522,42 @@ export function runInConsole(root: string, cmd: string) {
  * value of a console under the logs is that it keeps its history and its
  * running job while you look around above it.
  */
-export function ConsoleStrip({ root, open, height, onHeight, onClose }: {
+export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClose }: {
   root: string; open: boolean; height: number; onHeight: (h: number) => void; onClose: () => void;
 }) {
   const slot = useRef<HTMLDivElement>(null);
   const [, redraw] = useReducer((x: number) => x + 1, 0);
   const [sid, setSid] = useState<string>("");
+  /**
+   * Which checkout this console is in — its own choice, falling back to the
+   * terminal view's repo until someone makes one. Changing it swaps which
+   * per-repo console session the strip is showing; the one you were in keeps
+   * running, which is the same promise the strip already makes when you close
+   * it.
+   */
+  const [picked, setPicked] = useState<string>(() => { try { return localStorage.getItem(CONSOLE_ROOT_KEY) || ""; } catch { return ""; } });
+  const root = picked || fallbackRoot;
+  const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  const [repoOpen, setRepoOpen] = useState(false);
+  const [repoQuery, setRepoQuery] = useState("");
+  const pickerRef = useRef<HTMLDivElement>(null);
+  useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); });
+  // On demand: the Docker panel mounts this strip on every open, and most opens
+  // never touch the picker.
+  useEffect(() => {
+    if (!repoOpen || repos.length || IS_DEMO) return;
+    api.gitRepos().then(({ repos: r }) => setRepos(r)).catch(() => {});
+  }, [repoOpen, repos.length]);
+  const chooseRepo = (next: string) => {
+    setPicked(next);
+    try { localStorage.setItem(CONSOLE_ROOT_KEY, next); } catch { /* private mode — lasts the session */ }
+    setRepoOpen(false); setRepoQuery("");
+  };
+  const runHere = useCallback((cmd: string) => {
+    const s = sessions.get(sid);
+    if (!s || IS_DEMO) return;
+    runInShell(s, cmd);
+  }, [sid]);
 
   // One console shell per repo, reused. `sessionsFor` already orders by
   // creation, so the first console-tagged one is stable across remounts.
@@ -498,7 +579,13 @@ export function ConsoleStrip({ root, open, height, onHeight, onClose }: {
     s.term.options.theme = themeFromCss();
     const unTheme = applyThemeLive(s);
     s.subs.add(redraw);
+    // Debounced: a ResizeObserver fires on every frame of a drag, and each fit
+    // reflows the entire scrollback *and* sends a resize ioctl to the shell.
+    // Undebounced that is the drag stuttering and the shell being told sixty
+    // different sizes on the way to the one that matters.
+    let fitTimer: ReturnType<typeof setTimeout> | null = null;
     const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
+    const fitSoon = () => { if (fitTimer) clearTimeout(fitTimer); fitTimer = setTimeout(doFit, 100); };
     doFit();
     if (s.status === "idle") connect(s);
     // Opening a shell is asking to type in it. The strip mounted focused on
@@ -507,9 +594,10 @@ export function ConsoleStrip({ root, open, height, onHeight, onClose }: {
     // forget you have to make. Same rAF as the terminal view's own focus: the
     // element has to be attached and laid out first.
     requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
-    const ro = new ResizeObserver(doFit);
+    const ro = new ResizeObserver(fitSoon);
     ro.observe(el);
     return () => {
+      if (fitTimer) clearTimeout(fitTimer);
       ro.disconnect();
       unTheme();
       s.subs.delete(redraw);
@@ -538,14 +626,62 @@ export function ConsoleStrip({ root, open, height, onHeight, onClose }: {
   if (!open) return null;
   return (
     <div className="shrink-0 flex flex-col" style={{ height: `${Math.round(height * 100)}%`, borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+      {/* The strip's own toolbar. Everything in it stops the drag from
+          starting — the whole bar is the resize handle, so a click that also
+          began a drag would move the console every time you opened a menu. */}
       <div onMouseDown={drag}
         className="shrink-0 flex items-center gap-2 px-3 py-1 cursor-row-resize select-none"
         style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)" }}>
-        <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--primary-hover)" }}>console</span>
-        <span className="text-[9.5px] t-dim2 truncate">{root ? repoName(root) : "no repo"}</span>
-        {sess && <span className="text-[9px]" style={{ color: SESS_DOT[sess.status].color }}>● {SESS_DOT[sess.status].label}</span>}
-        <span className="ml-auto text-[9px] t-dim2">drag to resize</span>
-        <button onClick={(e) => { e.stopPropagation(); onClose(); }} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70" title="hide the console (the shell keeps running)">✕</button>
+        <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--primary-hover)" }}>console</span>
+
+        {/* Which checkout this shell is in. The console is where migrations get
+            run, and on a worktree-per-ticket repo the right directory is rarely
+            the one the terminal view happens to be sitting in — so it picks its
+            own, and remembers it. */}
+        <div className="relative shrink-0" ref={pickerRef} onMouseDown={(e) => e.stopPropagation()}>
+          <button onClick={() => setRepoOpen((o) => !o)} disabled={IS_DEMO}
+            className="flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-md max-w-[200px]"
+            style={{ background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
+            title={root || "no repo"}>
+            <span className="truncate">{root ? repoName(root) : "no repo"}</span><span className="t-dim2">▼</span>
+          </button>
+          {repoOpen && (
+            <div className="absolute left-0 rounded-lg text-[11px] shadow-2xl flex flex-col"
+              style={{ zIndex: 40, bottom: "calc(100% + 4px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 360, overflow: "hidden" }}>
+              <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="filter repos…"
+                className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
+                style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+              <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
+                {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch + " " + r.root).toLowerCase().includes(q); }).map((r) => (
+                  <button key={r.root} onClick={() => chooseRepo(r.root)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
+                    style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
+                    {/* Same badge and same name rule as every other picker: a
+                        worktree IS its branch, a project is its folder. */}
+                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
+                      style={r.worktreeOf
+                        ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
+                        : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{r.worktreeOf ? "WT" : "REPO"}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.root}>{r.worktreeOf ? r.branch : r.name}</span>
+                    {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
+                  </button>
+                ))}
+                {!repos.length && <div className="px-3 py-2 t-dim2">reading repos…</div>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {sess && <span className="text-[9px] shrink-0" style={{ color: SESS_DOT[sess.status].color }}>● {SESS_DOT[sess.status].label}</span>}
+
+        {/* The same control the terminal view mounts — commands and pins, one
+            component, so the two shells cannot drift apart again. Opens upward:
+            there is nothing below this strip to open into. */}
+        <div className="flex items-center gap-2 min-w-0" onMouseDown={(e) => e.stopPropagation()}>
+          <CommandBar root={root} disabled={!sid} font={TERM_FONT} onRun={runHere} dropUp />
+        </div>
+
+        <span className="ml-auto text-[9px] t-dim2 shrink-0">drag to resize</span>
+        <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="hide the console (the shell keeps running)">✕</button>
       </div>
       <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--bg)" }} onClick={() => sess?.term.focus()} />
     </div>
@@ -558,16 +694,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [root, setRoot] = useState<string>(() => { try { return localStorage.getItem(ROOT_KEY) || ""; } catch { return ""; } });
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
+  /** Only whether the server allows commands at all — the list, its dropdown
+   *  and the pins are the shared CommandBar's business now. */
   const [cmds, setCmds] = useState<TerminalCommands | null>(null);
-  const [cmdsOpen, setCmdsOpen] = useState(false);
-  const [cmdQuery, setCmdQuery] = useState("");
   /** Both dropdowns live in here, so one listener can tell "clicked outside"
    *  from "clicked a row". */
   const pickersRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
 
-  useDismiss(repoOpen || cmdsOpen, pickersRef, () => { setRepoOpen(false); setCmdsOpen(false); });
+  useDismiss(repoOpen, pickersRef, () => setRepoOpen(false));
 
   useEffect(() => {
     if (!open) return;
@@ -584,7 +720,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   useEffect(() => {
     if (!open || !root) return;
     setCmds(null);
-    api.terminalCommands(root).then(setCmds).catch(() => setCmds({ enabled: true, make: [], scripts: [] }));
+    loadCommands(root).then(setCmds);
   }, [open, root]);
 
   // Which shells are on screen. One id per visible pane: a single pane is the
@@ -621,7 +757,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   useEffect(() => {
     if (!open || IS_DEMO) return;
     panelClose = () => closeRef.current();
-    const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void }[] = [];
+    const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void; stopFit: () => void }[] = [];
     paneIds.forEach((id, i) => {
       const s = sessions.get(id);
       const el = paneRefs.current[i];
@@ -631,19 +767,25 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       s.term.options.theme = themeFromCss(); // pick up theme switches between opens
       const unTheme = applyThemeLive(s);
       s.subs.add(force);
+      // Same debounce as the console strip: one fit when the drag settles, not
+      // one per frame of it — each costs a full reflow of the scrollback and a
+      // resize ioctl to the shell.
+      let fitTimer: ReturnType<typeof setTimeout> | null = null;
       const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
+      const fitSoon = () => { if (fitTimer) clearTimeout(fitTimer); fitTimer = setTimeout(doFit, 100); };
       doFit();
       if (s.status === "idle") connect(s);
-      const ro = new ResizeObserver(doFit);
+      const ro = new ResizeObserver(fitSoon);
       ro.observe(el);
-      mounted.push({ s, el, ro, unTheme });
+      mounted.push({ s, el, ro, unTheme, stopFit: () => { if (fitTimer) clearTimeout(fitTimer); } });
     });
     const focused = sessions.get(paneIds[focusIdx] ?? "");
     if (focused) requestAnimationFrame(() => focused.term.focus());
     return () => {
       panelClose = () => {};
-      for (const { s, el, ro, unTheme } of mounted) {
+      for (const { s, el, ro, unTheme, stopFit } of mounted) {
         ro.disconnect();
+        stopFit();
         unTheme();
         s.subs.delete(force);
         if (s.holder.parentElement === el) el.removeChild(s.holder);
@@ -763,7 +905,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (!root || IS_DEMO) return;
     const s = sessions.get(paneIds[focusIdx] ?? "") ?? createSession(root);
     runInShell(s, cmd);
-    setCmdsOpen(false);
   }, [root, paneIds, focusIdx]);
 
   const restart = useCallback(() => {
@@ -776,7 +917,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   }, [paneIds, focusIdx]);
 
   const repoRef = repos.find((r) => r.root === root);
-  const nCmds = (cmds?.make.length ?? 0) + (cmds?.scripts.length ?? 0);
   const disabled = cmds ? !cmds.enabled : false;
 
   const statusDot: Record<SessStatus, { color: string; label: string }> = {
@@ -814,7 +954,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   <span className={viewTitleClass} style={{ color: "var(--text)" }}>Terminal</span>
                   <div ref={pickersRef} className="flex items-center gap-3">
                   <div className="relative">
-                    <button onClick={() => { setRepoOpen((o) => !o); setCmdsOpen(false); }} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
+                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
                       <span className="font-medium">{repoRef ? repoName(repoRef.root) : "pick a repo"}</span><span className="t-dim2">▼</span>
                     </button>
                     {repoOpen && (
@@ -879,57 +1019,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     )}
                   </div>
 
-                  {/* project commands: Makefile targets + package scripts, explained */}
-                  <div className="relative">
-                    <button onClick={() => { setCmdsOpen((o) => !o); setRepoOpen(false); }} disabled={!nCmds}
-                      title="Ready-to-run project commands: Makefile targets & package scripts, with what each one does"
-                      className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg font-medium"
-                      style={{ color: nCmds ? "var(--primary-hover)" : "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", opacity: nCmds ? 1 : 0.5 }}>
-                      ⚙ commands{nCmds ? ` (${nCmds})` : cmds ? " (none)" : " …"}<span className="t-dim2">▼</span>
-                    </button>
-                    {cmdsOpen && cmds && (
-                      <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", width: 460, maxHeight: 480, overflow: "hidden" }}>
-                        {/* A real project has more targets than fit on a screen
-                            — this repo's own reference monorepo has 150 in one
-                            Makefile — so scrolling to find `migrate` was the
-                            only way to run it. Matches the name and what the
-                            target says it does, since half of them are only
-                            recognisable by their description. */}
-                        <input autoFocus value={cmdQuery} onChange={(e) => setCmdQuery(e.target.value)}
-                          placeholder="filter commands…"
-                          className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
-                          style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
-                        <div className="agx-scroll overflow-y-auto py-1" style={{ minHeight: 0 }}>
-                          {/* commands come from the whole selected project — the
-                              root Makefile/package.json plus any in subfolders —
-                              so each folder gets its own labelled group */}
-                          {groupByDir(matchCommands(cmds.make, cmdQuery)).map(([dir, list]) => (
-                            <div key={"m:" + dir}>
-                              <div className="px-3 pt-1.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">make — {dir ? `${dir}/Makefile` : "Makefile"}</div>
-                              {list.map((c) => <CommandRow key={"m:" + dir + ":" + c.name} c={c} onRun={run} />)}
-                            </div>
-                          ))}
-                          {groupByDir(matchCommands(cmds.scripts, cmdQuery)).map(([dir, list]) => (
-                            <div key={"s:" + dir}>
-                              <div className="px-3 pt-2 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">scripts — {dir ? `${dir}/package.json` : "package.json"}</div>
-                              {list.map((c) => <CommandRow key={"s:" + dir + ":" + c.name} c={c} onRun={run} />)}
-                            </div>
-                          ))}
-                          {!matchCommands(cmds.make, cmdQuery).length && !matchCommands(cmds.scripts, cmdQuery).length && (
-                            <div className="px-3 py-2 t-dim2">no command matches “{cmdQuery.trim()}”</div>
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </div>
 
-                  </div>
-
-                  <div className="flex items-center gap-1 overflow-x-auto agx-scroll">
-                    {QUICK.map((q) => (
-                      <button key={q} onClick={() => run(q)} disabled={!root || IS_DEMO || disabled} className="text-[10px] px-2 py-1 rounded-md whitespace-nowrap" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>{q}</button>
-                    ))}
-                  </div>
+                  {/* Commands and pins — the same control the docked console
+                      mounts, so the two shells offer the same thing. Its own
+                      dropdown state lives inside it, which is why it sits
+                      outside the pickers group above. */}
+                  <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} />
 
                   <div className="ml-auto flex items-center gap-1.5 shrink-0">
                     <span onClick={status === "unauthorized" ? reauthPrompt : undefined}
@@ -1106,35 +1202,3 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   );
 }
 
-/**
- * Filter the command list by name, description or folder.
- *
- * Description included deliberately: a Makefile names things like `infra.up`
- * and `check.build_id`, so what you remember is usually what it *does*, not
- * what it is called.
- */
-function matchCommands(list: ProjectCommand[], query: string): ProjectCommand[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return list;
-  return list.filter((c) => `${c.name} ${c.desc ?? ""} ${c.dir ?? ""}`.toLowerCase().includes(q));
-}
-
-/** Bucket commands by the project folder they belong to, repo root first. */
-function groupByDir(list: ProjectCommand[]): [string, ProjectCommand[]][] {
-  const by = new Map<string, ProjectCommand[]>();
-  for (const c of list) {
-    const dir = c.dir ?? "";
-    if (!by.has(dir)) by.set(dir, []);
-    by.get(dir)!.push(c);
-  }
-  return [...by.entries()].sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)));
-}
-
-function CommandRow({ c, onRun }: { c: ProjectCommand; onRun: (cmd: string) => void }) {
-  return (
-    <button onClick={() => onRun(c.cmd)} title={c.cmd} className="w-full text-left px-3 py-1.5 flex items-baseline gap-2.5 hover:bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]">
-      <span className="shrink-0 font-medium" style={{ color: "var(--primary-hover)", fontFamily: TERM_FONT }}>{c.cmd}</span>
-      <span className="min-w-0 flex-1 truncate t-dim2">{c.desc || "—"}</span>
-    </button>
-  );
-}
