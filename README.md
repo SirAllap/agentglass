@@ -684,7 +684,6 @@ other by session, so the same turn is never counted twice.
 Where this is going — themes, not dates. The living version is the issue tracker; the [`help wanted`](https://github.com/SirAllap/agentglass/labels/help%20wanted) and [`good first issue`](https://github.com/SirAllap/agentglass/labels/good%20first%20issue) labels mark the best places to start.
 
 **Now**
-- Tell a slow tool call from a hung one by evidence of life, not a timer — [#134](https://github.com/SirAllap/agentglass/issues/134)
 - Lead with a verdict: what's running, what's stuck, what needs you now — [#42](https://github.com/SirAllap/agentglass/issues/42)
 - Windows: a usable terminal panel, or an honest disable — [#98](https://github.com/SirAllap/agentglass/issues/98)
 
@@ -702,6 +701,7 @@ Where this is going — themes, not dates. The living version is the issue track
 - Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
 
 **Recently shipped** — see the [releases](https://github.com/SirAllap/agentglass/releases) for the full record.
+- **unreleased** — a slow tool call is told from a hung one by evidence rather than by a timer, per tool class, with "can't tell" as a real answer ([#134](https://github.com/SirAllap/agentglass/issues/134)); the UI says so when something other than agentglass owns `:4000`; a fresh install has somewhere to look for repos
 - **v0.5.0** — pull request review inside the cockpit, and the freeze is gone: the event loop is watched, and every expensive git, docker and database read left the thread that carries the terminal
 - **v0.4.0** — evidence-of-life signal for open tool calls; the shell no longer adopts a stranger's server on `:4000`
 - **v0.3.0** — in-app merge-conflict resolution, whole-project docker controls, a rearrangeable workspace, and an in-app updater
