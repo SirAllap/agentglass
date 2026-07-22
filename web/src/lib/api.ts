@@ -25,6 +25,67 @@ export const SERVER: string =
   DESKTOP_API?.replace(/\/$/, "") ||
   (SERVED_BY_API ? location.origin : `http://${location.hostname}:4000`);
 
+/**
+ * Whether the line above *guessed* the origin rather than being told it.
+ *
+ * The three configured paths are known-good: `VITE_CW_SERVER` was typed by
+ * someone, the desktop shell probes and hands over the origin it verified, and
+ * a page the server itself served is the server by definition. Only the last
+ * fallback is a guess, and it is the one worth checking.
+ */
+export const SERVER_GUESSED: boolean =
+  !(import.meta.env.VITE_CW_SERVER as string | undefined) && !DESKTOP_API && !SERVED_BY_API;
+
+/** What is answering at `SERVER`. `foreign` is the interesting one: something
+ *  is there, it is not us, and every panel is about to ask it for data. */
+export type ServerIdentity = "ours" | "foreign" | "down";
+
+/**
+ * Ask the origin who it is.
+ *
+ * A 200 is not proof of identity, and treating it as proof is a bug with teeth:
+ * `:4000` is a common default (Phoenix ships on it, and any number of local
+ * observability servers pick it), so a machine with one of those running hands
+ * the dashboard a stranger. Every request then gets a 404 or a shape we do not
+ * understand, and the cockpit renders exactly as it would with no agents at
+ * all. The conclusion a reasonable person draws is "this project is broken".
+ *
+ * The desktop shell has checked this since #126 — it walks eight ports and
+ * reads the body of `/health` rather than its status. This is the same check on
+ * the side that never had it: run from source, which is contributors.
+ *
+ * The `ok`/`clients` shape is accepted alongside the name so that a server
+ * built before `service` existed still identifies as ours rather than as an
+ * impostor.
+ */
+export async function probeServer(timeoutMs = 2500): Promise<ServerIdentity> {
+  const ctl = new AbortController();
+  const bail = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${SERVER}/health`, { headers: authHeaders(), signal: ctl.signal });
+    // A server that needs a token is still ours, and the header we just sent
+    // may simply be missing — that is the auth banner's problem, not this one.
+    if (r.status === 401 || r.status === 403) return "ours";
+    if (!r.ok) return "foreign";
+    // A body we cannot read is still a body: something is listening and it is
+    // not us. Letting the parse failure fall through to the catch below would
+    // report "nothing is there" about a server that just answered, which is the
+    // exact confusion this function exists to end — a Phoenix app on :4000
+    // serves HTML from every path, including this one.
+    let j: { service?: unknown; ok?: unknown; clients?: unknown };
+    try { j = await r.json(); } catch { return "foreign"; }
+    return j.service === "agentglass" || (j.ok === true && typeof j.clients === "number") ? "ours" : "foreign";
+  } catch (e) {
+    // Refused, DNS, CORS, or the abort above: nothing usable is there. Told
+    // apart from `foreign` deliberately — "start the server" and "something
+    // else owns this port" are different problems with different fixes, and
+    // today they look identical.
+    return (e as Error)?.name === "AbortError" ? "foreign" : "down";
+  } finally {
+    clearTimeout(bail);
+  }
+}
+
 /** Auth token for a server that requires one (exposed / multi-user box). Read
  *  once from `?token=` — then stripped from the URL bar so it isn't shoulder-
  *  surfed or copied around — or from a prior localStorage save. Empty on the

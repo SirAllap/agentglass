@@ -29,6 +29,7 @@ import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
 import { VIEW_IDS, loadViewOrder, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import ServerBanner from "./components/ServerBanner.tsx";
 import { chordFromEvent, viewForChord } from "./lib/keybindings.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
@@ -413,6 +414,9 @@ export default function App() {
     <div className="h-screen overflow-hidden flex flex-col relative">
       <div className="aurora" />
       <div className="aurora-grid" />
+
+      {/* Above everything, because when it shows, nothing below it is real. */}
+      <ServerBanner />
 
       <Header
         conn={conn}
