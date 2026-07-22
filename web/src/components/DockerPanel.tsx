@@ -292,6 +292,18 @@ export function DockerView({ active }: { active: boolean }) {
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  /**
+   * Closing the console hands the keyboard back to the panel.
+   *
+   * The strip takes focus the moment it opens — opening a shell is asking to
+   * type in it, and it used to cost a click on the black area first. This is
+   * the other half of that: without it `j`/`k` would go on being swallowed by
+   * a shell that is no longer on screen.
+   */
+  const closeConsole = useCallback(() => {
+    setConsoleOpen(false);
+    requestAnimationFrame(() => frameRef.current?.focus());
+  }, []);
   const logSeq = useRef(0);          // guards stale log responses
   const stuckBottom = useRef(true);  // only auto-scroll when the user is at the bottom
 
@@ -624,7 +636,7 @@ export function DockerView({ active }: { active: boolean }) {
                   open={consoleOpen}
                   height={consoleH}
                   onHeight={setConsoleH}
-                  onClose={() => setConsoleOpen(false)}
+                  onClose={closeConsole}
                 />
 
                 {ov?.available && view === "containers" && (
@@ -637,7 +649,7 @@ export function DockerView({ active }: { active: boolean }) {
                         logs is the sort of thing you only use if you know it
                         is there. It reads as an action, not as a legend. */}
                     <button
-                      onClick={() => setConsoleOpen((v) => !v)}
+                      onClick={() => (consoleOpen ? closeConsole() : setConsoleOpen(true))}
                       className="ml-1 px-2.5 py-1 rounded-lg text-[10.5px] font-medium whitespace-nowrap transition-colors flex items-center gap-1.5"
                       title="A shell in this project, docked under the logs — run make targets, migrations or tests without leaving Docker. It keeps running while you look around."
                       style={{
