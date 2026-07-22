@@ -172,7 +172,25 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                   </button>
 
                   {repos === null && <div className="px-3 py-3 text-[11px] t-dim2">looking for repos…</div>}
-                  {repos !== null && !shown.length && <div className="px-3 py-3 text-[11px] t-dim2">no repos found{terms.length ? " for that filter" : ""}</div>}
+                  {/* Two different empty states. A filter that matches nothing
+                      is about the filter; an empty list with no filter is about
+                      configuration, and saying "no repos found" there states a
+                      fact about the machine ("you have no code") when the true
+                      statement is about this app ("nothing is configured to
+                      look in"). The first reads as a bug in discovery, which is
+                      how it was reported. */}
+                  {repos !== null && !shown.length && (terms.length ? (
+                    <div className="px-3 py-3 text-[11px] t-dim2">no repos match that filter</div>
+                  ) : (
+                    <div className="px-3 py-3 text-[11px] t-dim2 leading-relaxed">
+                      <div style={{ color: "var(--text2)" }}>nothing to look in yet</div>
+                      <div className="mt-1">
+                        agentglass sweeps the folders your projects already live in, and the usual ones
+                        (<code>~/code</code>, <code>~/src</code>, <code>~/projects</code>…). If yours are somewhere else,
+                        name them with <code>repoDirs</code> in your config, or <code>AGENTGLASS_REPO_DIRS</code>.
+                      </div>
+                    </div>
+                  ))}
                   {shown.map((r) => (
                     <button key={r.root} onClick={() => choose(r.root)} disabled={busy}
                       className="w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 hover:bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]"

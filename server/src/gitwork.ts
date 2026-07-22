@@ -6,6 +6,7 @@
 
 import { resolve, basename, relative, dirname, sep, join } from "node:path";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
@@ -305,6 +306,39 @@ function reposUnder(baseDir: string, depth = REPO_SCAN_DEPTH): string[] {
  * directly in one of those (a home directory that is itself a repo) still gets
  * listed on its own — it just doesn't drag its neighbours in.
  */
+/**
+ * Where code tends to live, for an install that has nothing else to go on.
+ *
+ * Every other source of roots describes a machine that has already been used:
+ * the cwd the app was launched from (a shortcut, so not a repo), projects the
+ * transcript scan found (no sessions yet), the parents of those projects, repos
+ * seen in telemetry (no events yet), and configured directories (unset). On a
+ * fresh install all five are empty, so the picker offered "Whole machine" and
+ * nothing else — which reads as discovery being broken, when it is discovery
+ * working exactly as written.
+ *
+ * The list is short and conventional on purpose. This is a guess, and a guess
+ * that walks somewhere surprising is worse than no guess at all: each of these
+ * is a directory whose name says "my code is in here", and one `readdir` is the
+ * whole cost of trying. Anything more exotic is what `repoDirs` is for, which
+ * the empty state now names.
+ */
+const CODE_HOMES = ["code", "src", "projects", "dev", "repos", "workspace", "Developer", "Documents/GitHub"];
+
+export function firstRunRoots(): string[] {
+  // `$HOME` first, `homedir()` behind it. On POSIX the variable is the user's
+  // own statement about where their home is, and honouring it is also what
+  // makes this testable against a fixture rather than against the machine the
+  // test happens to run on.
+  const home = process.env.HOME || homedir();
+  const out: string[] = [];
+  for (const name of CODE_HOMES) {
+    const dir = resolve(home, name);
+    try { if (statSync(dir).isDirectory()) out.push(dir); } catch { /* not on this machine */ }
+  }
+  return out;
+}
+
 function codeRootsOf(knownRoots: string[]): string[] {
   const TOO_BROAD = new Set(["/", "/home", "/mnt", "/media", "/run", "/usr", "/opt", "/var", "/tmp", "/etc", "/srv"]);
   const out = new Set<string>();
@@ -528,7 +562,13 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // them and, more to the point, predictable. Inference is only the fallback
   // for an unconfigured install, and it can do no better than guess from the
   // directories that happen to hold existing projects.
-  const bases = only.length ? only : codeRootsOf(knownRoots);
+  // Inferred parents first, then the conventional homes — and the homes only
+  // when inference came back with nothing, which is exactly the fresh-install
+  // case. A machine that has been used has better information about itself than
+  // this list does, and adding `~/code` to it would put back projects the user
+  // has never opened here alongside the ones they work in daily.
+  const inferred = codeRootsOf(knownRoots);
+  const bases = only.length ? only : (inferred.length ? inferred : firstRunRoots());
   for (const base of bases) for (const r of reposUnder(base)) roots.add(r);
   // env overrides for repos that live elsewhere
   for (const p of (process.env.AGENTGLASS_REPOS || "").split(":").filter(Boolean)) { const r = repoRootOf(p); if (r) roots.add(r); }
