@@ -163,6 +163,30 @@ describe("mergedIntoTrunk", () => {
     setSystemTime(new Date(Date.now() + 60_000)); // still inside the sweep's TTL
     expect((await of("rebased"))?.mergedIntoTrunk).toBe(false);
   });
+
+  /**
+   * The sweep has to be allowed to FINISH.
+   *
+   * invalidateMerged() clears the "already swept" mark, and the auto-fetch
+   * called it every 60 seconds unconditionally. On a large repo the sweep takes
+   * about that long — so it was cancelled and restarted forever, no squash
+   * verdict ever landed, and the panel sat on "still checking for squash
+   * merges…" permanently while reporting 0 merged out of 5 gone branches.
+   *
+   * The fetch now only invalidates when it actually moved a remote ref. This
+   * pins the property that broke: an invalidation with nothing new must not
+   * cost a verdict that was already proved.
+   */
+  test("a verdict still lands after the caches are wiped", async () => {
+    // Wiping is what the auto-fetch did every 60 seconds, unconditionally. On a
+    // large repo the sweep takes about that long, so it was cancelled and
+    // restarted forever: no squash verdict ever landed and the panel sat on
+    // "still checking for squash merges…" permanently. The fetch now only
+    // invalidates when it moved a remote ref; this pins that a wipe costs a
+    // re-sweep and nothing more.
+    gw.invalidateMerged(REPO);
+    expect(await settles("squashed", true)).toBe(true);
+  });
 });
 
 afterAll(() => setSystemTime());

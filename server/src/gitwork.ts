@@ -770,6 +770,15 @@ async function autoFetchOnce(): Promise<void> {
   if (!root || !repoRoot(root)) return;
   fetching = true;
   try {
+    // What the remote refs point at, before and after. Invalidating on every
+    // tick regardless is what broke squash detection outright: the sweep that
+    // recognises squash- and rebase-merged branches takes tens of seconds on a
+    // large repo, and this ran every 60s and cleared its "already swept" mark
+    // each time — so on a 38-branch repo the sweep NEVER finished, the panel
+    // sat on "still checking for squash merges…" permanently, and not one
+    // squash-merged branch was ever recognised. Most fetches change nothing.
+    const refsOf = () => git(root, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes"]).stdout;
+    const before = refsOf();
     const proc = Bun.spawn(["git", "-C", root, "fetch", "--all", "--prune", "--quiet"], {
       stdout: "ignore",
       stderr: "ignore",
@@ -778,9 +787,9 @@ async function autoFetchOnce(): Promise<void> {
     const timer = setTimeout(() => proc.kill(), 20_000);
     await proc.exited;
     clearTimeout(timer);
-    // A fetch moves origin/*, which is exactly what "merged into the trunk" is
-    // measured against.
-    invalidateMerged(root);
+    // A fetch that MOVED origin/* changes what "merged into the trunk" means.
+    // One that moved nothing changes nothing, and must not throw away work.
+    if (refsOf() !== before) invalidateMerged(root);
   } catch {
     // Offline, no remote, no credentials — all ordinary. The counts simply stay
     // where they were, which is the same as the old behaviour.
