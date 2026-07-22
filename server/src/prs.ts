@@ -1101,3 +1101,59 @@ export async function commitDiff(rootIn: unknown, shaIn: unknown): Promise<{ ok:
   if (r.code !== 0) return { ok: false, error: (r.stderr || "").trim().split("\n")[0] || "could not read that commit" };
   return { ok: true, text: r.stdout };
 }
+
+/**
+ * A whole review in one shot: a verdict, a body, and the line comments that
+ * were queued up while reading the diff.
+ *
+ * This is what GitHub calls a pending review, and it is a different endpoint
+ * from `gh pr review` — that one posts a verdict with a body and nothing else.
+ * Line comments have to ride along in the same request or they arrive as a
+ * scatter of separate notifications, which is exactly the noise a reviewer is
+ * trying not to create.
+ *
+ * `line` is the line in the file's NEW side. GitHub also accepts the older
+ * `position` (an offset within the diff), which is fragile the moment the
+ * branch moves; the line number survives a rebase.
+ */
+export async function submitReviewWith(
+  rootIn: unknown, numberIn: unknown, verb: unknown, body: unknown, commentsIn: unknown,
+): Promise<PrActionResult> {
+  const g = writeGuard(rootIn); if (g) return g;
+  const n = Number(numberIn);
+  if (!Number.isInteger(n) || n <= 0) return { ok: false, error: "invalid pull request number" };
+  const event = verb === "approve" ? "APPROVE" : verb === "request_changes" ? "REQUEST_CHANGES" : verb === "comment" ? "COMMENT" : null;
+  if (!event) return { ok: false, error: "choose approve, request changes, or comment" };
+
+  const comments: { path: string; line: number; side: string; body: string }[] = [];
+  for (const c of Array.isArray(commentsIn) ? commentsIn : []) {
+    const path = typeof c?.path === "string" ? c.path : "";
+    const line = Number(c?.line);
+    const text = typeof c?.body === "string" ? c.body.trim() : "";
+    if (!path || !Number.isInteger(line) || line <= 0 || !text) continue;
+    comments.push({ path, line, side: c?.side === "LEFT" ? "LEFT" : "RIGHT", body: text });
+  }
+
+  const text = String(body ?? "").trim();
+  // GitHub refuses an empty COMMENT review, and a REQUEST_CHANGES with nothing
+  // said is unkind to whoever receives it.
+  if (event !== "APPROVE" && !text && !comments.length) {
+    return { ok: false, error: "say something, or leave at least one line comment" };
+  }
+
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+
+  const payload = JSON.stringify({ event, ...(text ? { body: text } : {}), ...(comments.length ? { comments } : {}) });
+  const r = await gh(
+    ["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/${n}/reviews`, "--input", "-"],
+    undefined, payload,
+  );
+  invalidate(repo, n);
+  if (r.code !== 0) {
+    const msg = (r.stderr || r.stdout).trim().split("\n").find((l) => l.trim()) || "the review was not accepted";
+    return { ok: false, error: msg };
+  }
+  const count = comments.length;
+  return { ok: true, detail: `review submitted${count ? ` with ${count} line comment${count === 1 ? "" : "s"}` : ""}` };
+}

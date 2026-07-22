@@ -50,7 +50,7 @@ import {
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, prepareLocalReview, discardLocalReview, branchUrl, subscribeCi, commitDiff as prCommitDiff,
+  rerunFailedChecks, mergePr, closePr, prepareLocalReview, discardLocalReview, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
 } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
@@ -844,6 +844,7 @@ const server = Bun.serve<WsData>({
       let res;
       switch (pathname) {
         case "/prs/review": res = await submitReview(root, n, b.verb, b.body); break;
+        case "/prs/review-with": res = await submitReviewWith(root, n, b.verb, b.body, b.comments); break;
         case "/prs/comment": res = await addComment(root, n, b.body); break;
         case "/prs/reply": res = await replyToThread(root, n, b.commentId, b.body); break;
         case "/prs/thread-resolved": res = await setThreadResolved(root, b.threadId, b.resolved); break;

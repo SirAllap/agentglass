@@ -5,7 +5,7 @@
 // one file, and a body's tables rendered as raw pipes when a table is exactly
 // how a before/after comparison gets written.
 import { describe, expect, test } from "bun:test";
-import { splitDiff, parseBody } from "../src/lib/prBody.ts";
+import { splitDiff, parseBody, parseUnifiedDiff, newLineNumbers } from "../src/lib/prBody.ts";
 
 describe("splitDiff", () => {
   const DIFF = [
@@ -81,7 +81,7 @@ describe("parseBody", () => {
 
   /** A lone pipe in prose is not a table, and treating it as one ate the line. */
   test("a pipe without a divider row stays prose", () => {
-    expect(kinds("a | b is not a table\nand nor is this")).toEqual(["text"]);
+    expect(kinds("a | b is not a table\nand nor is this")).toEqual(["para"]);
   });
 
   test("blockquotes are quoted rather than printed with their >", () => {
@@ -113,5 +113,132 @@ describe("parseBody", () => {
   test("CRLF bodies parse identically to LF ones", () => {
     const body = "## Head\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> quoted\n";
     expect(kinds(body.replace(/\n/g, "\r\n"))).toEqual(kinds(body));
+  });
+});
+
+describe("parseUnifiedDiff", () => {
+  const DIFF = [
+    "diff --git a/app/views.py b/app/views.py",
+    "index f10c7ce..f9d6c1e 100644",
+    "--- a/app/views.py",
+    "+++ b/app/views.py",
+    "@@ -10,4 +10,5 @@ def handler(request):",
+    " context line",
+    "-removed",
+    "+added one",
+    "+added two",
+    " trailing",
+    "@@ -40 +41,2 @@",
+    "-only",
+    "+replaced",
+    "+extra",
+    "diff --git a/app/utils.py b/app/utils.py",
+    "@@ -1,2 +1,2 @@",
+    "-old",
+    "+new",
+  ].join("\n");
+
+  test("counts additions and deletions per file, not per pull request", () => {
+    const files = parseUnifiedDiff(DIFF);
+    expect(files.map((f) => f.path)).toEqual(["app/views.py", "app/utils.py"]);
+    expect(files[0]!.additions).toBe(4);
+    expect(files[0]!.deletions).toBe(2);
+    expect(files[1]!.additions).toBe(1);
+    expect(files[1]!.deletions).toBe(1);
+  });
+
+  test("hunk headers parse, including the single-line form without a comma", () => {
+    const [views] = parseUnifiedDiff(DIFF);
+    expect(views!.hunks).toHaveLength(2);
+    expect(views!.hunks[0]).toMatchObject({ oldStart: 10, oldLines: 4, newStart: 10, newLines: 5 });
+    // "@@ -40 +41,2 @@" — an omitted count means one line, not zero.
+    expect(views!.hunks[1]).toMatchObject({ oldStart: 40, oldLines: 1, newStart: 41, newLines: 2 });
+  });
+
+  test("no-newline markers are dropped but blank context lines survive", () => {
+    const [f] = parseUnifiedDiff([
+      "diff --git a/a.txt b/a.txt",
+      "@@ -1,3 +1,3 @@",
+      " one",
+      "",
+      "+two",
+      "\\ No newline at end of file",
+    ].join("\n"));
+    // A blank context line that lost its leading space still occupies a line;
+    // dropping it shifts every line number after it.
+    expect(f!.hunks[0]!.lines).toEqual([" one", " ", "+two"]);
+  });
+
+  test("nothing parseable yields no files rather than throwing", () => {
+    expect(parseUnifiedDiff("")).toEqual([]);
+    expect(parseUnifiedDiff("not a diff at all")).toEqual([]);
+  });
+
+  test("CRLF diffs parse identically to LF ones", () => {
+    expect(parseUnifiedDiff(DIFF.replace(/\n/g, "\r\n"))).toEqual(parseUnifiedDiff(DIFF));
+  });
+});
+
+describe("newLineNumbers", () => {
+  test("removed lines have no line in the new file; the rest count up", () => {
+    const [f] = parseUnifiedDiff([
+      "diff --git a/a.py b/a.py",
+      "@@ -5,3 +5,3 @@",
+      " keep",
+      "-gone",
+      "+fresh",
+    ].join("\n"));
+    expect(newLineNumbers(f!.hunks[0]!)).toEqual([5, null, 6]);
+  });
+});
+
+describe("markdown, the parts a PR body actually uses", () => {
+  test("ordered lists stay ordered, and nesting keeps its depth", () => {
+    const blocks = parseBody("1. first\n2. second\n   - nested\n");
+    const list = blocks.find((b) => b.kind === "list");
+    if (list?.kind !== "list") throw new Error("no list");
+    expect(list.ordered).toBe(true);
+    expect(list.items[2]!.depth).toBeGreaterThan(0);
+  });
+
+  test("a wrapped checklist line joins the item above it", () => {
+    const blocks = parseBody("- [ ] If there are changes in prompts, add the label\n      and push a commit afterwards.\n");
+    const list = blocks.find((b) => b.kind === "list");
+    if (list?.kind !== "list") throw new Error("no list");
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]!.html).toContain("push a commit");
+  });
+
+  test("headings carry their level", () => {
+    const levels = parseBody("# one\n\n## two\n\n#### four\n").filter((b) => b.kind === "heading").map((b) => (b.kind === "heading" ? b.level : 0));
+    expect(levels).toEqual([1, 2, 4]);
+  });
+
+  test("bold inside a code span is left alone", () => {
+    const [b] = parseBody("use `--all**` carefully");
+    expect(b!.kind).toBe("para");
+    if (b!.kind !== "para") throw new Error("not a para");
+    expect(b!.html).toContain("<code>");
+    expect(b!.html).not.toContain("<strong>");
+  });
+
+  test("strikethrough and entities render", () => {
+    const [b] = parseBody("~~dropped~~ and &amp; and &#39;quoted&#39;");
+    if (b!.kind !== "para") throw new Error("not a para");
+    expect(b!.html).toContain("<del>dropped</del>");
+    expect(b!.html).toContain("&amp;");
+  });
+
+  test("a javascript: link is never turned into an anchor", () => {
+    const [b] = parseBody("[click](javascript:alert(1))");
+    if (b!.kind !== "para") throw new Error("not a para");
+    expect(b!.html).not.toContain("<a ");
+  });
+
+  test("raw HTML in a body is shown, never executed", () => {
+    const [b] = parseBody("<script>alert(1)</script>");
+    if (b!.kind !== "para") throw new Error("not a para");
+    expect(b!.html).toContain("&lt;script&gt;");
+    expect(b!.html).not.toContain("<script>");
   });
 });

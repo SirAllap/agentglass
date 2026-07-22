@@ -284,6 +284,12 @@ const realApi = {
   prAssetUrl: (raw: string) => `${SERVER}/prs/asset?url=${encodeURIComponent(raw)}`,
   prReview: (root: string, number: number, verb: "approve" | "request_changes" | "comment", body: string) =>
     post<PrActionResult>("/prs/review", { root, number, verb, body }),
+  /** A verdict plus every line comment queued while reading the diff, in one
+   *  request — GitHub's "pending review", which arrives as one notification
+   *  instead of a scatter. */
+  prReviewWith: (root: string, number: number, verb: "approve" | "request_changes" | "comment", body: string,
+    comments: { path: string; line: number; side?: "LEFT" | "RIGHT"; body: string }[]) =>
+    post<PrActionResult>("/prs/review-with", { root, number, verb, body, comments }),
   prComment: (root: string, number: number, body: string) => post<PrActionResult>("/prs/comment", { root, number, body }),
   prReply: (root: string, number: number, commentId: number, body: string) => post<PrActionResult>("/prs/reply", { root, number, commentId, body }),
   prSetThreadResolved: (root: string, threadId: string, resolved: boolean) => post<PrActionResult>("/prs/thread-resolved", { root, threadId, resolved }),
@@ -464,6 +470,7 @@ const demoApi: typeof realApi = {
   prDiff: (_root: string, _number: number) => D({ ok: false, error: "not available in the demo" }),
   prAssetUrl: (raw: string) => raw,
   prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),
+  prReviewWith: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string, _c: unknown[]) => D(demoPrAction()),
   prComment: (_r: string, _n: number, _b: string) => D(demoPrAction()),
   prReply: (_r: string, _n: number, _c: number, _b: string) => D(demoPrAction()),
   prSetThreadResolved: (_r: string, _t: string, _v: boolean) => D(demoPrAction()),
