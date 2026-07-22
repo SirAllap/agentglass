@@ -275,6 +275,10 @@ const treeCache = new Map<string, { at: number; data: WorkingTree }>();
 setGitChangeHook(() => { treeCache.clear(); broadcast({ type: "git" }); });
 
 function broadcast(frame: WsFrame) {
+  // Serialising an event and writing it to every open client. Small per client,
+  // but it is a fan-out on the hot path of ingest and it was one of the things
+  // hiding inside "(background)".
+  entered("broadcast to clients");
   const msg = JSON.stringify(frame);
   for (const ws of clients) {
     try {
@@ -821,16 +825,16 @@ const server = Bun.serve<WsData>({
       const detail = id ? getSession(id) : null;
       return detail ? json(detail) : json({ error: "not found" }, 404);
     }
-    if (pathname === "/skills") return json({ skills: getSkills(), generated_at: Date.now() });
+    if (pathname === "/skills") return json({ skills: await getSkills(), generated_at: Date.now() });
     if (pathname === "/skills/export") {
       const fmt = url.searchParams.get("format") || "md";
       const dl = (body: string, type: string, name: string) =>
         new Response(body, {
           headers: { "content-type": type, "content-disposition": `attachment; filename="${name}"`, ...cors },
         });
-      if (fmt === "json") return dl(JSON.stringify(getSkills(), null, 2), "application/json", "skills-catalog.json");
-      if (fmt === "csv") return dl(catalogCsv(), "text/csv", "skills-catalog.csv");
-      return dl(catalogMarkdown(), "text/markdown", "skills-catalog.md");
+      if (fmt === "json") return dl(JSON.stringify(await getSkills(), null, 2), "application/json", "skills-catalog.json");
+      if (fmt === "csv") return dl(await catalogCsv(), "text/csv", "skills-catalog.csv");
+      return dl(await catalogMarkdown(), "text/markdown", "skills-catalog.md");
     }
     if (pathname === "/sessions") {
       const limit = Math.min(1000, Number(url.searchParams.get("limit") || 100));

@@ -803,6 +803,7 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
   // "no row yet" for a transcript, both inserted its lines, and every count,
   // token and dollar for those sessions was silently doubled in the DB.
   sweepBusy = true;
+  entered("first transcript scan");
   scanOnce(null)
     .then((n) => {
       const projects = projectPaths.size;
