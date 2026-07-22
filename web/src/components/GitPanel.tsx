@@ -7,7 +7,8 @@ import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
-import { partitionByWorktree, splitReadable, goneConfirmText, leftoversLine } from "../lib/goneCleanup.ts";
+import { partitionByWorktree, splitReadable, goneConfirmText } from "../lib/goneCleanup.ts";
+import { RescueModal } from "./RescueModal.tsx";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
@@ -463,6 +464,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [graph, setGraph] = useState<GitGraphLine[]>([]);
   const [stashes, setStashes] = useState<GitStash[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
+  /** The rescue prompt, and the promise deleteHeldByWorktrees() is parked on
+   *  while it is open. Null means no prompt; resolving with null is a cancel. */
+  const [rescue, setRescue] = useState<{ reports: WorktreeLeftovers[]; resolve: (v: Map<string, string[]> | null) => void } | null>(null);
   const [remotes, setRemotes] = useState<GitRemote[]>([]);
   /** The remote whose branches the pane is listing, and that list. Empty until
    *  the first answer names one — the server picks the only/first remote when
@@ -938,18 +942,41 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     for (const { branch, why } of refused) failed.push(`${branch.name} (${why})`);
     if (!removable.length) return 0;
 
-    const detail = removable.map(({ report }) => leftoversLine(report, wtName(report.path))).join("\n\n");
+    // The modal replaces what used to be a confirm() listing the same files.
+    // Reading a list you then have to copy by hand is a step people skip at the
+    // exact moment they shouldn't, so the list is now the thing you act on.
+    const picked = await new Promise<Map<string, string[]> | null>((resolve) => {
+      setRescue({ reports: removable.map(({ report }) => report), resolve });
+    });
+    setRescue(null);
+    if (!picked) return 0; // cancelled — nothing removed, nothing copied
 
-    if (!confirm(
-      `Remove ${removable.length} worktree${removable.length === 1 ? "" : "s"} and delete their branches?\n\n` +
-      `git reports these checkouts clean, but removing one deletes its gitignored files too — silently. This is what goes:\n\n${detail}\n\n` +
-      `The branches are recoverable from the reflog for 30 days. These files are not recoverable at all.`
-    )) return 0;
+    // Copy first, remove second, and never the other way round. A failed rescue
+    // has to be able to stop the removal, which it cannot do once the directory
+    // is gone.
+    const keptBack = new Set<string>();
+    let rescued = 0;
+    for (const [path, rels] of picked) {
+      if (!rels.length) continue;
+      const res = await api.gitWorktreeRescue(root, path, rels).catch((e) => ({ ok: false, error: String(e), copied: [] as string[], skipped: [] as { path: string; why: string }[] }));
+      const lost = res.skipped ?? [];
+      if (lost.length) {
+        // Anything we could not save is a reason to leave that worktree alone:
+        // removing it now destroys the very file the user asked to keep.
+        const b = removable.find(({ report }) => report.path === path)?.branch;
+        if (b) failed.push(`${b.name} (kept — couldn't save ${lost.slice(0, 2).map((s) => `${s.path}: ${s.why}`).join("; ")})`);
+        keptBack.add(path);
+      }
+      if (res.copied?.length) rescued += res.copied.length;
+    }
+
+    if (rescued) flash(true, `kept ${rescued} file${rescued === 1 ? "" : "s"} in the main checkout`);
 
     let done = 0;
     // `report.path` rather than another lookup: it is the path the server just
     // confirmed it inspected, so the thing removed is the thing priced.
     for (const { branch, report } of removable) {
+      if (keptBack.has(report.path)) continue; // its rescue failed; already reported
       const rm = await api.gitWorktreeRemove(root, report.path, true).catch((e) => ({ ok: false, error: String(e) }));
       if (!rm.ok) { failed.push(`${branch.name} (${rm.error || "worktree remove failed"})`); continue; }
       const r = await api.gitBranchDelete(root, branch.name, true).catch((e) => ({ ok: false, error: String(e) }));
@@ -2113,6 +2140,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           it's a drill-down from a row you clicked, not a place you navigate
           to — the rail's views are the destinations, this is a detour. */}
       <ChangesModal open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" presetChanges={commitView?.changes} presetTitle={commitView?.title} />
+      {rescue && <RescueModal reports={rescue.reports} onCancel={() => rescue.resolve(null)} onConfirm={(picked) => rescue.resolve(picked)} />}
     </div>
   );
 }

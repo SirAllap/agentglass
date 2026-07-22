@@ -33,7 +33,7 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
@@ -625,6 +625,9 @@ const server = Bun.serve<WsData>({
         // without it the branch is created and nothing else moves.
         case "/git/track-remote": res = trackRemoteBranch(root, String(b.ref || ""), { switch: !!b.switch }); break;
         case "/git/worktree-remove": res = removeWorktree(root, b.path, !!b.force); break;
+        // Copy chosen leftovers into the main checkout before the worktree
+        // holding them is removed. Never overwrites — see rescueLeftovers().
+        case "/git/worktree-rescue": res = await rescueLeftovers(root, b.path, b.paths); break;
         // `root` here is the checkout being updated — a worktree updates
         // itself, because the merge has to run where the branch is checked out.
         case "/git/sync-base": res = syncFromBase(root, b.base); break;

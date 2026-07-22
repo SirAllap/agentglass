@@ -5,7 +5,7 @@
 // every mutating op is gated by AGENTGLASS_GIT_WRITE_DISABLED=1.
 
 import { resolve, basename, relative, dirname, sep, join } from "node:path";
-import { statSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
@@ -13,7 +13,7 @@ import type {
   ConflictBlock, BlockChoice,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
   GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine, GitTreeState,
-  GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, WorktreeLeftovers,
+  GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, WorktreeLeftovers, LeftoverEntry,
 } from "../../shared/types.ts";
 
 export const GIT_WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -1461,6 +1461,95 @@ const rebuildable = (rel: string): boolean =>
 const LEFTOVERS_MAX = 12;
 /** Ignored directories opened up to see what's inside — one git call each. */
 const EXPAND_MAX = 8;
+/** Above this, two same-sized files are called `differs` rather than read.
+ *  Being wrong here only over-reports: it lists an entry that had nothing to
+ *  lose, and refuses to pre-select it. Reading 12 MB to say "identical" is not
+ *  worth blocking the dialog for. */
+const COMPARE_MAX_BYTES = 2 * 1024 * 1024;
+/** Files walked when measuring a directory. Past it the size is a floor, which
+ *  is all the number is for — nobody needs `dist/` weighed precisely. */
+const WALK_MAX = 4000;
+
+/** How many children a wholly-ignored directory is broken into before it stays
+ *  one row. Past this it is a build output or a dependency tree, and forty rows
+ *  of it would bury the file the list exists for. */
+const CHILDREN_MAX = 40;
+
+/**
+ * The immediate children of a directory git refused to look inside, as paths
+ * relative to the worktree. Directories keep their trailing slash so the rest
+ * of the pipeline treats them as directories.
+ *
+ * Falls back to the directory itself when it is too crowded to be worth
+ * splitting, or unreadable — both of which have to keep the entry on the list
+ * rather than drop it.
+ */
+function readOneLevel(worktree: string, dir: string): string[] {
+  const rel = dir.endsWith("/") ? dir.slice(0, -1) : dir;
+  try {
+    const kids = readdirSync(join(worktree, rel), { withFileTypes: true });
+    if (!kids.length || kids.length > CHILDREN_MAX) return [dir];
+    return kids.map((k) => `${rel}/${k.name}${k.isDirectory() ? "/" : ""}`);
+  } catch { return [dir]; }
+}
+
+/** The repository's main working checkout — where a rescued file belongs.
+ *  `git worktree list` puts it first; that is its documented order, and it is
+ *  the one entry whose `.git` is a real directory rather than a file. */
+function mainCheckout(root: string): string {
+  return worktreeList(root)[0]?.path ?? root;
+}
+
+/** Bytes under `p`, recursive, bounded. -1 when it can't be read at all. */
+function sizeOf(p: string): number {
+  try {
+    const st = statSync(p);
+    if (!st.isDirectory()) return st.size;
+    let total = 0, seen = 0;
+    const walk = (d: string): void => {
+      if (seen >= WALK_MAX) return;
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        if (seen++ >= WALK_MAX) return;
+        const child = join(d, e.name);
+        // Never follow a symlink out of the tree we're measuring.
+        if (e.isSymbolicLink()) continue;
+        if (e.isDirectory()) walk(child);
+        else { try { total += statSync(child).size; } catch { /* vanished mid-walk */ } }
+      }
+    };
+    walk(p);
+    return total;
+  } catch { return -1; }
+}
+
+/**
+ * What the main checkout has at this path, and how big the worktree's copy is.
+ *
+ * "Same" has to mean byte-identical, because the entire consequence of the
+ * answer is that the entry stops being shown at all. Size first (one stat, and
+ * it settles most of them), contents only when the sizes match and the file is
+ * small enough to be worth reading.
+ *
+ * Directories are never called "same": proving it means walking both trees, and
+ * the answer that costs nothing — list it, don't pre-select it — is already the
+ * safe one.
+ */
+async function compareToMain(main: string, worktree: string, rel: string): Promise<{ vsMain: "same" | "absent" | "differs"; bytes: number }> {
+  const clean = rel.endsWith("/") ? rel.slice(0, -1) : rel;
+  const mine = join(worktree, clean);
+  const theirs = join(main, clean);
+  const bytes = sizeOf(mine);
+  let a, b;
+  try { a = statSync(mine); } catch { return { vsMain: "absent", bytes }; }
+  try { b = statSync(theirs); } catch { return { vsMain: "absent", bytes }; }
+  if (a.isDirectory() || b.isDirectory()) return { vsMain: "differs", bytes };
+  if (a.size !== b.size) return { vsMain: "differs", bytes };
+  if (a.size > COMPARE_MAX_BYTES) return { vsMain: "differs", bytes };
+  try {
+    const [x, y] = await Promise.all([Bun.file(mine).arrayBuffer(), Bun.file(theirs).arrayBuffer()]);
+    return { vsMain: Buffer.from(x).equals(Buffer.from(y)) ? "same" : "differs", bytes };
+  } catch { return { vsMain: "differs", bytes }; }
+}
 
 /**
  * What `git worktree remove` would delete here that git would never warn about.
@@ -1483,16 +1572,16 @@ const EXPAND_MAX = 8;
 export async function worktreeLeftovers(rootIn: string, pathIn: unknown): Promise<WorktreeLeftovers> {
   const root = repoRoot(rootIn);
   const abs = safeAbs(pathIn);
-  if (!root || !abs) return { path: String(pathIn ?? ""), files: [], more: 0, skipped: 0, error: "invalid path" };
+  if (!root || !abs) return { path: String(pathIn ?? ""), entries: [], more: 0, skipped: 0, identical: 0, error: "invalid path" };
   // Only a path this repo actually owns as a worktree, so this can't be used to
   // enumerate arbitrary directories through the API.
   if (!worktreeList(root).some((w) => w.path === abs)) {
-    return { path: abs, files: [], more: 0, skipped: 0, error: "not a worktree of this repository" };
+    return { path: abs, entries: [], more: 0, skipped: 0, identical: 0, error: "not a worktree of this repository" };
   }
   const r = await gitAsync(abs, ["-c", "core.quotePath=false", "status", "--porcelain=v1", "--ignored"]);
   // A directory git can't read is not an empty one. Say so, and let the caller
   // present it as a reason to keep the worktree rather than a green light.
-  if (r.code !== 0) return { path: abs, files: [], more: 0, skipped: 0, error: r.stderr.trim() || "could not read that checkout" };
+  if (r.code !== 0) return { path: abs, entries: [], more: 0, skipped: 0, identical: 0, error: r.stderr.trim() || "could not read that checkout" };
 
   const parse = (out: string): { code: string; rel: string }[] =>
     out.split("\n").filter((l) => l.length >= 4).map((l) => ({
@@ -1526,17 +1615,103 @@ export async function worktreeLeftovers(rootIn: string, pathIn: unknown): Promis
   const inner = await Promise.all(expand.map((d) =>
     gitAsync(abs, ["-c", "core.quotePath=false", "status", "--porcelain=v1", "--ignored=matching", "--", d])));
   for (let i = 0; i < expand.length; i++) {
+    const dir = expand[i]!;
     const entries = inner[i]!.code === 0 ? parse(inner[i]!.stdout).filter((e) => e.code === "!!") : [];
-    // Couldn't see inside, or it told us nothing new: keep the directory itself
-    // on the list rather than dropping it.
-    if (!entries.length) { ignored.push(expand[i]!); continue; }
-    for (const { rel } of entries) { if (rebuildable(rel)) skipped++; else ignored.push(rel); }
+    // Git will not descend when the ignore rule names the DIRECTORY — a
+    // `.gitignore` line of `.specs/` makes `--ignored=matching -- .specs/`
+    // answer `.specs/` again, forever. That is the common shape, and left here
+    // it costs the whole feature: an undivided `.specs/` is "differs" against
+    // the main checkout's own `.specs/`, so it can never be pre-ticked and the
+    // rescue would refuse it as already-existing. The one file inside that
+    // nobody has a copy of never gets offered.
+    //
+    // So when git says nothing new, read the directory. One level: deeper turns
+    // a screenshots folder into forty rows, and the directory is the useful
+    // unit anyway.
+    const useful = entries.filter((e) => e.rel !== dir);
+    if (!useful.length) { for (const child of readOneLevel(abs, dir)) { if (rebuildable(child)) skipped++; else ignored.push(child); } continue; }
+    for (const { rel } of useful) { if (rebuildable(rel)) skipped++; else ignored.push(rel); }
   }
 
+  // Now the question that turns a warning into an offer: what does the main
+  // checkout already have at each of these paths? A worktree is a second copy
+  // of the repo, so most of this list is a duplicate of a file sitting safely
+  // in the main checkout — on the repo this was built for, 20 of 34.
+  const main = mainCheckout(root);
+  const entries: LeftoverEntry[] = [];
+  let identical = 0;
   // Work git would have stopped for goes first: if there is any, the answer is
   // "don't do this" and it should be the first thing read.
-  const all = [...work, ...ignored];
-  return { path: abs, files: all.slice(0, LEFTOVERS_MAX), more: Math.max(0, all.length - LEFTOVERS_MAX), skipped };
+  for (const rel of [...work, ...ignored]) {
+    const cmp = await compareToMain(main, abs, rel);
+    if (cmp.vsMain === "same") { identical++; continue; }
+    entries.push({ path: rel, bytes: cmp.bytes, dir: rel.endsWith("/"), vsMain: cmp.vsMain });
+  }
+  // Safe-to-rescue first, then by size ascending. Notes are small and unique;
+  // build output is large and already-there. Sorting this way is what stops a
+  // 708K directory of screenshots hiding behind 22 MB of `dist/` in a list that
+  // gets cut at twelve.
+  entries.sort((a, b) =>
+    Number(a.vsMain === "differs") - Number(b.vsMain === "differs") || a.bytes - b.bytes || a.path.localeCompare(b.path));
+  return {
+    path: abs, entries: entries.slice(0, LEFTOVERS_MAX),
+    more: Math.max(0, entries.length - LEFTOVERS_MAX), skipped, identical,
+  };
+}
+
+/**
+ * Copy chosen leftovers out of a worktree and into the main checkout, at the
+ * same relative path, before the worktree is removed.
+ *
+ * The main checkout rather than an invented archive directory, because that is
+ * where these files already live: this repo's `.specs/` in the main checkout
+ * holds 157 of exactly these notes, and the worktree's three are simply the
+ * ones that never made it back. A rescue folder would be a second place to
+ * look for the same thing.
+ *
+ * Refuses to overwrite. That is the whole safety property: a "rescue" that
+ * clobbers the main checkout's `tmp/` or `dist/` with the dying worktree's
+ * version is the exact accident this feature exists to prevent, and it would
+ * happen silently. Callers that genuinely want that must delete the target
+ * themselves; there is no force flag, on purpose.
+ *
+ * Every path is re-derived from the worktree root here rather than trusted from
+ * the request, so `../` in a relative path lands outside and is rejected rather
+ * than reaching into the filesystem.
+ */
+export async function rescueLeftovers(rootIn: string, pathIn: unknown, relsIn: unknown): Promise<GitActionResult & { copied?: string[]; skipped?: { path: string; why: string }[] }> {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
+  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
+  const main = mainCheckout(root);
+  if (main === abs) return { ok: false, error: "that is the main checkout — nothing to rescue it into" };
+  if (!Array.isArray(relsIn)) return { ok: false, error: "no paths given" };
+  const rels = relsIn.filter((r): r is string => typeof r === "string" && !!r).slice(0, 500);
+
+  const copied: string[] = [];
+  const skipped: { path: string; why: string }[] = [];
+  for (const rel of rels) {
+    const clean = rel.endsWith("/") ? rel.slice(0, -1) : rel;
+    const from = resolve(abs, clean);
+    const to = resolve(main, clean);
+    // Both ends have to stay inside their tree. `resolve` has already collapsed
+    // any `..`, so this catches it wherever it appeared in the string.
+    if (from !== abs && !from.startsWith(abs + sep)) { skipped.push({ path: rel, why: "outside the worktree" }); continue; }
+    if (to !== main && !to.startsWith(main + sep)) { skipped.push({ path: rel, why: "outside the main checkout" }); continue; }
+    if (existsSync(to)) { skipped.push({ path: rel, why: "already exists in the main checkout" }); continue; }
+    if (!existsSync(from)) { skipped.push({ path: rel, why: "no longer in the worktree" }); continue; }
+    try {
+      mkdirSync(dirname(to), { recursive: true });
+      // `cp -R` rather than a hand-rolled walk: it is one spawn for a file or a
+      // whole tree, and it preserves what a copy of somebody's notes should
+      // preserve. `-n` is a second refusal to clobber behind the check above.
+      const p = Bun.spawnSync(["cp", "-Rn", from, to], { stdout: "pipe", stderr: "pipe" });
+      if (p.exitCode !== 0) { skipped.push({ path: rel, why: p.stderr?.toString().trim() || "copy failed" }); continue; }
+      copied.push(rel);
+    } catch (e) { skipped.push({ path: rel, why: String(e) }); }
+  }
+  return { ok: skipped.length === 0, copied, skipped, ...(skipped.length ? { error: `${skipped.length} of ${rels.length} not copied` } : {}) };
 }
 
 export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean): GitActionResult {

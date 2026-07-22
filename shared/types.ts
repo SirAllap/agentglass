@@ -627,17 +627,52 @@ export interface GitWorktree {
  */
 export interface WorktreeLeftovers {
   path: string;
-  /** Repo-relative paths that would go: modified and untracked first, then the
-   *  ignored ones that don't look reproducible. Capped — see `more`. */
-  files: string[];
+  /** What would go, worst-first. Capped — see `more`. */
+  entries: LeftoverEntry[];
   /** How many more there were beyond the ones listed. */
   more: number;
   /** Ignored entries dropped as rebuildable (`__pycache__/`, `node_modules/`).
    *  Reported so the count in the UI can say what it chose not to show. */
   skipped: number;
+  /** Entries byte-identical to the same path in the main checkout. Counted and
+   *  NOT listed: deleting a copy loses nothing, and listing them buried the
+   *  four that mattered under twenty that didn't. */
+  identical: number;
   /** Set when the directory could not be read — treat as "assume work is
    *  there", never as "nothing to lose". */
   error?: string;
+}
+
+/**
+ * One thing that disappears with the worktree, and what the main checkout has
+ * to say about it.
+ *
+ * `vsMain` is the whole reason this can be offered as a rescue rather than just
+ * a warning. A worktree is a second copy of a repo, so most of what looks
+ * alarming in it — every `compose/envs/*.env`, every generated `reverse.js` —
+ * is byte-identical to the file already sitting in the main checkout. Those are
+ * dropped before they reach here (see `identical`). What remains is:
+ *
+ *   * `absent`  — the main checkout has nothing at this path. Copying it there
+ *                 is pure gain and cannot destroy anything, so these are the
+ *                 ones offered pre-selected.
+ *   * `differs` — a file exists there and is NOT the same. Copying OVERWRITES
+ *                 the main checkout's version, which is how a rescue turns into
+ *                 the thing it was meant to prevent. Never pre-selected, and
+ *                 the UI has to say "overwrites" out loud.
+ *
+ * A directory is reported `differs` whenever the main checkout has one at that
+ * path, without recursing to prove it: walking a 12 MB `dist/` to answer a
+ * question whose safe answer is already "don't pre-select it" is work spent to
+ * reach the same place.
+ */
+export interface LeftoverEntry {
+  /** Path relative to the worktree root. Trailing "/" when it's a directory. */
+  path: string;
+  /** Bytes, recursive for a directory. -1 when it could not be measured. */
+  bytes: number;
+  dir: boolean;
+  vsMain: "absent" | "differs";
 }
 
 // --- live docker panel (lazydocker replacement) ------------------------------

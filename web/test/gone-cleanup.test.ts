@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { partitionByWorktree, splitReadable, goneConfirmText, leftoversLine } from "../src/lib/goneCleanup.ts";
-import type { GitBranch, WorktreeLeftovers } from "../../shared/types.ts";
+import { partitionByWorktree, splitReadable, goneConfirmText, leftoversLine, preselected, fmtBytes } from "../src/lib/goneCleanup.ts";
+import type { GitBranch, WorktreeLeftovers, LeftoverEntry } from "../../shared/types.ts";
 
 /**
  * The bulk "delete N merged" path, pinned at the two points where it decides
@@ -17,8 +17,10 @@ const branch = (name: string): GitBranch => ({
   name, current: false, upstream: null, track: "[gone]", date: "", subject: "", mergedIntoTrunk: true,
 });
 const report = (path: string, over: Partial<WorktreeLeftovers> = {}): WorktreeLeftovers => ({
-  path, files: [], more: 0, skipped: 0, ...over,
+  path, entries: [], more: 0, skipped: 0, identical: 0, ...over,
 });
+const entry = (path: string, bytes: number, vsMain: "absent" | "differs" = "absent"): LeftoverEntry =>
+  ({ path, bytes, dir: path.endsWith("/"), vsMain });
 
 describe("partitionByWorktree", () => {
   it("puts a branch with a worktree on the held side", () => {
@@ -44,10 +46,10 @@ describe("splitReadable", () => {
 
   it("treats a successful report as removable", () => {
     // THE regression. A good report has no `error` field at all.
-    const { removable, refused } = splitReadable([b], map, [report("/code/repo-PROJ-1", { files: ["a.env"], skipped: 12 })]);
+    const { removable, refused } = splitReadable([b], map, [report("/code/repo-PROJ-1", { entries: [entry("a.env", 40)], skipped: 12 })]);
     expect(refused).toEqual([]);
     expect(removable).toHaveLength(1);
-    expect(removable[0]!.report.files).toEqual(["a.env"]);
+    expect(removable[0]!.report.entries.map((e) => e.path)).toEqual(["a.env"]);
   });
 
   it("an empty checkout is still removable", () => {
@@ -110,9 +112,56 @@ describe("goneConfirmText", () => {
   });
 });
 
+describe("preselected", () => {
+  it("ticks the small unique ones and leaves the big ones alone", () => {
+    // The shape of a real worktree: notes nobody else has, beside build output
+    // the main checkout also has a version of. No rule here knows what
+    // `.specs` is — only "absent" and "small".
+    const r = report("/code/repo-x", {
+      entries: [
+        entry(".specs/plan.md", 5340),
+        entry(".specs/pol-captures/", 725_000),
+        entry("tmp/", 5_500_000, "differs"),
+        entry("src/app/dist/", 12_000_000, "differs"),
+      ],
+    });
+    expect([...preselected(r)]).toEqual([".specs/plan.md", ".specs/pol-captures/"]);
+  });
+
+  it("never ticks something that would overwrite the main checkout", () => {
+    // Even a tiny one. Copying over a file that is already there is the exact
+    // accident the rescue exists to prevent, so it can only ever be deliberate.
+    const r = report("/x", { entries: [entry("worktree.env", 181, "differs")] });
+    expect(preselected(r).size).toBe(0);
+  });
+
+  it("does not tick something it could not measure", () => {
+    const r = report("/x", { entries: [entry("weird", -1)] });
+    expect(preselected(r).size).toBe(0);
+  });
+
+  it("leaves a large unique entry offered but unticked", () => {
+    // Unique and huge: still worth showing — it might be a capture directory —
+    // but not something to copy into the main checkout without being asked.
+    const r = report("/x", { entries: [entry("recordings/", 900_000_000)] });
+    expect(preselected(r).size).toBe(0);
+    expect(r.entries).toHaveLength(1);
+  });
+});
+
+describe("fmtBytes", () => {
+  it("reads at a glance", () => {
+    expect(fmtBytes(181)).toBe("181B");
+    expect(fmtBytes(5340)).toBe("5.2K");
+    expect(fmtBytes(725_000)).toBe("708K");
+    expect(fmtBytes(12_000_000)).toBe("11M");
+    expect(fmtBytes(-1)).toBe("?");
+  });
+});
+
 describe("leftoversLine", () => {
   it("caps the list and counts the rest, including the server's own overflow", () => {
-    const r = report("/code/repo-x", { files: ["1", "2", "3", "4", "5", "6", "7"], more: 21, skipped: 508 });
+    const r = report("/code/repo-x", { entries: ["1", "2", "3", "4", "5", "6", "7"].map((n) => entry(n, 10)), more: 21, skipped: 508 });
     const line = leftoversLine(r, "repo-x");
     expect(line).toContain("    1\n");
     expect(line).not.toContain("    7\n");
@@ -123,6 +172,7 @@ describe("leftoversLine", () => {
 
   it("distinguishes an empty checkout from one holding only caches", () => {
     expect(leftoversLine(report("/x"), "x")).toContain("empty");
-    expect(leftoversLine(report("/x", { skipped: 9 }), "x")).toContain("nothing but 9 rebuildable");
+    expect(leftoversLine(report("/x", { skipped: 9 }), "x")).toContain("9 rebuildable");
+    expect(leftoversLine(report("/x", { identical: 20 }), "x")).toContain("20 already in the main checkout");
   });
 });

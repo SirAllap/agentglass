@@ -96,14 +96,53 @@ export function goneConfirmText(
 
 /** One worktree's entry in the "this is what goes" list. */
 export function leftoversLine(report: WorktreeLeftovers, name: string, shownMax = 6): string {
-  const shown = report.files.slice(0, shownMax);
-  const rest = report.files.length - shown.length + report.more;
-  const body = report.files.length
-    ? shown.map((f) => `    ${f}`).join("\n")
+  const shown = report.entries.slice(0, shownMax);
+  const rest = report.entries.length - shown.length + report.more;
+  const body = report.entries.length
+    ? shown.map((e) => `    ${e.path}${e.vsMain === "differs" ? "  (also in the main checkout, different)" : ""}`).join("\n")
       + (rest > 0 ? `\n    …and ${rest} more` : "")
       + (report.skipped ? `\n    (+${report.skipped} rebuildable, e.g. caches — not listed)` : "")
-    : report.skipped
-      ? `    nothing but ${report.skipped} rebuildable entries (caches, deps)`
+    : report.skipped || report.identical
+      ? `    nothing unique — ${[report.identical && `${report.identical} already in the main checkout`, report.skipped && `${report.skipped} rebuildable`].filter(Boolean).join(", ")}`
       : "    empty";
   return `  ${name}\n${body}`;
+}
+
+/**
+ * Which leftovers start out ticked in the rescue list.
+ *
+ * Two rules, and neither one knows what a `.specs` directory is — the repo this
+ * was built for keeps its notes there, the next one won't, and a heuristic that
+ * has to be told the folder name is a heuristic that only ever works once.
+ *
+ *   * `differs` is never pre-ticked. Copying it overwrites the main checkout's
+ *     own version, which is the accident this whole feature exists to avoid.
+ *     It stays offered — sometimes the worktree's copy IS the newer one — but
+ *     that has to be a deliberate tick.
+ *   * `absent` is pre-ticked while it stays small. Nothing can be lost by
+ *     copying it, and size is the one signal that separates notes from build
+ *     output without naming either: a page of findings is kilobytes, a `dist/`
+ *     is megabytes.
+ *
+ * On the repo this was built for that lands exactly on the four `.specs`
+ * entries and leaves 22 MB of `dist/` and a 5 MB `tmp/` unticked, without a
+ * single project-specific rule.
+ */
+export const RESCUE_PRESELECT_MAX_BYTES = 4 * 1024 * 1024;
+
+export function preselected(report: WorktreeLeftovers, maxBytes = RESCUE_PRESELECT_MAX_BYTES): Set<string> {
+  const out = new Set<string>();
+  for (const e of report.entries) {
+    if (e.vsMain === "absent" && e.bytes >= 0 && e.bytes <= maxBytes) out.add(e.path);
+  }
+  return out;
+}
+
+/** Bytes as something a human reads at a glance in a list. */
+export function fmtBytes(n: number): string {
+  if (n < 0) return "?";
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)}K`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)}M`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)}G`;
 }
