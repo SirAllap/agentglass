@@ -6,9 +6,99 @@
     <title>agentglass</title>
     <meta name="description" content="Real-time observability for AI agent workflows — any provider." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      What fills the window before React does.
+
+      The bundle is ~1.8 MB of JS and CSS that has to arrive, parse and execute
+      before a single pixel is drawn, and `<div id="root"></div>` paints as
+      nothing — so the app opened onto a black rectangle and looked like it had
+      failed to start. This is markup, not an app: no imports, no framework and
+      no request of its own, so it is on screen in the first frame.
+
+      It also tells the truth rather than spinning decoratively. The sidecar is
+      started in parallel with the window (see electron/main.js), so at this
+      point it may not be answering yet — the script below asks /health and says
+      which of the two things is actually pending. No progress bar: nothing here
+      can measure progress honestly, and a bar that stalls at 90% is worse than
+      no bar at all.
+
+      React replaces all of it: createRoot().render() clears #root on mount.
+    -->
+    <style>
+      #ag-boot {
+        position: fixed; inset: 0; display: flex; gap: 14px;
+        flex-direction: column; align-items: center; justify-content: center;
+        background: #0f0a1a; color: #a78bfa;
+        font-family: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+        -webkit-user-select: none; user-select: none;
+      }
+      #ag-boot .ag-mark { width: 46px; height: 46px; }
+      #ag-boot .ag-name { font-size: 13px; letter-spacing: .14em; color: #c4b5fd; }
+      #ag-boot .ag-status {
+        font-size: 11px; color: #6d5a94; min-height: 14px;
+        display: flex; align-items: center; gap: 7px;
+      }
+      /* Delayed on purpose: a warm start is over in about a second, and a
+         spinner that appears and vanishes in that time reads as a flicker.
+         This one only becomes visible if the wait is long enough to notice. */
+      #ag-boot .ag-spin {
+        width: 9px; height: 9px; border-radius: 50%;
+        border: 1.5px solid rgba(167,139,250,.25); border-top-color: #a78bfa;
+        opacity: 0; animation: ag-fade .2s linear .45s forwards, ag-spin .7s linear .45s infinite;
+      }
+      @keyframes ag-spin { to { transform: rotate(360deg); } }
+      @keyframes ag-fade { to { opacity: 1; } }
+      @media (prefers-reduced-motion: reduce) {
+        #ag-boot .ag-spin { animation: ag-fade .2s linear .45s forwards; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="ag-boot">
+        <svg class="ag-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <line x1="20.2" y1="20.2" x2="27" y2="27" stroke="#7c3aed" stroke-width="3.4" stroke-linecap="round"/>
+          <circle cx="13.5" cy="13.5" r="9" fill="#a78bfa" fill-opacity="0.14"/>
+          <circle cx="13.5" cy="13.5" r="5.6" fill="none" stroke="#a78bfa" stroke-opacity="0.35" stroke-width="1"/>
+          <path d="M13.5 13.5 L13.5 4.6 A8.9 8.9 0 0 1 19.7 7 Z" fill="#a78bfa" fill-opacity="0.28"/>
+          <line x1="13.5" y1="13.5" x2="19.7" y2="7" stroke="#c4b5fd" stroke-width="1"/>
+          <circle cx="9" cy="16.4" r="1.9" fill="#34d399"/>
+        </svg>
+        <div class="ag-name">agentglass</div>
+        <div class="ag-status"><span class="ag-spin"></span><span id="ag-boot-msg">starting…</span></div>
+      </div>
+    </div>
+    <script>
+      // Report what is actually pending, by asking. The sidecar comes up
+      // alongside the window rather than before it, so "waiting for the server"
+      // and "waiting for the interface" are different waits and only one of
+      // them is usually the answer.
+      (function () {
+        var msg = document.getElementById("ag-boot-msg");
+        if (!msg) return;
+        var origin = (window.agentglass && window.agentglass.apiOrigin) || location.origin;
+        var t0 = Date.now();
+        function tick() {
+          // Gone means React mounted and this whole subtree was replaced.
+          if (!document.getElementById("ag-boot")) return;
+          fetch(origin + "/health", { cache: "no-store" })
+            .then(function (r) {
+              if (!document.getElementById("ag-boot")) return;
+              // Server is up; whatever is left is the bundle still parsing.
+              msg.textContent = r.ok ? "loading the interface…" : "waiting for the server…";
+              setTimeout(tick, 500);
+            })
+            .catch(function () {
+              if (!document.getElementById("ag-boot")) return;
+              // Only claim something is slow once it has been slow. Before that
+              // the honest word is "starting".
+              msg.textContent = Date.now() - t0 > 4000 ? "still starting the server…" : "starting the server…";
+              setTimeout(tick, 300);
+            });
+        }
+        tick();
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
