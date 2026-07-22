@@ -17,7 +17,7 @@ export type ViewDef = {
 export const VIEWS: ViewDef[] = [
   { id: "git", label: "git", key: "g", icon: GitIcon, hint: "stage, commit, push/pull the working tree" },
   { id: "diff", label: "diff", key: "d", icon: DiffIcon, hint: "review & commit every diff the fleet made" },
-  { id: "pr", label: "pr", key: "p", icon: PrIcon, hint: "review pull requests without leaving for the browser" },
+  { id: "pr", label: "pull requests", key: "p", icon: PrIcon, hint: "review pull requests without leaving for the browser" },
   { id: "docker", label: "docker", key: "o", icon: DockerIcon, hint: "containers, logs, stats & actions" },
   { id: "term", label: "term", key: "t", icon: TerminalIcon, hint: "a real shell in any repo/worktree" },
   { id: "chat", label: "chat", key: "c", icon: ChatIcon, hint: "drive a Claude session in any repo/worktree" },

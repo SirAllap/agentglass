@@ -1084,3 +1084,20 @@ export async function branchUrl(rootIn: unknown, branchIn: unknown, goneIn?: unk
   branchUrlCache.set(key, { at: Date.now(), url: best.url });
   return { ok: true, url: best.url, kind: "pr" };
 }
+
+/**
+ * One commit's diff.
+ *
+ * Asked of GitHub rather than of the local checkout: the commit belongs to a
+ * pull request, which may be from a fork or simply not fetched here, and
+ * "review this commit" should not depend on whether you happen to have it.
+ */
+export async function commitDiff(rootIn: unknown, shaIn: unknown): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const sha = String(shaIn || "").trim();
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) return { ok: false, error: "invalid commit" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const r = await gh(["api", `repos/${repo.nameWithOwner}/commits/${sha}`, "-H", "Accept: application/vnd.github.v3.diff"]);
+  if (r.code !== 0) return { ok: false, error: (r.stderr || "").trim().split("\n")[0] || "could not read that commit" };
+  return { ok: true, text: r.stdout };
+}

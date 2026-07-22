@@ -48,13 +48,17 @@ describe("view order", () => {
     expect(ids).toContain("term");
     expect(ids).toContain("docker");
     expect(ids).toContain("diff");
-    expect(ids.length).toBe(5);
+    expect(ids).toContain("pr");
+    // Against the module's own list, not a number: the point is that nothing
+    // is dropped, and hardcoding a count means every view added later fails a
+    // test about something else.
+    expect(ids.length).toBe(v.VIEWS.length);
   });
 
   it("ignores a corrupt saved order rather than throwing", async () => {
     store.set("agentglass.workspace.order", "{not json");
     const v = await load();
-    expect(v.loadViewOrder().length).toBe(5);
+    expect(v.loadViewOrder().length).toBe(v.VIEWS.length);
   });
 
   it("drops an id that no longer exists", async () => {

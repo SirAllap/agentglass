@@ -22,6 +22,7 @@ import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
+import { parseBody, renderInline, splitDiff, lineTint, type MdBlock } from "../lib/prBody.ts";
 
 type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks";
@@ -102,83 +103,6 @@ function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
  * so a body containing raw HTML renders as text rather than as markup. The body
  * is written by anyone who can open a pull request; it is not trusted input.
  */
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-function renderInline(s: string): string {
-  let out = escapeHtml(s);
-  out = out.replace(/`([^`]+)`/g, '<code class="px-1 rounded" style="background:color-mix(in srgb,var(--border) 30%,transparent)">$1</code>');
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong style="color:var(--text)">$1</strong>');
-  // Links only to http(s) — a markdown link is a place to smuggle javascript:.
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    (_m, text: string, href: string) => `<a href="${href}" target="_blank" rel="noreferrer noopener" style="color:var(--primary)">${text}</a>`);
-  out = out.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)/g,
-    (_m, pre: string, href: string) => `${pre}<a href="${href}" target="_blank" rel="noreferrer noopener" style="color:var(--primary)">${href}</a>`);
-  return out;
-}
-
-type MdBlock =
-  | { kind: "text"; html: string }
-  | { kind: "code"; text: string }
-  | { kind: "image"; src: string; alt: string };
-
-/** Split a body into what has to render differently: fenced code, images
- *  (which need the proxy), and everything else. */
-export function parseBody(body: string): MdBlock[] {
-  const blocks: MdBlock[] = [];
-  let buf: string[] = [];
-  const flush = () => {
-    if (!buf.length) return;
-    const html = buf.map((line) => {
-      const h = line.match(/^(#{1,6})\s+(.*)$/);
-      if (h) return `<div style="color:var(--text);font-weight:600;margin-top:.7em">${renderInline(h[2]!)}</div>`;
-      const task = line.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
-      if (task) {
-        const done = task[1]!.toLowerCase() === "x";
-        return `<div style="display:flex;gap:.4em;color:${done ? "var(--text3)" : "var(--text)"}">` +
-          `<span style="color:${done ? "var(--success)" : "var(--warning)"}">${done ? "✔" : "☐"}</span>` +
-          `<span>${renderInline(task[2]!)}</span></div>`;
-      }
-      const li = line.match(/^\s*[-*]\s+(.*)$/);
-      if (li) return `<div style="display:flex;gap:.4em"><span style="color:var(--primary)">·</span><span>${renderInline(li[1]!)}</span></div>`;
-      if (!line.trim()) return "<div style='height:.5em'></div>";
-      return `<div>${renderInline(line)}</div>`;
-    }).join("");
-    blocks.push({ kind: "text", html });
-    buf = [];
-  };
-
-  // `\r?\n`, not `\n`: GitHub bodies are CRLF, and a JS regex `.` matches
-  // neither `\n` nor `\r`, so every `(.*)$` rule below silently fails on a line
-  // that still carries its carriage return — headings, task boxes and images
-  // all render as plain text.
-  const lines = (body || "").split(/\r?\n/);
-  let fence: string[] | null = null;
-  for (const line of lines) {
-    if (line.trim().startsWith("```")) {
-      if (fence) { blocks.push({ kind: "code", text: fence.join("\n") }); fence = null; }
-      else { flush(); fence = []; }
-      continue;
-    }
-    if (fence) { fence.push(line); continue; }
-
-    const md = line.match(/^\s*!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)\s*$/);
-    const html = line.match(/<img[^>]*\bsrc="(https?:\/\/[^"]+)"[^>]*>/i);
-    if (md) { flush(); blocks.push({ kind: "image", src: md[2]!, alt: md[1]! }); continue; }
-    if (html) {
-      flush();
-      const alt = line.match(/\balt="([^"]*)"/i)?.[1] ?? "";
-      blocks.push({ kind: "image", src: html[1]!, alt });
-      continue;
-    }
-    buf.push(line);
-  }
-  if (fence) blocks.push({ kind: "code", text: fence.join("\n") });
-  flush();
-  return blocks;
-}
-
 function Body({ body }: { body: string }) {
   const blocks = useMemo(() => parseBody(body), [body]);
   return (
@@ -190,6 +114,37 @@ function Body({ body }: { body: string }) {
               style={{ ...CODE_FONT_STYLE, background: "var(--bg)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
               {b.text}
             </pre>
+          );
+        }
+        if (b.kind === "table") {
+          return (
+            <div key={i} className="my-2 overflow-x-auto ag-scroll">
+              <table className="text-[11px]" style={{ borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>{b.head.map((h, j) => (
+                    <th key={j} className="text-left px-2 py-1 whitespace-nowrap"
+                      style={{ color: "var(--text)", fontWeight: 500, borderBottom: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}
+                      dangerouslySetInnerHTML={{ __html: renderInline(h) }} />
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  {b.rows.map((r, ri) => (
+                    <tr key={ri}>{r.map((c, ci) => (
+                      <td key={ci} className="px-2 py-1 align-top"
+                        style={{ color: "var(--text2)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}
+                        dangerouslySetInnerHTML={{ __html: renderInline(c) }} />
+                    ))}</tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        }
+        if (b.kind === "quote") {
+          return (
+            <blockquote key={i} className="my-1.5 pl-2 py-0.5"
+              style={{ borderLeft: "2px solid color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text3)" }}
+              dangerouslySetInnerHTML={{ __html: b.html }} />
           );
         }
         if (b.kind === "image") {
@@ -206,6 +161,30 @@ function Body({ body }: { body: string }) {
         return <div key={i} dangerouslySetInnerHTML={{ __html: b.html }} />;
       })}
     </div>
+  );
+}
+
+/** A unified diff, coloured, with a background tint on the changed lines so a
+ *  block of additions reads as a block rather than as green text. */
+function Diff({ text, empty }: { text: string; empty?: string }) {
+  const lines = useMemo(() => text.split(/\r?\n/), [text]);
+  if (!text.trim()) return <div className="text-[11px] p-2" style={{ color: "var(--text3)" }}>{empty ?? "no changes"}</div>;
+  return (
+    <pre className="overflow-x-auto text-[10.5px] leading-snug ag-scroll"
+      style={{ ...CODE_FONT_STYLE, background: "var(--bg)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", borderRadius: 4, margin: 0 }}>
+      {lines.map((l, i) => {
+        const add = l.startsWith("+") && !l.startsWith("+++");
+        const del = l.startsWith("-") && !l.startsWith("---");
+        return (
+          <div key={i} style={{
+            color: lineTint(l),
+            background: add ? "color-mix(in srgb, var(--success) 9%, transparent)"
+              : del ? "color-mix(in srgb, var(--error) 9%, transparent)" : undefined,
+            padding: "0 .5rem",
+          }}>{l || " "}</div>
+        );
+      })}
+    </pre>
   );
 }
 
@@ -265,6 +244,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const [rawBots, setRawBots] = useState(false);
   const [seen, setSeen] = useState<Record<string, string[]>>(loadSeen);
   const [diff, setDiff] = useState<string>("");
+  /** Which file's diff is on screen. The whole-PR blob is never shown — it is
+   *  sliced by `splitDiff` and one file is rendered at a time. */
+  const [selFile, setSelFile] = useState<string | null>(null);
+  const [selCommit, setSelCommit] = useState<string | null>(null);
+  const [commitText, setCommitText] = useState<string>("");
+  const [commitBusy, setCommitBusy] = useState(false);
   const detailReq = useRef(0);
 
   const flash = useCallback((ok: boolean, msg: string) => {
@@ -312,7 +297,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
   useEffect(() => {
     if (!active || !root || selected == null) { setDetail(null); return; }
-    setDiff("");
+    setDiff(""); setSelFile(null); setSelCommit(null); setCommitText("");
     loadDetail(selected);
   }, [active, root, selected, loadDetail]);
 
@@ -320,6 +305,18 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (tab !== "files" || !detail || diff || !root) return;
     api.prDiff(root, detail.number).then((r) => setDiff(r.ok ? (r.text || "") : "")).catch(() => {});
   }, [tab, detail, diff, root]);
+
+  /** Per-file slices of the one diff we fetched. */
+  const byFile = useMemo(() => splitDiff(diff), [diff]);
+
+  const openCommit = useCallback((sha: string) => {
+    if (!root) return;
+    setSelCommit(sha); setCommitText(""); setCommitBusy(true);
+    api.prCommitDiff(root, sha)
+      .then((r) => setCommitText(r.ok ? (r.text || "") : `could not load this commit — ${r.error ?? ""}`))
+      .catch((e) => setCommitText(String(e)))
+      .finally(() => setCommitBusy(false));
+  }, [root]);
 
   const act = useCallback(async (label: string, fn: () => Promise<{ ok: boolean; error?: string; detail?: string }>) => {
     if (busy) return false;
@@ -427,14 +424,18 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     <div className="flex flex-col h-full min-h-0">
       <style>{SCROLLBAR_CSS}</style>
       <div className={viewHeaderClass} style={viewHeaderStyle}>
-        <span className={viewTitleClass} style={{ color: "var(--text)" }}>pr</span>
-        {repo && <span className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{repo.nameWithOwner}</span>}
-        {repos.length > 1 && (
+        <span className={viewTitleClass} style={{ color: "var(--text)" }}>Pull Requests</span>
+        {/* The picker already says which checkout, and the checkout implies the
+            repo — showing `owner/name` next to it said the same thing twice. */}
+        {repos.length > 1 ? (
           <select value={root} onChange={(e) => { setRoot(e.target.value); setSelected(null); setDetail(null); }}
-            className="text-[10px] px-1 py-0.5 rounded bg-transparent max-w-[190px]"
+            title={repo ? repo.nameWithOwner : undefined}
+            className="text-[10px] px-1 py-0.5 rounded bg-transparent max-w-[220px]"
             style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
             {repos.map((r) => <option key={r.root} value={r.root} style={{ background: "var(--bg)" }}>{r.root.split("/").pop()}</option>)}
           </select>
+        ) : (
+          repo && <span className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{repo.nameWithOwner}</span>
         )}
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {toast && (
@@ -531,11 +532,27 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                 {tab === "commits" && (
                   <div className="text-[11px]">
                     {d.commits.map((c) => (
-                      <div key={c.oid} className="flex items-center gap-2 py-1 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 18%, transparent)", opacity: c.isMerge ? 0.5 : 1 }}>
-                        <span className="tabular-nums shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.short}</span>
-                        <span className="truncate" style={{ color: "var(--text2)" }}>{c.message}</span>
-                        {c.isMerge && <Chip text="merge" tint="var(--text3)" title="trunk catch-up, not work to review" />}
-                        <span className="ml-auto shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{c.author}</span>
+                      <div key={c.oid}>
+                        <button onClick={() => openCommit(selCommit === c.oid ? "" : c.oid)}
+                          className="w-full text-left flex items-center gap-2 py-1 border-b"
+                          style={{
+                            borderColor: "color-mix(in srgb, var(--border) 18%, transparent)",
+                            opacity: c.isMerge ? 0.55 : 1,
+                            background: selCommit === c.oid ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
+                          }}>
+                          <span className="shrink-0" style={{ color: "var(--text3)" }}>{selCommit === c.oid ? "▾" : "▸"}</span>
+                          <span className="tabular-nums shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.short}</span>
+                          <span className="truncate" style={{ color: "var(--text2)" }}>{c.message}</span>
+                          {c.isMerge && <Chip text="merge" tint="var(--text3)" title="trunk catch-up, not work to review" />}
+                          <span className="ml-auto shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{c.author}</span>
+                        </button>
+                        {selCommit === c.oid && (
+                          <div className="my-1.5">
+                            {commitBusy
+                              ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>loading the diff…</div>
+                              : <Diff text={commitText} empty="this commit changed nothing" />}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -549,29 +566,38 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                     </div>
                     {d.files.map((f) => {
                       const done = seenFiles.includes(f.path);
+                      const open = selFile === f.path;
                       return (
-                        <label key={f.path} className="flex items-center gap-2 py-1 border-b cursor-pointer"
-                          style={{ borderColor: "color-mix(in srgb, var(--border) 18%, transparent)" }}>
-                          <input type="checkbox" checked={done} onChange={() => toggleSeen(f.path)} style={{ accentColor: "var(--primary)" }} />
-                          <span className="truncate" style={{ color: done ? "var(--text3)" : "var(--text2)", textDecoration: done ? "line-through" : undefined }}>{f.path}</span>
-                          {f.comments > 0 && <Chip text={`${f.comments} open`} tint="var(--warning)" />}
-                          <span className="ml-auto shrink-0 tabular-nums" style={{ color: "var(--success)" }}>+{f.additions}</span>
-                          <span className="shrink-0 tabular-nums" style={{ color: "var(--error)" }}>−{f.deletions}</span>
-                        </label>
+                        <div key={f.path}>
+                          <div className="flex items-center gap-2 py-1 border-b"
+                            style={{
+                              borderColor: "color-mix(in srgb, var(--border) 18%, transparent)",
+                              background: open ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
+                            }}>
+                            {/* The tick is "I have read this" and must not also
+                                open the file — two different intents on one row. */}
+                            <input type="checkbox" checked={done} onChange={() => toggleSeen(f.path)}
+                              onClick={(e) => e.stopPropagation()} style={{ accentColor: "var(--primary)" }}
+                              title="mark reviewed" aria-label={`mark ${f.path} reviewed`} />
+                            <button onClick={() => setSelFile(open ? null : f.path)}
+                              className="flex-1 min-w-0 text-left flex items-center gap-2">
+                              <span className="shrink-0" style={{ color: "var(--text3)" }}>{open ? "▾" : "▸"}</span>
+                              <span className="truncate" style={{ color: done ? "var(--text3)" : "var(--text2)", textDecoration: done ? "line-through" : undefined }}>{f.path}</span>
+                              {f.comments > 0 && <Chip text={`${f.comments} open`} tint="var(--warning)" />}
+                              <span className="ml-auto shrink-0 tabular-nums" style={{ color: "var(--success)" }}>+{f.additions}</span>
+                              <span className="shrink-0 tabular-nums" style={{ color: "var(--error)" }}>−{f.deletions}</span>
+                            </button>
+                          </div>
+                          {open && (
+                            <div className="my-1.5">
+                              {!diff
+                                ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>loading the diff…</div>
+                                : <Diff text={byFile.get(f.path) ?? ""} empty="no textual diff — binary, renamed, or too large to show" />}
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
-                    {diff && (
-                      <pre className="mt-3 p-2 rounded overflow-x-auto text-[10.5px] leading-snug"
-                        style={{ ...CODE_FONT_STYLE, background: "var(--bg)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", maxHeight: 460 }}>
-                        {diff.split("\n").map((l, i) => (
-                          <div key={i} style={{
-                            color: l.startsWith("+") && !l.startsWith("+++") ? "var(--success)"
-                              : l.startsWith("-") && !l.startsWith("---") ? "var(--error)"
-                              : l.startsWith("@@") ? "var(--primary)" : "var(--text3)",
-                          }}>{l || " "}</div>
-                        ))}
-                      </pre>
-                    )}
                   </div>
                 )}
 
@@ -845,10 +871,25 @@ const CHECK_TINT: Record<PrCheck["state"], string> = {
   success: "var(--success)", failure: "var(--error)", pending: "var(--warning)",
   skipped: "var(--text3)", neutral: "var(--text3)",
 };
+const CHECK_GLYPH: Record<PrCheck["state"], string> = {
+  success: "✓", failure: "✕", pending: "•", skipped: "⊘", neutral: "⊘",
+};
 
 function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: boolean }) {
   const c = d.checks;
   const pct = (n: number) => (c.total ? (n / c.total) * 100 : 0);
+  // Skipped checks are the bulk of a big suite and almost never what you came
+  // for, so they collapse — the same call GitHub makes, for the same reason.
+  const [showSkipped, setShowSkipped] = useState(false);
+
+  const order: Record<PrCheck["state"], number> = { failure: 0, pending: 1, success: 2, neutral: 3, skipped: 4 };
+  const shown = useMemo(() => {
+    const list = d.checksAll.filter((k) => showSkipped || (k.state !== "skipped" && k.state !== "neutral"));
+    return [...list].sort((a, b) => order[a.state] - order[b.state] || a.name.localeCompare(b.name));
+  }, [d.checksAll, showSkipped]);
+
+  const skippedCount = d.checksAll.filter((k) => k.state === "skipped" || k.state === "neutral").length;
+
   return (
     <div className="text-[11px]">
       <div className="flex items-center gap-2 mb-2 tabular-nums">
@@ -862,22 +903,8 @@ function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: 
           { pct: pct(c.pending), tint: "var(--warning)" },
           { pct: pct(c.skipped), tint: "color-mix(in srgb, var(--text3) 40%, transparent)" },
         ]} />
+        {c.failure > 0 && <Btn onClick={onRerun} disabled={busy}>re-run failed</Btn>}
       </div>
-
-      {c.failing.length > 0 && (
-        <div className="mb-2">
-          {c.failing.map((f, i) => (
-            <div key={i} className="flex items-center gap-1.5 py-1 px-2 mb-1 rounded"
-              style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 9%, transparent)" }}>
-              <Dot tint="var(--error)" />
-              <span style={{ color: "var(--text)" }}>{f.name}</span>
-              {f.workflow && <span className="text-[10px]" style={{ color: "var(--text3)" }}>{f.workflow}</span>}
-              {f.url && <a href={f.url} target="_blank" rel="noreferrer noopener" className="ml-auto text-[10px]" style={{ color: "var(--text2)" }}>log ↗</a>}
-            </div>
-          ))}
-          <Btn onClick={onRerun} disabled={busy}>re-run failed jobs</Btn>
-        </div>
-      )}
 
       <div className="text-[10px] mb-2" style={{ color: "var(--text3)" }}>
         {c.allDone
@@ -885,12 +912,30 @@ function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: 
           : `${c.pending} of ${c.total} still running — you will be told once, when the last one lands.`}
       </div>
 
-      <div className="flex flex-wrap gap-0.5 mb-2">
-        {d.checksAll.map((k, i) => (
-          <span key={i} title={`${k.name}${k.workflow ? ` · ${k.workflow}` : ""} — ${k.state}`}
-            style={{ width: 11, height: 11, borderRadius: 2, background: CHECK_TINT[k.state], opacity: k.state === "skipped" || k.state === "neutral" ? 0.4 : 1 }} />
+      {/* Every check, by name. A grid of squares says something broke without
+          saying what, which is exactly the trip to the browser this replaces. */}
+      <div>
+        {shown.map((k, i) => (
+          <div key={`${k.name}-${i}`} className="flex items-center gap-2 py-1 border-b"
+            style={{ borderColor: "color-mix(in srgb, var(--border) 18%, transparent)" }}>
+            <span className="shrink-0 w-3 text-center" style={{ color: CHECK_TINT[k.state] }}>{CHECK_GLYPH[k.state]}</span>
+            <span className="truncate" style={{ color: k.state === "skipped" || k.state === "neutral" ? "var(--text3)" : "var(--text2)" }}>
+              {k.workflow ? <span style={{ color: "var(--text3)" }}>{k.workflow} / </span> : null}{k.name}
+            </span>
+            <span className="ml-auto shrink-0 text-[9.5px] uppercase tracking-wide" style={{ color: CHECK_TINT[k.state] }}>{k.state}</span>
+            {k.url && (
+              <a href={k.url} target="_blank" rel="noreferrer noopener" className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>log ↗</a>
+            )}
+          </div>
         ))}
       </div>
+
+      {skippedCount > 0 && (
+        <button onClick={() => setShowSkipped((v) => !v)} className="mt-2 text-[10px] px-2 py-1 rounded"
+          style={{ color: "var(--text2)", border: "1px dashed color-mix(in srgb, var(--border) 50%, transparent)" }}>
+          {showSkipped ? "hide" : "show"} {skippedCount} skipped
+        </button>
+      )}
     </div>
   );
 }

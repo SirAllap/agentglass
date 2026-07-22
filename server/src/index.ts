@@ -50,7 +50,7 @@ import {
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, prepareLocalReview, discardLocalReview, branchUrl, subscribeCi,
+  rerunFailedChecks, mergePr, closePr, prepareLocalReview, discardLocalReview, branchUrl, subscribeCi, commitDiff as prCommitDiff,
 } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
@@ -825,6 +825,9 @@ const server = Bun.serve<WsData>({
     // Images in a PR body. Not JSON — it streams the bytes back, because
     // GitHub's own attachment URLs 404 without the token this attaches.
     if (pathname === "/prs/asset") return prAsset(url.searchParams.get("url") || "");
+    if (pathname === "/prs/commit-diff") {
+      return json(await prCommitDiff(url.searchParams.get("root") || "", url.searchParams.get("sha") || ""));
+    }
     if (pathname === "/prs/branch-url") {
       return json(await branchUrl(
         url.searchParams.get("root") || "",

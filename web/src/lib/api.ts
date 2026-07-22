@@ -302,6 +302,8 @@ const realApi = {
   prLocalReviewDiscard: (root: string, number: number) => post<PrActionResult>("/prs/local-review-discard", { root, number }),
   /** Where a local branch lives on the web. A live branch resolves to its tree
    *  with no network at all; a gone one resolves to the PR it came from. */
+  prCommitDiff: (root: string, sha: string) =>
+    get<{ ok: boolean; text?: string; error?: string }>(`/prs/commit-diff?root=${encodeURIComponent(root)}&sha=${encodeURIComponent(sha)}`),
   prBranchUrl: (root: string, branch: string, gone: boolean) =>
     get<{ ok: boolean; url?: string; kind?: "tree" | "pr"; error?: string }>(
       `/prs/branch-url?root=${encodeURIComponent(root)}&branch=${encodeURIComponent(branch)}&gone=${gone ? "true" : "false"}`),
@@ -476,6 +478,7 @@ const demoApi: typeof realApi = {
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
   prLocalReview: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prLocalReviewDiscard: (_r: string, _n: number) => D(demoPrAction()),
+  prCommitDiff: (_r: string, _s: string) => D({ ok: false, error: "not available in the demo" }),
   prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
 };
 
