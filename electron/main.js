@@ -18,7 +18,7 @@
 // origin and no port to contend for. Only one instance runs now (see the lock
 // below), but the origin is what makes the store survive a restart.
 
-const { app, BrowserWindow, ipcMain, protocol, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, protocol, shell } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -239,6 +239,7 @@ function createWindow() {
   });
   registerIpc(win);
   openLinksOutside(win);
+  keepUsefulShortcuts(win);
   win.loadURL(`${APP_ORIGIN}/`);
   mainWindow = win;
   win.on("closed", () => { if (mainWindow === win) mainWindow = null; });
@@ -272,6 +273,45 @@ app.on("second-instance", () => {
  * launch a `file://` or a custom-scheme URL, and the strings reaching here come
  * out of pull request bodies and git remotes, which are written by other people.
  */
+/**
+ * Put back the few accelerators the menu was carrying.
+ *
+ * Removing the menu removes its shortcuts with it. Editing keys survive —
+ * Chromium handles cut/copy/paste inside a field natively — but reload,
+ * devtools, zoom and fullscreen were the menu's.
+ *
+ * What is deliberately NOT bound here is anything a shell owns. This app has a
+ * real terminal in it: Ctrl+R is history search, Ctrl+C interrupts, Ctrl+L
+ * clears. Rebinding those to browser actions would break the pane people spend
+ * the most time in, so reload is Ctrl+Shift+R and the rest are function keys.
+ */
+function keepUsefulShortcuts(win) {
+  win.webContents.on("before-input-event", (e, input) => {
+    if (input.type !== "keyDown") return;
+    const ctrl = input.control || input.meta;
+    const hit = () => e.preventDefault();
+
+    if (input.key === "F12" || (ctrl && input.shift && input.key.toLowerCase() === "i")) {
+      hit(); win.webContents.toggleDevTools(); return;
+    }
+    if (ctrl && input.shift && input.key.toLowerCase() === "r") {
+      hit(); win.webContents.reloadIgnoringCache(); return;
+    }
+    if (input.key === "F11") {
+      hit(); win.setFullScreen(!win.isFullScreen()); return;
+    }
+    if (ctrl && (input.key === "=" || input.key === "+")) {
+      hit(); win.webContents.setZoomLevel(win.webContents.getZoomLevel() + 0.5); return;
+    }
+    if (ctrl && input.key === "-") {
+      hit(); win.webContents.setZoomLevel(win.webContents.getZoomLevel() - 0.5); return;
+    }
+    if (ctrl && input.key === "0") {
+      hit(); win.webContents.setZoomLevel(0);
+    }
+  });
+}
+
 function openLinksOutside(win) {
   const external = (url) => {
     try {
@@ -293,6 +333,14 @@ function openLinksOutside(win) {
 }
 
 app.whenReady().then(async () => {
+  // No menu bar, at all.
+  //
+  // `autoHideMenuBar` only hides it until Alt is pressed — and this app embeds
+  // a real terminal, where Alt is part of ordinary use (meta bindings, tmux,
+  // readline). The bar kept dropping over the top of the UI mid-keystroke.
+  // Removing the menu outright is the only thing that stops that; the handful
+  // of accelerators it carried are rebound in keepUsefulShortcuts().
+  Menu.setApplicationMenu(null);
   serveApp();
   // Synchronous on purpose: the preload publishes `apiOrigin` as a plain value
   // because web/src/lib/api.ts reads it while its module body runs, before any
