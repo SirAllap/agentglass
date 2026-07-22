@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, WorkingTree } from "../../shared/types.ts";
 import { normalize, detectError } from "./ingest.ts";
 import { db } from "./db.ts";
 import {
@@ -38,7 +38,7 @@ import {
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
-import { watchLoop, entered, stalls } from "./loopwatch.ts";
+import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
@@ -199,7 +199,25 @@ const trustedHost = (url: URL) => isPrivate(url.hostname) || ALLOWED_HOSTS.has(u
 
 // Every git mutation nudges the clients that are showing git state. Registered
 // here rather than in gitwork so that module stays unaware of the socket.
-setGitChangeHook(() => broadcast({ type: "git" }));
+/**
+ * The working tree, held for a moment — a property of this endpoint, not of
+ * `workingTree()`, which stays truthful for every other caller.
+ *
+ * Measured by the loop watchdog with the git panel open and someone typing:
+ * 618ms per call, eight calls in two minutes, the largest single source of
+ * blocked event loop in the app. It is four synchronous git invocations (two
+ * diffs, a status, the branch state) on a 2.5s client poll, and the terminal
+ * rides the same thread.
+ *
+ * Making those four async is the real fix, is a deep change through parseDiff,
+ * treeState and branchInfo, and is not worth doing badly. Meanwhile: one second,
+ * scaled by `backoff()` so it holds longer while a shell is in use, and dropped
+ * the instant anything mutates a repository — which is what keeps staging a
+ * file from reading back the state before it.
+ */
+const TREE_TTL_MS = 1_000;
+const treeCache = new Map<string, { at: number; data: WorkingTree }>();
+setGitChangeHook(() => { treeCache.clear(); broadcast({ type: "git" }); });
 
 function broadcast(frame: WsFrame) {
   const msg = JSON.stringify(frame);
@@ -531,7 +549,12 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/git/tree") {
       const root = url.searchParams.get("root") || "";
-      return json(workingTree(root));
+      const hit = treeCache.get(root);
+      if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return json(hit.data);
+      const data = workingTree(root);
+      if (treeCache.size > 40) treeCache.clear();
+      treeCache.set(root, { at: Date.now(), data });
+      return json(data);
     }
     if (pathname === "/git/branches") return json(gitBranches(url.searchParams.get("root") || ""));
     // `scope=all` is the whole graph; anything else is this checkout's own
