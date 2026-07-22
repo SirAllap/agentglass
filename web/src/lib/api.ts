@@ -266,7 +266,10 @@ const realApi = {
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
   updateStatus: () => get<UpdateStatus>("/update/status"),
-  updateNotes: () => get<ReleaseNotes>("/update/notes"),
+  // The tag is optional because the automatic modal wants "whatever this build
+  // came from", while About asks for a named release — the update it is about
+  // to install, say, which is not the one running.
+  updateNotes: (tag?: string) => get<ReleaseNotes>(`/update/notes${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`),
   updateRun: () => post<{ ok: boolean; error?: string }>("/update/run", {}),
   updateLog: () => get<{ ok: boolean; text: string }>("/update/log"),
   dockerInspect: (id: string) => get<{ ok: boolean; env: string[]; config: string; error?: string }>(`/docker/inspect?id=${encodeURIComponent(id)}`),
@@ -441,7 +444,7 @@ const demoApi: typeof realApi = {
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
-  updateNotes: () => D({ ok: false, tag: "", notes: "", source: "", error: "not available in the demo" } as ReleaseNotes),
+  updateNotes: (_tag?: string) => D({ ok: false, tag: "", notes: "", source: "", error: "not available in the demo" } as ReleaseNotes),
   updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0 }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
   updateRun: () => D({ ok: false, error: "not available in the demo" }),
   updateLog: () => D({ ok: true, text: "" }),

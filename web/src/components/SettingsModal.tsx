@@ -13,10 +13,12 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { ingestUpdate } from "../lib/updateStore.ts";
+import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
+import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
-import type { UpdateStatus } from "../../../shared/types.ts";
+import type { UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, notifyQuiet, setNotifyQuiet, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
@@ -211,6 +213,23 @@ function AboutPane({ open }: { open: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  // Which release's notes are being read, and what came back. Fetched here
+  // because the modal is presentational — the automatic caller has to see the
+  // answer before it can decide whether to open at all, so neither of them can
+  // let the dialog do its own loading. The server holds these for an hour, so
+  // reopening the same release is not a round trip that reaches github twice.
+  const [want, setWant] = useState<NotesTarget | null>(null);
+  const [notes, setNotes] = useState<ReleaseNotes | null>(null);
+
+  useEffect(() => {
+    if (!want) return;
+    let live = true;
+    setNotes(null);
+    api.updateNotes(want.tag)
+      .then((r) => { if (live) setNotes(r); })
+      .catch(() => { if (live) setNotes({ ok: false, tag: want.tag, notes: "", source: "", error: "could not reach the server" }); });
+    return () => { live = false; };
+  }, [want]);
 
   useEffect(() => {
     if (!open) return;
@@ -236,6 +255,7 @@ function AboutPane({ open }: { open: boolean }) {
   if (!st) return <Section title="About"><div className="px-3 py-2 text-[11px] t-dim2">reading version…</div></Section>;
 
   const short = st.info.commit ? st.info.commit.slice(0, 7) : "unknown";
+  const mine = installedNotes(st.info.baseTag, st.info.distance, st.branch);
   return (
     <Section title="About">
       <div className="px-3 py-2 flex flex-col gap-3">
@@ -243,6 +263,16 @@ function AboutPane({ open }: { open: boolean }) {
           <span className="text-[12.5px]" style={{ color: "var(--text)" }}>agentglass {st.info.version}</span>
           <span className="text-[10.5px] t-dim2 tabular-nums" title={st.info.commit}>{short}</span>
           {st.info.builtAt && <span className="text-[10px] t-dim2">built {new Date(st.info.builtAt).toLocaleString()}</span>}
+          {/* The notes used to appear once, on the launch after an update, and
+              were unreachable ever after — dismiss it, or update before it
+              existed, and the only copy was on the release page. */}
+          {mine && (
+            <button onClick={() => setWant(mine)}
+              className="ml-auto text-[10.5px] px-2 py-0.5 rounded-md hover:opacity-80"
+              style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>
+              release notes
+            </button>
+          )}
         </div>
 
         {/* The outcome of the previous run, which finished after the app it was
@@ -288,17 +318,41 @@ function AboutPane({ open }: { open: boolean }) {
               ))}
             </div>
             {err && <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>}
-            <button onClick={run} disabled={busy}
-              className="self-start text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
-              style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
-              {busy ? "starting…" : `install ${st.branch} & restart`}
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={run} disabled={busy}
+                className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
+                style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                {busy ? "starting…" : `install ${st.branch} & restart`}
+              </button>
+              {/* Read before you install, rather than after the app has
+                  restarted into it. The tag list above says which releases are
+                  coming; this says what is in them. */}
+              <button onClick={() => setWant({ tag: st.branch, title: "What's in this update" })}
+                className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
+                style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>
+                what's in {st.branch}
+              </button>
+            </div>
             <span className="text-[9.5px] t-dim2">
               Builds the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.
             </span>
           </>
         )}
       </div>
+
+      <ReleaseNotesModal
+        open={!!want}
+        tag={want?.tag ?? ""}
+        title={want?.title}
+        footnote={want?.footnote}
+        loading={!!want && !notes}
+        // A release with no annotation, an origin github knows nothing about,
+        // a laptop on a train: all of them end here. Saying which is the whole
+        // point of a button you pressed on purpose.
+        error={notes && !notes.ok ? (notes.error || "no notes for that release") : undefined}
+        notes={notes?.notes ?? ""}
+        onClose={() => setWant(null)}
+      />
     </Section>
   );
 }
