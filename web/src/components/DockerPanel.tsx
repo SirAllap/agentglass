@@ -7,7 +7,7 @@ import type { DockerOverview, DockerContainer, DockerStat } from "../../../share
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
-import { ConsoleStrip, lastTerminalRoot, runInConsole } from "./TerminalPanel.tsx";
+import { ConsoleStrip, consoleRoot, runInConsole } from "./TerminalPanel.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -592,7 +592,7 @@ export function DockerView({ active }: { active: boolean }) {
                                   A second, container-only terminal would be a
                                   second set of bugs for no extra reach. */}
                               {writeEnabled && selected.state === "running" && (
-                                <button onClick={() => { setConsoleOpen(true); runInConsole(lastTerminalRoot(), `docker exec -it ${selected.id.slice(0, 12)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'`); }}
+                                <button onClick={() => { setConsoleOpen(true); runInConsole(consoleRoot(), `docker exec -it ${selected.id.slice(0, 12)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'`); }}
                                   className="text-[10px] px-2 py-0.5 rounded mr-1"
                                   style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
                                   title={`Open a shell inside ${selected.name}`}>exec</button>
@@ -632,7 +632,7 @@ export function DockerView({ active }: { active: boolean }) {
                     else, so opening it takes room from the logs rather than
                     covering them. */}
                 <ConsoleStrip
-                  root={lastTerminalRoot()}
+                  root={consoleRoot()}
                   open={consoleOpen}
                   height={consoleH}
                   onHeight={setConsoleH}

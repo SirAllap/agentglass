@@ -480,7 +480,7 @@ export function makeCommands(root: string, dirs: CommandDir[] = commandDirs(root
     if (!makefile) continue;
     let text: string;
     try { text = readFileSync(join(root, rel, makefile), "utf8"); } catch { continue; }
-    for (const t of parseMakeTargets(text)) { // parseMakeTargets caps each file at 60
+    for (const t of parseMakeTargets(text)) { // capped per file — see MAKE_MAX_PER_FILE
       out.push({ name: t.name, cmd: rel ? `make -C ${rel} ${t.name}` : `make ${t.name}`, desc: t.desc, dir: rel });
     }
     if (out.length >= CMD_MAX_TOTAL) break;
