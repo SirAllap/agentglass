@@ -15,7 +15,8 @@
 // preference, all silently reset. A fixed port would have fixed persistence
 // but reintroduced the bug the ephemeral port was chosen to avoid (a second
 // instance failing to bind). A custom scheme has neither problem: one stable
-// origin, no port, and any number of instances share it.
+// origin and no port to contend for. Only one instance runs now (see the lock
+// below), but the origin is what makes the store survive a restart.
 
 const { app, BrowserWindow, ipcMain, protocol, shell } = require("electron");
 const { spawn } = require("child_process");
@@ -27,6 +28,25 @@ const os = require("os");
 // GPU compositing on Wayland.
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
+
+// One instance, one window.
+//
+// Nothing used to stop a second launch, and the shell was built to survive one:
+// it opened its own window, probed the port, found the first instance's sidecar
+// and adopted it (see pickPort). Two windows then drove one server and neither
+// looked wrong -- so double-clicking the launcher, or a script starting the app
+// while it was already up, piled on whole extra copies of Chromium, each holding
+// its own memory, with nothing on screen to say it had happened.
+//
+// Taken here rather than inside `whenReady` on purpose: before the scheme is
+// registered and long before a window exists, so an instance that loses the race
+// costs one process that exits immediately instead of one that briefly paints.
+// The `return` is a genuine early exit -- this file is CommonJS, whose module
+// top level is a function body.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
 
 // Must run before `ready`. `standard` is what gives the scheme a real origin
 // (and therefore its own persistent localStorage); `secure` keeps it a trusted
@@ -57,6 +77,8 @@ const SIDECAR_NAME = process.platform === "win32" ? "agentglass-server.exe" : "a
 const SIDECAR_BIN = PACKAGED ? path.join(process.resourcesPath, SIDECAR_NAME) : null;
 
 let sidecar = null;
+// Kept so a second launch has something to raise instead of opening a window.
+let mainWindow = null;
 
 const MIME = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
@@ -218,7 +240,25 @@ function createWindow() {
   registerIpc(win);
   openLinksOutside(win);
   win.loadURL(`${APP_ORIGIN}/`);
+  mainWindow = win;
+  win.on("closed", () => { if (mainWindow === win) mainWindow = null; });
 }
+
+/**
+ * A second launch raises the window that already exists.
+ *
+ * Without this the lock alone would make the app look broken in a new way:
+ * clicking the launcher while agentglass was minimised, or on another
+ * workspace, would do visibly nothing at all -- the second process would take
+ * one look at the lock and exit in silence. `show` is what crosses workspaces;
+ * `restore` alone leaves a minimised window minimised.
+ */
+app.on("second-instance", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
 
 /**
  * A link to GitHub belongs in the user's browser, not in this window.
