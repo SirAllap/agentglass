@@ -191,7 +191,7 @@ const realApi = {
   gitPush: (root: string) => post<GitActionResult>("/git/push", { root }),
   gitPull: (root: string) => post<GitActionResult>("/git/pull", { root }),
   gitFetch: (root: string) => post<GitActionResult>("/git/fetch", { root }),
-  gitBranches: (root: string) => get<{ current: string; branches: GitBranch[]; trunk?: string | null; sweeping?: boolean }>(`/git/branches?root=${encodeURIComponent(root)}`),
+  gitBranches: (root: string) => get<{ current: string; branches: GitBranch[]; trunk?: string | null }>(`/git/branches?root=${encodeURIComponent(root)}`),
   gitLog: (root: string, limit = 100) => get<{ commits: GitCommit[] }>(`/git/log?root=${encodeURIComponent(root)}&limit=${limit}`),
   gitCommitDiff: (root: string, hash: string) => get<{ changes: FileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
   gitStashes: (root: string) => get<{ stashes: GitStash[] }>(`/git/stashes?root=${encodeURIComponent(root)}`),

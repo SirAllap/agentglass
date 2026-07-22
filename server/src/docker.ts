@@ -10,26 +10,37 @@ import type {
   DockerOverview, DockerScope, DockerActionResult,
 } from "../../shared/types.ts";
 import { workspaceRoot, scopeRoots } from "./config.ts";
+import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
+import { withSpawnSlot } from "./spawnpool.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
-type Res = { code: number; stdout: string; stderr: string };
-function docker(args: string[], timeoutMs = 8000): Res {
-  try {
-    const proc = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
-    return { code: proc.exitCode ?? 1, stdout: proc.stdout?.toString() ?? "", stderr: proc.stderr?.toString() ?? "" };
-  } catch (e) {
-    return { code: 1, stdout: "", stderr: String(e) };
-  }
+type Res = { code: number; stdout: string; stderr: string; killed?: boolean };
+
+/**
+ * Every docker call, awaited. There is no synchronous variant on purpose.
+ *
+ * There was one, and four callers used it — logs, inspect, top and the
+ * start/stop/restart actions. `Bun.spawnSync` stops the server's only thread
+ * until the CLI exits, and that thread is also pumping the terminal's PTY
+ * socket, the chat stream and every HTTP request. Since the log tab refetches
+ * on a three-second timer, the UI froze on a three-second beat for as long as
+ * `docker logs` took — which is what "I type and the text appears half a
+ * second later" turned out to be.
+ *
+ * Awaiting also lets independent queries overlap: each invocation pays the
+ * CLI's own startup before it reaches the daemon, and the overview needs five.
+ */
+async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
+  // Shares the one process cap with git: the resources being protected are the
+  // machine's, and the docker CLI is heavier than git per invocation.
+  return withSpawnSlot(() => runDocker(args, timeoutMs));
 }
 
-/** Awaited variant, so independent queries can run at once. Each `docker`
- *  invocation pays the CLI's own startup before it talks to the daemon, and
- *  the overview needs five of them — serially that cost is paid five times
- *  over, on a poll. */
-async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
+async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
+  const owner = currentLabel();
   try {
     const proc = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
     const [stdout, stderr, code] = await Promise.all([
@@ -37,7 +48,11 @@ async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
-    return { code: code ?? 1, stdout, stderr };
+    // A timeout kill and a refusal are both "non-zero", and they mean opposite
+    // things: the CLI answering "cannot connect to the daemon" is a fact, while
+    // a SIGTERM at the deadline says only that we ran out of patience. Callers
+    // that cache a verdict need to be able to tell those apart.
+    return { code: code ?? 1, stdout, stderr, killed: proc.killed || !!proc.signalCode };
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e) };
   }
@@ -55,18 +70,82 @@ function jsonLines(out: string): Record<string, string>[] {
 
 let cachedVersion: string | null = null;
 let versionCheckedAt = 0;
+/** How long a *conclusive* "no daemon" is trusted before probing again. */
 const VERSION_RETRY_MS = 15_000;
-/** The daemon version doesn't change while we run, so a success is cached for
- *  good. A *failure* is cached too, briefly: re-probing on every poll meant a
- *  stopped daemon cost a blocking spawn — up to the 4s timeout — several times
- *  a minute, freezing the single-threaded server each time. */
+/** …and how long an inconclusive one is, which is barely at all: a probe that
+ *  timed out proves nothing, and the panel should not spend fifteen seconds
+ *  telling the user their daemon is down on the strength of it. */
+const VERSION_UNSURE_RETRY_MS = 2_000;
+let versionInflight: Promise<DaemonProbe> | null = null;
+/** Whether the last failure was the CLI answering, or us giving up on it. */
+let lastProbeInconclusive = false;
+
+interface DaemonProbe {
+  /** The daemon's version, or null when we could not get one. */
+  version: string | null;
+  /** True when we genuinely do not know — a timeout, not a refusal. */
+  inconclusive: boolean;
+}
+
+/**
+ * Is the daemon there, and which version.
+ *
+ * A success is cached for good: the version does not change under a running
+ * server, and re-probing on every poll costs a process for an answer we have.
+ *
+ * A *failure* needs more care than it was getting, because two things were
+ * wrong and both put "docker not available (is the daemon running?)" on screen
+ * over a perfectly healthy daemon:
+ *
+ *   * Concurrent callers raced. `versionCheckedAt` was stamped before the
+ *     await, so a second overview request arriving while the first probe was
+ *     still running fell into the "asked recently, don't ask again" branch and
+ *     got `null` — a definitive "no daemon" derived from a probe that had not
+ *     finished yet. The panel polls every five seconds and the strip asks too,
+ *     so this needed no unusual timing at all. Now everyone awaits the same
+ *     probe.
+ *   * A timeout was treated as an answer. `docker version` against a busy
+ *     daemon on a machine with a dozen containers can exceed a short deadline;
+ *     that verdict was then held for fifteen seconds, which is exactly long
+ *     enough to open the panel, see the error, and go looking for a daemon that
+ *     was running the whole time.
+ */
+async function probeDaemon(): Promise<DaemonProbe> {
+  if (cachedVersion) return { version: cachedVersion, inconclusive: false };
+  if (versionInflight) return versionInflight;
+  const wait = lastProbeInconclusive ? VERSION_UNSURE_RETRY_MS : VERSION_RETRY_MS;
+  if (versionCheckedAt && Date.now() - versionCheckedAt < wait) {
+    return { version: null, inconclusive: lastProbeInconclusive };
+  }
+  versionInflight = (async () => {
+    try {
+      // Six seconds, not the eight everything else here gets, and deliberately
+      // under Bun.serve's own 10s request deadline: a probe that outlives the
+      // request it belongs to hands the panel a network error instead of the
+      // honest "still trying" below. The deadline is not a hard stop either —
+      // Bun SIGTERMs the child, but if `docker` is a wrapper script (rootless,
+      // snap, Desktop's shim) its pipes stay open until the grandchild exits —
+      // so leaving room under the request timeout is what actually bounds this.
+      const r = await dockerAsync(["version", "--format", "{{.Server.Version}}"], 6_000);
+      versionCheckedAt = Date.now();
+      if (r.code === 0) {
+        cachedVersion = r.stdout.trim() || null;
+        lastProbeInconclusive = !cachedVersion; // exit 0 with no version is not an answer either
+        return { version: cachedVersion, inconclusive: lastProbeInconclusive };
+      }
+      // Killed at the deadline, or dead with nothing to say — either way the
+      // daemon has not told us anything.
+      lastProbeInconclusive = !!r.killed || !r.stderr.trim();
+      return { version: null, inconclusive: lastProbeInconclusive };
+    } finally {
+      versionInflight = null;
+    }
+  })();
+  return versionInflight;
+}
+
 export async function dockerVersion(): Promise<string | null> {
-  if (cachedVersion) return cachedVersion;
-  if (versionCheckedAt && Date.now() - versionCheckedAt < VERSION_RETRY_MS) return null;
-  versionCheckedAt = Date.now();
-  const r = await dockerAsync(["version", "--format", "{{.Server.Version}}"], 4000);
-  cachedVersion = r.code === 0 ? r.stdout.trim() || null : null;
-  return cachedVersion;
+  return (await probeDaemon()).version;
 }
 
 // Every field is named explicitly instead of using `{{json .}}`, which looks
@@ -248,11 +327,23 @@ let overviewCache: { at: number; root: string | null; data: DockerOverview } | n
 
 export async function overview(): Promise<DockerOverview> {
   const root = workspaceRoot();
-  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS) return overviewCache.data;
-  const version = await dockerVersion();
+  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS * backoff()) return overviewCache.data;
+  const { version, inconclusive } = await probeDaemon();
   if (!version) {
-    const down: DockerOverview = { available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null, containers: [], images: [], volumes: [], networks: [], error: "docker not available (is the daemon running?)" };
-    overviewCache = { at: Date.now(), root, data: down };
+    const down: DockerOverview = {
+      available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null,
+      containers: [], images: [], volumes: [], networks: [],
+      // Say which of the two it is. Claiming the daemon is down when all we did
+      // was run out of patience sends the user to `systemctl status` for
+      // nothing — and it was, on a machine where docker was fine.
+      error: inconclusive
+        ? "no answer from docker yet — still trying"
+        : "docker not available (is the daemon running?)",
+    };
+    // A guess is not worth caching for as long as a fact. Holding an
+    // inconclusive verdict for the full window is what kept the error on screen
+    // long after the daemon answered.
+    if (!inconclusive) overviewCache = { at: Date.now(), root, data: down };
     return down;
   }
   const [c, i, v, n] = await Promise.all([containers(), images(), volumes(), networks()]);
@@ -303,7 +394,7 @@ export async function stats(ids?: string[]): Promise<DockerStat[]> {
   const targets = ids ? [...new Set(ids)].filter((id) => ID_RE.test(id)) : null;
   if (targets && !targets.length) return [];
   const key = targets ? targets.join(",") : "*";
-  if (statsCache && statsCache.key === key && Date.now() - statsCache.at < STATS_TTL_MS) return statsCache.data;
+  if (statsCache && statsCache.key === key && Date.now() - statsCache.at < STATS_TTL_MS * backoff()) return statsCache.data;
   const r = await dockerAsync(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}", ...(targets ?? [])], 12000);
   // A container removed between the overview and this call takes the whole
   // command down with it ("No such container"). Falling back to the host sample
@@ -323,11 +414,20 @@ export async function stats(ids?: string[]): Promise<DockerStat[]> {
   return data;
 }
 
-/** Last `tail` log lines for a container (bounded). Docker writes logs to stderr. */
-export function logs(id: string, tail = 400): { ok: boolean; text: string; error?: string } {
+/**
+ * Last `tail` log lines for a container (bounded). Docker writes logs to stderr.
+ *
+ * Awaited, like everything else here. The panel refetches these every three
+ * seconds while a log tab is open, and a blocking spawn on that cadence stops
+ * the server's only thread — which is also the thread pumping the terminal's
+ * PTY socket and the chat stream. Measured on a chatty container it is
+ * hundreds of milliseconds, which is exactly long enough to read as the app
+ * freezing while you type.
+ */
+export async function logs(id: string, tail = 400): Promise<{ ok: boolean; text: string; error?: string }> {
   if (!ID_RE.test(id)) return { ok: false, text: "", error: "invalid container id" };
   const n = Math.max(1, Math.min(5000, tail | 0));
-  const r = docker(["logs", "--tail", String(n), "--timestamps", id], 10000);
+  const r = await dockerAsync(["logs", "--tail", String(n), "--timestamps", id], 10000);
   // A container writes its own logs to stderr with exit 0; a non-zero exit is a
   // real failure (e.g. "No such container") — surface it as an error, not logs.
   if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "docker logs failed" };
@@ -340,9 +440,11 @@ function guard(id: string): DockerActionResult | null {
   if (!ID_RE.test(id)) return { ok: false, error: "invalid container id" };
   return null;
 }
-function action(verb: string, id: string, extra: string[] = []): DockerActionResult {
+/** `stop` and `restart` wait out the container's grace period — ten seconds of
+ *  a frozen UI if this blocks, on a button the user pressed and is watching. */
+async function action(verb: string, id: string, extra: string[] = []): Promise<DockerActionResult> {
   const g = guard(id); if (g) return g;
-  const r = docker([verb, ...extra, id], 20000);
+  const r = await dockerAsync([verb, ...extra, id], 20000);
   // The panel refetches right after acting; without dropping the cache it gets
   // the pre-action snapshot back and the container looks unchanged, as though
   // the button did nothing.
@@ -363,9 +465,9 @@ export const removeContainer = (id: string) => action("rm", id); // non-force: f
  * to render two tabs would double the latency of switching between them for no
  * gain. `top` is a live process list, so it is its own call.
  */
-export function inspect(id: string): { ok: boolean; env: string[]; config: string; error?: string } {
+export async function inspect(id: string): Promise<{ ok: boolean; env: string[]; config: string; error?: string }> {
   if (!ID_RE.test(id)) return { ok: false, env: [], config: "", error: "invalid container id" };
-  const r = docker(["inspect", id], 10000);
+  const r = await dockerAsync(["inspect", id], 10000);
   if (r.code !== 0) return { ok: false, env: [], config: "", error: r.stderr.trim() || "docker inspect failed" };
   let env: string[] = [];
   let config = r.stdout;
@@ -380,9 +482,9 @@ export function inspect(id: string): { ok: boolean; env: string[]; config: strin
   return { ok: true, env, config };
 }
 
-export function top(id: string): { ok: boolean; text: string; error?: string } {
+export async function top(id: string): Promise<{ ok: boolean; text: string; error?: string }> {
   if (!ID_RE.test(id)) return { ok: false, text: "", error: "invalid container id" };
-  const r = docker(["top", id], 10000);
+  const r = await dockerAsync(["top", id], 10000);
   // A stopped container cannot be topped, and saying that is better than an
   // empty table that looks like "no processes".
   if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "the container is not running" };

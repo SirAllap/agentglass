@@ -88,7 +88,7 @@ beforeAll(async () => {
 });
 
 describe("mergedIntoTrunk", () => {
-  const of = (name: string) => gw.branches(REPO).branches.find((b) => b.name === name);
+  const of = async (name: string) => (await gw.branches(REPO)).branches.find((b) => b.name === name);
 
   /**
    * Squash detection is deliberately eventual.
@@ -105,14 +105,14 @@ describe("mergedIntoTrunk", () => {
   const settles = async (name: string, want: boolean, ms = 5000) => {
     const deadline = Date.now() + ms;
     for (;;) {
-      if (of(name)?.mergedIntoTrunk === want) return true;
-      if (Date.now() > deadline) return of(name)?.mergedIntoTrunk;
+      if ((await of(name))?.mergedIntoTrunk === want) return true;
+      if (Date.now() > deadline) return (await of(name))?.mergedIntoTrunk;
       await Bun.sleep(25);
     }
   };
 
-  test("names the trunk it compared against", () => {
-    expect(gw.branches(REPO).trunk).toBe("main");
+  test("names the trunk it compared against", async () => {
+    expect((await gw.branches(REPO)).trunk).toBe("main");
   });
 
   test("a squash-merged branch counts as merged, once the sweep has run", async () => {
@@ -123,16 +123,16 @@ describe("mergedIntoTrunk", () => {
     expect(await settles("rebased", true)).toBe(true);
   });
 
-  test("a normally merged branch still counts as merged", () => {
-    expect(of("merged")?.mergedIntoTrunk).toBe(true);
+  test("a normally merged branch still counts as merged", async () => {
+    expect((await of("merged"))?.mergedIntoTrunk).toBe(true);
   });
 
-  test("a branch with unlanded work does not", () => {
-    expect(of("open")?.mergedIntoTrunk).toBe(false);
+  test("a branch with unlanded work does not", async () => {
+    expect((await of("open"))?.mergedIntoTrunk).toBe(false);
   });
 
-  test("an unrelated history does not", () => {
-    expect(of("stranger")?.mergedIntoTrunk).toBe(false);
+  test("an unrelated history does not", async () => {
+    expect((await of("stranger"))?.mergedIntoTrunk).toBe(false);
   });
 
   /**
@@ -145,10 +145,10 @@ describe("mergedIntoTrunk", () => {
    * A minute is squarely inside that window. Nothing about the repo changed, so
    * nothing about the answer may either.
    */
-  test("verdicts survive the ancestry cache expiring under them", () => {
+  test("verdicts survive the ancestry cache expiring under them", async () => {
     setSystemTime(new Date(Date.now() + 60_000));
-    expect(of("squashed")?.mergedIntoTrunk).toBe(true);
-    expect(of("rebased")?.mergedIntoTrunk).toBe(true);
+    expect((await of("squashed"))?.mergedIntoTrunk).toBe(true);
+    expect((await of("rebased"))?.mergedIntoTrunk).toBe(true);
   });
 
   /**
@@ -156,12 +156,36 @@ describe("mergedIntoTrunk", () => {
    * that outlived its branch would be worse than the bug it fixes: the delete
    * behind this flag is `-D`, so it would throw away work nothing has checked.
    */
-  test("a remembered verdict is dropped when the branch moves", () => {
+  test("a remembered verdict is dropped when the branch moves", async () => {
     git("checkout", "-q", "rebased");
     commit("rebase-c.txt", "c\n", "new work, after the merge");
     git("checkout", "-q", "main");
     setSystemTime(new Date(Date.now() + 60_000)); // still inside the sweep's TTL
-    expect(of("rebased")?.mergedIntoTrunk).toBe(false);
+    expect((await of("rebased"))?.mergedIntoTrunk).toBe(false);
+  });
+
+  /**
+   * The sweep has to be allowed to FINISH.
+   *
+   * invalidateMerged() clears the "already swept" mark, and the auto-fetch
+   * called it every 60 seconds unconditionally. On a large repo the sweep takes
+   * about that long — so it was cancelled and restarted forever, no squash
+   * verdict ever landed, and the panel sat on "still checking for squash
+   * merges…" permanently while reporting 0 merged out of 5 gone branches.
+   *
+   * The fetch now only invalidates when it actually moved a remote ref. This
+   * pins the property that broke: an invalidation with nothing new must not
+   * cost a verdict that was already proved.
+   */
+  test("a verdict still lands after the caches are wiped", async () => {
+    // Wiping is what the auto-fetch did every 60 seconds, unconditionally. On a
+    // large repo the sweep takes about that long, so it was cancelled and
+    // restarted forever: no squash verdict ever landed and the panel sat on
+    // "still checking for squash merges…" permanently. The fetch now only
+    // invalidates when it moved a remote ref; this pins that a wipe costs a
+    // re-sweep and nothing more.
+    gw.invalidateMerged(REPO);
+    expect(await settles("squashed", true)).toBe(true);
   });
 });
 

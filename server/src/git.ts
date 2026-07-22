@@ -15,6 +15,8 @@ import { resolve, dirname, relative, sep } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { inScope } from "./config.ts";
 import { record } from "./gitlog.ts";
+import { currentLabel, resumedAs } from "./loopwatch.ts";
+import { withSpawnSlot } from "./spawnpool.ts";
 import type { GitFileStatus, RepoStatus, CommitResult } from "../../shared/types.ts";
 
 export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
@@ -44,16 +46,65 @@ export function git(cwd: string, args: string[]): GitResult {
  *  repo, but the repo picker asks every repo on the machine at once — run those
  *  concurrently or the panel waits for the sum of them. */
 export async function gitAsync(cwd: string, args: string[]): Promise<GitResult> {
+  // Queued behind the process cap — see spawnpool. A sweep of eighteen
+  // checkouts is eighteen of these, and several sweeps can overlap.
+  return withSpawnSlot(() => runGit(cwd, args));
+}
+
+/**
+ * How long one `git` may run before it is killed.
+ *
+ * A backstop against "never", not a policy on how fast git ought to be. It has
+ * to clear the slowest thing that legitimately comes through here — a PR fetch
+ * on a large repo over a slow link — because killing real work would be a worse
+ * bug than the one this closes. Anything past two minutes is not slow, it is
+ * stuck.
+ *
+ * Read per call rather than fixed at import, for the reason spawnpool's limit()
+ * gives: a module constant is decided by whichever file imports this first,
+ * which in a test run is never the file doing the overriding.
+ */
+const gitTimeoutMs = () => Number(process.env.AGENTGLASS_GIT_TIMEOUT_SECONDS ?? 120) * 1000;
+
+async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   const t0 = performance.now();
+  // Whose work this is, read while we are still standing inside the caller —
+  // everything after the await belongs to them, however many other requests
+  // arrive in the meantime. See loopwatch.
+  const owner = currentLabel();
   try {
-    const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn(["git", "-C", cwd, ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+      // A git that never returns used to cost one hung request: bad, bounded,
+      // survivable. Now that every spawn takes a slot from the shared pool it
+      // costs a slot as well, and a slot that is never handed back is gone for
+      // the life of the process — enough of them and nothing in the app can run
+      // git again. That is the freeze the pool was built to prevent, reached
+      // from the other side.
+      timeout: gitTimeoutMs(),
+      // The three the auto-fetch already sets, for the reason it documents
+      // (gitwork.ts): a repo whose credentials expired otherwise sits on a
+      // password prompt that no one is there to answer. Not hypothetical on
+      // this path — prs.ts fetches PR refs from the network through here.
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
+    });
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
-    record(cwd, args, code ?? 1, performance.now() - t0, stderr);
-    return { code: code ?? 1, stdout, stderr };
+    // Everything after this line is synchronous parsing of what git said, on
+    // behalf of whoever asked.
+    resumedAs(owner);
+    // A git killed mid-flight says nothing on stderr, and prs.ts puts stderr's
+    // first line in front of the user verbatim — an empty one reads as a bug in
+    // us rather than as a remote that never answered.
+    const err = proc.signalCode && !stderr.trim()
+      ? `git ${args[0] ?? ""} gave up after ${gitTimeoutMs() / 1000}s — killed with ${proc.signalCode}`
+      : stderr;
+    record(cwd, args, code ?? 1, performance.now() - t0, err);
+    return { code: code ?? 1, stdout, stderr: err };
   } catch (e) {
     record(cwd, args, 1, performance.now() - t0, String(e));
     return { code: 1, stdout: "", stderr: String(e) };

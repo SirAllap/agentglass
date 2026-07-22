@@ -154,6 +154,10 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_path)")
 // the one who pays a full table scan with a JSON parse per row on /events,
 // /stats and /changes. It also bounds the backfill below.
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd ON events(cwd_path)");
+// `model_name` had none, so the filter dropdown's third query — SELECT DISTINCT
+// over it — was the one full scan with a temp B-tree in that endpoint. Cheap
+// index, and the covering scan it enables is what the other two already had.
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_model ON events(model_name)");
 
 // Sessions have no payload of their own, so these are real columns, written at
 // upsert and backfilled from the session's events for rows that predate them.
@@ -299,30 +303,85 @@ function providerScope(provider?: string | null): { clause: string; args: string
     : { clause: "", args: [] };
 }
 
-/** SQL fragment + args restricting an events query to one project. A scoped
- *  cockpit is *about* that project, so rows from anywhere else stay hidden even
- *  though they remain in the DB — an earlier machine-wide run, or hooks fired by
- *  a sibling repo. Matches the root and everything under it, against both the
- *  resolved repo root and the raw cwd, so linked worktrees and monorepo subdirs
- *  are in scope either way (the same test the scanner applies at ingest).
+/**
+ * Every project/cwd path the events table actually contains.
+ *
+ * Tiny — single digits on a real database, because it is one entry per checkout
+ * anyone has ever worked in — and both columns are indexed, so this is two
+ * covering scans measured at 5ms and 2ms. Cached anyway, and invalidated the
+ * moment an event arrives carrying a path that is not in it, so a brand-new
+ * worktree shows up on its first event rather than up to a TTL later.
+ */
+const PATHS_TTL_MS = 30_000;
+let pathCache: { at: number; paths: string[] } | null = null;
+
+function recordedPaths(): string[] {
+  if (pathCache && Date.now() - pathCache.at < PATHS_TTL_MS) return pathCache.paths;
+  const seen = new Set<string>();
+  for (const col of ["project_path", "cwd_path"] as const) {
+    for (const r of db.query<{ p: string | null }, []>(`SELECT DISTINCT ${col} AS p FROM events`).all()) {
+      if (r.p) seen.add(r.p);
+    }
+  }
+  const paths = [...seen];
+  pathCache = { at: Date.now(), paths };
+  return paths;
+}
+
+/** Called at ingest when a row carries a path the cached set has not seen. */
+function notePath(p: unknown): void {
+  if (typeof p !== "string" || !p) return;
+  if (pathCache && !pathCache.paths.includes(p)) pathCache = null;
+}
+
+/** SQL fragment + args restricting an events query to one project.
+ *
+ *  A scoped cockpit is *about* that project, so rows from anywhere else stay
+ *  hidden even though they remain in the DB — an earlier machine-wide run, or
+ *  hooks fired by a sibling repo. In scope means the resolved repo root or the
+ *  raw cwd is one of the project's checkouts, or sits inside one (a monorepo
+ *  subdir) — the same test the scanner applies at ingest.
  *
  *  Rows with no recorded path (pre-scanner events) are treated as out of scope:
- *  a project view that quietly includes "unknown" is worse than one that's
- *  honestly narrow. Empty clause when unscoped — the whole-machine view. */
+ *  a project view that quietly includes "unknown" is worse than one that is
+ *  honestly narrow. Empty clause when unscoped — the whole-machine view.
+ *
+ *  The shape of this clause is the whole point. It used to be one four-way OR
+ *  group per checkout — `= ? OR LIKE ? OR = ? OR LIKE ?` — which on a repo with
+ *  eighteen worktrees is seventy-two predicates, half of them LIKE, evaluated
+ *  against every row. No index survives that, and it got worse with every
+ *  worktree added: the loop watchdog caught `/events/filter-options` at 1432ms
+ *  and `/sessions` at 1078ms, on the thread that carries the terminal.
+ *
+ *  So the prefix logic moves out of SQL. The set of paths the table actually
+ *  contains is tiny and indexed; work out which of *those* are in scope here,
+ *  in a language that can do it once instead of per row, and hand SQLite an
+ *  equality test it can index. Same rows, measured 194ms → 9ms on the same
+ *  query — and it no longer degrades as checkouts are added.
+ *
+ *  The JS test is also stricter than the SQL it replaces: `LIKE 'x/%'` treats
+ *  `_` as a wildcard, so a path containing an underscore matched more than it
+ *  should have. `startsWith` does not.
+ */
 export function scopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
   if (!scope) return { clause: "", args: [] };
-  // One group per checkout of the project, not one for the scope path alone.
-  // Linked worktrees usually live in sibling directories, so `LIKE scope/%`
+  // Every checkout of the project, not the scope path alone: linked worktrees
+  // usually live in sibling directories, so a prefix test against the scope
   // matches none of them — a project opened at ~/code/orbit would show an empty
   // dashboard for a day spent working in ~/code/orbit-WEB-1042, which is where
-  // the work actually happens. Column names stay unqualified: openToolCalls()
-  // rewrites them to `p.<col>` for its aliased query.
-  const args: string[] = [];
-  const groups = scopeRoots(scope).map((r) => {
-    args.push(r, r + "/%", r, r + "/%");
-    return "project_path = ? OR project_path LIKE ? OR cwd_path = ? OR cwd_path LIKE ?";
-  });
-  return { clause: ` AND (${groups.join(" OR ")})`, args };
+  // the work actually happens.
+  const roots = scopeRoots(scope);
+  const inScope = recordedPaths().filter((p) => roots.some((r) => p === r || p.startsWith(r + "/")));
+  // Nothing recorded for this project yet. `AND 0` is the honest answer and the
+  // fast one; an empty IN list is a syntax error.
+  if (!inScope.length) return { clause: " AND 0", args: [] };
+  // Column names stay unqualified: openToolCalls() rewrites them to `p.<col>`
+  // for its aliased query.
+  const q = inScope.map(() => "?").join(",");
+  return {
+    clause: ` AND (project_path IN (${q}) OR cwd_path IN (${q}))`,
+    args: [...inScope, ...inScope],
+  };
 }
 
 /** Same restriction for the `sessions` table, which carries its own columns. */
@@ -448,6 +507,11 @@ export interface InsertResult {
  */
 export function insertEvent(n: NormalizedEvent): InsertResult {
   const model = n.model_name;
+  // A path nobody has recorded before means the scope set is stale — a new
+  // worktree must appear in a scoped dashboard on its first event, not on the
+  // first event after a cache expiry.
+  notePath(n.payload?.project_path);
+  notePath((n.payload as { cwd?: unknown } | undefined)?.cwd);
 
   // --- token delta computation -------------------------------------------
   let dIn = n.usage.input_tokens ?? 0;
@@ -654,7 +718,34 @@ export function openToolCalls(): OpenToolCall[] {
     .all(Date.now() - OPEN_TOOL_MAX_MS, ...s.args);
 }
 
+/**
+ * The filter dropdowns' contents, cached.
+ *
+ * Measured by the loop watchdog on a real cockpit: 1432ms of blocked event
+ * loop, five times in two minutes — the single worst freeze in the app, and
+ * every millisecond of it is a terminal that has stopped echoing, because the
+ * PTY rides this same thread.
+ *
+ * Three `SELECT DISTINCT` over 35k rows should be instant, and would be if the
+ * scope filter did not expand to one four-way OR group per checkout of the
+ * project. Eighteen worktrees is seventy-two predicates, half of them LIKE, on
+ * every row — which no index survives. Fixing that clause is worth doing and is
+ * not a thing to rush; caching what it feeds is worth doing anyway, because
+ * this is the contents of a dropdown. A new app or model appearing thirty
+ * seconds late costs nothing; the freeze costs the terminal.
+ */
+const FILTER_TTL_MS = 30_000;
+let filterCache: { at: number; scope: string | null; data: ReturnType<typeof computeFilterOptions> } | null = null;
+
 export function getFilterOptions() {
+  const scope = workspaceRoot();
+  if (filterCache && filterCache.scope === scope && Date.now() - filterCache.at < FILTER_TTL_MS) return filterCache.data;
+  const data = computeFilterOptions();
+  filterCache = { at: Date.now(), scope, data };
+  return data;
+}
+
+function computeFilterOptions() {
   // Scoped too, or the dropdowns keep offering apps and models that the feed
   // behind them can no longer show — picking one would just empty the panel.
   const s = scopeClause();

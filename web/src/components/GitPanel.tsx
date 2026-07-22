@@ -2,7 +2,7 @@
 // (stage/unstage/discard/commit), branches (checkout/create/delete), log
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
@@ -464,7 +464,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   // branches / log / stashes / worktrees
-  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null; sweeping?: boolean }>({ current: "", branches: [] });
+  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null }>({ current: "", branches: [] });
   const [newBranch, setNewBranch] = useState("");
   const [graph, setGraph] = useState<GitGraphLine[]>([]);
   const [stashes, setStashes] = useState<GitStash[]>([]);
@@ -745,25 +745,6 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   usePoll(open && !!root && !busy, () => loadTree(root));
   usePoll(open && !!root && !busy, loadView, 10_000);
 
-  /**
-   * "still checking for squash merges…" has to be able to stop saying that.
-   *
-   * The sweep runs behind the response, so the panel shows that line and waits
-   * for a later poll to carry the finished answer. But the poll above is gated
-   * on `!busy` — one stuck flag and the line is frozen on screen forever,
-   * promising an update that will never arrive. Which is what happened: the
-   * server had been answering `sweeping: false` for minutes while the panel
-   * still claimed to be working.
-   *
-   * So the claim refreshes itself. One targeted re-read while it is true,
-   * ungated, and it stops as soon as the answer says so — nothing to leak,
-   * nothing to keep running once the line is gone.
-   */
-  useEffect(() => {
-    if (!open || !root || !branchData.sweeping) return;
-    const t = setTimeout(() => { reloadBranches(); }, 2500);
-    return () => clearTimeout(t);
-  }, [open, root, branchData.sweeping, branchData.branches]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * Run a git action, and make sure the screen agrees with the repo afterwards.
@@ -1936,14 +1917,17 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             {busy ? `${pending ?? "working"}…` : `delete ${goneMerged.length} merged`}
                           </button>
                         )}
-                        {onlyGone && (
-                          <span className="text-[9.5px] t-dim2">
-                            {goneMerged.length > 0 && <>{goneMerged.length} already in {branchData.trunk ?? "the trunk"}</>}
-                            {branchData.sweeping && <span title="Squash- and rebase-merged branches are recognised by replaying their diff, which runs behind the list. The count can still go up.">{goneMerged.length > 0 ? " · " : ""}still checking for squash merges…</span>}
-                            {goneMerged.length > 0 && goneUnmerged.length > 0 && " · "}
-                            {goneUnmerged.length > 0 && <span style={{ color: "var(--warning)" }}>{goneUnmerged.length} not merged — kept</span>}
-                          </span>
-                        )}
+                        {onlyGone && (() => {
+                          // Composed, not concatenated. Each piece used to carry
+                          // its own separator and guess whether it needed one,
+                          // so with nothing merged the sweep note and the kept
+                          // count ran together into one unreadable string.
+                          // Joining a list cannot produce that.
+                          const parts: ReactNode[] = [];
+                          if (goneMerged.length) parts.push(<>{goneMerged.length} already in {branchData.trunk ?? "the trunk"}</>);
+                          if (goneUnmerged.length) parts.push(<span style={{ color: "var(--warning)" }}>{goneUnmerged.length} not merged — kept</span>);
+                          return <span className="text-[9.5px] t-dim2">{parts.map((p, i) => <Fragment key={i}>{i > 0 && " · "}{p}</Fragment>)}</span>;
+                        })()}
                       </div>
                     )}
                     {!incBranches.rows.length && <PaneEmpty busy={busyView === "branches"} what="branches" />}

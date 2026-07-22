@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, WorkingTree } from "../../shared/types.ts";
 import { normalize, detectError } from "./ingest.ts";
 import { db } from "./db.ts";
 import {
@@ -26,7 +26,7 @@ import { getUsage } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED } from "./git.ts";
+import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, git } from "./git.ts";
 import {
   workingTree, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
@@ -38,6 +38,8 @@ import {
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
+import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
+import { spawnPoolStats } from "./spawnpool.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
@@ -198,9 +200,86 @@ const trustedHost = (url: URL) => isPrivate(url.hostname) || ALLOWED_HOSTS.has(u
 
 // Every git mutation nudges the clients that are showing git state. Registered
 // here rather than in gitwork so that module stays unaware of the socket.
-setGitChangeHook(() => broadcast({ type: "git" }));
+/**
+ * The working tree, held for a moment — a property of this endpoint, not of
+ * `workingTree()`, which stays truthful for every other caller.
+ *
+ * Measured by the loop watchdog with the git panel open and someone typing:
+ * 618ms per call, eight calls in two minutes, the largest single source of
+ * blocked event loop in the app. It is four synchronous git invocations (two
+ * diffs, a status, the branch state) on a 2.5s client poll, and the terminal
+ * rides the same thread.
+ *
+ * Making those four async is the real fix, is a deep change through parseDiff,
+ * treeState and branchInfo, and is not worth doing badly. Meanwhile: one second,
+ * scaled by `backoff()` so it holds longer while a shell is in use, and dropped
+ * the instant anything mutates a repository — which is what keeps staging a
+ * file from reading back the state before it.
+ */
+/**
+ * Expensive git reads, held until the repository actually moves.
+ *
+ * `/git/branches` is ~1042ms on a real repo and `/git/graph` ~934ms, and both
+ * are on 10s polls while their tab is open — so a TTL cache is no use, the poll
+ * outlives any sane one. But asking "has anything moved?" costs 2ms: one
+ * `for-each-ref` over every local and remote ref. If not one hash has changed,
+ * last time's answer is not stale, it is *identical*, and recomputing it is
+ * ~800ms of a thread the terminal is trying to use.
+ *
+ * Better than a TTL in the way that matters: there is no staleness window at
+ * all. A commit made in the app, in the terminal, or by an agent moves a ref,
+ * the fingerprint changes, and the next poll recomputes. Nothing has to know to
+ * invalidate anything.
+ *
+ * Measured on the repo this was built against: 761ms for the graph, 644ms for
+ * `branch --merged` alone, against 2ms for the fingerprint.
+ */
+// The *serialised* answer, not the object. A cache hit on the graph would
+// otherwise re-stringify 164KB of it on every poll, which is most of what was
+// left of the cost once the git call was skipped.
+const refsCache = new Map<string, { refs: number; body: string }>();
+
+function refsFingerprint(root: string): number {
+  const r = git(root, ["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]);
+  // A failure fingerprints as "different every time", so a broken repo falls
+  // back to recomputing rather than serving one wrong answer forever.
+  return r.code === 0 ? Number(Bun.hash(r.stdout + ":" + r.stdout.length)) : Math.random();
+}
+
+/** Awaited variant, for the reads that no longer block the loop. */
+async function whileRefsHoldAsync(key: string, root: string, compute: () => Promise<unknown>): Promise<string> {
+  if (!root) return JSON.stringify(await compute());
+  const refs = refsFingerprint(root);
+  const hit = refsCache.get(key);
+  if (hit && hit.refs === refs) return hit.body;
+  const body = JSON.stringify(await compute());
+  if (refsCache.size > 40) refsCache.clear();
+  refsCache.set(key, { refs, body });
+  return body;
+}
+
+/** Recompute only when a ref moved. `key` separates answers that come from the
+ *  same repo but different questions (the log's scope, a limit). */
+function whileRefsHold(key: string, root: string, compute: () => unknown): string {
+  if (!root) return JSON.stringify(compute());
+  const refs = refsFingerprint(root);
+  const hit = refsCache.get(key);
+  if (hit && hit.refs === refs) return hit.body;
+  const body = JSON.stringify(compute());
+  if (refsCache.size > 40) refsCache.clear();
+  refsCache.set(key, { refs, body });
+  return body;
+}
+
+const TREE_TTL_MS = 1_000;
+const treeCache = new Map<string, { at: number; data: WorkingTree }>();
+setGitChangeHook(() => { treeCache.clear(); broadcast({ type: "git" }); });
 
 function broadcast(frame: WsFrame) {
+  // Serialising an event and writing it to every open client. Small per client,
+  // but it is a fan-out on the hot path of ingest and it was one of the things
+  // hiding inside "(background)".
+  entered("broadcast to clients");
   const msg = JSON.stringify(frame);
   for (const ws of clients) {
     try {
@@ -243,12 +322,19 @@ const server = Bun.serve<WsData>({
   async fetch(req, srv) {
     const url = new URL(req.url);
     const { pathname } = url;
+    // Name this request for the loop watchdog: if the loop stalls in the next
+    // moment, the stall is reported against this path instead of being one more
+    // anonymous freeze in a terminal. See loopwatch.ts.
+    entered(`${req.method} ${pathname}`);
 
     // Per-request response helpers: `cors` reflects this caller's Origin, so it
     // has to be built here rather than shared as a module constant.
     const cors = corsFor(req);
     const json = (data: unknown, status = 200) =>
       new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...cors } });
+    /** Already-serialised JSON — see whileRefsHold. */
+    const body = (s: string, status = 200) =>
+      new Response(s, { status, headers: { "content-type": "application/json", ...cors } });
     const csrfBlocked = () => json({ ok: false, error: "cross-origin write blocked" }, 403);
     const rebindBlocked = () =>
       json({ ok: false, error: "request Host is not a local or private address (DNS-rebinding guard — set AGENTGLASS_ALLOWED_HOSTS for a reverse-proxy name)" }, 403);
@@ -526,12 +612,25 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/git/tree") {
       const root = url.searchParams.get("root") || "";
-      return json(workingTree(root));
+      const hit = treeCache.get(root);
+      if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return json(hit.data);
+      const data = await workingTree(root);
+      if (treeCache.size > 40) treeCache.clear();
+      treeCache.set(root, { at: Date.now(), data });
+      return json(data);
     }
-    if (pathname === "/git/branches") return json(gitBranches(url.searchParams.get("root") || ""));
+    if (pathname === "/git/branches") {
+      const root = url.searchParams.get("root") || "";
+      return body(await whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root)));
+    }
     // `scope=all` is the whole graph; anything else is this checkout's own
     // history, which is what the pane defaults to.
-    if (pathname === "/git/graph") return json(logGraph(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 400), url.searchParams.get("scope") === "all" ? "all" : "head"));
+    if (pathname === "/git/graph") {
+      const root = url.searchParams.get("root") || "";
+      const limit = Number(url.searchParams.get("limit") || 400);
+      const scope = url.searchParams.get("scope") === "all" ? "all" : "head";
+      return body(await whileRefsHoldAsync(`graph:${root}:${limit}:${scope}`, root, () => logGraph(root, limit, scope)));
+    }
     if (pathname === "/git/worktrees") return json({ worktrees: await gitWorktrees(url.searchParams.get("root") || "") });
     // What a worktree removal would destroy, per path — asked before offering
     // the removal, never after. Repeatable `path=` so the bulk delete can price
@@ -546,7 +645,7 @@ const server = Bun.serve<WsData>({
     // path on disk.
     if (pathname === "/update/status") {
       if (!desktopOnly(req)) return csrfBlocked();
-      return json(updateStatus());
+      return json(await updateStatus());
     }
     // What changed in the release this build came from. Same desktop-only gate
     // as the rest of /update: the build's origin and tag are in the answer.
@@ -566,13 +665,21 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
     // Every git command this server has run — the command log panel.
     if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
+    // Every moment this process stopped answering, and what was running. The
+    // terminal rides this loop, so these ARE the freezes the user feels.
+    if (pathname === "/api/loopwatch") return json({ ...stalls(Number(url.searchParams.get("since") || 0)), spawns: spawnPoolStats() });
     // Open a file at a line in the editor the user already has running.
     if (pathname === "/editor/target") return json({ ...(await editorTarget(url.searchParams.get("path") || "")), hasNvim: HAS_NVIM });
     if (pathname === "/git/remotes") return json({ remotes: gitRemotes(url.searchParams.get("root") || "") });
     // Every branch on one remote, as the last fetch left them. Whole, not
     // paged — see remoteBranches() for why.
     if (pathname === "/git/remote-branches") return json(gitRemoteBranches(url.searchParams.get("root") || "", url.searchParams.get("remote") || ""));
-    if (pathname === "/git/tags") return json({ tags: gitTags(url.searchParams.get("root") || "") });
+    if (pathname === "/git/tags") {
+      // 125 tags is one `for-each-ref` and cheap, but it is on the same 10s poll
+      // and answers from the same refs — free to include.
+      const root = url.searchParams.get("root") || "";
+      return body(whileRefsHold(`tags:${root}`, root, () => ({ tags: gitTags(root) })));
+    }
     if (pathname === "/git/reflog") return json({ entries: gitReflog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 200)) });
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
     if (pathname === "/editor/capability") return json(editorCapability());
@@ -633,13 +740,13 @@ const server = Bun.serve<WsData>({
         case "/git/worktree-chown": res = fixWorktreeOwnership(root, b.path); break;
         // `root` here is the checkout being updated — a worktree updates
         // itself, because the merge has to run where the branch is checked out.
-        case "/git/sync-base": res = syncFromBase(root, b.base); break;
+        case "/git/sync-base": res = await syncFromBase(root, b.base); break;
         case "/git/set-base": res = setBase(root, b.branch, b.base ?? null); break;
         case "/git/resolve": res = resolveWith(root, b.paths ?? b.path, b.side); break;
         case "/git/resolve-blocks": res = resolveBlocks(root, b.path, b.choices); break;
         case "/git/merge-abort": res = mergeAbort(root); break;
         case "/git/merge-continue": res = mergeContinue(root); break;
-        case "/git/undo-merge": res = undoMerge(root); break;
+        case "/git/undo-merge": res = await undoMerge(root); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);
@@ -660,16 +767,16 @@ const server = Bun.serve<WsData>({
       const sampleable = shown.containers.filter((c) => c.state === "running" || c.state === "paused").map((c) => c.id);
       return json({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
     }
-    if (pathname === "/docker/inspect") return json(dockerInspect(url.searchParams.get("id") || ""));
-    if (pathname === "/docker/top") return json(dockerTop(url.searchParams.get("id") || ""));
+    if (pathname === "/docker/inspect") return json(await dockerInspect(url.searchParams.get("id") || ""));
+    if (pathname === "/docker/top") return json(await dockerTop(url.searchParams.get("id") || ""));
     if (pathname === "/docker/logs") {
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);
-      return json(dockerLogs(id, tail));
+      return json(await dockerLogs(id, tail));
     }
     if (pathname === "/update/run" && req.method === "POST") {
       if (!desktopOnly(req)) return csrfBlocked();
-      return json(startUpdate());
+      return json(await startUpdate());
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
@@ -678,10 +785,10 @@ const server = Bun.serve<WsData>({
       const id = String(b.id || "");
       let res;
       switch (pathname) {
-        case "/docker/start": res = startContainer(id); break;
-        case "/docker/stop": res = stopContainer(id); break;
-        case "/docker/restart": res = restartContainer(id); break;
-        case "/docker/rm": res = removeContainer(id); break;
+        case "/docker/start": res = await startContainer(id); break;
+        case "/docker/stop": res = await stopContainer(id); break;
+        case "/docker/restart": res = await restartContainer(id); break;
+        case "/docker/rm": res = await removeContainer(id); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);
@@ -719,16 +826,16 @@ const server = Bun.serve<WsData>({
       const detail = id ? getSession(id) : null;
       return detail ? json(detail) : json({ error: "not found" }, 404);
     }
-    if (pathname === "/skills") return json({ skills: getSkills(), generated_at: Date.now() });
+    if (pathname === "/skills") return json({ skills: await getSkills(), generated_at: Date.now() });
     if (pathname === "/skills/export") {
       const fmt = url.searchParams.get("format") || "md";
       const dl = (body: string, type: string, name: string) =>
         new Response(body, {
           headers: { "content-type": type, "content-disposition": `attachment; filename="${name}"`, ...cors },
         });
-      if (fmt === "json") return dl(JSON.stringify(getSkills(), null, 2), "application/json", "skills-catalog.json");
-      if (fmt === "csv") return dl(catalogCsv(), "text/csv", "skills-catalog.csv");
-      return dl(catalogMarkdown(), "text/markdown", "skills-catalog.md");
+      if (fmt === "json") return dl(JSON.stringify(await getSkills(), null, 2), "application/json", "skills-catalog.json");
+      if (fmt === "csv") return dl(await catalogCsv(), "text/csv", "skills-catalog.csv");
+      return dl(await catalogMarkdown(), "text/markdown", "skills-catalog.md");
     }
     if (pathname === "/sessions") {
       const limit = Math.min(1000, Number(url.searchParams.get("limit") || 100));
@@ -952,3 +1059,6 @@ const ws = workspaceRoot();
 console.log(ws ? `   Project     → ${ws} (this project only)` : "   Project     → every project on this machine");
 // Only meaningful once a project is open — see startAutoFetch().
 startAutoFetch();
+// Watch our own event loop. Cheap (one timer, one subtraction) and the only
+// thing that turns "the terminal feels laggy" into a name and a number.
+watchLoop();

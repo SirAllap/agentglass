@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import type { IngestBody } from "../../shared/types.ts";
 import { normalize } from "./ingest.ts";
+import { entered, backoff } from "./loopwatch.ts";
 import { db, insertEvent, setSessionTitles, RETENTION_DAYS, type InsertResult } from "./db.ts";
 // safeAbs: translates Windows drive paths, so a WSL-side transcript groups
 // under its own folder rather than collapsing onto the server's cwd.
@@ -802,6 +803,7 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
   // "no row yet" for a transcript, both inserted its lines, and every count,
   // token and dollar for those sessions was silently doubled in the DB.
   sweepBusy = true;
+  entered("first transcript scan");
   scanOnce(null)
     .then((n) => {
       const projects = projectPaths.size;
@@ -812,8 +814,16 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
       backfillTitles()
         .then((named) => { if (named) console.log(`🏷  named ${named} session${named === 1 ? "" : "s"} from their transcripts`); })
         .catch((e) => console.error(`[scan] title backfill failed: ${e instanceof Error ? e.message : e}`));
+      let skipped = 0;
       setInterval(async () => {
         if (sweepBusy) return; // a slow sweep must not stack up behind the timer
+        // Reading and parsing transcripts is synchronous work on the thread the
+        // terminal needs. While someone is typing, skip ticks rather than take
+        // it — but never more than a few in a row, or a busy session would stop
+        // ingesting its own events.
+        if (backoff() > 1 && skipped < 3) { skipped++; return; }
+        skipped = 0;
+        entered("transcript sweep");
         sweepBusy = true;
         try {
           await scanOnce(onLive);

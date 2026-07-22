@@ -9,6 +9,7 @@ import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSy
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
+import { entered, backoff } from "./loopwatch.ts";
 import type {
   ConflictBlock, BlockChoice,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
@@ -19,14 +20,30 @@ import type {
 export const GIT_WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
 const UNTRACKED_MAX_BYTES = 512 * 1024; // don't inline-diff huge new files
 
-/** Validate that `root` is the top-level of a git repo; return the abs root. */
+/**
+ * Validate that `root` is the top-level of a git repo; return the abs root.
+ *
+ * Cached, because this is the first line of nearly every function in this file
+ * and it costs a subprocess: on a panel poll it ran a dozen times a second to
+ * re-derive an answer that changes only if someone moves a directory. A repo's
+ * top level does not move under a running app; a *miss* is not cached, so a
+ * path that becomes a repo later is picked up.
+ */
+const ROOT_TTL_MS = 60_000;
+const rootCache = new Map<string, { at: number; top: string }>();
+
 function repoRoot(root: unknown): string | null {
   const abs = safeAbs(root);
   if (!abs) return null;
+  const hit = rootCache.get(abs);
+  if (hit && Date.now() - hit.at < ROOT_TTL_MS) return hit.top;
   const top = git(abs, ["rev-parse", "--show-toplevel"]);
   if (top.code !== 0) return null;
   const t = top.stdout.trim();
-  return t || null;
+  if (!t) return null;
+  if (rootCache.size > 200) rootCache.clear();
+  rootCache.set(abs, { at: Date.now(), top: t });
+  return t;
 }
 
 /** Resolve a repo-relative path and reject anything escaping the root. */
@@ -109,8 +126,8 @@ function parseDiff(root: string, text: string, staged: boolean): GitFileChange[]
 }
 
 /** Build all-added GitFileChange entries for untracked files. */
-function untracked(root: string): GitFileChange[] {
-  const r = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+async function untracked(root: string): Promise<GitFileChange[]> {
+  const r = await gitAsync(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
   if (r.code !== 0) return [];
   const now = Date.now();
   const out: GitFileChange[] = [];
@@ -160,7 +177,7 @@ function treeState(root: string): GitTreeState {
   return "clean";
 }
 
-function branchInfo(root: string): GitBranchInfo {
+async function branchInfo(root: string): Promise<GitBranchInfo> {
   const name = currentBranch(root);
   const detached = name === "(detached)";
   const upstream = git(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).stdout.trim() || null;
@@ -172,11 +189,11 @@ function branchInfo(root: string): GitBranchInfo {
   }
   // What this branch was cut from, and how far it has drifted — the header's
   // "sync" affordance. Cheap and cached; nothing here is per-branch fan-out.
-  const base = detached ? null : baseOf(root, name);
+  const base = detached ? null : await baseOf(root, name);
   return {
     name, upstream, ahead, behind, detached, state: treeState(root),
     base,
-    behindBase: base ? behindBase(root, name, base) : 0,
+    behindBase: base ? await behindBase(root, name, base) : 0,
     // Two rev-parses, so only when the answer can change a decision: the
     // panel asks it to decide whether being behind upstream is a reason to
     // refuse a base merge, and that question only exists while behind.
@@ -186,15 +203,25 @@ function branchInfo(root: string): GitBranchInfo {
 }
 
 /** Full working-tree state for one repo. */
-export function workingTree(rootIn: unknown): WorkingTree {
+export async function workingTree(rootIn: unknown): Promise<WorkingTree> {
   const root = repoRoot(rootIn);
   if (!root) {
     return { root: String(rootIn ?? ""), branch: { name: "", upstream: null, ahead: 0, behind: 0, detached: false }, staged: [], unstaged: [], clean: true, writeEnabled: GIT_WRITE_ENABLED, error: "not a git repository" };
   }
-  const staged = parseDiff(root, git(root, ["-c", "core.quotePath=false", "diff", "--cached"]).stdout, true);
-  const unstaged = [...parseDiff(root, git(root, ["-c", "core.quotePath=false", "diff"]).stdout, false), ...untracked(root)];
+  // The four reads this is made of, run together rather than one after another
+  // — and awaited, so the 618ms this measured at is wall clock instead of a
+  // terminal that has stopped echoing. It is on a 2.5s poll whenever the panel
+  // is open.
+  const [stagedOut, unstagedOut, others, branch] = await Promise.all([
+    gitAsync(root, ["-c", "core.quotePath=false", "diff", "--cached"]),
+    gitAsync(root, ["-c", "core.quotePath=false", "diff"]),
+    untracked(root),
+    branchInfo(root),
+  ]);
+  const staged = parseDiff(root, stagedOut.stdout, true);
+  const unstaged = [...parseDiff(root, unstagedOut.stdout, false), ...others];
   return {
-    root, branch: branchInfo(root), staged, unstaged,
+    root, branch, staged, unstaged,
     clean: staged.length === 0 && unstaged.length === 0,
     writeEnabled: GIT_WRITE_ENABLED,
   };
@@ -309,14 +336,36 @@ function codeRootsOf(knownRoots: string[]): string[] {
  *
  *  Both counts are only as fresh as the last fetch — they compare against the
  *  local origin/* refs, not the remote. See startAutoFetch(). */
+/**
+ * When work last landed on each checkout's branch, cached hard.
+ *
+ * The dirty count next to it has to be fresh — it changes as you edit — but a
+ * commit date does not: it moves when you commit, and `run()` clears this the
+ * moment anything writes. Measured without the cache on a repo with eighteen
+ * checkouts, `/git/repos` spawned 36 processes and burned 4.1 seconds of CPU
+ * every five seconds, half of it re-asking eighteen branches for a date that
+ * had not changed since the last time. While the user was typing in a terminal
+ * this same process serves.
+ */
+const TIP_TTL_MS = 60_000;
+const tipCache = new Map<string, { at: number; ms: number }>();
+
+async function tipDate(root: string): Promise<number> {
+  const hit = tipCache.get(root);
+  if (hit && Date.now() - hit.at < TIP_TTL_MS) return hit.ms;
+  const r = await gitAsync(root, ["log", "-1", "--format=%ct", "HEAD"]);
+  const ms = r.code === 0 ? (Number(r.stdout.trim()) || 0) * 1000 : 0;
+  if (tipCache.size > 400) tipCache.clear();
+  tipCache.set(root, { at: Date.now(), ms });
+  return ms;
+}
+
 async function repoRef(root: string): Promise<GitRepoRef | null> {
-  // Two questions, asked at once: what is dirty here, and when did work last
-  // land on this branch. The second is 3ms against the first's 75ms on a large
-  // repo, and both are awaited rather than blocking — see the perf note on
-  // `git()`.
+  // Two questions, asked at once: what is dirty here (fresh every time), and
+  // when work last landed on this branch (cached — see tipDate).
   const [r, tip] = await Promise.all([
     gitAsync(root, ["status", "--porcelain=v1", "--branch"]),
-    gitAsync(root, ["log", "-1", "--format=%ct", "HEAD"]),
+    tipDate(root),
   ]);
   if (r.code !== 0) return null;
   const lines = r.stdout.split("\n").filter(Boolean);
@@ -335,7 +384,7 @@ async function repoRef(root: string): Promise<GitRepoRef | null> {
     root, name: basename(root), branch, dirty: lines.length - (head ? 1 : 0),
     ahead: Number(head.match(/ahead (\d+)/)?.[1]) || 0,
     behind: Number(head.match(/behind (\d+)/)?.[1]) || 0,
-    touchedAt: touchedAt(root, tip.code === 0 ? (Number(tip.stdout.trim()) || 0) * 1000 : 0),
+    touchedAt: touchedAt(root, tip),
     ...(parent ? { worktreeOf: parent } : {}),
   };
 }
@@ -378,7 +427,17 @@ function touchedAt(root: string, tipMs: number): number {
 // flipping between panels asks again seconds later. The answer is a directory
 // sweep plus a git call per repo, so it's worth holding briefly — short enough
 // that a branch switch or a new file shows up almost immediately.
-const REPO_CACHE_MS = 5_000;
+/**
+ * How long the repo list is held.
+ *
+ * Was five seconds, which on a repo with eighteen checkouts meant eighteen
+ * `git status` calls — 2.9 seconds of CPU — every five seconds, forever, for
+ * the dirty dots in a dropdown. Nothing here needs that: the *selected* repo's
+ * working tree has its own 2.5s poll through `/git/tree`, and a dot beside a
+ * checkout you are not looking at can be a few seconds old. Every write still
+ * clears this immediately, so anything you do shows up at once.
+ */
+const REPO_CACHE_MS = 15_000;
 // A small map rather than one slot: the scoped panels and the machine-wide
 // project picker ask with different keys, and alternating between them must
 // not evict each other's still-fresh answer (each miss re-runs a directory
@@ -390,6 +449,11 @@ const repoCache = new Map<string, { at: number; repos: GitRepoRef[] }>();
  *  the list is one directory sweep and is about to be asked for again anyway. */
 export function invalidateRepos(_root?: string): void {
   repoCache.clear();
+  // Committing or staging changes what is dirty, and this is the one place
+  // every write in this file passes through.
+  dirtyCache.clear();
+  // A commit or a checkout moves the tip date too, and both go through run().
+  tipCache.clear();
 }
 
 export async function discoverRepos(paths: string[], knownRoots: string[] = [], opts: { ignoreScope?: boolean } = {}): Promise<GitRepoRef[]> {
@@ -397,7 +461,10 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // serve the old scope's answer for the next five seconds.
   const key = [opts.ignoreScope ? "*" : workspaceRoot() ?? "", ...knownRoots].join("\\0");
   const hit = repoCache.get(key);
-  if (hit && Date.now() - hit.at < REPO_CACHE_MS) return hit.repos;
+  // Held longer while a shell is in use or the loop is stalling: this sweep is
+  // eighteen `git status` calls on a worktree-heavy repo, and none of them is
+  // worth a late keystroke. See backoff().
+  if (hit && Date.now() - hit.at < REPO_CACHE_MS * backoff()) return hit.repos;
   if (repoCache.size > 8) repoCache.clear(); // scope churn — don't hoard stale lists
   const roots = new Set<string>();
 
@@ -415,7 +482,14 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     // worktrees, because they ARE the project on other branches; a container
     // folder brings every repo found from that folder inward, and nothing else.
     const found = self
-      ? [self, ...worktrees(self).map((w) => w.path).filter((p) => p && p !== self)]
+      // `worktreeList`, not `worktrees`: this needs the paths and nothing else,
+      // and the richer call computes a base branch and a `rev-list --count`
+      // per checkout — synchronously, on the server's only thread. On a repo
+      // with 17 worktrees that is 34 blocking subprocesses, ~200ms each, on
+      // the most frequently requested endpoint in the app. Measured: it froze
+      // the whole UI — the terminal's PTY socket included — for up to 2.8s at
+      // a time, several times a minute, while the user was typing.
+      ? [self, ...worktreeList(self).map((w) => w.path).filter((p) => p && p !== self)]
       : reposUnder(only1);
     const refs = await Promise.all(found.map((r) => repoRef(r)));
     const scoped = refs.filter((r): r is GitRepoRef => !!r);
@@ -699,6 +773,15 @@ async function autoFetchOnce(): Promise<void> {
   if (!root || !repoRoot(root)) return;
   fetching = true;
   try {
+    // What the remote refs point at, before and after. Invalidating on every
+    // tick regardless is what broke squash detection outright: the sweep that
+    // recognises squash- and rebase-merged branches takes tens of seconds on a
+    // large repo, and this ran every 60s and cleared its "already swept" mark
+    // each time — so on a 38-branch repo the sweep NEVER finished, the panel
+    // sat on "still checking for squash merges…" permanently, and not one
+    // squash-merged branch was ever recognised. Most fetches change nothing.
+    const refsOf = () => git(root, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes"]).stdout;
+    const before = refsOf();
     const proc = Bun.spawn(["git", "-C", root, "fetch", "--all", "--prune", "--quiet"], {
       stdout: "ignore",
       stderr: "ignore",
@@ -707,9 +790,9 @@ async function autoFetchOnce(): Promise<void> {
     const timer = setTimeout(() => proc.kill(), 20_000);
     await proc.exited;
     clearTimeout(timer);
-    // A fetch moves origin/*, which is exactly what "merged into the trunk" is
-    // measured against.
-    invalidateMerged(root);
+    // A fetch that MOVED origin/* changes what "merged into the trunk" means.
+    // One that moved nothing changes nothing, and must not throw away work.
+    if (refsOf() !== before) invalidateMerged(root);
   } catch {
     // Offline, no remote, no credentials — all ordinary. The counts simply stay
     // where they were, which is the same as the old behaviour.
@@ -720,7 +803,7 @@ async function autoFetchOnce(): Promise<void> {
 
 export function startAutoFetch(): void {
   if (AUTO_FETCH_MS <= 0) return; // AGENTGLASS_AUTOFETCH_SECONDS=0 turns it off
-  setInterval(autoFetchOnce, AUTO_FETCH_MS).unref?.();
+  setInterval(() => { entered("auto-fetch"); void autoFetchOnce(); }, AUTO_FETCH_MS).unref?.();
   autoFetchOnce(); // don't make the first minute a lie
 }
 
@@ -907,14 +990,17 @@ function applyMemo(root: string, key: string, set: Set<string>): void {
   }
 }
 
-function mergedInto(root: string, ref: string): Set<string> {
+async function mergedInto(root: string, ref: string): Promise<Set<string>> {
   // \u0000 rather than a raw NUL byte: written literally it makes the whole
   // file `data` to grep, which then skips it silently — you get no matches
   // and no warning. Same separator, same keys, still greppable.
   const key = `${root}\u0000${ref}`;
   const hit = mergedCache.get(key);
   if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.set;
-  const r = git(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
+  // 644ms on a repo with a long history — the single most expensive call in
+  // this endpoint, and cached, so it is paid on a miss and then not again until
+  // a ref moves. Awaited so that miss costs wall clock rather than a terminal.
+  const r = await gitAsync(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
   const set = new Set(r.stdout.split("\n").filter(Boolean));
   applyMemo(root, key, set);
   mergedCache.set(key, { at: Date.now(), set });
@@ -1011,27 +1097,12 @@ export function invalidateMerged(root?: string): void {
 }
 
 
-/**
- * Is the squash/rebase sweep still running for this trunk?
- *
- * It fills in behind the response on purpose (see sweepProbes), so a branch
- * merged through the GitHub button is recognised a moment AFTER the list is
- * first drawn. Left unsaid, that reads as a bug: the button says "delete 3
- * merged" when the panel opens and "delete 4 merged" when you come back to it,
- * with nothing on screen accounting for the extra one.
- */
-export function mergedSweeping(rootIn: unknown, ref: string): boolean {
+export async function branches(rootIn: unknown): Promise<{ current: string; branches: GitBranch[]; trunk: string | null }> {
   const root = repoRoot(rootIn);
-  return !!root && probeRunning.has(`${root}\u0000${ref}`);
-}
-
-export function branches(rootIn: unknown): { current: string; branches: GitBranch[]; trunk: string | null; sweeping: boolean } {
-  const root = repoRoot(rootIn);
-  if (!root) return { current: "", branches: [], trunk: null, sweeping: false };
+  if (!root) return { current: "", branches: [], trunk: null };
   const fmt = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)`;
-  const r = git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]);
-  const trunk = defaultBranch(root);
-  const merged = trunk ? mergedInto(root, trunk) : null;
+  const [r, trunk] = [git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]), defaultBranch(root)];
+  const merged = trunk ? await mergedInto(root, trunk) : null;
   const list: GitBranch[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -1044,10 +1115,13 @@ export function branches(rootIn: unknown): { current: string; branches: GitBranc
       ...(merged ? { mergedIntoTrunk: merged.has(name) } : {}),
     });
   }
-  // Read AFTER mergedInto(), which is what starts the sweep — asked before, it
-  // is always false on the very first call and the caller never learns that the
-  // count it is showing is still moving.
-  return { current: currentBranch(root), branches: list, trunk, sweeping: !!trunk && mergedSweeping(root, trunk) };
+  // No "still sweeping" flag here, deliberately. mergedInto() above is what
+  // schedules the sweep, so asking whether one is running always answered yes:
+  // the sweep is a setTimeout and cannot have run yet within this call. The
+  // flag was a question asked immediately after switching it on. The count
+  // settling a beat later is the honest behaviour, and a permanent label
+  // explaining it was worse than the thing it explained.
+  return { current: currentBranch(root), branches: list, trunk };
 }
 
 // lazygit-style branch ops
@@ -1090,14 +1164,18 @@ export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "h
  * So: HEAD by default — the log of the checkout you are in — with `--all` still
  * a click away for the times you genuinely want the whole graph.
  */
-export function logGraph(rootIn: unknown, limit = 400, scope: "head" | "all" = "head"): { lines: GitGraphLine[]; scope: "head" | "all"; branch: string } {
+export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "all" = "head"): Promise<{ lines: GitGraphLine[]; scope: "head" | "all"; branch: string }> {
   const root = repoRoot(rootIn);
   if (!root) return { lines: [], scope, branch: "" };
   const n = Math.max(1, Math.min(2000, limit | 0));
   // NUL can't go in an argv string (execve truncates at it), so use the same
   // \x1f unit-separator the branch code uses — safe in args, absent from commits.
   const fmt = `${US}%h${US}%an${US}%ar${US}%s${US}%D`;
-  const r = git(root, ["-c", "core.quotePath=false", "log", "--graph", ...(scope === "all" ? ["--all"] : []), "--date=relative", `-n${n}`, `--format=${fmt}`]);
+  // Awaited: measured at 761ms on a large repo, and the cost is `--graph`'s
+  // topological walk rather than the row count — asking for 60 commits instead
+  // of 500 saves nothing (762ms vs 761ms). So the only thing that helps is not
+  // holding the loop while it runs.
+  const r = await gitAsync(root, ["-c", "core.quotePath=false", "log", "--graph", ...(scope === "all" ? ["--all"] : []), "--date=relative", `-n${n}`, `--format=${fmt}`]);
   const lines: GitGraphLine[] = [];
   for (const raw of r.stdout.split("\n")) {
     if (!raw) continue;
@@ -1128,10 +1206,13 @@ export function logGraph(rootIn: unknown, limit = 400, scope: "head" | "all" = "
  * that is one subprocess per branch for a guess that is wrong exactly when
  * branches are stacked — the case where being wrong costs you a bad merge.
  */
-export function baseOf(root: string, branch: string): string | null {
+export async function baseOf(root: string, branch: string): Promise<string | null> {
   if (!branch || branch === "(detached)") return null;
-  const cfg = git(root, ["config", "--get", `branch.${branch}.agentglassbase`]).stdout.trim();
-  if (cfg && validRef(cfg) && git(root, ["rev-parse", "--verify", "--quiet", cfg]).code === 0) return cfg;
+  // Two subprocesses, and `worktrees()` asks once per checkout — 34 of them on
+  // a repo with seventeen. Left synchronous they were the 806ms this endpoint
+  // still cost after everything around them had been awaited.
+  const cfg = (await gitAsync(root, ["config", "--get", `branch.${branch}.agentglassbase`])).stdout.trim();
+  if (cfg && validRef(cfg) && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", cfg])).code === 0) return cfg;
   const trunk = defaultBranch(root);
   // A branch is not its own base; the trunk checkout simply has none.
   if (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch) return null;
@@ -1176,11 +1257,14 @@ export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitAct
  *  only when something fetches or merges, and these views poll. */
 const BEHIND_TTL_MS = 15_000;
 const behindCache = new Map<string, { at: number; n: number }>();
-export function behindBase(root: string, branch: string, base: string): number {
+export async function behindBase(root: string, branch: string, base: string): Promise<number> {
   const key = `${root}\u0000${branch}\u0000${base}`;
   const hit = behindCache.get(key);
   if (hit && Date.now() - hit.at < BEHIND_TTL_MS) return hit.n;
-  const r = git(root, ["rev-list", "--count", `${branch}..${base}`]);
+  // ~200ms per checkout on a large repo, and `worktrees()` asks it once per
+  // worktree — seventeen of them here. Awaited, so the seventeen overlap and
+  // none of them holds the thread the terminal is on.
+  const r = await gitAsync(root, ["rev-list", "--count", `${branch}..${base}`]);
   const n = r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
   if (behindCache.size > 400) behindCache.clear();
   behindCache.set(key, { at: Date.now(), n });
@@ -1197,12 +1281,12 @@ export function behindBase(root: string, branch: string, base: string): number {
  * out*, which is what makes this possible at all: you cannot merge into a
  * branch you are not on, and a worktree per card means every branch is on one.
  */
-export function syncFromBase(dirIn: unknown, baseIn?: unknown): GitActionResult {
+export async function syncFromBase(dirIn: unknown, baseIn?: unknown): Promise<GitActionResult> {
   const dir = repoRoot(dirIn); if (!dir) return { ok: false, error: "not a git repository root" };
   const g = guard(dir); if (g) return g;
   const branch = currentBranch(dir);
   if (!branch || branch === "(detached)") return { ok: false, error: "this checkout is not on a branch" };
-  const base = typeof baseIn === "string" && baseIn ? baseIn : baseOf(dir, branch);
+  const base = typeof baseIn === "string" && baseIn ? baseIn : await baseOf(dir, branch);
   if (!base) return { ok: false, error: "no base branch is known for this checkout" };
   if (!validRef(base)) return { ok: false, error: "invalid base" };
   // Refuse on a dirty tree rather than merging over uncommitted work: git would
@@ -1326,12 +1410,12 @@ export function undoableMerge(root: string, ahead: number, upstream: string | nu
 }
 
 /** Put the branch back exactly as it stood before its last merge. */
-export function undoMerge(rootIn: unknown): GitActionResult {
+export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   // Re-checked here, never trusted from the client: this is a hard reset, and
   // these conditions are the only thing making it safe.
-  const info = branchInfo(root);
+  const info = await branchInfo(root);
   if (!undoableMerge(root, info.ahead, info.upstream)) {
     return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
   }
@@ -1363,17 +1447,20 @@ function worktreeList(root: string): GitWorktree[] {
   return out;
 }
 
-export function worktrees(rootIn: unknown): GitWorktree[] {
+export async function worktrees(rootIn: unknown): Promise<GitWorktree[]> {
   const root = repoRoot(rootIn);
   if (!root) return [];
   const out = worktreeList(root);
   // How far each checkout has drifted from what it was branched off. One
-  // rev-list per worktree, cached, and only for the ones on a real branch.
-  for (const w of out) {
-    const base = w.branch === "(detached)" ? null : baseOf(root, w.branch);
+  // rev-list per worktree, cached, and only for the ones on a real branch —
+  // and all of them at once rather than one after another: seventeen serial
+  // 200ms calls is the 1955ms this endpoint used to cost, all of it on the
+  // thread carrying the terminal.
+  await Promise.all(out.map(async (w) => {
+    const base = w.branch === "(detached)" ? null : await baseOf(root, w.branch);
     w.base = base;
-    w.behindBase = base ? behindBase(root, w.branch, base) : 0;
-  }
+    w.behindBase = base ? await behindBase(root, w.branch, base) : 0;
+  }));
   return out;
 }
 
@@ -1389,15 +1476,39 @@ export function worktrees(rootIn: unknown): GitWorktree[] {
  * The panel needs this for one reason: `syncFromBase` refuses to merge into a
  * dirty checkout, and a button that can only fail is worse than a disabled one.
  */
+/**
+ * Dirty counts, held briefly.
+ *
+ * `git status` per checkout is fifteen subprocesses on a worktree-heavy repo,
+ * and even fully awaited that is fifteen spawns' worth of setup on the loop —
+ * the last measurable cost in this endpoint once everything else was converted
+ * (~200ms a call, on a 10s poll). The repo picker already statuses the same
+ * paths on its own cache; this stops the two of them racing to re-derive the
+ * same answer seconds apart.
+ *
+ * Short, and stretched by `backoff()` while a shell is in use: a dirty dot on a
+ * checkout you are not looking at can be a few seconds old, and every write
+ * clears it through run() anyway.
+ */
+const DIRTY_TTL_MS = 5_000;
+const dirtyCache = new Map<string, { at: number; n: number }>();
+
 export async function worktreesWithState(rootIn: unknown): Promise<GitWorktree[]> {
-  const out = worktrees(rootIn);
+  const out = await worktrees(rootIn);
+  const ttl = DIRTY_TTL_MS * backoff();
   await Promise.all(out.map(async (w) => {
     if (w.bare) return; // no working tree to be dirty
+    const hit = dirtyCache.get(w.path);
+    if (hit && Date.now() - hit.at < ttl) { w.dirty = hit.n; return; }
     const r = await gitAsync(w.path, ["status", "--porcelain"]);
     // A checkout whose directory was deleted from under git answers non-zero;
     // "unknown" is honest there, and leaves the button enabled rather than
     // silently blocking on a status we never got.
-    if (r.code === 0) w.dirty = r.stdout.split("\n").filter(Boolean).length;
+    if (r.code === 0) {
+      w.dirty = r.stdout.split("\n").filter(Boolean).length;
+      if (dirtyCache.size > 200) dirtyCache.clear();
+      dirtyCache.set(w.path, { at: Date.now(), n: w.dirty });
+    }
   }));
   return out;
 }

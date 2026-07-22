@@ -55,6 +55,13 @@ jobs:
           exit $STATUS
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+      # tsc, bun test and the smoke run all pass on a server that freezes for a
+      # second at a time: the types are fine, the answers are correct, the bundle
+      # boots. Only the clock disagrees, and the clock is what the user feels —
+      # this process serves the terminal's PTY on the same thread as every git
+      # call it makes. This is the only step that measures it.
+      - name: Perf budget (the event loop stays answerable)
+        run: bun scripts/perfbudget.ts
       - name: Server boots
         run: |
           cd server

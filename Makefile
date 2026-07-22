@@ -28,6 +28,12 @@ test: ## Run the server test suite (what CI runs)
 smoke: build ## Boot the production bundle in headless Chrome — fails on a blank screen or any console error
 	bun scripts/smoke.ts
 
+perf: ## Check the server still answers while it works — fails if the event loop (and so the terminal) stalls
+	bun scripts/perfbudget.ts
+
+soak: ## Run the server hard for a few minutes and fail if its memory keeps climbing (AGX_SOAK_MINUTES=30 for a real one)
+	bun scripts/soak.ts
+
 typecheck: ## Type-check both halves (vite build and bun both strip types without checking)
 	cd web && bunx tsc --noEmit
 	cd server && bunx tsc --noEmit
@@ -93,5 +99,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test smoke typecheck start setup setup-undo connect connect-undo demo-feed assets \
+.PHONY: help install dev server web build test smoke perf soak typecheck start setup setup-undo connect connect-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open
