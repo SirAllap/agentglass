@@ -9,6 +9,7 @@ import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSy
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
+import { entered } from "./loopwatch.ts";
 import type {
   ConflictBlock, BlockChoice,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
@@ -761,7 +762,7 @@ async function autoFetchOnce(): Promise<void> {
 
 export function startAutoFetch(): void {
   if (AUTO_FETCH_MS <= 0) return; // AGENTGLASS_AUTOFETCH_SECONDS=0 turns it off
-  setInterval(autoFetchOnce, AUTO_FETCH_MS).unref?.();
+  setInterval(() => { entered("auto-fetch"); void autoFetchOnce(); }, AUTO_FETCH_MS).unref?.();
   autoFetchOnce(); // don't make the first minute a lie
 }
 

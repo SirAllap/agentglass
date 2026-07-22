@@ -38,6 +38,7 @@ import {
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
+import { watchLoop, entered, stalls } from "./loopwatch.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
@@ -243,6 +244,10 @@ const server = Bun.serve<WsData>({
   async fetch(req, srv) {
     const url = new URL(req.url);
     const { pathname } = url;
+    // Name this request for the loop watchdog: if the loop stalls in the next
+    // moment, the stall is reported against this path instead of being one more
+    // anonymous freeze in a terminal. See loopwatch.ts.
+    entered(`${req.method} ${pathname}`);
 
     // Per-request response helpers: `cors` reflects this caller's Origin, so it
     // has to be built here rather than shared as a module constant.
@@ -566,6 +571,9 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
     // Every git command this server has run — the command log panel.
     if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
+    // Every moment this process stopped answering, and what was running. The
+    // terminal rides this loop, so these ARE the freezes the user feels.
+    if (pathname === "/api/loopwatch") return json(stalls(Number(url.searchParams.get("since") || 0)));
     // Open a file at a line in the editor the user already has running.
     if (pathname === "/editor/target") return json({ ...(await editorTarget(url.searchParams.get("path") || "")), hasNvim: HAS_NVIM });
     if (pathname === "/git/remotes") return json({ remotes: gitRemotes(url.searchParams.get("root") || "") });
@@ -952,3 +960,6 @@ const ws = workspaceRoot();
 console.log(ws ? `   Project     → ${ws} (this project only)` : "   Project     → every project on this machine");
 // Only meaningful once a project is open — see startAutoFetch().
 startAutoFetch();
+// Watch our own event loop. Cheap (one timer, one subtraction) and the only
+// thing that turns "the terminal feels laggy" into a name and a number.
+watchLoop();

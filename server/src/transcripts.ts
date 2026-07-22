@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import type { IngestBody } from "../../shared/types.ts";
 import { normalize } from "./ingest.ts";
+import { entered } from "./loopwatch.ts";
 import { db, insertEvent, setSessionTitles, RETENTION_DAYS, type InsertResult } from "./db.ts";
 // safeAbs: translates Windows drive paths, so a WSL-side transcript groups
 // under its own folder rather than collapsing onto the server's cwd.
@@ -814,6 +815,7 @@ export function startScanner(onLive: (r: InsertResult) => void): void {
         .catch((e) => console.error(`[scan] title backfill failed: ${e instanceof Error ? e.message : e}`));
       setInterval(async () => {
         if (sweepBusy) return; // a slow sweep must not stack up behind the timer
+        entered("transcript sweep");
         sweepBusy = true;
         try {
           await scanOnce(onLive);
