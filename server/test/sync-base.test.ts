@@ -49,21 +49,21 @@ afterAll(() => {
 });
 
 describe("base branch", () => {
-  it("falls back to the trunk when nothing is configured", () => {
-    expect(gw.baseOf(repo, "CARD-1")).toBe("main");
+  it("falls back to the trunk when nothing is configured", async () => {
+    expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
   });
 
-  it("gives the trunk itself no base", () => {
+  it("gives the trunk itself no base", async () => {
     // Otherwise the trunk offers to merge itself into itself.
-    expect(gw.baseOf(repo, "main")).toBe(null);
+    expect((await gw.baseOf(repo, "main"))).toBe(null);
   });
 
-  it("honours an explicit override, because not every branch is cut from trunk", () => {
+  it("honours an explicit override, because not every branch is cut from trunk", async () => {
     run(repo, "branch", "release-9");
     gw.setBase(repo, "CARD-1", "release-9");
-    expect(gw.baseOf(repo, "CARD-1")).toBe("release-9");
+    expect((await gw.baseOf(repo, "CARD-1"))).toBe("release-9");
     gw.setBase(repo, "CARD-1", null); // back to inferred
-    expect(gw.baseOf(repo, "CARD-1")).toBe("main");
+    expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
   });
 
   it("counts what the base has and the branch does not", async () => {
@@ -73,12 +73,12 @@ describe("base branch", () => {
 });
 
 describe("undo merge", () => {
-  it("offers nothing when the tip is an ordinary commit", () => {
+  it("offers nothing when the tip is an ordinary commit", async () => {
     // Not a merge: there is no single "before" to return to.
     expect(gw.undoableMerge(repo, 1, null)).toBe(false);
   });
 
-  it("offers nothing for work that has been pushed", () => {
+  it("offers nothing for work that has been pushed", async () => {
     // ahead === 0 means the remote already has it, and rewriting published
     // history is a different, worse problem than undoing a local mistake.
     // Upstream present and nothing ahead of it: the remote already has this.
@@ -125,9 +125,9 @@ describe("undo merge", () => {
 });
 
 describe("syncFromBase", () => {
-  it("refuses when the checkout has uncommitted work", () => {
+  it("refuses when the checkout has uncommitted work", async () => {
     writeFileSync(join(wt, "scratch.txt"), "wip\n");
-    const r = gw.syncFromBase(wt);
+    const r = await gw.syncFromBase(wt);
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/commit or stash/i);
     rmSync(join(wt, "scratch.txt"));
@@ -135,15 +135,15 @@ describe("syncFromBase", () => {
 
   it("merges the base into the worktree's branch and clears the gap", async () => {
     expect(await gw.behindBase(repo, "CARD-1", "main")).toBe(2);
-    const r = gw.syncFromBase(wt);
+    const r = await gw.syncFromBase(wt);
     expect(r.ok).toBe(true);
     // The cache is keyed per branch+base and has a TTL, so read past it.
     const after = spawnSync("git", ["-C", repo, "rev-list", "--count", "CARD-1..main"], { encoding: "utf8" });
     expect(Number(after.stdout.trim())).toBe(0);
   });
 
-  it("refuses a checkout with no base rather than guessing one", () => {
-    const r = gw.syncFromBase(repo); // repo is on main, which has no base
+  it("refuses a checkout with no base rather than guessing one", async () => {
+    const r = await gw.syncFromBase(repo); // repo is on main, which has no base
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/no base/i);
   });

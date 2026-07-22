@@ -189,7 +189,7 @@ async function branchInfo(root: string): Promise<GitBranchInfo> {
   }
   // What this branch was cut from, and how far it has drifted — the header's
   // "sync" affordance. Cheap and cached; nothing here is per-branch fan-out.
-  const base = detached ? null : baseOf(root, name);
+  const base = detached ? null : await baseOf(root, name);
   return {
     name, upstream, ahead, behind, detached, state: treeState(root),
     base,
@@ -1203,10 +1203,13 @@ export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "al
  * that is one subprocess per branch for a guess that is wrong exactly when
  * branches are stacked — the case where being wrong costs you a bad merge.
  */
-export function baseOf(root: string, branch: string): string | null {
+export async function baseOf(root: string, branch: string): Promise<string | null> {
   if (!branch || branch === "(detached)") return null;
-  const cfg = git(root, ["config", "--get", `branch.${branch}.agentglassbase`]).stdout.trim();
-  if (cfg && validRef(cfg) && git(root, ["rev-parse", "--verify", "--quiet", cfg]).code === 0) return cfg;
+  // Two subprocesses, and `worktrees()` asks once per checkout — 34 of them on
+  // a repo with seventeen. Left synchronous they were the 806ms this endpoint
+  // still cost after everything around them had been awaited.
+  const cfg = (await gitAsync(root, ["config", "--get", `branch.${branch}.agentglassbase`])).stdout.trim();
+  if (cfg && validRef(cfg) && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", cfg])).code === 0) return cfg;
   const trunk = defaultBranch(root);
   // A branch is not its own base; the trunk checkout simply has none.
   if (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch) return null;
@@ -1275,12 +1278,12 @@ export async function behindBase(root: string, branch: string, base: string): Pr
  * out*, which is what makes this possible at all: you cannot merge into a
  * branch you are not on, and a worktree per card means every branch is on one.
  */
-export function syncFromBase(dirIn: unknown, baseIn?: unknown): GitActionResult {
+export async function syncFromBase(dirIn: unknown, baseIn?: unknown): Promise<GitActionResult> {
   const dir = repoRoot(dirIn); if (!dir) return { ok: false, error: "not a git repository root" };
   const g = guard(dir); if (g) return g;
   const branch = currentBranch(dir);
   if (!branch || branch === "(detached)") return { ok: false, error: "this checkout is not on a branch" };
-  const base = typeof baseIn === "string" && baseIn ? baseIn : baseOf(dir, branch);
+  const base = typeof baseIn === "string" && baseIn ? baseIn : await baseOf(dir, branch);
   if (!base) return { ok: false, error: "no base branch is known for this checkout" };
   if (!validRef(base)) return { ok: false, error: "invalid base" };
   // Refuse on a dirty tree rather than merging over uncommitted work: git would
@@ -1451,7 +1454,7 @@ export async function worktrees(rootIn: unknown): Promise<GitWorktree[]> {
   // 200ms calls is the 1955ms this endpoint used to cost, all of it on the
   // thread carrying the terminal.
   await Promise.all(out.map(async (w) => {
-    const base = w.branch === "(detached)" ? null : baseOf(root, w.branch);
+    const base = w.branch === "(detached)" ? null : await baseOf(root, w.branch);
     w.base = base;
     w.behindBase = base ? await behindBase(root, w.branch, base) : 0;
   }));

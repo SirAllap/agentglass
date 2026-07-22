@@ -739,7 +739,7 @@ const server = Bun.serve<WsData>({
         case "/git/worktree-chown": res = fixWorktreeOwnership(root, b.path); break;
         // `root` here is the checkout being updated — a worktree updates
         // itself, because the merge has to run where the branch is checked out.
-        case "/git/sync-base": res = syncFromBase(root, b.base); break;
+        case "/git/sync-base": res = await syncFromBase(root, b.base); break;
         case "/git/set-base": res = setBase(root, b.branch, b.base ?? null); break;
         case "/git/resolve": res = resolveWith(root, b.paths ?? b.path, b.side); break;
         case "/git/resolve-blocks": res = resolveBlocks(root, b.path, b.choices); break;
