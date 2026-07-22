@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, leftoversLine, preselected, fmtBytes } from "../src/lib/goneCleanup.ts";
+import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, leftoversLine, preselected, fmtBytes, rescueKey, rescuePicks } from "../src/lib/goneCleanup.ts";
 import type { GitBranch, WorktreeLeftovers, LeftoverEntry } from "../../shared/types.ts";
 
 /**
@@ -180,5 +180,56 @@ describe("leftoversLine", () => {
     expect(leftoversLine(report("/x"), "x")).toContain("empty");
     expect(leftoversLine(report("/x", { skipped: 9 }), "x")).toContain("9 rebuildable");
     expect(leftoversLine(report("/x", { identical: 20 }), "x")).toContain("20 already in the main checkout");
+  });
+});
+
+describe("rescuePicks", () => {
+  // The exact shape of the checkout that lost data: notes and screenshots that
+  // exist nowhere else, mixed with build output that also lives in the main
+  // checkout. Five of these were ticked, reported as copied, were not on disk
+  // afterwards — and the checkout was deleted next.
+  const WT = "/home/dev/orbit-WEB-1042";
+  const real = report(WT, {
+    entries: [
+      entry("worktree.env", 181),
+      entry(".specs/adversarial-findings-v11.md", 2902),
+      entry(".specs/adversarial-findings-local.md", 3300),
+      entry(".specs/implementation-plan.md", 5340),
+      entry(".specs/pol-captures/cap-01-air-dashboard.png", 12345),
+      entry(".specs/pol-captures/cap-03-dashboard-rendered.png", 137000),
+      entry(".specs/pol-captures/cap-02-profile-overlay.png", 151465),
+      entry(".specs/pol-captures/cap-05-console-table.png", 154278),
+      entry(".specs/pol-captures/cap-04-with-profile.png", 251903),
+      entry("tmp/pyrefly-exapi.txt", 103, "differs"),
+      entry("src/app/dist/bundle/", 12_000_000, "differs"),
+    ],
+    identical: 20, skipped: 508,
+  });
+
+  it("asks for every ticked path, nested ones included", () => {
+    // The regression. Nine entries pre-ticked, nine sent — not four.
+    const ticked = new Set([...preselected(real)].map((p) => rescueKey(WT, p)));
+    const picks = rescuePicks([real], ticked);
+    expect(picks.get(WT)).toHaveLength(9);
+    expect(picks.get(WT)).toContain(".specs/pol-captures/cap-04-with-profile.png");
+    expect(picks.get(WT)).toContain("worktree.env");
+    // And nothing that would overwrite the main checkout.
+    expect(picks.get(WT)).not.toContain("tmp/pyrefly-exapi.txt");
+  });
+
+  it("keys are per worktree, so identical paths don't collide", () => {
+    // Every worktree of a repo has a `worktree.env`. Ticking one must not tick
+    // the other, and must not drop it either.
+    const a = report("/w/a", { entries: [entry("worktree.env", 10)] });
+    const b = report("/w/b", { entries: [entry("worktree.env", 10)] });
+    const picks = rescuePicks([a, b], new Set([rescueKey("/w/b", "worktree.env")]));
+    expect(picks.has("/w/a")).toBe(false);
+    expect(picks.get("/w/b")).toEqual(["worktree.env"]);
+  });
+
+  it("an untouched worktree contributes nothing at all", () => {
+    // Not an empty array — the caller skips on `!rels.length`, and an entry
+    // with no paths would still print "keeping 0 files".
+    expect(rescuePicks([real], new Set()).size).toBe(0);
   });
 });

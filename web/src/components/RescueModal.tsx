@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { WorktreeLeftovers, LeftoverEntry } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
-import { preselected, fmtBytes } from "../lib/goneCleanup.ts";
+import { preselected, fmtBytes, rescueKey, rescuePicks } from "../lib/goneCleanup.ts";
 
 /**
  * The last thing between somebody's notes and `rm -rf`.
@@ -42,7 +42,7 @@ function Tick({ on, dim }: { on: boolean; dim?: boolean }) {
 /** A flat row list across every worktree, so j/k crosses group boundaries the
  *  way a single list should. Headers are rendered from the same array. */
 type Row = { kind: "head"; report: WorktreeLeftovers } | { kind: "entry"; report: WorktreeLeftovers; entry: LeftoverEntry };
-const keyOf = (r: WorktreeLeftovers, e: LeftoverEntry) => `${r.path}\u0000${e.path}`;
+const keyOf = (r: WorktreeLeftovers, e: LeftoverEntry) => rescueKey(r.path, e.path);
 
 export function RescueModal({ reports, progress, onCancel, onConfirm }: {
   reports: WorktreeLeftovers[];
@@ -55,7 +55,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
 }) {
   const [on, setOn] = useState<Set<string>>(() => {
     const s = new Set<string>();
-    for (const r of reports) for (const p of preselected(r)) s.add(`${r.path}\u0000${p}`);
+    for (const r of reports) for (const p of preselected(r)) s.add(rescueKey(r.path, p));
     return s;
   });
   const [cur, setCur] = useState(0);
@@ -88,14 +88,10 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
   }, [rows, on]);
 
   const toggle = (k: string) => setOn((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  const submit = () => {
-    const picked = new Map<string, string[]>();
-    for (const r of rows) {
-      if (r.kind !== "entry" || !on.has(keyOf(r.report, r.entry))) continue;
-      picked.set(r.report.path, [...(picked.get(r.report.path) ?? []), r.entry.path]);
-    }
-    onConfirm(picked);
-  };
+  // Built from `reports` rather than from `rows`, and by a function with a test
+  // around it. The version that walked `rows` inline lost five screenshots and
+  // a `worktree.env` from a checkout that was deleted immediately afterwards.
+  const submit = () => onConfirm(rescuePicks(reports, on));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

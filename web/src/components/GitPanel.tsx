@@ -746,6 +746,26 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   usePoll(open && !!root && !busy, loadView, 10_000);
 
   /**
+   * "still checking for squash merges…" has to be able to stop saying that.
+   *
+   * The sweep runs behind the response, so the panel shows that line and waits
+   * for a later poll to carry the finished answer. But the poll above is gated
+   * on `!busy` — one stuck flag and the line is frozen on screen forever,
+   * promising an update that will never arrive. Which is what happened: the
+   * server had been answering `sweeping: false` for minutes while the panel
+   * still claimed to be working.
+   *
+   * So the claim refreshes itself. One targeted re-read while it is true,
+   * ungated, and it stops as soon as the answer says so — nothing to leak,
+   * nothing to keep running once the line is gone.
+   */
+  useEffect(() => {
+    if (!open || !root || !branchData.sweeping) return;
+    const t = setTimeout(() => { reloadBranches(); }, 2500);
+    return () => clearTimeout(t);
+  }, [open, root, branchData.sweeping, branchData.branches]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
    * Run a git action, and make sure the screen agrees with the repo afterwards.
    *
    * Two things this has to get right, both of which it used to get wrong:
@@ -1003,7 +1023,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       if (!rels.length) continue;
       step(`keeping ${rels.length} file${rels.length === 1 ? "" : "s"} from ${wtName(path)}`);
       const res = await api.gitWorktreeRescue(root, path, rels).catch((e) => ({ ok: false, error: String(e), copied: [] as string[], skipped: [] as { path: string; why: string }[] }));
-      const lost = res.skipped ?? [];
+      // Every path asked for has to come back accounted for. Counting only
+      // `skipped` trusts the server to have reported its own omissions, and a
+      // request that silently returns fewer copies than it was given then
+      // reads as a clean success — which is how five screenshots were deleted
+      // after being "kept". Anything unaccounted for is a loss.
+      const missing = rels.filter((r) => !(res.copied ?? []).includes(r) && !(res.skipped ?? []).some((s) => s.path === r));
+      const lost = [...(res.skipped ?? []), ...missing.map((path) => ({ path, why: "never confirmed by the server" }))];
       if (lost.length) {
         // Anything we could not save is a reason to leave that worktree alone:
         // removing it now destroys the very file the user asked to keep.

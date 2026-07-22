@@ -1803,6 +1803,13 @@ export async function rescueLeftovers(rootIn: string, pathIn: unknown, relsIn: u
       // preserve. `-n` is a second refusal to clobber behind the check above.
       const p = Bun.spawnSync(["cp", "-Rn", from, to], { stdout: "pipe", stderr: "pipe" });
       if (p.exitCode !== 0) { skipped.push({ path: rel, why: p.stderr?.toString().trim() || "copy failed" }); continue; }
+      // Look, rather than believe the exit code. `cp -n` returns 0 when it
+      // declines to overwrite, and a caller about to delete the original needs
+      // "it is there" to mean the file is there. Five screenshots were reported
+      // copied, were not on disk, and the checkout holding them was removed
+      // straight after — the cause is still unknown, so this closes the hole
+      // the cause can come through.
+      if (!existsSync(to)) { skipped.push({ path: rel, why: "copy reported success but nothing arrived" }); continue; }
       copied.push(rel);
     } catch (e) { skipped.push({ path: rel, why: String(e) }); }
   }

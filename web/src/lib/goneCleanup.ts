@@ -148,6 +148,43 @@ export function preselected(report: WorktreeLeftovers, maxBytes = RESCUE_PRESELE
   return out;
 }
 
+/**
+ * The key a tick is stored under: which worktree, which path inside it.
+ *
+ * Two worktrees of the same repo hold the same relative paths — every one of
+ * them has a `worktree.env` — so the path alone cannot identify a row. The
+ * separator is NUL because no path contains one, written escaped because a raw
+ * one in a source file makes the whole file `data` to grep.
+ */
+export const rescueKey = (worktree: string, path: string) => `${worktree}\u0000${path}`;
+
+/**
+ * What the rescue request will actually ask for: worktree path → chosen paths.
+ *
+ * Lifted out of the modal and given a test, because the version that lived
+ * inside it silently dropped files. Five screenshots and a `worktree.env` were
+ * ticked, reported as copied, and were not on disk afterwards — and the
+ * checkout they were in got deleted straight after. Anything that decides what
+ * survives a deletion belongs somewhere it can be exercised without a browser.
+ *
+ * Order is preserved per worktree so the server's `copied` list can be lined up
+ * against what was asked for.
+ */
+export function rescuePicks(
+  reports: WorktreeLeftovers[],
+  ticked: ReadonlySet<string>,
+): Map<string, string[]> {
+  const picked = new Map<string, string[]>();
+  for (const report of reports) {
+    for (const entry of report.entries) {
+      if (!ticked.has(rescueKey(report.path, entry.path))) continue;
+      const list = picked.get(report.path);
+      if (list) list.push(entry.path); else picked.set(report.path, [entry.path]);
+    }
+  }
+  return picked;
+}
+
 /** Bytes as something a human reads at a glance in a list. */
 export function fmtBytes(n: number): string {
   if (n < 0) return "?";
