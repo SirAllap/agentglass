@@ -1353,7 +1353,10 @@ export function remotes(rootIn: unknown): GitRemote[] {
   const counts = new Map<string, number>();
   for (const line of git(root, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]).stdout.split("\n")) {
     const name = line.split("/")[0];
-    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    // `origin/HEAD` is a pointer at another ref in this list, not a branch of
+    // its own — remoteBranches() drops it, so counting it here made the tab
+    // claim 790 over a list of 789.
+    if (name && !line.endsWith("/HEAD")) counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const byName = new Map<string, GitRemote>();
   for (const line of git(root, ["remote", "-v"]).stdout.split("\n")) {

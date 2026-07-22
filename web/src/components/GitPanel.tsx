@@ -1224,7 +1224,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
   const COUNTS: Partial<Record<View, number>> = {
     changes: all.length, branches: branchData.branches.length, worktrees: worktrees.length,
-    stashes: stashes.length, remotes: remotes.length, tags: tags.length,
+    stashes: stashes.length, tags: tags.length,
+    // Branches on the remotes, not how many remotes there are. "1" over a pane
+    // listing 789 branches was the tab counting the wrong noun: every other tab
+    // counts the rows you are about to see, and this one counted the heading.
+    // Summed across remotes for the fork setup, where the answer is "everything
+    // you can reach", not "everything on whichever one is selected".
+    remotes: remotes.reduce((n, r) => n + r.branches, 0),
   };
   /**
    * One tab: the key that gets you there, the name, and the count *under* both.
