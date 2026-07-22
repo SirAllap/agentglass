@@ -154,6 +154,10 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_path)")
 // the one who pays a full table scan with a JSON parse per row on /events,
 // /stats and /changes. It also bounds the backfill below.
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd ON events(cwd_path)");
+// `model_name` had none, so the filter dropdown's third query — SELECT DISTINCT
+// over it — was the one full scan with a temp B-tree in that endpoint. Cheap
+// index, and the covering scan it enables is what the other two already had.
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_model ON events(model_name)");
 
 // Sessions have no payload of their own, so these are real columns, written at
 // upsert and backfilled from the session's events for rows that predate them.
@@ -654,7 +658,34 @@ export function openToolCalls(): OpenToolCall[] {
     .all(Date.now() - OPEN_TOOL_MAX_MS, ...s.args);
 }
 
+/**
+ * The filter dropdowns' contents, cached.
+ *
+ * Measured by the loop watchdog on a real cockpit: 1432ms of blocked event
+ * loop, five times in two minutes — the single worst freeze in the app, and
+ * every millisecond of it is a terminal that has stopped echoing, because the
+ * PTY rides this same thread.
+ *
+ * Three `SELECT DISTINCT` over 35k rows should be instant, and would be if the
+ * scope filter did not expand to one four-way OR group per checkout of the
+ * project. Eighteen worktrees is seventy-two predicates, half of them LIKE, on
+ * every row — which no index survives. Fixing that clause is worth doing and is
+ * not a thing to rush; caching what it feeds is worth doing anyway, because
+ * this is the contents of a dropdown. A new app or model appearing thirty
+ * seconds late costs nothing; the freeze costs the terminal.
+ */
+const FILTER_TTL_MS = 30_000;
+let filterCache: { at: number; scope: string | null; data: ReturnType<typeof computeFilterOptions> } | null = null;
+
 export function getFilterOptions() {
+  const scope = workspaceRoot();
+  if (filterCache && filterCache.scope === scope && Date.now() - filterCache.at < FILTER_TTL_MS) return filterCache.data;
+  const data = computeFilterOptions();
+  filterCache = { at: Date.now(), scope, data };
+  return data;
+}
+
+function computeFilterOptions() {
   // Scoped too, or the dropdowns keep offering apps and models that the feed
   // behind them can no longer show — picking one would just empty the panel.
   const s = scopeClause();
