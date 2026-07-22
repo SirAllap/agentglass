@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
-import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
+import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
@@ -844,6 +844,25 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const goneUnmerged = goneBranches.filter((b) => !b.mergedIntoTrunk);
 
   /**
+   * Branch name → the worktree holding it, excluding this checkout. `git branch
+   * -D` refuses outright on these, which is what made a bulk run report
+   * "deleted 0, 3 failed" with no hint that a worktree was the reason.
+   *
+   * Fetched here rather than read off the `worktrees` state, and that is not
+   * belt-and-braces: that state is only ever filled by the Worktrees tab
+   * (`view === "worktrees"`), so from the Branches tab it is an empty array and
+   * this map would find nothing — the partition below would send every branch
+   * down the "delete it directly" path and reproduce the exact failure this is
+   * fixing. Fresh is also the only correct answer for a destructive action:
+   * another agent adds or removes worktrees in this repo while the panel sits
+   * open.
+   */
+  const heldByWorktreeNow = async (): Promise<Map<string, string>> => {
+    const { worktrees: live } = await api.gitWorktrees(root);
+    return new Map(live.filter((w) => !w.current && w.branch && w.branch !== "(detached)").map((w) => [w.branch, w.path] as const));
+  };
+
+  /**
    * Delete the gone branches whose work is already in the trunk.
    *
    * Forced (`-D`), and that's safe *because* of the check above: we've verified
@@ -855,30 +874,105 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * genuinely dangerous case — a remote branch deleted without merging — and
    * it's the one case where an unrecoverable delete would actually cost you
    * something.
+   *
+   * The branches still held by a worktree are a second, separate question, and
+   * it gets its own confirmation *with the file list in it*. Not politeness:
+   * `git worktree remove` deletes gitignored files without `--force` and
+   * without a word, so a checkout that reports itself clean can still be
+   * holding every `compose/envs/*.env` and a page of local notes. `-D` on the
+   * branch is reversible for thirty days through the reflog; `rm -rf` on an
+   * ignored file is not reversible at all. So nothing is removed until the
+   * files that would go have been named on screen.
    */
   const deleteGone = async () => {
     if (!goneMerged.length || busy) return;
     const trunk = branchData.trunk ?? "the trunk";
+    // Before the first question, because the question's wording depends on it.
+    // A failure here is a reason to stop: without the map every branch looks
+    // free to delete, which is the wrong half of the fork to guess at.
+    let heldByWorktree: Map<string, string>;
+    try { heldByWorktree = await heldByWorktreeNow(); }
+    catch (e) { flash(false, `couldn't list this repo's worktrees: ${String(e)}`); return; }
+    const held = goneMerged.filter((b) => heldByWorktree.has(b.name));
+    const free = goneMerged.filter((b) => !heldByWorktree.has(b.name));
     if (!confirm(
-      `Delete ${goneMerged.length} branch${goneMerged.length === 1 ? "" : "es"} already merged into ${trunk}?` +
-      (goneUnmerged.length ? `\n\n${goneUnmerged.length} more have no remote branch but are NOT in ${trunk} — those are kept.` : "")
+      (free.length
+        ? `Delete ${free.length} branch${free.length === 1 ? "" : "es"} already merged into ${trunk}?`
+        : `None of the ${goneMerged.length} merged branches can be deleted on their own — every one is checked out in a worktree.`) +
+      (held.length ? `\n\n${held.length} more ${held.length === 1 ? "is" : "are"} checked out in a worktree. You'll be asked about those separately, with what removing them would delete.` : "") +
+      (goneUnmerged.length ? `\n\n${goneUnmerged.length} have no remote branch but are NOT in ${trunk} — those are kept.` : "")
     )) return;
     setBusy(true);
     const failed: string[] = [];
+    let done = 0;
     try {
-      for (const b of goneMerged) {
-        const r = await api.gitBranchDelete(root, b.name, true).catch(() => ({ ok: false }));
-        if (!r.ok) failed.push(b.name);
+      for (const b of free) {
+        const r = await api.gitBranchDelete(root, b.name, true).catch(() => ({ ok: false, error: "" }));
+        if (r.ok) done++; else failed.push(`${b.name}${r.error ? ` (${r.error})` : ""}`);
       }
-      const done = goneMerged.length - failed.length;
+      if (held.length) done += await deleteHeldByWorktrees(held, heldByWorktree, failed);
       flash(failed.length === 0,
         failed.length === 0
           ? `deleted ${done} merged branch${done === 1 ? "" : "es"}`
-          : `deleted ${done}, ${failed.length} failed: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}`);
+          : `deleted ${done}, ${failed.length} kept: ${failed.slice(0, 2).join("; ")}${failed.length > 2 ? "…" : ""}`);
     } finally {
       setBusy(false);
       reloadBranches();
+      reloadWorktrees();
     }
+  };
+
+  /**
+   * The worktree half: price it, show the price, then charge it.
+   *
+   * One request covers the whole batch, and its answer is the dialog — every
+   * path that disappears, per checkout, with the rebuildable noise
+   * (`__pycache__/`, `node_modules/`) counted rather than listed so the lines
+   * that matter aren't buried under four hundred that don't.
+   *
+   * A checkout we could not read is not removed, whatever the user answers.
+   * "Could not list what's in there" and "there's nothing in there" produce the
+   * same empty list, and only one of them is safe to act on.
+   */
+  const deleteHeldByWorktrees = async (held: GitBranch[], heldByWorktree: Map<string, string>, failed: string[]): Promise<number> => {
+    const paths = held.map((b) => heldByWorktree.get(b.name)!);
+    let reports: WorktreeLeftovers[];
+    try { reports = (await api.gitWorktreeLeftovers(root, paths)).leftovers; }
+    catch (e) { for (const b of held) failed.push(`${b.name} (couldn't inspect its worktree: ${String(e)})`); return 0; }
+
+    const byPath = new Map(reports.map((r) => [r.path, r] as const));
+    const unreadable = held.filter((b) => byPath.get(heldByWorktree.get(b.name)!)?.error ?? true);
+    const removable = held.filter((b) => !unreadable.includes(b));
+    for (const b of unreadable) {
+      const why = byPath.get(heldByWorktree.get(b.name)!)?.error ?? "no answer from the server";
+      failed.push(`${b.name} (${why})`);
+    }
+    if (!removable.length) return 0;
+
+    const detail = removable.map((b) => {
+      const r = byPath.get(heldByWorktree.get(b.name)!)!;
+      const shown = r.files.slice(0, 6).map((f) => `    ${f}`);
+      const rest = r.files.length - shown.length + r.more;
+      return `  ${wtName(r.path)}\n` + (r.files.length
+        ? shown.join("\n") + (rest > 0 ? `\n    …and ${rest} more` : "") + (r.skipped ? `\n    (+${r.skipped} rebuildable, e.g. caches — not listed)` : "")
+        : r.skipped ? `    nothing but ${r.skipped} rebuildable entries (caches, deps)` : "    empty");
+    }).join("\n\n");
+
+    if (!confirm(
+      `Remove ${removable.length} worktree${removable.length === 1 ? "" : "s"} and delete their branches?\n\n` +
+      `git reports these checkouts clean, but removing one deletes its gitignored files too — silently. This is what goes:\n\n${detail}\n\n` +
+      `The branches are recoverable from the reflog for 30 days. These files are not recoverable at all.`
+    )) return 0;
+
+    let done = 0;
+    for (const b of removable) {
+      const path = heldByWorktree.get(b.name)!;
+      const rm = await api.gitWorktreeRemove(root, path, true).catch((e) => ({ ok: false, error: String(e) }));
+      if (!rm.ok) { failed.push(`${b.name} (${rm.error || "worktree remove failed"})`); continue; }
+      const r = await api.gitBranchDelete(root, b.name, true).catch((e) => ({ ok: false, error: String(e) }));
+      if (r.ok) done++; else failed.push(`${b.name} (${r.error || "branch delete failed"})`);
+    }
+    return done;
   };
   const mergeBranch = (name: string) => { if (confirm(`Merge ${name} into the current branch?`)) act(() => api.gitMerge(root, name), `merged ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
   const rebaseBranch = (name: string) => { if (confirm(`Rebase the current branch onto ${name}?`)) act(() => api.gitRebase(root, name), `rebased onto ${name}`).then((ok) => { if (ok) reloadBranches(); }); };

@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -237,6 +237,10 @@ const realApi = {
    *  Remotes tab asks; HEAD when omitted. */
   gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean, startPoint?: string) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch, startPoint }),
   gitWorktreeRemove: (root: string, path: string, force: boolean) => post<GitActionResult>("/git/worktree-remove", { root, path, force }),
+  /** What removing these worktrees would delete that git wouldn't warn about —
+   *  ask before offering the removal. One request for the whole batch. */
+  gitWorktreeLeftovers: (root: string, paths: string[]) =>
+    get<{ leftovers: WorktreeLeftovers[] }>(`/git/worktree-leftovers?root=${encodeURIComponent(root)}${paths.map((p) => `&path=${encodeURIComponent(p)}`).join("")}`),
   /** Merge a checkout's base branch into it — "update from base". `root` is the
    *  checkout doing the updating, since the merge runs where the branch is. */
   gitSyncBase: (root: string, base?: string) => post<GitActionResult>("/git/sync-base", { root, base }),
@@ -380,6 +384,7 @@ const demoApi: typeof realApi = {
   gitUndoMerge: (_root: string) => D(demo.gitActionUnavailable()),
   gitMergeContinue: (_root: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
+  gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),

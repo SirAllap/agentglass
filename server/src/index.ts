@@ -33,7 +33,7 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
@@ -533,6 +533,15 @@ const server = Bun.serve<WsData>({
     // history, which is what the pane defaults to.
     if (pathname === "/git/graph") return json(logGraph(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 400), url.searchParams.get("scope") === "all" ? "all" : "head"));
     if (pathname === "/git/worktrees") return json({ worktrees: await gitWorktrees(url.searchParams.get("root") || "") });
+    // What a worktree removal would destroy, per path — asked before offering
+    // the removal, never after. Repeatable `path=` so the bulk delete can price
+    // every worktree it is about to touch in one round trip; concurrent because
+    // each is a `git status --ignored` and a dozen sequential ones is a second.
+    if (pathname === "/git/worktree-leftovers") {
+      const root = url.searchParams.get("root") || "";
+      const paths = url.searchParams.getAll("path").slice(0, 50);
+      return json({ leftovers: await Promise.all(paths.map((p) => worktreeLeftovers(root, p))) });
+    }
     // Update: reads are gated too, since the status alone reveals the source
     // path on disk.
     if (pathname === "/update/status") {

@@ -13,7 +13,7 @@ import type {
   ConflictBlock, BlockChoice,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
   GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine, GitTreeState,
-  GitRemote, GitRemoteBranch, GitTag, GitReflogEntry,
+  GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, WorktreeLeftovers,
 } from "../../shared/types.ts";
 
 export const GIT_WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -1435,6 +1435,110 @@ export function addWorktree(rootIn: string, pathIn: unknown, branch: string, new
   }
   return run(root, newBranch ? ["worktree", "add", "-b", branch, abs, ...from] : ["worktree", "add", abs, branch]);
 }
+/**
+ * Ignored paths that are output, not work — safe to leave out of "here is what
+ * you lose", because deleting them costs a rebuild and nothing else.
+ *
+ * Deliberately short, and matched on whole path segments. Every name here is
+ * one whose contents are reproducible from the repo by definition of the tool
+ * that writes it. `dist`, `build`, `target`, `out` and `.cache` are NOT here
+ * and are not oversights: they're plausible directory names for real sources in
+ * a repo somebody else laid out, and the cost of being wrong is asymmetric —
+ * over-listing makes a confirmation dialog longer, under-listing deletes work.
+ */
+const REBUILDABLE = new Set([
+  "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache", ".tox",
+  "node_modules", ".venv", "venv", ".turbo", ".parcel-cache", ".next",
+  ".gradle", ".eggs", ".nyc_output", ".sass-cache", "htmlcov", "coverage",
+  ".DS_Store",
+]);
+const rebuildable = (rel: string): boolean =>
+  rel.split("/").some((seg) => REBUILDABLE.has(seg) || seg.endsWith(".egg-info")) ||
+  /\.(pyc|pyo)$/.test(rel);
+
+/** How many paths a single leftovers report will name before it starts
+ *  counting. Long enough to be a list you read, short enough to stay one. */
+const LEFTOVERS_MAX = 12;
+/** Ignored directories opened up to see what's inside — one git call each. */
+const EXPAND_MAX = 8;
+
+/**
+ * What `git worktree remove` would delete here that git would never warn about.
+ *
+ * The whole point is the ignored files. Git refuses to remove a worktree with
+ * modified or untracked files, so those already have a guard; ignored ones have
+ * none, and `remove` (no `--force`) deletes them silently — measured, not
+ * assumed: a worktree whose only content is a gitignored `secrets.env` reports
+ * `status --porcelain` empty and is removed with exit 0, file included.
+ *
+ * On a real checkout that is `compose/envs/*.env` and a page of local notes
+ * sitting beside four hundred `__pycache__/` directories, so the ignored list
+ * is filtered through REBUILDABLE — otherwise the noise buries the one line
+ * that mattered, and a dialog nobody reads guards nothing.
+ *
+ * `--ignored` in its traditional mode, not `=matching`: it collapses an ignored
+ * directory to one entry instead of listing every file under it, which is the
+ * difference between 403 lines and 3356 on this repo, and 100ms of work.
+ */
+export async function worktreeLeftovers(rootIn: string, pathIn: unknown): Promise<WorktreeLeftovers> {
+  const root = repoRoot(rootIn);
+  const abs = safeAbs(pathIn);
+  if (!root || !abs) return { path: String(pathIn ?? ""), files: [], more: 0, skipped: 0, error: "invalid path" };
+  // Only a path this repo actually owns as a worktree, so this can't be used to
+  // enumerate arbitrary directories through the API.
+  if (!worktreeList(root).some((w) => w.path === abs)) {
+    return { path: abs, files: [], more: 0, skipped: 0, error: "not a worktree of this repository" };
+  }
+  const r = await gitAsync(abs, ["-c", "core.quotePath=false", "status", "--porcelain=v1", "--ignored"]);
+  // A directory git can't read is not an empty one. Say so, and let the caller
+  // present it as a reason to keep the worktree rather than a green light.
+  if (r.code !== 0) return { path: abs, files: [], more: 0, skipped: 0, error: r.stderr.trim() || "could not read that checkout" };
+
+  const parse = (out: string): { code: string; rel: string }[] =>
+    out.split("\n").filter((l) => l.length >= 4).map((l) => ({
+      code: l.slice(0, 2),
+      // Quoted when the path has odd bytes in it; core.quotePath=false keeps
+      // UTF-8 readable, and the quotes that remain are honest about the rest.
+      rel: l.slice(3).replace(/^"|"$/g, ""),
+    })).filter((e) => e.rel);
+
+  const work: string[] = [];    // modified / untracked — git already guards these
+  const ignored: string[] = []; // the ones nothing guards
+  const dirs: string[] = [];    // ignored directories worth looking inside
+  let skipped = 0;
+  for (const { code, rel } of parse(r.stdout)) {
+    if (code !== "!!") { work.push(rel); continue; }
+    if (rebuildable(rel)) { skipped++; continue; }
+    if (rel.endsWith("/")) dirs.push(rel); else ignored.push(rel);
+  }
+
+  // A directory whose every entry is ignored collapses to one line — `cfg/`,
+  // not `cfg/local.env` and `cfg/__pycache__/`. That single line is both too
+  // alarming and too vague: it can be nothing but a cache, or it can be the one
+  // env file you needed, and it reads identically either way. So look inside
+  // the ones we don't already recognise, one level, and let the names speak.
+  //
+  // Bounded, and only ever a handful in practice: a directory collapses only
+  // when it holds nothing tracked at all. Past the cap the directory keeps its
+  // own name in the list, which over-reports rather than under-reports.
+  const expand = dirs.slice(0, EXPAND_MAX);
+  ignored.push(...dirs.slice(EXPAND_MAX));
+  const inner = await Promise.all(expand.map((d) =>
+    gitAsync(abs, ["-c", "core.quotePath=false", "status", "--porcelain=v1", "--ignored=matching", "--", d])));
+  for (let i = 0; i < expand.length; i++) {
+    const entries = inner[i]!.code === 0 ? parse(inner[i]!.stdout).filter((e) => e.code === "!!") : [];
+    // Couldn't see inside, or it told us nothing new: keep the directory itself
+    // on the list rather than dropping it.
+    if (!entries.length) { ignored.push(expand[i]!); continue; }
+    for (const { rel } of entries) { if (rebuildable(rel)) skipped++; else ignored.push(rel); }
+  }
+
+  // Work git would have stopped for goes first: if there is any, the answer is
+  // "don't do this" and it should be the first thing read.
+  const all = [...work, ...ignored];
+  return { path: abs, files: all.slice(0, LEFTOVERS_MAX), more: Math.max(0, all.length - LEFTOVERS_MAX), skipped };
+}
+
 export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;

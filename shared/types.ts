@@ -616,6 +616,30 @@ export interface GitWorktree {
   dirty?: number;
 }
 
+/**
+ * What removing a worktree would destroy, named before you agree to it.
+ *
+ * `git status` is not the answer to that question. It reports a checkout with a
+ * `.env` and a page of local notes in it as perfectly clean, because both are
+ * gitignored — and `git worktree remove` deletes the whole directory, ignored
+ * files included, without `--force` and without a word. So a caller about to
+ * offer "remove these worktrees" has to look at the disk itself.
+ */
+export interface WorktreeLeftovers {
+  path: string;
+  /** Repo-relative paths that would go: modified and untracked first, then the
+   *  ignored ones that don't look reproducible. Capped — see `more`. */
+  files: string[];
+  /** How many more there were beyond the ones listed. */
+  more: number;
+  /** Ignored entries dropped as rebuildable (`__pycache__/`, `node_modules/`).
+   *  Reported so the count in the UI can say what it chose not to show. */
+  skipped: number;
+  /** Set when the directory could not be read — treat as "assume work is
+   *  there", never as "nothing to lose". */
+  error?: string;
+}
+
 // --- live docker panel (lazydocker replacement) ------------------------------
 export interface DockerContainer {
   id: string;        // short id
