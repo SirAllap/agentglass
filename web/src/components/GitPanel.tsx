@@ -7,6 +7,7 @@ import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
+import { partitionByWorktree, splitReadable, goneConfirmText, leftoversLine } from "../lib/goneCleanup.ts";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
@@ -893,15 +894,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     let heldByWorktree: Map<string, string>;
     try { heldByWorktree = await heldByWorktreeNow(); }
     catch (e) { flash(false, `couldn't list this repo's worktrees: ${String(e)}`); return; }
-    const held = goneMerged.filter((b) => heldByWorktree.has(b.name));
-    const free = goneMerged.filter((b) => !heldByWorktree.has(b.name));
-    if (!confirm(
-      (free.length
-        ? `Delete ${free.length} branch${free.length === 1 ? "" : "es"} already merged into ${trunk}?`
-        : `None of the ${goneMerged.length} merged branches can be deleted on their own — every one is checked out in a worktree.`) +
-      (held.length ? `\n\n${held.length} more ${held.length === 1 ? "is" : "are"} checked out in a worktree. You'll be asked about those separately, with what removing them would delete.` : "") +
-      (goneUnmerged.length ? `\n\n${goneUnmerged.length} have no remote branch but are NOT in ${trunk} — those are kept.` : "")
-    )) return;
+    const { free, held } = partitionByWorktree(goneMerged, heldByWorktree);
+    if (!confirm(goneConfirmText(free, held, goneUnmerged.length, trunk))) return;
     setBusy(true);
     const failed: string[] = [];
     let done = 0;
@@ -940,23 +934,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     try { reports = (await api.gitWorktreeLeftovers(root, paths)).leftovers; }
     catch (e) { for (const b of held) failed.push(`${b.name} (couldn't inspect its worktree: ${String(e)})`); return 0; }
 
-    const byPath = new Map(reports.map((r) => [r.path, r] as const));
-    const unreadable = held.filter((b) => byPath.get(heldByWorktree.get(b.name)!)?.error ?? true);
-    const removable = held.filter((b) => !unreadable.includes(b));
-    for (const b of unreadable) {
-      const why = byPath.get(heldByWorktree.get(b.name)!)?.error ?? "no answer from the server";
-      failed.push(`${b.name} (${why})`);
-    }
+    const { removable, refused } = splitReadable(held, heldByWorktree, reports);
+    for (const { branch, why } of refused) failed.push(`${branch.name} (${why})`);
     if (!removable.length) return 0;
 
-    const detail = removable.map((b) => {
-      const r = byPath.get(heldByWorktree.get(b.name)!)!;
-      const shown = r.files.slice(0, 6).map((f) => `    ${f}`);
-      const rest = r.files.length - shown.length + r.more;
-      return `  ${wtName(r.path)}\n` + (r.files.length
-        ? shown.join("\n") + (rest > 0 ? `\n    …and ${rest} more` : "") + (r.skipped ? `\n    (+${r.skipped} rebuildable, e.g. caches — not listed)` : "")
-        : r.skipped ? `    nothing but ${r.skipped} rebuildable entries (caches, deps)` : "    empty");
-    }).join("\n\n");
+    const detail = removable.map(({ report }) => leftoversLine(report, wtName(report.path))).join("\n\n");
 
     if (!confirm(
       `Remove ${removable.length} worktree${removable.length === 1 ? "" : "s"} and delete their branches?\n\n` +
@@ -965,12 +947,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     )) return 0;
 
     let done = 0;
-    for (const b of removable) {
-      const path = heldByWorktree.get(b.name)!;
-      const rm = await api.gitWorktreeRemove(root, path, true).catch((e) => ({ ok: false, error: String(e) }));
-      if (!rm.ok) { failed.push(`${b.name} (${rm.error || "worktree remove failed"})`); continue; }
-      const r = await api.gitBranchDelete(root, b.name, true).catch((e) => ({ ok: false, error: String(e) }));
-      if (r.ok) done++; else failed.push(`${b.name} (${r.error || "branch delete failed"})`);
+    // `report.path` rather than another lookup: it is the path the server just
+    // confirmed it inspected, so the thing removed is the thing priced.
+    for (const { branch, report } of removable) {
+      const rm = await api.gitWorktreeRemove(root, report.path, true).catch((e) => ({ ok: false, error: String(e) }));
+      if (!rm.ok) { failed.push(`${branch.name} (${rm.error || "worktree remove failed"})`); continue; }
+      const r = await api.gitBranchDelete(root, branch.name, true).catch((e) => ({ ok: false, error: String(e) }));
+      if (r.ok) done++; else failed.push(`${branch.name} (${r.error || "branch delete failed"})`);
     }
     return done;
   };
