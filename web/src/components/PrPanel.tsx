@@ -588,7 +588,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const canReview = !!d && !d.viewerDidAuthor;
 
   const TABS: { id: Tab; label: string; n?: number; warn?: boolean }[] = d ? [
-    { id: "overview", label: "overview", warn: d.checklist.some((c) => !c.checked) },
+    { id: "overview", label: "overview" },
     { id: "conversation", label: "conversation", n: lanes.humans.length + lanes.humanComments.length + d.threads.length + lanes.bots.length },
     { id: "commits", label: "commits", n: d.commits.length },
     { id: "files", label: "files", n: d.files.length },
@@ -711,12 +711,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                     onResolve={(t) => act(t.isResolved ? "unresolve" : "resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
                     onReply={async (t) => {
                       const first = t.comments[0];
-                      if (!first) return;
+                      if (typeof first?.databaseId !== "number") return;
                       const body = await askText({ title: `Reply on ${t.path}${t.line ? `:${t.line}` : ""}`, confirmLabel: "Reply", input: { label: "Reply" } });
                       if (!body?.trim()) return;
-                      await act("reply", () => api.prReply(root, d.number, Number(first.id), body));
+                      await act("reply", () => api.prReply(root, d.number, first.databaseId as number, body));
                     }}
-                    fileOf={(p) => byPath.get(p)}
                   />
                 )}
 
@@ -797,8 +796,6 @@ function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpd
   onLocalReview: () => void; onMerge: () => void; onClose: () => void; onUpdateBranch: () => void;
   onRerun: () => void; onAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
 }) {
-  const done = d.checklist.filter((c) => c.checked).length;
-  const open = d.checklist.length - done;
   const c = d.checks;
   const canMerge = d.mergeState === "CLEAN";
 
@@ -870,20 +867,6 @@ function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpd
           </span>
         </div>
       </section>
-
-      {d.checklist.length > 0 && (
-        <section>
-          <div className="flex items-center gap-2 text-[9.5px] uppercase tracking-wider mb-1" style={{ color: "var(--text3)" }}>
-            <span>checklist</span>
-            {open > 0 && <span style={{ color: "var(--warning)" }}>{open} open</span>}
-            <span className="ml-auto tabular-nums">{done}/{d.checklist.length}</span>
-          </div>
-          <Bar parts={[
-            { pct: (done / d.checklist.length) * 100, tint: "var(--success)" },
-            { pct: (open / d.checklist.length) * 100, tint: "var(--warning)" },
-          ]} />
-        </section>
-      )}
 
       <section>
         <div className="text-[9.5px] uppercase tracking-wider mb-2" style={{ color: "var(--text3)" }}>description</div>
@@ -1018,6 +1001,16 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
 // conversation
 // ---------------------------------------------------------------------------
 
+/** Out to GitHub, for the one thing the panel does not show — the full history
+ *  of an edit, a reaction, the blame behind a line. */
+function GhLink({ href, title }: { href: string; title: string }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer noopener" title={title}
+      className="shrink-0 text-[10px] px-1 rounded"
+      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>↗</a>
+  );
+}
+
 function Lane({ label, extra }: { label: string; extra?: string }) {
   return (
     <div className="flex items-center gap-2 mt-4 mb-2 text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>
@@ -1027,8 +1020,8 @@ function Lane({ label, extra }: { label: string; extra?: string }) {
   );
 }
 
-function Card({ who, chip, when, tone, children }: {
-  who: string; chip?: React.ReactNode; when?: string; tone?: "chg" | "appr" | "bot"; children: React.ReactNode;
+function Card({ who, chip, when, tone, url, children }: {
+  who: string; chip?: React.ReactNode; when?: string; tone?: "chg" | "appr" | "bot"; url?: string; children: React.ReactNode;
 }) {
   const edge = tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : tone === "bot" ? "var(--info)" : "var(--border)";
   return (
@@ -1039,60 +1032,81 @@ function Card({ who, chip, when, tone, children }: {
         <Avatar login={who} size={17} />
         <b style={{ color: "var(--text)", fontWeight: 500 }}>{who}</b>
         {chip}
-        {when && <span className="ml-auto text-[10px]" style={{ color: "var(--text3)" }}>{when}</span>}
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {when && <span className="text-[10px]" style={{ color: "var(--text3)" }}>{when}</span>}
+          {url && <GhLink href={url} title="open on GitHub" />}
+        </span>
       </div>
       <div className="px-3 py-2.5">{children}</div>
     </div>
   );
 }
 
-/** The hunk a thread is anchored to, so the comment reads next to its code. */
-function ThreadSnippet({ file, line }: { file?: FileChange; line: number | null }) {
+/**
+ * The code a thread is about.
+ *
+ * Straight from the hunk GitHub stored with the comment. Reconstructing it from
+ * the pull request's diff meant the snippet only appeared on tabs that had
+ * already fetched that diff — so in the conversation, where the thread actually
+ * reads, there was never any code at all. It also survives an outdated thread,
+ * whose lines no longer exist in the current diff.
+ *
+ * Trimmed to the last few lines: a stored hunk runs thirty-odd lines and the
+ * comment is about the end of it.
+ */
+function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) {
   const rows = useMemo(() => {
-    if (!file || !line) return null;
-    for (const h of file.hunks) {
-      let n = h.newStart;
-      const out: { text: string; no: number | null }[] = [];
-      for (const l of h.lines) {
-        const no = l.startsWith("-") ? null : n++;
-        out.push({ text: l, no });
-      }
-      if (out.some((r) => r.no === line)) {
-        const idx = out.findIndex((r) => r.no === line);
-        return out.slice(Math.max(0, idx - 3), idx + 1);
-      }
+    const all = (hunk || "").split(/\r?\n/).filter((l, i) => i > 0 || !l.startsWith("@@"));
+    const tail = all.slice(-5);
+    // Number the tail against the line the comment landed on, counting back
+    // over everything that occupies a line on the new side.
+    let n = typeof line === "number" ? line : NaN;
+    const nums: (number | null)[] = [];
+    for (let i = tail.length - 1; i >= 0; i--) {
+      if (tail[i]!.startsWith("-")) { nums[i] = null; continue; }
+      nums[i] = Number.isNaN(n) ? null : n--;
     }
-    return null;
-  }, [file, line]);
-  if (!rows?.length) return null;
+    return tail.map((text, i) => ({ text, no: nums[i] ?? null }));
+  }, [hunk, line]);
+
+  if (!hunk?.trim()) return null;
   return (
     <div className="text-[10.5px]" style={{ ...CODE_FONT_STYLE, borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
       {rows.map((r, i) => (
-        <div key={i} className="px-2.5 whitespace-pre overflow-hidden text-ellipsis" style={{
-          color: r.text.startsWith("+") ? "var(--success)" : r.text.startsWith("-") ? "var(--error)" : "var(--text3)",
+        <div key={i} className="flex" style={{
           background: r.text.startsWith("+") ? "color-mix(in srgb, var(--success) 10%, transparent)"
             : r.text.startsWith("-") ? "color-mix(in srgb, var(--error) 10%, transparent)" : undefined,
-        }}>{r.text || " "}</div>
+        }}>
+          <span className="shrink-0 text-right select-none tabular-nums px-2"
+            style={{ width: 46, color: "var(--text3)", opacity: .7 }}>{r.no ?? ""}</span>
+          <span className="min-w-0 flex-1 whitespace-pre overflow-x-auto pr-2 agx-scroll" style={{
+            color: r.text.startsWith("+") ? "var(--success)" : r.text.startsWith("-") ? "var(--error)" : "var(--text2)",
+          }}>{r.text || " "}</span>
+        </div>
       ))}
     </div>
   );
 }
 
-/** One review thread: where it is anchored, the code it sits on, the exchange,
- *  and the two things you can do about it. */
-function Thread({ t, fileOf, onResolve, onReply, busy }: {
-  t: PrThread; fileOf: (p: string) => FileChange | undefined;
-  onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void; busy: boolean;
+function Thread({ t, onResolve, onReply, busy }: {
+  t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void; busy: boolean;
 }) {
+  // The REST reply endpoint takes the numeric comment id. `id` is a GraphQL
+  // node id (`PRRC_kwDO…`) and `Number()` of that is NaN — which is why reply
+  // could never have worked before `databaseId` was asked for.
+  const canReply = typeof t.comments[0]?.databaseId === "number";
   return (
     <div className="rounded-md overflow-hidden mb-2" style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
         style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
-        <span style={{ color: "var(--primary)" }}>{t.path}{t.line ? `:${t.line}` : ""}</span>
+        <span className="truncate" style={{ color: "var(--primary)" }}>{t.path}{t.line ? `:${t.line}` : ""}</span>
         {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="the code under this comment has changed since" />}
-        <span className="ml-auto">{t.isResolved ? <Chip text="resolved" tint="var(--success)" /> : <Chip text="open" tint="var(--warning)" />}</span>
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {t.isResolved ? <Chip text="resolved" tint="var(--success)" /> : <Chip text="open" tint="var(--warning)" />}
+          {t.url && <GhLink href={t.url} title="open this thread on GitHub" />}
+        </span>
       </div>
-      <ThreadSnippet file={fileOf(t.path)} line={t.line} />
+      <ThreadSnippet hunk={t.diffHunk} line={t.originalLine ?? t.line} />
       {t.comments.map((c, i) => (
         <div key={c.id} className="px-3 py-2"
           style={{ paddingLeft: i ? 26 : 12, background: i ? "color-mix(in srgb, var(--border) 9%, transparent)" : undefined }}>
@@ -1100,25 +1114,28 @@ function Thread({ t, fileOf, onResolve, onReply, busy }: {
             <Avatar login={c.author} size={15} />
             <b style={{ color: "var(--text)", fontWeight: 500 }}>{c.author}</b>
             {c.isBot && <Chip text="automation" tint="var(--info)" />}
-            <span className="ml-auto" style={{ color: "var(--text3)" }}>{ago(c.createdAt)}</span>
+            <span className="ml-auto flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
+              {ago(c.createdAt)}
+              {c.url && <GhLink href={c.url} title="open this comment on GitHub" />}
+            </span>
           </div>
           <Md body={c.body} />
         </div>
       ))}
       <div className="flex gap-1.5 px-3 py-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
-        <Btn onClick={() => onReply(t)} disabled={busy} small>reply</Btn>
+        <Btn onClick={() => onReply(t)} disabled={busy || !canReply} small
+          title={canReply ? undefined : "this thread has no comment to reply to"}>reply</Btn>
         <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "unresolve" : "resolve conversation"}</Btn>
       </div>
     </div>
   );
 }
 
-function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy, fileOf }: {
+function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy }: {
   d: PrDetail;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
   raw: boolean; onRaw: (v: boolean) => void;
   onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void; busy: boolean;
-  fileOf: (path: string) => FileChange | undefined;
 }) {
   const kb = Math.round(lanes.bots.reduce((n, c) => n + c.body.length, 0) / 1024);
   // Threads whose author never submitted a review of their own — a bot's
@@ -1141,7 +1158,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy, fileOf }
         const mine = d.threads.filter((t) => t.comments[0]?.author === r.author);
         return (
           <div key={`r${i}`} className="mb-2">
-            <Card who={r.author} when={ago(r.submittedAt)}
+            <Card who={r.author} when={ago(r.submittedAt)} url={r.url}
               tone={r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined}
               chip={r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
                 : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
@@ -1149,26 +1166,26 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy, fileOf }
             </Card>
             {mine.length > 0 && (
               <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                {mine.map((t) => <Thread key={t.id} t={t} fileOf={fileOf} onResolve={onResolve} onReply={onReply} busy={busy} />)}
+                {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} busy={busy} />)}
               </div>
             )}
           </div>
         );
       })}
       {lanes.humanComments.map((c) => (
-        <Card key={c.id} who={c.author} when={ago(c.createdAt)}><Md body={c.body} /></Card>
+        <Card key={c.id} who={c.author} when={ago(c.createdAt)} url={c.url}><Md body={c.body} /></Card>
       ))}
 
       {orphanThreads.length > 0 && (
         <>
           <Lane label="line threads" extra={`${orphanThreads.filter((t) => !t.isResolved).length} open of ${orphanThreads.length}`} />
-          {orphanThreads.map((t) => <Thread key={t.id} t={t} fileOf={fileOf} onResolve={onResolve} onReply={onReply} busy={busy} />)}
+          {orphanThreads.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} busy={busy} />)}
         </>
       )}
 
       <Lane label="automation" extra={lanes.bots.length ? `${lanes.bots.length} comments · ${kb} KB` : undefined} />
       {lanes.botReviews.map((r, i) => (
-        <Card key={`br${i}`} who={r.author} when={ago(r.submittedAt)} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}>
+        <Card key={`br${i}`} who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}>
           <Md body={r.body} />
         </Card>
       ))}
@@ -1180,7 +1197,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy, fileOf }
             {lanes.bots.length} machine comment{lanes.bots.length === 1 ? "" : "s"} · {kb} KB {raw ? "— hide raw" : "collapsed — show raw"}
           </button>
           {lanes.bots.map((c) => (
-            <Card key={c.id} who={c.author} when={ago(c.createdAt)} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}>
+            <Card key={c.id} who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}>
               {raw ? <pre className="overflow-x-auto text-[10px] max-h-72 agx-scroll" style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.body}</pre>
                 : <span style={{ color: "var(--text2)" }}>{c.digest || "(nothing worth pulling out)"}</span>}
             </Card>

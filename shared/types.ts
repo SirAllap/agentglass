@@ -945,10 +945,15 @@ export type PrMergeState =
 
 export interface PrThreadComment {
   id: string;
+  /** The numeric id the REST reply endpoint wants; the `id` above is a GraphQL
+   *  node id and the two are not interchangeable. */
+  databaseId?: number | null;
   author: string;
   isBot: boolean;
   body: string;
   createdAt: string;
+  /** Straight to this comment on GitHub, for when you need the full thing. */
+  url?: string;
 }
 
 export interface PrThread {
@@ -959,6 +964,12 @@ export interface PrThread {
   isResolved: boolean;
   /** The code under it has changed since; usually safe to skip. */
   isOutdated: boolean;
+  /** The diff hunk GitHub kept with the comment. Present even when the thread
+   *  is outdated and those lines are gone from the current diff. */
+  diffHunk?: string;
+  /** The line in the file as it was when the comment was written. */
+  originalLine?: number | null;
+  url?: string;
   comments: PrThreadComment[];
 }
 
@@ -968,6 +979,7 @@ export interface PrReview {
   state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
   body: string;
   submittedAt: string;
+  url?: string;
 }
 
 export interface PrComment {
@@ -976,6 +988,7 @@ export interface PrComment {
   isBot: boolean;
   body: string;
   createdAt: string;
+  url?: string;
   /** Bot noise reduced to its point — a 46KB coverage table is three numbers
    *  and 1,847 rows nobody reads. Null when nothing could be extracted. */
   digest?: string | null;

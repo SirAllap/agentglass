@@ -597,13 +597,13 @@ const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     labels(first:20){nodes{name color}}
     assignees(first:10){nodes{login}}
     reviewRequests(first:10){nodes{requestedReviewer{... on User{login} ... on Team{name}}}}
-    reviews(first:50){nodes{author{login} state body submittedAt}}
-    comments(first:50){nodes{databaseId author{login} body createdAt}}
+    reviews(first:50){nodes{author{login} state body submittedAt url}}
+    comments(first:50){nodes{databaseId author{login} body createdAt url}}
     commits(first:100){nodes{commit{oid messageHeadline parents{totalCount} author{user{login} name}}}}
     files(first:100){nodes{path additions deletions changeType}}
     reviewThreads(first:50){nodes{
       id isResolved isOutdated path line
-      comments(first:20){nodes{id author{login} body createdAt}}
+      comments(first:20){nodes{id databaseId author{login} body createdAt url diffHunk originalLine}}
     }}
     timelineItems(last:30, itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]){nodes{... on HeadRefForcePushedEvent{createdAt}}}
     statusCheckRollup:commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{
@@ -659,6 +659,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     state: r.state,
     body: r.body || "",
     submittedAt: r.submittedAt || "",
+    url: r.url || "",
   }));
 
   const comments: PrComment[] = (p.comments?.nodes || []).map((c: any) => {
@@ -670,6 +671,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
       isBot: bot,
       body: c.body || "",
       createdAt: c.createdAt || "",
+      url: c.url || "",
       digest: bot ? digestBotComment(c.body || "") : null,
     };
   });
@@ -680,12 +682,22 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     line: t.line ?? null,
     isResolved: !!t.isResolved,
     isOutdated: !!t.isOutdated,
+    // The hunk GitHub stored with the comment, not one reconstructed from the
+    // pull request's diff. It arrives with the thread, so the code a comment is
+    // about is on screen without the diff having been fetched at all — and it
+    // is the same few lines GitHub shows, including on an outdated thread whose
+    // hunk no longer exists in the current diff.
+    diffHunk: t.comments?.nodes?.[0]?.diffHunk || "",
+    originalLine: t.comments?.nodes?.[0]?.originalLine ?? null,
+    url: t.comments?.nodes?.[0]?.url || "",
     comments: (t.comments?.nodes || []).map((c: any) => ({
       id: c.id,
+      databaseId: c.databaseId ?? null,
       author: c.author?.login || "",
       isBot: isBotLogin(c.author?.login || ""),
       body: c.body || "",
       createdAt: c.createdAt || "",
+      url: c.url || "",
     })),
   }));
 
