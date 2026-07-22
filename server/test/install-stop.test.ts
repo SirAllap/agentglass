@@ -21,6 +21,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const APPCTL = join(import.meta.dir, "..", "..", "electron", "appctl.sh");
+
+/** Wait, inside the shell, for the reopened instance to exist — same reason as
+ *  `visible` below, on the other side of the process boundary. */
+const AWAIT_MAIN = 'for _ in $(seq 200); do [ -n "$(main_pids)" ] && break; sleep 0.025; done';
 const spawned: number[] = [];
 
 /** A fake install: our own copy of a shell, named the way the real one is. The
@@ -65,6 +69,32 @@ async function appctl(app: string, call: string, env: Record<string, string> = {
 const pids = (out: string) => out.split("\n").filter((l) => /^\d+$/.test(l)).map(Number);
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
+/**
+ * Wait until the script can see every process we just launched.
+ *
+ * This used to be `await Bun.sleep(200)` in front of every assertion — a guess
+ * at how long six processes take to become visible in /proc. It held locally
+ * and went red on a loaded CI runner, on a commit that had nothing to do with
+ * it, and then passed on a re-run of the same commit: the worst shape of flake,
+ * because the person reading the failure is looking at their own diff.
+ *
+ * Waiting for the condition instead of for a duration is both more reliable and
+ * faster — on a machine where the processes are up in 10ms, this returns in
+ * 10ms rather than sleeping out the other 190. The deadline exists so a genuine
+ * regression fails as a clear assertion rather than as a hung test, so it
+ * returns what it last saw rather than throwing.
+ */
+async function visible(app: string, want: number[], deadlineMs = 5000): Promise<number[]> {
+  const until = Date.now() + deadlineMs;
+  let seen: number[] = [];
+  do {
+    seen = pids((await appctl(app, "app_pids")).out);
+    if (want.every((pid) => seen.includes(pid))) return seen;
+    await Bun.sleep(25);
+  } while (Date.now() < until);
+  return seen;
+}
+
 afterEach(() => {
   for (const pid of spawned.splice(0)) { try { process.kill(pid, 9); } catch { /* already gone */ } }
 });
@@ -81,13 +111,12 @@ describe("finding the processes that belong to an install", () => {
       launch(join(app, "agentglass"), "read x", "--type=renderer"),
     ];
     const sidecar = launch(join(app, "resources", "agentglass-server"));
-    await Bun.sleep(200);
 
     // Every one of them is ours. Asserted as "contains", not as an exact set:
     // what the script needs to be true is that nothing of this install is
     // missed, and a transient extra — a helper caught mid-fork — is genuinely
     // ours too, and genuinely fine to signal.
-    const all = pids((await appctl(app, "app_pids")).out);
+    const all = await visible(app, [main, ...helpers, sidecar]);
     for (const pid of [main, ...helpers, sidecar]) expect(all).toContain(pid);
 
     // The whole fix in one assertion: only the main process gets signalled.
@@ -103,7 +132,7 @@ describe("finding the processes that belong to an install", () => {
     // which is the failure this whole file exists to prevent.
     const app = fakeInstall();
     const main = launch(join(app, "agentglass"), "read x", "--ozone-platform=wayland");
-    await Bun.sleep(200);
+    await visible(app, [main]);
     expect(pids((await appctl(app, "main_pids")).out)).toEqual([main]);
     rmSync(app, { recursive: true, force: true });
   });
@@ -112,7 +141,10 @@ describe("finding the processes that belong to an install", () => {
     const mine = fakeInstall();
     const theirs = fakeInstall();
     const other = launch(join(theirs, "agentglass"));
-    await Bun.sleep(200);
+    // Wait on the *other* install, so this is not a race we win by being early:
+    // the assertion below is only meaningful once `other` is genuinely visible
+    // to the script, and it still must not appear under `mine`.
+    await visible(theirs, [other]);
     expect((await appctl(mine, "app_pids")).out).toBe("");
     expect(alive(other)).toBe(true);
     for (const d of [mine, theirs]) rmSync(d, { recursive: true, force: true });
@@ -123,7 +155,7 @@ describe("stopping it", () => {
   test("a healthy instance goes on the first signal, with no escalation", async () => {
     const app = fakeInstall();
     const main = launch(join(app, "agentglass"));
-    await Bun.sleep(200);
+    await visible(app, [main]);
 
     const { code, out } = await appctl(app, "stop_app");
     expect(code).toBe(0);
@@ -139,7 +171,7 @@ describe("stopping it", () => {
     const app = fakeInstall();
     const main = launch(join(app, "agentglass"));
     const stubborn = launch(join(app, "agentglass"), "trap '' TERM; read x", "--type=renderer");
-    await Bun.sleep(200);
+    await visible(app, [main, stubborn]);
 
     const { code, out } = await appctl(app, "stop_app", { APPCTL_GRACE_TENTHS: "5" });
     expect(code).toBe(0);
@@ -152,7 +184,7 @@ describe("stopping it", () => {
   test("a sidecar left behind by a previous wedge is cleared", async () => {
     const app = fakeInstall();
     const orphan = launch(join(app, "resources", "agentglass-server"), "trap '' TERM; read x");
-    await Bun.sleep(200);
+    await visible(app, [orphan]);
 
     const { code, out } = await appctl(app, "stop_app", { APPCTL_GRACE_TENTHS: "5" });
     expect(code).toBe(0);
@@ -194,10 +226,10 @@ describe("putting back what the install took down", () => {
   test("the instance comes back with the flags it had", async () => {
     const app = fakeInstall();
     // A main process started the ordinary way for this app: with a flag.
-    launch(join(app, "agentglass"), blocker(app), "--ozone-platform=wayland");
-    await Bun.sleep(200);
+    const main = launch(join(app, "agentglass"), blocker(app), "--ozone-platform=wayland");
+    await visible(app, [main]);
 
-    const { code, out } = await appctl(app, 'stop_app && start_app && sleep 0.5 && tr "\\0" " " < /proc/$(main_pids | head -n1)/cmdline');
+    const { code, out } = await appctl(app, `stop_app && start_app && ${AWAIT_MAIN} && tr "\\0" " " < /proc/$(main_pids | head -n1)/cmdline`);
     expect(code).toBe(0);
     expect(out).toContain("reopening");
     // The same binary, and the flag it was carrying — not a bare relaunch that
@@ -219,9 +251,9 @@ describe("putting back what the install took down", () => {
     });
     p.unref();
     spawned.push(p.pid);
-    await Bun.sleep(200);
+    await visible(app, [p.pid]);
 
-    const { out } = await appctl(app, 'stop_app >/dev/null && start_app >/dev/null && sleep 0.5 && tr "\\0" "\\n" < /proc/$(main_pids | head -n1)/environ');
+    const { out } = await appctl(app, `stop_app >/dev/null && start_app >/dev/null && ${AWAIT_MAIN} && tr "\\0" "\\n" < /proc/$(main_pids | head -n1)/environ`);
     expect(out).toContain("AGENTGLASS_PROJECT=/tmp/scoped-repo");
     expect(out).not.toContain("SOME_DEAD_SESSION");
     cleanup(app);
