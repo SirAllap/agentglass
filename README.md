@@ -40,7 +40,7 @@ gate. No install, no server. *(Everything there is fake; it's a showcase.)*
 - [Any provider — via OpenTelemetry](#any-provider--via-opentelemetry-openai-gemini-bedrock-)
 - [Configuration](#configuration-env) · [API](#api) · [Architecture](#architecture)
 - [Extending / make it yours](docs/EXTENDING.md)
-- [Contributing](#contributing) · [License](#license)
+- [Roadmap](#roadmap) · [Contributing](#contributing) · [License](#license)
 
 ---
 
@@ -621,6 +621,35 @@ On ingest the server diffs each cumulative report against the session's prior
 total, storing a per-event **delta** — so timeline sums and session totals agree
 and nothing is double-counted. Hook events and the scanner dedupe against each
 other by session, so the same turn is never counted twice.
+
+---
+
+## Roadmap
+
+Where this is going — themes, not dates. The living version is the issue tracker; the [`help wanted`](https://github.com/SirAllap/agentglass/labels/help%20wanted) and [`good first issue`](https://github.com/SirAllap/agentglass/labels/good%20first%20issue) labels mark the best places to start.
+
+**Now**
+- Tell a slow tool call from a hung one by evidence of life, not a timer — [#134](https://github.com/SirAllap/agentglass/issues/134)
+- Lead with a verdict: what's running, what's stuck, what needs you now — [#42](https://github.com/SirAllap/agentglass/issues/42)
+- Windows: a usable terminal panel, or an honest disable — [#98](https://github.com/SirAllap/agentglass/issues/98)
+
+**Next**
+- Per-agent changes scoped to each session's worktree/branch — [#117](https://github.com/SirAllap/agentglass/issues/117)
+- Warn when parallel agents collide on shared runtime the diff can't see — [#118](https://github.com/SirAllap/agentglass/issues/118)
+- A gate that can hold by rule (spend, allowlist), not only by hand — [#109](https://github.com/SirAllap/agentglass/issues/109)
+- Per-project gate policies and hook profiles — [#14](https://github.com/SirAllap/agentglass/issues/14)
+- Keep model prices fresh without hand-editing the table — [#9](https://github.com/SirAllap/agentglass/issues/9)
+
+**Later / exploring**
+- An API panel to exercise the endpoints the fleet is building — [#170](https://github.com/SirAllap/agentglass/issues/170)
+- Tasks per project, and a decision log mined from transcripts — [#12](https://github.com/SirAllap/agentglass/issues/12), [#13](https://github.com/SirAllap/agentglass/issues/13)
+- A phone-friendly view for monitoring and answering gate approvals — [#7](https://github.com/SirAllap/agentglass/issues/7)
+- Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
+
+**Recently shipped** — see the [releases](https://github.com/SirAllap/agentglass/releases) for the full record.
+- **v0.4.0** — evidence-of-life signal for open tool calls; the shell no longer adopts a stranger's server on `:4000`
+- **v0.3.0** — in-app merge-conflict resolution, whole-project docker controls, a rearrangeable workspace, and an in-app updater
+- **v0.2.x** — downloadable installers for Linux / macOS / Windows, the Electron desktop shell, and a real chat panel
 
 ---
 
