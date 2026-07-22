@@ -30,5 +30,17 @@ jobs:
           # so %(contents) yields the commit message and the annotation — the
           # actual release notes — is lost. Re-fetch to get the tag object.
           git fetch --force --tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+
+          # And refuse if it is lightweight for real, rather than publishing a
+          # commit message as the release notes. %(contents) never fails and
+          # never comes back empty on such a tag — it just answers with the
+          # wrong thing, which is how a merge subject becomes a release body.
+          kind="$(git for-each-ref --format='%(objecttype)' "refs/tags/$GITHUB_REF_NAME")"
+          if [ "$kind" != "tag" ]; then
+            echo "::error::$GITHUB_REF_NAME is a lightweight tag ($kind) — it carries no annotation to publish." >&2
+            echo "Cut it with: git tag -a --cleanup=verbatim $GITHUB_REF_NAME -F notes.md" >&2
+            exit 1
+          fi
+
           git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > /tmp/notes.md
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file /tmp/notes.md

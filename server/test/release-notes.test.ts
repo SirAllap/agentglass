@@ -31,6 +31,9 @@ beforeAll(async () => {
   run(clone, "add", "-A");
   run(clone, "commit", "-qm", "first");
   spawnSync("git", ["-C", clone, "tag", "-a", "--cleanup=verbatim", "v9.9.9", "-F", "-"], { input: NOTES, encoding: "utf8" });
+  // A lightweight tag, the shape `gh release create` leaves behind: no
+  // annotation at all, so `%(contents)` falls through to the commit message.
+  run(clone, "tag", "v9.9.8");
   su = await import("../src/selfupdate.ts");
 });
 
@@ -49,6 +52,30 @@ describe("release notes", () => {
     expect(r.ok).toBe(true);
     expect(r.source).toBe("clone");
     expect(r.notes).toContain("tmux windows are the panel's own tabs");
+  });
+
+  it("keeps the markdown headings a release body is made of", async () => {
+    // `git tag -a -F` strips every line starting with `#` unless it is told
+    // not to — which silently deletes every `### Section` from the notes and
+    // leaves a flat list. The fixture is cut with --cleanup=verbatim, and this
+    // is the assertion that notices if that ever stops being true.
+    const r = await su.releaseNotes("v9.9.9");
+    expect(r.notes).toContain("### Terminal");
+  });
+
+  it("refuses to read a lightweight tag, whose 'annotation' is a commit message", async () => {
+    // The bug this replaced: %(contents) on a tag with no annotation answers
+    // with the commit message and never comes back empty, so the old emptiness
+    // check passed it straight through as release notes. v0.3.0 is lightweight
+    // — publishing from the GitHub UI creates the tag that way — and the app
+    // showed "Merge pull request #123 from …" as its release notes.
+    //
+    // Correct behaviour is to decline the clone and fall through to the API,
+    // which here has no reachable origin, so the answer is an honest failure
+    // rather than a plausible-looking wrong one.
+    const r = await su.releaseNotes("v9.9.8");
+    expect(r.source).not.toBe("clone");
+    expect(r.notes).not.toContain("first");
   });
 
   it("answers with a shape the client can always read", async () => {
