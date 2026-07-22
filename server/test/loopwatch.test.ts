@@ -28,6 +28,11 @@ function block(ms: number) {
 
 describe("loop watchdog", () => {
   it("notices a block, and blames whatever entered last", async () => {
+    // Let a heartbeat land first. Attribution is now "was this label entered
+    // while the loop was blocked", so a tick that was already late — from
+    // whatever the rest of the suite is doing — would make the block look like
+    // it started before the label, and the label would rightly lose.
+    await Bun.sleep(120);
     const before = lw.stalls().stalls.at(-1)?.id ?? 0;
     lw.entered("GET /git/repos");
     block(320);
@@ -46,10 +51,12 @@ describe("loop watchdog", () => {
   it("does not blame a request that finished long ago", async () => {
     // A stall arriving out of nowhere is a timer, a stream pump or GC, and
     // saying so beats pinning it on whichever endpoint happened to be last —
-    // which would quietly turn background work into a bug report against an
-    // innocent route.
+    // which is not hypothetical: `/gate/pending` reads an in-memory Map in
+    // microseconds, is polled constantly, and topped the blocked list at 600ms
+    // a call for work it had already finished. A label only answers for a block
+    // that began while it was running.
     lw.entered("GET /something-old");
-    await Bun.sleep(2_100); // past the freshness window
+    await Bun.sleep(300); // it has finished; the block below is not its doing
     const before = lw.stalls().stalls.at(-1)?.id ?? 0;
     block(300);
     await Bun.sleep(250);

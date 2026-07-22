@@ -20,14 +20,30 @@ import type {
 export const GIT_WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
 const UNTRACKED_MAX_BYTES = 512 * 1024; // don't inline-diff huge new files
 
-/** Validate that `root` is the top-level of a git repo; return the abs root. */
+/**
+ * Validate that `root` is the top-level of a git repo; return the abs root.
+ *
+ * Cached, because this is the first line of nearly every function in this file
+ * and it costs a subprocess: on a panel poll it ran a dozen times a second to
+ * re-derive an answer that changes only if someone moves a directory. A repo's
+ * top level does not move under a running app; a *miss* is not cached, so a
+ * path that becomes a repo later is picked up.
+ */
+const ROOT_TTL_MS = 60_000;
+const rootCache = new Map<string, { at: number; top: string }>();
+
 function repoRoot(root: unknown): string | null {
   const abs = safeAbs(root);
   if (!abs) return null;
+  const hit = rootCache.get(abs);
+  if (hit && Date.now() - hit.at < ROOT_TTL_MS) return hit.top;
   const top = git(abs, ["rev-parse", "--show-toplevel"]);
   if (top.code !== 0) return null;
   const t = top.stdout.trim();
-  return t || null;
+  if (!t) return null;
+  if (rootCache.size > 200) rootCache.clear();
+  rootCache.set(abs, { at: Date.now(), top: t });
+  return t;
 }
 
 /** Resolve a repo-relative path and reject anything escaping the root. */
@@ -110,8 +126,8 @@ function parseDiff(root: string, text: string, staged: boolean): GitFileChange[]
 }
 
 /** Build all-added GitFileChange entries for untracked files. */
-function untracked(root: string): GitFileChange[] {
-  const r = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+async function untracked(root: string): Promise<GitFileChange[]> {
+  const r = await gitAsync(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
   if (r.code !== 0) return [];
   const now = Date.now();
   const out: GitFileChange[] = [];
@@ -161,7 +177,7 @@ function treeState(root: string): GitTreeState {
   return "clean";
 }
 
-function branchInfo(root: string): GitBranchInfo {
+async function branchInfo(root: string): Promise<GitBranchInfo> {
   const name = currentBranch(root);
   const detached = name === "(detached)";
   const upstream = git(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).stdout.trim() || null;
@@ -177,7 +193,7 @@ function branchInfo(root: string): GitBranchInfo {
   return {
     name, upstream, ahead, behind, detached, state: treeState(root),
     base,
-    behindBase: base ? behindBase(root, name, base) : 0,
+    behindBase: base ? await behindBase(root, name, base) : 0,
     // Two rev-parses, so only when the answer can change a decision: the
     // panel asks it to decide whether being behind upstream is a reason to
     // refuse a base merge, and that question only exists while behind.
@@ -187,15 +203,25 @@ function branchInfo(root: string): GitBranchInfo {
 }
 
 /** Full working-tree state for one repo. */
-export function workingTree(rootIn: unknown): WorkingTree {
+export async function workingTree(rootIn: unknown): Promise<WorkingTree> {
   const root = repoRoot(rootIn);
   if (!root) {
     return { root: String(rootIn ?? ""), branch: { name: "", upstream: null, ahead: 0, behind: 0, detached: false }, staged: [], unstaged: [], clean: true, writeEnabled: GIT_WRITE_ENABLED, error: "not a git repository" };
   }
-  const staged = parseDiff(root, git(root, ["-c", "core.quotePath=false", "diff", "--cached"]).stdout, true);
-  const unstaged = [...parseDiff(root, git(root, ["-c", "core.quotePath=false", "diff"]).stdout, false), ...untracked(root)];
+  // The four reads this is made of, run together rather than one after another
+  // — and awaited, so the 618ms this measured at is wall clock instead of a
+  // terminal that has stopped echoing. It is on a 2.5s poll whenever the panel
+  // is open.
+  const [stagedOut, unstagedOut, others, branch] = await Promise.all([
+    gitAsync(root, ["-c", "core.quotePath=false", "diff", "--cached"]),
+    gitAsync(root, ["-c", "core.quotePath=false", "diff"]),
+    untracked(root),
+    branchInfo(root),
+  ]);
+  const staged = parseDiff(root, stagedOut.stdout, true);
+  const unstaged = [...parseDiff(root, unstagedOut.stdout, false), ...others];
   return {
-    root, branch: branchInfo(root), staged, unstaged,
+    root, branch, staged, unstaged,
     clean: staged.length === 0 && unstaged.length === 0,
     writeEnabled: GIT_WRITE_ENABLED,
   };
@@ -952,14 +978,17 @@ function applyMemo(root: string, key: string, set: Set<string>): void {
   }
 }
 
-function mergedInto(root: string, ref: string): Set<string> {
+async function mergedInto(root: string, ref: string): Promise<Set<string>> {
   // \u0000 rather than a raw NUL byte: written literally it makes the whole
   // file `data` to grep, which then skips it silently — you get no matches
   // and no warning. Same separator, same keys, still greppable.
   const key = `${root}\u0000${ref}`;
   const hit = mergedCache.get(key);
   if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.set;
-  const r = git(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
+  // 644ms on a repo with a long history — the single most expensive call in
+  // this endpoint, and cached, so it is paid on a miss and then not again until
+  // a ref moves. Awaited so that miss costs wall clock rather than a terminal.
+  const r = await gitAsync(root, ["for-each-ref", "--merged", ref, "refs/heads", "--format=%(refname:short)"]);
   const set = new Set(r.stdout.split("\n").filter(Boolean));
   applyMemo(root, key, set);
   mergedCache.set(key, { at: Date.now(), set });
@@ -1070,13 +1099,12 @@ export function mergedSweeping(rootIn: unknown, ref: string): boolean {
   return !!root && probeRunning.has(`${root}\u0000${ref}`);
 }
 
-export function branches(rootIn: unknown): { current: string; branches: GitBranch[]; trunk: string | null; sweeping: boolean } {
+export async function branches(rootIn: unknown): Promise<{ current: string; branches: GitBranch[]; trunk: string | null; sweeping: boolean }> {
   const root = repoRoot(rootIn);
   if (!root) return { current: "", branches: [], trunk: null, sweeping: false };
   const fmt = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)`;
-  const r = git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]);
-  const trunk = defaultBranch(root);
-  const merged = trunk ? mergedInto(root, trunk) : null;
+  const [r, trunk] = [git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]), defaultBranch(root)];
+  const merged = trunk ? await mergedInto(root, trunk) : null;
   const list: GitBranch[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -1135,14 +1163,18 @@ export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "h
  * So: HEAD by default — the log of the checkout you are in — with `--all` still
  * a click away for the times you genuinely want the whole graph.
  */
-export function logGraph(rootIn: unknown, limit = 400, scope: "head" | "all" = "head"): { lines: GitGraphLine[]; scope: "head" | "all"; branch: string } {
+export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "all" = "head"): Promise<{ lines: GitGraphLine[]; scope: "head" | "all"; branch: string }> {
   const root = repoRoot(rootIn);
   if (!root) return { lines: [], scope, branch: "" };
   const n = Math.max(1, Math.min(2000, limit | 0));
   // NUL can't go in an argv string (execve truncates at it), so use the same
   // \x1f unit-separator the branch code uses — safe in args, absent from commits.
   const fmt = `${US}%h${US}%an${US}%ar${US}%s${US}%D`;
-  const r = git(root, ["-c", "core.quotePath=false", "log", "--graph", ...(scope === "all" ? ["--all"] : []), "--date=relative", `-n${n}`, `--format=${fmt}`]);
+  // Awaited: measured at 761ms on a large repo, and the cost is `--graph`'s
+  // topological walk rather than the row count — asking for 60 commits instead
+  // of 500 saves nothing (762ms vs 761ms). So the only thing that helps is not
+  // holding the loop while it runs.
+  const r = await gitAsync(root, ["-c", "core.quotePath=false", "log", "--graph", ...(scope === "all" ? ["--all"] : []), "--date=relative", `-n${n}`, `--format=${fmt}`]);
   const lines: GitGraphLine[] = [];
   for (const raw of r.stdout.split("\n")) {
     if (!raw) continue;
@@ -1221,11 +1253,14 @@ export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitAct
  *  only when something fetches or merges, and these views poll. */
 const BEHIND_TTL_MS = 15_000;
 const behindCache = new Map<string, { at: number; n: number }>();
-export function behindBase(root: string, branch: string, base: string): number {
+export async function behindBase(root: string, branch: string, base: string): Promise<number> {
   const key = `${root}\u0000${branch}\u0000${base}`;
   const hit = behindCache.get(key);
   if (hit && Date.now() - hit.at < BEHIND_TTL_MS) return hit.n;
-  const r = git(root, ["rev-list", "--count", `${branch}..${base}`]);
+  // ~200ms per checkout on a large repo, and `worktrees()` asks it once per
+  // worktree — seventeen of them here. Awaited, so the seventeen overlap and
+  // none of them holds the thread the terminal is on.
+  const r = await gitAsync(root, ["rev-list", "--count", `${branch}..${base}`]);
   const n = r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
   if (behindCache.size > 400) behindCache.clear();
   behindCache.set(key, { at: Date.now(), n });
@@ -1371,12 +1406,12 @@ export function undoableMerge(root: string, ahead: number, upstream: string | nu
 }
 
 /** Put the branch back exactly as it stood before its last merge. */
-export function undoMerge(rootIn: unknown): GitActionResult {
+export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   // Re-checked here, never trusted from the client: this is a hard reset, and
   // these conditions are the only thing making it safe.
-  const info = branchInfo(root);
+  const info = await branchInfo(root);
   if (!undoableMerge(root, info.ahead, info.upstream)) {
     return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
   }
@@ -1408,17 +1443,20 @@ function worktreeList(root: string): GitWorktree[] {
   return out;
 }
 
-export function worktrees(rootIn: unknown): GitWorktree[] {
+export async function worktrees(rootIn: unknown): Promise<GitWorktree[]> {
   const root = repoRoot(rootIn);
   if (!root) return [];
   const out = worktreeList(root);
   // How far each checkout has drifted from what it was branched off. One
-  // rev-list per worktree, cached, and only for the ones on a real branch.
-  for (const w of out) {
+  // rev-list per worktree, cached, and only for the ones on a real branch —
+  // and all of them at once rather than one after another: seventeen serial
+  // 200ms calls is the 1955ms this endpoint used to cost, all of it on the
+  // thread carrying the terminal.
+  await Promise.all(out.map(async (w) => {
     const base = w.branch === "(detached)" ? null : baseOf(root, w.branch);
     w.base = base;
-    w.behindBase = base ? behindBase(root, w.branch, base) : 0;
-  }
+    w.behindBase = base ? await behindBase(root, w.branch, base) : 0;
+  }));
   return out;
 }
 
@@ -1435,7 +1473,7 @@ export function worktrees(rootIn: unknown): GitWorktree[] {
  * dirty checkout, and a button that can only fail is worse than a disabled one.
  */
 export async function worktreesWithState(rootIn: unknown): Promise<GitWorktree[]> {
-  const out = worktrees(rootIn);
+  const out = await worktrees(rootIn);
   await Promise.all(out.map(async (w) => {
     if (w.bare) return; // no working tree to be dirty
     const r = await gitAsync(w.path, ["status", "--porcelain"]);

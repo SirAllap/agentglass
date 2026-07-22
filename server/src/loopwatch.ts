@@ -60,8 +60,22 @@ let seq = 0;
  * window below says outright rather than guessing.
  */
 let recent: { what: string; at: number } | null = null;
-/** Past this, the last-entered label is no longer a plausible witness. */
-const FRESH_MS = 2_000;
+/**
+ * How far *before the block began* a label may have been entered and still be
+ * blamed for it.
+ *
+ * This used to be two seconds from the stall being noticed, which quietly
+ * libelled the cheapest endpoints in the app: `/gate/pending` reads an
+ * in-memory Map in microseconds, is polled constantly, and was therefore the
+ * most recent label whenever something else — GC, a stream pump, an async
+ * continuation — stopped the loop. It came out top of the list at 600ms a call
+ * for work it had already finished.
+ *
+ * A synchronous block runs inside whatever entered it, so the honest test is
+ * whether the label was entered during the blocked period rather than merely
+ * recently. The margin covers the gap between entering and starting to block.
+ */
+const BLAME_MARGIN_MS = 50;
 let timer: ReturnType<typeof setInterval> | null = null;
 let last = 0;
 let worst = 0;
@@ -95,7 +109,12 @@ export function watchLoop(): void {
     // Whatever was on the stack when the loop came back is the best witness we
     // have. Empty means the culprit was not wrapped — a timer, a stream pump,
     // or GC — which is itself worth knowing.
-    const what = recent && Date.now() - recent.at < FRESH_MS ? recent.what : "(background — a timer, a stream, or GC)";
+    // The block started `ms` ago; anything entered before that had already had
+    // its turn on the loop.
+    const startedAt = Date.now() - ms;
+    const what = recent && recent.at >= startedAt - BLAME_MARGIN_MS
+      ? recent.what
+      : "(background — a timer, a stream, or GC)";
     const entry: Stall = { id: ++seq, at: Date.now(), ms, what };
     ring.push(entry);
     const max = cap();

@@ -66,9 +66,9 @@ describe("base branch", () => {
     expect(gw.baseOf(repo, "CARD-1")).toBe("main");
   });
 
-  it("counts what the base has and the branch does not", () => {
-    expect(gw.behindBase(repo, "CARD-1", "main")).toBe(2);
-    expect(gw.behindBase(repo, "main", "main")).toBe(0);
+  it("counts what the base has and the branch does not", async () => {
+    expect(await gw.behindBase(repo, "CARD-1", "main")).toBe(2);
+    expect(await gw.behindBase(repo, "main", "main")).toBe(0);
   });
 });
 
@@ -85,7 +85,7 @@ describe("undo merge", () => {
     expect(gw.undoableMerge(repo, 0, "origin/main")).toBe(false);
   });
 
-  it("undoes an unpushed merge exactly, and refuses once there is nothing to undo", () => {
+  it("undoes an unpushed merge exactly, and refuses once there is nothing to undo", async () => {
     // Two branches that genuinely diverge, or the merge is a no-op and there
     // is nothing to undo.
     run(repo, "checkout", "-q", "-b", "undo-side");
@@ -102,23 +102,23 @@ describe("undo merge", () => {
     expect(merged).not.toBe(before);
     expect(gw.undoableMerge(repo, 1, null)).toBe(true);
 
-    expect(gw.undoMerge(repo).ok).toBe(true);
+    expect((await gw.undoMerge(repo)).ok).toBe(true);
     expect(run(repo, "rev-parse", "HEAD").stdout.trim()).toBe(before);
 
     // And now there is nothing to undo, which it says rather than resetting
     // another commit off the branch.
-    const second = gw.undoMerge(repo);
+    const second = await gw.undoMerge(repo);
     expect(second.ok).toBe(false);
     expect(second.error).toMatch(/nothing to undo/i);
     run(repo, "checkout", "-q", "main");
   });
 
-  it("refuses while the tree is dirty, since the undo is a hard reset", () => {
+  it("refuses while the tree is dirty, since the undo is a hard reset", async () => {
     run(repo, "checkout", "-q", "-b", "undo-dirty");
     run(repo, "merge", "--no-edit", "undo-side");
     writeFileSync(join(repo, "scratch.txt"), "work in progress\n");
     expect(gw.undoableMerge(repo, 1, null)).toBe(false);
-    expect(gw.undoMerge(repo).ok).toBe(false);
+    expect((await gw.undoMerge(repo)).ok).toBe(false);
     rmSync(join(repo, "scratch.txt"));
     run(repo, "checkout", "-q", "main");
   });
@@ -133,8 +133,8 @@ describe("syncFromBase", () => {
     rmSync(join(wt, "scratch.txt"));
   });
 
-  it("merges the base into the worktree's branch and clears the gap", () => {
-    expect(gw.behindBase(repo, "CARD-1", "main")).toBe(2);
+  it("merges the base into the worktree's branch and clears the gap", async () => {
+    expect(await gw.behindBase(repo, "CARD-1", "main")).toBe(2);
     const r = gw.syncFromBase(wt);
     expect(r.ok).toBe(true);
     // The cache is keyed per branch+base and has a TTL, so read past it.

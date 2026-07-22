@@ -64,7 +64,7 @@ const advanceTrunk = (file: string) => {
 };
 
 describe("upstream is the base", () => {
-  it("says so for a local-only branch that tracks the trunk", () => {
+  it("says so for a local-only branch that tracks the trunk", async () => {
     // The shape every `git branch --track main` produces, and every worktree
     // cut from one: no remote copy of this branch exists at all.
     run(work, "checkout", "-q", "-b", "local-only", "--track", "origin/main");
@@ -73,14 +73,14 @@ describe("upstream is the base", () => {
     run(work, "commit", "-qm", "local work");
     advanceTrunk("b.txt");
 
-    const b = gw.workingTree(work).branch;
+    const b = (await gw.workingTree(work)).branch;
     expect(b.upstream).toBe("origin/main");
     expect(b.behind).toBeGreaterThan(0);
     expect(b.ahead).toBeGreaterThan(0); // diverged, so `pull --ff-only` cannot run
     expect(b.upstreamIsBase).toBe(true);
   });
 
-  it("says no when the branch has a remote copy of its own", () => {
+  it("says no when the branch has a remote copy of its own", async () => {
     // Here being behind really does mean "your remote branch has commits you
     // do not", which is the case the guard was written for.
     run(work, "checkout", "-q", "-b", "twin");
@@ -93,24 +93,24 @@ describe("upstream is the base", () => {
     run(other, "push", "-q", "origin", "twin");
     advanceTrunk("c.txt");
 
-    const b = gw.workingTree(work).branch;
+    const b = (await gw.workingTree(work)).branch;
     expect(b.upstream).toBe("origin/twin");
     expect(b.behind).toBeGreaterThan(0);
     expect(b.upstreamIsBase).toBe(false);
   });
 
-  it("does not ask while the branch is level with its upstream", () => {
+  it("does not ask while the branch is level with its upstream", async () => {
     // Nothing is blocked when behind is zero, so the two rev-parses it costs
     // would buy nothing on every poll of every repo.
     run(work, "checkout", "-q", "main");
     run(work, "merge", "-q", "--ff-only", "origin/main");
 
-    const b = gw.workingTree(work).branch;
+    const b = (await gw.workingTree(work)).branch;
     expect(b.behind).toBe(0);
     expect(b.upstreamIsBase).toBeUndefined();
   });
 
-  it("is not fooled by a slash in the branch name", () => {
+  it("is not fooled by a slash in the branch name", async () => {
     // Naive prefix-stripping turns `native/egui-shell` into `egui-shell` and
     // compares that against the trunk, which is how this gets quietly wrong.
     run(work, "checkout", "-q", "-b", "native/egui-shell", "--track", "origin/main");
@@ -119,7 +119,7 @@ describe("upstream is the base", () => {
     run(work, "commit", "-qm", "native work");
     advanceTrunk("d.txt");
 
-    const b = gw.workingTree(work).branch;
+    const b = (await gw.workingTree(work)).branch;
     expect(b.name).toBe("native/egui-shell");
     expect(b.upstreamIsBase).toBe(true);
   });

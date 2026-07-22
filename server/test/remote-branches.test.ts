@@ -224,9 +224,9 @@ describe("where a worktree may be created", () => {
 describe("logGraph scope", () => {
   // The complaint this comes from: standing in a worktree on a ticket branch
   // and reading a log whose top commits belonged to other people's branches.
-  it("defaults to the history of the checkout you are in", () => {
+  it("defaults to the history of the checkout you are in", async () => {
     run(clone, "checkout", "-q", "main");
-    const r = gw.logGraph(clone, 100);
+    const r = await gw.logGraph(clone, 100);
     expect(r.scope).toBe("head");
     expect(r.branch).toBe("main");
     const subjects = r.lines.map((l) => l.subject).filter(Boolean);
@@ -234,17 +234,17 @@ describe("logGraph scope", () => {
     expect(subjects).not.toContain("work on WEB-3-gamma");
   });
 
-  it("reads the whole graph when asked to", () => {
-    const subjects = gw.logGraph(clone, 100, "all").lines.map((l) => l.subject).filter(Boolean);
+  it("reads the whole graph when asked to", async () => {
+    const subjects = (await gw.logGraph(clone, 100, "all")).lines.map((l) => l.subject).filter(Boolean);
     expect(subjects).toContain("work on WEB-3-gamma");
     expect(subjects).toContain("first");
   });
 
-  it("names the branch it read, from whichever checkout asked", () => {
+  it("names the branch it read, from whichever checkout asked", async () => {
     // Each worktree is its own HEAD — the pane has to be able to say which one
     // it is showing.
-    expect(gw.logGraph(sibling("WEB-3-gamma"), 20).branch).toBe("WEB-3-gamma");
-    expect(gw.logGraph(sibling("WEB-3-gamma"), 20).lines.map((l) => l.subject)).toContain("work on WEB-3-gamma");
+    expect((await gw.logGraph(sibling("WEB-3-gamma"), 20)).branch).toBe("WEB-3-gamma");
+    expect((await gw.logGraph(sibling("WEB-3-gamma"), 20)).lines.map((l) => l.subject)).toContain("work on WEB-3-gamma");
   });
 });
 

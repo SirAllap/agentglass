@@ -245,6 +245,18 @@ function refsFingerprint(root: string): number {
   return r.code === 0 ? Number(Bun.hash(r.stdout + ":" + r.stdout.length)) : Math.random();
 }
 
+/** Awaited variant, for the reads that no longer block the loop. */
+async function whileRefsHoldAsync(key: string, root: string, compute: () => Promise<unknown>): Promise<string> {
+  if (!root) return JSON.stringify(await compute());
+  const refs = refsFingerprint(root);
+  const hit = refsCache.get(key);
+  if (hit && hit.refs === refs) return hit.body;
+  const body = JSON.stringify(await compute());
+  if (refsCache.size > 40) refsCache.clear();
+  refsCache.set(key, { refs, body });
+  return body;
+}
+
 /** Recompute only when a ref moved. `key` separates answers that come from the
  *  same repo but different questions (the log's scope, a limit). */
 function whileRefsHold(key: string, root: string, compute: () => unknown): string {
@@ -597,14 +609,14 @@ const server = Bun.serve<WsData>({
       const root = url.searchParams.get("root") || "";
       const hit = treeCache.get(root);
       if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return json(hit.data);
-      const data = workingTree(root);
+      const data = await workingTree(root);
       if (treeCache.size > 40) treeCache.clear();
       treeCache.set(root, { at: Date.now(), data });
       return json(data);
     }
     if (pathname === "/git/branches") {
       const root = url.searchParams.get("root") || "";
-      return body(whileRefsHold(`branches:${root}`, root, () => gitBranches(root)));
+      return body(await whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root)));
     }
     // `scope=all` is the whole graph; anything else is this checkout's own
     // history, which is what the pane defaults to.
@@ -612,7 +624,7 @@ const server = Bun.serve<WsData>({
       const root = url.searchParams.get("root") || "";
       const limit = Number(url.searchParams.get("limit") || 400);
       const scope = url.searchParams.get("scope") === "all" ? "all" : "head";
-      return body(whileRefsHold(`graph:${root}:${limit}:${scope}`, root, () => logGraph(root, limit, scope)));
+      return body(await whileRefsHoldAsync(`graph:${root}:${limit}:${scope}`, root, () => logGraph(root, limit, scope)));
     }
     if (pathname === "/git/worktrees") return json({ worktrees: await gitWorktrees(url.searchParams.get("root") || "") });
     // What a worktree removal would destroy, per path — asked before offering
@@ -729,7 +741,7 @@ const server = Bun.serve<WsData>({
         case "/git/resolve-blocks": res = resolveBlocks(root, b.path, b.choices); break;
         case "/git/merge-abort": res = mergeAbort(root); break;
         case "/git/merge-continue": res = mergeContinue(root); break;
-        case "/git/undo-merge": res = undoMerge(root); break;
+        case "/git/undo-merge": res = await undoMerge(root); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);
