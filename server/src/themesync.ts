@@ -474,10 +474,56 @@ export const SNIPPETS = {
   tmux: `source-file -q ~/.config/agentglass/theme.tmux.conf`,
 };
 
+/**
+ * Where this machine's tmux config actually lives.
+ *
+ * tmux reads `~/.tmux.conf` *and* `$XDG_CONFIG_HOME/tmux/tmux.conf`, and the
+ * second one is where a config written this decade tends to be. Looking only at
+ * the first told anyone on the XDG path that they had not added the snippet
+ * when they had, and offered to have them paste it into a file they do not
+ * keep — so the theme quietly stopped applying every time their tmux server
+ * restarted, which for anyone running tmux-continuum is every reboot.
+ *
+ * The one that exists wins; the XDG one wins if both do, because that is the
+ * one being maintained. With neither, `~/.tmux.conf` is the answer, since tmux
+ * reads it and it is the path every tmux answer on the internet names.
+ */
+export function tmuxConfPath(): string {
+  const xdg = join(CONFIG_HOME, "tmux", "tmux.conf");
+  const dot = join(homedir(), ".tmux.conf");
+  if (existsSync(xdg)) return xdg;
+  return existsSync(dot) ? dot : xdg;
+}
+
+/**
+ * Push the generated theme into one specific tmux server.
+ *
+ * `syncTheme` already does this on the default socket when the palette changes,
+ * which covers "the user picked a new theme". It does not cover the other
+ * direction: a tmux *server* that started after the last sync — a reboot, a
+ * `kill-server`, or a tmux-continuum restore — comes up with none of it, and
+ * everything the panel does not draw itself (the message row, the prompt, the
+ * pane borders) falls back to whatever tmux ships with. That is a black bar in
+ * the middle of a themed panel, and nothing in the app explains why.
+ *
+ * Sourcing our own generated file is the same act the theme switch already
+ * performs, at the moment it is actually needed, and `-q` makes it silent when
+ * the file is not there yet.
+ */
+export function applyThemeTo(socket: string[]): boolean {
+  if (!existsSync(TMUX_THEME)) return false;
+  try {
+    const p = Bun.spawnSync(["tmux", ...socket, "source-file", "-q", TMUX_THEME], {
+      stdout: "ignore", stderr: "ignore", timeout: 2000,
+    });
+    return p.exitCode === 0;
+  } catch { return false; }
+}
+
 /** Has the user already opted in? Read-only — this never edits their files. */
 export function snippetStatus(): { nvim: boolean; tmux: boolean; nvimPath: string; tmuxPath: string } {
   const nvimPath = join(CONFIG_HOME, "nvim", "lua", "plugins", "theme.lua");
-  const tmuxPath = join(homedir(), ".tmux.conf");
+  const tmuxPath = tmuxConfPath();
   const has = (p: string, needle: string) => {
     try { return existsSync(p) && readFileSync(p, "utf8").includes(needle); } catch { return false; }
   };

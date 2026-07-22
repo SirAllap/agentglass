@@ -327,18 +327,66 @@ export function runAction(t: TmuxTarget, action: TmuxAction, window?: string, na
   }
 }
 
+/** The options the panel borrows when it takes the status line over. Restored
+ *  together, in the same breath, so a half-restored bar cannot outlive us. */
+const BORROWED = ["status", "status-format[0]", "status-style"];
+
 /**
- * Hide or restore tmux's own status line for this session.
+ * What `status` this session actually resolves to, set on the session or
+ * inherited from the global options.
  *
- * Opt-in, and it has to be: `status` is a session option, not a client one, so a
- * second client attached to the same session from a real terminal loses its
- * status line too. Nobody should have that happen to them because they opened a
- * panel. `set-option -u` puts it back exactly as their config had it, rather
- * than guessing at "on".
+ * Needed because "already off" is a real answer and a different one from "on":
+ * a user who runs tmux with no status line has nothing for us to hide, and
+ * turning one *on* to blank it would cost them a row for no reason.
+ */
+function effectiveStatus(t: TmuxTarget): string {
+  const own = (tmux(t.socket, ["show-options", "-t", t.id, "-v", "status"]) || "").trim();
+  return own || (tmux(t.socket, ["show-options", "-gv", "status"]) || "").trim();
+}
+
+/**
+ * Take tmux's status line over for this session, or give it back.
+ *
+ * Taking it over used to mean `status off`, which is not the same thing as
+ * taking it over — it is removing it, and tmux still needs somewhere to put a
+ * prompt. With no status row allocated, `prefix ,`, `prefix .`, `prefix :` and
+ * every `display-message` (continuum's "Tmux environment saved!", say) are
+ * drawn *over the top line of the shell*, because that is the row where the
+ * status line would have been. The pane's own content is untouched underneath
+ * and comes back when the message clears, so nothing is lost — it just looks
+ * like the terminal is being scribbled on, and the line you were reading is
+ * gone while you answer.
+ *
+ * So the row is blanked rather than removed: `status on` with an empty
+ * `status-format[0]`, styled in the terminal's own default colours so an empty
+ * bar is invisible against the panel. tmux keeps a row it can draw prompts and
+ * messages into, the tab strip stays the only window list on screen, and the
+ * shell keeps every line it had. The cost is honest and small: one row, which
+ * is what the status line was costing anyway.
+ *
+ * Opt-in, and it has to be: these are session options, not client ones, so a
+ * second client attached to the same session from a real terminal is affected
+ * too. `set-option -u` puts each one back exactly as their config had it,
+ * rather than guessing at a default.
  */
 export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
-  const args = visible
-    ? ["set-option", "-t", t.id, "-u", "status"]
-    : ["set-option", "-t", t.id, "status", "off"];
-  return tmux(t.socket, args) !== null;
+  if (visible) {
+    // Give everything back, and do not stop at the first failure: a session that
+    // kept `status-format[0]` blank because `status` failed to restore is a
+    // session with an invisible status line and no way to know why.
+    return BORROWED.map((opt) => tmux(t.socket, ["set-option", "-t", t.id, "-u", opt]) !== null).every(Boolean);
+  }
+  // Nothing to borrow from someone who runs without one. They already live with
+  // prompts drawing over their shell in every other terminal they use, and
+  // adding a row here would be the panel deciding it knows better.
+  if (effectiveStatus(t) === "off") return false;
+  const set = (opt: string, val: string) => tmux(t.socket, ["set-option", "-t", t.id, opt, val]) !== null;
+  const on = set("status", "on");
+  // `bg=default` is the terminal's background, which is the panel's background,
+  // so the row reads as part of the app rather than as a bar with nothing in it.
+  const styled = set("status-style", "bg=default,fg=default");
+  const blank = set("status-format[0]", "");
+  // The blanking is the part that matters; if it took, we borrowed the bar and
+  // the caller must remember to give it back.
+  return blank && (on || styled);
 }

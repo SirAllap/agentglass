@@ -1163,7 +1163,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     })}
                     <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title={`new tmux window (${px} c puts it next to this one)`}>+</button>
                     <button onClick={() => setTmuxBar((v) => !v)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
-                      title={tmuxBar ? "hide tmux's own status line for this session" : "show tmux's own status line again"}>
+                      title={tmuxBar
+                        ? "blank tmux's own status line for this session — it keeps the row, so its prompts and messages still have somewhere to draw"
+                        : "give tmux's own status line back"}>
                       {tmuxBar ? "hide tmux bar" : "show tmux bar"}
                     </button>
                   </div>
