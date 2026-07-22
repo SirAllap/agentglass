@@ -1,6 +1,7 @@
 import { useSyncExternalStore, useState } from "react";
 import { VIEWS, loadViewOrder, saveViewOrder, subscribeViewOrder, type ViewId } from "./views.ts";
 import { chordFor, chordLabel, chords, subscribeBindings } from "../../lib/keybindings.ts";
+import { SkillsIcon } from "./icons.tsx";
 
 const EMPTY_CHORDS = {};
 
@@ -15,11 +16,12 @@ export type RailPip = { dot?: boolean; count?: number };
  *  replied) rides as a corner pip so it costs no width at all.
  */
 export function ViewRail({
-  view, onSelect, onClose, pips,
+  view, onSelect, onClose, onSkills, pips,
 }: {
   view: ViewId;
   onSelect: (v: ViewId) => void;
   onClose: () => void;
+  onSkills: () => void;
   pips?: Partial<Record<ViewId, RailPip>>;
 }) {
   // Arrow keys move between tabs, matching the tablist pattern. Without this
@@ -114,7 +116,19 @@ export function ViewRail({
         );
       })}
 
-      <div className="mt-auto pt-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+      <div className="mt-auto pt-2 flex flex-col gap-[3px]" style={{ borderTop: "1px solid color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+        {/* The catalog is reference, not a view: it opens over the workspace and
+            hands it straight back, so it belongs down here with close rather
+            than among the tabs, where it would imply state you can return to. */}
+        <button
+          onClick={onSkills}
+          aria-label="Skills catalog"
+          data-tip="skills catalog · what this fleet can do"
+          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+          style={{ color: "var(--text4)" }}
+        >
+          <SkillsIcon size={16} />
+        </button>
         <button
           onClick={onClose}
           aria-label="Close workspace"

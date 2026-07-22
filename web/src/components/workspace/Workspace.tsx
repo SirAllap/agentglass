@@ -31,12 +31,13 @@ const BODY = {
  *  aren't looking at keep their state without costing anything on the network.
  */
 export function Workspace({
-  open, view, onView, onClose, chatFocusId,
+  open, view, onView, onClose, onSkills, chatFocusId,
 }: {
   open: boolean;
   view: ViewId;
   onView: (v: ViewId) => void;
   onClose: () => void;
+  onSkills: () => void;
   chatFocusId?: string | null;
 }) {
   // Same reason as App's onClose: this reaches a view's effect dependencies,
@@ -126,7 +127,7 @@ export function Workspace({
                   boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)",
                 }}
               >
-                <ViewRail view={view} onSelect={onView} onClose={onClose} pips={pips} />
+                <ViewRail view={view} onSelect={onView} onClose={onClose} onSkills={onSkills} pips={pips} />
 
                 <div className="relative flex-1 min-w-0">
                   {VIEWS.map((v) => {
