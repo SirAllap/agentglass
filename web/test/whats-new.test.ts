@@ -71,3 +71,42 @@ describe("what's new", () => {
     expect(wn.releaseToAnnounce("v0.4.0")).toBeNull();
   });
 });
+
+/**
+ * The notes About offers, which is a different question: not "has this changed
+ * since last launch" but "what is in the thing I am running".
+ */
+describe("notes on demand", () => {
+  it("offers the release this build came from", () => {
+    expect(wn.installedNotes("v0.4.0", 0, "v0.4.0")).toEqual({ tag: "v0.4.0", title: "What's new", footnote: undefined });
+  });
+
+  it("admits when the build is past the tag it is named after", () => {
+    // The whole reason this is not just `tag`: notes for v0.4.0 shown against a
+    // build 72 commits past it describe a fraction of what is running.
+    const t = wn.installedNotes("v0.4.0", 72, "v0.4.0");
+    expect(t?.tag).toBe("v0.4.0");
+    expect(t?.footnote).toContain("72 commits past v0.4.0");
+  });
+
+  it("counts one commit in the singular", () => {
+    expect(wn.installedNotes("v0.4.0", 1, "v0.4.0")?.footnote).toContain("1 commit past");
+  });
+
+  it("falls back to the newest published release when the build descends from none", () => {
+    // A dev checkout. There is nothing truthful to say about this build, so the
+    // latest release is offered as itself rather than as yours.
+    expect(wn.installedNotes("", 0, "v0.4.0")).toEqual({ tag: "v0.4.0", title: "Latest release" });
+  });
+
+  it("offers nothing when there is no release to point at", () => {
+    // No tag published anywhere: a button here could only ever open an error.
+    expect(wn.installedNotes("", 0, "")).toBeNull();
+  });
+
+  it("never offers the latest release as the installed one", () => {
+    // Being on v0.3.0 with v0.4.0 published must show v0.3.0 — the button sits
+    // beside the version, and showing someone else's notes there is a lie.
+    expect(wn.installedNotes("v0.3.0", 0, "v0.4.0")?.tag).toBe("v0.3.0");
+  });
+});

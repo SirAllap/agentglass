@@ -42,6 +42,38 @@ export function releaseToAnnounce(tag: string, seen = read()): string | null {
   return tag;
 }
 
+/** Which release About's notes button opens, and what it must admit to. */
+export type NotesTarget = { tag: string; title: string; footnote?: string };
+
+/**
+ * The notes reachable on demand, rather than only on a version boundary.
+ *
+ * The announcement above fires once and never again, so anyone who dismissed it
+ * — or updated before it existed — had no way back to the notes at all. About
+ * needs to answer "what is in the thing I am running", which is a different
+ * question with two honest answers:
+ *
+ *  - **Built from a release.** Show that release. If the build is some commits
+ *    past the tag, say so: the notes describe the tag, not the build, and a
+ *    72-commit gap presented as "what's new" is a lie by omission.
+ *  - **Built from no release** — a dev checkout, or provenance too old to
+ *    judge. Nothing truthful can be said about this build, but the newest
+ *    published release is still worth being able to read, labelled as what it
+ *    is rather than as yours.
+ */
+export function installedNotes(baseTag: string, distance: number, latest: string): NotesTarget | null {
+  if (baseTag) {
+    return {
+      tag: baseTag,
+      title: "What's new",
+      footnote: distance > 0
+        ? `This build is ${distance} commit${distance === 1 ? "" : "s"} past ${baseTag} — those changes are not in these notes.`
+        : undefined,
+    };
+  }
+  return latest ? { tag: latest, title: "Latest release" } : null;
+}
+
 /** Compare v-prefixed release tags numerically. String order gets v0.10.0 wrong
  *  against v0.9.0, which is the one comparison that has to survive a year. */
 function rank(tag: string): number {
