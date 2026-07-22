@@ -543,13 +543,13 @@
       <b>hold a risky tool call until you approve it</b>, from any device, and it survives a
       restart. And the cockpit acts — review diffs, stage &amp; push, drive docker, drop into
       a <b>real terminal</b> (with your tmux windows as native tabs), chat with Claude —
-      without leaving the glass. Runs in the browser, or as a desktop app.
+      without leaving the glass. A desktop app, with its server built in.
     </p>
 
     <div class="ctas">
       <a class="btn-a" href="./demo/">▶ Enter the live demo</a>
       <a class="btn-b" data-dl="any" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ Download <span data-agx="version">the desktop app</span></a>
-      <button class="btn-b" id="copy-npx" data-copy="git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run dev" title="Copy: git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run dev"><span class="c">$</span> <span id="npx-txt">git clone … &amp;&amp; bun install &amp;&amp; bun run dev</span></button>
+      <button class="btn-b" id="copy-npx" data-copy="git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run setup" title="Copy: git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run setup"><span class="c">$</span> <span id="npx-txt">git clone … &amp;&amp; bun run setup</span></button>
     </div>
 
     <div class="keys" aria-label="Workspace panels, one keystroke away">
@@ -832,9 +832,9 @@ sudo apt install ./agentglass_*.deb</code>
   <div class="txgrid">
     <div class="txlog rv">
       <div><span class="who p">pilot ▸</span> request startup.</div>
-      <div><span class="who">tower ▸</span> cleared. two ways in —</div>
+      <div><span class="who">tower ▸</span> cleared. one way in —</div>
       <div class="dim">◇ <a href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener" style="text-decoration:underline">download the desktop app</a> · macOS, Linux, Windows</div>
-      <div class="dim">◇ or <span class="cmd">git clone</span> · <span class="cmd">bun install</span> · <span class="cmd">bun run dev</span></div>
+      <div class="dim">◇ launch it — the server ships inside, nothing to run</div>
       <div class="dim">◇ scanning ~/.claude/projects … 18 sessions found</div>
       <div class="dim">◇ <span class="cmd">bun run setup</span> wires the Claude Code hooks — opt-in</div>
       <div><span class="who p">pilot ▸</span> tower in sight. <span class="caret"></span></div>
@@ -864,7 +864,7 @@ sudo apt install ./agentglass_*.deb</code>
   <div class="rv">
     <span class="stamp">Cleared for takeoff</span>
     <h2>Your agents are already flying.<br><em>Get a tower.</em></h2>
-    <button class="cmdline" id="copy-npx2" data-copy="git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run dev" title="Copy: git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run dev"><span class="p">$</span> <span id="npx-txt2">git clone … &amp;&amp; bun install &amp;&amp; bun run dev</span></button>
+    <button class="cmdline" id="copy-npx2" data-copy="git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run setup" title="Copy: git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run setup"><span class="p">$</span> <span id="npx-txt2">git clone … &amp;&amp; bun run setup</span></button>
     <div class="row">
       <a class="btn-a" href="./demo/">▶ Live demo — no install</a>
       <a class="btn-b" data-dl="mac" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ macOS</a>

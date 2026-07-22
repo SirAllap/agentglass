@@ -18,7 +18,7 @@
 
 Point any AI coding agent at agentglass — via Claude Code hooks or any OpenTelemetry GenAI exporter (OpenAI Codex, Gemini CLI, Bedrock, LangChain, LiteLLM…) — and watch every agent, tool call, token, and dollar move in real time. Cost tracking, tool-latency percentiles, error timelines, session lifecycles, a filter-the-whole-cockpit-by-provider switch, and 22 themes. It persists across reloads (unlike a pure in-browser stream).
 
-And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — all behind one keystroke, under a notch that mirrors your desktop notifications so nothing is lost while you are fullscreen. Runs in the browser or as a **native desktop app**.
+And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — all behind one keystroke, under a notch that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
 
 ### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/demo/)
 
@@ -244,23 +244,54 @@ Every dark palette has a matching light twin — e.g. Midnight Purple Light:
 
 ## Quickstart
 
-Requires [Bun](https://bun.sh) ≥ 1.1 and Python 3 (for the hook forwarder).
+agentglass is a **desktop app**. Grab the installer for your platform from
+[**Releases**](https://github.com/SirAllap/agentglass/releases/latest), launch
+it, and the cockpit opens with its own server bundled inside. Nothing to run in
+a terminal, no port to open in a browser.
+
+| Linux | macOS |
+| --- | --- |
+| `.AppImage` (chmod +x, run it) or `.deb` | `.dmg`, Apple Silicon and Intel |
+
+That alone already shows you everything: the built-in **transcript scanner**
+reads `~/.claude/projects`, so every Claude Code session on the machine is
+there on first open, with no wiring at all.
+
+To also get live streaming and `PreToolUse` gating, wire the hooks once
+(opt-in, details [below](#wire-the-hooks-globally--one-command-opt-in)). The
+forwarder lives in the repo, so this step wants a clone and Python 3; it needs
+nothing else:
 
 ```bash
 git clone https://github.com/SirAllap/agentglass.git && cd agentglass
-bun install
-bun run setup        # wire the global Claude Code hooks — opt-in, see below
-bun run dev          # server :4000  +  UI :6180
+python3 hooks/install_hooks.py        # global Claude Code hooks
+python3 hooks/seed_demo.py            # optional: streams demo agents for ~30s
 ```
 
-Open **http://localhost:6180**. Then see it move without wiring a real project:
+> Want to look before installing? The [**live demo**](https://sirallap.github.io/agentglass/demo/)
+> is this exact UI, built from the same source on every push, running on
+> fabricated data.
+
+### Running from source
+
+For hacking on agentglass, or for a headless box. Requires
+[Bun](https://bun.sh) ≥ 1.1 and Python 3 (for the hook forwarder).
 
 ```bash
-python3 hooks/seed_demo.py            # streams demo agents for ~30s
+bun install
+bun run dev          # server :4000  +  UI :6180  (vite dev server)
+make desktop         # or: build the UI and launch the real shell
 ```
 
+`bun run dev` gives you the same UI in a browser tab at
+**http://localhost:6180**, minus what only the shell can do (fullscreen, zoom,
+launch-at-login, and the self-update route, which refuses a browser by design).
+It is the development path, not the way to run the app. If something else on
+your machine already owns `:4000`, the tab will talk to *that* server, so check
+the port before believing an empty dashboard.
+
 **Single-port deploys** (a headless box, a systemd unit): build the UI once and
-the server serves it itself — one process, one port, API and dashboard on the
+the server serves it itself, one process, one port, API and dashboard on the
 same origin:
 
 ```bash
@@ -268,12 +299,13 @@ bun run build                         # web/dist
 cd server && bun run src/index.ts     # dashboard AND API on :4000
 ```
 
-When `web/dist` doesn't exist (plain `bun run dev`), nothing changes — the
-server is API-only and the vite dev server owns the UI as before.
+When `web/dist` doesn't exist (plain `bun run dev`, or the packaged app's
+bundled server), nothing is served over HTTP: the server is API-only and no
+dashboard is reachable on that port at all.
 
-Prefer `make`? Every entry point is a described Makefile target — `make help`
-lists them all (`make dev`, `make setup`, `make demo-feed`, `make desktop`, …),
-and the in-app terminal (`t` → **⚙ commands**) surfaces the same list, ready to
+Prefer `make`? Every entry point is a described Makefile target, and `make help`
+lists them all (`make dev`, `make setup`, `make demo-feed`, `make desktop`, …).
+The in-app terminal (`t` → **⚙ commands**) surfaces the same list, ready to
 click-run.
 
 ### Wire the hooks globally — one command, opt-in
@@ -326,6 +358,13 @@ run in a terminal. Launch it from your app menu and the cockpit opens; close it
 and the server goes with it. The UI is the same web app, run in Chromium so it
 composites on the GPU.
 
+Installers for every release are published on
+[**Releases**](https://github.com/SirAllap/agentglass/releases/latest):
+`.AppImage` and `.deb` for Linux, `.dmg` for macOS (Apple Silicon and Intel).
+That is the way to install it.
+
+Building it yourself, from a clone:
+
 ```bash
 make desktop            # build the UI and launch Electron + the sidecar
 make desktop-dist       # package installable binaries (electron-builder)
@@ -333,6 +372,10 @@ make desktop-install    # install for this user (no root)
 ```
 
 Then launch **agentglass** from your desktop menu, or `agentglass` from a shell.
+
+The packaged app's bundled server serves the API and nothing else: the UI is
+loaded from the shell's own `agentglass://` origin, which a browser cannot
+reach, so an install never exposes a dashboard on a port.
 
 - **Attaches, never duplicates** — if a server is already listening on `:4000`
   (e.g. a `bun run dev` you left running), the app attaches to it instead of
