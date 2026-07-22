@@ -10,7 +10,7 @@ import type {
   DockerOverview, DockerScope, DockerActionResult,
 } from "../../shared/types.ts";
 import { workspaceRoot, scopeRoots } from "./config.ts";
-import { backoff } from "./loopwatch.ts";
+import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
@@ -33,6 +33,7 @@ type Res = { code: number; stdout: string; stderr: string; killed?: boolean };
  * CLI's own startup before it reaches the daemon, and the overview needs five.
  */
 async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
+  const owner = currentLabel();
   try {
     const proc = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
     const [stdout, stderr, code] = await Promise.all([

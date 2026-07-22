@@ -15,6 +15,7 @@ import { resolve, dirname, relative, sep } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 import { inScope } from "./config.ts";
 import { record } from "./gitlog.ts";
+import { currentLabel, resumedAs } from "./loopwatch.ts";
 import type { GitFileStatus, RepoStatus, CommitResult } from "../../shared/types.ts";
 
 export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
@@ -45,6 +46,10 @@ export function git(cwd: string, args: string[]): GitResult {
  *  concurrently or the panel waits for the sum of them. */
 export async function gitAsync(cwd: string, args: string[]): Promise<GitResult> {
   const t0 = performance.now();
+  // Whose work this is, read while we are still standing inside the caller —
+  // everything after the await belongs to them, however many other requests
+  // arrive in the meantime. See loopwatch.
+  const owner = currentLabel();
   try {
     const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([
@@ -52,6 +57,9 @@ export async function gitAsync(cwd: string, args: string[]): Promise<GitResult> 
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
+    // Everything after this line is synchronous parsing of what git said, on
+    // behalf of whoever asked.
+    resumedAs(owner);
     record(cwd, args, code ?? 1, performance.now() - t0, stderr);
     return { code: code ?? 1, stdout, stderr };
   } catch (e) {

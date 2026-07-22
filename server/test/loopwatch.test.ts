@@ -119,3 +119,33 @@ describe("load shedding", () => {
     expect(lw.backoff()).toBe(1);
   }, 10_000);
 });
+
+describe("attribution across an await", () => {
+  // The bug this exists for: once the expensive reads became async, the work
+  // that blocks is a *continuation* that resumes after its handler returned.
+  // "The last thing to start" then names whichever poll arrived while we were
+  // waiting — it named `/__ping__`, a route that does not exist, for 674ms.
+  it("blames the request that owns the continuation, not the poll that arrived meanwhile", async () => {
+    await Bun.sleep(120);
+    const before = lw.stalls().stalls.at(-1)?.id ?? 0;
+
+    // A request that awaits something, and blocks when it comes back.
+    const slow = (async () => {
+      lw.entered("GET /the-real-culprit");
+      const owner = lw.currentLabel(); // captured while still inside the handler
+      await Bun.sleep(60);            // …a subprocess, in real life
+      lw.resumedAs(owner);            // its output is about to be parsed
+      block(300);
+    })();
+    // Meanwhile a cheap poll arrives and finishes long before the block.
+    await Bun.sleep(20);
+    lw.entered("GET /__ping__");
+    await slow;
+    await Bun.sleep(250);
+
+    const seen = lw.stalls(before).stalls;
+    const worst = seen.reduce((a, b) => (b.ms > a.ms ? b : a));
+    expect(worst.ms).toBeGreaterThanOrEqual(150);
+    expect(worst.what).toBe("GET /the-real-culprit");
+  }, 10_000);
+});

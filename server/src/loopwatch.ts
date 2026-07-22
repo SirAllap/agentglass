@@ -59,10 +59,47 @@ let seq = 0;
  * after anything entered is a timer or a stream pump, which the freshness
  * window below says outright rather than guessing.
  */
+const BACKGROUND = "(background — a timer, a stream, or GC)";
 let recent: { what: string; at: number } | null = null;
+
 /**
- * How far *before the block began* a label may have been entered and still be
- * blamed for it.
+ * The label, carried across awaits — by hand.
+ *
+ * `recent` alone was a good heuristic while handlers were synchronous: a sync
+ * handler runs to completion inside its own label, so "the last thing to start"
+ * was the thing running. Once the expensive reads became async that stopped
+ * being true. The blocking work is now a *continuation* that resumes long after
+ * its handler returned, so "last to start" names whoever spoke most recently —
+ * it named `/__ping__`, a route that does not exist and does nothing, for
+ * 674ms. That is how this was caught.
+ *
+ * The right API for this is `async_hooks.createHook`, which reports when each
+ * async resource begins and ends executing. Bun implements it as a no-op: init,
+ * before and after never fire. `AsyncLocalStorage` is implemented and looked
+ * like the answer, but `enterWith` proved unreliable once anything had entered
+ * a store on the root context — the label came back undefined in exactly the
+ * case this exists for, which is not something to build an instrument on.
+ *
+ * So: capture and restore, explicitly. A caller reads the label synchronously
+ * at the moment it starts waiting — at which point it is standing inside the
+ * right handler by construction — and hands it back when the continuation
+ * resumes. Two function calls, no runtime magic, and it behaves the same in a
+ * test as it does in production.
+ */
+
+/** The label to blame right now, for a caller about to await. */
+export function currentLabel(): string {
+  return recent?.what ?? BACKGROUND;
+}
+
+/** "A continuation of `what` is about to run synchronously." */
+export function resumedAs(what: string): void {
+  recent = { what, at: Date.now() };
+}
+
+/**
+ * How far before the loop was last known free a label may have been entered
+ * and still be blamed for the block that followed.
  *
  * This used to be two seconds from the stall being noticed, which quietly
  * libelled the cheapest endpoints in the app: `/gate/pending` reads an
@@ -101,6 +138,9 @@ export function watchLoop(): void {
   timer = setInterval(() => {
     const now = performance.now();
     const drift = now - last - TICK_MS;
+    // When the loop was last known free. Everything that entered since then is
+    // a candidate for having blocked it — see the blame note below.
+    const freeAt = Date.now() - Math.round(now - last);
     last = now;
     if (drift < STALL_MS) return;
     const ms = Math.round(drift);
@@ -109,12 +149,16 @@ export function watchLoop(): void {
     // Whatever was on the stack when the loop came back is the best witness we
     // have. Empty means the culprit was not wrapped — a timer, a stream pump,
     // or GC — which is itself worth knowing.
-    // The block started `ms` ago; anything entered before that had already had
-    // its turn on the loop.
-    const startedAt = Date.now() - ms;
-    const what = recent && recent.at >= startedAt - BLAME_MARGIN_MS
-      ? recent.what
-      : "(background — a timer, a stream, or GC)";
+    // Blame anything that entered since the loop was last free.
+    //
+    // NOT `now - drift`, which is the tick's *expected* time rather than the
+    // moment work actually began: a task that starts just after a tick and
+    // blocks for 300ms is reported as 210ms of drift, and dating the block from
+    // `now - 210` places its start 90ms after the task began — so the task that
+    // did it looks too old to be responsible and the stall is filed under
+    // "background". Which is exactly what happened, and what this comment is
+    // paid for.
+    const what = recent && recent.at >= freeAt - BLAME_MARGIN_MS ? recent.what : BACKGROUND;
     const entry: Stall = { id: ++seq, at: Date.now(), ms, what };
     ring.push(entry);
     const max = cap();
