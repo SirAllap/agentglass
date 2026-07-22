@@ -151,6 +151,11 @@ export function useLive(): LiveData {
         setEvents(initial);
         setLastEvent(initial[initial.length - 1] ?? null);
         setOpenTools(frame.openTools ?? []);
+      } else if (frame.type === "openTools") {
+        // The whole list, re-read with fresh evidence. Replaces rather than
+        // merges: the server's answer is authoritative about what is open, and
+        // a call missing from it has closed.
+        setOpenTools(frame.data);
       } else if (frame.type === "event") {
         if (seen.current.has(frame.data.id)) return; // duplicate delivery
         seen.current.add(frame.data.id);

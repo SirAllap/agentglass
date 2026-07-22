@@ -295,12 +295,47 @@ function broadcast(frame: WsFrame) {
   }
 }
 
+/**
+ * Push the open-tool list, with evidence read at this moment.
+ *
+ * Evidence is a claim about *now* — "the file it promised to touch has not
+ * changed since the call opened" — and one taken when a client connected is
+ * worth nothing a minute later. It used to be sent only in the `initial` frame,
+ * which was fine while nothing depended on it and is not fine now that it
+ * decides whether a session is reported as stuck.
+ *
+ * Silent when nothing is open and when nobody is listening, so an idle machine
+ * pays for one SQL query on a four-second tick and no filesystem work at all.
+ */
+function pushOpenTools() {
+  if (!clients.size) return;
+  const open = openToolCalls();
+  if (!open.length && !lastOpenCount) return;
+  lastOpenCount = open.length;
+  broadcast({ type: "openTools", data: withEvidence(open) });
+}
+let lastOpenCount = 0;
+/**
+ * How often the verdict is re-read.
+ *
+ * Fast enough that "stuck" appears while the user is still looking at the
+ * session, slow enough that the filesystem work — one stat per session, one
+ * shallow directory scan per working directory — is nothing. The classifier's
+ * own thresholds are in minutes, so a tighter tick would buy no accuracy.
+ */
+const OPEN_TOOL_TICK_MS = 4000;
+setInterval(pushOpenTools, OPEN_TOOL_TICK_MS).unref?.();
+
 /** Normalize → persist → broadcast → alert. Shared by /ingest and /v1/traces. */
 function ingestBody(body: IngestBody) {
   const n = normalize(body);
   const { event, session } = insertEvent(n);
   broadcast({ type: "event", data: event });
   broadcast({ type: "session", data: session });
+  // A Pre opens a call and a Post closes one, so the list the fleet is drawing
+  // from just changed. Pushed now rather than up to a tick later, because the
+  // moment a tool starts is exactly when the card should say so.
+  if (event.hook_event_type === "PreToolUse" || event.hook_event_type.startsWith("PostToolUse")) pushOpenTools();
   maybeAlert(event);
   return event;
 }
@@ -1086,6 +1121,10 @@ setInterval(prune, 3_600_000);
 startScanner(({ event, session }) => {
   broadcast({ type: "event", data: event });
   broadcast({ type: "session", data: session });
+  // A Pre opens a call and a Post closes one, so the list the fleet is drawing
+  // from just changed. Pushed now rather than up to a tick later, because the
+  // moment a tool starts is exactly when the card should say so.
+  if (event.hook_event_type === "PreToolUse" || event.hook_event_type.startsWith("PostToolUse")) pushOpenTools();
   maybeAlert(event);
 });
 

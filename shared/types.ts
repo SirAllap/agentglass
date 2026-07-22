@@ -359,12 +359,35 @@ export interface OpenToolCall {
   evidenceAt?: number;
   /** Which evidence the timestamp came from. `none` means no source was
    *  readable — deliberately not the same claim as "nothing happened". */
-  evidenceKind?: "transcript" | "target" | "none";
+  evidenceKind?: "transcript" | "target" | "dir" | "none";
+  /** The directory this call is running in, for tools whose only possible
+   *  evidence is that something moved in it. */
+  dir?: string | null;
+  /** What the evidence supports. Absent from a server too old to send it, which
+   *  the client reads as `unknown` rather than as good news. */
+  liveness?: Liveness;
 }
+
+/**
+ * What the evidence says about a running tool call.
+ *
+ * `unknown` is a real answer and is rendered as one: a WebFetch and a `curl`
+ * leave nothing local behind, and claiming a hang we cannot see is how a
+ * five-minute timer lost its credibility in the first place.
+ *
+ * `lost` is not a hang either — it is our own bookkeeping failing. The CLI
+ * wrote more transcript after this call opened, so the result arrived and the
+ * Post event did not.
+ */
+export type Liveness = "working" | "stuck" | "lost" | "unknown";
 
 /** WebSocket frames. */
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
+  /** The open-tool list again, with fresh evidence. Pushed on a timer while any
+   *  call is open: evidence is a claim about *now*, and one taken at connect
+   *  time is worth nothing thirty seconds later. */
+  | { type: "openTools"; data: OpenToolCall[] }
   | { type: "event"; data: WatchEvent }
   | { type: "session"; data: SessionRollup }
   /** Something mutated a repository. Carries no payload on purpose: the panels

@@ -683,7 +683,11 @@ const OPEN_TOOL_MAX_MS = 30 * 60_000;
 const openToolSql = (scoped: string) =>
   `SELECT p.session_id AS session_id, p.source_app AS source_app,
           COALESCE(p.tool_name, 'tool') AS tool_name, p.timestamp AS since,
-          json_extract(p.payload, '$.tool_input.file_path') AS target
+          json_extract(p.payload, '$.tool_input.file_path') AS target,
+          -- Where the call is running, for the tools whose only possible
+          -- evidence is that something moved in it: the turn's cwd when it ran
+          -- somewhere other than the repo root, the project path otherwise.
+          COALESCE(json_extract(p.payload, '$.cwd'), json_extract(p.payload, '$.project_path')) AS dir
      FROM events p
     WHERE p.hook_event_type = 'PreToolUse'
       AND p.timestamp >= ?
