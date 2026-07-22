@@ -15,9 +15,10 @@
 // preference, all silently reset. A fixed port would have fixed persistence
 // but reintroduced the bug the ephemeral port was chosen to avoid (a second
 // instance failing to bind). A custom scheme has neither problem: one stable
-// origin, no port, and any number of instances share it.
+// origin and no port to contend for. Only one instance runs now (see the lock
+// below), but the origin is what makes the store survive a restart.
 
-const { app, BrowserWindow, ipcMain, protocol, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, protocol, shell } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -27,6 +28,25 @@ const os = require("os");
 // GPU compositing on Wayland.
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
+
+// One instance, one window.
+//
+// Nothing used to stop a second launch, and the shell was built to survive one:
+// it opened its own window, probed the port, found the first instance's sidecar
+// and adopted it (see pickPort). Two windows then drove one server and neither
+// looked wrong -- so double-clicking the launcher, or a script starting the app
+// while it was already up, piled on whole extra copies of Chromium, each holding
+// its own memory, with nothing on screen to say it had happened.
+//
+// Taken here rather than inside `whenReady` on purpose: before the scheme is
+// registered and long before a window exists, so an instance that loses the race
+// costs one process that exits immediately instead of one that briefly paints.
+// The `return` is a genuine early exit -- this file is CommonJS, whose module
+// top level is a function body.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  return;
+}
 
 // Must run before `ready`. `standard` is what gives the scheme a real origin
 // (and therefore its own persistent localStorage); `secure` keeps it a trusted
@@ -57,6 +77,8 @@ const SIDECAR_NAME = process.platform === "win32" ? "agentglass-server.exe" : "a
 const SIDECAR_BIN = PACKAGED ? path.join(process.resourcesPath, SIDECAR_NAME) : null;
 
 let sidecar = null;
+// Kept so a second launch has something to raise instead of opening a window.
+let mainWindow = null;
 
 const MIME = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
@@ -217,8 +239,27 @@ function createWindow() {
   });
   registerIpc(win);
   openLinksOutside(win);
+  keepUsefulShortcuts(win);
   win.loadURL(`${APP_ORIGIN}/`);
+  mainWindow = win;
+  win.on("closed", () => { if (mainWindow === win) mainWindow = null; });
 }
+
+/**
+ * A second launch raises the window that already exists.
+ *
+ * Without this the lock alone would make the app look broken in a new way:
+ * clicking the launcher while agentglass was minimised, or on another
+ * workspace, would do visibly nothing at all -- the second process would take
+ * one look at the lock and exit in silence. `show` is what crosses workspaces;
+ * `restore` alone leaves a minimised window minimised.
+ */
+app.on("second-instance", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
 
 /**
  * A link to GitHub belongs in the user's browser, not in this window.
@@ -232,6 +273,45 @@ function createWindow() {
  * launch a `file://` or a custom-scheme URL, and the strings reaching here come
  * out of pull request bodies and git remotes, which are written by other people.
  */
+/**
+ * Put back the few accelerators the menu was carrying.
+ *
+ * Removing the menu removes its shortcuts with it. Editing keys survive —
+ * Chromium handles cut/copy/paste inside a field natively — but reload,
+ * devtools, zoom and fullscreen were the menu's.
+ *
+ * What is deliberately NOT bound here is anything a shell owns. This app has a
+ * real terminal in it: Ctrl+R is history search, Ctrl+C interrupts, Ctrl+L
+ * clears. Rebinding those to browser actions would break the pane people spend
+ * the most time in, so reload is Ctrl+Shift+R and the rest are function keys.
+ */
+function keepUsefulShortcuts(win) {
+  win.webContents.on("before-input-event", (e, input) => {
+    if (input.type !== "keyDown") return;
+    const ctrl = input.control || input.meta;
+    const hit = () => e.preventDefault();
+
+    if (input.key === "F12" || (ctrl && input.shift && input.key.toLowerCase() === "i")) {
+      hit(); win.webContents.toggleDevTools(); return;
+    }
+    if (ctrl && input.shift && input.key.toLowerCase() === "r") {
+      hit(); win.webContents.reloadIgnoringCache(); return;
+    }
+    if (input.key === "F11") {
+      hit(); win.setFullScreen(!win.isFullScreen()); return;
+    }
+    if (ctrl && (input.key === "=" || input.key === "+")) {
+      hit(); win.webContents.setZoomLevel(win.webContents.getZoomLevel() + 0.5); return;
+    }
+    if (ctrl && input.key === "-") {
+      hit(); win.webContents.setZoomLevel(win.webContents.getZoomLevel() - 0.5); return;
+    }
+    if (ctrl && input.key === "0") {
+      hit(); win.webContents.setZoomLevel(0);
+    }
+  });
+}
+
 function openLinksOutside(win) {
   const external = (url) => {
     try {
@@ -253,6 +333,14 @@ function openLinksOutside(win) {
 }
 
 app.whenReady().then(async () => {
+  // No menu bar, at all.
+  //
+  // `autoHideMenuBar` only hides it until Alt is pressed — and this app embeds
+  // a real terminal, where Alt is part of ordinary use (meta bindings, tmux,
+  // readline). The bar kept dropping over the top of the UI mid-keystroke.
+  // Removing the menu outright is the only thing that stops that; the handful
+  // of accelerators it carried are rebound in keepUsefulShortcuts().
+  Menu.setApplicationMenu(null);
   serveApp();
   // Synchronous on purpose: the preload publishes `apiOrigin` as a plain value
   // because web/src/lib/api.ts reads it while its module body runs, before any
