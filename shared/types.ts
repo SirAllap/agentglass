@@ -458,6 +458,20 @@ export interface GitRepoRef {
   /** How many linked worktrees were folded into this project — what the picker
    *  shows so a dozen hidden checkouts aren't invisible. */
   worktrees?: number;
+  /**
+   * When this checkout was last worked in, as an epoch ms — what the pickers
+   * sort on, most recent first.
+   *
+   * Read from the mtime of the checkout's own `HEAD` and reflog, which git
+   * writes on every commit, checkout, merge, rebase, reset and pull. That makes
+   * it "when did I last do something here", which is the question a list of
+   * seventeen ticket worktrees is really being asked — and it costs two stats
+   * rather than a `git log` per checkout. See touchedAt() for why it is not the
+   * index.
+   *
+   * 0 when it could not be read; those sort last rather than first.
+   */
+  touchedAt: number;
 }
 /** One candidate directory from the project picker's path completion. Names and
  *  a `.git` flag only — the completion endpoint never reports files. */

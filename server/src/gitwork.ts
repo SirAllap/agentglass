@@ -310,7 +310,14 @@ function codeRootsOf(knownRoots: string[]): string[] {
  *  Both counts are only as fresh as the last fetch — they compare against the
  *  local origin/* refs, not the remote. See startAutoFetch(). */
 async function repoRef(root: string): Promise<GitRepoRef | null> {
-  const r = await gitAsync(root, ["status", "--porcelain=v1", "--branch"]);
+  // Two questions, asked at once: what is dirty here, and when did work last
+  // land on this branch. The second is 3ms against the first's 75ms on a large
+  // repo, and both are awaited rather than blocking — see the perf note on
+  // `git()`.
+  const [r, tip] = await Promise.all([
+    gitAsync(root, ["status", "--porcelain=v1", "--branch"]),
+    gitAsync(root, ["log", "-1", "--format=%ct", "HEAD"]),
+  ]);
   if (r.code !== 0) return null;
   const lines = r.stdout.split("\n").filter(Boolean);
   const head = lines[0]?.startsWith("##") ? lines[0] : "";
@@ -328,8 +335,43 @@ async function repoRef(root: string): Promise<GitRepoRef | null> {
     root, name: basename(root), branch, dirty: lines.length - (head ? 1 : 0),
     ahead: Number(head.match(/ahead (\d+)/)?.[1]) || 0,
     behind: Number(head.match(/behind (\d+)/)?.[1]) || 0,
+    touchedAt: touchedAt(root, tip.code === 0 ? (Number(tip.stdout.trim()) || 0) * 1000 : 0),
     ...(parent ? { worktreeOf: parent } : {}),
   };
+}
+
+/**
+ * When this checkout was last worked in — what the pickers sort on.
+ *
+ * `HEAD` and the reflog (`logs/HEAD`) inside the checkout's own git dir,
+ * whichever is newer. Git appends to the reflog every time HEAD moves — commit,
+ * checkout, merge, rebase, reset, pull — and rewrites HEAD on a branch switch,
+ * so between them they answer "when did I last do something here" for two
+ * stats and no subprocess. A linked worktree has its own pair under
+ * `.git/worktrees/<dir>/`, which is what makes this per-checkout rather than
+ * per-repository.
+ *
+ * NOT the index, which is the obvious choice and the wrong one: `git status`
+ * refreshes it and writes it back, and this server runs `git status` against
+ * every checkout on a five-second sweep to fill in the dirty counts. The
+ * timestamp would have been "when the picker last polled", identical
+ * everywhere, and the order would have come out as whichever parallel status
+ * happened to finish last. Measured, not assumed — a backdated index came back
+ * stamped `now` after a single status.
+ *
+ * NOT the working tree's own files either: a build writing into `dist/` would
+ * make an untouched checkout look like the freshest one on the machine.
+ *
+ * 0 when it could not be read; those sort last rather than first.
+ */
+function touchedAt(root: string, tipMs: number): number {
+  const dir = gitDir(root);
+  if (!dir) return tipMs;
+  let newest = tipMs;
+  // HEAD itself, not the reflog beside it: a symref file git rewrites on
+  // checkout and leaves alone otherwise.
+  try { newest = Math.max(newest, statSync(join(dir, "HEAD")).mtimeMs); } catch { /* mid-write, or gone */ }
+  return Math.round(newest);
 }
 
 // Opening git, terminal and chat each asks for the same list, and a user
@@ -381,8 +423,14 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     // order among peers, but it shouldn't bury the main checkout behind a
     // worktree that happens to have more edits open — the dropdown is read as
     // "the project, and the branches I have checked out beside it".
+    // The project itself stays at the top — it is the thing the others are
+    // worktrees OF, and hunting for it in a list of seventeen is not a thing
+    // anyone should have to do. Below it, most recently worked in first: on a
+    // ticket-per-worktree repo that is the only ordering that puts what you are
+    // doing today above what you did in March. Dirty-first used to be the rule
+    // and is subsumed by it — staging a file touches the index.
     scoped.sort((a, b) =>
-      Number(!!a.worktreeOf) - Number(!!b.worktreeOf) || b.dirty - a.dirty || a.name.localeCompare(b.name));
+      Number(!!a.worktreeOf) - Number(!!b.worktreeOf) || b.touchedAt - a.touchedAt || a.name.localeCompare(b.name));
     repoCache.set(key, { at: Date.now(), repos: scoped });
     return scoped;
   }
@@ -449,29 +497,33 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   const out = (await Promise.all([...roots].map((r) => repoRef(r)))).filter((r): r is GitRepoRef => !!r);
   for (const r of out) { const n = folded.get(r.root); if (n) r.worktrees = n; }
   const scoped = only.length ? within(out, only) : out;
-  // Families stay together, dirtiest family first, the project ahead of its own
-  // worktrees. Sorting the flat list by dirty count alone scatters a repo's
+  // Families stay together, most recently worked-in family first, the project
+  // ahead of its own worktrees. Sorting the flat list alone scatters a repo's
   // checkouts through the dropdown, so `orbit` and `orbit-WEB-1042` end up
   // pages apart — the one arrangement that makes a worktree look like an
   // unrelated project, which is the confusion this whole change is about.
+  //
+  // A family is as recent as its most recent checkout: work happens in the
+  // worktrees, so ranking a project by its own main checkout would sink an
+  // actively-worked repo below one nobody has opened in a month.
   const family = (r: GitRepoRef) => r.worktreeOf ?? r.root;
-  const rank = new Map<string, { dirty: number; name: string }>();
+  const rank = new Map<string, { touchedAt: number; name: string }>();
   for (const r of scoped) {
     const f = family(r);
     const cur = rank.get(f);
     // The family's name comes from the project itself, not from whichever
     // worktree happens to sort first.
-    if (!cur || (!r.worktreeOf && cur.name !== r.name) || r.dirty > cur.dirty) {
-      rank.set(f, { dirty: Math.max(cur?.dirty ?? 0, r.dirty), name: r.worktreeOf ? cur?.name ?? r.name : r.name });
+    if (!cur || (!r.worktreeOf && cur.name !== r.name) || r.touchedAt > cur.touchedAt) {
+      rank.set(f, { touchedAt: Math.max(cur?.touchedAt ?? 0, r.touchedAt), name: r.worktreeOf ? cur?.name ?? r.name : r.name });
     }
   }
   scoped.sort((a, b) => {
     const fa = family(a), fb = family(b);
     if (fa !== fb) {
       const ra = rank.get(fa)!, rb = rank.get(fb)!;
-      return rb.dirty - ra.dirty || ra.name.localeCompare(rb.name);
+      return rb.touchedAt - ra.touchedAt || ra.name.localeCompare(rb.name);
     }
-    return Number(!!a.worktreeOf) - Number(!!b.worktreeOf) || b.dirty - a.dirty || a.name.localeCompare(b.name);
+    return Number(!!a.worktreeOf) - Number(!!b.worktreeOf) || b.touchedAt - a.touchedAt || a.name.localeCompare(b.name);
   });
   repoCache.set(key, { at: Date.now(), repos: scoped });
   return scoped;

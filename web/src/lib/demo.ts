@@ -298,8 +298,10 @@ export function gitCommit(): CommitResult {
 // --- live git panel (demo is read-only) ---
 export function gitRepos(): { repos: GitRepoRef[] } {
   return { repos: [
-    { root: "/home/you/code/shop-api", name: "shop-api", branch: "main", dirty: 3, ahead: 2, behind: 0 },
-    { root: "/home/you/code/agentglass", name: "agentglass", branch: "feat/git-panel", dirty: 1, ahead: 0, behind: 1 },
+    // Fixed stamps, not Date.now(): a demo that reorders itself between two
+    // screenshots is a demo that looks broken.
+    { root: "/home/you/code/shop-api", name: "shop-api", branch: "main", dirty: 3, ahead: 2, behind: 0, touchedAt: 1_760_000_000_000 },
+    { root: "/home/you/code/agentglass", name: "agentglass", branch: "feat/git-panel", dirty: 1, ahead: 0, behind: 1, touchedAt: 1_759_000_000_000 },
   ] };
 }
 function gcf(id: number, path: string, status: GitFileChange["status"], staged: boolean, lines: string[]): GitFileChange {
