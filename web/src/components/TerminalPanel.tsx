@@ -9,6 +9,7 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import type { GitRepoRef, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
@@ -354,6 +355,28 @@ function createSession(root: string): Sess {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  /*
+   * Draw on the GPU when the machine will let us.
+   *
+   * xterm's default renderer builds DOM for every cell, which is the single
+   * biggest source of multi-second stalls when a shell is producing output
+   * quickly — a build log or `cat` on anything large. The WebGL renderer draws
+   * the same cells as textured quads and does not care how fast they arrive.
+   *
+   * Guarded twice, because a GPU is not a promise. The constructor throws where
+   * there is no WebGL2 context at all (a software-rendered session, a remote
+   * desktop, `--disable-gpu`), and a context can be lost *later* — a driver
+   * reset, the compositor reclaiming memory, waking from suspend. Both paths
+   * fall back to the DOM renderer, which is slower and always works; a terminal
+   * that renders slowly is a terminal, a terminal that renders nothing is a
+   * bug report. Neither case is worth a message: the shell keeps running and
+   * the user has nothing to decide.
+   */
+  try {
+    const gl = new WebglAddon();
+    gl.onContextLoss(() => { try { gl.dispose(); } catch { /* already gone */ } });
+    term.loadAddon(gl);
+  } catch { /* no WebGL2 here — the DOM renderer stays */ }
   // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === "keydown" && e.key === "Escape" && e.shiftKey) { panelClose(); return false; }

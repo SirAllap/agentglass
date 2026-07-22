@@ -289,6 +289,7 @@ export function ptyOpen(ws: PtyWs) {
     const reader = readable.getReader();
     let held: Uint8Array[] = [];
     let size = 0;
+    let backedUp = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const flush = () => {
       if (timer) { clearTimeout(timer); timer = null; }
@@ -301,7 +302,11 @@ export function ptyOpen(ws: PtyWs) {
       })();
       held = []; size = 0;
       if (session.closed) return;
-      try { ws.send(out); } catch { /* socket gone; the read loop will notice */ }
+      // Bun answers with the bytes queued, or -1 when the socket is already
+      // backed up. That is a real backpressure signal from the transport
+      // itself — better than inferring it from a byte count — so remember it
+      // and let the read loop stop pulling on the pty until it clears.
+      try { if (ws.send(out) === -1) backedUp = true; } catch { /* socket gone; the read loop will notice */ }
     };
     try {
       for (;;) {
@@ -314,12 +319,18 @@ export function ptyOpen(ws: PtyWs) {
           if (size >= BIG) flush();
           else if (!timer) timer = setTimeout(flush, FRAME_MS);
         }
-        // Let the client catch up before pulling more out of the shell.
+        // Let the client catch up before pulling more out of the shell. Two
+        // ways to know it is behind: the transport said so on the last send, or
+        // the queue is deep. The wait is bounded — a client that never drains
+        // is a dead client, and holding the shell for it forever is worse than
+        // dropping behind.
         let waited = 0;
-        while (!session.closed && (ws.getBufferedAmount?.() ?? 0) > HIGH_WATER && waited < 10_000) {
+        while (!session.closed && waited < 10_000 &&
+               (backedUp || (ws.getBufferedAmount?.() ?? 0) > HIGH_WATER)) {
           flush();
           await Bun.sleep(4);
           waited += 4;
+          backedUp = (ws.getBufferedAmount?.() ?? 0) > HIGH_WATER;
         }
       }
     } catch { /* stream torn down */ }
