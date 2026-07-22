@@ -1,3 +1,7 @@
+# Both forms: a trailing slash matches a directory only, and a `node_modules`
+# that is a *symlink* (a worktree pointed at the main checkout's copy, say) is a
+# file — so `node_modules/` alone let one be committed.
+node_modules
 node_modules/
 dist/
 *.db
