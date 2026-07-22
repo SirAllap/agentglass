@@ -6,7 +6,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
-import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
+import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
+import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody } from "../lib/goneCleanup.ts";
+import { RescueModal } from "./RescueModal.tsx";
+import { useDialogs } from "./ConfirmDialog.tsx";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
@@ -134,7 +137,9 @@ const VIEW_KEYS: Record<View, [string, string][]> = {
   log: [["j/k", "commit"]],
   reflog: [["j/k", "entry"]],
   branches: [["j/k", "branch"], ["space", "checkout"], ["d", "delete"]],
-  remotes: [["j/k", "remote"]],
+  // `space` is the harmless one on purpose — see rowAction: checkout and
+  // worktree both move something on disk and stay mouse-only.
+  remotes: [["j/k", "branch"], ["space", "+ local"]],
   tags: [["j/k", "tag"]],
   stashes: [["j/k", "stash"], ["space", "apply"], ["d", "drop"]],
   worktrees: [["j/k", "worktree"], ["space", "open"], ["d", "remove"]],
@@ -452,17 +457,44 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
+  // The panel's own confirm/prompt. window.confirm renders in OS chrome, reads
+  // as somebody else's dialog next to our modals, and blocks the JS thread so
+  // nothing can show progress while it is up.
+  const { ask, askText, dialog } = useDialogs();
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   // branches / log / stashes / worktrees
-  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null }>({ current: "", branches: [] });
+  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null; sweeping?: boolean }>({ current: "", branches: [] });
   const [newBranch, setNewBranch] = useState("");
   const [graph, setGraph] = useState<GitGraphLine[]>([]);
   const [stashes, setStashes] = useState<GitStash[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
+  /** The rescue prompt, and the promise deleteHeldByWorktrees() is parked on
+   *  while it is open. Null means no prompt; resolving with null is a cancel. */
+  const [rescue, setRescue] = useState<{ reports: WorktreeLeftovers[]; resolve: (v: Map<string, string[]> | null) => void; progress?: string } | null>(null);
   const [remotes, setRemotes] = useState<GitRemote[]>([]);
+  /** The remote whose branches the pane is listing, and that list. Empty until
+   *  the first answer names one — the server picks the only/first remote when
+   *  we ask without one, so there is no guess to make here. */
+  const [remoteSel, setRemoteSel] = useState("");
+  const [remoteRows, setRemoteRows] = useState<GitRemoteBranch[]>([]);
+  const [remoteQuery, setRemoteQuery] = useState("");
   const [tags, setTags] = useState<GitTag[]>([]);
   const [reflog, setReflog] = useState<GitReflogEntry[]>([]);
+  /**
+   * Whose history the Log shows: this checkout's own, or every branch.
+   *
+   * Remembered across sessions because it is a preference, not a mode you set
+   * per visit — and defaulted to the branch you are standing on, which is the
+   * answer to "what have I been doing" that the pane is usually asked.
+   */
+  const [logScope, setLogScope] = useState<"head" | "all">(() => {
+    try { return localStorage.getItem("agx_git_log_scope") === "all" ? "all" : "head"; } catch { return "head"; }
+  });
+  useEffect(() => { try { localStorage.setItem("agx_git_log_scope", logScope); } catch { /* private mode */ } }, [logScope]);
+  /** The branch the log was read from, as the server saw it — so the pane can
+   *  name it rather than leave you to infer it from the commits. */
+  const [graphBranch, setGraphBranch] = useState("");
   /** Which view has a request in flight, so "still loading" and "genuinely
    *  empty" stop rendering as the same blank pane. */
   const [busyView, setBusyView] = useState<View | null>(null);
@@ -659,13 +691,24 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       });
     };
     if (view === "branches") track(api.gitBranches(root), setBranchData);
-    else if (view === "log") track(api.gitGraph(root, 500), (r) => setGraph(r.lines));
+    else if (view === "log") track(api.gitGraph(root, 500, logScope), (r) => { setGraph(r.lines); setGraphBranch(r.branch); });
     else if (view === "stashes") track(api.gitStashes(root), (r) => setStashes(r.stashes));
     else if (view === "worktrees") track(api.gitWorktrees(root), (r) => setWorktrees(r.worktrees));
-    else if (view === "remotes") track(api.gitRemotes(root), (r) => setRemotes(r.remotes));
+    else if (view === "remotes") {
+      // Two answers, because the pane asks two questions: which remotes there
+      // are (the picker) and what is on the selected one (the list). Asked
+      // together rather than chained, so the list doesn't wait on the picker.
+      api.gitRemotes(root).then((r) => setRemotes(r.remotes)).catch(() => {});
+      track(api.gitRemoteBranches(root, remoteSel), (r) => {
+        setRemoteRows(r.branches);
+        // Which remote the server actually read — how the picker gets its
+        // initial selection without this side guessing "origin".
+        if (r.remote) setRemoteSel(r.remote);
+      });
+    }
     else if (view === "tags") track(api.gitTags(root), (r) => setTags(r.tags));
     else if (view === "reflog") track(api.gitReflog(root), (r) => setReflog(r.entries));
-  }, [open, root, view]);
+  }, [open, root, view, logScope, remoteSel]);
   useEffect(() => { loadView(); }, [loadView]);
 
   // Any repository mutation, from anywhere — this panel, another window, or a
@@ -703,6 +746,26 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   usePoll(open && !!root && !busy, loadView, 10_000);
 
   /**
+   * "still checking for squash merges…" has to be able to stop saying that.
+   *
+   * The sweep runs behind the response, so the panel shows that line and waits
+   * for a later poll to carry the finished answer. But the poll above is gated
+   * on `!busy` — one stuck flag and the line is frozen on screen forever,
+   * promising an update that will never arrive. Which is what happened: the
+   * server had been answering `sweeping: false` for minutes while the panel
+   * still claimed to be working.
+   *
+   * So the claim refreshes itself. One targeted re-read while it is true,
+   * ungated, and it stops as soon as the answer says so — nothing to leak,
+   * nothing to keep running once the line is gone.
+   */
+  useEffect(() => {
+    if (!open || !root || !branchData.sweeping) return;
+    const t = setTimeout(() => { reloadBranches(); }, 2500);
+    return () => clearTimeout(t);
+  }, [open, root, branchData.sweeping, branchData.branches]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /**
    * Run a git action, and make sure the screen agrees with the repo afterwards.
    *
    * Two things this has to get right, both of which it used to get wrong:
@@ -733,10 +796,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // working tree ops
   const stage = async (c: GitFileChange) => { if (await act(() => api.gitStage(root, [rel(c)]))) setSelKey("s:" + c.file_path); };
   const unstage = async (c: GitFileChange) => { if (await act(() => api.gitUnstage(root, [rel(c)]))) setSelKey("u:" + c.file_path); };
-  const discard = (c: GitFileChange) => { if (confirm(`Discard changes to ${baseName(c.file_path)}? This cannot be undone.`)) act(() => api.gitDiscard(root, [rel(c)]), "discarded"); };
+  const discard = async (c: GitFileChange) => {
+    if (await ask({ title: `Discard changes to ${baseName(c.file_path)}?`, body: "This cannot be undone.", danger: true, confirmLabel: "Discard" })) act(() => api.gitDiscard(root, [rel(c)]), "discarded");
+  };
   const doCommit = async () => {
     if (!title.trim()) { flash(false, "commit title required"); return; }
-    if (await act(() => api.gitCommitStaged(root, title, body), "committed")) { setTitle(""); setBody(""); api.gitGraph(root, 500).then((r) => setGraph(r.lines)).catch(() => {}); }
+    if (await act(() => api.gitCommitStaged(root, title, body), "committed")) { setTitle(""); setBody(""); api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)).catch(() => {}); }
   };
   // branches
   const reloadBranches = () => api.gitBranches(root).then(setBranchData).catch(() => {});
@@ -766,20 +831,20 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * on *which* failure came back.
    */
   const deleteBranch = async (b: GitBranch) => {
-    if (busy || !confirm(`Delete branch ${b.name}?`)) return;
+    if (busy || !(await ask({ title: `Delete branch ${b.name}?`, danger: true }))) return;
     setBusy(true);
     setPending(`delete ${b.name}`);
     try {
       let r = await api.gitBranchDelete(root, b.name, false);
       const wt = r.ok ? null : /worktree at '([^']+)'/.exec(r.error || "")?.[1];
       if (wt) {
-        if (!confirm(`${b.name} is checked out in the worktree ${wtName(wt)}.\n\nRemove that worktree and delete the branch?`)) { flash(false, "kept"); return; }
+        if (!(await ask({ title: `${b.name} is checked out in a worktree`, body: `It lives in ${wtName(wt)}. Remove that worktree and delete the branch?`, danger: true, confirmLabel: "Remove & delete" }))) { flash(false, "kept"); return; }
         let rm = await api.gitWorktreeRemove(root, wt, false);
         // git refuses to drop a worktree holding work — modified tracked files
         // or, as often, a stray untracked scratch file. Name the cost, then let
         // them take it.
         if (!rm.ok && /modified|untracked|not clean/i.test(rm.error || "")) {
-          if (!confirm(`${wtName(wt)} still has uncommitted or untracked files.\n\nRemove it anyway? That work is gone.`)) { flash(false, rm.error || "kept"); return; }
+          if (!(await ask({ title: `${wtName(wt)} still has uncommitted or untracked files`, body: "Remove it anyway? That work is gone.", danger: true, confirmLabel: "Remove anyway" }))) { flash(false, rm.error || "kept"); return; }
           rm = await api.gitWorktreeRemove(root, wt, true);
         }
         if (!rm.ok) { flash(false, rm.error || "worktree remove failed"); return; }
@@ -788,7 +853,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       }
       if (!r.ok && /not fully merged/i.test(r.error || "") && b.mergedIntoTrunk) {
         const trunk = branchData.trunk ?? "the trunk";
-        if (confirm(`git says ${b.name} isn't merged, but its commits are already in ${trunk} — a squash merge rewrites them, so the tip never becomes an ancestor.\n\nDelete it anyway?`)) {
+        if (await ask({ title: `git says ${b.name} isn't merged`, body: `Its commits are already in ${trunk} — a squash merge rewrites them, so the tip never becomes an ancestor of anything.\n\nDelete it anyway?`, danger: true })) {
           r = await api.gitBranchDelete(root, b.name, true);
         }
       }
@@ -811,6 +876,25 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const goneUnmerged = goneBranches.filter((b) => !b.mergedIntoTrunk);
 
   /**
+   * Branch name → the worktree holding it, excluding this checkout. `git branch
+   * -D` refuses outright on these, which is what made a bulk run report
+   * "deleted 0, 3 failed" with no hint that a worktree was the reason.
+   *
+   * Fetched here rather than read off the `worktrees` state, and that is not
+   * belt-and-braces: that state is only ever filled by the Worktrees tab
+   * (`view === "worktrees"`), so from the Branches tab it is an empty array and
+   * this map would find nothing — the partition below would send every branch
+   * down the "delete it directly" path and reproduce the exact failure this is
+   * fixing. Fresh is also the only correct answer for a destructive action:
+   * another agent adds or removes worktrees in this repo while the panel sits
+   * open.
+   */
+  const heldByWorktreeNow = async (): Promise<Map<string, string>> => {
+    const { worktrees: live } = await api.gitWorktrees(root);
+    return new Map(live.filter((w) => !w.current && w.branch && w.branch !== "(detached)").map((w) => [w.branch, w.path] as const));
+  };
+
+  /**
    * Delete the gone branches whose work is already in the trunk.
    *
    * Forced (`-D`), and that's safe *because* of the check above: we've verified
@@ -822,42 +906,170 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * genuinely dangerous case — a remote branch deleted without merging — and
    * it's the one case where an unrecoverable delete would actually cost you
    * something.
+   *
+   * The branches still held by a worktree are a second, separate question, and
+   * it gets its own confirmation *with the file list in it*. Not politeness:
+   * `git worktree remove` deletes gitignored files without `--force` and
+   * without a word, so a checkout that reports itself clean can still be
+   * holding every `compose/envs/*.env` and a page of local notes. `-D` on the
+   * branch is reversible for thirty days through the reflog; `rm -rf` on an
+   * ignored file is not reversible at all. So nothing is removed until the
+   * files that would go have been named on screen.
    */
   const deleteGone = async () => {
     if (!goneMerged.length || busy) return;
     const trunk = branchData.trunk ?? "the trunk";
-    if (!confirm(
-      `Delete ${goneMerged.length} branch${goneMerged.length === 1 ? "" : "es"} already merged into ${trunk}?` +
-      (goneUnmerged.length ? `\n\n${goneUnmerged.length} more have no remote branch but are NOT in ${trunk} — those are kept.` : "")
-    )) return;
+    // Busy BEFORE the first await, not after the confirmation. `git worktree
+    // list` costs a status per checkout — on a repo with eighteen of them the
+    // press was followed by seconds of a button that looked untouched, and the
+    // first thing to appear was a dialog. A control that has been pressed has
+    // to say so on the same frame.
+    setBusy(true);
+    setPending("checking worktrees");
+    let heldByWorktree: Map<string, string>;
+    // Without the map every branch looks free to delete, which is the wrong
+    // half of the fork to guess at — so a failure here stops the whole thing.
+    try { heldByWorktree = await heldByWorktreeNow(); }
+    catch (e) { flash(false, `couldn't list this repo's worktrees: ${String(e)}`); setBusy(false); setPending(null); return; }
+    const { free, held } = partitionByWorktree(goneMerged, heldByWorktree);
+    setPending(null);
+    setBusy(false); // the question is theirs to answer; nothing is running
+    if (!(await ask({ title: goneConfirmTitle(free, held, trunk), body: goneConfirmBody(free, held, goneUnmerged.length, trunk), confirmLabel: "Continue" }))) return;
     setBusy(true);
     const failed: string[] = [];
+    let done = 0;
     try {
-      for (const b of goneMerged) {
-        const r = await api.gitBranchDelete(root, b.name, true).catch(() => ({ ok: false }));
-        if (!r.ok) failed.push(b.name);
+      for (const b of free) {
+        setPending(`deleting ${b.name}`);
+        const r = await api.gitBranchDelete(root, b.name, true).catch(() => ({ ok: false, error: "" }));
+        if (r.ok) done++; else failed.push(`${b.name}${r.error ? ` (${r.error})` : ""}`);
       }
-      const done = goneMerged.length - failed.length;
+      if (held.length) done += await deleteHeldByWorktrees(held, heldByWorktree, failed);
       flash(failed.length === 0,
         failed.length === 0
           ? `deleted ${done} merged branch${done === 1 ? "" : "es"}`
-          : `deleted ${done}, ${failed.length} failed: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}`);
+          : `deleted ${done}, ${failed.length} kept: ${failed.slice(0, 2).join("; ")}${failed.length > 2 ? "…" : ""}`);
     } finally {
       setBusy(false);
+      setPending(null);
       reloadBranches();
+      reloadWorktrees();
     }
   };
-  const mergeBranch = (name: string) => { if (confirm(`Merge ${name} into the current branch?`)) act(() => api.gitMerge(root, name), `merged ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
-  const rebaseBranch = (name: string) => { if (confirm(`Rebase the current branch onto ${name}?`)) act(() => api.gitRebase(root, name), `rebased onto ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
-  const renameBranch = (name: string) => { const to = prompt(`Rename ${name} to:`, name); if (to && to.trim() && to !== name) act(() => api.gitBranchRename(root, name, to.trim()), `renamed → ${to.trim()}`).then((ok) => { if (ok) reloadBranches(); }); };
+
+  /**
+   * The worktree half: price it, show the price, then charge it.
+   *
+   * One request covers the whole batch, and its answer is the dialog — every
+   * path that disappears, per checkout, with the rebuildable noise
+   * (`__pycache__/`, `node_modules/`) counted rather than listed so the lines
+   * that matter aren't buried under four hundred that don't.
+   *
+   * A checkout we could not read is not removed, whatever the user answers.
+   * "Could not list what's in there" and "there's nothing in there" produce the
+   * same empty list, and only one of them is safe to act on.
+   */
+  const deleteHeldByWorktrees = async (held: GitBranch[], heldByWorktree: Map<string, string>, failed: string[]): Promise<number> => {
+    const paths = held.map((b) => heldByWorktree.get(b.name)!);
+    let reports: WorktreeLeftovers[];
+    try { reports = (await api.gitWorktreeLeftovers(root, paths)).leftovers; }
+    catch (e) { for (const b of held) failed.push(`${b.name} (couldn't inspect its worktree: ${String(e)})`); return 0; }
+
+    let { removable, refused } = splitReadable(held, heldByWorktree, reports);
+
+    // A checkout blocked only by ownership is a checkout one dialog away from
+    // working, so offer that dialog instead of reporting a dead end. The
+    // elevation is the desktop's own (pkexec) and does chown, never rm — the
+    // removal still runs as the user, through every check below.
+    const blocked = reports.filter((r) => r.blocked && refused.some((f) => heldByWorktree.get(f.branch.name) === r.path));
+    if (blocked.length && await ask({
+      title: `${blocked.length} worktree${blocked.length === 1 ? " has" : "s have"} files owned by ${[...new Set(blocked.flatMap((r) => r.blocked!.owners))].join(", ")}`,
+      body: `A container wrote them, so nothing can delete them as you.\n\n${blocked.map((r) => `${wtName(r.path)} — ${r.blocked!.count}${r.blocked!.more ? "+" : ""} files`).join("\n")}\n\nHand them back? Your desktop will ask for your password. agentglass never sees it, and only runs chown — the deletion still happens as you.`,
+      confirmLabel: "Hand them back",
+    })) {
+      for (const r of blocked) {
+        setPending(`restoring ownership of ${wtName(r.path)}`);
+        const fix = await api.gitWorktreeChown(root, r.path).catch((e) => ({ ok: false, error: String(e) }));
+        if (!fix.ok) { flash(false, `${wtName(r.path)}: ${fix.error || "chown failed"}`); continue; }
+        r.blocked = undefined; // re-read below now that it can succeed
+      }
+      // Re-split against the repaired reports rather than trusting the old
+      // verdict: the whole point is that some of them are removable now.
+      ({ removable, refused } = splitReadable(held, heldByWorktree, reports));
+    }
+
+    for (const { branch, why } of refused) failed.push(`${branch.name} (${why})`);
+    if (!removable.length) return 0;
+
+    // The modal replaces what used to be a confirm() listing the same files.
+    // Reading a list you then have to copy by hand is a step people skip at the
+    // exact moment they shouldn't, so the list is now the thing you act on.
+    const picked = await new Promise<Map<string, string[]> | null>((resolve) => {
+      setRescue({ reports: removable.map(({ report }) => report), resolve });
+    });
+    if (!picked) { setRescue(null); return 0; } // cancelled — nothing removed, nothing copied
+    // The modal STAYS UP for the rest of this, showing what is happening.
+    // Copying 700K and removing three checkouts is seconds of work, and closing
+    // the dialog first left the user staring at an unchanged panel, free to
+    // navigate away mid-delete with nothing on screen saying why.
+    const step = (progress: string) => setRescue((r) => (r ? { ...r, progress } : r));
+
+    // Copy first, remove second, and never the other way round. A failed rescue
+    // has to be able to stop the removal, which it cannot do once the directory
+    // is gone.
+    const keptBack = new Set<string>();
+    let rescued = 0;
+    for (const [path, rels] of picked) {
+      if (!rels.length) continue;
+      step(`keeping ${rels.length} file${rels.length === 1 ? "" : "s"} from ${wtName(path)}`);
+      const res = await api.gitWorktreeRescue(root, path, rels).catch((e) => ({ ok: false, error: String(e), copied: [] as string[], skipped: [] as { path: string; why: string }[] }));
+      // Every path asked for has to come back accounted for. Counting only
+      // `skipped` trusts the server to have reported its own omissions, and a
+      // request that silently returns fewer copies than it was given then
+      // reads as a clean success — which is how five screenshots were deleted
+      // after being "kept". Anything unaccounted for is a loss.
+      const missing = rels.filter((r) => !(res.copied ?? []).includes(r) && !(res.skipped ?? []).some((s) => s.path === r));
+      const lost = [...(res.skipped ?? []), ...missing.map((path) => ({ path, why: "never confirmed by the server" }))];
+      if (lost.length) {
+        // Anything we could not save is a reason to leave that worktree alone:
+        // removing it now destroys the very file the user asked to keep.
+        const b = removable.find(({ report }) => report.path === path)?.branch;
+        if (b) failed.push(`${b.name} (kept — couldn't save ${lost.slice(0, 2).map((s) => `${s.path}: ${s.why}`).join("; ")})`);
+        keptBack.add(path);
+      }
+      if (res.copied?.length) rescued += res.copied.length;
+    }
+
+    if (rescued) flash(true, `kept ${rescued} file${rescued === 1 ? "" : "s"} in the main checkout`);
+
+    let done = 0;
+    // `report.path` rather than another lookup: it is the path the server just
+    // confirmed it inspected, so the thing removed is the thing priced.
+    for (const { branch, report } of removable) {
+      if (keptBack.has(report.path)) continue; // its rescue failed; already reported
+      step(`removing ${wtName(report.path)}`);
+      const rm = await api.gitWorktreeRemove(root, report.path, true).catch((e) => ({ ok: false, error: String(e) }));
+      if (!rm.ok) { failed.push(`${branch.name} (${rm.error || "worktree remove failed"})`); continue; }
+      const r = await api.gitBranchDelete(root, branch.name, true).catch((e) => ({ ok: false, error: String(e) }));
+      if (r.ok) done++; else failed.push(`${branch.name} (${r.error || "branch delete failed"})`);
+    }
+    setRescue(null);
+    return done;
+  };
+  const mergeBranch = async (name: string) => { if (await ask({ title: `Merge ${name} into the current branch?`, confirmLabel: "Merge" })) act(() => api.gitMerge(root, name), `merged ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
+  const rebaseBranch = async (name: string) => { if (await ask({ title: `Rebase the current branch onto ${name}?`, confirmLabel: "Rebase" })) act(() => api.gitRebase(root, name), `rebased onto ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
+  const renameBranch = async (name: string) => {
+    const to = await askText({ title: `Rename ${name}`, input: { label: "New name", initial: name }, confirmLabel: "Rename" });
+    if (to && to !== name) act(() => api.gitBranchRename(root, name, to), `renamed → ${to}`).then((ok) => { if (ok) reloadBranches(); });
+  };
   // log
   const openCommit = async (hash: string, subject: string) => {
     try { const { changes } = await api.gitCommitDiff(root, hash); setCommitView({ changes, title: `${hash} · ${subject}` }); }
     catch (e) { flash(false, String(e)); }
   };
-  const resetTo = (hash: string, mode: "soft" | "mixed" | "hard") => {
-    if (mode === "hard" && !confirm(`Hard reset to ${hash}? This DISCARDS working-tree changes.`)) return;
-    act(() => api.gitReset(root, hash, mode), `reset --${mode} ${hash}`).then((ok) => { if (ok) api.gitGraph(root, 500).then((r) => setGraph(r.lines)); });
+  const resetTo = async (hash: string, mode: "soft" | "mixed" | "hard") => {
+    if (mode === "hard" && !(await ask({ title: `Hard reset to ${hash}?`, body: "This DISCARDS working-tree changes.", danger: true, confirmLabel: "Reset --hard" }))) return;
+    act(() => api.gitReset(root, hash, mode), `reset --${mode} ${hash}`).then((ok) => { if (ok) api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)); });
   };
   // worktrees
   const reloadWorktrees = () => api.gitWorktrees(root).then((r) => setWorktrees(r.worktrees)).catch(() => {});
@@ -869,13 +1081,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // Same shape as the worktree step inside deleteBranch: a dirty worktree is a
   // question ("that work is gone — still?"), not a dead end.
   const removeWorktree = async (w: GitWorktree) => {
-    if (busy || !confirm(`Remove worktree ${wtName(w.path)}?`)) return;
+    if (busy || !(await ask({ title: `Remove worktree ${wtName(w.path)}?`, danger: true, confirmLabel: "Remove" }))) return;
     setBusy(true);
     setPending(`remove ${wtName(w.path)}`);
     try {
       let r = await api.gitWorktreeRemove(root, w.path, false);
       if (!r.ok && /modified|untracked|not clean/i.test(r.error || "")) {
-        if (!confirm(`${wtName(w.path)} still has uncommitted or untracked files.\n\nRemove it anyway? That work is gone.`)) { flash(false, r.error || "kept"); return; }
+        if (!(await ask({ title: `${wtName(w.path)} still has uncommitted or untracked files`, body: "Remove it anyway? That work is gone.", danger: true, confirmLabel: "Remove anyway" }))) { flash(false, r.error || "kept"); return; }
         r = await api.gitWorktreeRemove(root, w.path, true);
       }
       flash(r.ok, r.ok ? "removed worktree" : r.error || "failed");
@@ -883,6 +1095,34 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); setPending(null); }
   };
+  // remote branches
+  const reloadRemoteBranches = () => api.gitRemoteBranches(root, remoteSel).then((r) => setRemoteRows(r.branches)).catch(() => {});
+  /**
+   * Get a remote branch onto this machine, three ways.
+   *
+   * "local" makes the branch and stops — the safe one, and the one that fits a
+   * repo where the working tree belongs to an agent that is mid-edit. "checkout"
+   * also switches this checkout onto it. "worktree" gives it a directory of its
+   * own, which on a repo worked one-ticket-per-branch is usually what "add that
+   * branch to my local env" actually means.
+   */
+  const takeRemote = async (b: GitRemoteBranch, how: "local" | "checkout" | "worktree") => {
+    if (how === "worktree") {
+      const path = `${root}-${b.name.replace(/[\/\s]+/g, "-")}`; // sibling dir, same shape as the Worktrees tab uses
+      if (await act(() => api.gitWorktreeAdd(root, path, b.name, true, b.ref), `worktree ${wtName(path)}`, `take:${b.ref}`)) {
+        reloadRemoteBranches(); reloadWorktrees(); reloadBranches();
+      }
+      return;
+    }
+    const ok = await act(() => api.gitTrackRemote(root, b.ref, how === "checkout"),
+      how === "checkout" ? `on ${b.name}` : `${b.name} is local now`, `take:${b.ref}`);
+    if (!ok) return;
+    reloadRemoteBranches(); reloadBranches();
+    // Checking out moved the working tree — the Changes view is now the thing
+    // worth looking at, the same as it is after a checkout from the Branches tab.
+    if (how === "checkout") setView("changes");
+  };
+
   // Source control's picker never had this; the terminal's did. Same bug, one
   // file each, which is why it read as fixed.
   const repoPickerRef = useRef<HTMLDivElement | null>(null);
@@ -893,7 +1133,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const reloadStashes = () => api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
   const stashPush = async () => { if (await act(() => api.gitStashPush(root, ""), "stashed")) reloadStashes(); };
   const stashOp = async (op: "apply" | "pop" | "drop", index: number) => {
-    if (op === "drop" && !confirm("Drop this stash?")) return;
+    if (op === "drop" && !(await ask({ title: "Drop this stash?", body: "The stashed changes are gone.", danger: true, confirmLabel: "Drop" }))) return;
     const fn = op === "apply" ? api.gitStashApply : op === "pop" ? api.gitStashPop : api.gitStashDrop;
     if (await act(() => fn(root, index), op + "ed")) reloadStashes();
   };
@@ -1024,9 +1264,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   }, [view]);
 
   // interactive hunk staging (unified view, modified files)
-  const applyHunk = (action: "stage" | "unstage" | "discard", i: number) => {
+  const applyHunk = async (action: "stage" | "unstage" | "discard", i: number) => {
     if (!selected || !writeEnabled) return;
-    if (action === "discard" && !confirm("Discard this hunk? This cannot be undone.")) return;
+    if (action === "discard" && !(await ask({ title: "Discard this hunk?", body: "This cannot be undone.", danger: true, confirmLabel: "Discard" }))) return;
     act(() => api.gitApplyHunk(root, selected.file_path, selected.staged, action, selected.hunks[i]), `${action}d hunk`);
   };
   const hunkBtn = (label: string, tint: string, onClick: () => void) => (
@@ -1091,13 +1331,31 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const incGraph = useIncremental(graph, root);
   const incReflog = useIncremental(reflog, root);
   const incTags = useIncremental(tags, root);
+  /**
+   * The remote's branches, filtered here rather than on the server.
+   *
+   * 790 of them arrive in one response and a repo's branch names are how people
+   * actually search — "20343", "phone", a colleague's prefix — so this is a
+   * substring match over name, subject and author, all terms having to hit. A
+   * round trip per keystroke would be slower and no more correct.
+   */
+  const shownRemoteBranches = useMemo(() => {
+    const q = remoteQuery.trim().toLowerCase();
+    if (!q) return remoteRows;
+    const terms = q.split(/\s+/);
+    return remoteRows.filter((b) => {
+      const hay = `${b.name} ${b.subject} ${b.author}`.toLowerCase();
+      return terms.every((t) => hay.includes(t));
+    });
+  }, [remoteRows, remoteQuery]);
+  const incRemoteBranches = useIncremental(shownRemoteBranches, `${root}:${remoteSel}:${remoteQuery}`);
 
   /** How many rows the focused view has, so j/k knows where the end is. */
   const rowCount =
     view === "branches" ? shownBranches.length :
     view === "reflog" ? reflog.length :
     view === "tags" ? tags.length :
-    view === "remotes" ? remotes.length :
+    view === "remotes" ? shownRemoteBranches.length :
     view === "stashes" ? stashes.length :
     view === "worktrees" ? worktrees.length :
     view === "log" ? graph.length : 0;
@@ -1106,6 +1364,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // would otherwise leave it pointing past the end.
   useEffect(() => { setRowIdx((i) => (rowCount ? Math.min(i, rowCount - 1) : 0)); }, [rowCount]);
   useEffect(() => { setRowIdx(0); }, [view, root]);
+  // A different repo has different remotes: carrying the selection over asks for
+  // branches from a remote this one may not even have.
+  useEffect(() => { setRemoteSel(""); setRemoteRows([]); setRemoteQuery(""); }, [root]);
 
   /**
    * What `space` (the view's main action) and `d` (remove) do to the row under
@@ -1129,55 +1390,97 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       const w = worktrees[rowIdx];
       if (!w || (kind === "delete" && w.current)) return;
       kind === "primary" ? openWorktree(w) : removeWorktree(w);
+    } else if (view === "remotes") {
+      // Only the harmless one gets a key. Checking out and creating a worktree
+      // both move something on disk, and neither should be one keystroke away
+      // from a list you scroll with j/k.
+      const b = shownRemoteBranches[rowIdx];
+      if (!b || b.local || kind === "delete") return;
+      takeRemote(b, "local");
     }
   };
-  const hasRowAction = view === "branches" || view === "stashes" || view === "worktrees";
+  const hasRowAction = view === "branches" || view === "stashes" || view === "worktrees" || view === "remotes";
 
   const COUNTS: Partial<Record<View, number>> = {
     changes: all.length, branches: branchData.branches.length, worktrees: worktrees.length,
-    stashes: stashes.length, remotes: remotes.length, tags: tags.length,
+    stashes: stashes.length, tags: tags.length,
+    // Branches on the remotes, not how many remotes there are. "1" over a pane
+    // listing 789 branches was the tab counting the wrong noun: every other tab
+    // counts the rows you are about to see, and this one counted the heading.
+    // Summed across remotes for the fork setup, where the answer is "everything
+    // you can reach", not "everything on whichever one is selected".
+    remotes: remotes.reduce((n, r) => n + r.branches, 0),
   };
+  /**
+   * One tab: the key that gets you there, the name, and the count raised on the
+   * name as a footnote.
+   *
+   * Two problems, one shape. The count used to be a chip beside the label,
+   * which cost ~28px per counted tab — eight tabs plus a 60-character branch
+   * name plus fetch/pull/push did not fit, so the strip scrolled and "Stashes"
+   * was permanently a sliver reading "8 S" behind the branch chip. Moving the
+   * count onto a second line fixed the width and bought a different problem:
+   * eight bordered boxes, each with an outlined keycap and an internal rule,
+   * and a dead empty line under the two tabs that have no count. That read as
+   * a row of controls rather than a tab strip.
+   *
+   * As a superscript the count is an attribute of the name instead of a second
+   * value competing with the jump key, so the box, the keycap outline and the
+   * rule can all go — and the tabs that have no count simply have no
+   * superscript, with nothing left for the absence to be a hole in. Measured
+   * against the previous design in a mock of the real 1900px header: 686px vs
+   * 746px, comfortably inside the ~890px the strip actually gets.
+   *
+   * The padding is deliberately top-heavy (7px over 4px): the raised digits
+   * need that room, or the active tab's tint clips through them.
+   */
   const ViewTab = ({ id }: { id: View }) => {
     const n = COUNTS[id];
     const num = ALL_VIEWS.indexOf(id) + 1;
+    const on = view === id;
     return (
-      <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]} — press ${num}`}
+      <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]}${n ? ` (${n})` : ""} — press ${num}`}
         aria-keyshortcuts={String(num)}
-        className="text-[10.5px] px-2 py-1 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0"
-        style={{ background: view === id ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: view === id ? "var(--text)" : "var(--text3)", border: `1px solid color-mix(in srgb, var(--border) ${view === id ? 40 : 15}%, transparent)` }}>
+        className="text-[10.5px] leading-none rounded-[5px] transition-colors flex items-baseline gap-[5px] whitespace-nowrap shrink-0"
+        style={{
+          padding: "7px 7px 4px",
+          background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent",
+          color: on ? "var(--text)" : "var(--text3)",
+          opacity: on ? 1 : 0.72,
+        }}>
         {/* The key that gets you here. lazygit does the same in its panel titles
             (gui.showPanelJumps) — a shortcut nothing advertises is a shortcut
-            nobody uses.
-
-            Drawn as a keycap rather than a bare digit. Bare, it read as a
-            count — "1 Changes" looked like one change — and next to a real one
-            ("4 Branches 44") the row became two numbers with a word wedged
-            between them. An outlined cap says "press this"; the count beside
-            it is a filled chip, so the two are different kinds of object
-            before either is read. */}
-        <span
-          className="tabular-nums leading-none rounded-[3px] px-1 py-[1px]"
-          style={{
-            fontSize: 8.5,
-            opacity: view === id ? 0.85 : 0.5,
-            border: "1px solid color-mix(in srgb, var(--text3) 45%, transparent)",
-          }}
-        >{num}</span>
-        {VIEW_LABEL[id]}
-        {n != null && n > 0 && (
-          <span
-            className="tabular-nums leading-none rounded-full px-1.5 py-[1px]"
-            style={{ fontSize: 9, background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--primary-hover)" }}
-          >{n}</span>
-        )}
+            nobody uses. A bare digit was ambiguous with the count while both
+            sat on the same line at the same size; raising the count settles it
+            without needing an outline around this one. */}
+        <span className="tabular-nums" style={{ fontSize: 8, opacity: on ? 0.9 : 0.5, color: on ? "var(--primary-hover)" : undefined }}>{num}</span>
+        <span className="relative">
+          {VIEW_LABEL[id]}
+          {/* Zero is left off rather than drawn: these counts start at zero and
+              are only true once that tab has been visited, so a fresh panel
+              printing "0" on Tags would be stating something it never checked.
+              Every offset is explicit because the CSS reset gives `sup` its own
+              `top`, and inheriting that would put the digits somewhere other
+              than where this was designed and measured. */}
+          {!!n && (
+            <sup
+              className="tabular-nums"
+              style={{
+                fontSize: 7.5, lineHeight: 1, verticalAlign: "super",
+                position: "relative", top: -4.5, left: 1.5,
+                opacity: on ? 1 : 0.68, color: on ? "var(--primary-hover)" : undefined,
+              }}
+            >{n}</sup>
+          )}
+        </span>
       </button>
     );
   };
-  /** One group's tabs. A single-view group renders as a plain button; a
-   *  multi-view one shows its siblings separated by a hairline, which is what
-   *  makes "these three are one panel" legible without a second row. */
+  /** One group's tabs. Held together by proximity alone — 1px between siblings
+   *  against the 9px between groups — which is enough to read "these three are
+   *  one panel" now that the tabs themselves carry no border to compete with. */
   const ViewGroup = ({ views }: { views: View[] }) => (
-    <div className="flex items-center gap-px rounded-md" style={views.length > 1 ? { background: "color-mix(in srgb, var(--border) 12%, transparent)" } : undefined}>
+    <div className="flex items-baseline gap-px">
       {views.map((v) => <ViewTab key={v} id={v} />)}
     </div>
   );
@@ -1254,7 +1557,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       name will not fit a narrow window, and something has to
                       give — a strip you can flick is better than controls
                       pushed off the right edge. */}
-                  <div className="flex items-center gap-2 ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
+                  <div className="flex items-center gap-[9px] ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
                     {VIEW_GROUPS.map((g) => <ViewGroup key={g.label} views={g.views} />)}
                   </div>
                   <div className="ml-auto flex items-center gap-1.5 min-w-0">
@@ -1270,8 +1573,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         the moment it exists for. */}
                     {branch?.canUndoMerge && (
                       <button
-                        onClick={() => {
-                          if (!confirm(`Undo the last merge on ${branch.name}?\n\nThe branch goes back to exactly where it was. Nothing has been pushed, so nothing anyone else has is affected.`)) return;
+                        onClick={async () => {
+                          if (!(await ask({ title: `Undo the last merge on ${branch.name}?`, body: "The branch goes back to exactly where it was. Nothing has been pushed, so nothing anyone else has is affected.", confirmLabel: "Undo merge" }))) return;
                           void act(() => api.gitUndoMerge(root), "merge undone", "undo");
                         }}
                         disabled={!writeEnabled || busy}
@@ -1549,6 +1852,37 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     </div>
                   </div>
                 ) : view === "log" ? (
+                  <div className="flex-1 min-h-0 flex flex-col">
+                    {/*
+                      * Whose history this is.
+                      *
+                      * The pane used to run `--all` and say nothing about it,
+                      * so from a worktree on a ticket branch you got 500
+                      * commits belonging to every branch in the repo — your own
+                      * branch nowhere near the top — with no clue that was even
+                      * the question being answered. Naming the branch is half
+                      * the fix; the toggle is the other half, because "show me
+                      * the whole graph" is a real thing to want, just not the
+                      * default.
+                      */}
+                    <div className="shrink-0 px-3 pt-2.5 pb-2 flex items-center gap-2">
+                      <span className="text-[9.5px] uppercase tracking-wider t-dim2 shrink-0">history of</span>
+                      <span className="min-w-0 truncate text-[11px] px-2 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
+                        title={logScope === "all" ? "every branch in this repository" : `${graphBranch || "HEAD"} — the branch this checkout is on`}>
+                        {logScope === "all" ? "every branch" : `⎇ ${graphBranch || branch?.name || "HEAD"}`}
+                      </span>
+                      <div className="flex items-center gap-px rounded-md ml-1" style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+                        {([["head", "this branch"], ["all", "all branches"]] as const).map(([s, label]) => (
+                          <button key={s} onClick={() => setLogScope(s)}
+                            className="text-[10px] px-2 py-1 rounded-md whitespace-nowrap"
+                            style={{ background: logScope === s ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: logScope === s ? "var(--text)" : "var(--text3)", border: `1px solid color-mix(in srgb, var(--border) ${logScope === s ? 40 : 15}%, transparent)` }}
+                            title={s === "head" ? "Only the commits reachable from this checkout's HEAD" : "git log --all — every branch, which is a lot on a shared repo"}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <span className="ml-auto shrink-0 text-[9.5px] tabular-nums t-dim2">{graph.length ? `${graph.filter((l) => l.hash).length} commits` : ""}</span>
+                    </div>
                   <div onScroll={incGraph.onScroll} className="agx-scroll flex-1 min-h-0 overflow-auto py-1 text-[11.5px]" style={{ fontFamily: "var(--font-mono, ui-monospace), monospace" }}>
                     {incGraph.rows.map((l, i) => {
                       const isCommit = !!l.hash;
@@ -1558,7 +1892,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           className={`flex items-center gap-2 px-3 whitespace-pre ${isCommit ? "cursor-pointer hover:brightness-125" : ""}`}
                           style={{ lineHeight: "1.55", ...(i === rowIdx ? rowProps(true).style : {}) }}
                           title={isCommit ? "View this commit's diff" : undefined}
-                          onContextMenu={isCommit ? (e) => { e.preventDefault(); const m = prompt(`reset current branch to ${l.hash} — type: soft, mixed, or hard`, "mixed"); if (m === "soft" || m === "mixed" || m === "hard") resetTo(l.hash!, m); } : undefined}>
+                          onContextMenu={isCommit ? async (e) => { e.preventDefault(); const m = await askText({ title: `Reset current branch to ${l.hash}`, input: { label: "Mode — soft, mixed or hard", initial: "mixed" }, confirmLabel: "Reset" }); if (m === "soft" || m === "mixed" || m === "hard") resetTo(l.hash!, m); } : undefined}>
                           <span style={{ color: "color-mix(in srgb, var(--primary) 75%, var(--text3))" }}>{l.graph}</span>
                           {isCommit && <>
                             <span className="shrink-0 tabular-nums" style={{ color: "var(--primary-hover)" }}>{l.hash}</span>
@@ -1572,6 +1906,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     })}
                     {!graph.length && <PaneEmpty busy={busyView === "log"} what="commits" />}
                     <MoreRows shown={incGraph.rows.length} total={graph.length} onAll={incGraph.showAll} />
+                  </div>
                   </div>
                 ) : view === "branches" ? (
                   <div onScroll={incBranches.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
@@ -1598,12 +1933,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         {onlyGone && writeEnabled && goneMerged.length > 0 && (
                           <button onClick={deleteGone} disabled={busy} className="text-[10.5px] px-2.5 py-1 rounded-lg font-medium"
                             style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)", opacity: busy ? 0.55 : 1 }}>
-                            {busy ? "deleting…" : `delete ${goneMerged.length} merged`}
+                            {busy ? `${pending ?? "working"}…` : `delete ${goneMerged.length} merged`}
                           </button>
                         )}
                         {onlyGone && (
                           <span className="text-[9.5px] t-dim2">
                             {goneMerged.length > 0 && <>{goneMerged.length} already in {branchData.trunk ?? "the trunk"}</>}
+                            {branchData.sweeping && <span title="Squash- and rebase-merged branches are recognised by replaying their diff, which runs behind the list. The count can still go up.">{goneMerged.length > 0 ? " · " : ""}still checking for squash merges…</span>}
                             {goneMerged.length > 0 && goneUnmerged.length > 0 && " · "}
                             {goneUnmerged.length > 0 && <span style={{ color: "var(--warning)" }}>{goneUnmerged.length} not merged — kept</span>}
                           </span>
@@ -1670,18 +2006,112 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {!stashes.length && <PaneEmpty busy={busyView === "stashes"} what="stashes" />}
                   </div>
                 ) : view === "remotes" ? (
-                  <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
-                    {remotes.map((r, i) => (
-                      <div key={r.name} {...rowProps(i === rowIdx)} className="flex items-center gap-3 px-2.5 py-2 rounded-md" onClick={() => setRowIdx(i)}>
-                        <span className="shrink-0 text-[12px] font-medium" style={{ color: "var(--text)" }}>{r.name}</span>
-                        <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{r.branches} branch{r.branches === 1 ? "" : "es"}</span>
-                        <span className="min-w-0 flex-1 truncate text-[10px] t-dim2" title={r.fetchUrl}>{r.fetchUrl}</span>
-                        {/* Only worth showing when they differ — the fork setup,
-                            where you fetch from upstream and push to your own. */}
-                        {r.pushUrl && r.pushUrl !== r.fetchUrl && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }} title={`pushes to ${r.pushUrl}`}>push ≠ fetch</span>}
+                  /*
+                   * The remote, and then what is actually on it.
+                   *
+                   * This tab used to be one row — "origin · 790 branches · url"
+                   * — which is a fact about the repository nobody needs twice.
+                   * The 790 were the interesting part and there was no way to
+                   * see them, so a branch a colleague pushed was reachable only
+                   * by typing git in a terminal. Now the remote line is a
+                   * header (a picker, when there is more than one) and the pane
+                   * below it is the branch list, searchable, with the one
+                   * action that matters: get it onto this machine.
+                   */
+                  <div className="flex-1 min-h-0 flex flex-col">
+                    <div className="px-3 pt-3 pb-2 shrink-0 flex flex-col gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {remotes.map((r) => {
+                          const on = r.name === remoteSel;
+                          return (
+                            <button key={r.name} onClick={() => { setRemoteSel(r.name); setRemoteQuery(""); }}
+                              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] max-w-full"
+                              style={{ background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent", border: `1px solid color-mix(in srgb, var(--${on ? "primary" : "border"}) ${on ? 35 : 30}%, transparent)`, color: on ? "var(--text)" : "var(--text2)" }}
+                              title={`${r.fetchUrl}${r.pushUrl && r.pushUrl !== r.fetchUrl ? `\npushes to ${r.pushUrl}` : ""}`}>
+                              <span className="font-medium shrink-0">{r.name}</span>
+                              <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{r.branches}</span>
+                              <span className="min-w-0 truncate text-[9.5px] t-dim2">{r.fetchUrl}</span>
+                              {/* Only worth showing when they differ — the fork
+                                  setup, where you fetch from upstream and push
+                                  to your own. */}
+                              {r.pushUrl && r.pushUrl !== r.fetchUrl && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>push ≠ fetch</span>}
+                            </button>
+                          );
+                        })}
                       </div>
-                    ))}
-                    {!remotes.length && <PaneEmpty busy={busyView === "remotes"} what="remotes" />}
+                      {!!remotes.length && (
+                        <div className="flex items-center gap-2">
+                          <input value={remoteQuery} onChange={(e) => { setRemoteQuery(e.target.value); setRowIdx(0); }}
+                            placeholder={`search ${remoteSel || "remote"} branches…`}
+                            className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none"
+                            style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
+                          {/* Counted against the whole list, not the page: "36
+                              of 790" is the only way to know whether the search
+                              narrowed anything. */}
+                          <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">
+                            {remoteQuery.trim() ? `${shownRemoteBranches.length} of ${remoteRows.length}` : `${remoteRows.length} branch${remoteRows.length === 1 ? "" : "es"}`}
+                          </span>
+                          {remoteQuery.trim() && (
+                            <button onClick={() => setRemoteQuery("")} className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>clear</button>
+                          )}
+                        </div>
+                      )}
+                      {/* These refs are the last fetch's answer, and every other
+                          number in this panel is measured against them. Saying
+                          so is cheaper than someone wondering why a branch
+                          pushed a minute ago isn't here. */}
+                      {!!remotes.length && <div className="text-[9.5px] t-dim2">as of the last fetch — press fetch above for anything newer</div>}
+                    </div>
+                    <div onScroll={incRemoteBranches.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto px-3 pb-3">
+                      {!shownRemoteBranches.length && (
+                        remoteQuery.trim() && remoteRows.length
+                          ? <div className="grid place-items-center py-10 t-dim2 text-[12px]">nothing on {remoteSel} matches “{remoteQuery.trim()}”</div>
+                          : <PaneEmpty busy={busyView === "remotes"} what={remotes.length ? "remote branches" : "remotes"} />
+                      )}
+                      {incRemoteBranches.rows.map((b, i) => {
+                        const sel = i === rowIdx;
+                        return (
+                          <div key={b.ref} onClick={() => setRowIdx(i)} {...rowProps(sel)}
+                            className="group flex items-center gap-2 px-2.5 py-1.5 rounded-md">
+                            <span className="shrink-0 text-[11.5px] font-medium truncate" style={{ maxWidth: 380, color: b.local ? "var(--text)" : "var(--text2)" }} title={b.ref}>{b.name}</span>
+                            {/* Whether you already have it is the whole reason
+                                this list is worth reading. A checkout that has
+                                it out is stronger still — that is where the
+                                work would go. */}
+                            {b.worktree
+                              ? <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${b.worktree}`}>▸ {wtName(b.worktree)}</span>
+                              : b.local
+                                ? <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }} title={b.tracking ? "you have this branch, tracking this remote one" : "you have a local branch of this name — it tracks something else"}>{b.tracking ? "local" : "local ≠"}</span>
+                                : null}
+                            <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{b.hash}</span>
+                            <span className="min-w-0 flex-1 truncate text-[10px] t-dim2" title={b.subject}>{b.subject}</span>
+                            <span className="shrink-0 text-[9.5px] t-dim2 truncate" style={{ maxWidth: 130 }}>{b.author}</span>
+                            <span className="shrink-0 text-[9.5px] t-dim2 w-20 text-right">{b.date}</span>
+                            {writeEnabled && !b.local && (
+                              <div className="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                                {/* Three verbs, ordered by how much they move.
+                                    "+ local" touches nothing on disk; the other
+                                    two do, so they are never the default. */}
+                                <button onClick={() => takeRemote(b, "local")} disabled={busy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+                                  title={`Create a local ${b.name} tracking ${b.ref}. Nothing is checked out — this working tree does not move.`}>+ local</button>
+                                <button onClick={() => takeRemote(b, "checkout")} disabled={busy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}
+                                  title={`Create a local ${b.name} tracking ${b.ref} and switch this checkout onto it.`}>checkout</button>
+                                <button onClick={() => takeRemote(b, "worktree")} disabled={busy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+                                  title={`Check ${b.name} out in its own directory beside this one — this working tree is untouched.`}>+ worktree</button>
+                              </div>
+                            )}
+                            {/* Already here: the useful action is going there,
+                                not making a second copy. */}
+                            {b.local && b.worktree && b.worktree !== root && (
+                              <button onClick={() => openWorktree({ path: b.worktree!, branch: b.name, head: b.hash, current: false, bare: false, locked: false })}
+                                className="shrink-0 text-[10px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100" style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}
+                                title={`Open ${b.worktree}`}>open</button>
+                            )}
+                          </div>
+                        );
+                      })}
+                      <MoreRows shown={incRemoteBranches.rows.length} total={shownRemoteBranches.length} onAll={incRemoteBranches.showAll} />
+                    </div>
                   </div>
                 ) : view === "tags" ? (
                   <div onScroll={incTags.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
@@ -1730,6 +2160,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>⎇ {w.branch}</span>
                         <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{w.head}</span>
                         {w.locked && <span className="shrink-0 text-[9px]" style={{ color: "var(--warning)" }}>locked</span>}
+                        {/* Same reading as the repo picker's. It is also the
+                            reason the sync button below may be disabled, so it
+                            has to be visible on the row that carries it. */}
+                        {!!w.dirty && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${w.dirty} uncommitted change${w.dirty === 1 ? "" : "s"} in this checkout`}>●{w.dirty}</span>}
                         <span className="min-w-0 flex-1 truncate text-[9.5px] t-dim2">{w.path}</span>
                         {/* How far this checkout has drifted from what it was
                             branched off, and the one-click way to close the
@@ -1742,16 +2176,29 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               title={`${w.behindBase} commit${w.behindBase === 1 ? "" : "s"} on ${w.base} that this branch does not have`}>
                               ↓{w.behindBase} behind {w.base}
                             </span>
-                            {writeEnabled && (
-                              <button
-                                onClick={() => act(() => api.gitSyncBase(w.path, w.base ?? undefined), `merged ${w.base}`, "sync")}
-                                disabled={busy}
-                                className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-                                style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: busy ? 0.5 : 1 }}
-                                title={`Merge ${w.base} into ${w.branch}, in that worktree. A merge, not a rebase — nothing already pushed gets rewritten. Refused if that checkout has uncommitted changes.`}>
-                                {pending === "sync" ? "syncing…" : "sync"}
-                              </button>
-                            )}
+                            {/* Disabled on a dirty checkout, exactly like the
+                                header's sync button — syncFromBase refuses to
+                                merge over uncommitted work, so an enabled
+                                button here could only ever produce an error
+                                toast. The header got this right and this row
+                                did not, which is worse than either: the same
+                                action looked possible in one place and not the
+                                other. */}
+                            {writeEnabled && (() => {
+                              const blocked = !!w.dirty;
+                              return (
+                                <button
+                                  onClick={() => act(() => api.gitSyncBase(w.path, w.base ?? undefined), `merged ${w.base}`, `sync:${w.path}`)}
+                                  disabled={busy || blocked}
+                                  className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                                  style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: busy || blocked ? 0.45 : 1 }}
+                                  title={blocked
+                                    ? `Commit or stash the ${w.dirty} change${w.dirty === 1 ? "" : "s"} in ${wtName(w.path)} first — merging over uncommitted work is how you lose it`
+                                    : `Merge ${w.base} into ${w.branch}, in that worktree. A merge, not a rebase — nothing already pushed gets rewritten.`}>
+                                  {pending === `sync:${w.path}` ? "syncing…" : "sync"}
+                                </button>
+                              );
+                            })()}
                           </>
                         )}
                         {writeEnabled && !w.current && <button onClick={() => removeWorktree(w)} className="shrink-0 text-[10px] opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Remove worktree">remove</button>}
@@ -1769,6 +2216,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           it's a drill-down from a row you clicked, not a place you navigate
           to — the rail's views are the destinations, this is a detour. */}
       <ChangesModal open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" presetChanges={commitView?.changes} presetTitle={commitView?.title} />
+      {rescue && <RescueModal reports={rescue.reports} progress={rescue.progress} onCancel={() => rescue.resolve(null)} onConfirm={(picked) => rescue.resolve(picked)} />}
+      {dialog}
     </div>
   );
 }

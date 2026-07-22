@@ -458,6 +458,20 @@ export interface GitRepoRef {
   /** How many linked worktrees were folded into this project — what the picker
    *  shows so a dozen hidden checkouts aren't invisible. */
   worktrees?: number;
+  /**
+   * When this checkout was last worked in, as an epoch ms — what the pickers
+   * sort on, most recent first.
+   *
+   * Read from the mtime of the checkout's own `HEAD` and reflog, which git
+   * writes on every commit, checkout, merge, rebase, reset and pull. That makes
+   * it "when did I last do something here", which is the question a list of
+   * seventeen ticket worktrees is really being asked — and it costs two stats
+   * rather than a `git log` per checkout. See touchedAt() for why it is not the
+   * index.
+   *
+   * 0 when it could not be read; those sort last rather than first.
+   */
+  touchedAt: number;
 }
 /** One candidate directory from the project picker's path completion. Names and
  *  a `.git` flag only — the completion endpoint never reports files. */
@@ -535,6 +549,33 @@ export interface GitRemote {
   /** Branches on this remote, as short names ("main"), without the remote prefix. */
   branches: number;
 }
+/**
+ * One branch on a remote, as the local repository last saw it.
+ *
+ * These come from `refs/remotes/<remote>/*` — what the last fetch left behind,
+ * not a live call to the server. That distinction matters in the UI: a branch
+ * pushed by a colleague ten seconds ago is not here until you fetch.
+ *
+ * `local` and `worktree` are the whole point of the list. On a repo with 800
+ * remote branches the useful question is never "what exists" — it's "do I
+ * already have this one, and where".
+ */
+export interface GitRemoteBranch {
+  /** Short name, without the remote prefix — "WEB-1042-quota-banner". */
+  name: string;
+  /** Full short ref — "origin/WEB-1042-quota-banner", i.e. what you pass to git. */
+  ref: string;
+  hash: string;
+  subject: string;
+  author: string;
+  date: string; // relative
+  /** A local branch of the same name already exists. */
+  local: boolean;
+  /** …and it tracks this remote branch, rather than merely sharing its name. */
+  tracking: boolean;
+  /** A checkout that already has that local branch out, if any. */
+  worktree?: string;
+}
 export interface GitTag {
   name: string;
   /** Annotated tags carry their own message; lightweight ones borrow the commit's. */
@@ -564,6 +605,93 @@ export interface GitWorktree {
   base?: string | null;
   /** Commits the base has that this checkout does not. */
   behindBase?: number;
+  /**
+   * Uncommitted entries in that checkout (`git status --porcelain` lines).
+   *
+   * Costs one `git status` per worktree, and is worth it: a merge into a dirty
+   * checkout is refused by the server, so without this the panel offers a sync
+   * button that can only fail. Undefined means "not asked" — a bare worktree,
+   * or a caller that didn't want to pay for it.
+   */
+  dirty?: number;
+}
+
+/**
+ * What removing a worktree would destroy, named before you agree to it.
+ *
+ * `git status` is not the answer to that question. It reports a checkout with a
+ * `.env` and a page of local notes in it as perfectly clean, because both are
+ * gitignored — and `git worktree remove` deletes the whole directory, ignored
+ * files included, without `--force` and without a word. So a caller about to
+ * offer "remove these worktrees" has to look at the disk itself.
+ */
+export interface WorktreeLeftovers {
+  path: string;
+  /** What would go, worst-first. Capped — see `more`. */
+  entries: LeftoverEntry[];
+  /** How many more there were beyond the ones listed. */
+  more: number;
+  /** Ignored entries dropped as rebuildable (`__pycache__/`, `node_modules/`).
+   *  Reported so the count in the UI can say what it chose not to show. */
+  skipped: number;
+  /** Entries byte-identical to the same path in the main checkout. Counted and
+   *  NOT listed: deleting a copy loses nothing, and listing them buried the
+   *  four that mattered under twenty that didn't. */
+  identical: number;
+  /** Set when the directory could not be read — treat as "assume work is
+   *  there", never as "nothing to lose". */
+  error?: string;
+  /** Files in this checkout owned by somebody else — almost always root,
+   *  written by a container that mounted the repo and ran as root. Present
+   *  means the removal CANNOT succeed and must not be attempted: git deletes
+   *  the worktree's registration before its files, so a half-done removal
+   *  leaves an orphan directory that no longer belongs to any repository. */
+  blocked?: BlockedByOwner;
+}
+
+/** Why a worktree cannot be deleted, and the one command that fixes it. */
+export interface BlockedByOwner {
+  /** How many foreign-owned paths were found before the walk gave up. */
+  count: number;
+  /** True when the count is a floor rather than a total. */
+  more: boolean;
+  /** Top-level directories to hand to chown — the useful unit, since these
+   *  come from a container writing a whole `tmp/` or `.mypy_cache/`. */
+  paths: string[];
+  /** Owner names seen, e.g. ["root"]. */
+  owners: string[];
+}
+
+/**
+ * One thing that disappears with the worktree, and what the main checkout has
+ * to say about it.
+ *
+ * `vsMain` is the whole reason this can be offered as a rescue rather than just
+ * a warning. A worktree is a second copy of a repo, so most of what looks
+ * alarming in it — every `compose/envs/*.env`, every generated `reverse.js` —
+ * is byte-identical to the file already sitting in the main checkout. Those are
+ * dropped before they reach here (see `identical`). What remains is:
+ *
+ *   * `absent`  — the main checkout has nothing at this path. Copying it there
+ *                 is pure gain and cannot destroy anything, so these are the
+ *                 ones offered pre-selected.
+ *   * `differs` — a file exists there and is NOT the same. Copying OVERWRITES
+ *                 the main checkout's version, which is how a rescue turns into
+ *                 the thing it was meant to prevent. Never pre-selected, and
+ *                 the UI has to say "overwrites" out loud.
+ *
+ * A directory is reported `differs` whenever the main checkout has one at that
+ * path, without recursing to prove it: walking a 12 MB `dist/` to answer a
+ * question whose safe answer is already "don't pre-select it" is work spent to
+ * reach the same place.
+ */
+export interface LeftoverEntry {
+  /** Path relative to the worktree root. Trailing "/" when it's a directory. */
+  path: string;
+  /** Bytes, recursive for a directory. -1 when it could not be measured. */
+  bytes: number;
+  dir: boolean;
+  vsMain: "absent" | "differs";
 }
 
 // --- live docker panel (lazydocker replacement) ------------------------------

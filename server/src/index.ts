@@ -33,9 +33,9 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktrees as gitWorktrees, addWorktree, removeWorktree, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
-  remotes as gitRemotes, tags as gitTags, reflog as gitReflog,
+  remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
@@ -529,8 +529,19 @@ const server = Bun.serve<WsData>({
       return json(workingTree(root));
     }
     if (pathname === "/git/branches") return json(gitBranches(url.searchParams.get("root") || ""));
-    if (pathname === "/git/graph") return json(logGraph(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 400)));
-    if (pathname === "/git/worktrees") return json({ worktrees: gitWorktrees(url.searchParams.get("root") || "") });
+    // `scope=all` is the whole graph; anything else is this checkout's own
+    // history, which is what the pane defaults to.
+    if (pathname === "/git/graph") return json(logGraph(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 400), url.searchParams.get("scope") === "all" ? "all" : "head"));
+    if (pathname === "/git/worktrees") return json({ worktrees: await gitWorktrees(url.searchParams.get("root") || "") });
+    // What a worktree removal would destroy, per path — asked before offering
+    // the removal, never after. Repeatable `path=` so the bulk delete can price
+    // every worktree it is about to touch in one round trip; concurrent because
+    // each is a `git status --ignored` and a dozen sequential ones is a second.
+    if (pathname === "/git/worktree-leftovers") {
+      const root = url.searchParams.get("root") || "";
+      const paths = url.searchParams.getAll("path").slice(0, 50);
+      return json({ leftovers: await Promise.all(paths.map((p) => worktreeLeftovers(root, p))) });
+    }
     // Update: reads are gated too, since the status alone reveals the source
     // path on disk.
     if (pathname === "/update/status") {
@@ -558,6 +569,9 @@ const server = Bun.serve<WsData>({
     // Open a file at a line in the editor the user already has running.
     if (pathname === "/editor/target") return json({ ...(await editorTarget(url.searchParams.get("path") || "")), hasNvim: HAS_NVIM });
     if (pathname === "/git/remotes") return json({ remotes: gitRemotes(url.searchParams.get("root") || "") });
+    // Every branch on one remote, as the last fetch left them. Whole, not
+    // paged — see remoteBranches() for why.
+    if (pathname === "/git/remote-branches") return json(gitRemoteBranches(url.searchParams.get("root") || "", url.searchParams.get("remote") || ""));
     if (pathname === "/git/tags") return json({ tags: gitTags(url.searchParams.get("root") || "") });
     if (pathname === "/git/reflog") return json({ entries: gitReflog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 200)) });
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
@@ -606,8 +620,17 @@ const server = Bun.serve<WsData>({
         case "/git/rebase": res = rebaseBranch(root, String(b.name || "")); break;
         case "/git/branch-rename": res = renameBranch(root, String(b.name || ""), String(b.to || "")); break;
         case "/git/reset": res = resetTo(root, String(b.ref || ""), b.mode); break;
-        case "/git/worktree-add": res = addWorktree(root, b.path, String(b.branch || ""), !!b.newBranch); break;
+        case "/git/worktree-add": res = addWorktree(root, b.path, String(b.branch || ""), !!b.newBranch, b.startPoint); break;
+        // Bring a remote branch local. `switch` moves this checkout onto it;
+        // without it the branch is created and nothing else moves.
+        case "/git/track-remote": res = trackRemoteBranch(root, String(b.ref || ""), { switch: !!b.switch }); break;
         case "/git/worktree-remove": res = removeWorktree(root, b.path, !!b.force); break;
+        // Copy chosen leftovers into the main checkout before the worktree
+        // holding them is removed. Never overwrites — see rescueLeftovers().
+        case "/git/worktree-rescue": res = await rescueLeftovers(root, b.path, b.paths); break;
+        // Elevates — the only route that does. chown only, never rm, and the
+        // path must match a worktree git reports. See fixWorktreeOwnership().
+        case "/git/worktree-chown": res = fixWorktreeOwnership(root, b.path); break;
         // `root` here is the checkout being updated — a worktree updates
         // itself, because the merge has to run where the branch is checked out.
         case "/git/sync-base": res = syncFromBase(root, b.base); break;
