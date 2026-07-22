@@ -131,6 +131,7 @@ function killGroup(s: Session, sigNum: number) {
 }
 
 import { resolveClient, readFrame, runAction, setStatusLine, prefixKeys, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { applyThemeTo } from "./themesync.ts";
 
 const enc = new TextEncoder();
 const ctl = (ws: PtyWs, frame: Record<string, unknown>) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
@@ -232,6 +233,13 @@ export function ptyOpen(ws: PtyWs) {
     }
     session.tmux = t;
     session.tmuxPrefix = prefixKeys(t);
+    // Repaint this server in the cockpit's palette. A tmux that started after
+    // the last theme switch — a reboot, or a continuum restore — has never
+    // heard of it, and the parts the panel does not draw itself (the message
+    // row, the prompt, the pane borders) come up in tmux's own colours in the
+    // middle of a themed panel. Best-effort, and silent when there is no theme
+    // file yet: this is a repaint, not a precondition.
+    applyThemeTo(t.socket);
     // Re-apply the panel's answer to the new session. Without this a restored
     // session comes up with tmux's own status line on top of our tabs, and
     // nothing in the panel changed to make the browser re-ask for it.

@@ -8,7 +8,7 @@
 // What is unit-tested is everything that turns tmux's text into our shapes, and
 // everything that decides whether a command is allowed to run at all.
 import { describe, expect, test } from "bun:test";
-import { parseWindows, parseFrame, socketFromArgv, runAction, sanitizeWindowName, prefixKeys, type TmuxTarget } from "../src/tmuxctl.ts";
+import { parseWindows, parseFrame, socketFromArgv, runAction, sanitizeWindowName, prefixKeys, setStatusLine, type TmuxTarget } from "../src/tmuxctl.ts";
 
 describe("reading tmux's window list", () => {
   test("id, index, name, active flag and tmux's own marks", () => {
@@ -164,6 +164,26 @@ describe("window names", () => {
 
   test("absurdly long names are cut, not passed on", () => {
     expect(sanitizeWindowName("x".repeat(500))!.length).toBe(64);
+  });
+});
+
+describe("borrowing the status line", () => {
+  // The panel takes tmux's status row over rather than turning it off, because
+  // tmux needs somewhere to draw `prefix ,`, `prefix :` and every
+  // `display-message` — with no row allocated it draws them over the top line
+  // of the shell instead. What is unit-testable without a tmux server is the
+  // bookkeeping: whether we claim to have borrowed something we did not.
+  const t: TmuxTarget = { pid: 1, socket: ["-L", "nonexistent-agx-test"], session: "s", id: "$0" };
+
+  test("an unreachable server is not reported as borrowed", () => {
+    // The caller remembers what it borrowed so it can give it back on the way
+    // out. A false claim here leaves a restore aimed at a session we never
+    // touched, and — worse — swallows the real one.
+    expect(setStatusLine(t, false)).toBe(false);
+  });
+
+  test("giving it back reports failure rather than pretending", () => {
+    expect(setStatusLine(t, true)).toBe(false);
   });
 });
 
