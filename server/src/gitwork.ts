@@ -1456,9 +1456,20 @@ const rebuildable = (rel: string): boolean =>
   rel.split("/").some((seg) => REBUILDABLE.has(seg) || seg.endsWith(".egg-info")) ||
   /\.(pyc|pyo)$/.test(rel);
 
-/** How many paths a single leftovers report will name before it starts
- *  counting. Long enough to be a list you read, short enough to stay one. */
-const LEFTOVERS_MAX = 12;
+/**
+ * How many paths a report names before it starts counting.
+ *
+ * Twelve, back when this filled a text `confirm()` and the list was only ever
+ * read. It now fills a scrolling modal where each row is a thing you can TICK,
+ * so anything past the cap is not merely unmentioned — it cannot be rescued at
+ * all, and the count that replaces it offers no way to get at it. On a real
+ * checkout twelve hid eight entries.
+ *
+ * Sixty scrolls fine and comfortably clears the worst checkout here (34).
+ * Entries are sorted safe-and-small first, so a cap that does bite still bites
+ * the build output rather than the notes.
+ */
+const LEFTOVERS_MAX = 60;
 /** Ignored directories opened up to see what's inside — one git call each. */
 const EXPAND_MAX = 8;
 /** Above this, two same-sized files are called `differs` rather than read.
