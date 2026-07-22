@@ -449,6 +449,9 @@ const repoCache = new Map<string, { at: number; repos: GitRepoRef[] }>();
  *  the list is one directory sweep and is about to be asked for again anyway. */
 export function invalidateRepos(_root?: string): void {
   repoCache.clear();
+  // Committing or staging changes what is dirty, and this is the one place
+  // every write in this file passes through.
+  dirtyCache.clear();
   // A commit or a checkout moves the tip date too, and both go through run().
   tipCache.clear();
 }
@@ -1473,15 +1476,39 @@ export async function worktrees(rootIn: unknown): Promise<GitWorktree[]> {
  * The panel needs this for one reason: `syncFromBase` refuses to merge into a
  * dirty checkout, and a button that can only fail is worse than a disabled one.
  */
+/**
+ * Dirty counts, held briefly.
+ *
+ * `git status` per checkout is fifteen subprocesses on a worktree-heavy repo,
+ * and even fully awaited that is fifteen spawns' worth of setup on the loop —
+ * the last measurable cost in this endpoint once everything else was converted
+ * (~200ms a call, on a 10s poll). The repo picker already statuses the same
+ * paths on its own cache; this stops the two of them racing to re-derive the
+ * same answer seconds apart.
+ *
+ * Short, and stretched by `backoff()` while a shell is in use: a dirty dot on a
+ * checkout you are not looking at can be a few seconds old, and every write
+ * clears it through run() anyway.
+ */
+const DIRTY_TTL_MS = 5_000;
+const dirtyCache = new Map<string, { at: number; n: number }>();
+
 export async function worktreesWithState(rootIn: unknown): Promise<GitWorktree[]> {
   const out = await worktrees(rootIn);
+  const ttl = DIRTY_TTL_MS * backoff();
   await Promise.all(out.map(async (w) => {
     if (w.bare) return; // no working tree to be dirty
+    const hit = dirtyCache.get(w.path);
+    if (hit && Date.now() - hit.at < ttl) { w.dirty = hit.n; return; }
     const r = await gitAsync(w.path, ["status", "--porcelain"]);
     // A checkout whose directory was deleted from under git answers non-zero;
     // "unknown" is honest there, and leaves the button enabled rather than
     // silently blocking on a status we never got.
-    if (r.code === 0) w.dirty = r.stdout.split("\n").filter(Boolean).length;
+    if (r.code === 0) {
+      w.dirty = r.stdout.split("\n").filter(Boolean).length;
+      if (dirtyCache.size > 200) dirtyCache.clear();
+      dirtyCache.set(w.path, { at: Date.now(), n: w.dirty });
+    }
   }));
   return out;
 }
