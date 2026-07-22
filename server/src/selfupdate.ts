@@ -118,31 +118,35 @@ const TAGS_TTL_MS = 10 * 60_000;
 const TAGS_FAIL_TTL_MS = 60_000;
 let tagCache: { at: number; url: string; tags: string[] } | null = null;
 
-export function remoteTags(originUrl: string): string[] {
+export async function remoteTags(originUrl: string): Promise<string[]> {
   if (!originUrl) return [];
   const hit = tagCache;
   if (hit && hit.url === originUrl) {
     const ttl = hit.tags.length ? TAGS_TTL_MS : TAGS_FAIL_TTL_MS;
     if (Date.now() - hit.at < ttl) return hit.tags;
   }
-  const tags = readRemoteTags(originUrl);
+  const tags = await readRemoteTags(originUrl);
   tagCache = { at: Date.now(), url: originUrl, tags };
   return tags;
 }
 
-function readRemoteTags(originUrl: string): string[] {
-  const r = spawnSync("git", ["ls-remote", "--tags", "--refs", originUrl], {
-    encoding: "utf8", timeout: 45_000,
+async function readRemoteTags(originUrl: string): Promise<string[]> {
+  // Awaited: a network round trip on the thread that carries the terminal was
+  // 469ms of the app's startup, and the timeout below allows forty-five
+  // seconds of it on a bad connection.
+  const proc = Bun.spawn(["git", "ls-remote", "--tags", "--refs", originUrl], {
+    stdout: "pipe", stderr: "ignore", timeout: 45_000,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
   });
-  if (r.status !== 0) return [];
-  return (r.stdout ?? "").split("\n")
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (code !== 0) return [];
+  return (out ?? "").split("\n")
     .map((l) => l.split("refs/tags/")[1]?.trim() ?? "")
     .filter((t) => TAG_RE.test(t))
     .sort((a, b) => cmpTag(b, a));
 }
 
-export function updateStatus(): UpdateStatus {
+export async function updateStatus(): Promise<UpdateStatus> {
   const info = buildInfo();
   const base: UpdateStatus = {
     ok: true, available: false, info, branch: "", behind: 0, ahead: 0, incoming: [], last: readStamp(),
@@ -151,7 +155,7 @@ export function updateStatus(): UpdateStatus {
     return { ...base, blocked: "this build records no origin — reinstall from source once to enable updates" };
   }
 
-  const tags = remoteTags(info.origin);
+  const tags = await remoteTags(info.origin);
   if (!tags.length) {
     return { ...base, available: true, blocked: "no releases published yet — tag one with `git tag v0.3.0 && git push --tags`" };
   }
@@ -179,9 +183,9 @@ export function updateStatus(): UpdateStatus {
 
 let running = false;
 
-export function startUpdate(): { ok: boolean; error?: string; log?: string } {
+export async function startUpdate(): Promise<{ ok: boolean; error?: string; log?: string }> {
   if (running) return { ok: false, error: "an update is already running" };
-  const st = updateStatus();
+  const st = await updateStatus();
   if (st.blocked) return { ok: false, error: st.blocked };
   if (!st.available || st.behind === 0) return { ok: false, error: "already on the newest release" };
 

@@ -73,7 +73,7 @@ describe("self update", () => {
     release("v0.1.0"); release("v0.2.0"); release("v0.10.0");
     git(work, "tag", "wip-scratch"); git(work, "push", "-q", "--tags", "origin");
     const u = await load();
-    const tags = u.remoteTags(remote);
+    const tags = await u.remoteTags(remote);
     expect(tags).toEqual(["v0.10.0", "v0.2.0", "v0.1.0"]);
     expect(tags).not.toContain("wip-scratch"); // a private tag is not a release
   });
@@ -86,18 +86,18 @@ describe("self update", () => {
     // minutes.
     release("v0.2.0");
     const u = await load();
-    expect(u.remoteTags(remote)).toEqual(["v0.2.0"]);
+    expect(await u.remoteTags(remote)).toEqual(["v0.2.0"]);
     // Make the remote unreachable. A second call that still answers can only be
     // answering from the cache.
     rmSync(remote, { recursive: true, force: true });
-    expect(u.remoteTags(remote)).toEqual(["v0.2.0"]);
+    expect(await u.remoteTags(remote)).toEqual(["v0.2.0"]);
   });
 
   it("offers the newer release and counts how many there are", async () => {
     release("v0.2.0"); release("v0.3.0"); release("v0.4.0");
     trash.push(installedAs("0.2.0"));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.available).toBe(true);
     expect(st.branch).toBe("v0.4.0");
     expect(st.behind).toBe(2);
@@ -109,10 +109,10 @@ describe("self update", () => {
     release("v0.2.0");
     trash.push(installedAs("0.2.0"));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.behind).toBe(0);
     expect(st.blocked).toBeUndefined();
-    expect(u.startUpdate().ok).toBe(false);
+    expect((await u.startUpdate()).ok).toBe(false);
   });
 
   it("NEVER offers a branch tip — commits after the tag are not an update", async () => {
@@ -124,9 +124,9 @@ describe("self update", () => {
     git(work, "push", "-q", "origin", "main");
     trash.push(installedAs("0.2.0"));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.behind).toBe(0);
-    expect(u.startUpdate().ok).toBe(false);
+    expect((await u.startUpdate()).ok).toBe(false);
   });
 
   it("treats a build ahead of every release as up to date, not as a downgrade", async () => {
@@ -135,9 +135,9 @@ describe("self update", () => {
     release("v0.2.0");
     trash.push(installedAs("0.9.0"));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.behind).toBe(0);
-    expect(u.startUpdate().ok).toBe(false);
+    expect((await u.startUpdate()).ok).toBe(false);
   });
 
   it("does not offer a downgrade when package.json was never bumped", async () => {
@@ -148,17 +148,17 @@ describe("self update", () => {
     release("v0.2.0"); release("v0.2.1");
     trash.push(installedAs("0.2.0", remote, "v0.2.1", 48));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.behind).toBe(0);
     expect(st.incoming).toEqual([]);
-    expect(u.startUpdate().ok).toBe(false);
+    expect((await u.startUpdate()).ok).toBe(false);
   });
 
   it("still offers a genuinely newer release to a build past an older tag", async () => {
     release("v0.2.0"); release("v0.2.1"); release("v0.3.0");
     trash.push(installedAs("0.2.0", remote, "v0.2.1", 48));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.branch).toBe("v0.3.0");
     expect(st.behind).toBe(1);
   });
@@ -166,26 +166,26 @@ describe("self update", () => {
   it("says so when nothing has been released yet", async () => {
     trash.push(installedAs("0.2.0"));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.behind).toBe(0);
     expect(st.blocked).toContain("no releases");
-    expect(u.startUpdate().ok).toBe(false);
+    expect((await u.startUpdate()).ok).toBe(false);
   });
 
   it("cannot update a build that records no origin", async () => {
     release("v0.3.0");
     trash.push(installedAs("0.2.0", ""));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.available).toBe(false);
     expect(st.blocked).toContain("no origin");
-    expect(u.startUpdate().ok).toBe(false);
+    expect((await u.startUpdate()).ok).toBe(false);
   });
 
   it("degrades rather than throwing when the remote is unreachable", async () => {
     trash.push(installedAs("0.2.0", join(tmpdir(), "no-such-remote-" + Math.random())));
     const u = await load();
-    const st = u.updateStatus();
+    const st = await u.updateStatus();
     expect(st.ok).toBe(true);
     expect(st.behind).toBe(0);
     expect(st.blocked).toBeTruthy();
@@ -199,13 +199,13 @@ describe("self update", () => {
     writeFileSync(join(work, "uncommitted.txt"), "in progress");
     trash.push(installedAs("0.2.0"));
     const u = await load();
-    u.updateStatus();
+    await u.updateStatus();
     expect(git(work, "rev-parse", "HEAD").stdout.trim()).toBe(before);
     expect(readFileSync(join(work, "uncommitted.txt"), "utf8")).toBe("in progress");
     expect(git(work, "status", "--porcelain").stdout).toContain("uncommitted.txt");
   });
 
-  it("ships an update script that refuses anything but a release tag", () => {
+  it("ships an update script that refuses anything but a release tag", async () => {
     // Resolved from this file, never from process.cwd(): the suite is run from
     // the repo root by hand and from `server/` by CI, and a path that depends
     // on which one passed locally and failed in CI.

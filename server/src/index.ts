@@ -644,7 +644,7 @@ const server = Bun.serve<WsData>({
     // path on disk.
     if (pathname === "/update/status") {
       if (!desktopOnly(req)) return csrfBlocked();
-      return json(updateStatus());
+      return json(await updateStatus());
     }
     // What changed in the release this build came from. Same desktop-only gate
     // as the rest of /update: the build's origin and tag are in the answer.
@@ -775,7 +775,7 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/update/run" && req.method === "POST") {
       if (!desktopOnly(req)) return csrfBlocked();
-      return json(startUpdate());
+      return json(await startUpdate());
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
