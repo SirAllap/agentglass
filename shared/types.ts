@@ -931,6 +931,11 @@ export interface PrSummary {
   checks: PrCheckRollup;
   /** This checkout is on the PR's head branch — "you are here". */
   isCurrentBranch?: boolean;
+  /** Whether `checks` has actually been fetched. The list arrives in two
+   *  passes because the check rollup costs four times the rest of the row, and
+   *  a row that has not had its second pass must say "loading" rather than
+   *  "no checks" — those are different claims. */
+  checksLoaded?: boolean;
 }
 
 /** Why the merge button is grey. A disabled control that can't say why is the
@@ -1020,6 +1025,8 @@ export interface PrListResponse {
   fetchedAt: number;
   stale: boolean;
   loading: boolean;
+  /** The rows are here but their check states are still being fetched. */
+  checksPending?: boolean;
   error?: string;
   /** `gh` missing or not logged in — a first-class state, not an error toast. */
   needsAuth?: boolean;

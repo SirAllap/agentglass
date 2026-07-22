@@ -267,6 +267,32 @@ function DiffPane({ file, split, wrap, onComment }: {
 // list row
 // ---------------------------------------------------------------------------
 
+/** Placeholder rows while the list is on its way.
+ *
+ *  A spinner says "wait"; these say "a list is coming, roughly this shape",
+ *  which is the difference between a pane that feels slow and one that feels
+ *  broken. `prefers-reduced-motion` drops the shimmer, not the placeholder. */
+function Skeletons({ n = 6 }: { n?: number }) {
+  return (
+    <div aria-hidden>
+      <style>{`@keyframes agxpulse{0%,100%{opacity:.35}50%{opacity:.7}}
+@media (prefers-reduced-motion:reduce){.agx-sk{animation:none!important}}`}</style>
+      {Array.from({ length: n }, (_, i) => (
+        <div key={i} className="px-2.5 py-2 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
+          <div className="agx-sk rounded" style={{
+            height: 8, width: `${58 + ((i * 13) % 34)}%`, background: "color-mix(in srgb, var(--border) 55%, transparent)",
+            animation: `agxpulse 1.4s ease-in-out ${i * 0.09}s infinite`,
+          }} />
+          <div className="agx-sk rounded mt-1.5" style={{
+            height: 6, width: `${30 + ((i * 7) % 20)}%`, background: "color-mix(in srgb, var(--border) 38%, transparent)",
+            animation: `agxpulse 1.4s ease-in-out ${i * 0.09 + 0.2}s infinite`,
+          }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PrRow({ p, active, onSelect }: { p: PrSummary; active: boolean; onSelect: () => void }) {
   const c = p.checks;
   return (
@@ -282,9 +308,15 @@ function PrRow({ p, active, onSelect }: { p: PrSummary; active: boolean; onSelec
         {p.isCurrentBranch && <Chip text="here" tint="var(--primary)" title="this checkout is on that branch" />}
       </div>
       <div className="flex items-center gap-1.5 mt-0.5 text-[10px]" style={{ color: "var(--text3)" }}>
-        <Dot tint={stateTint(p)} title={`${c.success} passed · ${c.failure} failed · ${c.skipped} skipped · ${c.pending} running`} />
+        <Dot tint={p.checksLoaded === false ? "var(--text3)" : stateTint(p)}
+          title={p.checksLoaded === false ? "check states are still loading" : `${c.success} passed · ${c.failure} failed · ${c.skipped} skipped · ${c.pending} running`} />
         <span className="tabular-nums">
-          {c.total === 0 ? "no checks" : c.pending > 0 ? `${c.total - c.pending}/${c.total}` : c.failure > 0 ? `${c.failure} failing` : "green"}
+          {/* Not yet fetched is not the same as none. Saying "no checks" here
+              would be a claim about the repository rather than about us. */}
+          {p.checksLoaded === false ? "checks…"
+            : c.total === 0 ? "no checks"
+            : c.pending > 0 ? `${c.total - c.pending}/${c.total}`
+            : c.failure > 0 ? `${c.failure} failing` : "green"}
         </span>
         {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip d={p.reviewDecision} />}
         <span className="ml-auto shrink-0">{ago(p.updatedAt)}</span>
@@ -307,7 +339,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const [filter, setFilter] = useState<Filter>("mine");
   const [prs, setPrs] = useState<PrSummary[]>([]);
   const [counts, setCounts] = useState<Partial<Record<Filter, number>>>({});
-  const [listState, setListState] = useState<{ fetchedAt: number; loading: boolean; error?: string; needsAuth?: boolean }>({ fetchedAt: 0, loading: false });
+  const [listState, setListState] = useState<{ fetchedAt: number; loading: boolean; checksPending?: boolean; error?: string; needsAuth?: boolean }>({ fetchedAt: 0, loading: false });
   const [selected, setSelected] = useState<number | null>(null);
   const [detail, setDetail] = useState<PrDetail | null>(null);
   const [detailErr, setDetailErr] = useState("");
@@ -326,6 +358,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const [wrap, setWrap] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const detailReq = useRef(0);
+  /** Which list request is current. A filter's answer takes seconds, and
+   *  without this the slower reply from the filter you just left overwrites the
+   *  one you switched to — the old selection reappearing under the new tab. */
+  const listReq = useRef(0);
 
   const flash = useCallback((ok: boolean, msg: string) => {
     setToast({ ok, msg });
@@ -342,14 +378,36 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
   const loadList = useCallback((force = false) => {
     if (!root) return;
+    const req = ++listReq.current;
+    const want = filter;
     api.prList(root, filter, force).then((r) => {
+      if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
       setPrs(r.prs);
-      setCounts((c) => ({ ...c, [filter]: r.prs.length }));
-      setListState({ fetchedAt: r.fetchedAt, loading: r.loading, error: r.error, needsAuth: r.needsAuth });
+      setCounts((c) => ({ ...c, [want]: r.prs.length }));
+      setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth });
       setSelected((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : r.prs[0]?.number ?? null));
-    }).catch((e) => setListState({ fetchedAt: 0, loading: false, error: String(e) }));
+    }).catch((e) => {
+      if (req !== listReq.current) return;
+      setListState({ fetchedAt: 0, loading: false, error: String(e) });
+    });
   }, [root, filter]);
+
+  /**
+   * Switching filter empties the pane before anything is fetched.
+   *
+   * Otherwise the previous filter's selection stays on screen for the second or
+   * two the new list takes, and you are reading one pull request under a tab
+   * that says you are looking at another.
+   */
+  useEffect(() => {
+    listReq.current++;
+    setPrs([]);
+    setSelected(null);
+    setDetail(null);
+    setDetailErr("");
+    setListState((st) => ({ ...st, loading: true, fetchedAt: 0 }));
+  }, [filter, root]);
 
   useEffect(() => {
     if (!active || !root) return;
@@ -358,12 +416,23 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     return () => clearInterval(t);
   }, [active, root, filter, loadList]);
 
-  // The review queue's size, so the filter can carry it without being opened.
+  /**
+   * Warm the filters you are not looking at.
+   *
+   * Each is its own cache entry on the server, so the first visit to a tab
+   * always paid the whole fetch. Touching them once fills the counts and leaves
+   * a warm cache to switch into. Staggered, because the server has one thread
+   * and three `gh` calls at once is the stall this panel exists to avoid.
+   */
   useEffect(() => {
-    if (!active || !root || filter === "review") return;
-    api.prList(root, "review", false)
-      .then((r) => setCounts((c) => ({ ...c, review: r.prs.length })))
-      .catch(() => {});
+    if (!active || !root) return;
+    const others = (["mine", "review", "all"] as Filter[]).filter((f) => f !== filter);
+    const timers = others.map((f, i) => setTimeout(() => {
+      api.prList(root, f, false)
+        .then((r) => setCounts((c) => ({ ...c, [f]: r.prs.length })))
+        .catch(() => {});
+    }, 1200 + i * 2500));
+    return () => timers.forEach(clearTimeout);
   }, [active, root, filter]);
 
   const loadDetail = useCallback((n: number, force = false) => {
@@ -539,8 +608,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
         ) : repo && <span className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{repo.nameWithOwner}</span>}
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {toast && <span className="text-[10px] max-w-[380px] truncate" style={{ color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</span>}
-          <span className="text-[10px] tabular-nums" style={{ color: "var(--text3)" }}>
-            {listState.loading ? "refreshing…" : listState.fetchedAt ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}` : ""}
+          <span className="text-[10px] tabular-nums" style={{ color: listState.loading || listState.checksPending ? "var(--warning)" : "var(--text3)" }}>
+            {listState.loading ? "loading pull requests…"
+              : listState.checksPending ? "loading check states…"
+              : listState.fetchedAt ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}` : ""}
           </span>
           <Btn onClick={() => loadList(true)} disabled={busy} small>refresh</Btn>
         </div>
@@ -574,9 +645,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             ) : !repo ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>{listState.error || "no GitHub remote on this repository"}</div>
             ) : prs.length === 0 ? (
-              <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
-                {listState.loading ? "loading…" : filter === "mine" ? "no open pull requests of yours" : filter === "review" ? "nothing waiting on your review" : "no open pull requests"}
-              </div>
+              listState.loading ? <Skeletons /> : (
+                <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
+                  {filter === "mine" ? "no open pull requests of yours" : filter === "review" ? "nothing waiting on your review" : "no open pull requests"}
+                </div>
+              )
             ) : prs.map((p) => (
               <PrRow key={p.number} p={p} active={p.number === selected} onSelect={() => { setSelected(p.number); setTab("overview"); }} />
             ))}
@@ -587,7 +660,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
           {!d ? (
-            <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>{detailErr || (selected == null ? "select a pull request" : "loading…")}</div>
+            <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>
+              {detailErr ? detailErr
+                : selected == null ? (listState.loading ? "loading pull requests…" : "select a pull request")
+                : `loading #${selected}…`}
+            </div>
           ) : (
             <>
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>

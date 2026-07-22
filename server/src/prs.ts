@@ -288,9 +288,22 @@ export function noteCi(repo: PrRepoId, pr: PrSummary): void {
 
 export type PrFilter = "mine" | "review" | "all";
 
-const LIST_FIELDS = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,statusCheckRollup";
+/**
+ * Two field sets, because one of them costs four times the other.
+ *
+ * Measured on a real repo, 50 open pull requests: 1.5s without
+ * `statusCheckRollup` and 5.5s with it. The rollup is a separate GraphQL walk
+ * per pull request, so it dominates — and it is also the part nobody is waiting
+ * for when they open the panel to find a title.
+ *
+ * So the list arrives in two passes. The cheap one lands first and the rows are
+ * usable immediately; the rollup fills the check states in behind it. A row
+ * whose checks have not landed says so rather than claiming "no checks", which
+ * is a different and wrong answer.
+ */
+const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels";
 
-type Entry = { at: number; prs: PrSummary[]; loading: boolean; error?: string };
+type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string };
 const listCache = new Map<string, Entry>();
 const inflight = new Set<string>();
 const LIST_TTL_MS = 90_000;
@@ -300,8 +313,8 @@ const LIST_TTL_MS = 90_000;
 // same keys, still searchable.
 const cacheKey = (repo: PrRepoId, filter: PrFilter) => `${repo.key}\u0000${filter}`;
 
-function mapSummary(p: any): PrSummary {
-  const { rollup } = rollupChecks(p.statusCheckRollup);
+function mapSummary(p: any, withChecks: boolean): PrSummary {
+  const { rollup } = rollupChecks(withChecks ? p.statusCheckRollup : []);
   return {
     number: p.number,
     title: p.title || "",
@@ -318,22 +331,84 @@ function mapSummary(p: any): PrSummary {
     changedFiles: p.changedFiles ?? 0,
     labels: (p.labels || []).map((l: any) => ({ name: l.name, color: l.color })),
     checks: rollup,
+    // Absent is not zero: a row without this must say "checks loading", never
+    // "no checks", which is a claim about the repository rather than about us.
+    checksLoaded: withChecks,
   };
 }
 
 async function fetchList(repo: PrRepoId, filter: PrFilter): Promise<PrSummary[]> {
-  const R = ["-R", repo.nameWithOwner];
-  if (filter === "review") {
-    // `gh pr list --search` rather than `gh search prs`: the latter is a global
-    // search and would need its own repo filter anyway, and it rate-limits
-    // separately from the REST path everything else here uses.
-    const rows = await ghJson<any[]>(["pr", "list", ...R, "--search", "review-requested:@me", "--state", "open", "--limit", "50", "--json", LIST_FIELDS]);
-    return (rows || []).map(mapSummary);
-  }
-  const args = ["pr", "list", ...R, "--state", "open", "--limit", "50", "--json", LIST_FIELDS];
+  const args = ["pr", "list", "-R", repo.nameWithOwner, "--state", "open", "--limit", "50", "--json", LIST_FIELDS_FAST];
+  // `gh pr list --search` rather than `gh search prs`: the latter is a global
+  // search that would need its own repo filter anyway, and it rate-limits
+  // separately from the REST path everything else here uses.
+  if (filter === "review") args.push("--search", "review-requested:@me");
   if (filter === "mine") args.push("--author", "@me");
   const rows = await ghJson<any[]>(args);
-  return (rows || []).map(mapSummary);
+  return (rows || []).map((r) => mapSummary(r, false));
+}
+
+/**
+ * Check states, one pull request at a time.
+ *
+ * Asking for fifty rollups in one query does not work: GitHub answers
+ * `HTTP 504 — we couldn't respond to your request in time`. Measured on a real
+ * repo — 15 rollups in a batch take 3.2s, 50 in a batch time out on GitHub's
+ * side however long we are willing to wait. So they are fetched per pull
+ * request, ~0.8s each, newest first, and each one updates its own row as it
+ * lands. The list fills in visibly instead of arriving all at once or not at
+ * all.
+ *
+ * Keyed by `updatedAt`, so a poll that finds nothing changed costs nothing.
+ */
+/** Matched to the list's own limit on purpose. A lower cap leaves the rows past
+ *  it saying "checks…" for ever, which is a lie the UI has no way to correct.
+ *  Fifty probes is ~40s of background network — no CPU, nothing blocked — and
+ *  the per-PR cache keyed by `updatedAt` makes every later visit free. */
+const CHECK_PROBE_MAX = 50;
+const checkCache = new Map<string, { updatedAt: string; rollup: PrCheckRollup; all: PrCheck[] }>();
+const checkRunning = new Set<string>();
+
+function refreshChecks(repo: PrRepoId, filter: PrFilter, rows: PrSummary[]): void {
+  const key = cacheKey(repo, filter);
+  if (checkRunning.has(key)) return;
+  checkRunning.add(key);
+
+  void (async () => {
+    try {
+      let i = 0;
+      for (const pr of rows.slice(0, CHECK_PROBE_MAX)) {
+        const ck = `${repo.key}\u0000${pr.number}`;
+        const hit = checkCache.get(ck);
+        let rollup: PrCheckRollup, all: PrCheck[];
+        if (hit && hit.updatedAt === pr.updatedAt) {
+          ({ rollup, all } = hit);
+        } else {
+          const one = await ghJson<any>(["pr", "view", String(pr.number), "-R", repo.nameWithOwner, "--json", "statusCheckRollup"]);
+          if (!one) { i++; continue; }
+          ({ rollup, all } = rollupChecks(one.statusCheckRollup));
+          checkCache.set(ck, { updatedAt: pr.updatedAt, rollup, all });
+        }
+        i++;
+
+        // Update this row in place. Re-read the entry each time: a newer list
+        // may have replaced it while this walk was running, and overwriting it
+        // wholesale would undo that.
+        const cur = listCache.get(key);
+        if (!cur) return;
+        const next = cur.prs.map((p) => (p.number === pr.number ? { ...p, checks: rollup, checksLoaded: true } : p));
+        listCache.set(key, { ...cur, prs: next, checksPending: i < Math.min(rows.length, CHECK_PROBE_MAX) });
+        noteCi(repo, { ...pr, checks: rollup });
+      }
+      const cur = listCache.get(key);
+      if (cur) listCache.set(key, { ...cur, checksPending: false });
+    } catch {
+      const cur = listCache.get(key);
+      if (cur) listCache.set(key, { ...cur, checksPending: false });
+    } finally {
+      checkRunning.delete(key);
+    }
+  })();
 }
 
 /** Refresh behind the response. Never awaited by a request handler. */
@@ -342,19 +417,39 @@ function refreshList(repo: PrRepoId, filter: PrFilter): void {
   if (inflight.has(key)) return;
   inflight.add(key);
   const prev = listCache.get(key);
-  listCache.set(key, { at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, error: prev?.error });
+  const keep = (over: Partial<Entry>): Entry => ({
+    at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: true, checksPending: true, error: prev?.error, ...over,
+  });
+  listCache.set(key, keep({}));
+
   void (async () => {
     try {
       const cap = await ghCapability();
       if (!cap.available || !cap.authed) {
-        listCache.set(key, { at: Date.now(), prs: prev?.prs ?? [], loading: false, error: cap.reason });
+        listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false, error: cap.reason }));
         return;
       }
-      const prs = await fetchList(repo, filter);
-      listCache.set(key, { at: Date.now(), prs, loading: false });
-      for (const pr of prs) noteCi(repo, pr);
+
+      // One cheap query for the rows themselves — titles, authors, review
+      // decisions. Enough to choose a pull request, and it is what the panel
+      // is blocked on.
+      const rows = await fetchList(repo, filter);
+      if (!rows.length && prev?.prs.length) {
+        // An empty answer after a good one is far more likely to be a hiccup
+        // than a repository that lost every pull request. Keep what we had.
+        listCache.set(key, keep({ loading: false, checksPending: false }));
+        return;
+      }
+      // Carry over any check states already known, so switching back to a tab
+      // does not blank the states it had.
+      const merged = rows.map((r) => {
+        const hit = checkCache.get(`${repo.key}\u0000${r.number}`);
+        return hit && hit.updatedAt === r.updatedAt ? { ...r, checks: hit.rollup, checksLoaded: true } : r;
+      });
+      listCache.set(key, { at: Date.now(), prs: merged, loading: false, checksPending: merged.some((p) => !p.checksLoaded) });
+      refreshChecks(repo, filter, merged);
     } catch (e) {
-      listCache.set(key, { at: prev?.at ?? 0, prs: prev?.prs ?? [], loading: false, error: String(e) });
+      listCache.set(key, keep({ loading: false, checksPending: false, error: String(e) }));
     } finally {
       inflight.delete(key);
     }
@@ -403,6 +498,7 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, force = false)
     fetchedAt: cur?.at ?? 0,
     stale: !cur?.at || Date.now() - (cur?.at ?? 0) > LIST_TTL_MS,
     loading: !!cur?.loading,
+    checksPending: !!cur?.checksPending,
     error: cur?.error,
     needsAuth: !cap.available || !cap.authed,
   };
