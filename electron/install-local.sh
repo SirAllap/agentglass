@@ -119,3 +119,10 @@ echo "installed:"
 echo "  app      $APP/agentglass"
 echo "  command  agentglass"
 echo "  launcher $DESKTOP/agentglass.desktop"
+
+# Put back what we took down. An install has to close the running app — it is
+# replacing the files underneath it — and leaving it closed made the normal
+# loop (merge, `make desktop-update`, look at the change) end with the window
+# gone and no sign that reopening it was the next step. Nothing happens here if
+# nothing was running.
+start_app
