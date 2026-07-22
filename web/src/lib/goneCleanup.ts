@@ -19,7 +19,7 @@
  * this decision with a successful report catches it, which is why it is now a
  * function that can be handed one.
  */
-import type { GitBranch, WorktreeLeftovers } from "../../../shared/types.ts";
+import type { GitBranch, WorktreeLeftovers, BlockedByOwner } from "../../../shared/types.ts";
 
 /** Branches whose upstream is gone and whose work is in the trunk, split by
  *  whether a worktree is holding them. `git branch -D` refuses on the held
@@ -57,9 +57,19 @@ export function splitReadable(
     // failure the way `?.error ?? true` did.
     if (!report) refused.push({ branch, why: "no answer from the server" });
     else if (report.error) refused.push({ branch, why: report.error });
+    // Files owned by somebody else — a container that ran as root. The removal
+    // cannot finish, and git deletes the worktree's registration BEFORE its
+    // files, so attempting it is what leaves an orphaned directory behind.
+    // Refusing is the only outcome that keeps the checkout usable.
+    else if (report.blocked) refused.push({ branch, why: blockedReason(report.blocked) });
     else removable.push({ branch, report });
   }
   return { removable, refused };
+}
+
+/** One line for a toast, naming the fix rather than just the symptom. */
+export function blockedReason(b: BlockedByOwner): string {
+  return `${b.count}${b.more ? "+" : ""} files belong to ${b.owners.join(", ")} — run: sudo chown -R "$(id -un):$(id -gn)" ${b.paths.join(" ")}`;
 }
 
 /**

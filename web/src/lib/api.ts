@@ -243,6 +243,9 @@ const realApi = {
    *  already there comes back in `skipped` with the reason. */
   gitWorktreeRescue: (root: string, path: string, paths: string[]) =>
     post<GitActionResult & { copied?: string[]; skipped?: { path: string; why: string }[] }>("/git/worktree-rescue", { root, path, paths }),
+  /** Hand a worktree's root-owned files back, via the desktop's own auth
+   *  dialog. chown only — the removal still runs as you. */
+  gitWorktreeChown: (root: string, path: string) => post<GitActionResult>("/git/worktree-chown", { root, path }),
   gitWorktreeLeftovers: (root: string, paths: string[]) =>
     get<{ leftovers: WorktreeLeftovers[] }>(`/git/worktree-leftovers?root=${encodeURIComponent(root)}${paths.map((p) => `&path=${encodeURIComponent(p)}`).join("")}`),
   /** Merge a checkout's base branch into it — "update from base". `root` is the
@@ -390,6 +393,7 @@ const demoApi: typeof realApi = {
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
   gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),
+  gitWorktreeChown: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),

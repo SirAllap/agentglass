@@ -641,6 +641,25 @@ export interface WorktreeLeftovers {
   /** Set when the directory could not be read — treat as "assume work is
    *  there", never as "nothing to lose". */
   error?: string;
+  /** Files in this checkout owned by somebody else — almost always root,
+   *  written by a container that mounted the repo and ran as root. Present
+   *  means the removal CANNOT succeed and must not be attempted: git deletes
+   *  the worktree's registration before its files, so a half-done removal
+   *  leaves an orphan directory that no longer belongs to any repository. */
+  blocked?: BlockedByOwner;
+}
+
+/** Why a worktree cannot be deleted, and the one command that fixes it. */
+export interface BlockedByOwner {
+  /** How many foreign-owned paths were found before the walk gave up. */
+  count: number;
+  /** True when the count is a floor rather than a total. */
+  more: boolean;
+  /** Top-level directories to hand to chown — the useful unit, since these
+   *  come from a container writing a whole `tmp/` or `.mypy_cache/`. */
+  paths: string[];
+  /** Owner names seen, e.g. ["root"]. */
+  owners: string[];
 }
 
 /**

@@ -33,7 +33,7 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
@@ -628,6 +628,9 @@ const server = Bun.serve<WsData>({
         // Copy chosen leftovers into the main checkout before the worktree
         // holding them is removed. Never overwrites — see rescueLeftovers().
         case "/git/worktree-rescue": res = await rescueLeftovers(root, b.path, b.paths); break;
+        // Elevates — the only route that does. chown only, never rm, and the
+        // path must match a worktree git reports. See fixWorktreeOwnership().
+        case "/git/worktree-chown": res = fixWorktreeOwnership(root, b.path); break;
         // `root` here is the checkout being updated — a worktree updates
         // itself, because the merge has to run where the branch is checked out.
         case "/git/sync-base": res = syncFromBase(root, b.base); break;

@@ -13,7 +13,7 @@ import type {
   ConflictBlock, BlockChoice,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
   GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine, GitTreeState,
-  GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, WorktreeLeftovers, LeftoverEntry,
+  GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, WorktreeLeftovers, LeftoverEntry, BlockedByOwner,
 } from "../../shared/types.ts";
 
 export const GIT_WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -1521,6 +1521,69 @@ function readOneLevel(worktree: string, dir: string): string[] {
   } catch { return [dir]; }
 }
 
+/** Entries walked looking for foreign owners before the answer becomes "at
+ *  least this many". One is already enough to block the removal; the rest of
+ *  the count is only there to make the message honest. */
+const OWNER_SCAN_MAX = 20_000;
+
+/**
+ * Paths in this checkout that belong to somebody else.
+ *
+ * A repo built with docker-compose gets `tmp/`, `.mypy_cache/` and
+ * `.ruff_cache/` written by a container running as root, straight into the
+ * bind-mounted worktree. They are root:root on the host, so nothing the user
+ * runs can delete them — and `git worktree remove --force` finds that out
+ * halfway through, AFTER it has already deleted the worktree's registration.
+ * What is left is a directory that is no longer a worktree of anything, with
+ * some of its tracked files gone: measured on a real repo, 1450 files deleted
+ * out of one checkout and its registration destroyed, while the root-owned
+ * caches sat there untouched.
+ *
+ * So this is a precondition, not a diagnosis after the fact.
+ *
+ * Reported per top-level directory because that is the unit that gets fixed:
+ * one `chown -R` on `tmp/` settles the four hundred files under it.
+ */
+export function foreignOwned(dir: string): BlockedByOwner | null {
+  const me = typeof process.getuid === "function" ? process.getuid() : -1;
+  if (me < 0) return null; // no uids to compare (Windows) — nothing to claim
+  const tops = new Set<string>();
+  const owners = new Set<string>();
+  let count = 0, seen = 0, more = false;
+
+  const walk = (abs: string, top: string): void => {
+    if (seen >= OWNER_SCAN_MAX) { more = true; return; }
+    let entries;
+    try { entries = readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (seen++ >= OWNER_SCAN_MAX) { more = true; return; }
+      const child = join(abs, e.name);
+      if (e.isSymbolicLink()) continue; // the link is ours even when the target isn't
+      let st;
+      try { st = statSync(child); } catch { continue; }
+      if (st.uid !== me) {
+        count++;
+        tops.add(top || e.name);
+        owners.add(String(st.uid));
+        // No need to descend: the whole subtree goes in one chown, and walking
+        // 30k root-owned cache files to raise a number nobody reads is waste.
+        if (e.isDirectory()) continue;
+      } else if (e.isDirectory()) {
+        walk(child, top || e.name);
+      }
+    }
+  };
+  walk(dir, "");
+  if (!count) return null;
+  return {
+    count, more,
+    paths: [...tops].sort().slice(0, 12),
+    // uid 0 is root everywhere; anything else is named by number, which is
+    // still what `chown` wants.
+    owners: [...owners].map((u) => (u === "0" ? "root" : `uid ${u}`)),
+  };
+}
+
 /** The repository's main working checkout — where a rescued file belongs.
  *  `git worktree list` puts it first; that is its documented order, and it is
  *  the one entry whose `.git` is a real directory rather than a file. */
@@ -1681,9 +1744,13 @@ export async function worktreeLeftovers(rootIn: string, pathIn: unknown): Promis
   // gets cut at twelve.
   entries.sort((a, b) =>
     Number(a.vsMain === "differs") - Number(b.vsMain === "differs") || a.bytes - b.bytes || a.path.localeCompare(b.path));
+  // Asked here rather than at removal time so the dialog can say "this one
+  // can't go" while there is still a decision to make about it.
+  const blocked = foreignOwned(abs);
   return {
     path: abs, entries: entries.slice(0, LEFTOVERS_MAX),
     more: Math.max(0, entries.length - LEFTOVERS_MAX), skipped, identical,
+    ...(blocked ? { blocked } : {}),
   };
 }
 
@@ -1742,12 +1809,114 @@ export async function rescueLeftovers(rootIn: string, pathIn: unknown, relsIn: u
   return { ok: skipped.length === 0, copied, skipped, ...(skipped.length ? { error: `${skipped.length} of ${rels.length} not copied` } : {}) };
 }
 
+/**
+ * Put back the administrative entry `git worktree remove` deletes first.
+ *
+ * Its removal is not atomic: the registration under `.git/worktrees/<name>`
+ * goes before the files do, so a removal that fails partway — a root-owned
+ * cache it cannot unlink — leaves a full directory that is no longer a worktree
+ * of anything. `git worktree repair` does not help: it relinks a worktree that
+ * MOVED, and refuses here because the directory it would point at is gone.
+ *
+ * Rebuilding it by hand is three small files and a `reset`, which is what git
+ * itself writes. The reset restores the index from HEAD without touching the
+ * working tree, so tracked files that survived stay exactly as they are and the
+ * ones the failed removal did delete show up as deletions to restore, rather
+ * than as a checkout nobody can read.
+ */
+function restoreRegistration(root: string, abs: string, branch: string): boolean {
+  try {
+    const dotgit = join(abs, ".git");
+    if (!existsSync(dotgit)) return false;
+    // The name git used, read back out of the worktree's own .git pointer, so
+    // this cannot invent a different one.
+    const ref = readFileSync(dotgit, "utf8").replace(/^gitdir:\s*/, "").trim();
+    const name = basename(ref);
+    if (!name) return false;
+    const admin = join(gitDir(root) ?? join(root, ".git"), "worktrees", name);
+    if (existsSync(admin)) return false; // still registered — nothing to undo
+    mkdirSync(admin, { recursive: true });
+    writeFileSync(join(admin, "gitdir"), `${dotgit}\n`);
+    writeFileSync(join(admin, "commondir"), "../..\n");
+    writeFileSync(join(admin, "HEAD"), branch && branch !== "(detached)" ? `ref: refs/heads/${branch}\n` : "");
+    git(abs, ["reset", "-q"]);
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * Hand a worktree's files back to the user, through the system's own auth
+ * dialog, so the removal it blocks can proceed.
+ *
+ * Three deliberate limits, because this is the only place in the app that
+ * reaches root:
+ *
+ *   1. `pkexec`, not `sudo`. The password prompt is the desktop's, it shows the
+ *      exact command being elevated, and this process never sees, stores or
+ *      transports the password. An input of our own asking for a sudo password
+ *      is the thing not to build, whatever it would save.
+ *   2. `chown` and nothing else. Never `rm` as root. Root's job is to give the
+ *      files back; the deletion still happens as the user afterwards, subject
+ *      to every check that already exists. The worst outcome of a bug here is
+ *      that a directory the user owns becomes a directory the user owns.
+ *   3. The path is not taken from the caller. It has to match a worktree this
+ *      repository currently reports, so a crafted request cannot point root at
+ *      an arbitrary directory. Arguments go as an array — there is no shell to
+ *      inject into.
+ */
+export function fixWorktreeOwnership(rootIn: string, pathIn: unknown): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
+  // Only a path git itself vouches for, and never the checkout we are in.
+  if (abs === root) return { ok: false, error: "that is the main checkout" };
+  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
+  if (!foreignOwned(abs)) return { ok: true, output: "already yours" };
+
+  const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+  const gid = typeof process.getgid === "function" ? process.getgid() : -1;
+  if (uid < 0 || gid < 0) return { ok: false, error: "no user to hand ownership to on this platform" };
+
+  const p = Bun.spawnSync(["pkexec", "chown", "-R", `${uid}:${gid}`, "--", abs], { stdout: "pipe", stderr: "pipe" });
+  const err = p.stderr?.toString().trim() ?? "";
+  if (p.exitCode === 126 || /dismissed|not authorized/i.test(err)) return { ok: false, error: "cancelled" };
+  if (p.exitCode !== 0) return { ok: false, error: err || `pkexec exited ${p.exitCode}` };
+  // Verified, not assumed: pkexec can succeed while chown skips something.
+  const left = foreignOwned(abs);
+  return left
+    ? { ok: false, error: `still ${left.count}${left.more ? "+" : ""} files owned by ${left.owners.join(", ")}` }
+    : { ok: true, output: "ownership restored" };
+}
+
 export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
   if (abs === root) return { ok: false, error: "can't remove the current worktree" };
-  return run(root, force ? ["worktree", "remove", "--force", abs] : ["worktree", "remove", abs]);
+
+  // Refuse rather than start something that cannot finish. Git deletes the
+  // registration before the files, so "try it and see" is not free: the failure
+  // mode is a directory that is no longer a worktree, missing some of its
+  // tracked files, with the undeletable ones still sitting there.
+  const blocked = foreignOwned(abs);
+  if (blocked) {
+    const what = blocked.paths.map((p) => `${basename(abs)}/${p}`).join(" ");
+    return {
+      ok: false,
+      error: `${blocked.count}${blocked.more ? "+" : ""} files here belong to ${blocked.owners.join(", ")} — a container wrote them. `
+        + `Nothing can delete them as you, and a partial removal would leave this directory orphaned.\n\n`
+        + `Fix it first:\n  sudo chown -R "$(id -un):$(id -gn)" ${what}`,
+    };
+  }
+
+  // The branch, captured while the worktree is still registered — it is what
+  // the registration has to be rebuilt from if the removal fails anyway.
+  const branch = worktreeList(root).find((w) => w.path === abs)?.branch ?? "";
+  const r = run(root, force ? ["worktree", "remove", "--force", abs] : ["worktree", "remove", abs]);
+  if (!r.ok && existsSync(abs) && restoreRegistration(root, abs, branch)) {
+    return { ...r, error: `${r.error ?? "worktree remove failed"} — the worktree is still registered; nothing was left orphaned` };
+  }
+  return r;
 }
 
 export function checkout(rootIn: string, name: string): GitActionResult {

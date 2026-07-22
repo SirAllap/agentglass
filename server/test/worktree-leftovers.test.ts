@@ -205,6 +205,41 @@ describe("worktreeLeftovers", () => {
  *  removes them from what worktreeLeftovers() lists. Reorder the two describes
  *  and the first one starts failing for a reason that has nothing to do with
  *  it. */
+describe("foreignOwned", () => {
+  test("says nothing when every file is ours", () => {
+    // The normal case, and the one that must not cost anything: a false
+    // positive here refuses a removal that would have worked fine.
+    expect(gw.foreignOwned(WT)).toBeNull();
+  });
+
+  test("a directory nobody can read is not a directory full of strangers", () => {
+    expect(gw.foreignOwned(join(dir, "does-not-exist"))).toBeNull();
+  });
+});
+
+describe("fixWorktreeOwnership", () => {
+  test("refuses a path that is not a worktree of this repo", () => {
+    // This is the ONE call that reaches root. The path must come from git, not
+    // from the request, or a crafted call points chown at anything.
+    const r = gw.fixWorktreeOwnership(REPO, dir);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("not a worktree");
+  });
+
+  test("refuses the main checkout", () => {
+    const r = gw.fixWorktreeOwnership(REPO, REPO);
+    expect(r.ok).toBe(false);
+  });
+
+  test("does nothing, and elevates nothing, when the files are already ours", () => {
+    // No pkexec, no dialog, no root: there is nothing to hand back. If this
+    // ever starts prompting on a clean checkout, that is the bug.
+    const r = gw.fixWorktreeOwnership(REPO, WT);
+    expect(r.ok).toBe(true);
+    expect(r.output).toBe("already yours");
+  });
+});
+
 describe("rescueLeftovers", () => {
   test("copies into the main checkout at the same relative path", async () => {
     const r = await gw.rescueLeftovers(REPO, WT, ["notes-local.md"]);

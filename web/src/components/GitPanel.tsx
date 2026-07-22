@@ -955,7 +955,29 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     try { reports = (await api.gitWorktreeLeftovers(root, paths)).leftovers; }
     catch (e) { for (const b of held) failed.push(`${b.name} (couldn't inspect its worktree: ${String(e)})`); return 0; }
 
-    const { removable, refused } = splitReadable(held, heldByWorktree, reports);
+    let { removable, refused } = splitReadable(held, heldByWorktree, reports);
+
+    // A checkout blocked only by ownership is a checkout one dialog away from
+    // working, so offer that dialog instead of reporting a dead end. The
+    // elevation is the desktop's own (pkexec) and does chown, never rm — the
+    // removal still runs as the user, through every check below.
+    const blocked = reports.filter((r) => r.blocked && refused.some((f) => heldByWorktree.get(f.branch.name) === r.path));
+    if (blocked.length && await ask({
+      title: `${blocked.length} worktree${blocked.length === 1 ? " has" : "s have"} files owned by ${[...new Set(blocked.flatMap((r) => r.blocked!.owners))].join(", ")}`,
+      body: `A container wrote them, so nothing can delete them as you.\n\n${blocked.map((r) => `${wtName(r.path)} — ${r.blocked!.count}${r.blocked!.more ? "+" : ""} files`).join("\n")}\n\nHand them back? Your desktop will ask for your password. agentglass never sees it, and only runs chown — the deletion still happens as you.`,
+      confirmLabel: "Hand them back",
+    })) {
+      for (const r of blocked) {
+        setPending(`restoring ownership of ${wtName(r.path)}`);
+        const fix = await api.gitWorktreeChown(root, r.path).catch((e) => ({ ok: false, error: String(e) }));
+        if (!fix.ok) { flash(false, `${wtName(r.path)}: ${fix.error || "chown failed"}`); continue; }
+        r.blocked = undefined; // re-read below now that it can succeed
+      }
+      // Re-split against the repaired reports rather than trusting the old
+      // verdict: the whole point is that some of them are removable now.
+      ({ removable, refused } = splitReadable(held, heldByWorktree, reports));
+    }
+
     for (const { branch, why } of refused) failed.push(`${branch.name} (${why})`);
     if (!removable.length) return 0;
 
