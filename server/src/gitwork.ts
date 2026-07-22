@@ -1011,9 +1011,23 @@ export function invalidateMerged(root?: string): void {
 }
 
 
-export function branches(rootIn: unknown): { current: string; branches: GitBranch[]; trunk: string | null } {
+/**
+ * Is the squash/rebase sweep still running for this trunk?
+ *
+ * It fills in behind the response on purpose (see sweepProbes), so a branch
+ * merged through the GitHub button is recognised a moment AFTER the list is
+ * first drawn. Left unsaid, that reads as a bug: the button says "delete 3
+ * merged" when the panel opens and "delete 4 merged" when you come back to it,
+ * with nothing on screen accounting for the extra one.
+ */
+export function mergedSweeping(rootIn: unknown, ref: string): boolean {
   const root = repoRoot(rootIn);
-  if (!root) return { current: "", branches: [], trunk: null };
+  return !!root && probeRunning.has(`${root}\u0000${ref}`);
+}
+
+export function branches(rootIn: unknown): { current: string; branches: GitBranch[]; trunk: string | null; sweeping: boolean } {
+  const root = repoRoot(rootIn);
+  if (!root) return { current: "", branches: [], trunk: null, sweeping: false };
   const fmt = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)`;
   const r = git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]);
   const trunk = defaultBranch(root);
@@ -1030,7 +1044,10 @@ export function branches(rootIn: unknown): { current: string; branches: GitBranc
       ...(merged ? { mergedIntoTrunk: merged.has(name) } : {}),
     });
   }
-  return { current: currentBranch(root), branches: list, trunk };
+  // Read AFTER mergedInto(), which is what starts the sweep — asked before, it
+  // is always false on the very first call and the caller never learns that the
+  // count it is showing is still moving.
+  return { current: currentBranch(root), branches: list, trunk, sweeping: !!trunk && mergedSweeping(root, trunk) };
 }
 
 // lazygit-style branch ops

@@ -70,23 +70,23 @@ export function splitReadable(
  * touched — six, in a repo that has three. Each case gets its own sentence
  * rather than one sentence with a hole in it.
  */
-export function goneConfirmText(
-  free: GitBranch[],
-  held: GitBranch[],
-  unmergedCount: number,
-  trunk: string,
-): string {
+const s = (n: number, one: string, many: string) => (n === 1 ? one : many);
+
+/** The question itself — one line, the thing the dialog puts in bold. */
+export function goneConfirmTitle(free: GitBranch[], held: GitBranch[], trunk: string): string {
+  if (free.length) return `Delete ${free.length} ${s(free.length, "branch", "branches")} already merged into ${trunk}?`;
+  if (held.length) return `Remove ${held.length} ${s(held.length, "worktree", "worktrees")} and delete ${s(held.length, "its branch", "their branches")}?`;
+  return "Nothing to delete";
+}
+
+/** The detail under it. Everything the question can't carry on one line. */
+export function goneConfirmBody(free: GitBranch[], held: GitBranch[], unmergedCount: number, trunk: string): string {
   const parts: string[] = [];
-  const s = (n: number, one: string, many: string) => (n === 1 ? one : many);
-  if (free.length) {
-    parts.push(`Delete ${free.length} ${s(free.length, "branch", "branches")} already merged into ${trunk}?`);
-    if (held.length) {
-      parts.push(`${held.length} more ${s(held.length, "is", "are")} checked out in a worktree. You'll be asked about ${s(held.length, "it", "those")} separately, with what removing ${s(held.length, "it", "them")} would delete.`);
-    }
+  if (free.length && held.length) {
+    parts.push(`${held.length} more ${s(held.length, "is", "are")} checked out in a worktree. You'll be asked about ${s(held.length, "it", "those")} separately, with what removing ${s(held.length, "it", "them")} would delete.`);
   } else if (held.length) {
     // No "more" here: there is nothing for them to be more *than*.
-    parts.push(`All ${held.length} merged ${s(held.length, "branch is", "branches are")} checked out in a worktree, so ${s(held.length, "it", "they")} can't be deleted on ${s(held.length, "its", "their")} own.`);
-    parts.push(`Remove ${s(held.length, "that worktree", "those worktrees")} and delete ${s(held.length, "the branch", "the branches")}? You'll see exactly what removing ${s(held.length, "it", "them")} would delete before anything happens.`);
+    parts.push(`All ${held.length} merged ${s(held.length, "branch is", "branches are")} checked out in a worktree, so ${s(held.length, "it", "they")} can't be deleted on ${s(held.length, "its", "their")} own. You'll see exactly what removing ${s(held.length, "it", "them")} would delete, and can keep any of it, before anything happens.`);
   }
   if (unmergedCount) {
     parts.push(`${unmergedCount} ${s(unmergedCount, "has", "have")} no remote branch but ${s(unmergedCount, "is", "are")} NOT in ${trunk} — those are kept.`);

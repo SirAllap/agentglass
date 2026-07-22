@@ -44,8 +44,11 @@ function Tick({ on, dim }: { on: boolean; dim?: boolean }) {
 type Row = { kind: "head"; report: WorktreeLeftovers } | { kind: "entry"; report: WorktreeLeftovers; entry: LeftoverEntry };
 const keyOf = (r: WorktreeLeftovers, e: LeftoverEntry) => `${r.path}\u0000${e.path}`;
 
-export function RescueModal({ reports, onCancel, onConfirm }: {
+export function RescueModal({ reports, progress, onCancel, onConfirm }: {
   reports: WorktreeLeftovers[];
+  /** Set once the user has committed: the dialog stays up and narrates instead
+   *  of vanishing into a panel that looks like nothing happened. */
+  progress?: string;
   onCancel: () => void;
   /** Chosen paths per worktree path. Empty map means "remove, rescue nothing". */
   onConfirm: (picked: Map<string, string[]>) => void;
@@ -57,6 +60,8 @@ export function RescueModal({ reports, onCancel, onConfirm }: {
   });
   const [cur, setCur] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  /** Committed and running: the list stops taking input and the footer narrates. */
+  const working = !!progress;
 
   const rows: Row[] = useMemo(() => {
     const out: Row[] = [];
@@ -83,7 +88,7 @@ export function RescueModal({ reports, onCancel, onConfirm }: {
   }, [rows, on]);
 
   const toggle = (k: string) => setOn((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
-  const confirm = () => {
+  const submit = () => {
     const picked = new Map<string, string[]>();
     for (const r of rows) {
       if (r.kind !== "entry" || !on.has(keyOf(r.report, r.entry))) continue;
@@ -94,8 +99,9 @@ export function RescueModal({ reports, onCancel, onConfirm }: {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (working) return; // committed — the keyboard can't take it back
       if (e.key === "Escape") { e.preventDefault(); onCancel(); return; }
-      if (e.key === "Enter") { e.preventDefault(); confirm(); return; }
+      if (e.key === "Enter") { e.preventDefault(); submit(); return; }
       const at = selectable.indexOf(cur);
       if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); setCur(selectable[Math.min(selectable.length - 1, at + 1)] ?? cur); }
       else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); setCur(selectable[Math.max(0, at - 1)] ?? cur); }
@@ -107,7 +113,7 @@ export function RescueModal({ reports, onCancel, onConfirm }: {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [rows, selectable, cur, on]);
+  }, [rows, selectable, cur, on, working]);
 
   useEffect(() => { listRef.current?.querySelector('[data-cur="1"]')?.scrollIntoView({ block: "nearest" }); }, [cur]);
 
@@ -134,7 +140,7 @@ export function RescueModal({ reports, onCancel, onConfirm }: {
               </div>
             </div>
 
-            <div ref={listRef} className="agx-scroll overflow-y-auto flex-1 px-2 py-2">
+            <div ref={listRef} className="agx-scroll overflow-y-auto flex-1 px-2 py-2" style={{ opacity: working ? 0.45 : 1, pointerEvents: working ? "none" : "auto" }}>
               {nothingToOffer && (
                 <div className="px-3 py-6 text-[11.5px] text-center" style={{ color: "var(--text3)" }}>
                   Nothing unique in these checkouts — everything in them is either a cache or already in the main checkout.
@@ -174,6 +180,15 @@ export function RescueModal({ reports, onCancel, onConfirm }: {
             </div>
 
             <div className="px-4 py-2.5 flex items-center gap-3" style={{ borderTop: "1px solid var(--border)" }}>
+              {working ? (
+                <>
+                  <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ border: "2px solid color-mix(in srgb, var(--primary) 35%, transparent)", borderTopColor: "var(--primary)", animation: "agx-spin 0.7s linear infinite" }} />
+                  <style>{"@keyframes agx-spin{to{transform:rotate(360deg)}}"}</style>
+                  <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>{progress}…</span>
+                  <span className="ml-auto text-[10.5px]" style={{ color: "var(--text3)" }}>this can take a few seconds</span>
+                </>
+              ) : (
+              <>
               <span className="text-[11px]" style={{ color: "var(--text3)" }}>
                 <span className="t-dim2">j/k</span> move · <span className="t-dim2">space</span> toggle · <span className="t-dim2">a</span> all · <span className="t-dim2">n</span> none
               </span>
@@ -182,9 +197,11 @@ export function RescueModal({ reports, onCancel, onConfirm }: {
                 {totals.differs > 0 && ` · ${totals.differs} would overwrite`}
               </span>
               <button onClick={onCancel} className="text-[11px] px-2.5 py-1 rounded" style={{ color: "var(--text2)", border: "1px solid var(--border)" }}>Cancel</button>
-              <button onClick={confirm} className="text-[11px] px-2.5 py-1 rounded font-medium" style={{ color: "var(--bg)", background: "var(--primary)" }}>
+              <button onClick={submit} className="text-[11px] px-2.5 py-1 rounded font-medium" style={{ color: "var(--bg)", background: "var(--primary)" }}>
                 {totals.n ? `Keep ${totals.n} & remove` : "Remove, keep nothing"}
               </button>
+              </>
+              )}
             </div>
           </motion.div>
         </div>

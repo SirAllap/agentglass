@@ -7,8 +7,9 @@ import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
-import { partitionByWorktree, splitReadable, goneConfirmText } from "../lib/goneCleanup.ts";
+import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody } from "../lib/goneCleanup.ts";
 import { RescueModal } from "./RescueModal.tsx";
+import { useDialogs } from "./ConfirmDialog.tsx";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
@@ -456,17 +457,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
+  // The panel's own confirm/prompt. window.confirm renders in OS chrome, reads
+  // as somebody else's dialog next to our modals, and blocks the JS thread so
+  // nothing can show progress while it is up.
+  const { ask, askText, dialog } = useDialogs();
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   // branches / log / stashes / worktrees
-  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null }>({ current: "", branches: [] });
+  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null; sweeping?: boolean }>({ current: "", branches: [] });
   const [newBranch, setNewBranch] = useState("");
   const [graph, setGraph] = useState<GitGraphLine[]>([]);
   const [stashes, setStashes] = useState<GitStash[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
   /** The rescue prompt, and the promise deleteHeldByWorktrees() is parked on
    *  while it is open. Null means no prompt; resolving with null is a cancel. */
-  const [rescue, setRescue] = useState<{ reports: WorktreeLeftovers[]; resolve: (v: Map<string, string[]> | null) => void } | null>(null);
+  const [rescue, setRescue] = useState<{ reports: WorktreeLeftovers[]; resolve: (v: Map<string, string[]> | null) => void; progress?: string } | null>(null);
   const [remotes, setRemotes] = useState<GitRemote[]>([]);
   /** The remote whose branches the pane is listing, and that list. Empty until
    *  the first answer names one — the server picks the only/first remote when
@@ -771,7 +776,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // working tree ops
   const stage = async (c: GitFileChange) => { if (await act(() => api.gitStage(root, [rel(c)]))) setSelKey("s:" + c.file_path); };
   const unstage = async (c: GitFileChange) => { if (await act(() => api.gitUnstage(root, [rel(c)]))) setSelKey("u:" + c.file_path); };
-  const discard = (c: GitFileChange) => { if (confirm(`Discard changes to ${baseName(c.file_path)}? This cannot be undone.`)) act(() => api.gitDiscard(root, [rel(c)]), "discarded"); };
+  const discard = async (c: GitFileChange) => {
+    if (await ask({ title: `Discard changes to ${baseName(c.file_path)}?`, body: "This cannot be undone.", danger: true, confirmLabel: "Discard" })) act(() => api.gitDiscard(root, [rel(c)]), "discarded");
+  };
   const doCommit = async () => {
     if (!title.trim()) { flash(false, "commit title required"); return; }
     if (await act(() => api.gitCommitStaged(root, title, body), "committed")) { setTitle(""); setBody(""); api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)).catch(() => {}); }
@@ -804,20 +811,20 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * on *which* failure came back.
    */
   const deleteBranch = async (b: GitBranch) => {
-    if (busy || !confirm(`Delete branch ${b.name}?`)) return;
+    if (busy || !(await ask({ title: `Delete branch ${b.name}?`, danger: true }))) return;
     setBusy(true);
     setPending(`delete ${b.name}`);
     try {
       let r = await api.gitBranchDelete(root, b.name, false);
       const wt = r.ok ? null : /worktree at '([^']+)'/.exec(r.error || "")?.[1];
       if (wt) {
-        if (!confirm(`${b.name} is checked out in the worktree ${wtName(wt)}.\n\nRemove that worktree and delete the branch?`)) { flash(false, "kept"); return; }
+        if (!(await ask({ title: `${b.name} is checked out in a worktree`, body: `It lives in ${wtName(wt)}. Remove that worktree and delete the branch?`, danger: true, confirmLabel: "Remove & delete" }))) { flash(false, "kept"); return; }
         let rm = await api.gitWorktreeRemove(root, wt, false);
         // git refuses to drop a worktree holding work — modified tracked files
         // or, as often, a stray untracked scratch file. Name the cost, then let
         // them take it.
         if (!rm.ok && /modified|untracked|not clean/i.test(rm.error || "")) {
-          if (!confirm(`${wtName(wt)} still has uncommitted or untracked files.\n\nRemove it anyway? That work is gone.`)) { flash(false, rm.error || "kept"); return; }
+          if (!(await ask({ title: `${wtName(wt)} still has uncommitted or untracked files`, body: "Remove it anyway? That work is gone.", danger: true, confirmLabel: "Remove anyway" }))) { flash(false, rm.error || "kept"); return; }
           rm = await api.gitWorktreeRemove(root, wt, true);
         }
         if (!rm.ok) { flash(false, rm.error || "worktree remove failed"); return; }
@@ -826,7 +833,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       }
       if (!r.ok && /not fully merged/i.test(r.error || "") && b.mergedIntoTrunk) {
         const trunk = branchData.trunk ?? "the trunk";
-        if (confirm(`git says ${b.name} isn't merged, but its commits are already in ${trunk} — a squash merge rewrites them, so the tip never becomes an ancestor.\n\nDelete it anyway?`)) {
+        if (await ask({ title: `git says ${b.name} isn't merged`, body: `Its commits are already in ${trunk} — a squash merge rewrites them, so the tip never becomes an ancestor of anything.\n\nDelete it anyway?`, danger: true })) {
           r = await api.gitBranchDelete(root, b.name, true);
         }
       }
@@ -892,19 +899,28 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const deleteGone = async () => {
     if (!goneMerged.length || busy) return;
     const trunk = branchData.trunk ?? "the trunk";
-    // Before the first question, because the question's wording depends on it.
-    // A failure here is a reason to stop: without the map every branch looks
-    // free to delete, which is the wrong half of the fork to guess at.
+    // Busy BEFORE the first await, not after the confirmation. `git worktree
+    // list` costs a status per checkout — on a repo with eighteen of them the
+    // press was followed by seconds of a button that looked untouched, and the
+    // first thing to appear was a dialog. A control that has been pressed has
+    // to say so on the same frame.
+    setBusy(true);
+    setPending("checking worktrees");
     let heldByWorktree: Map<string, string>;
+    // Without the map every branch looks free to delete, which is the wrong
+    // half of the fork to guess at — so a failure here stops the whole thing.
     try { heldByWorktree = await heldByWorktreeNow(); }
-    catch (e) { flash(false, `couldn't list this repo's worktrees: ${String(e)}`); return; }
+    catch (e) { flash(false, `couldn't list this repo's worktrees: ${String(e)}`); setBusy(false); setPending(null); return; }
     const { free, held } = partitionByWorktree(goneMerged, heldByWorktree);
-    if (!confirm(goneConfirmText(free, held, goneUnmerged.length, trunk))) return;
+    setPending(null);
+    setBusy(false); // the question is theirs to answer; nothing is running
+    if (!(await ask({ title: goneConfirmTitle(free, held, trunk), body: goneConfirmBody(free, held, goneUnmerged.length, trunk), confirmLabel: "Continue" }))) return;
     setBusy(true);
     const failed: string[] = [];
     let done = 0;
     try {
       for (const b of free) {
+        setPending(`deleting ${b.name}`);
         const r = await api.gitBranchDelete(root, b.name, true).catch(() => ({ ok: false, error: "" }));
         if (r.ok) done++; else failed.push(`${b.name}${r.error ? ` (${r.error})` : ""}`);
       }
@@ -915,6 +931,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           : `deleted ${done}, ${failed.length} kept: ${failed.slice(0, 2).join("; ")}${failed.length > 2 ? "…" : ""}`);
     } finally {
       setBusy(false);
+      setPending(null);
       reloadBranches();
       reloadWorktrees();
     }
@@ -948,8 +965,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const picked = await new Promise<Map<string, string[]> | null>((resolve) => {
       setRescue({ reports: removable.map(({ report }) => report), resolve });
     });
-    setRescue(null);
-    if (!picked) return 0; // cancelled — nothing removed, nothing copied
+    if (!picked) { setRescue(null); return 0; } // cancelled — nothing removed, nothing copied
+    // The modal STAYS UP for the rest of this, showing what is happening.
+    // Copying 700K and removing three checkouts is seconds of work, and closing
+    // the dialog first left the user staring at an unchanged panel, free to
+    // navigate away mid-delete with nothing on screen saying why.
+    const step = (progress: string) => setRescue((r) => (r ? { ...r, progress } : r));
 
     // Copy first, remove second, and never the other way round. A failed rescue
     // has to be able to stop the removal, which it cannot do once the directory
@@ -958,6 +979,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     let rescued = 0;
     for (const [path, rels] of picked) {
       if (!rels.length) continue;
+      step(`keeping ${rels.length} file${rels.length === 1 ? "" : "s"} from ${wtName(path)}`);
       const res = await api.gitWorktreeRescue(root, path, rels).catch((e) => ({ ok: false, error: String(e), copied: [] as string[], skipped: [] as { path: string; why: string }[] }));
       const lost = res.skipped ?? [];
       if (lost.length) {
@@ -977,23 +999,28 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     // confirmed it inspected, so the thing removed is the thing priced.
     for (const { branch, report } of removable) {
       if (keptBack.has(report.path)) continue; // its rescue failed; already reported
+      step(`removing ${wtName(report.path)}`);
       const rm = await api.gitWorktreeRemove(root, report.path, true).catch((e) => ({ ok: false, error: String(e) }));
       if (!rm.ok) { failed.push(`${branch.name} (${rm.error || "worktree remove failed"})`); continue; }
       const r = await api.gitBranchDelete(root, branch.name, true).catch((e) => ({ ok: false, error: String(e) }));
       if (r.ok) done++; else failed.push(`${branch.name} (${r.error || "branch delete failed"})`);
     }
+    setRescue(null);
     return done;
   };
-  const mergeBranch = (name: string) => { if (confirm(`Merge ${name} into the current branch?`)) act(() => api.gitMerge(root, name), `merged ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
-  const rebaseBranch = (name: string) => { if (confirm(`Rebase the current branch onto ${name}?`)) act(() => api.gitRebase(root, name), `rebased onto ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
-  const renameBranch = (name: string) => { const to = prompt(`Rename ${name} to:`, name); if (to && to.trim() && to !== name) act(() => api.gitBranchRename(root, name, to.trim()), `renamed → ${to.trim()}`).then((ok) => { if (ok) reloadBranches(); }); };
+  const mergeBranch = async (name: string) => { if (await ask({ title: `Merge ${name} into the current branch?`, confirmLabel: "Merge" })) act(() => api.gitMerge(root, name), `merged ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
+  const rebaseBranch = async (name: string) => { if (await ask({ title: `Rebase the current branch onto ${name}?`, confirmLabel: "Rebase" })) act(() => api.gitRebase(root, name), `rebased onto ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
+  const renameBranch = async (name: string) => {
+    const to = await askText({ title: `Rename ${name}`, input: { label: "New name", initial: name }, confirmLabel: "Rename" });
+    if (to && to !== name) act(() => api.gitBranchRename(root, name, to), `renamed → ${to}`).then((ok) => { if (ok) reloadBranches(); });
+  };
   // log
   const openCommit = async (hash: string, subject: string) => {
     try { const { changes } = await api.gitCommitDiff(root, hash); setCommitView({ changes, title: `${hash} · ${subject}` }); }
     catch (e) { flash(false, String(e)); }
   };
-  const resetTo = (hash: string, mode: "soft" | "mixed" | "hard") => {
-    if (mode === "hard" && !confirm(`Hard reset to ${hash}? This DISCARDS working-tree changes.`)) return;
+  const resetTo = async (hash: string, mode: "soft" | "mixed" | "hard") => {
+    if (mode === "hard" && !(await ask({ title: `Hard reset to ${hash}?`, body: "This DISCARDS working-tree changes.", danger: true, confirmLabel: "Reset --hard" }))) return;
     act(() => api.gitReset(root, hash, mode), `reset --${mode} ${hash}`).then((ok) => { if (ok) api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)); });
   };
   // worktrees
@@ -1006,13 +1033,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // Same shape as the worktree step inside deleteBranch: a dirty worktree is a
   // question ("that work is gone — still?"), not a dead end.
   const removeWorktree = async (w: GitWorktree) => {
-    if (busy || !confirm(`Remove worktree ${wtName(w.path)}?`)) return;
+    if (busy || !(await ask({ title: `Remove worktree ${wtName(w.path)}?`, danger: true, confirmLabel: "Remove" }))) return;
     setBusy(true);
     setPending(`remove ${wtName(w.path)}`);
     try {
       let r = await api.gitWorktreeRemove(root, w.path, false);
       if (!r.ok && /modified|untracked|not clean/i.test(r.error || "")) {
-        if (!confirm(`${wtName(w.path)} still has uncommitted or untracked files.\n\nRemove it anyway? That work is gone.`)) { flash(false, r.error || "kept"); return; }
+        if (!(await ask({ title: `${wtName(w.path)} still has uncommitted or untracked files`, body: "Remove it anyway? That work is gone.", danger: true, confirmLabel: "Remove anyway" }))) { flash(false, r.error || "kept"); return; }
         r = await api.gitWorktreeRemove(root, w.path, true);
       }
       flash(r.ok, r.ok ? "removed worktree" : r.error || "failed");
@@ -1058,7 +1085,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const reloadStashes = () => api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
   const stashPush = async () => { if (await act(() => api.gitStashPush(root, ""), "stashed")) reloadStashes(); };
   const stashOp = async (op: "apply" | "pop" | "drop", index: number) => {
-    if (op === "drop" && !confirm("Drop this stash?")) return;
+    if (op === "drop" && !(await ask({ title: "Drop this stash?", body: "The stashed changes are gone.", danger: true, confirmLabel: "Drop" }))) return;
     const fn = op === "apply" ? api.gitStashApply : op === "pop" ? api.gitStashPop : api.gitStashDrop;
     if (await act(() => fn(root, index), op + "ed")) reloadStashes();
   };
@@ -1189,9 +1216,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   }, [view]);
 
   // interactive hunk staging (unified view, modified files)
-  const applyHunk = (action: "stage" | "unstage" | "discard", i: number) => {
+  const applyHunk = async (action: "stage" | "unstage" | "discard", i: number) => {
     if (!selected || !writeEnabled) return;
-    if (action === "discard" && !confirm("Discard this hunk? This cannot be undone.")) return;
+    if (action === "discard" && !(await ask({ title: "Discard this hunk?", body: "This cannot be undone.", danger: true, confirmLabel: "Discard" }))) return;
     act(() => api.gitApplyHunk(root, selected.file_path, selected.staged, action, selected.hunks[i]), `${action}d hunk`);
   };
   const hunkBtn = (label: string, tint: string, onClick: () => void) => (
@@ -1498,8 +1525,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         the moment it exists for. */}
                     {branch?.canUndoMerge && (
                       <button
-                        onClick={() => {
-                          if (!confirm(`Undo the last merge on ${branch.name}?\n\nThe branch goes back to exactly where it was. Nothing has been pushed, so nothing anyone else has is affected.`)) return;
+                        onClick={async () => {
+                          if (!(await ask({ title: `Undo the last merge on ${branch.name}?`, body: "The branch goes back to exactly where it was. Nothing has been pushed, so nothing anyone else has is affected.", confirmLabel: "Undo merge" }))) return;
                           void act(() => api.gitUndoMerge(root), "merge undone", "undo");
                         }}
                         disabled={!writeEnabled || busy}
@@ -1817,7 +1844,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           className={`flex items-center gap-2 px-3 whitespace-pre ${isCommit ? "cursor-pointer hover:brightness-125" : ""}`}
                           style={{ lineHeight: "1.55", ...(i === rowIdx ? rowProps(true).style : {}) }}
                           title={isCommit ? "View this commit's diff" : undefined}
-                          onContextMenu={isCommit ? (e) => { e.preventDefault(); const m = prompt(`reset current branch to ${l.hash} — type: soft, mixed, or hard`, "mixed"); if (m === "soft" || m === "mixed" || m === "hard") resetTo(l.hash!, m); } : undefined}>
+                          onContextMenu={isCommit ? async (e) => { e.preventDefault(); const m = await askText({ title: `Reset current branch to ${l.hash}`, input: { label: "Mode — soft, mixed or hard", initial: "mixed" }, confirmLabel: "Reset" }); if (m === "soft" || m === "mixed" || m === "hard") resetTo(l.hash!, m); } : undefined}>
                           <span style={{ color: "color-mix(in srgb, var(--primary) 75%, var(--text3))" }}>{l.graph}</span>
                           {isCommit && <>
                             <span className="shrink-0 tabular-nums" style={{ color: "var(--primary-hover)" }}>{l.hash}</span>
@@ -1858,12 +1885,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         {onlyGone && writeEnabled && goneMerged.length > 0 && (
                           <button onClick={deleteGone} disabled={busy} className="text-[10.5px] px-2.5 py-1 rounded-lg font-medium"
                             style={{ background: "color-mix(in srgb, var(--error) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", color: "var(--error)", opacity: busy ? 0.55 : 1 }}>
-                            {busy ? "deleting…" : `delete ${goneMerged.length} merged`}
+                            {busy ? `${pending ?? "working"}…` : `delete ${goneMerged.length} merged`}
                           </button>
                         )}
                         {onlyGone && (
                           <span className="text-[9.5px] t-dim2">
                             {goneMerged.length > 0 && <>{goneMerged.length} already in {branchData.trunk ?? "the trunk"}</>}
+                            {branchData.sweeping && <span title="Squash- and rebase-merged branches are recognised by replaying their diff, which runs behind the list. The count can still go up.">{goneMerged.length > 0 ? " · " : ""}still checking for squash merges…</span>}
                             {goneMerged.length > 0 && goneUnmerged.length > 0 && " · "}
                             {goneUnmerged.length > 0 && <span style={{ color: "var(--warning)" }}>{goneUnmerged.length} not merged — kept</span>}
                           </span>
@@ -2140,7 +2168,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           it's a drill-down from a row you clicked, not a place you navigate
           to — the rail's views are the destinations, this is a detour. */}
       <ChangesModal open={!!commitView} onClose={() => setCommitView(null)} onBack={() => setCommitView(null)} backLabel="Log" presetChanges={commitView?.changes} presetTitle={commitView?.title} />
-      {rescue && <RescueModal reports={rescue.reports} onCancel={() => rescue.resolve(null)} onConfirm={(picked) => rescue.resolve(picked)} />}
+      {rescue && <RescueModal reports={rescue.reports} progress={rescue.progress} onCancel={() => rescue.resolve(null)} onConfirm={(picked) => rescue.resolve(picked)} />}
+      {dialog}
     </div>
   );
 }

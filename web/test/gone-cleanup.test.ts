@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { partitionByWorktree, splitReadable, goneConfirmText, leftoversLine, preselected, fmtBytes } from "../src/lib/goneCleanup.ts";
+import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, leftoversLine, preselected, fmtBytes } from "../src/lib/goneCleanup.ts";
 import type { GitBranch, WorktreeLeftovers, LeftoverEntry } from "../../shared/types.ts";
 
 /**
@@ -80,7 +80,7 @@ describe("splitReadable", () => {
   });
 });
 
-describe("goneConfirmText", () => {
+describe("goneConfirmTitle / goneConfirmBody", () => {
   const trunk = "origin/master";
 
   it("does not call the held ones 'more' when none are free", () => {
@@ -88,27 +88,33 @@ describe("goneConfirmText", () => {
     // own" followed by "3 more are checked out in a worktree" reads as six
     // branches in a repo that has three.
     const held = [branch("a"), branch("b"), branch("c")];
-    const text = goneConfirmText([], held, 5, trunk);
-    expect(text).not.toContain("more are checked out");
-    expect(text).toContain("All 3 merged branches are checked out in a worktree");
-    expect(text).toContain("5 have no remote branch");
+    expect(goneConfirmTitle([], held, trunk)).toBe("Remove 3 worktrees and delete their branches?");
+    const body = goneConfirmBody([], held, 5, trunk);
+    expect(body).not.toContain("more are checked out");
+    expect(body).toContain("All 3 merged branches are checked out in a worktree");
+    expect(body).toContain("5 have no remote branch");
   });
 
   it("uses 'more' only when there is something for them to be more than", () => {
-    const text = goneConfirmText([branch("a")], [branch("b")], 0, trunk);
-    expect(text).toContain("Delete 1 branch already merged into origin/master?");
-    expect(text).toContain("1 more is checked out in a worktree");
+    expect(goneConfirmTitle([branch("a")], [branch("b")], trunk)).toBe("Delete 1 branch already merged into origin/master?");
+    expect(goneConfirmBody([branch("a")], [branch("b")], 0, trunk)).toContain("1 more is checked out in a worktree");
   });
 
   it("says nothing about worktrees when none are held", () => {
-    const text = goneConfirmText([branch("a"), branch("b")], [], 0, trunk);
-    expect(text).toBe("Delete 2 branches already merged into origin/master?");
+    expect(goneConfirmTitle([branch("a"), branch("b")], [], trunk)).toBe("Delete 2 branches already merged into origin/master?");
+    expect(goneConfirmBody([branch("a"), branch("b")], [], 0, trunk)).toBe("");
   });
 
   it("agrees in number for a single held branch", () => {
-    const text = goneConfirmText([], [branch("a")], 0, trunk);
-    expect(text).toContain("All 1 merged branch is checked out in a worktree");
-    expect(text).toContain("Remove that worktree and delete the branch?");
+    expect(goneConfirmTitle([], [branch("a")], trunk)).toBe("Remove 1 worktree and delete its branch?");
+    expect(goneConfirmBody([], [branch("a")], 0, trunk)).toContain("All 1 merged branch is checked out in a worktree");
+  });
+
+  it("the title is one line — it is what the dialog bolds", () => {
+    // Body carries the rest. A title with newlines in it renders as a wall.
+    for (const t of [goneConfirmTitle([branch("a")], [branch("b")], trunk), goneConfirmTitle([], [branch("a")], trunk)]) {
+      expect(t).not.toContain("\n");
+    }
   });
 });
 

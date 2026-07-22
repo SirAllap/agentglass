@@ -10,6 +10,7 @@ import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
 import { ConsoleStrip, lastTerminalRoot, runInConsole } from "./TerminalPanel.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
+import { useDialogs } from "./ConfirmDialog.tsx";
 
 // Strip ANSI CSI (colors, cursor moves, erases) + OSC sequences, not just SGR.
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g; // eslint-disable-line no-control-regex
@@ -251,6 +252,7 @@ export function DockerView({ active }: { active: boolean }) {
   // keyed on the repo, not on the container, so selecting a different one
   // above never disturbs what is running below.
   const sidebarW = useSidebarWidth();
+  const { ask, dialog } = useDialogs();
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleH, setConsoleH] = useState<number>(() => {
     try { return Math.min(0.85, Math.max(0.08, Number(localStorage.getItem(CONSOLE_KEY)) || 0.1)); } catch { return 0.1; }
@@ -383,7 +385,7 @@ export function DockerView({ active }: { active: boolean }) {
     if (busy) return;
     const targets = cs.filter((c) => (verb === "start" ? c.state !== "running" : c.state === "running"));
     if (!targets.length) return;
-    if (verb !== "start" && !confirm(`${verb} ${targets.length} container${targets.length === 1 ? "" : "s"}?`)) return;
+    if (verb !== "start" && !(await ask({ title: `${verb} ${targets.length} container${targets.length === 1 ? "" : "s"}?`, confirmLabel: verb }))) return;
     setBusy(true);
     let ok = 0;
     const failed: string[] = [];
@@ -402,7 +404,7 @@ export function DockerView({ active }: { active: boolean }) {
 
   const doAction = async (id: string, verb: "start" | "stop" | "restart" | "rm") => {
     if (busy) return;
-    if ((verb === "rm" || verb === "stop") && !confirm(`${verb} this container?`)) return;
+    if ((verb === "rm" || verb === "stop") && !(await ask({ title: `${verb} this container?`, danger: verb === "rm", confirmLabel: verb }))) return;
     setBusy(true);
     try {
       const fn = verb === "start" ? api.dockerStart : verb === "stop" ? api.dockerStop : verb === "restart" ? api.dockerRestart : api.dockerRm;
@@ -654,6 +656,7 @@ export function DockerView({ active }: { active: boolean }) {
                 {toast && (
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-lg text-[11px] shadow-xl" style={{ zIndex: 40, background: "var(--bg3)", border: `1px solid ${toast.ok ? "color-mix(in srgb, var(--success) 50%, transparent)" : "color-mix(in srgb, var(--error) 50%, transparent)"}`, color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</div>
                 )}
+                {dialog}
     </div>
   );
 }
