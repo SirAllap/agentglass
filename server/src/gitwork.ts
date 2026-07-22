@@ -309,14 +309,36 @@ function codeRootsOf(knownRoots: string[]): string[] {
  *
  *  Both counts are only as fresh as the last fetch — they compare against the
  *  local origin/* refs, not the remote. See startAutoFetch(). */
+/**
+ * When work last landed on each checkout's branch, cached hard.
+ *
+ * The dirty count next to it has to be fresh — it changes as you edit — but a
+ * commit date does not: it moves when you commit, and `run()` clears this the
+ * moment anything writes. Measured without the cache on a repo with eighteen
+ * checkouts, `/git/repos` spawned 36 processes and burned 4.1 seconds of CPU
+ * every five seconds, half of it re-asking eighteen branches for a date that
+ * had not changed since the last time. While the user was typing in a terminal
+ * this same process serves.
+ */
+const TIP_TTL_MS = 60_000;
+const tipCache = new Map<string, { at: number; ms: number }>();
+
+async function tipDate(root: string): Promise<number> {
+  const hit = tipCache.get(root);
+  if (hit && Date.now() - hit.at < TIP_TTL_MS) return hit.ms;
+  const r = await gitAsync(root, ["log", "-1", "--format=%ct", "HEAD"]);
+  const ms = r.code === 0 ? (Number(r.stdout.trim()) || 0) * 1000 : 0;
+  if (tipCache.size > 400) tipCache.clear();
+  tipCache.set(root, { at: Date.now(), ms });
+  return ms;
+}
+
 async function repoRef(root: string): Promise<GitRepoRef | null> {
-  // Two questions, asked at once: what is dirty here, and when did work last
-  // land on this branch. The second is 3ms against the first's 75ms on a large
-  // repo, and both are awaited rather than blocking — see the perf note on
-  // `git()`.
+  // Two questions, asked at once: what is dirty here (fresh every time), and
+  // when work last landed on this branch (cached — see tipDate).
   const [r, tip] = await Promise.all([
     gitAsync(root, ["status", "--porcelain=v1", "--branch"]),
-    gitAsync(root, ["log", "-1", "--format=%ct", "HEAD"]),
+    tipDate(root),
   ]);
   if (r.code !== 0) return null;
   const lines = r.stdout.split("\n").filter(Boolean);
@@ -335,7 +357,7 @@ async function repoRef(root: string): Promise<GitRepoRef | null> {
     root, name: basename(root), branch, dirty: lines.length - (head ? 1 : 0),
     ahead: Number(head.match(/ahead (\d+)/)?.[1]) || 0,
     behind: Number(head.match(/behind (\d+)/)?.[1]) || 0,
-    touchedAt: touchedAt(root, tip.code === 0 ? (Number(tip.stdout.trim()) || 0) * 1000 : 0),
+    touchedAt: touchedAt(root, tip),
     ...(parent ? { worktreeOf: parent } : {}),
   };
 }
@@ -378,7 +400,17 @@ function touchedAt(root: string, tipMs: number): number {
 // flipping between panels asks again seconds later. The answer is a directory
 // sweep plus a git call per repo, so it's worth holding briefly — short enough
 // that a branch switch or a new file shows up almost immediately.
-const REPO_CACHE_MS = 5_000;
+/**
+ * How long the repo list is held.
+ *
+ * Was five seconds, which on a repo with eighteen checkouts meant eighteen
+ * `git status` calls — 2.9 seconds of CPU — every five seconds, forever, for
+ * the dirty dots in a dropdown. Nothing here needs that: the *selected* repo's
+ * working tree has its own 2.5s poll through `/git/tree`, and a dot beside a
+ * checkout you are not looking at can be a few seconds old. Every write still
+ * clears this immediately, so anything you do shows up at once.
+ */
+const REPO_CACHE_MS = 15_000;
 // A small map rather than one slot: the scoped panels and the machine-wide
 // project picker ask with different keys, and alternating between them must
 // not evict each other's still-fresh answer (each miss re-runs a directory
@@ -390,6 +422,8 @@ const repoCache = new Map<string, { at: number; repos: GitRepoRef[] }>();
  *  the list is one directory sweep and is about to be asked for again anyway. */
 export function invalidateRepos(_root?: string): void {
   repoCache.clear();
+  // A commit or a checkout moves the tip date too, and both go through run().
+  tipCache.clear();
 }
 
 export async function discoverRepos(paths: string[], knownRoots: string[] = [], opts: { ignoreScope?: boolean } = {}): Promise<GitRepoRef[]> {
