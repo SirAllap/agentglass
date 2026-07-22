@@ -81,16 +81,27 @@ type Session = {
   /** Cleared on close — a stray interval would keep reading /proc for a pty
    *  that no longer exists, once per session, forever. */
   tmuxPoll?: ReturnType<typeof setInterval> | null;
-  /** The tmux session this shell is attached to, once one is found. */
+  /** The tmux client in this shell, once one is found. Survives a session
+   *  switch, which is the whole reason it is kept apart from the target. */
+  tmuxClient?: TmuxClient | null;
+  /** The tmux session that client is showing, re-read every poll. */
   tmux?: TmuxTarget | null;
+  /** tmux's prefix keys, re-read whenever the session changes rather than every
+   *  tick: it is a config value, not a live one. */
+  tmuxPrefix?: string[];
   /** Re-read tmux and push if anything moved. Held so an action can refresh
    *  immediately instead of leaving the strip stale until the next tick. */
   tmuxSweep?: () => void;
-  /** Whether we hid tmux's own status line, so it can be given back on the way
-   *  out. Restoring is not optional: a session left with `status off` after the
-   *  panel closed would look broken in the user's real terminal, and they would
-   *  have no reason to connect it to us. */
-  tmuxStatusHidden?: boolean;
+  /** Whether the panel wants tmux's own status line drawn. Remembered rather
+   *  than applied and forgotten, so the answer can be re-applied to whatever
+   *  session the client moves to next. Undefined until the panel says. */
+  tmuxStatusVisible?: boolean;
+  /** The session we actually hid it on, so it can be given back on the way out.
+   *  Restoring is not optional: a session left with `status off` after the panel
+   *  closed would look broken in the user's real terminal, and they would have
+   *  no reason to connect it to us. It is the session and not a boolean because
+   *  the one we borrowed from is not always the one we end up on. */
+  tmuxStatusHiddenOn?: TmuxTarget | null;
 };
 const sessions = new Map<PtyWs, Session>();
 
@@ -119,7 +130,7 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveTarget, listWindows, runAction, setStatusLine, prefixKeys, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, prefixKeys, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 
 const enc = new TextEncoder();
 const ctl = (ws: PtyWs, frame: Record<string, unknown>) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
@@ -205,43 +216,85 @@ export function ptyOpen(ws: PtyWs) {
   sessions.set(ws, session);
   ctl(ws, { t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir });
 
-  /*
-   * Watch for tmux coming and going.
+  /**
+   * The client moved to a different session — follow it there.
    *
-   * Polled rather than detected once at startup, because the interesting case
-   * is exactly the one that changes: you open a plain shell, type `tmux`, and
-   * the panel's tabs and split button should stand down at that moment — and
-   * come back when you detach. Two seconds is well under the threshold where a
-   * stale layout is noticeable, and the check is a couple of small /proc reads.
+   * Everything we hold about a session is about *that* session: the prefix we
+   * advertise, and the status line we borrowed. Hand the old one its status line
+   * back before borrowing the next one's, so a user who switches away with `^b s`
+   * finds their other session exactly as their config left it.
+   */
+  const followSession = (t: TmuxTarget) => {
+    const borrowed = session.tmuxStatusHiddenOn;
+    if (borrowed && borrowed.id !== t.id) {
+      setStatusLine(borrowed, true);
+      session.tmuxStatusHiddenOn = null;
+    }
+    session.tmux = t;
+    session.tmuxPrefix = prefixKeys(t);
+    // Re-apply the panel's answer to the new session. Without this a restored
+    // session comes up with tmux's own status line on top of our tabs, and
+    // nothing in the panel changed to make the browser re-ask for it.
+    if (session.tmuxStatusVisible === false && !session.tmuxStatusHiddenOn) {
+      if (setStatusLine(t, false)) session.tmuxStatusHiddenOn = t;
+    }
+  };
+
+  /*
+   * Watch for tmux coming and going, and for the session under it moving.
+   *
+   * Polled rather than detected once at startup, because the interesting cases
+   * are exactly the ones that change: you open a plain shell, type `tmux`, and
+   * the panel's split button should stand down at that moment — and come back
+   * when you detach. The same is true one level down, for which session that
+   * client is showing.
    */
   let sawTmux = false;
-  let sentWindows = "";
+  let sent = "";
   const sweep = () => {
     if (session.closed || session.exited) return;
     const now = tmuxRunning(proc.pid);
     if (now !== sawTmux) {
       sawTmux = now;
       if (!now) {
-        // Detached. Forget the session rather than keep polling a target that
+        // Detached. Forget the client rather than keep polling a target that
         // is no longer ours, and stop describing windows nobody is looking at.
+        session.tmuxClient = null;
         session.tmux = null;
-        session.tmuxStatusHidden = false;
-        sentWindows = "";
+        session.tmuxPrefix = [];
+        session.tmuxStatusHiddenOn = null;
+        sent = "";
         ctl(ws, { t: "tmux", active: false, windows: [] });
         return;
       }
     }
     if (!now) return;
-    // Resolved once per attach: the join walks /proc and shells out to
-    // list-clients, and neither answer changes while the same client is up.
-    if (!session.tmux) session.tmux = resolveTarget(proc.pid);
-    const windows = session.tmux ? listWindows(session.tmux) : [];
+    // The client is resolved once per attach — that walk is /proc and it does
+    // not change while the same client is up. Which session it is *showing* is
+    // read every tick, because that does change: `^b s`, and every continuum
+    // restore, which switches the client to the restored session and kills the
+    // one it attached to. A target cached at attach time points at that dead
+    // session for the rest of the shell's life.
+    if (!session.tmuxClient) session.tmuxClient = resolveClient(proc.pid);
+    const frame = session.tmuxClient ? readFrame(session.tmuxClient) : null;
+    if (frame) {
+      if (frame.target.id !== session.tmux?.id) followSession(frame.target);
+      else session.tmux = frame.target; // a rename keeps the id and changes the name
+    } else {
+      // Unreachable: the server went away, or the client is mid-attach. Drop it
+      // and resolve again next tick rather than answer from something stale.
+      session.tmuxClient = null;
+      session.tmux = null;
+    }
+    const windows = frame?.windows ?? [];
     // Only speak when something changed. A tab strip that re-renders on every
-    // tick is a tab strip that drops the click you were halfway through.
-    const shape = JSON.stringify(windows);
-    if (shape === sentWindows && sawTmux === now) return;
-    sentWindows = shape;
-    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, prefix: session.tmux ? prefixKeys(session.tmux) : [], windows });
+    // tick is a tab strip that drops the click you were halfway through. The
+    // session is part of "changed": switching between two sessions with the
+    // same window names is still a switch, and the panel says which one it is.
+    const shape = JSON.stringify([session.tmux?.id ?? null, windows]);
+    if (shape === sent) return;
+    sent = shape;
+    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, prefix: session.tmuxPrefix ?? [], windows });
   };
   session.tmuxSweep = sweep;
   /*
@@ -383,12 +436,17 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
      * /proc, never one the client names, so a page cannot address somebody
      * else's tmux by asking nicely.
      */
-    if (!s.tmux) return;
     if (msg.cmd === "status") {
       const visible = msg.visible !== false;
-      if (setStatusLine(s.tmux, visible)) s.tmuxStatusHidden = !visible;
+      // Remembered before it is applied, and remembered even with no session
+      // resolved yet: this is a preference about tmux's chrome, not about one
+      // session, and it has to survive the client being switched to another.
+      s.tmuxStatusVisible = visible;
+      if (!s.tmux) return;
+      if (setStatusLine(s.tmux, visible)) s.tmuxStatusHiddenOn = visible ? null : s.tmux;
       return;
     }
+    if (!s.tmux) return;
     const action = msg.cmd as TmuxAction;
     if (!["select", "new", "kill", "rename"].includes(action)) return;
     if (!runAction(s.tmux, action, msg.window, msg.name)) return;
@@ -420,7 +478,7 @@ function cleanup(ws: PtyWs, s: Session) {
   // Give the status line back before letting go. The panel borrowed it; a
   // session left with `status off` after the panel closed looks broken in the
   // user's real terminal, and nothing there would point back at us.
-  if (s.tmuxStatusHidden && s.tmux) { setStatusLine(s.tmux, true); s.tmuxStatusHidden = false; }
+  if (s.tmuxStatusHiddenOn) { setStatusLine(s.tmuxStatusHiddenOn, true); s.tmuxStatusHiddenOn = null; }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
 }
 

@@ -8,7 +8,7 @@
 // What is unit-tested is everything that turns tmux's text into our shapes, and
 // everything that decides whether a command is allowed to run at all.
 import { describe, expect, test } from "bun:test";
-import { parseWindows, socketFromArgv, runAction, sanitizeWindowName, prefixKeys, type TmuxTarget } from "../src/tmuxctl.ts";
+import { parseWindows, parseFrame, socketFromArgv, runAction, sanitizeWindowName, prefixKeys, type TmuxTarget } from "../src/tmuxctl.ts";
 
 describe("reading tmux's window list", () => {
   test("id, index, name, active flag and tmux's own marks", () => {
@@ -44,6 +44,55 @@ describe("reading tmux's window list", () => {
     const [bell, activity] = parseWindows("@0\t1\tbuild\t0\t!\n@1\t2\ttest\t0\t#\n");
     expect(bell!.flags).toBe("!");
     expect(activity!.flags).toBe("#");
+  });
+});
+
+describe("which session the client is on", () => {
+  // Read fresh every poll rather than once at attach, because a client outlives
+  // the session it shows. tmux-continuum's restore is the case that broke: it
+  // attaches you to a scratch session, restores the saved ones, switches you
+  // across and kills the scratch one — so a session resolved at attach time
+  // names something that no longer exists, and the tab strip empties out while
+  // tmux keeps drawing its own status line where our tabs should have been.
+  const frame = [
+    "c\t/dev/pts/3\tother\t$1",
+    "c\t/dev/pts/0\tmain\t$2",
+    "w\t$1\t@0\t1\tnot-ours\t1\t*",
+    "w\t$2\t@3\t1\tAI01\t1\t*",
+    "w\t$2\t@4\t2\tAI02\t0\t-",
+  ].join("\n");
+
+  test("our client's session, and only our session's windows", () => {
+    const f = parseFrame(frame, "/dev/pts/0");
+    expect(f!.session).toBe("main");
+    expect(f!.id).toBe("$2");
+    expect(f!.windows.map((w) => w.name)).toEqual(["AI01", "AI02"]);
+  });
+
+  test("windows are matched by session id, not by name", () => {
+    // resurrect will happily restore a second session called `main`, and a
+    // kill-window aimed at the wrong one of those is unrecoverable.
+    const twoMains = "c\t/dev/pts/0\tmain\t$2\nw\t$9\t@1\t1\tmain\t1\t*\nw\t$2\t@2\t1\tours\t1\t*";
+    expect(parseFrame(twoMains, "/dev/pts/0")!.windows.map((w) => w.name)).toEqual(["ours"]);
+  });
+
+  test("a session with no windows of its own reads as empty, not as somebody else's", () => {
+    expect(parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$1\t@0\t1\tnot-ours\t1\t*", "/dev/pts/0")!.windows).toEqual([]);
+  });
+
+  test("no client on our terminal is no answer at all", () => {
+    // Mid-attach, or the client detached between the /proc walk and the ask.
+    // Answering with the first session in the list would put somebody else's
+    // windows in the strip, and a click there kills somebody else's window.
+    expect(parseFrame(frame, "/dev/pts/9")).toBeNull();
+    expect(parseFrame("", "/dev/pts/0")).toBeNull();
+  });
+
+  test("window names with tabs in them do not smuggle a session id", () => {
+    // The name is the last-but-two field and is not re-split, so this is a
+    // window called what it says, in $2, and not one in $7.
+    const f = parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$2\t@1\t1\tnpm run dev\t1\t*", "/dev/pts/0");
+    expect(f!.windows).toEqual([{ id: "@1", index: 1, name: "npm run dev", active: true, flags: "*" }]);
   });
 });
 

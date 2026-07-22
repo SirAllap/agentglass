@@ -25,13 +25,33 @@ import type { TmuxWindow } from "../../shared/types.ts";
  *  socket, and short enough that a wedged tmux server cannot stall the poll. */
 const TMUX_TIMEOUT_MS = 2000;
 
+/**
+ * The tmux client itself: everything about it that /proc knows and tmux does
+ * not need to be asked about.
+ *
+ * Held separately from the session because they change on different clocks. A
+ * client lives as long as the shell has tmux in it; the session it is *showing*
+ * can change underneath it at any moment, and does — `^b s`, `^b (`, and every
+ * tmux-continuum restore, which attaches you to a scratch session and then
+ * switches you to the restored one before you have finished blinking.
+ */
+export interface TmuxClient {
+  /** The tmux client process inside our shell. */
+  pid: number;
+  /** `-S <path>` / `-L <name>` as the client itself was invoked, so we reach the
+   *  same server rather than the default one. Empty for the default socket. */
+  socket: string[];
+  /** The terminal it is attached to, which is how tmux names it back to us. */
+  tty: string;
+}
+
 export interface TmuxTarget {
   /** The tmux client process inside our shell. */
   pid: number;
   /** `-S <path>` / `-L <name>` as the client itself was invoked, so we reach the
    *  same server rather than the default one. Empty for the default socket. */
   socket: string[];
-  /** The session that client is attached to, for display. */
+  /** The session that client is attached to *right now*, for display. */
   session: string;
   /** tmux's own id for it (`$0`), which is what every command below targets.
    *  Names are matched by prefix unless you fight the syntax for it, and even
@@ -116,26 +136,19 @@ function tmux(socket: string[], args: string[]): string | null {
 }
 
 /**
- * Resolve the pid of a tmux client to the session it is showing.
+ * The tmux client under this shell, and how to reach its server.
  *
- * The join is the terminal: our pty is that client's controlling tty, and tmux
- * will name it back to us in `client_tty`. Guessing instead — taking the most
- * recent session, say — is wrong the moment a user has two sessions open, which
- * is the normal case for the people who use tmux at all.
+ * Only the /proc half. Which session it is showing is deliberately not part of
+ * this: that answer goes stale, and an interface that hands both back at once
+ * invites a caller to cache the pair, which is the bug this shape exists to
+ * prevent.
  */
-export function resolveTarget(shellPid: number): TmuxTarget | null {
+export function resolveClient(shellPid: number): TmuxClient | null {
   const pid = tmuxClientPid(shellPid);
   if (!pid) return null;
   const tty = ttyOf(pid);
   if (!tty) return null;
-  const socket = socketOf(pid);
-  const out = tmux(socket, ["list-clients", "-F", "#{client_tty}\t#{session_name}\t#{session_id}"]);
-  if (!out) return null;
-  for (const line of out.split("\n")) {
-    const [clientTty, session, id] = line.split("\t");
-    if (clientTty === tty && session && id) return { pid, socket, session, id };
-  }
-  return null;
+  return { pid, socket: socketOf(pid), tty };
 }
 
 /** tmux window ids are `@` and digits, and nothing a client sends is trusted to
@@ -164,13 +177,72 @@ export function parseWindows(out: string): TmuxWindow[] {
   return windows;
 }
 
-export function listWindows(t: TmuxTarget): TmuxWindow[] {
-  const out = tmux(t.socket, [
-    "list-windows",
-    "-t", t.id,
-    "-F", "#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}",
+export interface TmuxFrame {
+  target: TmuxTarget;
+  windows: TmuxWindow[];
+}
+
+/**
+ * Which session this client is on, and what is in it — asked together, every
+ * time.
+ *
+ * The join is the terminal: our pty is that client's controlling tty, and tmux
+ * names it back to us in `client_tty`. Guessing instead — taking the most recent
+ * session, say — is wrong the moment a user has two sessions open, which is the
+ * normal case for the people who use tmux at all.
+ *
+ * The session has to be re-read rather than resolved once and kept, because a
+ * client outlives the session it is showing. `^b s` moves it. So does
+ * tmux-continuum's restore, which is worse than a move: it attaches you to a
+ * scratch session, restores the saved ones, switches you across and kills the
+ * scratch one behind you. A target cached at attach time then names a session
+ * that no longer exists, `list-windows` answers nothing, and the tab strip
+ * silently empties out while tmux carries on drawing its own status line
+ * underneath — which is exactly what it did.
+ *
+ * One tmux invocation for both halves: `list-clients` cannot tell us the windows
+ * and `list-windows` cannot tell us the client, but tmux takes a command list,
+ * so this costs the same one spawn per poll the old single-session read did. The
+ * lines are tagged because they come back concatenated.
+ */
+export function readFrame(c: TmuxClient): TmuxFrame | null {
+  const out = tmux(c.socket, [
+    "list-clients", "-F", "c\t#{client_tty}\t#{session_name}\t#{session_id}",
+    ";",
+    "list-windows", "-a",
+    "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}",
   ]);
-  return out ? parseWindows(out) : [];
+  if (!out) return null;
+  const f = parseFrame(out, c.tty);
+  return f ? { target: { pid: c.pid, socket: c.socket, session: f.session, id: f.id }, windows: f.windows } : null;
+}
+
+/**
+ * Pick our client's session out of the server's answer, and its windows out of
+ * every session's windows.
+ *
+ * Windows are filtered by session id and not by anything friendlier: session
+ * *names* are not unique enough to bet a `kill-window` on — resurrect happily
+ * restores a second session called `main` — and the id is what tmux itself uses.
+ */
+export function parseFrame(out: string, tty: string): { session: string; id: string; windows: TmuxWindow[] } | null {
+  let session: string | null = null;
+  let id: string | null = null;
+  const windowRows: string[] = [];
+  for (const line of out.split("\n")) {
+    if (line.startsWith("c\t")) {
+      const [, clientTty, name, sid] = line.split("\t");
+      if (clientTty === tty && name && sid) { session = name; id = sid; }
+    } else if (line.startsWith("w\t")) {
+      windowRows.push(line);
+    }
+  }
+  if (!session || !id) return null;
+  const mine = windowRows
+    .filter((r) => r.startsWith(`w\t${id}\t`))
+    // Drop the tag and the session id; what is left is what parseWindows reads.
+    .map((r) => r.split("\t").slice(2).join("\t"));
+  return { session, id, windows: parseWindows(mine.join("\n")) };
 }
 
 /**
