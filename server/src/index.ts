@@ -47,6 +47,11 @@ import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
   startContainer, stopContainer, restartContainer, removeContainer,
 } from "./docker.ts";
+import {
+  listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
+  setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
+  rerunFailedChecks, mergePr, closePr, prepareLocalReview, discardLocalReview, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
+} from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
 import { chatStream, CHAT_ENABLED, CHAT_BYPASS_ALLOWED } from "./chat.ts";
@@ -794,6 +799,71 @@ const server = Bun.serve<WsData>({
       if (res) return json(res, res.ok ? 200 : 400);
     }
 
+    // --- pull requests (gh-backed) ---
+    //
+    // Reads answer from a cache that refreshes behind them, so none of these
+    // waits on a subprocess. Writes are all POST and all origin-checked; the
+    // irreversible ones additionally carry the head sha the UI showed.
+    if (pathname === "/prs/capability") return json(await ghCapability(url.searchParams.get("force") === "1"));
+    if (pathname === "/prs/list") {
+      return json(await listPrs(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("filter") || "mine",
+        url.searchParams.get("force") === "1",
+      ));
+    }
+    if (pathname === "/prs/detail") {
+      return json(await prDetail(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("number") || "",
+        url.searchParams.get("force") === "1",
+      ));
+    }
+    if (pathname === "/prs/diff") {
+      return json(await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));
+    }
+    // Images in a PR body. Not JSON — it streams the bytes back, because
+    // GitHub's own attachment URLs 404 without the token this attaches.
+    if (pathname === "/prs/asset") return prAsset(url.searchParams.get("url") || "");
+    if (pathname === "/prs/commit-diff") {
+      return json(await prCommitDiff(url.searchParams.get("root") || "", url.searchParams.get("sha") || ""));
+    }
+    if (pathname === "/prs/branch-url") {
+      return json(await branchUrl(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("branch") || "",
+        url.searchParams.get("gone") || "",
+      ));
+    }
+    if (pathname.startsWith("/prs/") && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const root = b.root ?? "";
+      const n = b.number;
+      let res;
+      switch (pathname) {
+        case "/prs/review": res = await submitReview(root, n, b.verb, b.body); break;
+        case "/prs/review-with": res = await submitReviewWith(root, n, b.verb, b.body, b.comments); break;
+        case "/prs/comment": res = await addComment(root, n, b.body); break;
+        case "/prs/reply": res = await replyToThread(root, n, b.commentId, b.body); break;
+        case "/prs/thread-resolved": res = await setThreadResolved(root, b.threadId, b.resolved); break;
+        case "/prs/react": res = await react(root, b.commentId, b.content); break;
+        case "/prs/edit": res = await editPr(root, n, { title: b.title, body: b.body, base: b.base }); break;
+        case "/prs/labels": res = await setLabels(root, n, b.add, b.remove); break;
+        case "/prs/reviewers": res = await setReviewers(root, n, b.add, b.remove); break;
+        case "/prs/draft": res = await setDraft(root, n, b.draft); break;
+        case "/prs/update-branch": res = await updateBranch(root, n); break;
+        case "/prs/rerun": res = await rerunFailedChecks(root, n); break;
+        case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha }); break;
+        case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
+        case "/prs/local-review": res = await prepareLocalReview(root, n); break;
+        case "/prs/local-review-discard": res = await discardLocalReview(root, n); break;
+        default: res = null;
+      }
+      if (res) return json(res, res.ok ? 200 : 400);
+    }
+
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
     if (pathname === "/terminal/commands") return json(projectCommands(url.searchParams.get("root") || ""));
 
@@ -1059,6 +1129,10 @@ const ws = workspaceRoot();
 console.log(ws ? `   Project     → ${ws} (this project only)` : "   Project     → every project on this machine");
 // Only meaningful once a project is open — see startAutoFetch().
 startAutoFetch();
+// A pull request's checks finished. The latch is on the server so the message
+// arrives once per verdict no matter how many browser tabs are watching, and
+// the frame carries the names of what failed rather than only a count.
+subscribeCi((v) => broadcast({ type: "ci", data: v }));
 // Watch our own event loop. Cheap (one timer, one subtraction) and the only
 // thing that turns "the terminal feels laggy" into a name and a number.
 watchLoop();

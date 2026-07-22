@@ -1,4 +1,4 @@
-/** The five workspace glyphs, shared by the rail and the header button.
+/** The workspace glyphs, shared by the rail and the header button.
  *  They used to live in Header.tsx, where the rail couldn't reach them. */
 
 const svg = {
@@ -21,6 +21,17 @@ export function DiffIcon({ size = 15 }: P) {
     <svg {...svg} width={size} height={size}>
       <path d="M6 3v12" /><circle cx="6" cy="18" r="2.2" /><path d="M6 15a6 6 0 0 0 6 6" />
       <circle cx="18" cy="6" r="2.2" /><path d="M18 8v3a6 6 0 0 1-6 6" />
+    </svg>
+  );
+}
+
+/** Two commits reconciling into one line — a pull request, not a branch. */
+export function PrIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <circle cx="6" cy="6" r="2.2" /><path d="M6 8.2V18" /><circle cx="6" cy="20" r="2" />
+      <circle cx="18" cy="18" r="2.2" /><path d="M18 15.8V10a4 4 0 0 0-4-4h-2.5" />
+      <path d="M13 3.5 10.5 6 13 8.5" />
     </svg>
   );
 }

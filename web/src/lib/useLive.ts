@@ -3,6 +3,7 @@ import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts
 import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
+import { recordNote } from "./sysNotify.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -126,6 +127,21 @@ export function useLive(): LiveData {
       if (frame.type === "git") {
         // Not our data — a nudge for whoever is showing git state.
         gitChanged();
+        return;
+      }
+      if (frame.type === "ci") {
+        // The server holds the latch, so this arrives once per verdict for a
+        // whole suite. Naming the failures is the point: "1 failing" without a
+        // name is what sends you to the browser.
+        const v = frame.data;
+        recordNote({
+          app: "agentglass",
+          summary: `${v.repo}#${v.number} — checks ${v.verdict}`,
+          body: v.verdict === "red" && v.failing.length
+            ? `${v.failing.slice(0, 3).join(", ")}${v.failing.length > 3 ? ` +${v.failing.length - 3} more` : ""}\n${v.title}`
+            : v.title,
+          urgency: v.verdict === "red" ? 2 : 1,
+        });
         return;
       }
       if (frame.type === "initial") {

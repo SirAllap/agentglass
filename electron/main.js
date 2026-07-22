@@ -17,7 +17,7 @@
 // instance failing to bind). A custom scheme has neither problem: one stable
 // origin, no port, and any number of instances share it.
 
-const { app, BrowserWindow, ipcMain, protocol } = require("electron");
+const { app, BrowserWindow, ipcMain, protocol, shell } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -216,7 +216,40 @@ function createWindow() {
     webPreferences: { preload: path.join(__dirname, "preload.js") },
   });
   registerIpc(win);
+  openLinksOutside(win);
   win.loadURL(`${APP_ORIGIN}/`);
+}
+
+/**
+ * A link to GitHub belongs in the user's browser, not in this window.
+ *
+ * Without both handlers, `target="_blank"` opens a second, chrome-less Electron
+ * window with no way back, and an ordinary click navigates the app itself away
+ * from the renderer -- there is no address bar to return from, so the only fix
+ * is restarting the app.
+ *
+ * Only http(s) is ever handed to the OS. `shell.openExternal` will happily
+ * launch a `file://` or a custom-scheme URL, and the strings reaching here come
+ * out of pull request bodies and git remotes, which are written by other people.
+ */
+function openLinksOutside(win) {
+  const external = (url) => {
+    try {
+      const u = new URL(url);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+      shell.openExternal(url);
+      return true;
+    } catch { return false; }
+  };
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    external(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("will-navigate", (e, url) => {
+    if (url.startsWith(APP_ORIGIN)) return; // the app navigating within itself
+    e.preventDefault();
+    external(url);
+  });
 }
 
 app.whenReady().then(async () => {
