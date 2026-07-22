@@ -258,9 +258,19 @@ export async function releaseNotes(tagIn?: string): Promise<{ ok: boolean; tag: 
 
   // The tag object may be there without its annotation if the clone fetched it
   // shallowly, hence the emptiness check rather than trusting exit status.
+  //
+  // `%(objecttype)` first, because a LIGHTWEIGHT tag has no annotation and
+  // `%(contents)` silently answers with the *commit message* instead. It never
+  // returns empty, so the check above cannot catch it and the fallback below
+  // never runs. That is not hypothetical: v0.3.0 and v0.1.0 are lightweight —
+  // publishing a release from the GitHub UI creates the tag that way — and this
+  // function reported v0.3.0's release notes as "Merge pull request #123 from
+  // SirAllap/docs/refresh-assets-and-docs", while the real, hand-written notes
+  // sat on the release the fallback would have fetched.
   if (existsSync(join(SRC, ".git"))) {
-    const r = git(SRC, ["tag", "-l", "--format=%(contents)", tag]);
-    const local = r.status === 0 ? r.stdout.trim() : "";
+    const r = git(SRC, ["for-each-ref", "--format=%(objecttype)%0a%(contents)", `refs/tags/${tag}`]);
+    const [kind, ...rest] = (r.status === 0 ? r.stdout : "").split("\n");
+    const local = kind?.trim() === "tag" ? rest.join("\n").trim() : "";
     if (local) return keep(local, "clone");
   }
 
