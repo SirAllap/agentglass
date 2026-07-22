@@ -1,4 +1,4 @@
-import type { WatchEvent, OpenToolCall } from "../../../shared/types.ts";
+import type { WatchEvent, OpenToolCall, Liveness } from "../../../shared/types.ts";
 import { agentKey, fmtMs, sessionTitle } from "./format.ts";
 import { sessionWorktree } from "./worktree.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -56,7 +56,11 @@ export interface AgentCard {
    *  and reported only: nothing here decides `status` yet. The point of showing
    *  it first is to find out where it lies before anything depends on it. */
   evidenceAt: number | null;
-  evidenceKind: "transcript" | "target" | "none" | null;
+  evidenceKind: "transcript" | "target" | "dir" | "none" | null;
+  /** What that evidence supports. `unknown` is a real answer — a WebFetch
+   *  leaves nothing local behind — and is rendered as one rather than being
+   *  rounded up to "fine" or down to "stuck". */
+  liveness: Liveness;
   /** Context-window estimate: the latest turn's full prompt size (input +
    *  cache read + cache write — each API call re-sends the conversation, so
    *  that sum IS the context). 0 = no turn seen yet. */
@@ -72,11 +76,16 @@ export interface AgentCard {
 
 const STALL_MS = 20_000;
 const IDLE_MS = 5 * 60_000;
-// An open tool call older than this is a lost pair (crashed session, dropped
-// event), not a genuinely long build — stop vouching for it as "working".
+// The backstop for an open call nothing can vouch for. It used to be the whole
+// answer — "open for thirty minutes, therefore lost" — which dropped genuinely
+// long jobs off the fleet while they were still working. Now it only applies
+// when the evidence has nothing better to say: a call the server can see making
+// progress is not written off however long it runs.
 const TOOL_RUN_MAX_MS = 30 * 60_000;
-// An open tool call this old is worth a heads-up: probably a long build,
-// possibly a hang — either way the user wants to know it's still open.
+// How long an open call runs before it is worth mentioning at all. It is no
+// longer a verdict, only the point past which the evidence is worth reporting:
+// at five minutes, "still writing files" and "has touched nothing" are
+// different sentences, and this used to say the same thing for both.
 const TOOL_RUN_WARN_MS = 5 * 60_000;
 // An error this close to a session's final event is the note it ended on, rather
 // than one it hit and recovered from. Wide enough to cover the Stop that
@@ -107,6 +116,7 @@ function blankCard(key: string, source_app: string, session_id: string, model_na
     runningSince: 0,
     evidenceAt: null,
     evidenceKind: null,
+    liveness: "working",
     ctxTokens: 0,
     ctxTs: 0,
     ctxLimit: 200_000,
@@ -234,11 +244,12 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     if (s.since >= a.runningSince) {
       a.runningTool = s.tool_name;
       a.runningSince = s.since;
-      // Carried through untouched. The classifier below still runs on elapsed
-      // time alone; this rides alongside it so the two can be compared against
-      // real runs before either replaces the other.
       a.evidenceAt = s.evidenceAt ?? null;
       a.evidenceKind = s.evidenceKind ?? null;
+      // A server too old to send a verdict says nothing, which is `unknown` —
+      // not good news. Reading a missing field as "working" would let an old
+      // server silently vouch for every session on the fleet.
+      a.liveness = s.liveness ?? "unknown";
     }
   }
 
@@ -254,7 +265,15 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     const since = now - a.lastSeen;
     // A session that ended can't still be running a tool, whatever pair we
     // think is open; and an open pair past the ceiling is lost, not long.
-    if (a.lastType === "Stop" || a.lastType === "SessionEnd" || (a.runningTool && now - a.runningSince >= TOOL_RUN_MAX_MS)) {
+    // A session that ended cannot still be running a tool, whatever pair we
+    // think is open. `lost` says the same thing with evidence behind it: the
+    // transcript grew after this call opened, so its result arrived and our
+    // Post event did not. The thirty-minute ceiling stays as the backstop for
+    // calls the evidence cannot speak to, and no longer applies to one we can
+    // see making progress.
+    const unvouched = a.liveness !== "working";
+    if (a.lastType === "Stop" || a.lastType === "SessionEnd" || a.liveness === "lost"
+      || (a.runningTool && unvouched && now - a.runningSince >= TOOL_RUN_MAX_MS)) {
       a.runningTool = null;
     }
     const running = !!a.runningTool;
@@ -273,7 +292,17 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     a.outcome = deriveOutcome(a);
     // While a tool call is open, its live duration is the most informative
     // thing the card can say — better than the stale "PreToolUse · Bash".
-    if (a.status === "working" && running) a.lastAction = `running ${a.runningTool} · ${fmtMs(now - a.runningSince)}`;
+    if (a.status === "working" && running) {
+      // Past the point where a reader starts to wonder, say which of the two
+      // things it is. Before that the duration speaks for itself and a verdict
+      // on a ten-second call is noise.
+      const openFor = now - a.runningSince;
+      const note = openFor < TOOL_RUN_WARN_MS ? ""
+        : a.liveness === "stuck" ? " · no sign of life"
+        : a.liveness === "unknown" ? " · can't tell"
+        : " · still working";
+      a.lastAction = `running ${a.runningTool} · ${fmtMs(openFor)}${note}`;
+    }
 
     a.ctxLimit = ctxLimitOf(a.model_name, a.ctxTokens);
 
@@ -331,6 +360,14 @@ export function deriveOutcome(a: AgentCard): AgentOutcome {
   return "unclear";
 }
 
+/** Why a call was called stuck, in the reader's terms. The verdict is only
+ *  useful if the sentence under it can be argued with. */
+function stuckBecause(a: AgentCard): string {
+  if (a.evidenceKind === "target") return "the file it named has not changed since it started";
+  if (a.evidenceKind === "dir") return "nothing has moved in its working directory";
+  return "the session has written nothing since it started";
+}
+
 export function deriveAlerts(agents: AgentCard[]): Alert[] {
   const now = Date.now();
   const out: Alert[] = [];
@@ -339,11 +376,20 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
       out.push({ id: "wait:" + a.key, level: "warn", agent: a.key, text: "waiting for approval / input", ts: a.lastSeen });
     if (a.status === "errored")
       out.push({ id: "err:" + a.key, level: "error", agent: a.key, text: `${a.errors} error(s) — last action ${a.lastAction}`, ts: a.lastSeen });
-    // A tool call open this long deserves eyes: could be a fat build, could be
-    // a hang — the alert says which tool and for how long, and the user knows
-    // which of the two their project makes plausible.
-    if (a.status === "working" && a.runningTool && now - a.runningSince >= TOOL_RUN_WARN_MS)
-      out.push({ id: "long:" + a.key, level: "warn", agent: a.key, text: `${a.runningTool} running for ${fmtMs(now - a.runningSince)} — long job or stuck?`, ts: a.runningSince });
+    // A long tool call used to raise the same warning whatever it was doing,
+    // and asked the reader to guess: "long job or stuck?". Half of those were
+    // healthy builds, which is how the warning stopped being read at all. The
+    // evidence answers it now, and where it cannot, it says so instead of
+    // pretending. A call that is visibly working raises nothing.
+    if (a.status === "working" && a.runningTool && now - a.runningSince >= TOOL_RUN_WARN_MS) {
+      const openFor = fmtMs(now - a.runningSince);
+      if (a.liveness === "stuck")
+        out.push({ id: "stuck:" + a.key, level: "error", agent: a.key, ts: a.runningSince,
+          text: `${a.runningTool} open ${openFor} with nothing to show for it — ${stuckBecause(a)}` });
+      else if (a.liveness === "unknown")
+        out.push({ id: "long:" + a.key, level: "warn", agent: a.key, ts: a.runningSince,
+          text: `${a.runningTool} running ${openFor} — nothing local to check, so this could be either` });
+    }
     const rate = a.tools > 3 ? a.errors / a.tools : 0;
     if (rate > 0.25)
       out.push({ id: "rate:" + a.key, level: "error", agent: a.key, text: `high failure rate ${(rate * 100).toFixed(0)}%`, ts: a.lastSeen });
