@@ -75,6 +75,15 @@ describe("remoteBranches", () => {
     expect(g.hash).toMatch(/^[0-9a-f]{7,}$/);
   });
 
+  it("the count on the tab and the length of the list agree", () => {
+    // They came from two different filters and disagreed by one: `remotes()`
+    // counted `refs/remotes/origin/HEAD`, which `%(refname:short)` renders as
+    // the bare word "origin" — so a guard against names ending in "/HEAD"
+    // matched nothing and the tab claimed one branch more than the pane shows.
+    const r = gw.remotes(clone).find((x) => x.name === "origin")!;
+    expect(r.branches).toBe(gw.remoteBranches(clone, "origin").branches.length);
+  });
+
   it("drops origin/HEAD — it points at another row in the same list", () => {
     // A fresh clone always has one. Listed, it looks like a branch called HEAD
     // that you could check out.

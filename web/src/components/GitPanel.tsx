@@ -1233,74 +1233,75 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     remotes: remotes.reduce((n, r) => n + r.branches, 0),
   };
   /**
-   * One tab: the key that gets you there, the name, and the count *under* both.
+   * One tab: the key that gets you there, the name, and the count raised on the
+   * name as a footnote.
    *
-   * The count used to sit beside the name as a chip, which cost every counted
-   * tab ~28px of width. Eight tabs plus a 60-character branch name plus
-   * fetch/pull/push does not fit a laptop window, so the strip scrolled and the
-   * last tab ("Stashes") was permanently a sliver reading "8 S" behind the
-   * branch chip — a tab you cannot read is a tab you cannot use.
+   * Two problems, one shape. The count used to be a chip beside the label,
+   * which cost ~28px per counted tab — eight tabs plus a 60-character branch
+   * name plus fetch/pull/push did not fit, so the strip scrolled and "Stashes"
+   * was permanently a sliver reading "8 S" behind the branch chip. Moving the
+   * count onto a second line fixed the width and bought a different problem:
+   * eight bordered boxes, each with an outlined keycap and an internal rule,
+   * and a dead empty line under the two tabs that have no count. That read as
+   * a row of controls rather than a tab strip.
    *
-   * Stacking is the trade that costs nothing here: the header is a FIXED 48px
-   * (see VIEW_HEADER_H) and a two-line tab is ~31px, so the bar cannot grow
-   * vertically no matter what these say, while the strip gets ~150px back
-   * horizontally — enough for all eight to fit without scrolling.
+   * As a superscript the count is an attribute of the name instead of a second
+   * value competing with the jump key, so the box, the keycap outline and the
+   * rule can all go — and the tabs that have no count simply have no
+   * superscript, with nothing left for the absence to be a hole in. Measured
+   * against the previous design in a mock of the real 1900px header: 686px vs
+   * 746px, comfortably inside the ~890px the strip actually gets.
    *
-   * The rule separating the two lines is the tab's own, not a divider between
-   * tabs: it ties the number to the word above it rather than to its
-   * neighbours, which is what stops "45" and "125" from reading as one row of
-   * loose digits.
+   * The padding is deliberately top-heavy (7px over 4px): the raised digits
+   * need that room, or the active tab's tint clips through them.
    */
   const ViewTab = ({ id }: { id: View }) => {
     const n = COUNTS[id];
     const num = ALL_VIEWS.indexOf(id) + 1;
     const on = view === id;
     return (
-      <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]}${n != null ? ` (${n})` : ""} — press ${num}`}
+      <button onClick={() => setView(id)} title={`${VIEW_LABEL[id]}${n ? ` (${n})` : ""} — press ${num}`}
         aria-keyshortcuts={String(num)}
-        className="text-[10.5px] px-2 py-[3px] rounded-md transition-colors flex flex-col items-stretch gap-[2px] whitespace-nowrap shrink-0"
-        style={{ background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: on ? "var(--text)" : "var(--text3)", border: `1px solid color-mix(in srgb, var(--border) ${on ? 40 : 15}%, transparent)` }}>
-        <span className="flex items-center gap-1.5 leading-none">
-          {/* The key that gets you here. lazygit does the same in its panel
-              titles (gui.showPanelJumps) — a shortcut nothing advertises is a
-              shortcut nobody uses.
-
-              Drawn as a keycap rather than a bare digit. Bare, it read as a
-              count — "1 Changes" looked like one change. Now that the real
-              count is on the line below, the outline is what still tells the
-              two numbers apart at a glance. */}
-          <span
-            className="tabular-nums leading-none rounded-[3px] px-1 py-[1px]"
-            style={{ fontSize: 8.5, opacity: on ? 0.85 : 0.5, border: "1px solid color-mix(in srgb, var(--text3) 45%, transparent)" }}
-          >{num}</span>
+        className="text-[10.5px] leading-none rounded-[5px] transition-colors flex items-baseline gap-[5px] whitespace-nowrap shrink-0"
+        style={{
+          padding: "7px 7px 4px",
+          background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent",
+          color: on ? "var(--text)" : "var(--text3)",
+          opacity: on ? 1 : 0.72,
+        }}>
+        {/* The key that gets you here. lazygit does the same in its panel titles
+            (gui.showPanelJumps) — a shortcut nothing advertises is a shortcut
+            nobody uses. A bare digit was ambiguous with the count while both
+            sat on the same line at the same size; raising the count settles it
+            without needing an outline around this one. */}
+        <span className="tabular-nums" style={{ fontSize: 8, opacity: on ? 0.9 : 0.5, color: on ? "var(--primary-hover)" : undefined }}>{num}</span>
+        <span className="relative">
           {VIEW_LABEL[id]}
+          {/* Zero is left off rather than drawn: these counts start at zero and
+              are only true once that tab has been visited, so a fresh panel
+              printing "0" on Tags would be stating something it never checked.
+              Every offset is explicit because the CSS reset gives `sup` its own
+              `top`, and inheriting that would put the digits somewhere other
+              than where this was designed and measured. */}
+          {!!n && (
+            <sup
+              className="tabular-nums"
+              style={{
+                fontSize: 7.5, lineHeight: 1, verticalAlign: "super",
+                position: "relative", top: -4.5, left: 1.5,
+                opacity: on ? 1 : 0.68, color: on ? "var(--primary-hover)" : undefined,
+              }}
+            >{n}</sup>
+          )}
         </span>
-        {/* Always rendered, count or not: an empty second line keeps every tab
-            the same height, and a strip of tabs that each stop at a different
-            place is worse than a blank half-line under "Log".
-
-            Zero is left blank rather than drawn. These counts start at zero and
-            are only true once that tab has been visited, so a fresh panel
-            printing "0" under Tags would be stating something it hasn't
-            checked. */}
-        <span
-          className="tabular-nums leading-none text-center pt-[2px]"
-          style={{
-            fontSize: 9,
-            minHeight: 10,
-            color: on ? "var(--primary-hover)" : "var(--text3)",
-            opacity: on ? 1 : 0.75,
-            borderTop: `1px solid color-mix(in srgb, var(--${on ? "primary" : "border"}) ${on ? 30 : 22}%, transparent)`,
-          }}
-        >{n ? n : ""}</span>
       </button>
     );
   };
-  /** One group's tabs. A single-view group renders as a plain button; a
-   *  multi-view one shows its siblings separated by a hairline, which is what
-   *  makes "these three are one panel" legible without a second row. */
+  /** One group's tabs. Held together by proximity alone — 1px between siblings
+   *  against the 9px between groups — which is enough to read "these three are
+   *  one panel" now that the tabs themselves carry no border to compete with. */
   const ViewGroup = ({ views }: { views: View[] }) => (
-    <div className="flex items-center gap-px rounded-md" style={views.length > 1 ? { background: "color-mix(in srgb, var(--border) 12%, transparent)" } : undefined}>
+    <div className="flex items-baseline gap-px">
       {views.map((v) => <ViewTab key={v} id={v} />)}
     </div>
   );
@@ -1377,7 +1378,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       name will not fit a narrow window, and something has to
                       give — a strip you can flick is better than controls
                       pushed off the right edge. */}
-                  <div className="flex items-center gap-2 ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
+                  <div className="flex items-center gap-[9px] ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
                     {VIEW_GROUPS.map((g) => <ViewGroup key={g.label} views={g.views} />)}
                   </div>
                   <div className="ml-auto flex items-center gap-1.5 min-w-0">
