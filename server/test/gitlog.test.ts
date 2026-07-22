@@ -50,10 +50,14 @@ test("an unknown subcommand is treated as a read", () => {
 });
 
 test("records exit code, duration and the first stderr line on failure", () => {
-  const before = recent().length;
+  // Identify the new entry by its id, not by the list getting longer: the ring
+  // is capped (AGENTGLASS_GITLOG_SIZE, 400 by default) and the rest of the
+  // suite runs enough real git to fill it, after which recording one more
+  // evicts one more and the length never moves. The id is monotonic either way.
+  const before = recent().at(-1)?.id ?? 0;
   record("/repo", ["commit", "-m", "x"], 1, 12.5, "fatal: nothing to commit\nsecond line\n");
   const all = recent();
-  expect(all.length).toBe(before + 1);
+  expect(all.at(-1)!.id).toBe(before + 1);
   const e = all[all.length - 1];
   expect(e.args).toEqual(["commit", "-m", "x"]);
   expect(e.exitCode).toBe(1);

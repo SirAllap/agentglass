@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -196,6 +196,12 @@ const realApi = {
   gitCommitDiff: (root: string, hash: string) => get<{ changes: FileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
   gitStashes: (root: string) => get<{ stashes: GitStash[] }>(`/git/stashes?root=${encodeURIComponent(root)}`),
   gitRemotes: (root: string) => get<{ remotes: GitRemote[] }>(`/git/remotes?root=${encodeURIComponent(root)}`),
+  /** Every branch on one remote, as the last fetch left them — the whole list,
+   *  filtered and rendered progressively on this side. */
+  gitRemoteBranches: (root: string, remote: string) => get<{ ok: boolean; remote: string; branches: GitRemoteBranch[]; error?: string }>(`/git/remote-branches?root=${encodeURIComponent(root)}&remote=${encodeURIComponent(remote)}`),
+  /** Create a local branch tracking `ref` ("origin/WEB-1042"). `switch` also
+   *  moves this checkout onto it. */
+  gitTrackRemote: (root: string, ref: string, switchTo: boolean) => post<GitActionResult>("/git/track-remote", { root, ref, switch: switchTo }),
   gitTags: (root: string) => get<{ tags: GitTag[] }>(`/git/tags?root=${encodeURIComponent(root)}`),
   gitReflog: (root: string) => get<{ entries: GitReflogEntry[] }>(`/git/reflog?root=${encodeURIComponent(root)}`),
   gitCommandLog: (since = 0) => get<{ entries: GitLogEntry[] }>(`/git/commandlog?since=${since}`),
@@ -218,13 +224,18 @@ const realApi = {
   gitApplyHunk: (root: string, path: string, staged: boolean, action: "stage" | "unstage" | "discard", hunk: DiffHunk) => post<GitActionResult>("/git/apply-hunk", { root, path, staged, action, hunk }),
   gitConflictBlocks: (root: string, path: string) => get<{ ok: boolean; blocks: ConflictBlock[]; error?: string }>(`/git/conflict-blocks?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
   gitResolveBlocks: (root: string, path: string, choices: BlockChoice[]) => post<GitActionResult>("/git/resolve-blocks", { root, path, choices }),
-  gitGraph: (root: string, limit = 400) => get<{ lines: GitGraphLine[] }>(`/git/graph?root=${encodeURIComponent(root)}&limit=${limit}`),
+  /** `scope` is whose history: this checkout's own by default, the whole repo
+   *  on request. See logGraph() — the default used to be everything, which put
+   *  other people's branches at the top of your own log. */
+  gitGraph: (root: string, limit = 400, scope: "head" | "all" = "head") => get<{ lines: GitGraphLine[]; scope: "head" | "all"; branch: string }>(`/git/graph?root=${encodeURIComponent(root)}&limit=${limit}&scope=${scope}`),
   gitWorktrees: (root: string) => get<{ worktrees: GitWorktree[] }>(`/git/worktrees?root=${encodeURIComponent(root)}`),
   gitMerge: (root: string, name: string) => post<GitActionResult>("/git/merge", { root, name }),
   gitRebase: (root: string, name: string) => post<GitActionResult>("/git/rebase", { root, name }),
   gitBranchRename: (root: string, name: string, to: string) => post<GitActionResult>("/git/branch-rename", { root, name, to }),
   gitReset: (root: string, ref: string, mode: "soft" | "mixed" | "hard") => post<GitActionResult>("/git/reset", { root, ref, mode }),
-  gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch }),
+  /** `startPoint` is what the new branch is cut from — a remote branch when the
+   *  Remotes tab asks; HEAD when omitted. */
+  gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean, startPoint?: string) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch, startPoint }),
   gitWorktreeRemove: (root: string, path: string, force: boolean) => post<GitActionResult>("/git/worktree-remove", { root, path, force }),
   /** Merge a checkout's base branch into it — "update from base". `root` is the
    *  checkout doing the updating, since the merge runs where the branch is. */
@@ -332,6 +343,8 @@ const demoApi: typeof realApi = {
   // The demo has no real repo behind it; empty lists render as "none yet"
   // rather than as an error, which is the right shape for a showcase.
   gitRemotes: (_root: string) => D({ remotes: [] as GitRemote[] }),
+  gitRemoteBranches: (_root: string, _remote: string) => D({ ok: true, remote: "", branches: [] as GitRemoteBranch[] }),
+  gitTrackRemote: (_root: string, _ref: string, _switchTo: boolean) => D(demo.gitActionUnavailable()),
   gitTags: (_root: string) => D({ tags: [] as GitTag[] }),
   gitReflog: (_root: string) => D({ entries: [] as GitReflogEntry[] }),
   gitCommandLog: (_since?: number) => D({ entries: [] as GitLogEntry[] }),
@@ -351,13 +364,13 @@ const demoApi: typeof realApi = {
   gitApplyHunk: (_root: string, _path: string, _staged: boolean, _action: "stage" | "unstage" | "discard", _hunk: DiffHunk) => D(demo.gitActionUnavailable()),
   gitConflictBlocks: (_root: string, _path: string) => D({ ok: false, blocks: [] as ConflictBlock[], error: "not available in the demo" }),
   gitResolveBlocks: (_root: string, _path: string, _choices: BlockChoice[]) => D(demo.gitActionUnavailable()),
-  gitGraph: (_root: string, _limit?: number) => D(demo.gitGraph()),
+  gitGraph: (_root: string, _limit?: number, _scope?: "head" | "all") => D({ ...demo.gitGraph(), scope: "head" as const, branch: "main" }),
   gitWorktrees: (_root: string) => D(demo.gitWorktrees()),
   gitMerge: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitRebase: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitBranchRename: (_root: string, _name: string, _to: string) => D(demo.gitActionUnavailable()),
   gitReset: (_root: string, _ref: string, _mode: "soft" | "mixed" | "hard") => D(demo.gitActionUnavailable()),
-  gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean) => D(demo.gitActionUnavailable()),
+  gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean, _startPoint?: string) => D(demo.gitActionUnavailable()),
   gitSyncBase: (_root: string, _base?: string) => D(demo.gitActionUnavailable()),
   gitSetBase: (_root: string, _branch: string, _base: string | null) => D(demo.gitActionUnavailable()),
   gitBaseCandidates: (_root: string) => D({ ok: true, refs: [] }),

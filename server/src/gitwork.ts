@@ -13,7 +13,7 @@ import type {
   ConflictBlock, BlockChoice,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
   GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine, GitTreeState,
-  GitRemote, GitTag, GitReflogEntry,
+  GitRemote, GitRemoteBranch, GitTag, GitReflogEntry,
 } from "../../shared/types.ts";
 
 export const GIT_WRITE_ENABLED = process.env.AGENTGLASS_GIT_WRITE_DISABLED !== "1";
@@ -918,16 +918,27 @@ export function resetTo(rootIn: string, ref: string, mode: "soft" | "mixed" | "h
   return run(root, ["reset", `--${mode}`, ref]);
 }
 
-/** `git log --graph` rendered to rows: the graph glyphs plus commit fields
- *  (graph-only connector rows carry just `graph`). */
-export function logGraph(rootIn: unknown, limit = 400): { lines: GitGraphLine[] } {
+/**
+ * `git log --graph` rendered to rows: the graph glyphs plus commit fields
+ * (graph-only connector rows carry just `graph`).
+ *
+ * `scope` decides whose history this is, and the default matters. It used to be
+ * `--all` unconditionally, so a worktree on a ticket branch showed 500 commits
+ * belonging to every branch in the repo — on a busy repo the top of the log was
+ * other people's work, and the branch you were standing on was nowhere near the
+ * top. That reads as a bug even though git was doing exactly what it was asked.
+ *
+ * So: HEAD by default — the log of the checkout you are in — with `--all` still
+ * a click away for the times you genuinely want the whole graph.
+ */
+export function logGraph(rootIn: unknown, limit = 400, scope: "head" | "all" = "head"): { lines: GitGraphLine[]; scope: "head" | "all"; branch: string } {
   const root = repoRoot(rootIn);
-  if (!root) return { lines: [] };
+  if (!root) return { lines: [], scope, branch: "" };
   const n = Math.max(1, Math.min(2000, limit | 0));
   // NUL can't go in an argv string (execve truncates at it), so use the same
   // \x1f unit-separator the branch code uses — safe in args, absent from commits.
   const fmt = `${US}%h${US}%an${US}%ar${US}%s${US}%D`;
-  const r = git(root, ["-c", "core.quotePath=false", "log", "--graph", "--all", "--date=relative", `-n${n}`, `--format=${fmt}`]);
+  const r = git(root, ["-c", "core.quotePath=false", "log", "--graph", ...(scope === "all" ? ["--all"] : []), "--date=relative", `-n${n}`, `--format=${fmt}`]);
   const lines: GitGraphLine[] = [];
   for (const raw of r.stdout.split("\n")) {
     if (!raw) continue;
@@ -936,7 +947,9 @@ export function logGraph(rootIn: unknown, limit = 400): { lines: GitGraphLine[] 
     const [hash, author, date, subject, refs] = raw.slice(i + 1).split(US);
     lines.push({ graph: raw.slice(0, i), hash, author, date, subject, refs });
   }
-  return { lines };
+  // Named so the pane can say whose history it is showing rather than leaving
+  // the user to infer it from the commits.
+  return { lines, scope, branch: currentBranch(root) };
 }
 
 // --- worktrees (the user's per-card unit of work) ----------------------------
@@ -1166,9 +1179,10 @@ export function undoMerge(rootIn: unknown): GitActionResult {
   return run(root, ["reset", "--hard", "HEAD^1"]);
 }
 
-export function worktrees(rootIn: unknown): GitWorktree[] {
-  const root = repoRoot(rootIn);
-  if (!root) return [];
+/** `git worktree list --porcelain`, parsed and nothing more — no base branch,
+ *  no rev-list, no per-checkout status. The cheap half, for callers that only
+ *  need to know which paths exist and what is checked out in them. */
+function worktreeList(root: string): GitWorktree[] {
   const r = git(root, ["worktree", "list", "--porcelain"]);
   const out: GitWorktree[] = [];
   let cur: Partial<GitWorktree> | null = null;
@@ -1187,6 +1201,13 @@ export function worktrees(rootIn: unknown): GitWorktree[] {
     else if (line.startsWith("locked")) cur.locked = true;
   }
   flush();
+  return out;
+}
+
+export function worktrees(rootIn: unknown): GitWorktree[] {
+  const root = repoRoot(rootIn);
+  if (!root) return [];
+  const out = worktreeList(root);
   // How far each checkout has drifted from what it was branched off. One
   // rev-list per worktree, cached, and only for the ones on a real branch.
   for (const w of out) {
@@ -1196,20 +1217,81 @@ export function worktrees(rootIn: unknown): GitWorktree[] {
   }
   return out;
 }
-export function addWorktree(rootIn: string, pathIn: unknown, branch: string, newBranch: boolean): GitActionResult {
+
+/**
+ * The worktree list, plus how dirty each checkout is.
+ *
+ * Split from `worktrees()` because it costs a `git status` per checkout — a
+ * dozen subprocesses on a worktree-heavy repo, which the repo picker already
+ * pays for the same paths, but which callers like `discoverRepos` must not pay
+ * twice. Run concurrently, so it's one status' worth of wall clock rather than
+ * a dozen.
+ *
+ * The panel needs this for one reason: `syncFromBase` refuses to merge into a
+ * dirty checkout, and a button that can only fail is worse than a disabled one.
+ */
+export async function worktreesWithState(rootIn: unknown): Promise<GitWorktree[]> {
+  const out = worktrees(rootIn);
+  await Promise.all(out.map(async (w) => {
+    if (w.bare) return; // no working tree to be dirty
+    const r = await gitAsync(w.path, ["status", "--porcelain"]);
+    // A checkout whose directory was deleted from under git answers non-zero;
+    // "unknown" is honest there, and leaves the button enabled rather than
+    // silently blocking on a status we never got.
+    if (r.code === 0) w.dirty = r.stdout.split("\n").filter(Boolean).length;
+  }));
+  return out;
+}
+/**
+ * Where a new worktree is allowed to land.
+ *
+ * safeAbs alone accepts any absolute path, which would let a caller plant a
+ * full checkout anywhere the server can write — a served web root, an autostart
+ * directory. So this is an allowlist of two shapes, and only two:
+ *
+ *   * `<repo>-<name>` beside the repo — the sibling layout, which is what the
+ *     panel's own "+ add worktree" has always sent (`${root}-${branch}`) and
+ *     what a worktree-per-ticket setup looks like on disk. It was NOT accepted
+ *     here, so that button answered "worktree path must be under
+ *     <repo>/.worktrees/" every single time it was pressed, for every user,
+ *     since the first release. The rule and its only caller disagreed, and the
+ *     rule was the one nobody read.
+ *   * `<repo>/.worktrees/<name>` — the nested layout, kept because it was the
+ *     documented one. It has a cost the sibling layout doesn't: the directory
+ *     is untracked, so the repo reports itself dirty forever after.
+ *
+ * A prefix test is enough for both because the name is a single path segment:
+ * `dirname` of the candidate must be exactly the repo's parent (so `../..`
+ * cannot climb) and the basename must start with the repo's own.
+ */
+function worktreeSpot(root: string, abs: string): boolean {
+  const nested = resolve(root, ".worktrees");
+  if (abs !== nested && abs.startsWith(nested + sep)) return true;
+  const parent = dirname(root);
+  return dirname(abs) === parent && basename(abs).startsWith(basename(root) + "-");
+}
+
+/**
+ * `startPoint` is what the new branch is cut from — a remote branch, when the
+ * Remotes tab is the one asking. Omitted it means HEAD, which is right for
+ * "start a new card from where I am" and wrong for "give me a checkout of
+ * somebody's branch", and those are the two things this call is used for.
+ */
+export function addWorktree(rootIn: string, pathIn: unknown, branch: string, newBranch: boolean, startPoint?: unknown): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
-  // Confine the checkout to the repo's own .worktrees/. safeAbs alone accepts
-  // any absolute path, which let a caller plant a full checkout anywhere it
-  // could write — a served web root, an autostart dir. A worktree belongs under
-  // its repo; nothing legitimate needs it elsewhere.
-  const wtBase = resolve(root, ".worktrees");
-  if (abs !== wtBase && !abs.startsWith(wtBase + sep)) {
-    return { ok: false, error: "worktree path must be under <repo>/.worktrees/" };
+  if (!worktreeSpot(root, abs)) {
+    return { ok: false, error: `worktree path must be ${basename(root)}-<name> beside the repo, or under ${basename(root)}/.worktrees/` };
   }
   if (!validRef(branch)) return { ok: false, error: "invalid branch name" };
-  return run(root, newBranch ? ["worktree", "add", "-b", branch, abs] : ["worktree", "add", abs, branch]);
+  let from: string[] = [];
+  if (startPoint != null && startPoint !== "") {
+    if (typeof startPoint !== "string" || !validRef(startPoint)) return { ok: false, error: "invalid start point" };
+    if (git(root, ["rev-parse", "--verify", "--quiet", startPoint]).code !== 0) return { ok: false, error: `${startPoint} does not exist here — fetch first` };
+    from = [startPoint];
+  }
+  return run(root, newBranch ? ["worktree", "add", "-b", branch, abs, ...from] : ["worktree", "add", abs, branch]);
 }
 export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
@@ -1284,6 +1366,99 @@ export function remotes(rootIn: unknown): GitRemote[] {
     byName.set(name, cur);
   }
   return [...byName.values()];
+}
+
+/**
+ * The branches on one remote, newest first, each marked with whether you
+ * already have it.
+ *
+ * Read from `refs/remotes/<remote>/*` — the last fetch's answer, not a live
+ * call to the server. That is the honest thing to show: every other number in
+ * this panel (ahead, behind, gone) is measured against exactly these refs, and
+ * a list that quietly went and asked the network would disagree with all of
+ * them.
+ *
+ * Sent whole rather than paged. 800 refs is one `for-each-ref` and ~100KB of
+ * JSON; paging it server-side would mean a round trip per keystroke of the
+ * search box, for a list the client can filter in a frame. The rendering side
+ * is where the cost actually was, and useIncremental already handles that.
+ *
+ * `origin/HEAD` is dropped: it is a symbolic pointer at another row in this
+ * same list, not a branch of its own.
+ */
+export function remoteBranches(rootIn: unknown, remoteIn: unknown, limit = 3000): { ok: boolean; remote: string; branches: GitRemoteBranch[]; error?: string } {
+  const root = repoRoot(rootIn);
+  if (!root) return { ok: false, remote: "", branches: [], error: "not a git repository root" };
+  const remote = typeof remoteIn === "string" && remoteIn ? remoteIn : (remotes(root)[0]?.name ?? "");
+  if (!remote) return { ok: true, remote: "", branches: [] };
+  if (!validRef(remote) || remote.includes("/")) return { ok: false, remote: "", branches: [], error: "invalid remote" };
+
+  // What you already have, so the list can answer "do I have this one" without
+  // a call per row: local heads, what each one tracks, and which checkout has
+  // it out.
+  const localTracks = new Map<string, string>(); // local branch -> its upstream
+  for (const line of git(root, ["for-each-ref", `--format=%(refname:short)${US}%(upstream:short)`, "refs/heads"]).stdout.split("\n")) {
+    if (!line) continue;
+    const [name, upstream] = line.split(US);
+    if (name) localTracks.set(name, upstream || "");
+  }
+  const checkedOut = new Map<string, string>(); // branch -> worktree path
+  for (const w of worktreeList(root)) if (w.branch && w.branch !== "(detached)") checkedOut.set(w.branch, w.path);
+
+  const n = Math.max(1, Math.min(10_000, limit | 0));
+  const fmt = `%(refname:short)${US}%(objectname:short)${US}%(contents:subject)${US}%(authorname)${US}%(committerdate:relative)`;
+  const r = git(root, ["-c", "core.quotePath=false", "for-each-ref", "--sort=-committerdate", `--count=${n}`, `refs/remotes/${remote}`, `--format=${fmt}`]);
+  const branches: GitRemoteBranch[] = [];
+  for (const line of r.stdout.split("\n")) {
+    if (!line) continue;
+    const [ref, hash, subject, author, date] = line.split(US);
+    if (!ref || !ref.startsWith(remote + "/")) continue;
+    const name = ref.slice(remote.length + 1);
+    if (!name || name === "HEAD") continue;
+    const upstream = localTracks.get(name);
+    branches.push({
+      name, ref, hash: hash || "", subject: subject || "", author: author || "", date: date || "",
+      local: upstream !== undefined,
+      tracking: upstream === ref,
+      ...(checkedOut.has(name) ? { worktree: checkedOut.get(name)! } : {}),
+    });
+  }
+  return { ok: true, remote, branches };
+}
+
+/**
+ * Make a remote branch local: a branch of the same name, tracking it.
+ *
+ * `switch` decides whether this checkout moves onto it. Both exist because both
+ * are wanted — "let me look at this PR" wants the switch, and "grab it, I'll
+ * open it in a worktree later" must not yank the working tree out from under
+ * an agent that is mid-edit.
+ *
+ * Refuses when the local name is taken rather than silently reusing it: the
+ * existing branch may be a *different* branch that happens to share a name, and
+ * the difference between checking that out and checking out the remote's
+ * version is somebody's afternoon.
+ */
+export function trackRemoteBranch(rootIn: unknown, refIn: unknown, opts: { switch?: boolean } = {}): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const ref = typeof refIn === "string" ? refIn : "";
+  if (!validRef(ref) || !ref.includes("/")) return { ok: false, error: "invalid remote branch" };
+  // The remote prefix has to be a real remote, or "origin/feature/x" and a
+  // local branch literally called that are indistinguishable.
+  const remote = ref.slice(0, ref.indexOf("/"));
+  if (!remotes(root).some((r) => r.name === remote)) return { ok: false, error: `no remote called ${remote}` };
+  const name = ref.slice(remote.length + 1);
+  if (!name || name === "HEAD" || !validRef(name)) return { ok: false, error: "invalid branch name" };
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/remotes/${ref}`]).code !== 0) {
+    return { ok: false, error: `${ref} is not here — fetch first` };
+  }
+  if (git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]).code === 0) {
+    return { ok: false, error: `you already have a local ${name} — check it out from the Branches tab` };
+  }
+  return opts.switch
+    ? run(root, ["switch", "-c", name, "--track", ref])
+    : run(root, ["branch", "--track", name, ref]);
 }
 
 /** Tags, newest first. `creatordate` rather than `taggerdate` so lightweight

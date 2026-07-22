@@ -535,6 +535,33 @@ export interface GitRemote {
   /** Branches on this remote, as short names ("main"), without the remote prefix. */
   branches: number;
 }
+/**
+ * One branch on a remote, as the local repository last saw it.
+ *
+ * These come from `refs/remotes/<remote>/*` — what the last fetch left behind,
+ * not a live call to the server. That distinction matters in the UI: a branch
+ * pushed by a colleague ten seconds ago is not here until you fetch.
+ *
+ * `local` and `worktree` are the whole point of the list. On a repo with 800
+ * remote branches the useful question is never "what exists" — it's "do I
+ * already have this one, and where".
+ */
+export interface GitRemoteBranch {
+  /** Short name, without the remote prefix — "WEB-1042-quota-banner". */
+  name: string;
+  /** Full short ref — "origin/WEB-1042-quota-banner", i.e. what you pass to git. */
+  ref: string;
+  hash: string;
+  subject: string;
+  author: string;
+  date: string; // relative
+  /** A local branch of the same name already exists. */
+  local: boolean;
+  /** …and it tracks this remote branch, rather than merely sharing its name. */
+  tracking: boolean;
+  /** A checkout that already has that local branch out, if any. */
+  worktree?: string;
+}
 export interface GitTag {
   name: string;
   /** Annotated tags carry their own message; lightweight ones borrow the commit's. */
@@ -564,6 +591,15 @@ export interface GitWorktree {
   base?: string | null;
   /** Commits the base has that this checkout does not. */
   behindBase?: number;
+  /**
+   * Uncommitted entries in that checkout (`git status --porcelain` lines).
+   *
+   * Costs one `git status` per worktree, and is worth it: a merge into a dirty
+   * checkout is refused by the server, so without this the panel offers a sync
+   * button that can only fail. Undefined means "not asked" — a bare worktree,
+   * or a caller that didn't want to pay for it.
+   */
+  dirty?: number;
 }
 
 // --- live docker panel (lazydocker replacement) ------------------------------
