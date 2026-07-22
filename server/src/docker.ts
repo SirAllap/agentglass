@@ -11,6 +11,7 @@ import type {
 } from "../../shared/types.ts";
 import { workspaceRoot, scopeRoots } from "./config.ts";
 import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
+import { withSpawnSlot } from "./spawnpool.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
@@ -33,6 +34,12 @@ type Res = { code: number; stdout: string; stderr: string; killed?: boolean };
  * CLI's own startup before it reaches the daemon, and the overview needs five.
  */
 async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
+  // Shares the one process cap with git: the resources being protected are the
+  // machine's, and the docker CLI is heavier than git per invocation.
+  return withSpawnSlot(() => runDocker(args, timeoutMs));
+}
+
+async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
   const owner = currentLabel();
   try {
     const proc = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });

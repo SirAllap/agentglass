@@ -16,6 +16,7 @@ import { readFileSync, statSync } from "node:fs";
 import { inScope } from "./config.ts";
 import { record } from "./gitlog.ts";
 import { currentLabel, resumedAs } from "./loopwatch.ts";
+import { withSpawnSlot } from "./spawnpool.ts";
 import type { GitFileStatus, RepoStatus, CommitResult } from "../../shared/types.ts";
 
 export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
@@ -45,6 +46,12 @@ export function git(cwd: string, args: string[]): GitResult {
  *  repo, but the repo picker asks every repo on the machine at once — run those
  *  concurrently or the panel waits for the sum of them. */
 export async function gitAsync(cwd: string, args: string[]): Promise<GitResult> {
+  // Queued behind the process cap — see spawnpool. A sweep of eighteen
+  // checkouts is eighteen of these, and several sweeps can overlap.
+  return withSpawnSlot(() => runGit(cwd, args));
+}
+
+async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   const t0 = performance.now();
   // Whose work this is, read while we are still standing inside the caller —
   // everything after the await belongs to them, however many other requests

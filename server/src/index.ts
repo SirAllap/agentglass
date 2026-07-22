@@ -39,6 +39,7 @@ import {
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
 import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
+import { spawnPoolStats } from "./spawnpool.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
@@ -666,7 +667,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
     // Every moment this process stopped answering, and what was running. The
     // terminal rides this loop, so these ARE the freezes the user feels.
-    if (pathname === "/api/loopwatch") return json(stalls(Number(url.searchParams.get("since") || 0)));
+    if (pathname === "/api/loopwatch") return json({ ...stalls(Number(url.searchParams.get("since") || 0)), spawns: spawnPoolStats() });
     // Open a file at a line in the editor the user already has running.
     if (pathname === "/editor/target") return json({ ...(await editorTarget(url.searchParams.get("path") || "")), hasNvim: HAS_NVIM });
     if (pathname === "/git/remotes") return json({ remotes: gitRemotes(url.searchParams.get("root") || "") });
