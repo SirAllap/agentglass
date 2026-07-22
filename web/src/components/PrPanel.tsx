@@ -399,7 +399,13 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
    * two the new list takes, and you are reading one pull request under a tab
    * that says you are looking at another.
    */
+  const lastScope = useRef<string>("");
   useEffect(() => {
+    const scope = `${root}\u0000${filter}`;
+    if (lastScope.current === scope) return; // re-render, not a switch
+    const first = lastScope.current === "";
+    lastScope.current = scope;
+    if (first) return; // nothing on screen yet to clear
     listReq.current++;
     setPrs([]);
     setSelected(null);
@@ -408,12 +414,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     setListState((st) => ({ ...st, loading: true, fetchedAt: 0 }));
   }, [filter, root]);
 
-  useEffect(() => {
-    if (!active || !root) return;
-    loadList();
-    const t = setInterval(() => loadList(), POLL_MS);
-    return () => clearInterval(t);
-  }, [active, root, filter, loadList]);
+  // Polling pauses while the view is hidden — no point spending requests on a
+  // pane nobody is looking at — and resumes on return. Resuming refreshes; it
+  // does not reset.
+
 
   /**
    * Warm the filters you are not looking at.
@@ -440,15 +444,49 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     api.prDetail(root, n, force).then((r) => {
       if (req !== detailReq.current) return; // a later selection already won
       if (r.ok && r.detail) setDetail(r.detail);
+      // A refresh that fails leaves what is on screen alone: the pull request
+      // you are reading is better than an error where it used to be.
+      else if (!force) setDetailErr(r.error || "");
       else { setDetail(null); setDetailErr(r.error || "could not load this pull request"); }
     }).catch((e) => { if (req === detailReq.current) setDetailErr(String(e)); });
   }, [root]);
 
   useEffect(() => {
-    if (!active || !root || selected == null) { setDetail(null); return; }
+    if (!active || !root) return;
+    loadList();
+    const t = setInterval(() => {
+      loadList();
+      // Keep the open pull request current too. This reads the server's cache,
+      // so it only reaches the network when that entry has actually aged out —
+      // without it, a comment left while you are reading never appears until
+      // you navigate away and back.
+      const n = selectedRef.current;
+      if (n != null) loadDetail(n);
+    }, POLL_MS);
+    return () => clearInterval(t);
+  }, [active, root, filter, loadList, loadDetail]);
+
+  /**
+   * Load a pull request when the SELECTION changes — never merely because the
+   * view became visible again.
+   *
+   * This effect used to list `active`, so stepping away to the terminal and
+   * coming back re-ran it: the open commit, the open file and the fetched diff
+   * were all thrown away and the pane went back to "loading". You lost your
+   * place for having looked somewhere else for a moment. The view stays mounted
+   * the whole time — only its visibility changes — so there is nothing to
+   * restore and nothing to reload.
+   */
+  const loadedFor = useRef<number | null>(null);
+  const selectedRef = useRef<number | null>(null);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => {
+    if (!root || selected == null) { setDetail(null); loadedFor.current = null; return; }
+    if (loadedFor.current === selected) return; // same pull request, already here
+    loadedFor.current = selected;
     setDiff(""); setSelFile(null); setSelCommit(null); setCommitText("");
     loadDetail(selected);
-  }, [active, root, selected, loadDetail]);
+  }, [root, selected, loadDetail]);
 
   useEffect(() => {
     if ((tab !== "files" && tab !== "review") || !detail || diff || !root) return;
