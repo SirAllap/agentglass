@@ -1094,23 +1094,9 @@ export function invalidateMerged(root?: string): void {
 }
 
 
-/**
- * Is the squash/rebase sweep still running for this trunk?
- *
- * It fills in behind the response on purpose (see sweepProbes), so a branch
- * merged through the GitHub button is recognised a moment AFTER the list is
- * first drawn. Left unsaid, that reads as a bug: the button says "delete 3
- * merged" when the panel opens and "delete 4 merged" when you come back to it,
- * with nothing on screen accounting for the extra one.
- */
-export function mergedSweeping(rootIn: unknown, ref: string): boolean {
+export async function branches(rootIn: unknown): Promise<{ current: string; branches: GitBranch[]; trunk: string | null }> {
   const root = repoRoot(rootIn);
-  return !!root && probeRunning.has(`${root}\u0000${ref}`);
-}
-
-export async function branches(rootIn: unknown): Promise<{ current: string; branches: GitBranch[]; trunk: string | null; sweeping: boolean }> {
-  const root = repoRoot(rootIn);
-  if (!root) return { current: "", branches: [], trunk: null, sweeping: false };
+  if (!root) return { current: "", branches: [], trunk: null };
   const fmt = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)`;
   const [r, trunk] = [git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]), defaultBranch(root)];
   const merged = trunk ? await mergedInto(root, trunk) : null;
@@ -1126,10 +1112,13 @@ export async function branches(rootIn: unknown): Promise<{ current: string; bran
       ...(merged ? { mergedIntoTrunk: merged.has(name) } : {}),
     });
   }
-  // Read AFTER mergedInto(), which is what starts the sweep — asked before, it
-  // is always false on the very first call and the caller never learns that the
-  // count it is showing is still moving.
-  return { current: currentBranch(root), branches: list, trunk, sweeping: !!trunk && mergedSweeping(root, trunk) };
+  // No "still sweeping" flag here, deliberately. mergedInto() above is what
+  // schedules the sweep, so asking whether one is running always answered yes:
+  // the sweep is a setTimeout and cannot have run yet within this call. The
+  // flag was a question asked immediately after switching it on. The count
+  // settling a beat later is the honest behaviour, and a permanent label
+  // explaining it was worse than the thing it explained.
+  return { current: currentBranch(root), branches: list, trunk };
 }
 
 // lazygit-style branch ops
