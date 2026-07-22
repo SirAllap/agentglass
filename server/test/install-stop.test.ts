@@ -167,3 +167,74 @@ describe("stopping it", () => {
     rmSync(app, { recursive: true, force: true });
   });
 });
+
+describe("putting back what the install took down", () => {
+  // An install has to close the running app — it is replacing the files
+  // underneath it. Leaving it closed made the normal loop (merge, rebuild,
+  // look at the change) end with the window gone, which reads as the rebuild
+  // having broken something.
+  //
+  // The stub here blocks on a fifo rather than on stdin, because start_app
+  // hands the app /dev/null — as it must, since the reopened app outlives the
+  // shell that installed it. A stub reading stdin would see EOF and exit
+  // instantly, and the test would be measuring its own harness.
+  const blocker = (app: string) => {
+    const fifo = join(app, "block");
+    Bun.spawnSync(["mkfifo", fifo]);
+    return `read x < ${fifo}`;
+  };
+  const ourPids = (app: string) =>
+    Bun.spawnSync(["bash", "-c", `APP="${app}"; . "${APPCTL}"; app_pids`], { stdout: "pipe" })
+      .stdout.toString().trim().split("\n").filter(Boolean);
+  const cleanup = (app: string) => {
+    for (const pid of ourPids(app)) { try { process.kill(Number(pid), 9); } catch { /* gone */ } }
+    rmSync(app, { recursive: true, force: true });
+  };
+
+  test("the instance comes back with the flags it had", async () => {
+    const app = fakeInstall();
+    // A main process started the ordinary way for this app: with a flag.
+    launch(join(app, "agentglass"), blocker(app), "--ozone-platform=wayland");
+    await Bun.sleep(200);
+
+    const { code, out } = await appctl(app, 'stop_app && start_app && sleep 0.5 && tr "\\0" " " < /proc/$(main_pids | head -n1)/cmdline');
+    expect(code).toBe(0);
+    expect(out).toContain("reopening");
+    // The same binary, and the flag it was carrying — not a bare relaunch that
+    // silently drops the way this app is started.
+    expect(out).toContain(`${app}/agentglass`);
+    expect(out).toContain("--ozone-platform=wayland");
+    cleanup(app);
+  });
+
+  test("AGENTGLASS_ scoping survives, and nothing else is carried over", async () => {
+    // `make desktop-open DIR=…` scopes a window to one repo through the
+    // environment. Reopening it unscoped would be a different app than the one
+    // that was closed. Everything else about that environment is a dead session
+    // by the time we get here, so it is deliberately left behind.
+    const app = fakeInstall();
+    const p = Bun.spawn([join(app, "agentglass"), "-c", blocker(app)], {
+      stdio: ["pipe", "ignore", "ignore"],
+      env: { ...process.env, AGENTGLASS_PROJECT: "/tmp/scoped-repo", SOME_DEAD_SESSION: "nope" },
+    });
+    p.unref();
+    spawned.push(p.pid);
+    await Bun.sleep(200);
+
+    const { out } = await appctl(app, 'stop_app >/dev/null && start_app >/dev/null && sleep 0.5 && tr "\\0" "\\n" < /proc/$(main_pids | head -n1)/environ');
+    expect(out).toContain("AGENTGLASS_PROJECT=/tmp/scoped-repo");
+    expect(out).not.toContain("SOME_DEAD_SESSION");
+    cleanup(app);
+  });
+
+  test("an install with nothing running opens nothing", async () => {
+    // The person who closed it meant to. A rebuild is not a reason to reopen
+    // an app that was not there.
+    const app = fakeInstall();
+    const { code, out } = await appctl(app, "stop_app && start_app");
+    expect(code).toBe(0);
+    expect(out).not.toContain("reopening");
+    expect(ourPids(app)).toEqual([]);
+    rmSync(app, { recursive: true, force: true });
+  });
+});

@@ -87,6 +87,69 @@ _wait_gone() {
   [ -z "$(app_pids)" ]
 }
 
+# How the instance we are about to stop was started, so it can be put back the
+# same way. Empty means nothing was running, which is the difference between
+# "reopen it" and "open something the user had deliberately closed".
+#
+# One argument per line rather than the NUL-separated bytes /proc hands over,
+# because a shell variable cannot hold a NUL. The assumption that costs is an
+# argument containing a newline, which no way of launching this app produces.
+APPCTL_RESTART_ARGV=""
+APPCTL_RESTART_ENV=""
+
+# Read a stopped instance's command line and the environment that scoped it.
+#
+# Only AGENTGLASS_* is carried over. Restoring the whole environment would put
+# back whatever session the app happened to be launched from — stale sockets,
+# a dead SSH agent, a display that has since gone away — while the variables
+# that actually change what the app *is* are ours: `make desktop-open` scopes a
+# window to one repo with AGENTGLASS_PROJECT, and reopening it unscoped would
+# silently be a different app than the one that was closed.
+_capture_restart() {
+  local pid=$1
+  APPCTL_RESTART_ARGV=$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null) || APPCTL_RESTART_ARGV=""
+  APPCTL_RESTART_ENV=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep '^AGENTGLASS_[A-Za-z0-9_]*=' || true)
+  # An instance we could not read is one we must not claim to be able to
+  # restore: reopening with the wrong arguments is worse than not reopening.
+  [ -n "$APPCTL_RESTART_ARGV" ] || return 0
+}
+
+# Reopen what stop_app took down, if it took anything down.
+#
+# Deliberately not "launch the app": an install run while nothing was open
+# leaves nothing open, because the person who closed it meant to. This only
+# puts back the instance that was there a moment ago, with the arguments and the
+# scoping it had.
+start_app() {
+  [ -n "$APPCTL_RESTART_ARGV" ] || return 0
+  [ -x "$APP/agentglass" ] || return 1
+
+  local args=() env=() line
+  # argv[0] is dropped: it may be the ~/.local/bin symlink, or a path into an
+  # install directory that has just been replaced. The binary to run is the one
+  # we installed, by definition.
+  while IFS= read -r line; do
+    [ -n "$line" ] && args+=("$line")
+  done <<< "$APPCTL_RESTART_ARGV"
+  args=("${args[@]:1}")
+  while IFS= read -r line; do
+    [ -n "$line" ] && env+=("$line")
+  done <<< "$APPCTL_RESTART_ENV"
+
+  echo "==> reopening (${#args[@]} arg(s)${env:+, scoped})"
+  # Detached from this shell in its own session, so the app outlives the install
+  # script rather than dying with the terminal it was rebuilt from. `setsid`
+  # where there is one; a plain background job is the fallback, and the `disown`
+  # keeps a hangup from reaching it.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid env "${env[@]}" "$APP/agentglass" "${args[@]}" </dev/null >/dev/null 2>&1 &
+  else
+    env "${env[@]}" "$APP/agentglass" "${args[@]}" </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
+  return 0
+}
+
 # Stop the running instance, politely first. Returns 1 if anything survives,
 # because the caller's next move is rm -rf over these very files.
 stop_app() {
@@ -97,6 +160,9 @@ stop_app() {
   mains=$(main_pids)
   if [ -n "$mains" ]; then
     echo "==> stopping the running instance (main: $(echo "$mains" | tr '\n' ' '))"
+    # Read it before signalling it. A process that has exited has no command
+    # line left to read, and this is the only moment the answer exists.
+    _capture_restart "$(echo "$mains" | head -n 1)"
     kill $mains 2>/dev/null || true
   else
     # No main process: helpers that outlived their parent, or a sidecar left
