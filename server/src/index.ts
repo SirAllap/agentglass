@@ -660,12 +660,12 @@ const server = Bun.serve<WsData>({
       const sampleable = shown.containers.filter((c) => c.state === "running" || c.state === "paused").map((c) => c.id);
       return json({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
     }
-    if (pathname === "/docker/inspect") return json(dockerInspect(url.searchParams.get("id") || ""));
-    if (pathname === "/docker/top") return json(dockerTop(url.searchParams.get("id") || ""));
+    if (pathname === "/docker/inspect") return json(await dockerInspect(url.searchParams.get("id") || ""));
+    if (pathname === "/docker/top") return json(await dockerTop(url.searchParams.get("id") || ""));
     if (pathname === "/docker/logs") {
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);
-      return json(dockerLogs(id, tail));
+      return json(await dockerLogs(id, tail));
     }
     if (pathname === "/update/run" && req.method === "POST") {
       if (!desktopOnly(req)) return csrfBlocked();
@@ -678,10 +678,10 @@ const server = Bun.serve<WsData>({
       const id = String(b.id || "");
       let res;
       switch (pathname) {
-        case "/docker/start": res = startContainer(id); break;
-        case "/docker/stop": res = stopContainer(id); break;
-        case "/docker/restart": res = restartContainer(id); break;
-        case "/docker/rm": res = removeContainer(id); break;
+        case "/docker/start": res = await startContainer(id); break;
+        case "/docker/stop": res = await stopContainer(id); break;
+        case "/docker/restart": res = await restartContainer(id); break;
+        case "/docker/rm": res = await removeContainer(id); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);

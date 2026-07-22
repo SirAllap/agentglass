@@ -16,19 +16,21 @@ export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 type Res = { code: number; stdout: string; stderr: string };
-function docker(args: string[], timeoutMs = 8000): Res {
-  try {
-    const proc = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
-    return { code: proc.exitCode ?? 1, stdout: proc.stdout?.toString() ?? "", stderr: proc.stderr?.toString() ?? "" };
-  } catch (e) {
-    return { code: 1, stdout: "", stderr: String(e) };
-  }
-}
 
-/** Awaited variant, so independent queries can run at once. Each `docker`
- *  invocation pays the CLI's own startup before it talks to the daemon, and
- *  the overview needs five of them — serially that cost is paid five times
- *  over, on a poll. */
+/**
+ * Every docker call, awaited. There is no synchronous variant on purpose.
+ *
+ * There was one, and four callers used it — logs, inspect, top and the
+ * start/stop/restart actions. `Bun.spawnSync` stops the server's only thread
+ * until the CLI exits, and that thread is also pumping the terminal's PTY
+ * socket, the chat stream and every HTTP request. Since the log tab refetches
+ * on a three-second timer, the UI froze on a three-second beat for as long as
+ * `docker logs` took — which is what "I type and the text appears half a
+ * second later" turned out to be.
+ *
+ * Awaiting also lets independent queries overlap: each invocation pays the
+ * CLI's own startup before it reaches the daemon, and the overview needs five.
+ */
 async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
   try {
     const proc = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
@@ -323,11 +325,20 @@ export async function stats(ids?: string[]): Promise<DockerStat[]> {
   return data;
 }
 
-/** Last `tail` log lines for a container (bounded). Docker writes logs to stderr. */
-export function logs(id: string, tail = 400): { ok: boolean; text: string; error?: string } {
+/**
+ * Last `tail` log lines for a container (bounded). Docker writes logs to stderr.
+ *
+ * Awaited, like everything else here. The panel refetches these every three
+ * seconds while a log tab is open, and a blocking spawn on that cadence stops
+ * the server's only thread — which is also the thread pumping the terminal's
+ * PTY socket and the chat stream. Measured on a chatty container it is
+ * hundreds of milliseconds, which is exactly long enough to read as the app
+ * freezing while you type.
+ */
+export async function logs(id: string, tail = 400): Promise<{ ok: boolean; text: string; error?: string }> {
   if (!ID_RE.test(id)) return { ok: false, text: "", error: "invalid container id" };
   const n = Math.max(1, Math.min(5000, tail | 0));
-  const r = docker(["logs", "--tail", String(n), "--timestamps", id], 10000);
+  const r = await dockerAsync(["logs", "--tail", String(n), "--timestamps", id], 10000);
   // A container writes its own logs to stderr with exit 0; a non-zero exit is a
   // real failure (e.g. "No such container") — surface it as an error, not logs.
   if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "docker logs failed" };
@@ -340,9 +351,11 @@ function guard(id: string): DockerActionResult | null {
   if (!ID_RE.test(id)) return { ok: false, error: "invalid container id" };
   return null;
 }
-function action(verb: string, id: string, extra: string[] = []): DockerActionResult {
+/** `stop` and `restart` wait out the container's grace period — ten seconds of
+ *  a frozen UI if this blocks, on a button the user pressed and is watching. */
+async function action(verb: string, id: string, extra: string[] = []): Promise<DockerActionResult> {
   const g = guard(id); if (g) return g;
-  const r = docker([verb, ...extra, id], 20000);
+  const r = await dockerAsync([verb, ...extra, id], 20000);
   // The panel refetches right after acting; without dropping the cache it gets
   // the pre-action snapshot back and the container looks unchanged, as though
   // the button did nothing.
@@ -363,9 +376,9 @@ export const removeContainer = (id: string) => action("rm", id); // non-force: f
  * to render two tabs would double the latency of switching between them for no
  * gain. `top` is a live process list, so it is its own call.
  */
-export function inspect(id: string): { ok: boolean; env: string[]; config: string; error?: string } {
+export async function inspect(id: string): Promise<{ ok: boolean; env: string[]; config: string; error?: string }> {
   if (!ID_RE.test(id)) return { ok: false, env: [], config: "", error: "invalid container id" };
-  const r = docker(["inspect", id], 10000);
+  const r = await dockerAsync(["inspect", id], 10000);
   if (r.code !== 0) return { ok: false, env: [], config: "", error: r.stderr.trim() || "docker inspect failed" };
   let env: string[] = [];
   let config = r.stdout;
@@ -380,9 +393,9 @@ export function inspect(id: string): { ok: boolean; env: string[]; config: strin
   return { ok: true, env, config };
 }
 
-export function top(id: string): { ok: boolean; text: string; error?: string } {
+export async function top(id: string): Promise<{ ok: boolean; text: string; error?: string }> {
   if (!ID_RE.test(id)) return { ok: false, text: "", error: "invalid container id" };
-  const r = docker(["top", id], 10000);
+  const r = await dockerAsync(["top", id], 10000);
   // A stopped container cannot be topped, and saying that is better than an
   // empty table that looks like "no processes".
   if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "the container is not running" };

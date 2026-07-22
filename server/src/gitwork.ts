@@ -415,7 +415,14 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     // worktrees, because they ARE the project on other branches; a container
     // folder brings every repo found from that folder inward, and nothing else.
     const found = self
-      ? [self, ...worktrees(self).map((w) => w.path).filter((p) => p && p !== self)]
+      // `worktreeList`, not `worktrees`: this needs the paths and nothing else,
+      // and the richer call computes a base branch and a `rev-list --count`
+      // per checkout — synchronously, on the server's only thread. On a repo
+      // with 17 worktrees that is 34 blocking subprocesses, ~200ms each, on
+      // the most frequently requested endpoint in the app. Measured: it froze
+      // the whole UI — the terminal's PTY socket included — for up to 2.8s at
+      // a time, several times a minute, while the user was typing.
+      ? [self, ...worktreeList(self).map((w) => w.path).filter((p) => p && p !== self)]
       : reposUnder(only1);
     const refs = await Promise.all(found.map((r) => repoRef(r)));
     const scoped = refs.filter((r): r is GitRepoRef => !!r);
