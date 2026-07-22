@@ -257,16 +257,73 @@ export function ptyOpen(ws: PtyWs) {
   const tmuxPoll = setInterval(sweep, 500);
   session.tmuxPoll = tmuxPoll;
 
+  /**
+   * Shell output → socket, coalesced and back-pressured.
+   *
+   * It used to be one WebSocket frame per read off the pty. That is fine for a
+   * prompt and terrible for `cat` on a large file or a build log: the pty hands
+   * over whatever the kernel has, so a fast producer becomes thousands of tiny
+   * frames a second, each one a send here, a message event there, and a
+   * separate `term.write()` in the renderer. The cost is not the bytes, it is
+   * the per-frame overhead on both ends.
+   *
+   * Two things fix it, and they are the two the terminal actually needs:
+   *
+   *   * **Coalesce.** Hold what arrives for one frame's worth of time (8ms) and
+   *     send it as one message. A burst collapses into ~120 frames a second
+   *     instead of thousands. Typing is unaffected in any way a human can
+   *     perceive — 8ms is a third of the time it takes the key to travel — and
+   *     anything already large goes immediately rather than waiting.
+   *   * **Push back.** If the socket is behind, stop reading the pty. There is
+   *     no pause/resume call to make: not draining the stream lets the pipe
+   *     fill, and the kernel stops the producer for us — which is the whole
+   *     point of a pty being a pty. Without this, a runaway `yes` is buffered
+   *     in this process until something gives, and the something is memory.
+   */
+  const FRAME_MS = 8;
+  const BIG = 64 * 1024;          // send at once rather than waiting out the frame
+  const HIGH_WATER = 512 * 1024;  // socket queue past which we stop reading
+
   const pump = async (readable: ReadableStream<Uint8Array> | null | undefined) => {
     if (!readable) return;
     const reader = readable.getReader();
+    let held: Uint8Array[] = [];
+    let size = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (!held.length) return;
+      const out = held.length === 1 ? held[0] : (() => {
+        const all = new Uint8Array(size);
+        let at = 0;
+        for (const c of held) { all.set(c, at); at += c.length; }
+        return all;
+      })();
+      held = []; size = 0;
+      if (session.closed) return;
+      try { ws.send(out); } catch { /* socket gone; the read loop will notice */ }
+    };
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (value && !session.closed) { try { ws.send(value); } catch { break; } }
+        if (session.closed) break;
+        if (value?.length) {
+          held.push(value);
+          size += value.length;
+          if (size >= BIG) flush();
+          else if (!timer) timer = setTimeout(flush, FRAME_MS);
+        }
+        // Let the client catch up before pulling more out of the shell.
+        let waited = 0;
+        while (!session.closed && (ws.getBufferedAmount?.() ?? 0) > HIGH_WATER && waited < 10_000) {
+          flush();
+          await Bun.sleep(4);
+          waited += 4;
+        }
       }
     } catch { /* stream torn down */ }
+    finally { flush(); }
   };
 
   (async () => {

@@ -335,7 +335,20 @@ function createSession(root: string): Sess {
     fontSize: 13,
     lineHeight: 1.2,
     cursorBlink: true,
-    scrollback: 10_000,
+    /*
+     * Scrollback, and why it is not ten thousand any more.
+     *
+     * xterm keeps every line as cell data, so a wide window at 10k lines is
+     * tens of megabytes per shell — and this app holds several open at once,
+     * deliberately, so a build in one keeps running while you work in another.
+     * It is also what a resize has to reflow: every line, on every fit, which
+     * is the multi-second freeze people report when dragging a pane.
+     *
+     * Four thousand lines is still more than a screenful of build output by two
+     * orders of magnitude, and it is what the scroll bar can realistically be
+     * dragged through.
+     */
+    scrollback: 4_000,
     theme: themeFromCss(),
     macOptionIsMeta: true,
   });
@@ -543,7 +556,13 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     s.term.options.theme = themeFromCss();
     const unTheme = applyThemeLive(s);
     s.subs.add(redraw);
+    // Debounced: a ResizeObserver fires on every frame of a drag, and each fit
+    // reflows the entire scrollback *and* sends a resize ioctl to the shell.
+    // Undebounced that is the drag stuttering and the shell being told sixty
+    // different sizes on the way to the one that matters.
+    let fitTimer: ReturnType<typeof setTimeout> | null = null;
     const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
+    const fitSoon = () => { if (fitTimer) clearTimeout(fitTimer); fitTimer = setTimeout(doFit, 100); };
     doFit();
     if (s.status === "idle") connect(s);
     // Opening a shell is asking to type in it. The strip mounted focused on
@@ -552,9 +571,10 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     // forget you have to make. Same rAF as the terminal view's own focus: the
     // element has to be attached and laid out first.
     requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
-    const ro = new ResizeObserver(doFit);
+    const ro = new ResizeObserver(fitSoon);
     ro.observe(el);
     return () => {
+      if (fitTimer) clearTimeout(fitTimer);
       ro.disconnect();
       unTheme();
       s.subs.delete(redraw);
@@ -714,7 +734,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   useEffect(() => {
     if (!open || IS_DEMO) return;
     panelClose = () => closeRef.current();
-    const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void }[] = [];
+    const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void; stopFit: () => void }[] = [];
     paneIds.forEach((id, i) => {
       const s = sessions.get(id);
       const el = paneRefs.current[i];
@@ -724,19 +744,25 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       s.term.options.theme = themeFromCss(); // pick up theme switches between opens
       const unTheme = applyThemeLive(s);
       s.subs.add(force);
+      // Same debounce as the console strip: one fit when the drag settles, not
+      // one per frame of it — each costs a full reflow of the scrollback and a
+      // resize ioctl to the shell.
+      let fitTimer: ReturnType<typeof setTimeout> | null = null;
       const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
+      const fitSoon = () => { if (fitTimer) clearTimeout(fitTimer); fitTimer = setTimeout(doFit, 100); };
       doFit();
       if (s.status === "idle") connect(s);
-      const ro = new ResizeObserver(doFit);
+      const ro = new ResizeObserver(fitSoon);
       ro.observe(el);
-      mounted.push({ s, el, ro, unTheme });
+      mounted.push({ s, el, ro, unTheme, stopFit: () => { if (fitTimer) clearTimeout(fitTimer); } });
     });
     const focused = sessions.get(paneIds[focusIdx] ?? "");
     if (focused) requestAnimationFrame(() => focused.term.focus());
     return () => {
       panelClose = () => {};
-      for (const { s, el, ro, unTheme } of mounted) {
+      for (const { s, el, ro, unTheme, stopFit } of mounted) {
         ro.disconnect();
+        stopFit();
         unTheme();
         s.subs.delete(force);
         if (s.holder.parentElement === el) el.removeChild(s.holder);
