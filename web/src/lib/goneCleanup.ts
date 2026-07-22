@@ -104,20 +104,6 @@ export function goneConfirmBody(free: GitBranch[], held: GitBranch[], unmergedCo
   return parts.join("\n\n");
 }
 
-/** One worktree's entry in the "this is what goes" list. */
-export function leftoversLine(report: WorktreeLeftovers, name: string, shownMax = 6): string {
-  const shown = report.entries.slice(0, shownMax);
-  const rest = report.entries.length - shown.length + report.more;
-  const body = report.entries.length
-    ? shown.map((e) => `    ${e.path}${e.vsMain === "differs" ? "  (also in the main checkout, different)" : ""}`).join("\n")
-      + (rest > 0 ? `\n    …and ${rest} more` : "")
-      + (report.skipped ? `\n    (+${report.skipped} rebuildable, e.g. caches — not listed)` : "")
-    : report.skipped || report.identical
-      ? `    nothing unique — ${[report.identical && `${report.identical} already in the main checkout`, report.skipped && `${report.skipped} rebuildable`].filter(Boolean).join(", ")}`
-      : "    empty";
-  return `  ${name}\n${body}`;
-}
-
 /**
  * Which leftovers start out ticked in the rescue list.
  *

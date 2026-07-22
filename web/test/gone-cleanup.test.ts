@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, leftoversLine, preselected, fmtBytes, rescueKey, rescuePicks } from "../src/lib/goneCleanup.ts";
+import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, preselected, fmtBytes, rescueKey, rescuePicks } from "../src/lib/goneCleanup.ts";
 import type { GitBranch, WorktreeLeftovers, LeftoverEntry } from "../../shared/types.ts";
 
 /**
@@ -162,24 +162,6 @@ describe("fmtBytes", () => {
     expect(fmtBytes(725_000)).toBe("708K");
     expect(fmtBytes(12_000_000)).toBe("11M");
     expect(fmtBytes(-1)).toBe("?");
-  });
-});
-
-describe("leftoversLine", () => {
-  it("caps the list and counts the rest, including the server's own overflow", () => {
-    const r = report("/code/repo-x", { entries: ["1", "2", "3", "4", "5", "6", "7"].map((n) => entry(n, 10)), more: 21, skipped: 508 });
-    const line = leftoversLine(r, "repo-x");
-    expect(line).toContain("    1\n");
-    expect(line).not.toContain("    7\n");
-    // 7 files, 6 shown, 1 left over here plus the 21 the server had already cut.
-    expect(line).toContain("…and 22 more");
-    expect(line).toContain("(+508 rebuildable");
-  });
-
-  it("distinguishes an empty checkout from one holding only caches", () => {
-    expect(leftoversLine(report("/x"), "x")).toContain("empty");
-    expect(leftoversLine(report("/x", { skipped: 9 }), "x")).toContain("9 rebuildable");
-    expect(leftoversLine(report("/x", { identical: 20 }), "x")).toContain("20 already in the main checkout");
   });
 });
 
