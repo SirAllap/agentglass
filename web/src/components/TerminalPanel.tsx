@@ -4,7 +4,7 @@
 // tab-completion, colors, vim/htop/lazygit. Shell sessions are kept alive in a
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
@@ -132,6 +132,16 @@ function keyByte(k: string): string | null {
   }
   return "\u001b" + ch;
 }
+
+/**
+ * A tmux key spelling, written the way a keyboard hint is usually written.
+ *
+ * `C-b` is how tmux says it and `^b` is how every cheat sheet says it. Anything
+ * that is not a control key is left alone: `M-a` is already the way people
+ * write that one, and inventing a notation for the rest would be worse than
+ * repeating tmux's.
+ */
+const keyLabel = (k: string) => (/^C-.$/.test(k) ? `^${k.slice(2).toLowerCase()}` : k);
 
 const sessions = new Map<string, Sess>();
 let seq = 0;
@@ -821,6 +831,18 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // Lit while tmux is waiting for the second half of a prefix sequence.
   const prefixLive = !!sess?.tmuxPrefixAt && Date.now() - sess.tmuxPrefixAt < PREFIX_MS;
   /*
+   * The prefix, spelled for a keyboard hint.
+   *
+   * Every key this panel advertises starts with it, and it used to be written
+   * `^b` everywhere regardless of what tmux was actually listening for. That is
+   * wrong for exactly the people who rebound it — who are the people who use
+   * tmux enough to have rebound anything — and it is wrong silently: the hints
+   * still read as instructions, they just do not work. `^b` remains the
+   * fallback for the moment before tmux has answered, because it is right for
+   * everyone who never touched it.
+   */
+  const px = keyLabel(sess?.tmuxPrefix[0] ?? "C-b");
+  /*
    * The tab you clicked highlights now, not when tmux confirms it.
    *
    * The server re-reads tmux the moment the command returns, so the real answer
@@ -1077,12 +1099,31 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         : { color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
                       {(sess?.tmuxPrefix[0] ?? "tmux")}
                     </span>
+                    {/* Which session this strip is describing.
+                        It was in most people's status line, and with several
+                        sessions on one socket the tabs alone do not say which
+                        one you are looking at — a distinction that stopped
+                        being academic the moment a restore could move the
+                        client from one session to another underneath you. */}
+                    {sess?.tmuxSession && (
+                      <span className="shrink-0 px-1 text-[10px] max-w-[9rem] truncate" style={{ color: "var(--text4)" }} title={`tmux session: ${sess.tmuxSession}`}>
+                        {sess.tmuxSession}
+                      </span>
+                    )}
                     {tmuxWindows.map((w) => {
-                      // tmux's own marks, straight through: `!` is a bell, `#`
-                      // is activity in a window you are not looking at. Both
-                      // mean "something happened over here", which is the whole
-                      // reason the strip is worth looking at at all.
-                      const alerting = w.flags.includes("!") || w.flags.includes("#");
+                      // tmux's own marks, straight through, and kept apart
+                      // rather than merged: `!` is a bell, which the window
+                      // rang on purpose, and `#` is activity, which is only
+                      // output arriving. One dot for both said "something
+                      // happened over here" and left you to go and find out
+                      // which — and `monitor-activity` is off in most configs,
+                      // so the loud one is usually the only one that fires.
+                      const bell = w.flags.includes("!");
+                      const activity = w.flags.includes("#");
+                      // Zoom is the flag that changes what the keyboard does:
+                      // one pane is filling the window and the others are still
+                      // there, which is confusing precisely when it is invisible.
+                      const zoomed = w.flags.includes("Z");
                       return (
                         <div key={w.id}
                           onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd("select", { window: w.id }); } }}
@@ -1112,13 +1153,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           ) : (
                             <span>{w.name || "shell"}</span>
                           )}
-                          {alerting && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="activity" />}
+                          {zoomed && <span className="text-[9px] font-semibold leading-none" style={{ color: "var(--text4)" }} title="a pane in this window is zoomed">⤢</span>}
+                          {bell && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} title="bell" />}
+                          {!bell && activity && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="activity" />}
                           <button onClick={(e) => { e.stopPropagation(); tmuxCmd("kill", { window: w.id }); }}
                             className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="close window (kill-window)">✕</button>
                         </div>
                       );
                     })}
-                    <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title="new tmux window (^b c)">+</button>
+                    <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title={`new tmux window (${px} c puts it next to this one)`}>+</button>
                     <button onClick={() => setTmuxBar((v) => !v)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
                       title={tmuxBar ? "hide tmux's own status line for this session" : "show tmux's own status line again"}>
                       {tmuxBar ? "hide tmux bar" : "show tmux bar"}
@@ -1185,13 +1228,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>tmux</span>
                       <span>panel chrome hidden — tmux owns the panes</span>
                       <span className="t-dim2">·</span>
-                      <b style={{ color: "var(--text2)" }}>^b c</b><span>window</span>
-                      <b style={{ color: "var(--text2)" }}>^b "</b><span>split ↓</span>
-                      <b style={{ color: "var(--text2)" }}>^b %</b><span>split →</span>
-                      <b style={{ color: "var(--text2)" }}>^b o</b><span>next pane</span>
-                      <b style={{ color: "var(--text2)" }}>^b z</b><span>zoom</span>
-                      <b style={{ color: "var(--text2)" }}>^b d</b><span>detach</span>
-                      <b style={{ color: "var(--text2)" }}>^b ?</b><span>all keys</span>
+                      {[["c", "window"], ['"', "split ↓"], ["%", "split →"], ["o", "next pane"], ["z", "zoom"], ["d", "detach"], ["?", "all keys"]].map(([key, what]) => (
+                        <Fragment key={key}>
+                          <b style={{ color: "var(--text2)" }}>{px} {key}</b><span>{what}</span>
+                        </Fragment>
+                      ))}
                     </span>
                   ) : (
                     <span>real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
