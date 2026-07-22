@@ -133,6 +133,11 @@ export default function App() {
   wsOpenRef.current = wsOpen;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
+  // The catalog is the one panel that can open *over* the workspace, from the
+  // rail. Escape has to be able to tell the two apart, or one keystroke closes
+  // both and you lose the shell you were looking at to read a description.
+  const skillsOpenRef = useRef(skillsOpen);
+  skillsOpenRef.current = skillsOpen;
 
   // The workspace covers the dashboard, so the dashboard's ambient loops are
   // animating for nobody. The stylesheet freezes them on `data-ws`, the same way
@@ -330,6 +335,9 @@ export default function App() {
       // because a focused textarea can swallow it before it reaches here.
       if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
+        // Peel one layer at a time: the catalog opened from the rail sits on
+        // top of the workspace, so it goes first and the workspace stays.
+        if (wsOpenRef.current && skillsOpenRef.current) { setSkillsOpen(false); return; }
         setSelected(null);
         setPaletteOpen(false);
         setHelpOpen(false);
@@ -485,7 +493,7 @@ export default function App() {
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
-      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} chatFocusId={chatFocus} />
+      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} onSkills={() => setSkillsOpen(true)} chatFocusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
       {/* Shows once when the app first runs a version it has not run before —
           the update button restarts into a new build and otherwise says nothing

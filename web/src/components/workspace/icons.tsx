@@ -53,6 +53,17 @@ export function WorkspaceIcon({ size = 15 }: P) {
   return <svg {...svg} width={size} height={size}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>;
 }
 
+/** The skills catalog: a reference you open, not a view you work in — which is
+ *  why it sits with close at the foot of the rail rather than among the tabs. */
+export function SkillsIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5v-13A2.5 2.5 0 0 1 6.5 3z" />
+    </svg>
+  );
+}
+
 export function CloseIcon({ size = 15 }: P) {
   return <svg {...svg} width={size} height={size}><path d="M6 6l12 12M18 6L6 18" /></svg>;
 }

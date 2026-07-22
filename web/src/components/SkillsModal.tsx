@@ -192,7 +192,10 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
   const used = all.filter((s) => s.calls > 0).length;
 
   return (
-    <Portal>
+    // Above the workspace's portal, not merely after it: the rail opens this
+    // from inside the workspace, and at equal z the frame — which mounts later
+    // — would paint straight over the catalog.
+    <Portal z={10100}>
       <AnimatePresence>
         {open && (
           <>
