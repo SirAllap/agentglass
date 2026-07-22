@@ -78,6 +78,21 @@ describe("self update", () => {
     expect(tags).not.toContain("wip-scratch"); // a private tag is not a release
   });
 
+  it("does not re-dial the network on every poll", async () => {
+    // `git ls-remote` is a network round trip, it ran synchronously on the
+    // server's only thread, and the UI polls this. The loop watchdog caught it
+    // at 492ms — and the call is allowed forty-five seconds. Every one of those
+    // is a terminal that has stopped echoing, so the answer is held for ten
+    // minutes.
+    release("v0.2.0");
+    const u = await load();
+    expect(u.remoteTags(remote)).toEqual(["v0.2.0"]);
+    // Make the remote unreachable. A second call that still answers can only be
+    // answering from the cache.
+    rmSync(remote, { recursive: true, force: true });
+    expect(u.remoteTags(remote)).toEqual(["v0.2.0"]);
+  });
+
   it("offers the newer release and counts how many there are", async () => {
     release("v0.2.0"); release("v0.3.0"); release("v0.4.0");
     trash.push(installedAs("0.2.0"));

@@ -103,8 +103,34 @@ export function cmpTag(a: string, b: string): number {
  * on disk and must not touch anything, so it stays safe to call whenever the
  * About pane is opened.
  */
+/**
+ * Published releases, from the remote, cached.
+ *
+ * This is a network round trip — `git ls-remote` against GitHub — and it ran
+ * synchronously on the server's only thread, on an endpoint the UI polls. The
+ * loop watchdog caught it at 492ms; the timeout below says it is allowed to
+ * take forty-five seconds, and every one of those would be a terminal that had
+ * stopped echoing. A tag list changes when someone cuts a release, so ten
+ * minutes of staleness costs nothing and a failure is held briefly too — an
+ * offline laptop must not re-dial the network on every poll.
+ */
+const TAGS_TTL_MS = 10 * 60_000;
+const TAGS_FAIL_TTL_MS = 60_000;
+let tagCache: { at: number; url: string; tags: string[] } | null = null;
+
 export function remoteTags(originUrl: string): string[] {
   if (!originUrl) return [];
+  const hit = tagCache;
+  if (hit && hit.url === originUrl) {
+    const ttl = hit.tags.length ? TAGS_TTL_MS : TAGS_FAIL_TTL_MS;
+    if (Date.now() - hit.at < ttl) return hit.tags;
+  }
+  const tags = readRemoteTags(originUrl);
+  tagCache = { at: Date.now(), url: originUrl, tags };
+  return tags;
+}
+
+function readRemoteTags(originUrl: string): string[] {
   const r = spawnSync("git", ["ls-remote", "--tags", "--refs", originUrl], {
     encoding: "utf8", timeout: 45_000,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
