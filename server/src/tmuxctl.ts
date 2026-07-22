@@ -302,9 +302,19 @@ export function runAction(t: TmuxTarget, action: TmuxAction, window?: string, na
     case "select":
       return id === null ? false : tmux(t.socket, ["select-window", "-t", id]) !== null;
     case "new":
-      // After the current window rather than at the end, which is where `^b c`
-      // puts it when `renumber-windows` is on and where the eye expects it.
-      return tmux(t.socket, ["new-window", "-a", "-t", t.id]) !== null;
+      // At the end, which is tmux's default and where the button is.
+      //
+      // This used to pass `-a` to match `^b c`, on the grounds that the two
+      // should agree. They should not: they are different gestures. `^b c` is
+      // "here, next to what I am doing", and it lands next to the current
+      // window because that is where the hand is. A `+` at the end of a row of
+      // tabs is "at the end" — you click a button on the right and the new tab
+      // has to appear under it, not somewhere in the middle of the strip.
+      //
+      // tmux's default is the first free index, which is the end unless killing
+      // a middle window left a gap. That is the same rule the unbound `c` uses,
+      // so a strip that fills a gap is at least a rule the user already has.
+      return tmux(t.socket, ["new-window", "-t", t.id]) !== null;
     case "kill":
       return id === null ? false : tmux(t.socket, ["kill-window", "-t", id]) !== null;
     case "rename": {
