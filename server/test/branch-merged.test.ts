@@ -1,14 +1,17 @@
-// "Is this branch already in the trunk?" has to survive a squash merge.
+// "Is this branch already in the trunk?" has to survive a rewritten history.
 //
 // The branches panel gates its delete on that answer: get it wrong and a branch
 // whose PR landed weeks ago still refuses to delete, with a "not fully merged"
 // error the user can only clear from a terminal. Ancestry alone always gets it
-// wrong here, because a squash merge replays the work as a brand new commit and
-// the branch tip never becomes an ancestor of anything.
+// wrong for the two shapes GitHub's merge button actually produces — squash
+// replays the work as one brand new commit, rebase replays it as several, and
+// in neither case does the branch tip become an ancestor of anything.
 //
-// So this pins the two merge shapes separately, plus the two cases where the
-// answer must stay "no" — an open branch, and one sharing no history at all.
-import { describe, expect, test, beforeAll } from "bun:test";
+// So this pins the three merge shapes separately, plus the two cases where the
+// answer must stay "no" — an open branch, and one sharing no history at all —
+// plus the two ways a correct answer can still be lost afterwards: an expiring
+// cache, and a branch that grows new commits once the verdict is already in.
+import { describe, expect, test, beforeAll, afterAll, setSystemTime } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,6 +51,21 @@ beforeAll(async () => {
   git("checkout", "-q", "main");
   git("merge", "-q", "--squash", "squashed");
   git("commit", "-q", "-m", "feat: the whole branch, squashed (#1)");
+
+  // Rebase-merged: the same commits replayed one by one onto main, each with a
+  // new hash. This is the other GitHub merge button, and the one that defeats
+  // the squash probe too — that probe looks for a single combined patch, and a
+  // rebase never leaves one.
+  //
+  // Main has to move first. Replayed straight onto the commit they branched
+  // from, the picks reproduce byte-identical commits, main fast-forwards, and
+  // plain ancestry answers — which is not the case under test.
+  git("checkout", "-q", "-b", "rebased");
+  commit("rebase-a.txt", "a\n", "first half");
+  commit("rebase-b.txt", "b\n", "second half");
+  git("checkout", "-q", "main");
+  commit("trunk.txt", "moved on\n", "unrelated trunk work");
+  git("cherry-pick", "rebased~1", "rebased");
 
   // Merge-committed: ancestry still holds, and must keep being recognised.
   git("checkout", "-q", "-b", "merged", "main");
@@ -101,6 +119,10 @@ describe("mergedIntoTrunk", () => {
     expect(await settles("squashed", true)).toBe(true);
   });
 
+  test("a rebase-merged branch counts as merged, once the sweep has run", async () => {
+    expect(await settles("rebased", true)).toBe(true);
+  });
+
   test("a normally merged branch still counts as merged", () => {
     expect(of("merged")?.mergedIntoTrunk).toBe(true);
   });
@@ -112,4 +134,35 @@ describe("mergedIntoTrunk", () => {
   test("an unrelated history does not", () => {
     expect(of("stranger")?.mergedIntoTrunk).toBe(false);
   });
+
+  /**
+   * The two TTLs are an order of magnitude apart, and that gap used to eat the
+   * answer: the ancestry entry expires after 30s and is rebuilt from `--merged`
+   * alone, while the sweep that found the squashes declines to re-run for five
+   * minutes because it swept recently. Every branch above flipped back to "not
+   * merged — kept" for four and a half minutes out of every five.
+   *
+   * A minute is squarely inside that window. Nothing about the repo changed, so
+   * nothing about the answer may either.
+   */
+  test("verdicts survive the ancestry cache expiring under them", () => {
+    setSystemTime(new Date(Date.now() + 60_000));
+    expect(of("squashed")?.mergedIntoTrunk).toBe(true);
+    expect(of("rebased")?.mergedIntoTrunk).toBe(true);
+  });
+
+  /**
+   * ...but only for the commit they were proved against. A remembered verdict
+   * that outlived its branch would be worse than the bug it fixes: the delete
+   * behind this flag is `-D`, so it would throw away work nothing has checked.
+   */
+  test("a remembered verdict is dropped when the branch moves", () => {
+    git("checkout", "-q", "rebased");
+    commit("rebase-c.txt", "c\n", "new work, after the merge");
+    git("checkout", "-q", "main");
+    setSystemTime(new Date(Date.now() + 60_000)); // still inside the sweep's TTL
+    expect(of("rebased")?.mergedIntoTrunk).toBe(false);
+  });
 });
+
+afterAll(() => setSystemTime());
