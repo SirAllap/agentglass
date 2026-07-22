@@ -501,6 +501,12 @@ export function ConsoleStrip({ root, open, height, onHeight, onClose }: {
     const doFit = () => { try { fitTerm(s); } catch { /* not measurable yet */ } };
     doFit();
     if (s.status === "idle") connect(s);
+    // Opening a shell is asking to type in it. The strip mounted focused on
+    // nothing, so every open cost a click on the black area before the first
+    // keystroke landed — and a click that does nothing visible is a click you
+    // forget you have to make. Same rAF as the terminal view's own focus: the
+    // element has to be attached and laid out first.
+    requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
     const ro = new ResizeObserver(doFit);
     ro.observe(el);
     return () => {
