@@ -12,6 +12,9 @@ let lw: typeof import("../src/loopwatch.ts");
 beforeAll(async () => {
   // A small ring, so the trim can be proven without stalling for a minute.
   process.env.AGENTGLASS_LOOPWATCH_SIZE = "5";
+  // A short pressure window, so a stall from the test above ages out before the
+  // load-shedding tests below rather than after ten real seconds of waiting.
+  process.env.AGENTGLASS_PRESSURE_WINDOW_MS = "400";
   lw = await import("../src/loopwatch.ts");
   lw.watchLoop();
   await Bun.sleep(150); // let the heartbeat settle
@@ -69,4 +72,43 @@ describe("loop watchdog", () => {
     expect(s.stalls.length).toBeLessThanOrEqual(5);       // the ring trimmed
     expect(s.stalls.at(-1)!.id).toBeGreaterThan(5);        // …and kept the newest
   }, 15_000);
+});
+
+describe("load shedding", () => {
+  // The terminal cannot ask for priority, so it is given some: while a human is
+  // typing into a shell, the background sweeps hold their answers longer. The
+  // multiplier is the whole mechanism — the caches it multiplies already exist.
+  it("is 1 when nothing is happening", async () => {
+    await Bun.sleep(4_100);            // let any earlier keystroke go cold
+    expect(lw.terminalHot()).toBe(false);
+    expect(lw.pressureMs()).toBe(0);
+    expect(lw.backoff()).toBe(1);
+  }, 10_000);
+
+  it("stands back while the loop is already stalling", async () => {
+    // The second signal, and the one that covers whatever blocks the loop next:
+    // if something took 500ms out of the last window, adding an eighteen-repo
+    // `git status` sweep on top of it is the wrong instinct.
+    block(600);
+    await Bun.sleep(150);
+    expect(lw.pressureMs()).toBeGreaterThan(400);
+    expect(lw.backoff()).toBeGreaterThan(1);
+    await Bun.sleep(500);              // past the (shortened) window
+    expect(lw.backoff()).toBe(1);
+  }, 10_000);
+
+  it("stands back while someone is typing", () => {
+    lw.terminalActive();
+    expect(lw.terminalHot()).toBe(true);
+    expect(lw.backoff()).toBeGreaterThan(1);
+  });
+
+  it("lets go on its own once the typing stops", async () => {
+    lw.terminalActive();
+    expect(lw.backoff()).toBeGreaterThan(1);
+    await Bun.sleep(4_100);
+    // Nothing resets this and nothing can get stuck holding it — the signal is
+    // a timestamp, so calm is the state it returns to by doing nothing.
+    expect(lw.backoff()).toBe(1);
+  }, 10_000);
 });

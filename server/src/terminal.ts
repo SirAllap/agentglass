@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
 import type { ProjectCommand, TerminalCommands } from "../../shared/types.ts";
 import { safeAbs, repoRootOf } from "./git.ts";
+import { terminalActive } from "./loopwatch.ts";
 import { inScope } from "./config.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
@@ -288,6 +289,9 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean };
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
+    // A keystroke is the least ambiguous "a human is waiting on this process"
+    // signal there is; the background sweeps stand back while it is fresh.
+    terminalActive();
     try {
       const sink = s.proc.stdin as { write?: (b: Uint8Array) => void; flush?: () => void };
       sink.write?.(enc.encode(msg.d));

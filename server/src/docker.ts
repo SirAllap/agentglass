@@ -10,6 +10,7 @@ import type {
   DockerOverview, DockerScope, DockerActionResult,
 } from "../../shared/types.ts";
 import { workspaceRoot, scopeRoots } from "./config.ts";
+import { backoff } from "./loopwatch.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
@@ -318,7 +319,7 @@ let overviewCache: { at: number; root: string | null; data: DockerOverview } | n
 
 export async function overview(): Promise<DockerOverview> {
   const root = workspaceRoot();
-  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS) return overviewCache.data;
+  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS * backoff()) return overviewCache.data;
   const { version, inconclusive } = await probeDaemon();
   if (!version) {
     const down: DockerOverview = {
@@ -385,7 +386,7 @@ export async function stats(ids?: string[]): Promise<DockerStat[]> {
   const targets = ids ? [...new Set(ids)].filter((id) => ID_RE.test(id)) : null;
   if (targets && !targets.length) return [];
   const key = targets ? targets.join(",") : "*";
-  if (statsCache && statsCache.key === key && Date.now() - statsCache.at < STATS_TTL_MS) return statsCache.data;
+  if (statsCache && statsCache.key === key && Date.now() - statsCache.at < STATS_TTL_MS * backoff()) return statsCache.data;
   const r = await dockerAsync(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}", ...(targets ?? [])], 12000);
   // A container removed between the overview and this call takes the whole
   // command down with it ("No such container"). Falling back to the host sample

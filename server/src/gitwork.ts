@@ -9,7 +9,7 @@ import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSy
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
-import { entered } from "./loopwatch.ts";
+import { entered, backoff } from "./loopwatch.ts";
 import type {
   ConflictBlock, BlockChoice,
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
@@ -432,7 +432,10 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // serve the old scope's answer for the next five seconds.
   const key = [opts.ignoreScope ? "*" : workspaceRoot() ?? "", ...knownRoots].join("\\0");
   const hit = repoCache.get(key);
-  if (hit && Date.now() - hit.at < REPO_CACHE_MS) return hit.repos;
+  // Held longer while a shell is in use or the loop is stalling: this sweep is
+  // eighteen `git status` calls on a worktree-heavy repo, and none of them is
+  // worth a late keystroke. See backoff().
+  if (hit && Date.now() - hit.at < REPO_CACHE_MS * backoff()) return hit.repos;
   if (repoCache.size > 8) repoCache.clear(); // scope churn — don't hoard stale lists
   const roots = new Set<string>();
 

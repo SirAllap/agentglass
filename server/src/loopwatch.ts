@@ -108,8 +108,95 @@ export function watchLoop(): void {
   timer.unref?.();
 }
 
+// --- load shedding -----------------------------------------------------------
+//
+// Knowing the loop is drowning is worth something; doing nothing about it is
+// worth less than it sounds. Everything in this process competes for one
+// thread, and the terminal loses by accident — it is the only participant whose
+// delay a human feels directly, and it has no way to ask for priority.
+//
+// So it gets one. Two signals make the background work stand back, and both are
+// facts rather than guesses:
+//
+//   * Someone is typing. A keystroke arriving at a PTY is the least ambiguous
+//     "a human is waiting on this process right now" signal available. The
+//     dirty dots in a dropdown can be four seconds older than usual; the echo
+//     of a keystroke cannot be late.
+//   * The loop is already stalling. If something blocked it 500ms in the last
+//     ten seconds, adding a `git status` sweep on top is the wrong instinct.
+//
+// The effect is a multiplier on how long the background caches hold, which is
+// all the machinery this needs: those TTLs already exist, they are already the
+// only thing deciding how often the expensive sweeps run, and multiplying them
+// degrades to "slightly staler panel" rather than to a broken one. It recovers
+// on its own the moment both signals go quiet — nothing to reset, nothing that
+// can get stuck shedding.
+
+/** How long after a keystroke the terminal still counts as in use. */
+const HOT_MS = 4_000;
+/**
+ * The window pressure is judged over, and the budget inside it.
+ *
+ * The window is env-overridable for the same reason the ring size is: a test
+ * that has to wait ten real seconds for a stall to age out is a test nobody
+ * runs. Read per call, not at import.
+ */
+const pressureWindow = () => Number(process.env.AGENTGLASS_PRESSURE_WINDOW_MS ?? 10_000);
+const PRESSURE_BUDGET_MS = 400;
+/** How far the background is pushed back when either signal fires. Deliberately
+ *  modest: this is a step back, not a strike. */
+const HOT_FACTOR = 3;
+const PRESSURE_FACTOR = 4;
+
+let lastKeystroke = 0;
+
+/** Called on every byte a user sends to a shell. Cheap by necessity — it runs
+ *  on the hot path of the one thing this is protecting. */
+export function terminalActive(): void {
+  lastKeystroke = Date.now();
+}
+
+/** Is a human typing into a shell right now? */
+export function terminalHot(): boolean {
+  return Date.now() - lastKeystroke < HOT_MS;
+}
+
+/** Milliseconds the loop was unavailable inside the recent window. */
+export function pressureMs(): number {
+  const from = Date.now() - pressureWindow();
+  let n = 0;
+  for (let i = ring.length - 1; i >= 0; i--) {
+    if (ring[i].at < from) break;
+    n += ring[i].ms;
+  }
+  return n;
+}
+
+/**
+ * Multiply a background cache's lifetime by this.
+ *
+ * 1 when the app is calm, which is almost always — a user reading a diff is not
+ * typing and is not stalling anything, and nothing about their panels should
+ * change. The two are not added together: the worst signal wins, because
+ * doubling up on a bad moment is how a "protection" turns into a panel that
+ * never refreshes.
+ */
+export function backoff(): number {
+  return Math.max(
+    1,
+    terminalHot() ? HOT_FACTOR : 1,
+    pressureMs() > PRESSURE_BUDGET_MS ? PRESSURE_FACTOR : 1,
+  );
+}
+
 /** Stalls newer than `since` (an id), oldest first, plus the running totals. */
-export function stalls(since = 0): { stalls: Stall[]; worstMs: number; totalMs: number; sinceMs: number } {
+export function stalls(since = 0): { stalls: Stall[]; worstMs: number; totalMs: number; sinceMs: number; backoff: number; terminalHot: boolean } {
   const out = since > 0 ? ring.filter((e) => e.id > since) : ring.slice();
-  return { stalls: out, worstMs: worst, totalMs: total, sinceMs: started ? Date.now() - started : 0 };
+  return {
+    stalls: out, worstMs: worst, totalMs: total,
+    sinceMs: started ? Date.now() - started : 0,
+    // Reported, so "why is the docker panel slow to update" has an answer that
+    // is not a shrug: it is standing back because you are typing.
+    backoff: backoff(), terminalHot: terminalHot(),
+  };
 }
