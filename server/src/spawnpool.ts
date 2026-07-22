@@ -40,10 +40,17 @@
  * Read per call rather than fixed at import, for the same reason the watchdog's
  * ring size is: a module constant is decided by whichever file imports this
  * first, which in a test run is never the file doing the overriding.
+ *
+ * The trailing `|| 4` is not belt-and-braces. Where `navigator` is absent the
+ * subtraction is NaN, and NaN poisons the clamp — `Math.max(4, Math.min(16,
+ * NaN))` is NaN, `inflight >= NaN` is false forever, and the cap silently stops
+ * existing while every counter and stat still reads plausibly. A limit that can
+ * quietly become "no limit" is worse than no limit at all, because nothing ever
+ * says so. NaN is falsy, so this lands on the floor instead.
  */
 const limit = () => Math.max(
   4,
-  Math.min(16, Number(process.env.AGENTGLASS_SPAWN_LIMIT) || navigator.hardwareConcurrency - 2),
+  Math.min(16, Number(process.env.AGENTGLASS_SPAWN_LIMIT) || navigator.hardwareConcurrency - 2 || 4),
 );
 
 let inflight = 0;
