@@ -370,7 +370,22 @@ export type WsFrame =
   /** Something mutated a repository. Carries no payload on purpose: the panels
    *  each need a different slice of git state, so they re-read what they show
    *  rather than the server guessing which of them cares about what. */
-  | { type: "git" };
+  | { type: "git" }
+  /** A pull request's checks all finished. One frame per PR per verdict — the
+   *  server holds the latch, so a suite of sixty-one checks sends one of these,
+   *  not sixty-one. */
+  | { type: "ci"; data: CiVerdict };
+
+/** The aggregate outcome of a PR's checks, once every one of them is terminal. */
+export interface CiVerdict {
+  repo: string;
+  number: number;
+  title: string;
+  verdict: "green" | "red";
+  /** Named, so the message can say what broke instead of just that something did. */
+  failing: string[];
+  url: string;
+}
 
 // --- commit composer (live git working-tree) ---------------------------------
 export interface GitFileStatus {
@@ -850,3 +865,164 @@ export type UpdateStatus = {
   blocked?: string;
   last?: { at: string; ok: boolean; tail: string };
 };
+
+// --- pull requests (gh-backed) ---------------------------------------------
+
+/**
+ * A repo's identity on the forge, not on disk.
+ *
+ * Eighteen worktrees of the same clone are one repo here. Keying PRs by path
+ * would fetch the same list eighteen times — at ~1.9s a call on a server with
+ * one thread, which is the stall this whole panel is written to avoid.
+ */
+export interface PrRepoId {
+  /** "github.com/acme/orbit" — the cache key, and what `gh -R` is given. */
+  key: string;
+  host: string;
+  owner: string;
+  name: string;
+  /** "acme/orbit" */
+  nameWithOwner: string;
+}
+
+export type PrCheckState = "success" | "failure" | "pending" | "skipped" | "neutral";
+
+export interface PrCheck {
+  name: string;
+  workflow: string;
+  state: PrCheckState;
+  /** Terminal means it will not change without a new push or a re-run. */
+  done: boolean;
+  url?: string;
+}
+
+export interface PrCheckRollup {
+  total: number;
+  success: number;
+  failure: number;
+  skipped: number;
+  pending: number;
+  /** Every check has reached a terminal state. The notification latch waits
+   *  for this, so 61 checks produce one message rather than 61. */
+  allDone: boolean;
+  /** Only meaningful with `allDone`. Skipped never counts as failure. */
+  verdict: "green" | "red" | null;
+  /** The failing ones, named — a count alone sends you to the browser. */
+  failing: PrCheck[];
+}
+
+export interface PrLabel { name: string; color?: string }
+
+export interface PrSummary {
+  number: number;
+  title: string;
+  author: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
+  headRefName: string;
+  baseRefName: string;
+  url: string;
+  updatedAt: string;
+  reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  labels: PrLabel[];
+  checks: PrCheckRollup;
+  /** This checkout is on the PR's head branch — "you are here". */
+  isCurrentBranch?: boolean;
+}
+
+/** Why the merge button is grey. A disabled control that can't say why is the
+ *  thing this panel exists to replace. */
+export type PrMergeState =
+  | "CLEAN" | "BLOCKED" | "BEHIND" | "DIRTY" | "UNSTABLE" | "DRAFT" | "HAS_HOOKS" | "UNKNOWN";
+
+export interface PrThreadComment {
+  id: string;
+  author: string;
+  isBot: boolean;
+  body: string;
+  createdAt: string;
+}
+
+export interface PrThread {
+  /** GraphQL node id — the only handle `resolveReviewThread` accepts. */
+  id: string;
+  path: string;
+  line: number | null;
+  isResolved: boolean;
+  /** The code under it has changed since; usually safe to skip. */
+  isOutdated: boolean;
+  comments: PrThreadComment[];
+}
+
+export interface PrReview {
+  author: string;
+  isBot: boolean;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
+  body: string;
+  submittedAt: string;
+}
+
+export interface PrComment {
+  id: number;
+  author: string;
+  isBot: boolean;
+  body: string;
+  createdAt: string;
+  /** Bot noise reduced to its point — a 46KB coverage table is three numbers
+   *  and 1,847 rows nobody reads. Null when nothing could be extracted. */
+  digest?: string | null;
+}
+
+export interface PrCommit { oid: string; short: string; message: string; author: string; isMerge: boolean }
+
+export interface PrFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  status: string;
+  /** Unresolved threads anchored to this file. */
+  comments: number;
+}
+
+export interface PrChecklistItem { checked: boolean; text: string }
+
+export interface PrDetail extends PrSummary {
+  body: string;
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  mergeState: PrMergeState;
+  /** Parsed out of the body — unchecked boxes are a merge signal on repos
+   *  whose template carries a real checklist. */
+  checklist: PrChecklistItem[];
+  reviewers: string[];
+  assignees: string[];
+  reviews: PrReview[];
+  comments: PrComment[];
+  threads: PrThread[];
+  commits: PrCommit[];
+  files: PrFile[];
+  checks: PrCheckRollup;
+  checksAll: PrCheck[];
+  /** The author force-pushed after a review was submitted: that review is
+   *  stale and the reviewer should be told rather than left guessing. */
+  forcePushedSinceReview: boolean;
+}
+
+export interface PrListResponse {
+  ok: boolean;
+  /** Null when this directory has no forge remote we understand. */
+  repo: PrRepoId | null;
+  prs: PrSummary[];
+  /** When the cached copy was taken. The UI shows this rather than pretending
+   *  to be live — every number here costs a subprocess. */
+  fetchedAt: number;
+  stale: boolean;
+  loading: boolean;
+  error?: string;
+  /** `gh` missing or not logged in — a first-class state, not an error toast. */
+  needsAuth?: boolean;
+}
+
+export interface PrActionResult { ok: boolean; error?: string; detail?: string }

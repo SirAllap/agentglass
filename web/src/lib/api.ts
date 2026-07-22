@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -125,6 +125,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 const D = <T,>(v: T) => Promise.resolve(v); // demo helper
+const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is read-only" });
 
 const realApi = {
   recent: (limit = 300) => get<WatchEvent[]>(`/events/recent?limit=${limit}`),
@@ -270,6 +271,41 @@ const realApi = {
   updateLog: () => get<{ ok: boolean; text: string }>("/update/log"),
   dockerInspect: (id: string) => get<{ ok: boolean; env: string[]; config: string; error?: string }>(`/docker/inspect?id=${encodeURIComponent(id)}`),
   dockerTop: (id: string) => get<{ ok: boolean; text: string; error?: string }>(`/docker/top?id=${encodeURIComponent(id)}`),
+  // --- pull requests (gh-backed) ---
+  prCapability: (force = false) => get<{ available: boolean; authed: boolean; login?: string; reason?: string }>(`/prs/capability${force ? "?force=1" : ""}`),
+  prList: (root: string, filter: "mine" | "review" | "all", force = false) =>
+    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}${force ? "&force=1" : ""}`),
+  prDetail: (root: string, number: number, force = false) =>
+    get<{ ok: boolean; detail?: PrDetail; error?: string }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
+  prDiff: (root: string, number: number) =>
+    get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}`),
+  /** Images in a PR body go through the server, which attaches the gh token —
+   *  GitHub's own attachment URLs 404 without it. */
+  prAssetUrl: (raw: string) => `${SERVER}/prs/asset?url=${encodeURIComponent(raw)}`,
+  prReview: (root: string, number: number, verb: "approve" | "request_changes" | "comment", body: string) =>
+    post<PrActionResult>("/prs/review", { root, number, verb, body }),
+  prComment: (root: string, number: number, body: string) => post<PrActionResult>("/prs/comment", { root, number, body }),
+  prReply: (root: string, number: number, commentId: number, body: string) => post<PrActionResult>("/prs/reply", { root, number, commentId, body }),
+  prSetThreadResolved: (root: string, threadId: string, resolved: boolean) => post<PrActionResult>("/prs/thread-resolved", { root, threadId, resolved }),
+  prReact: (root: string, commentId: number, content = "+1") => post<PrActionResult>("/prs/react", { root, commentId, content }),
+  prEdit: (root: string, number: number, patch: { title?: string; body?: string; base?: string }) => post<PrActionResult>("/prs/edit", { root, number, ...patch }),
+  prLabels: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/labels", { root, number, add, remove }),
+  prReviewers: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/reviewers", { root, number, add, remove }),
+  prDraft: (root: string, number: number, draft: boolean) => post<PrActionResult>("/prs/draft", { root, number, draft }),
+  prUpdateBranch: (root: string, number: number) => post<PrActionResult>("/prs/update-branch", { root, number }),
+  prRerun: (root: string, number: number) => post<PrActionResult>("/prs/rerun", { root, number }),
+  prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string }) =>
+    post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
+  prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
+  prLocalReview: (root: string, number: number) =>
+    post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/local-review", { root, number }),
+  prLocalReviewDiscard: (root: string, number: number) => post<PrActionResult>("/prs/local-review-discard", { root, number }),
+  /** Where a local branch lives on the web. A live branch resolves to its tree
+   *  with no network at all; a gone one resolves to the PR it came from. */
+  prBranchUrl: (root: string, branch: string, gone: boolean) =>
+    get<{ ok: boolean; url?: string; kind?: "tree" | "pr"; error?: string }>(
+      `/prs/branch-url?root=${encodeURIComponent(root)}&branch=${encodeURIComponent(branch)}&gone=${gone ? "true" : "false"}`),
+
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
@@ -414,6 +450,33 @@ const demoApi: typeof realApi = {
   dockerStop: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRestart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRm: (_id: string) => D(demo.dockerActionUnavailable()),
+
+  // The demo has no GitHub behind it, and pretending otherwise would put a
+  // fake PR list in front of someone evaluating the app. It reports the same
+  // "gh isn't set up" state a real machine without gh would, which is honest
+  // and is a screen worth showing anyway.
+  prCapability: (_force?: boolean) => D({ available: false, authed: false, reason: "pull requests need the GitHub CLI — not available in the demo" }),
+  prList: (_root: string, _filter: "mine" | "review" | "all", _force?: boolean) =>
+    D<PrListResponse>({ ok: true, repo: null, prs: [], fetchedAt: 0, stale: false, loading: false, needsAuth: true, error: "not available in the demo" }),
+  prDetail: (_root: string, _number: number, _force?: boolean) => D({ ok: false, error: "not available in the demo" }),
+  prDiff: (_root: string, _number: number) => D({ ok: false, error: "not available in the demo" }),
+  prAssetUrl: (raw: string) => raw,
+  prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),
+  prComment: (_r: string, _n: number, _b: string) => D(demoPrAction()),
+  prReply: (_r: string, _n: number, _c: number, _b: string) => D(demoPrAction()),
+  prSetThreadResolved: (_r: string, _t: string, _v: boolean) => D(demoPrAction()),
+  prReact: (_r: string, _c: number, _content?: string) => D(demoPrAction()),
+  prEdit: (_r: string, _n: number, _p: { title?: string; body?: string; base?: string }) => D(demoPrAction()),
+  prLabels: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
+  prReviewers: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
+  prDraft: (_r: string, _n: number, _d: boolean) => D(demoPrAction()),
+  prUpdateBranch: (_r: string, _n: number) => D(demoPrAction()),
+  prRerun: (_r: string, _n: number) => D(demoPrAction()),
+  prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string }) => D(demoPrAction()),
+  prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
+  prLocalReview: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prLocalReviewDiscard: (_r: string, _n: number) => D(demoPrAction()),
+  prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
 };
 
 export const api = IS_DEMO ? demoApi : realApi;

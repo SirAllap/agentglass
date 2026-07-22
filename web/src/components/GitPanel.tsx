@@ -844,6 +844,26 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     finally { setBusy(false); setPending(null); }
   };
 
+  /**
+   * Open a branch where it lives on the web.
+   *
+   * A live branch has a tree page and the URL is pure string work. A `gone` one
+   * has no tree page — that is what gone means — so the only useful destination
+   * is the pull request it came from, which costs a lookup. Resolved on click
+   * rather than prefetched for every row: thirteen gone branches would be
+   * thirteen network calls for a link nobody pressed.
+   */
+  const openBranchOnWeb = async (b: GitBranch) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await api.prBranchUrl(root, b.name, trackChip(b.track).gone);
+      if (!r.ok || !r.url) { flash(false, r.error || "could not work out where that branch lives"); return; }
+      window.open(r.url, "_blank", "noopener,noreferrer");
+    } catch (e) { flash(false, String(e)); }
+    finally { setBusy(false); }
+  };
+
   // Branches whose upstream is gone. Never the current one: git refuses to
   // delete a checked-out branch anyway, and offering it is just a failed call.
   const goneBranches = branchData.branches.filter((b) => !b.current && trackChip(b.track).gone);
@@ -1960,6 +1980,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           <span className="shrink-0 text-[9.5px] t-dim2">{b.date}</span>
                           {writeEnabled && !b.current && (
                             <div className="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                              <button onClick={() => openBranchOnWeb(b)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={trackChip(b.track).gone ? "its remote branch is gone — find the pull request it came from" : "open this branch on GitHub"}>open ↗</button>
                               <button onClick={() => mergeBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Merge ${b.name} into current`}>merge</button>
                               <button onClick={() => rebaseBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Rebase current onto ${b.name}`}>rebase</button>
                               <button onClick={() => renameBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>rename</button>
