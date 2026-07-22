@@ -301,11 +301,11 @@ async function main() {
 
       await press("\\", true); // ⌘\ / Ctrl-\ opens it
       const railTabs = await evaluate(`document.querySelectorAll('${railSel} [role="tab"]').length`);
-      if (railTabs !== 5) failures.push(`[workspace] expected 5 rail tabs after Ctrl-\\, found ${railTabs}`);
+      if (railTabs !== 6) failures.push(`[workspace] expected 6 rail tabs after Ctrl-\\, found ${railTabs}`);
 
       // Every view mounts up front; only one is visible.
       const panes = await evaluate(`document.querySelectorAll('${railSel}')[0]?.parentElement?.querySelectorAll(':scope > div > [aria-hidden]').length ?? 0`);
-      if (panes !== 5) failures.push(`[workspace] expected all 5 views mounted, found ${panes}`);
+      if (panes !== 6) failures.push(`[workspace] expected all 6 views mounted, found ${panes}`);
 
       /**
        * Press a key and wait for the view to actually be the one expected.
@@ -327,9 +327,13 @@ async function main() {
       };
 
       // Inside the workspace, navigation carries a modifier. VIEWS order is
-      // git, diff, docker, term, chat — so ⌘2 and ⌘4.
+      // git, diff, pr, docker, term, chat — so ⌘2 is diff and ⌘5 is term.
+      // These numbers are deliberately literal rather than derived from the
+      // rail: a check that reads the app's own list would agree with it however
+      // wrong it got, and the point is to notice when the order moves. It moved
+      // here — `pr` was inserted third and pushed term from 4 to 5.
       if (!(await pressUntilView("2", "diff", true))) failures.push(`[workspace] Ctrl-2 should select diff, selected ${await selectedView()}`);
-      if (!(await pressUntilView("4", "term", true))) failures.push(`[workspace] Ctrl-4 should select term, selected ${await selectedView()}`);
+      if (!(await pressUntilView("5", "term", true))) failures.push(`[workspace] Ctrl-5 should select term, selected ${await selectedView()}`);
       if (!(await pressUntilView("1", "git", true))) failures.push(`[workspace] Ctrl-1 should select git, selected ${await selectedView()}`);
 
       // And the property this replaced a heuristic to guarantee: a bare letter
@@ -354,7 +358,7 @@ async function main() {
       }
       if (!closed) failures.push("[workspace] Escape did not close the workspace");
 
-      if (!failures.length) console.log("✓ smoke: workspace opens, all 5 views mount, keys switch and close");
+      if (!failures.length) console.log("✓ smoke: workspace opens, all 6 views mount, keys switch and close");
 
       // Chats have to outlive the page, which is a property no unit test can
       // reach: the store restores at module load, from real storage, in a real
