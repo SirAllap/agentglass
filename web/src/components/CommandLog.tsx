@@ -60,7 +60,7 @@ export function CommandLog({ open, onClose }: { open: boolean; onClose: () => vo
           title={writesOnly ? "Also show the read-only queries the panel runs while polling" : "Show only commands that can change the repository"}
           className="text-[9px] px-1.5 py-0.5 rounded"
           style={{ color: writesOnly ? "var(--text)" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
-          {writesOnly ? "writes only" : "everything"}
+          {writesOnly ? "Writes only" : "Everything"}
         </button>
         <button onClick={onClose} className="ml-auto text-[11px] px-1.5 t-dim2 hover:opacity-70" title="Hide (@)">✕</button>
       </div>
@@ -81,7 +81,7 @@ export function CommandLog({ open, onClose }: { open: boolean; onClose: () => vo
         ))}
         {!shown.length && (
           <div className="py-6 text-center t-dim2 text-[10px]">
-            {writesOnly ? "nothing has changed the repository yet" : "no commands yet"}
+            {writesOnly ? "Nothing has changed the repository yet" : "No commands yet"}
           </div>
         )}
       </div>

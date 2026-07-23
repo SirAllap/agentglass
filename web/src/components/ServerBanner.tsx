@@ -63,7 +63,7 @@ export default function ServerBanner() {
       }}
     >
       <span className="font-semibold" style={{ color: foreign ? "var(--error)" : "var(--warning)" }}>
-        {foreign ? "wrong server" : "no server"}
+        {foreign ? "Wrong server" : "No server"}
       </span>
       {foreign ? (
         <span>

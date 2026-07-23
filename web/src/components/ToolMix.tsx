@@ -62,7 +62,7 @@ export function ToolMix({ events }: { events: WatchEvent[] }) {
               <span className="t-dim2 tabular-nums">{m.pct.toFixed(0)}%</span>
             </span>
           ))}
-          {seg.length === 0 && <span className="text-[11px] t-dim2">waiting for tool calls…</span>}
+          {seg.length === 0 && <span className="text-[11px] t-dim2">Waiting for tool calls…</span>}
         </div>
       </div>
     </Panel>

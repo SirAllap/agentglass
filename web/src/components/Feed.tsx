@@ -9,10 +9,10 @@ import { fmtTime, fmtMs, fmtUsd, agentKey, hashColor } from "../lib/format.ts";
 type Category = "all" | "tools" | "chat" | "alerts";
 
 const CATS: { key: Category; label: string }[] = [
-  { key: "all", label: "all" },
-  { key: "tools", label: "tools" },
-  { key: "chat", label: "chat" },
-  { key: "alerts", label: "alerts" },
+  { key: "all", label: "All" },
+  { key: "tools", label: "Tools" },
+  { key: "chat", label: "Chat" },
+  { key: "alerts", label: "Alerts" },
 ];
 
 const TOOL_TYPES = new Set(["PreToolUse", "PostToolUse", "PostToolUseFailure"]);
@@ -270,7 +270,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
             <span className="absolute inline-flex h-full w-full rounded-full opacity-70" style={{ background: "var(--success)", animation: "ping-ring 1.6s ease-out infinite" }} />
             <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: "var(--success)" }} />
           </span>
-          following live
+          Following live
         </>
       ) : newCount > 0 ? (
         <AnimatePresence mode="wait">
@@ -280,7 +280,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
         </AnimatePresence>
       ) : (
         <>
-          <span aria-hidden style={{ letterSpacing: "-1px" }}>❚❚</span> paused
+          <span aria-hidden style={{ letterSpacing: "-1px" }}>❚❚</span> Paused
         </>
       )}
     </motion.button>
@@ -300,12 +300,12 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
       <span className="font-semibold">Filtered</span>
       {filter.app && (
         <span className="chip" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 55%, transparent)" }}>
-          app: {filter.app}
+          App: {filter.app}
         </span>
       )}
       {filter.type && (
         <span className="chip" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 55%, transparent)" }}>
-          event: {filter.type}
+          Event: {filter.type}
         </span>
       )}
       <span className="t-dim2 tabular-nums">· {rows.length} shown</span>
@@ -314,7 +314,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
         className="ml-auto flex items-center gap-1 rounded-md px-2 py-0.5 font-semibold cursor-pointer"
         style={{ color: "var(--bg2)", background: "var(--primary)" }}
       >
-        clear ✕
+        Clear ✕
       </button>
     </div>
   );
@@ -347,7 +347,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
             ))}
             <button
               onClick={() => setLanes((l) => !l)}
-              title="one column per session — parallel sessions get their own lane"
+              title="One column per session — parallel sessions get their own lane"
               className="chip cursor-pointer"
               style={
                 lanes
@@ -355,14 +355,14 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
                   : { color: "var(--text4)" }
               }
             >
-              ⫴ lanes
+              ⫴ Lanes
             </button>
           </div>
         </div>
         {lanes ? (
           <div className="flex-1 min-h-0 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.max(1, laneData.length)}, minmax(0, 1fr))` }}>
             {laneData.map((l) => <Lane key={l.key} aKey={l.key} rows={l.rows} onSelect={onSelect} />)}
-            {laneData.length === 0 && <div className="t-dim2 text-center py-8">no events match</div>}
+            {laneData.length === 0 && <div className="t-dim2 text-center py-8">No events match</div>}
           </div>
         ) : (
           <div ref={ref} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-1"
@@ -375,7 +375,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
             <AnimatePresence initial={false}>
               {rows.map((row) => <EventRow key={row.key} row={row} onSelect={onSelect} />)}
             </AnimatePresence>
-            {rows.length === 0 && <div className="t-dim2 text-center py-8">no events match</div>}
+            {rows.length === 0 && <div className="t-dim2 text-center py-8">No events match</div>}
           </div>
         )}
       </div>
@@ -395,13 +395,13 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
               className="chip cursor-pointer"
               style={{ color: "var(--text3)" }}
             >
-              ⛶ expand
+              ⛶ Expand
             </button>
           </div>
         }
       >
         {full ? (
-          <div className="h-full flex items-center justify-center t-dim2 text-[11px]">feed is fullscreen — Esc to bring it back</div>
+          <div className="h-full flex items-center justify-center t-dim2 text-[11px]">Feed is fullscreen — Esc to bring it back</div>
         ) : (
           body
         )}

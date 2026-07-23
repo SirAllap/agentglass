@@ -102,7 +102,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
               <span className="relative inline-flex rounded-full h-3 w-3" style={{ background: "var(--success)" }} />
             </span>
             <div className="text-[13px]" style={{ color: "var(--text2)" }}>All systems nominal</div>
-            <div className="text-[10px] t-dim2">no agent needs you right now</div>
+            <div className="text-[10px] t-dim2">No agent needs you right now</div>
           </div>
         )}
 
@@ -124,7 +124,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
                 <span className="ml-auto text-[9.5px] t-dim2">{g.source_app}:{g.session_id.slice(0, 8)}</span>
               </div>
               <div className="text-[10.5px] t-dim mt-1 mb-2 break-all line-clamp-2" title={g.summary} style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                {g.summary || "(no details)"}
+                {g.summary || "(No details)"}
               </div>
               <div className="flex gap-2">
                 <button
@@ -163,7 +163,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
                     {g.tool_name} {g.decision === "deny" ? "denied" : "allowed"} without you
                   </div>
                   <div className="text-[9.5px] t-dim2 truncate">
-                    {g.resolution === "restart" ? "window closed while the server was down" : "no decision before the timeout"} · {g.source_app}
+                    {g.resolution === "restart" ? "Window closed while the server was down" : "No decision before the timeout"} · {g.source_app}
                   </div>
                 </div>
                 <span className="text-[9.5px] t-dim2 shrink-0">{fmtAgo(g.decided_at ?? g.created)}</span>

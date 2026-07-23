@@ -183,13 +183,13 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                           value: s.calls,
                           right: s.cost_usd > 0 ? `${s.calls}× · ${fmtUsd(s.cost_usd)}` : `${s.calls}×`,
                         }))}
-                        empty="no skill runs in this window"
+                        empty="No skill runs in this window"
                       />
                     </Widget>
 
                     <Widget title="skill runs over time" i={4}>
                       {skills.length === 0 ? (
-                        <div className="t-dim2 text-[11px] py-3">no skill runs in this window</div>
+                        <div className="t-dim2 text-[11px] py-3">No skill runs in this window</div>
                       ) : (
                         <div className="flex flex-col gap-1">
                           {skills.slice(0, 6).map((s) => {
@@ -234,14 +234,14 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                           value: t.calls,
                           right: `${t.calls}× · p50 ${t.p50_ms >= 1000 ? (t.p50_ms / 1000).toFixed(1) + "s" : Math.round(t.p50_ms) + "ms"}`,
                         }))}
-                        empty="no tool calls in this window"
+                        empty="No tool calls in this window"
                       />
                     </Widget>
 
                     <Widget title="event mix" i={3}>
                       <BarList
                         rows={types.map((t) => ({ label: t.hook_event_type, value: t.count, dot: typeColor(t.hook_event_type) }))}
-                        empty="no events in this window"
+                        empty="No events in this window"
                       />
                     </Widget>
                   </div>
@@ -250,7 +250,7 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                 {/* full-width — a sibling below the columns, always clears them */}
                 <Widget title="apps by spend" i={5} full>
                   {apps.length === 0 ? (
-                    <div className="t-dim2 text-[11px] py-3">no activity in this window</div>
+                    <div className="t-dim2 text-[11px] py-3">No activity in this window</div>
                   ) : (
                     <div className="flex flex-col">
                       <div className="grid grid-cols-[minmax(0,1fr)_repeat(3,auto)] gap-x-4 text-[9px] uppercase tracking-wider t-dim2 pb-1">

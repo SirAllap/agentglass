@@ -53,7 +53,7 @@ export function ToolRow({ e, sub = [], nested = false }: {
           onClick={detail ? () => setOpen((o) => !o) : undefined}
           className={`min-w-0 flex-1 break-all ${detail ? "cursor-pointer" : ""} ${open ? "" : "truncate"}`}
           style={MONO}
-          title={detail && !open ? "click for the full command and its output" : undefined}>
+          title={detail && !open ? "Click for the full command and its output" : undefined}>
           <span style={{ color: tint }}>{e.is_error ? "✕ " : ""}{e.tool}</span>
           <span style={{ color: "var(--text4)" }}>(</span>
           <span style={{ color: "var(--text3)" }}>{firstLine}</span>

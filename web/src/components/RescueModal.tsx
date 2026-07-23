@@ -165,7 +165,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
                       <span className="text-[11.5px] truncate" style={{ color: ticked ? "var(--text)" : "var(--text3)" }}>{r.entry.path}</span>
                       {risky && (
                         <span className="text-[9px] px-1 rounded shrink-0" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 15%, transparent)" }}>
-                          overwrites the main checkout
+                          Overwrites the main checkout
                         </span>
                       )}
                       <span className="ml-auto text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{fmtBytes(r.entry.bytes)}</span>
@@ -181,7 +181,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
                   <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ border: "2px solid color-mix(in srgb, var(--primary) 35%, transparent)", borderTopColor: "var(--primary)", animation: "agx-spin 0.7s linear infinite" }} />
                   <style>{"@keyframes agx-spin{to{transform:rotate(360deg)}}"}</style>
                   <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>{progress}…</span>
-                  <span className="ml-auto text-[10.5px]" style={{ color: "var(--text3)" }}>this can take a few seconds</span>
+                  <span className="ml-auto text-[10.5px]" style={{ color: "var(--text3)" }}>This can take a few seconds</span>
                 </>
               ) : (
               <>
