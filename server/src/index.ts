@@ -26,7 +26,7 @@ import { getUsage } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, git } from "./git.ts";
+import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, git, gitCapability } from "./git.ts";
 import {
   workingTree, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
@@ -45,7 +45,7 @@ import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
-  startContainer, stopContainer, restartContainer, removeContainer,
+  startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
 } from "./docker.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
@@ -633,6 +633,9 @@ const server = Bun.serve<WsData>({
     }
 
     // --- live git panel (lazygit-style working tree) ---
+    // Is git even installed? A plain read like the rest of /git/*, so the
+    // surface-wide origin/rebinding gate is the whole authorisation story.
+    if (pathname === "/git/capability") return json(gitCapability());
     if (pathname === "/git/repos") {
       const paths = getChanges(300).map((c) => c.file_path);
       // `all=1` is the project picker: it needs the whole machine even when the
@@ -793,6 +796,12 @@ const server = Bun.serve<WsData>({
     }
 
     // --- live docker panel (lazydocker-style) ---
+    // Is docker even installed, as opposed to the daemon being down? A plain
+    // read like the rest of /docker/*, so the surface-wide origin/rebinding gate
+    // is the whole authorisation story. Lets the panel show install guidance for
+    // a missing binary instead of the overview's daemon message. Mirrors
+    // /git/capability.
+    if (pathname === "/docker/capability") return json(await dockerCapability());
     if (pathname === "/docker/overview") return json(await dockerOverview());
     if (pathname === "/docker/stats") {
       // Sample what the panel is showing. The overview is cached and scoped, so
@@ -1142,6 +1151,42 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => { shutdownTerminals(); process.exit(0); });
 }
 
+// Parent-death watchdog: a server must never outlive whoever launched it.
+//
+// The signal handlers above only cover a clean SIGINT/SIGTERM. They do nothing
+// when the launcher is SIGKILLed or crashes, and there is no launcher-side
+// cleanup at all for `make dev`, the perf/soak scripts, or a server an agent
+// left running inside a worktree that was later deleted (cwd `(deleted)`). The
+// only other thing that stops a sidecar is Electron's in-process stopSidecar
+// handler, which likewise cannot survive its own SIGKILL. The observed result:
+// a dozen servers reparented to init, each holding a port and a fistful of
+// shells, still running ~18h later and saturating the box. This gives the
+// server its own defence — it remembers the pid it was born under and, every
+// few seconds, checks that pid is still both its parent and alive. Reparented
+// to init (ppid 1), handed to a different parent, or the original gone → hang
+// up the shells and exit under its own power, within ~3s of losing its parent.
+//
+// Gated behind a flag the launcher opts into, so a deliberately daemonized
+// `make start` is never self-terminated. Every launcher that expects the
+// server to die with it sets the flag (the electron spawn, the dev script, the
+// perf/soak spawns); the 432-test suite never sets it, so the watchdog stays
+// dormant under `make test` — which is why the interval is not even registered
+// unless the flag is present. `process.ppid === 1` is the robust signal: a
+// crash of an intermediate wrapper (`bun --watch`, `concurrently`) reparents
+// the whole subtree to init, which a bare `!== bornUnder` on a still-live
+// wrapper would miss; `!== bornUnder` in turn catches the immediate parent
+// alone going away and the pid being recycled under a new owner.
+if (process.env.AGENTGLASS_DIE_WITH_PARENT === "1") {
+  const bornUnder = process.ppid;
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  setInterval(() => {
+    if (process.ppid === 1 || process.ppid !== bornUnder || !alive(bornUnder)) {
+      shutdownTerminals();
+      process.exit(0);
+    }
+  }, 3000).unref?.();
+}
+
 console.log(`🛰  agentglass server on http://${LOOPBACK_ONLY ? "localhost" : BIND}:${server.port}`);
 if (!LOOPBACK_ONLY) {
   const posture = AUTH_TOKEN ? "token-protected" : "UNAUTHENTICATED";
@@ -1175,3 +1220,12 @@ subscribeCi((v) => broadcast({ type: "ci", data: v }));
 // Watch our own event loop. Cheap (one timer, one subtraction) and the only
 // thing that turns "the terminal feels laggy" into a name and a number.
 watchLoop();
+
+// Say it once at boot if git is missing. Every git/diff/PR panel and the
+// terminal need it, and without this the only symptom is empty panels that
+// blame the repo — the log line is where an installer user finds the real
+// cause without opening devtools.
+{
+  const gc = gitCapability();
+  if (!gc.available) console.warn(`⚠  git not found on PATH — the git, diff, pull-request and terminal panels will not work. Install git to enable them.`);
+}

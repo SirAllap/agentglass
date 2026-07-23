@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -240,6 +240,7 @@ const realApi = {
   /** Subdirectories matching a half-typed path — the picker's completion. */
   fsComplete: (prefix: string) => get<FsCompletion>(`/fs/complete?prefix=${encodeURIComponent(prefix)}`),
   // --- live git panel (lazygit-style) ---
+  gitCapability: () => get<GitCapability>("/git/capability"),
   gitRepos: () => get<{ repos: GitRepoRef[] }>("/git/repos"),
   /** Every repo on the machine — for the project picker, even when scoped. */
   gitReposAll: () => get<{ repos: GitRepoRef[] }>("/git/repos?all=1"),
@@ -323,6 +324,9 @@ const realApi = {
   gitUndoMerge: (root: string) => post<GitActionResult>("/git/undo-merge", { root }),
   gitMergeContinue: (root: string) => post<GitActionResult>("/git/merge-continue", { root }),
   // --- live docker panel (lazydocker-style) ---
+  /** Installed / daemon-down / OK — so the panel can show install guidance for a
+   *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
+  dockerCapability: () => get<DockerCapability>("/docker/capability"),
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
@@ -446,6 +450,7 @@ const demoApi: typeof realApi = {
   setWorkspace: (_root: string | null) => D({ ok: false, workspace: null, persisted: false, error: "unavailable in the demo" }),
   // The demo has no filesystem to browse, so completion is simply always empty.
   fsComplete: (_prefix: string) => D({ base: "", entries: [], truncated: false }),
+  gitCapability: () => D({ available: true } as GitCapability),
   gitRepos: () => D(demo.gitRepos()),
   gitReposAll: () => D(demo.gitRepos()),
   gitTree: (root: string) => D(demo.gitTree(root)),
@@ -502,6 +507,7 @@ const demoApi: typeof realApi = {
   gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
   gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),
   gitWorktreeChown: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
+  dockerCapability: () => D({ available: true, version: "27.0.3" } as DockerCapability),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),

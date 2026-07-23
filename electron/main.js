@@ -179,7 +179,12 @@ async function resolvePort() {
 async function ensureServer(adopt) {
   const port = SERVER_PORT;
   if (adopt) return; // a dev server or another instance is already up
-  const env = { ...process.env, AGENTGLASS_PORT: String(port) };
+  // AGENTGLASS_DIE_WITH_PARENT arms the server's own parent-death watchdog:
+  // stopSidecar below cannot fire if this main process is SIGKILLed or crashes,
+  // so the sidecar backs it up by exiting on its own once we are gone. Only
+  // servers we spawn get the flag; adopted ones (returned above) keep whatever
+  // lifecycle they were launched with.
+  const env = { ...process.env, AGENTGLASS_PORT: String(port), AGENTGLASS_DIE_WITH_PARENT: "1" };
   sidecar = PACKAGED
     ? spawn(SIDECAR_BIN, [], { stdio: "ignore", env })
     : spawn("bun", ["run", path.join(REPO, "server", "src", "index.ts")], { stdio: "ignore", env });

@@ -74,9 +74,20 @@ const server = spawn({
     AGENTGLASS_DB: join(home, "soak.db"),
     XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"), XDG_CACHE_HOME: join(home, "cache"),
     AGENTGLASS_TOKEN: "", AGENTGLASS_SCAN_DISABLED: "1",
+    // Arm the server's parent-death watchdog. A soak runs for minutes and is the
+    // one most likely to be interrupted; if this script is SIGKILLed the server
+    // is reparented to init and the watchdog reaps it instead of it lingering.
+    AGENTGLASS_DIE_WITH_PARENT: "1",
   },
   stdout: "ignore", stderr: "inherit",
 });
+
+// SIGTERM/SIGINT skip the finally below, so a Ctrl-C or a `kill` on this script
+// would leave the server it spawned running. Kill it on the way out ourselves;
+// the watchdog is the backstop for the harder SIGKILL case only.
+for (const s of ["SIGINT", "SIGTERM"] as const) {
+  process.on(s, () => { try { server.kill(); } catch { /* already gone */ } process.exit(1); });
+}
 
 const POLLED = [
   `/git/tree?root=${R}`, `/git/repos`, `/git/branches?root=${R}`,

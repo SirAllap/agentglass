@@ -787,6 +787,32 @@ export interface DockerOverview {
 }
 export interface DockerActionResult { ok: boolean; error?: string; output?: string; }
 
+/**
+ * Whether docker is usable, told apart into the three states that need three
+ * different answers on screen.
+ *
+ * The overview carries a single `available: false` + `error` for any failure,
+ * which conflated the two that matter: a *missing binary* and a *downed daemon*
+ * are different problems with different fixes ("install Docker" vs "start the
+ * daemon"), and the panel used to send everyone to the daemon message — even on
+ * a machine with no docker at all. This is the docker counterpart to
+ * GitCapability, and `available` here means the same thing it does there: the
+ * CLI is on PATH.
+ *
+ *   (a) not installed → available:false, reason names it (install guidance)
+ *   (b) installed, daemon down → available:true, reason (no version)
+ *   (c) OK → available:true, version (no reason)
+ */
+export interface DockerCapability {
+  /** The `docker` CLI is on this machine. False → not installed at all. */
+  available: boolean;
+  /** The daemon's version, present only when it answered — i.e. state (c). */
+  version?: string;
+  /** Why docker isn't usable: the binary is missing (a), or the daemon isn't
+   *  responding (b). Absent in the healthy case. */
+  reason?: string;
+}
+
 // --- LLM walkthrough (AI-authored review itinerary) --------------------------
 export interface WalkthroughInputFile {
   path: string;
@@ -835,6 +861,15 @@ export interface TerminalCommands {
   enabled: boolean; // AGENTGLASS_TERMINAL_DISABLED gate
   make: ProjectCommand[];    // Makefile targets, with descriptions
   scripts: ProjectCommand[]; // package.json scripts, runner-aware
+}
+
+/** Whether `git` is on this machine at all. `available: false` is a first-class
+ *  UI state — the git/diff/PR panels and the terminal all need git — not an
+ *  error to bury behind an empty "no repos found". */
+export interface GitCapability {
+  available: boolean;
+  version?: string;
+  reason?: string;
 }
 
 /** One `<<<<<<< / ======= / >>>>>>>` region of a conflicted file. */

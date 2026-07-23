@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import type { ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
 import { api, IS_DEMO } from "../lib/api.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { keepTermFocus } from "../lib/keepFocus.ts";
 
 /**
  * The four git one-liners this row used to hardcode as always-visible chips.
@@ -205,11 +206,19 @@ function CommandRow({ c, font, on, full, onRun, onPin }: {
  * `font` is the terminal's own face: a command is a thing you type, and it
  * reads as one when it is set in the face it will be typed in.
  */
-export function CommandBar({ root, disabled, font, onRun, dropUp }: {
+export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
   root: string;
   disabled: boolean;
   font: string;
   onRun: (cmd: string) => void;
+  /** Put the cursor back where it belongs once the dropdown closes.
+   *
+   *  The filter input has to take focus off the terminal while it is open (you
+   *  came here to type in it), so closing it — by Escape, an outside click, or
+   *  the toggle — has to hand the focus back, or the shell sits there ignoring
+   *  keys until you click into it again. Running a command already refocuses
+   *  through `onRun`; this covers every other way out. */
+  onClose?: () => void;
   /** Open upwards — for the console strip, which sits at the bottom of a panel
    *  and has nothing below it to open into. */
   dropUp?: boolean;
@@ -219,10 +228,13 @@ export function CommandBar({ root, disabled, font, onRun, dropUp }: {
   const wrap = useRef<HTMLDivElement>(null);
   const cmds = useCommands(root);
   const pins = usePins(root);
-  useDismiss(open, wrap, () => { setOpen(false); setQuery(""); });
+  const dismiss = useCallback(() => { setOpen(false); setQuery(""); onClose?.(); }, [onClose]);
+  useDismiss(open, wrap, dismiss);
 
   const n = (cmds?.make.length ?? 0) + (cmds?.scripts.length ?? 0);
   const full = pins.length >= MAX_PINS;
+  // Selecting a command hands focus back through onRun (it types into the
+  // shell), so it closes without going through `dismiss`'s own refocus.
   const run = (cmd: string) => { setOpen(false); setQuery(""); onRun(cmd); };
   const pin = (cmd: string) => { togglePin(root, cmd); };
 
@@ -236,14 +248,22 @@ export function CommandBar({ root, disabled, font, onRun, dropUp }: {
   return (
     <>
       <div className="relative shrink-0" ref={wrap}>
-        <button onClick={() => setOpen((o) => !o)} disabled={!root || IS_DEMO}
+        {/* onMouseDown keeps the shell's cursor: the trigger is a button, and a
+            press on it would otherwise blur the terminal. Opening reveals the
+            filter input, which autofocuses on its own; closing routes through
+            `dismiss` so the focus goes back to the shell rather than nowhere. */}
+        <button onMouseDown={keepTermFocus} onClick={() => (open ? dismiss() : setOpen(true))} disabled={!root || IS_DEMO}
           title="Ready-to-run project commands: Makefile targets & package scripts, with what each one does. Pin the ones you use."
           className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg font-medium whitespace-nowrap"
           style={{ color: n ? "var(--primary-hover)" : "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", opacity: root && !IS_DEMO ? 1 : 0.5 }}>
           ⚙ commands{n ? ` (${n})` : cmds ? " (none)" : " …"}<span className="t-dim2">▼</span>
         </button>
         {open && (
-          <div className="absolute left-0 rounded-lg text-[11px] shadow-2xl flex flex-col"
+          // keepTermFocus on the whole popover: a click on its padding, a
+          // border, or a command row must not blur the filter input (it stays
+          // yours to type in while the menu is open). The input itself is
+          // excluded by the handler, so it can still be clicked into.
+          <div onMouseDown={keepTermFocus} className="absolute left-0 rounded-lg text-[11px] shadow-2xl flex flex-col"
             style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", width: 460, maxHeight: 420, overflow: "hidden", ...(dropUp ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }) }}>
             {/* A real project has more targets than fit on a screen — the repo
                 this was built against has 316 — so scrolling to find `migrate`
@@ -283,20 +303,25 @@ export function CommandBar({ root, disabled, font, onRun, dropUp }: {
       <div className="flex items-center gap-1 min-w-0 overflow-x-auto agx-scroll">
         {pins.map((cmd) => (
           <span key={cmd} className="group relative flex items-center shrink-0">
-            <button onClick={() => onRun(cmd)} disabled={disabled || !root || IS_DEMO}
+            {/* onMouseDown keeps the shell focused; running the chip refocuses
+                it anyway through onRun, but unpinning does not, so both carry
+                the guard rather than only one. */}
+            <button onMouseDown={keepTermFocus} onClick={() => onRun(cmd)} disabled={disabled || !root || IS_DEMO}
               className="text-[10px] pl-2 pr-2 py-1 rounded-md whitespace-nowrap"
               style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", fontFamily: font }}
               title={`run ${cmd}`}>{cmd}</button>
             {/* Unpin from the chip itself: going back to the dropdown to find
                 the row you pinned is the long way round. */}
-            <button onClick={() => togglePin(root, cmd)}
+            <button onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)}
               className="absolute -top-1 -right-1 text-[9px] leading-none rounded-full px-[3px] py-[1px] opacity-0 group-hover:opacity-100"
               style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}
               title={`unpin ${cmd}`}>✕</button>
           </span>
         ))}
         {!pins.length && !!root && (
-          <button onClick={() => setOpen(true)} className="text-[10px] px-2 py-1 rounded-md whitespace-nowrap shrink-0"
+          // Opens the dropdown (whose input then autofocuses), so it must not
+          // steal the shell's cursor on the way there — see the trigger above.
+          <button onMouseDown={keepTermFocus} onClick={() => setOpen(true)} className="text-[10px] px-2 py-1 rounded-md whitespace-nowrap shrink-0"
             style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--border) 30%, transparent)" }}
             title={`Pin up to ${MAX_PINS} commands here — they stay one click away, per repo`}>☆ pin a command</button>
         )}
