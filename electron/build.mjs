@@ -11,6 +11,19 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..");
 
+// CI builds the web UI and cross-compiles the sidecar for each target platform
+// itself (a bun `--compile --target=` this host cannot produce), then calls us
+// only to stamp provenance. In that mode we must NOT rebuild either — wiping
+// staging would delete the cross-built sidecar CI just placed, and recompiling
+// would produce a host-arch binary in a package meant for another platform.
+//
+// This is the seam the desktop-binaries workflow needs: before this existed,
+// CI never ran build.mjs at all, so its installers shipped with no
+// build-info.json and no self-update.sh — the whole update path was dead on
+// every binary anyone downloaded, while local builds (which do run build.mjs)
+// worked fine and hid it.
+const provenanceOnly = process.argv.includes("--provenance-only");
+
 function run(cmd, args, cwd) {
   const r = spawnSync(cmd, args, { cwd, stdio: "inherit" });
   if (r.status !== 0) {
@@ -19,20 +32,26 @@ function run(cmd, args, cwd) {
   }
 }
 
-console.log("==> building web UI");
-run("bun", ["run", "build"], resolve(REPO, "web"));
+if (provenanceOnly) {
+  // staging already holds CI's cross-compiled sidecar; only make sure the dir
+  // is there (idempotent — never wipes) so the writes below land.
+  mkdirSync(resolve(HERE, "staging"), { recursive: true });
+} else {
+  console.log("==> building web UI");
+  run("bun", ["run", "build"], resolve(REPO, "web"));
 
-console.log("==> compiling server sidecar");
-// Wipe staging first. electron-builder copies *everything* in here into the
-// app's resources (extraResources: { from: "staging", to: "." }), so anything
-// left behind ships — a stray build of the sidecar is 100MB, and six of them
-// once made it into an installed app before anyone noticed the size.
-rmSync(resolve(HERE, "staging"), { recursive: true, force: true });
-mkdirSync(resolve(HERE, "staging"), { recursive: true });
-run("bun", [
-  "build", "--compile", resolve(REPO, "server/src/index.ts"),
-  "--outfile", resolve(HERE, "staging/agentglass-server"),
-]);
+  console.log("==> compiling server sidecar");
+  // Wipe staging first. electron-builder copies *everything* in here into the
+  // app's resources (extraResources: { from: "staging", to: "." }), so anything
+  // left behind ships — a stray build of the sidecar is 100MB, and six of them
+  // once made it into an installed app before anyone noticed the size.
+  rmSync(resolve(HERE, "staging"), { recursive: true, force: true });
+  mkdirSync(resolve(HERE, "staging"), { recursive: true });
+  run("bun", [
+    "build", "--compile", resolve(REPO, "server/src/index.ts"),
+    "--outfile", resolve(HERE, "staging/agentglass-server"),
+  ]);
+}
 
 // Provenance, so the installed app knows what it was built from and can offer
 // to update itself. Without it the server would have to guess where the source
