@@ -40,6 +40,7 @@ import {
 import { recent as gitCommandLog } from "./gitlog.ts";
 import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { spawnPoolStats } from "./spawnpool.ts";
+import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
@@ -637,11 +638,17 @@ const server = Bun.serve<WsData>({
     // surface-wide origin/rebinding gate is the whole authorisation story.
     if (pathname === "/git/capability") return json(gitCapability());
     if (pathname === "/git/repos") {
-      const paths = getChanges(300).map((c) => c.file_path);
       // `all=1` is the project picker: it needs the whole machine even when the
       // cockpit is currently scoped to one project, or there'd be no way out.
       const ignoreScope = url.searchParams.get("all") === "1";
-      return json({ repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }) });
+      // Single-flighted: this sweep is a `git status` per repo across every
+      // checkout, and several open tabs asking at the same instant would each
+      // launch the whole fan-out. They share one now. (The 15s repoCache behind
+      // it still handles reuse across time; this handles reuse across callers.)
+      return body(await singleFlight(`repos:${ignoreScope}`, async () => {
+        const paths = getChanges(300).map((c) => c.file_path);
+        return JSON.stringify({ repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }) });
+      }));
     }
     // Directory completion for the project picker's free-text path input. A
     // plain read, so the surface-wide origin/rebinding/token gate above is the
@@ -655,16 +662,21 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/git/tree") {
       const root = url.searchParams.get("root") || "";
-      const hit = treeCache.get(root);
-      if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return json(hit.data);
-      const data = await workingTree(root);
-      if (treeCache.size > 40) treeCache.clear();
-      treeCache.set(root, { at: Date.now(), data });
-      return json(data);
+      // The 1s cache handles the 2.5s re-poll; single-flight handles the tabs
+      // that miss it together. workingTree is four git reads on the loop, so
+      // one caller doing them for all is the difference under a fan-out.
+      return body(await singleFlight(`tree:${root}`, async () => {
+        const hit = treeCache.get(root);
+        if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return JSON.stringify(hit.data);
+        const data = await workingTree(root);
+        if (treeCache.size > 40) treeCache.clear();
+        treeCache.set(root, { at: Date.now(), data });
+        return JSON.stringify(data);
+      }));
     }
     if (pathname === "/git/branches") {
       const root = url.searchParams.get("root") || "";
-      return body(await whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root)));
+      return body(await singleFlight(`branches:${root}`, () => whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root))));
     }
     // `scope=all` is the whole graph; anything else is this checkout's own
     // history, which is what the pane defaults to.
@@ -672,9 +684,16 @@ const server = Bun.serve<WsData>({
       const root = url.searchParams.get("root") || "";
       const limit = Number(url.searchParams.get("limit") || 400);
       const scope = url.searchParams.get("scope") === "all" ? "all" : "head";
-      return body(await whileRefsHoldAsync(`graph:${root}:${limit}:${scope}`, root, () => logGraph(root, limit, scope)));
+      const key = `graph:${root}:${limit}:${scope}`;
+      return body(await singleFlight(key, () => whileRefsHoldAsync(key, root, () => logGraph(root, limit, scope))));
     }
-    if (pathname === "/git/worktrees") return json({ worktrees: await gitWorktrees(url.searchParams.get("root") || "") });
+    if (pathname === "/git/worktrees") {
+      const root = url.searchParams.get("root") || "";
+      // The heaviest git read the panel polls: a worktree list plus a status,
+      // base and rev-list per checkout — a dozen-plus subprocesses on a
+      // worktree-heavy repo. Concurrent identical polls collapse to one.
+      return body(await singleFlight(`worktrees:${root}`, async () => JSON.stringify({ worktrees: await gitWorktrees(root) })));
+    }
     // What a worktree removal would destroy, per path — asked before offering
     // the removal, never after. Repeatable `path=` so the bulk delete can price
     // every worktree it is about to touch in one round trip; concurrent because
@@ -710,7 +729,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
     // Every moment this process stopped answering, and what was running. The
     // terminal rides this loop, so these ARE the freezes the user feels.
-    if (pathname === "/api/loopwatch") return json({ ...stalls(Number(url.searchParams.get("since") || 0)), spawns: spawnPoolStats() });
+    if (pathname === "/api/loopwatch") return json({ ...stalls(Number(url.searchParams.get("since") || 0)), spawns: spawnPoolStats(), coalescing: inflightCount() });
     // Open a file at a line in the editor the user already has running.
     if (pathname === "/editor/target") return json({ ...(await editorTarget(url.searchParams.get("path") || "")), hasNvim: HAS_NVIM });
     if (pathname === "/git/remotes") return json({ remotes: gitRemotes(url.searchParams.get("root") || "") });
@@ -802,7 +821,10 @@ const server = Bun.serve<WsData>({
     // a missing binary instead of the overview's daemon message. Mirrors
     // /git/capability.
     if (pathname === "/docker/capability") return json(await dockerCapability());
-    if (pathname === "/docker/overview") return json(await dockerOverview());
+    // Single-flighted alongside the git reads: `docker ps`/`docker stats` are
+    // slow spawns (seconds each) behind a short cache, and several tabs missing
+    // that cache together would each launch one. One sample now serves them all.
+    if (pathname === "/docker/overview") return body(await singleFlight("docker:overview", async () => JSON.stringify(await dockerOverview())));
     if (pathname === "/docker/stats") {
       // Sample what the panel is showing. The overview is cached and scoped, so
       // this costs nothing extra and keeps the two answers about the same set of
@@ -812,9 +834,11 @@ const server = Bun.serve<WsData>({
       // A restarting container is deliberately left out — it is between processes
       // often enough that naming it can take the whole sample down with a "no such
       // container", and it has nothing to report either way.
-      const shown = await dockerOverview();
-      const sampleable = shown.containers.filter((c) => c.state === "running" || c.state === "paused").map((c) => c.id);
-      return json({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
+      return body(await singleFlight("docker:stats", async () => {
+        const shown = await dockerOverview();
+        const sampleable = shown.containers.filter((c) => c.state === "running" || c.state === "paused").map((c) => c.id);
+        return JSON.stringify({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
+      }));
     }
     if (pathname === "/docker/inspect") return json(await dockerInspect(url.searchParams.get("id") || ""));
     if (pathname === "/docker/top") return json(await dockerTop(url.searchParams.get("id") || ""));
