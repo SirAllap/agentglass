@@ -98,7 +98,45 @@ Contract:
 Claude Code wiring lives in `hooks/gate_event.py` (see README control-plane
 section). Any harness can long-poll the same endpoint.
 
-## 3. Make it yours
+## 3. Drive the UI from outside (`POST /control`)
+
+The dashboard is keyboard-navigable, and `POST /control` exposes that same
+navigation to anything on the machine — a Stream Deck, a phone, a shell script.
+It is the one write route that grants **no capability the keyboard doesn't**: a
+command changes only what is *shown* (which view, whether the workspace is open,
+the theme), never the fleet, so it needs no gate beyond the `localOrigin` +
+token checks the whole surface already carries.
+
+The server validates the body against a closed set (`server/src/control.ts`)
+and rebroadcasts it as a `control` frame on `/stream`; every open tab runs it
+through the very setters the keyboard handler uses (`web/src/lib/controlBus.ts`
+→ `App.tsx`), so external and keyboard navigation are one path, not two.
+
+```bash
+# open the workspace on the git view
+curl -sS http://localhost:4000/control \
+  -H 'content-type: application/json' \
+  -d '{ "cmd": "view", "to": "git" }'
+```
+
+`ControlCmd` (see `shared/types.ts`), anything else → `400`:
+
+| `cmd` | Fields | Effect |
+| --- | --- | --- |
+| `view` | `to`: `git`\|`diff`\|`pr`\|`docker`\|`term`\|`chat` | open the workspace on that view |
+| `workspace` | `open?`: boolean | toggle (absent) or set the workspace overlay |
+| `esc` | — | close panels / workspace, as Escape does |
+| `open` | `what`: `stats`\|`skills`\|`search`\|`help`\|`palette` | open that panel |
+| `theme` | `name?`: id, or `dir?`: `1`\|`-1` | pin a palette, or step the list |
+| `zoom` | `dir`: `1`\|`-1`\|`0` | zoom in / out / reset |
+
+Approve/deny and monitoring need no bridge — they are already `POST /gate/decide`
+and the `/stats`, `/insights`, `/gate/pending`, `/stream` reads. `/control` fills
+the one gap: UI navigation. It is gated by `AGENTGLASS_TOKEN` like every route
+but the intake sinks, so a non-browser caller (no `Origin`) is admitted on a
+loopback bind and must carry `Authorization: Bearer <token>` when one is set.
+
+## 4. Make it yours
 
 ### Theme
 
@@ -118,7 +156,7 @@ Add a palette to `THEMES`, restart the UI, pick it in the theme switcher.
 
 ### A view in the workspace
 
-The five views are a list, and the rail, the shortcuts and the tooltips all read
+The six views are a list, and the rail, the shortcuts and the tooltips all read
 from it — so adding one is a single entry rather than five places to keep in
 step:
 
@@ -179,7 +217,7 @@ See the README security table (`AGENTGLASS_TOKEN`, `AGENTGLASS_GIT_WRITE_DISABLE
 (`/ingest`, OTLP) stay tokenless on purpose — local hooks and OTel exporters
 have no way to carry a secret — while everything else needs the token when set.
 
-## 4. How it stays live
+## 5. How it stays live
 
 ```
 hooks / OTLP / POST /ingest

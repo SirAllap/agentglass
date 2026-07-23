@@ -5,7 +5,9 @@ import { useStats } from "./lib/useStats.ts";
 import { deriveAgents, deriveAlerts, buildTitles } from "./lib/derive.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
-import { initialTheme, applyTheme } from "./lib/themes.ts";
+import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
+import { subscribeControl } from "./lib/controlBus.ts";
+import type { ControlCmd } from "../../shared/types.ts";
 import { actionFor } from "./lib/keybindings.ts";
 import { currentScale, nudgeScale, resetScale } from "./lib/uiScale.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
@@ -408,6 +410,57 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // External control (a Stream Deck, a phone): the live socket relays a command
+  // from POST /control and we run it here — through the very setters the keyboard
+  // handler above uses, so there is one navigation path, not two. Subscribes once
+  // (empty deps) and reads nothing from render scope but the state setters, which
+  // React guarantees stable; theme/zoom use functional updates so the current
+  // value is read at apply time, not captured in this closure.
+  useEffect(() => {
+    const nextThemeId = (cur: string, cmd: Extract<ControlCmd, { cmd: "theme" }>): string => {
+      if (cmd.name) return THEMES.some((t) => t.id === cmd.name) ? cmd.name : cur;
+      const i = THEMES.findIndex((t) => t.id === cur);
+      const n = THEMES.length;
+      return THEMES[(((i < 0 ? 0 : i) + (cmd.dir ?? 1)) % n + n) % n]!.id;
+    };
+    return subscribeControl((cmd) => {
+      switch (cmd.cmd) {
+        case "view":
+          setWsView(cmd.to);
+          setWsOpen(true);
+          break;
+        case "workspace":
+          setWsOpen((o) => (cmd.open === undefined ? !o : cmd.open));
+          break;
+        case "esc":
+          // The same peel Escape does, minus the focus guards — a remote command
+          // isn't typed into a field or a shell, so nothing has to be spared.
+          setSelected(null);
+          setPaletteOpen(false);
+          setHelpOpen(false);
+          setStatsOpen(false);
+          setSkillsOpen(false);
+          setWsOpen(false);
+          setSearchOpen(false);
+          setSessionView(null);
+          break;
+        case "open":
+          if (cmd.what === "stats") setStatsOpen(true);
+          else if (cmd.what === "skills") setSkillsOpen(true);
+          else if (cmd.what === "search") setSearchOpen(true);
+          else if (cmd.what === "help") setHelpOpen(true);
+          else if (cmd.what === "palette") setPaletteOpen(true);
+          break;
+        case "theme":
+          setTheme((cur) => nextThemeId(cur, cmd));
+          break;
+        case "zoom":
+          setScale(cmd.dir === 0 ? resetScale() : nudgeScale(cmd.dir));
+          break;
+      }
+    });
   }, []);
 
   // /stats carries the server's process start; fall back to page mount for

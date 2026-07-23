@@ -3,6 +3,7 @@ import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts
 import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
+import { emitControl } from "./controlBus.ts";
 import { recordNote } from "./sysNotify.ts";
 
 const MAX_EVENTS = 2000;
@@ -127,6 +128,13 @@ export function useLive(): LiveData {
       if (frame.type === "git") {
         // Not our data — a nudge for whoever is showing git state.
         gitChanged();
+        return;
+      }
+      if (frame.type === "control") {
+        // An external controller (Stream Deck, phone) drove the UI. Imperative,
+        // not data — hand it to App, which runs it through the same setters the
+        // keyboard does.
+        emitControl(frame.data);
         return;
       }
       if (frame.type === "ci") {

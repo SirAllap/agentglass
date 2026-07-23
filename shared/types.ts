@@ -381,6 +381,28 @@ export interface OpenToolCall {
  */
 export type Liveness = "working" | "stuck" | "lost" | "unknown";
 
+/**
+ * The workspace views, in the rail's canonical order. Source of truth for the
+ * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
+ * labels and hotkeys and re-exports this so both sides name one set.
+ */
+export type ViewId = "git" | "diff" | "pr" | "docker" | "term" | "chat";
+
+/**
+ * A UI-navigation command from an external controller (a Stream Deck, a phone),
+ * delivered to every client over the /stream socket (see the server's
+ * POST /control). It drives only client-side view state — open a view, toggle
+ * the workspace, cycle the theme — and executes nothing, which is why it can
+ * ride the same read-only socket the dashboard already holds.
+ */
+export type ControlCmd =
+  | { cmd: "view"; to: ViewId }
+  | { cmd: "workspace"; open?: boolean }
+  | { cmd: "esc" }
+  | { cmd: "open"; what: "stats" | "skills" | "search" | "help" | "palette" }
+  | { cmd: "theme"; dir?: 1 | -1; name?: string }
+  | { cmd: "zoom"; dir: 1 | -1 | 0 };
+
 /** WebSocket frames. */
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
@@ -397,7 +419,10 @@ export type WsFrame =
   /** A pull request's checks all finished. One frame per PR per verdict — the
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
-  | { type: "ci"; data: CiVerdict };
+  | { type: "ci"; data: CiVerdict }
+  /** A UI-navigation command from POST /control, rebroadcast to every client.
+   *  It changes what is *shown*, never the fleet. */
+  | { type: "control"; data: ControlCmd };
 
 /** The aggregate outcome of a PR's checks, once every one of them is terminal. */
 export interface CiVerdict {
