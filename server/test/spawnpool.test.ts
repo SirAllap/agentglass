@@ -10,6 +10,8 @@ let pool: typeof import("../src/spawnpool.ts");
 
 beforeAll(async () => {
   process.env.AGENTGLASS_SPAWN_LIMIT = "4";
+  // A short guard so the "stuck spawn" test doesn't wait five real minutes.
+  process.env.AGENTGLASS_SPAWN_GUARD_MS = "80";
   pool = await import("../src/spawnpool.ts");
 });
 
@@ -50,6 +52,24 @@ describe("spawn pool", () => {
     // And the pool still works afterwards.
     const after = await pool.withSpawnSlot(async () => "fine");
     expect(after).toBe("fine");
+  });
+
+  it("hands the slot back even when the work never settles", async () => {
+    // The leak that would be invisible until the app froze: a spawn whose stdout
+    // pipe never reaches EOF after its own timeout-kill leaves fn() pending, and
+    // the slot with it, forever. The guard timeout releases the slot so the pool
+    // keeps working; here four never-settling jobs fill the pool, and a fifth
+    // must still get through once the guard fires.
+    const before = pool.spawnPoolStats().inflight;
+    for (let i = 0; i < 4; i++) void pool.withSpawnSlot(() => new Promise<void>(() => {})); // never resolves
+    // The pool is now full of stuck work.
+    expect(pool.spawnPoolStats().inflight).toBeGreaterThanOrEqual(before + 1);
+    // After the guard (80ms) releases those slots, real work runs again.
+    const ran = await pool.withSpawnSlot(async () => "through");
+    expect(ran).toBe("through");
+    // And the stuck jobs no longer count against the pool.
+    await Bun.sleep(120);
+    expect(pool.spawnPoolStats().inflight).toBe(0);
   });
 
   it("reports whether the cap is actually biting", async () => {

@@ -19,6 +19,12 @@ import type { WalkthroughResult, WalkthroughInputFile } from "../../shared/types
 const MODEL = process.env.AGENTGLASS_WALKTHROUGH_MODEL || "claude-haiku-4-5";
 const MAX_FILES = 40;
 const MAX_PATCH_LINES = 90;
+// A hard ceiling on the local `claude` call. Without it a hung CLI — a stuck
+// login refresh, a wedged model request — holds the request open forever and
+// leaks the child, the same failure mode the other spawns in this repo already
+// guard against. Two minutes is well past a one-line-per-file summary on Haiku
+// while still bounding the worst case.
+const CLI_TIMEOUT_MS = 120_000;
 
 const claudeBin = () => Bun.which("claude");
 const hasApiKey = () => !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
@@ -122,8 +128,18 @@ async function viaClaudeCli(files: WalkthroughInputFile[]): Promise<WalkthroughR
     // phantom "walkthrough" session shows up in the dashboard).
     env: { ...process.env, AGENTGLASS_INTERNAL: "1" },
   });
-  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  const code = await proc.exited;
+  // Kill a hung CLI rather than await it forever; the timer is cleared once the
+  // process settles, so a normal run pays nothing for it.
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; try { proc.kill(); } catch { /* already gone */ } }, CLI_TIMEOUT_MS);
+  let out: string, err: string, code: number;
+  try {
+    [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    code = await proc.exited;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (timedOut) throw new Error(`claude timed out after ${CLI_TIMEOUT_MS / 1000}s`);
   if (code !== 0) throw new Error(err.trim() || `claude exited with code ${code}`);
 
   // `--output-format json` wraps the answer in an envelope with a `.result` string.

@@ -205,6 +205,31 @@ describe("self update", () => {
     expect(git(work, "status", "--porcelain").stdout).toContain("uncommitted.txt");
   });
 
+  it("frees the update lock when the update process exits without replacing us", async () => {
+    // The lock (`running`) stops a second update racing the first, but the script
+    // is detached and can fail — a compile error, a dropped network — without
+    // ever replacing this process. It used to stay locked for the rest of the
+    // session, the button dead with nothing behind it. A fake script that fails
+    // at once stands in for that; a later press must be allowed again.
+    release("v0.2.0"); release("v0.3.0");
+    const dir = installedAs("0.2.0"); trash.push(dir);
+    writeFileSync(join(dir, "electron", "self-update.sh"), "#!/usr/bin/env bash\nexit 1\n");
+    const u = await load();
+
+    const first = await u.startUpdate();
+    expect(first.ok).toBe(true); // the update launched, so the lock is now held
+
+    // Poll the way a retry would: once the failed child dies, the lock must clear
+    // and startUpdate be permitted again — never wedged on "already running".
+    let recovered = false;
+    for (let i = 0; i < 200; i++) {
+      const again = await u.startUpdate();
+      if (again.ok || again.error !== "an update is already running") { recovered = true; break; }
+      await Bun.sleep(20);
+    }
+    expect(recovered).toBe(true);
+  });
+
   it("ships an update script that refuses anything but a release tag", async () => {
     // Resolved from this file, never from process.cwd(): the suite is run from
     // the repo root by hand and from `server/` by CI, and a path that depends

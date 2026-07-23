@@ -32,7 +32,24 @@ interface Config {
 function load(): Config {
   try {
     if (!existsSync(CONFIG_PATH)) return {};
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Config;
+    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as unknown;
+    // A hand-edited config.json can hold anything. A top level that isn't a
+    // plain object (a bare number, a string, an array, null) would make the
+    // `root` check below throw on `in`, and a non-string `root` reached
+    // expand()/startsWith() at boot — `workspaceRoot()` runs before the server
+    // listens — and threw an uncaught TypeError that stopped the app dead. A
+    // corrupt config must degrade, never prevent startup, so coerce the shape:
+    // drop what we can't use, warn, keep the rest.
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      console.error(`[config] ignoring ${CONFIG_PATH}: expected a JSON object`);
+      return {};
+    }
+    const cfg = raw as Config;
+    if ("root" in cfg && cfg.root !== undefined && typeof cfg.root !== "string") {
+      console.error(`[config] ignoring non-string "root" in ${CONFIG_PATH}`);
+      delete cfg.root;
+    }
+    return cfg;
   } catch (e) {
     // A typo shouldn't take the server down, but it must not pass unnoticed
     // either — the symptom would be settings mysteriously not applying.
