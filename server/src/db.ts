@@ -1106,15 +1106,19 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
  */
 export function skillUsageDetail(since = 0, bucketCount = 12, provider?: string): SkillUsage[] {
   const { clause: pf, args: pa } = providerScope(provider);
+  // Project scope, same as every other aggregation in computeStatsSummary. Its
+  // absence here leaked top_skills — and the cost charged to them — from every
+  // other project on the machine into a cockpit opened for one.
+  const { clause: sc, args: sa } = scopeClause();
   const invocations = db
     .query<{ session_id: string; timestamp: number; skill: string }, any[]>(
       `SELECT session_id, timestamp, json_extract(payload, '$.tool_input.skill') AS skill
        FROM events
        WHERE hook_event_type = 'PreToolUse' AND tool_name = 'Skill'
-         AND json_extract(payload, '$.tool_input.skill') IS NOT NULL AND timestamp >= ?${pf}
+         AND json_extract(payload, '$.tool_input.skill') IS NOT NULL AND timestamp >= ?${pf}${sc}
        ORDER BY session_id, timestamp`
     )
-    .all(since, ...pa);
+    .all(since, ...pa, ...sa);
   if (!invocations.length) return [];
 
   const bySession = new Map<string, { timestamp: number; skill: string }[]>();
@@ -1144,12 +1148,14 @@ export function skillUsageDetail(since = 0, bucketCount = 12, provider?: string)
     a.buckets[idx]++;
   }
 
-  // Charge each cost-bearing event to the running skill at that moment.
+  // Charge each cost-bearing event to the running skill at that moment — scoped
+  // too, or an out-of-project session's spend is attributed to an in-project
+  // skill it never ran.
   const costRows = db
-    .query<{ session_id: string; timestamp: number; cost_usd: number }, [number]>(
-      `SELECT session_id, timestamp, cost_usd FROM events WHERE cost_usd > 0 AND timestamp >= ?`
+    .query<{ session_id: string; timestamp: number; cost_usd: number }, any[]>(
+      `SELECT session_id, timestamp, cost_usd FROM events WHERE cost_usd > 0 AND timestamp >= ?${sc}`
     )
-    .all(since);
+    .all(since, ...sa);
   for (const c of costRows) {
     const invs = bySession.get(c.session_id);
     if (!invs) continue;
