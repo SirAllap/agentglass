@@ -1,0 +1,25 @@
+# CodeRabbit config.
+#
+# Kept as an automated first-pass reviewer: on a real contributor PR it caught
+# two genuine Major bugs, which is worth the keep for a repo that takes outside
+# contributions. Tuned to 'chill' so it stops nitpicking and drops the noise
+# (no poem, no low-value comments), and it never blocks a merge — it advises.
+reviews:
+  profile: chill
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  request_changes_workflow: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    - "!bun.lock"
+    - "!**/dist/**"
+    - "!**/*.min.*"
+  path_instructions:
+    - path: "web/src/**"
+      instructions: "Colours come only from index.css tokens, never hardcoded. No em dashes."
+chat:
+  auto_reply: true
