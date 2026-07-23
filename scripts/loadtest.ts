@@ -36,7 +36,8 @@
  *   AGX_LOAD_ONLY=git / AGX_LOAD_SKIP=git  # bisect: which fan-out causes the stutter
  */
 import { spawn } from "bun";
-import { mkdtempSync, writeFileSync, rmSync, copyFileSync, existsSync, readFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -75,6 +76,44 @@ const REQ_TIMEOUT_MS = Math.max(1_000, Number(process.env.AGX_LOAD_REQ_TIMEOUT_M
  */
 const PTY_P99_BUDGET_MS = Math.max(1, Number(process.env.AGX_LOAD_PTY_P99_MS || 250));
 
+// --- whole-machine mode (AGX_LOAD_WHOLE_MACHINE=1) ---------------------------
+//
+// The default run measures the *scoped* cockpit — one repo, a real DB, the panel
+// fan-out. This mode measures the other bug, the one that only fires with the
+// picker set to "Whole machine" (no `root` configured): discoverRepos takes its
+// only1=null path and, before the fix, blindly walked the filesystem
+// (firstRunRoots → reposUnder, readdirSync to depth 4) looking for repos. That
+// walk is pure JS/native — zero git subprocesses — and on a real ~/code it
+// outlasts its own 15s cache, so the sweep never gets ahead and the sidecar sits
+// at 99.9% of one core while the PTY it shares the loop with freezes.
+//
+// Reproduced here against a /tmp fixture (never the real HOME): a $HOME/code with
+// many sibling projects, one worktree-heavy repo, and — the expensive part — a
+// deep bush of NON-repo directories for the walk to grind through. The sidecar is
+// launched unscoped and rooted at the fixture home, so firstRunRoots resolves
+// there. The fix deletes the walk; "Whole machine" then means "the projects I
+// already know about" (telemetry + configured + own repo), which we seed so the
+// picker stays populated and we can prove it still answers — fast — with no walk.
+const WHOLE = process.env.AGX_LOAD_WHOLE_MACHINE === "1";
+/** Sibling projects with telemetry — the "known projects" the picker should show. */
+const WM_REPOS = Math.max(1, Number(process.env.AGX_LOAD_WM_REPOS || 12));
+/** The non-repo bush's shape. Fanout^depth directories with no `.git` anywhere is
+ *  what forces the recursive readdirSync walk to the depth cap everywhere it
+ *  looks — i.e. the cost the fix removes. Defaults chosen so one sync sweep is
+ *  unmistakably over the 80ms PTY budget on a laptop. */
+const WM_TREES = Math.max(1, Number(process.env.AGX_LOAD_WM_TREES || 6));
+const WM_FANOUT = Math.max(1, Number(process.env.AGX_LOAD_WM_FANOUT || 14));
+const WM_DEPTH = Math.max(1, Number(process.env.AGX_LOAD_WM_DEPTH || 3));
+/** Force the repo-list cache to expire fast, so the pathological shape — a sweep
+ *  that outlasts its own TTL, which is what makes the burn *sustained* — shows up
+ *  in a short window instead of needing a disk big enough to walk for 15s. */
+const WM_REPO_CACHE_MS = Math.max(50, Number(process.env.AGX_LOAD_WM_CACHE_MS || 500));
+/** Whole-machine's own PTY budget. The point of the fix is that an unscoped
+ *  sidecar stays as fluid as a scoped one, so the bar is the same 80ms the task
+ *  names — tighter than the default 250ms, which was calibrated for the loud
+ *  many-panel run. */
+const WM_PTY_P99_BUDGET_MS = Math.max(1, Number(process.env.AGX_LOAD_WM_PTY_P99_MS || 80));
+
 // --- the panel fan-out: every endpoint a client polls while panels are open --
 // At the cadence the web app uses (GitPanel tree 2.5s / views 10s, DockerPanel
 // 5s, PrPanel 20s, Sessions 5s, gate 2s, stats 4s). Rather than juggle a dozen
@@ -85,6 +124,9 @@ function buildGets(R: string): string[] {
   let gets = [
     `/git/tree?root=${R}`,
     `/git/repos`,
+    // The project picker asking for the whole machine even when scoped — the
+    // other caller of the only1=null path, and the one worktree-folding runs on.
+    ...(WHOLE ? [`/git/repos?all=1`] : []),
     `/git/branches?root=${R}`,
     `/git/worktrees?root=${R}`,
     `/git/graph?root=${R}&limit=500&scope=head`,
@@ -166,19 +208,6 @@ function defaultRealDb(): string {
 const home = mkdtempSync(join(tmpdir(), "agx-load-home-"));
 const dbCopy = join(home, "loadtest.db");
 const srcDb = process.env.AGX_LOAD_DB || defaultRealDb();
-let dbNote: string;
-if (existsSync(srcDb)) {
-  // Read-only of the original: copyFileSync reads the source and writes the
-  // COPY. The server is only ever pointed at the copy, opened in its own temp
-  // home, so the real instance and its file are never touched. WAL mode keeps
-  // the main .db consistent at the last checkpoint, so a copy of just the .db
-  // is a valid (if slightly-behind) snapshot even if the real server is live.
-  copyFileSync(srcDb, dbCopy);
-  const mb = (readFileSync(dbCopy).byteLength / 1_048_576).toFixed(0);
-  dbNote = `copy of ${srcDb} (${mb}MB)`;
-} else {
-  dbNote = `empty DB (no ${srcDb} to copy — pass AGX_LOAD_DB for a realistic run)`;
-}
 
 // --- a repo with many worktrees: the git fan-out the panels sweep ------------
 function buildRepo(baseDir: string): string {
@@ -200,8 +229,120 @@ function buildRepo(baseDir: string): string {
   writeFileSync(join(repoDir, "scratch.txt"), "in progress\n"); // dirty, so counts have work
   return repoDir;
 }
+
+// --- the whole-machine fixture: many known projects + a disk NOT to walk -----
+// Everything lives under one throwaway HOME in /tmp. `code/` holds the projects
+// the picker should surface; the `tree-*` bush holds nothing but empty
+// directories, which is precisely what the speculative walk grinds through — and
+// what the fix stops touching.
+function buildWholeMachineFixture(baseDir: string): { home: string; focus: string; repos: string[] } {
+  const fixtureHome = join(baseDir, "home");
+  const code = join(fixtureHome, "code");
+  mkdirSync(code, { recursive: true });
+  const g = (cwd: string, ...a: string[]) => spawnSync("git", ["-C", cwd, ...a], { encoding: "utf8" });
+  const initRepo = (dir: string, name: string) => {
+    spawnSync("git", ["init", "-q", "-b", "main", dir]);
+    g(dir, "config", "user.email", "t@example.com");
+    g(dir, "config", "user.name", "t");
+    writeFileSync(join(dir, "README.md"), `# ${name}\n`);
+    g(dir, "add", "-A");
+    g(dir, "commit", "-qm", "first");
+  };
+  const repos: string[] = [];
+  for (let i = 0; i < WM_REPOS; i++) {
+    const d = join(code, `proj-${i}`);
+    initRepo(d, `proj-${i}`);
+    repos.push(d);
+  }
+  // One worktree-heavy project — the shape the status sweep pays the most for.
+  const orbit = join(code, "orbit");
+  initRepo(orbit, "orbit");
+  repos.push(orbit);
+  for (let i = 1; i <= WORKTREES; i++) {
+    const b = `WEB-${1000 + i}`;
+    const wt = join(code, `orbit-${b}`);
+    g(orbit, "worktree", "add", "-q", "-b", b, wt);
+    repos.push(wt);
+  }
+  writeFileSync(join(orbit, "scratch.txt"), "in progress\n");
+  // The bush: WM_FANOUT^WM_DEPTH empty non-repo directories. Descent only stops
+  // at a `.git`, so with none in here the walk runs to the depth cap in every
+  // branch — the cost the fix removes.
+  const bush = (dir: string, depth: number) => {
+    if (depth <= 0) return;
+    for (let i = 0; i < WM_FANOUT; i++) {
+      const d = join(dir, `d${i}`);
+      mkdirSync(d, { recursive: true });
+      bush(d, depth - 1);
+    }
+  };
+  for (let i = 0; i < WM_TREES; i++) bush(join(code, `tree-${i}`), WM_DEPTH);
+  return { home: fixtureHome, focus: orbit, repos };
+}
+
+/**
+ * Seed the events table with one edit per fixture repo.
+ *
+ * This is the telemetry source discoverRepos now leans on instead of the walk:
+ * "Whole machine" reads the project/cwd paths agents have actually touched. We
+ * write them ourselves, pointed only at the /tmp fixture, so the picker stays
+ * populated and the after-fix run can prove /git/repos still answers — with no
+ * disk walk behind it. The events schema mirrors db.ts (project_path/cwd_path are
+ * ALTER-added there; included here so the server's boot migration is a no-op).
+ */
+function seedTelemetry(dbPath: string, repos: string[]): void {
+  const db = new Database(dbPath);
+  db.exec(`CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
+    tool_name TEXT, tool_use_id TEXT, agent_id TEXT, agent_type TEXT, model_name TEXT,
+    is_error INTEGER NOT NULL DEFAULT 0, error_text TEXT, duration_ms INTEGER,
+    input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0, summary TEXT, payload TEXT NOT NULL DEFAULT '{}',
+    timestamp INTEGER NOT NULL, project_path TEXT, cwd_path TEXT
+  );`);
+  const ins = db.query(`INSERT INTO events
+    (source_app, session_id, hook_event_type, tool_name, project_path, cwd_path, payload, timestamp)
+    VALUES (?,?,?,?,?,?,?,?)`);
+  let i = 0;
+  for (const r of repos) {
+    // A Write with content so parseChange builds a hunk and keeps the row (an
+    // Edit with no old_string is dropped); file_path is what discoverRepos reads.
+    const payload = JSON.stringify({ tool_input: { file_path: join(r, "README.md"), content: "seed\n" }, project_path: r, cwd: r });
+    ins.run("claude-code", `sess-${i}`, "PostToolUse", "Write", r, r, payload, Date.now() - i * 1000);
+    i++;
+  }
+  db.close();
+}
+
 const base = mkdtempSync(join(tmpdir(), "agx-load-"));
-const repo = process.env.AGX_LOAD_ROOT || buildRepo(base);
+let wmHome: string | null = null;
+let repo: string;
+let dbNote: string;
+if (WHOLE) {
+  const f = buildWholeMachineFixture(base);
+  wmHome = f.home;
+  repo = f.focus;
+  // No real DB copied: the whole-machine sweep must read telemetry we control,
+  // pointed at the /tmp fixture and never at the operator's real repos.
+  seedTelemetry(dbCopy, f.repos);
+  dbNote = `seeded telemetry: ${f.repos.length} known projects (no real DB) · fixture ${f.home}`;
+} else {
+  repo = process.env.AGX_LOAD_ROOT || buildRepo(base);
+  if (existsSync(srcDb)) {
+    // Read-only of the original: copyFileSync reads the source and writes the
+    // COPY. The server is only ever pointed at the copy, opened in its own temp
+    // home, so the real instance and its file are never touched. WAL mode keeps
+    // the main .db consistent at the last checkpoint, so a copy of just the .db
+    // is a valid (if slightly-behind) snapshot even if the real server is live.
+    copyFileSync(srcDb, dbCopy);
+    const mb = (readFileSync(dbCopy).byteLength / 1_048_576).toFixed(0);
+    dbNote = `copy of ${srcDb} (${mb}MB)`;
+  } else {
+    dbNote = `empty DB (no ${srcDb} to copy — pass AGX_LOAD_DB for a realistic run)`;
+  }
+}
 
 const port = 4870 + Math.floor(Math.random() * 60);
 const S = `http://127.0.0.1:${port}`;
@@ -210,11 +351,24 @@ const R = encodeURIComponent(repo);
 
 const server = spawn({
   cmd: ["bun", join(ROOT, "server", "src", "index.ts")],
+  // Whole-machine mode runs the sidecar out of the fixture home so its own cwd
+  // is not a repo (selfRoot stays null, no stray real repos leak in) and so
+  // firstRunRoots resolves under the /tmp fixture rather than the real HOME.
+  ...(WHOLE && wmHome ? { cwd: wmHome } : {}),
   env: {
     ...process.env,
     AGENTGLASS_PORT: String(port),
-    AGENTGLASS_ROOT: repo,
+    // Whole machine = unscoped. "" is falsy, so workspaceRoot() reads null even
+    // if the parent shell happened to export AGENTGLASS_ROOT.
+    AGENTGLASS_ROOT: WHOLE ? "" : repo,
     AGENTGLASS_DB: dbCopy,
+    ...(WHOLE && wmHome ? {
+      HOME: wmHome,
+      // Shrink the repo-list cache so a sweep that outlasts its own TTL — the
+      // shape that makes the burn sustained rather than a one-off spike —
+      // reproduces inside the measure window.
+      AGENTGLASS_REPO_CACHE_MS: String(WM_REPO_CACHE_MS),
+    } : {}),
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_DATA_HOME: join(home, "data"),
     XDG_CACHE_HOME: join(home, "cache"),
@@ -266,6 +420,27 @@ async function pingLoop() {
     try { await fetch(`${S}/__perfping__`, { signal: AbortSignal.timeout(REQ_TIMEOUT_MS) }); } catch { /* aborted or between requests */ }
     loop.push(performance.now() - a);
     await Bun.sleep(20);
+  }
+}
+
+// --- /git/repos wall clock: the endpoint the whole-machine bug lives on -------
+// The PTY freeze is the symptom the user feels; this is its cause endpoint. A
+// light probe (one request every 500ms, so it barely loads the parent loop the
+// PTY probe rides) times how long the unscoped sweep takes to answer, and reads
+// off how many repos it returns — the "picker still populated" check that proves
+// removing the walk did not empty the list. Only relevant in whole-machine mode.
+const reposTimes: number[] = [];
+let reposCount = 0;
+async function reposProbe() {
+  while (!stop) {
+    const a = performance.now();
+    try {
+      const r = await fetch(`${S}/git/repos`, { signal: AbortSignal.timeout(REQ_TIMEOUT_MS) });
+      const j = await r.json() as { repos?: unknown[] };
+      reposCount = Array.isArray(j.repos) ? j.repos.length : reposCount;
+    } catch { /* aborted or between requests — the elapsed time still counts */ }
+    reposTimes.push(performance.now() - a);
+    await Bun.sleep(500);
   }
 }
 
@@ -380,11 +555,12 @@ try {
   }
   if (!up) throw new Error("server never answered /health — see stderr above");
 
+  const budget = WHOLE ? WM_PTY_P99_BUDGET_MS : PTY_P99_BUDGET_MS;
   const gets = buildGets(R);
-  console.log(`loadtest: ${CLIENTS} clients · ${gets.length + (withStatusEndpoint() ? 1 : 0)} endpoints/burst · ${WORKTREES}-worktree repo`);
+  console.log(`loadtest${WHOLE ? " [WHOLE MACHINE — unscoped, no FS walk]" : ""}: ${CLIENTS} clients · ${gets.length + (withStatusEndpoint() ? 1 : 0)} endpoints/burst · ${WORKTREES}-worktree repo`);
   console.log(`          DB: ${dbNote}`);
   console.log(`          repo: ${repo}`);
-  console.log(`          load in a child process · measuring ${(MEASURE_MS / 1000).toFixed(0)}s · PTY p99 budget ${PTY_P99_BUDGET_MS}ms\n`);
+  console.log(`          load in a child process · measuring ${(MEASURE_MS / 1000).toFixed(0)}s · PTY p99 budget ${budget}ms\n`);
 
   // Reset the server's stall log so we measure this run, not the boot backfill.
   const since = (await fetch(`${S}/api/loopwatch`, { signal: AbortSignal.timeout(REQ_TIMEOUT_MS) }).then((r) => r.json()).catch(() => ({ stalls: [] }))) as { stalls: { id: number }[] };
@@ -393,6 +569,9 @@ try {
   chk("starting ping + pty");
   const ping = pingLoop();
   const pty = ptyProbe();
+  // The /git/repos timer only earns its keep in whole-machine mode, where that
+  // endpoint is the whole story; elsewhere it is a resolved no-op.
+  const repos = WHOLE ? reposProbe() : Promise.resolve();
   // Wait until the shell is primed (first-run init paid) before measuring, so a
   // one-time warm-up cost never lands in the percentiles as a phantom freeze.
   await Promise.race([primed, Bun.sleep(15_000)]);
@@ -401,7 +580,7 @@ try {
 
   // Clear warm-up noise, then start the load — in its own process, so its dozens
   // of concurrent fetches never compete with the timers this loop uses to probe.
-  loop.length = 0; echo.length = 0;
+  loop.length = 0; echo.length = 0; reposTimes.length = 0;
   const pid = server.pid!;
   const cpu0 = cpuTicks(pid);
   const t0 = performance.now();
@@ -427,7 +606,7 @@ try {
   // them finish. Hard-capped regardless — measurement is done, and a probe that
   // won't wind down must not hold the whole run open.
   try { ptyWs?.close(); } catch { /* already closed */ }
-  await Promise.race([Promise.all([ping, pty]), Bun.sleep(10_000)]);
+  await Promise.race([Promise.all([ping, pty, repos]), Bun.sleep(10_000)]);
   chk("ping+pty stopped");
 
   // The server's own stall log for this window: worst offenders by name.
@@ -437,6 +616,7 @@ try {
 
   console.log(`— PTY echo (the stutter) —\n  ${fmt(echo)}${ptyTimeouts ? `  · ${ptyTimeouts} froze >5s` : ""}`);
   console.log(`\n— event loop, external ping —\n  ${fmt(loop)}`);
+  if (WHOLE) console.log(`\n— /git/repos (the unscoped sweep) —\n  ${fmt(reposTimes)}  · returned ${reposCount} repos`);
   console.log(`\n— server —\n  CPU ${cpuPct.toFixed(0)}% over ${wall.toFixed(1)}s · RSS ${rss.toFixed(0)}MB`);
   if (lw) {
     const byWhat = new Map<string, { n: number; total: number; worst: number }>();
@@ -456,18 +636,21 @@ try {
 
   const p99 = pct(echo, 99);
   console.log("");
-  if (echo.length < 20) {
+  if (WHOLE && reposCount === 0) {
+    console.log(`✗ loadtest: /git/repos returned 0 repos — the whole-machine picker is empty, the telemetry source is not feeding it`);
+    failed = true;
+  } else if (echo.length < 20) {
     console.log(`✗ loadtest: only ${echo.length} PTY samples — the probe never got going, nothing was proved`);
     failed = true;
   } else if (ptyTimeouts > 0) {
     console.log(`✗ loadtest: the terminal FROZE (>5s with no echo) ${ptyTimeouts}× under load — this is the bug`);
     failed = true;
-  } else if (p99 > PTY_P99_BUDGET_MS) {
-    console.log(`✗ loadtest: PTY p99 echo ${p99.toFixed(0)}ms is over the ${PTY_P99_BUDGET_MS}ms budget — the terminal stutters under load`);
+  } else if (p99 > budget) {
+    console.log(`✗ loadtest: PTY p99 echo ${p99.toFixed(0)}ms is over the ${budget}ms budget — the terminal stutters under load`);
     console.log(`  The stall table above names what held the loop. That is the thing to fix.`);
     failed = true;
   } else {
-    console.log(`✓ loadtest: the terminal stays responsive under load (PTY p99 ${p99.toFixed(0)}ms, budget ${PTY_P99_BUDGET_MS}ms)`);
+    console.log(`✓ loadtest: the terminal stays responsive under load (PTY p99 ${p99.toFixed(0)}ms, budget ${budget}ms)${WHOLE ? ` · /git/repos ${pct(reposTimes, 99).toFixed(0)}ms p99, ${reposCount} repos` : ""}`);
   }
 } catch (e) {
   console.error(`loadtest: ${e instanceof Error ? e.message : e}`);
