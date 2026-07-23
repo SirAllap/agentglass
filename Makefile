@@ -41,6 +41,9 @@ perf: ## Check the server still answers while it works — fails if the event lo
 soak: ## Run the server hard for a few minutes and fail if its memory keeps climbing (AGX_SOAK_MINUTES=30 for a real one)
 	trap 'kill 0' INT TERM; bun scripts/soak.ts
 
+loadtest: ## Hammer the server (many clients × every panel) against a copy of the REAL DB and fail if the PTY stutters (AGX_LOAD_CLIENTS=10 for heavier)
+	trap 'kill 0' INT TERM; bun scripts/loadtest.ts
+
 typecheck: ## Type-check both halves (vite build and bun both strip types without checking)
 	cd web && bunx tsc --noEmit
 	cd server && bunx tsc --noEmit
