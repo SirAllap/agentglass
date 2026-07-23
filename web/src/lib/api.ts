@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -240,6 +240,7 @@ const realApi = {
   /** Subdirectories matching a half-typed path — the picker's completion. */
   fsComplete: (prefix: string) => get<FsCompletion>(`/fs/complete?prefix=${encodeURIComponent(prefix)}`),
   // --- live git panel (lazygit-style) ---
+  gitCapability: () => get<GitCapability>("/git/capability"),
   gitRepos: () => get<{ repos: GitRepoRef[] }>("/git/repos"),
   /** Every repo on the machine — for the project picker, even when scoped. */
   gitReposAll: () => get<{ repos: GitRepoRef[] }>("/git/repos?all=1"),
@@ -446,6 +447,7 @@ const demoApi: typeof realApi = {
   setWorkspace: (_root: string | null) => D({ ok: false, workspace: null, persisted: false, error: "unavailable in the demo" }),
   // The demo has no filesystem to browse, so completion is simply always empty.
   fsComplete: (_prefix: string) => D({ base: "", entries: [], truncated: false }),
+  gitCapability: () => D({ available: true } as GitCapability),
   gitRepos: () => D(demo.gitRepos()),
   gitReposAll: () => D(demo.gitRepos()),
   gitTree: (root: string) => D(demo.gitTree(root)),

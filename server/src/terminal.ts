@@ -20,7 +20,7 @@ import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
 import type { ProjectCommand, TerminalCommands } from "../../shared/types.ts";
-import { safeAbs, repoRootOf } from "./git.ts";
+import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope } from "./config.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
@@ -173,7 +173,14 @@ export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) { ctl(ws, { t: "fatal", error: "terminal is disabled (AGENTGLASS_TERMINAL_DISABLED=1)" }); ws.close(1008, "disabled"); return; }
   const cwd = safeAbs(d.root);
-  if (!cwd || !repoRootOf(cwd)) { ctl(ws, { t: "fatal", error: "invalid or non-repo directory" }); ws.close(1008, "bad root"); return; }
+  if (!cwd || !repoRootOf(cwd)) {
+    // repoRootOf runs `git rev-parse`, so with no git it fails for every path.
+    // Say which — "invalid directory" for a real bad root, but "git is not
+    // installed" when that is the actual cause, or the fix looks unrelated.
+    const cap = gitCapability();
+    ctl(ws, { t: "fatal", error: cap.available ? "invalid or non-repo directory" : (cap.reason || "git is not installed") });
+    ws.close(1008, "bad root"); return;
+  }
   // A shell is the widest capability here — anything it can reach, it can
   // change. An instance opened for one project must not hand one out anywhere
   // else, or "open a project" narrows the view while leaving the blast radius

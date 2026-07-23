@@ -837,6 +837,15 @@ export interface TerminalCommands {
   scripts: ProjectCommand[]; // package.json scripts, runner-aware
 }
 
+/** Whether `git` is on this machine at all. `available: false` is a first-class
+ *  UI state — the git/diff/PR panels and the terminal all need git — not an
+ *  error to bury behind an empty "no repos found". */
+export interface GitCapability {
+  available: boolean;
+  version?: string;
+  reason?: string;
+}
+
 /** One `<<<<<<< / ======= / >>>>>>>` region of a conflicted file. */
 export type ConflictBlock = {
   index: number;

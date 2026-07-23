@@ -17,7 +17,7 @@ import { inScope } from "./config.ts";
 import { record } from "./gitlog.ts";
 import { currentLabel, resumedAs } from "./loopwatch.ts";
 import { withSpawnSlot } from "./spawnpool.ts";
-import type { GitFileStatus, RepoStatus, CommitResult } from "../../shared/types.ts";
+import type { GitFileStatus, RepoStatus, CommitResult, GitCapability } from "../../shared/types.ts";
 
 export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
 
@@ -49,6 +49,59 @@ export async function gitAsync(cwd: string, args: string[]): Promise<GitResult> 
   // Queued behind the process cap — see spawnpool. A sweep of eighteen
   // checkouts is eighteen of these, and several sweeps can overlap.
   return withSpawnSlot(() => runGit(cwd, args));
+}
+
+/**
+ * Is `git` even here?
+ *
+ * The whole file assumes it is, and `Bun.spawn` THROWS on a missing binary
+ * rather than returning exit 127 — so without this probe, a machine with no git
+ * turns every call above into a caught `{ code: 1 }`, and the panels invent a
+ * cause: the repo picker shows an empty "no repos found", and the terminal and
+ * chat reject a perfectly good directory with "invalid or non-repo directory"
+ * (blaming the folder for a tool that isn't installed). This is the same
+ * first-class-state treatment `ghCapability` already gives the PR panel: "git
+ * is not installed" is something the user can act on, not an error to bury.
+ *
+ * `Bun.which` is cached for the process — a binary does not appear mid-session,
+ * and the repo picker asks on every mount.
+ */
+let gitBinCache: string | null | undefined;
+export function gitBin(): string | null {
+  // PATH passed explicitly: bare `Bun.which("git")` resolves against a PATH
+  // captured at process start and ignores later changes to process.env.PATH,
+  // which both hides a genuinely stripped environment and makes this untestable.
+  if (gitBinCache === undefined) gitBinCache = Bun.which("git", { PATH: process.env.PATH ?? "" });
+  return gitBinCache;
+}
+
+let gitCapCache: { at: number; cap: GitCapability } | null = null;
+const GIT_CAP_TTL_MS = 60_000;
+
+export function gitCapability(): GitCapability {
+  if (gitCapCache && Date.now() - gitCapCache.at < GIT_CAP_TTL_MS) return gitCapCache.cap;
+  const bin = gitBin();
+  let cap: GitCapability;
+  if (!bin) {
+    cap = { available: false, reason: "git is not installed — the source-control, terminal and pull-request panels need it" };
+  } else {
+    let version: string | undefined;
+    try {
+      // Not through git()/record(): a capability probe must not land in the git
+      // activity log. `git --version` needs no repo and cannot hang meaningfully.
+      const r = Bun.spawnSync([bin, "--version"], { stdout: "pipe", stderr: "ignore", timeout: 5_000 });
+      version = r.exitCode === 0 ? (r.stdout?.toString().trim().replace(/^git version /, "") || undefined) : undefined;
+    } catch { /* vanished between which and spawn — treat as present, callers still guard */ }
+    cap = { available: true, version };
+  }
+  gitCapCache = { at: Date.now(), cap };
+  return cap;
+}
+
+/** Test seam: forget the probe so a test can flip PATH and re-ask. */
+export function __resetGitCapForTest(): void {
+  gitBinCache = undefined;
+  gitCapCache = null;
 }
 
 /**
