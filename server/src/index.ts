@@ -26,7 +26,7 @@ import { getUsage } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, git } from "./git.ts";
+import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, git, gitCapability } from "./git.ts";
 import {
   workingTree, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
@@ -633,6 +633,9 @@ const server = Bun.serve<WsData>({
     }
 
     // --- live git panel (lazygit-style working tree) ---
+    // Is git even installed? A plain read like the rest of /git/*, so the
+    // surface-wide origin/rebinding gate is the whole authorisation story.
+    if (pathname === "/git/capability") return json(gitCapability());
     if (pathname === "/git/repos") {
       const paths = getChanges(300).map((c) => c.file_path);
       // `all=1` is the project picker: it needs the whole machine even when the
@@ -1175,3 +1178,12 @@ subscribeCi((v) => broadcast({ type: "ci", data: v }));
 // Watch our own event loop. Cheap (one timer, one subtraction) and the only
 // thing that turns "the terminal feels laggy" into a name and a number.
 watchLoop();
+
+// Say it once at boot if git is missing. Every git/diff/PR panel and the
+// terminal need it, and without this the only symptom is empty panels that
+// blame the repo — the log line is where an installer user finds the real
+// cause without opening devtools.
+{
+  const gc = gitCapability();
+  if (!gc.available) console.warn(`⚠  git not found on PATH — the git, diff, pull-request and terminal panels will not work. Install git to enable them.`);
+}
