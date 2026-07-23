@@ -37,10 +37,11 @@
  */
 import { spawn } from "bun";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync, existsSync, readFileSync, renameSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { buildHeavyTranscripts } from "./heavytx.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 
@@ -113,6 +114,44 @@ const WM_REPO_CACHE_MS = Math.max(50, Number(process.env.AGX_LOAD_WM_CACHE_MS ||
  *  names — tighter than the default 250ms, which was calibrated for the loud
  *  many-panel run. */
 const WM_PTY_P99_BUDGET_MS = Math.max(1, Number(process.env.AGX_LOAD_WM_PTY_P99_MS || 80));
+
+// --- heavy-transcripts mode (AGX_LOAD_HEAVY_TRANSCRIPTS=1) -------------------
+//
+// The other bottleneck, and the one the transcript scanner owns: it runs on the
+// loop the PTY rides, and a cold-start backfill of a machine's ~/.claude —
+// hundreds of MB of JSONL, some sessions tens of MB with multi-MB base64-image
+// lines — parses and inserts every line. Before the fix that froze the console
+// for ~0.5-2s at a stretch per big file while the backlog cleared, with every
+// endpoint (discover, /health, /stats) timing out alongside it.
+//
+// This mode reproduces exactly that, against a /tmp fixture and NEVER the real
+// ~/.claude, and it does so the way the rest of this harness works: prime the
+// terminal on a CALM server first, THEN apply the load and measure. So the
+// server boots pointed at an EMPTY projects dir (instant first sweep, clean
+// prime); at measure-start the big fixture is MOVED in, and the steady-state
+// sweep — forced through even while a human types, every few ticks — chews the
+// backlog on the loop the PTY rides, exactly as it does on a real machine when
+// you open the app to a day's worth of transcripts and start typing. The PTY
+// echo then shows whether the sweep froze the console or breathed around it.
+//
+// The server is unscoped (the sweep ingests everything, no scope filter) with
+// the scan ENABLED and both HOME and AGENTGLASS_PROJECTS_DIR under the fixture,
+// so it does full work and touches nothing real. The batch/yield knobs are the
+// lever: set them huge (AGENTGLASS_SCAN_BATCH_LINES=99999999) to feel the pre-fix
+// single-transaction freeze, or leave them default to prove the batched,
+// yielding sweep stays fluid.
+const HEAVY = process.env.AGX_LOAD_HEAVY_TRANSCRIPTS === "1";
+/** Heavy-mode PTY budget — the scanner must stay as fluid as everything else, so
+ *  the bar is the 80ms the task names, not the loud many-panel 250ms. */
+const HEAVY_PTY_P99_BUDGET_MS = Math.max(1, Number(process.env.AGX_LOAD_HEAVY_PTY_P99_MS || 80));
+/** The fixture's shape. Sized so the boot backfill is still churning across the
+ *  whole measure window — the cost is per-EVENT (a JSON.parse + an insertEvent),
+ *  so it is line count, not raw MB, that keeps the sweep busy: ~600MB of mostly
+ *  ordinary turn lines is ~25s of backfill, comfortably longer than prime + the
+ *  15s measure. Fewer, fatter image lines would be bytes without the events that
+ *  make the sweep slow, so giants stay sparse here (see the branch below). */
+const HEAVY_FILES = Math.max(1, Number(process.env.AGX_TX_FILES || 12));
+const HEAVY_FILE_MB = Math.max(1, Number(process.env.AGX_TX_FILE_MB || 50));
 
 // --- the panel fan-out: every endpoint a client polls while panels are open --
 // At the cadence the web app uses (GitPanel tree 2.5s / views 10s, DockerPanel
@@ -318,9 +357,42 @@ function seedTelemetry(dbPath: string, repos: string[]): void {
 
 const base = mkdtempSync(join(tmpdir(), "agx-load-"));
 let wmHome: string | null = null;
+// Heavy mode's throwaway HOME, the (initially empty) projects tree the server
+// scans, and a STAGING dir the fixture is built in and later moved from. All
+// under `base` in /tmp — same filesystem, so the move is an instant rename —
+// and cleanup takes them, so the real ~/.claude is never in the picture.
+let heavyHome: string | null = null;
+let heavyProjects: string | null = null;
+let heavyStaged: string | null = null; // built here; renamed into heavyProjects at measure-start
 let repo: string;
 let dbNote: string;
-if (WHOLE) {
+if (HEAVY) {
+  heavyHome = join(base, "home");
+  heavyProjects = join(heavyHome, ".claude", "projects");
+  const staging = join(base, "staging");
+  // A real cwd for the transcripts to name (so projectOf resolves it once) and
+  // for the probe shell to open in.
+  repo = join(base, "repo");
+  mkdirSync(repo, { recursive: true });
+  mkdirSync(heavyProjects, { recursive: true }); // starts empty: instant first sweep
+  mkdirSync(staging, { recursive: true });
+  const t = performance.now();
+  // buildHeavyTranscripts writes <staging>/-tmp-heavyproj/*.jsonl; that one
+  // project folder is what gets moved in at measure-start.
+  const built = buildHeavyTranscripts(staging, {
+    files: HEAVY_FILES,
+    fileMb: HEAVY_FILE_MB,
+    giantLineMb: Number(process.env.AGX_TX_GIANT_MB || 4),
+    // Sparse on purpose: giant lines are bytes without events, and it is events
+    // that keep the sweep busy. A couple per file exercises the giant-line path
+    // for realism without diluting the per-event cost that IS the bottleneck.
+    giantPerFile: Number(process.env.AGX_TX_GIANT_PER_FILE ?? 2),
+    mediumLineKb: Number(process.env.AGX_TX_MEDIUM_KB || 4),
+    cwd: repo,
+  });
+  heavyStaged = join(staging, "-tmp-heavyproj");
+  dbNote = `heavy transcripts: ${(built.bytes / 1_048_576).toFixed(0)}MB across ${built.files.length} files (${built.lines} lines), built ${((performance.now() - t) / 1000).toFixed(1)}s · moved in at measure-start (fresh empty DB)`;
+} else if (WHOLE) {
   const f = buildWholeMachineFixture(base);
   wmHome = f.home;
   repo = f.focus;
@@ -354,13 +426,16 @@ const server = spawn({
   // Whole-machine mode runs the sidecar out of the fixture home so its own cwd
   // is not a repo (selfRoot stays null, no stray real repos leak in) and so
   // firstRunRoots resolves under the /tmp fixture rather than the real HOME.
-  ...(WHOLE && wmHome ? { cwd: wmHome } : {}),
+  // Heavy mode likewise runs out of its fixture home so nothing reaches real ~.
+  ...(WHOLE && wmHome ? { cwd: wmHome } : HEAVY && heavyHome ? { cwd: heavyHome } : {}),
   env: {
     ...process.env,
     AGENTGLASS_PORT: String(port),
-    // Whole machine = unscoped. "" is falsy, so workspaceRoot() reads null even
-    // if the parent shell happened to export AGENTGLASS_ROOT.
-    AGENTGLASS_ROOT: WHOLE ? "" : repo,
+    // Whole machine and heavy-transcripts are both unscoped. "" is falsy, so
+    // workspaceRoot() reads null even if the parent shell exported AGENTGLASS_ROOT
+    // — heavy mode needs that so the sweep ingests the whole fixture (no scope
+    // filter), which is the work being measured.
+    AGENTGLASS_ROOT: WHOLE || HEAVY ? "" : repo,
     AGENTGLASS_DB: dbCopy,
     ...(WHOLE && wmHome ? {
       HOME: wmHome,
@@ -369,15 +444,21 @@ const server = spawn({
       // reproduces inside the measure window.
       AGENTGLASS_REPO_CACHE_MS: String(WM_REPO_CACHE_MS),
     } : {}),
+    // Point the scanner at the /tmp fixture (both the projects dir directly and
+    // HOME as a backstop), so the real ~/.claude is never read. Poll fast so the
+    // sweep notices the fixture the instant it is moved in at measure-start,
+    // rather than up to 3s later.
+    ...(HEAVY && heavyHome && heavyProjects ? { HOME: heavyHome, AGENTGLASS_PROJECTS_DIR: heavyProjects, AGENTGLASS_SCAN_INTERVAL_MS: "500" } : {}),
     XDG_CONFIG_HOME: join(home, "config"),
     XDG_DATA_HOME: join(home, "data"),
     XDG_CACHE_HOME: join(home, "cache"),
     AGENTGLASS_TOKEN: "",
     // The transcript sweep reads the operator's real ~/.claude — not reproducible
-    // and, per the diagnosis, not the bottleneck (its tails are incremental).
-    // This test is about the git/docker/broadcast fan-out, so keep it out of the
-    // picture; set AGENTGLASS_SCAN_DISABLED=0 to fold it back in.
-    AGENTGLASS_SCAN_DISABLED: process.env.AGENTGLASS_SCAN_DISABLED ?? "1",
+    // and, for the default run, not the bottleneck (its tails are incremental).
+    // The default run is about the git/docker/broadcast fan-out, so keep it out
+    // of the picture; heavy-transcripts mode turns it ON (against the fixture)
+    // because there the sweep is the whole point.
+    AGENTGLASS_SCAN_DISABLED: HEAVY ? "0" : process.env.AGENTGLASS_SCAN_DISABLED ?? "1",
     // The probe shell. What is being measured — how fast the server's single
     // thread pumps PTY bytes while the fan-out runs — is a property of the
     // server, not the shell, so the probe wants the quietest, most deterministic
@@ -555,12 +636,19 @@ try {
   }
   if (!up) throw new Error("server never answered /health — see stderr above");
 
-  const budget = WHOLE ? WM_PTY_P99_BUDGET_MS : PTY_P99_BUDGET_MS;
+  const budget = HEAVY ? HEAVY_PTY_P99_BUDGET_MS : WHOLE ? WM_PTY_P99_BUDGET_MS : PTY_P99_BUDGET_MS;
   const gets = buildGets(R);
-  console.log(`loadtest${WHOLE ? " [WHOLE MACHINE — unscoped, no FS walk]" : ""}: ${CLIENTS} clients · ${gets.length + (withStatusEndpoint() ? 1 : 0)} endpoints/burst · ${WORKTREES}-worktree repo`);
-  console.log(`          DB: ${dbNote}`);
-  console.log(`          repo: ${repo}`);
-  console.log(`          load in a child process · measuring ${(MEASURE_MS / 1000).toFixed(0)}s · PTY p99 budget ${budget}ms\n`);
+  if (HEAVY) {
+    console.log(`loadtest [HEAVY TRANSCRIPTS — the scanner backfilling a big fixture at boot]`);
+    console.log(`          fixture: ${dbNote}`);
+    console.log(`          batch: ${process.env.AGENTGLASS_SCAN_BATCH_LINES || 500} lines / ${process.env.AGENTGLASS_SCAN_BATCH_BYTES || "1MB"} per yield · repo: ${repo}`);
+    console.log(`          no load child — the sweep IS the load · measuring ${(MEASURE_MS / 1000).toFixed(0)}s · PTY p99 budget ${budget}ms\n`);
+  } else {
+    console.log(`loadtest${WHOLE ? " [WHOLE MACHINE — unscoped, no FS walk]" : ""}: ${CLIENTS} clients · ${gets.length + (withStatusEndpoint() ? 1 : 0)} endpoints/burst · ${WORKTREES}-worktree repo`);
+    console.log(`          DB: ${dbNote}`);
+    console.log(`          repo: ${repo}`);
+    console.log(`          load in a child process · measuring ${(MEASURE_MS / 1000).toFixed(0)}s · PTY p99 budget ${budget}ms\n`);
+  }
 
   // Reset the server's stall log so we measure this run, not the boot backfill.
   const since = (await fetch(`${S}/api/loopwatch`, { signal: AbortSignal.timeout(REQ_TIMEOUT_MS) }).then((r) => r.json()).catch(() => ({ stalls: [] }))) as { stalls: { id: number }[] };
@@ -585,13 +673,22 @@ try {
   const cpu0 = cpuTicks(pid);
   const t0 = performance.now();
   measureStart = t0;
-  chk("load child starting");
-  loadChild = spawn({
-    cmd: ["bun", join(ROOT, "scripts", "loadtest.ts")],
-    env: { ...process.env, AGX_LOAD_WORKER: S, AGX_LOAD_REPO: repo, AGX_LOAD_WORKER_MS: String(MEASURE_MS) },
-    stdout: "ignore",
-    stderr: "inherit",
-  });
+  if (HEAVY && heavyStaged && heavyProjects) {
+    // The load in heavy mode is the sweep itself: drop the whole fixture into the
+    // scanned dir in one rename, and the next steady-state tick (forced through
+    // even while the probe types) starts chewing the backlog on the loop the PTY
+    // rides — the exact moment we want to be measuring the echo through.
+    chk("moving heavy fixture into the scan dir");
+    renameSync(heavyStaged, join(heavyProjects, "-tmp-heavyproj"));
+  } else {
+    chk("load child starting");
+    loadChild = spawn({
+      cmd: ["bun", join(ROOT, "scripts", "loadtest.ts")],
+      env: { ...process.env, AGX_LOAD_WORKER: S, AGX_LOAD_REPO: repo, AGX_LOAD_WORKER_MS: String(MEASURE_MS) },
+      stdout: "ignore",
+      stderr: "inherit",
+    });
+  }
 
   await Bun.sleep(MEASURE_MS);
   chk("measure window done");
@@ -636,7 +733,37 @@ try {
 
   const p99 = pct(echo, 99);
   console.log("");
-  if (WHOLE && reposCount === 0) {
+  if (HEAVY) {
+    // Heavy mode's verdict rides the external loop ping and the server's own
+    // watchdog, not the PTY echo probe. Those two ARE the terminal-responsiveness
+    // measure the whole codebase is built on — loopwatch.ts and perfbudget.ts both
+    // state that a loop blocked N ms is a PTY frozen N ms, because they share the
+    // one thread — and unlike the echo probe (which needs a shell that echoes on a
+    // calm boot, not guaranteed in every sandbox) they sample reliably here. The
+    // question heavy mode asks is precisely "did the sweep freeze the loop the PTY
+    // rides," and these answer it directly. The echo number is still reported when
+    // the probe managed to sample.
+    const loopP99 = pct(loop, 99);
+    const worst = lw?.worstMs ?? 0;
+    const LOOP_P99_BUDGET = Number(process.env.AGX_LOAD_HEAVY_LOOP_P99_MS || 120);
+    const FREEZE_MS = Number(process.env.AGX_LOAD_HEAVY_FREEZE_MS || 400);
+    if (echo.length >= 20) console.log(`  (PTY echo probe: p99 ${p99.toFixed(0)}ms, budget ${budget}ms)`);
+    // The watchdog freeze is checked FIRST: a multi-second stall is itself why
+    // the external ping collects few samples (it blocks on the frozen loop), so a
+    // low sample count is the symptom, not a reason to disbelieve the result.
+    if (worst > FREEZE_MS) {
+      console.log(`✗ loadtest: the sweep FROZE the loop the PTY rides — a single ${worst}ms stall (over the ${FREEZE_MS}ms freeze line). The stall table above names it.`);
+      failed = true;
+    } else if (loop.length < 50 && !lw) {
+      console.log(`✗ loadtest: only ${loop.length} loop-ping samples and no watchdog read — the probe never got going, nothing was proved`);
+      failed = true;
+    } else if (loopP99 > LOOP_P99_BUDGET) {
+      console.log(`✗ loadtest: loop p99 ${loopP99.toFixed(0)}ms over the ${LOOP_P99_BUDGET}ms budget while the sweep ran — the terminal would stutter`);
+      failed = true;
+    } else {
+      console.log(`✓ loadtest: the sweep stays off the loop the PTY rides — loop p99 ${loopP99.toFixed(0)}ms, worst stall ${worst}ms, at ${cpuPct.toFixed(0)}% CPU chewing the backlog. Console stays fluid.`);
+    }
+  } else if (WHOLE && reposCount === 0) {
     console.log(`✗ loadtest: /git/repos returned 0 repos — the whole-machine picker is empty, the telemetry source is not feeding it`);
     failed = true;
   } else if (echo.length < 20) {
