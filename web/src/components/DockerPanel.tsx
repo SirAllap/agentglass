@@ -223,7 +223,7 @@ function DetailPane({ tab, env, config, top, error }: {
   if (tab !== "env" && text == null) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
   if (tab === "env") {
     if (!env) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
-    if (!env.length) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]">this container has no environment set</div>;
+    if (!env.length) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]">This container has no environment set</div>;
     return (
       <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4 text-[11px] flex flex-col gap-1" style={{ color: "var(--text2)" }}>
         {env.map((line, i) => {
@@ -261,7 +261,7 @@ function DockerMissing({ reason }: { reason?: string }) {
       <div className="max-w-md flex flex-col items-center gap-2">
         <span className="text-[13px] font-semibold" style={{ color: "var(--warning)" }}>Docker isn't installed</span>
         <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>
-          {reason || "the docker CLI isn't on your PATH"}. Containers, images, volumes and logs stay empty until it is.
+          {reason || "The docker CLI isn't on your PATH"}. Containers, images, volumes and logs stay empty until it is.
         </span>
         <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
           Get it from <code>docker.com/get-started</code> (Docker Desktop), or your package manager:{" "}
@@ -354,7 +354,7 @@ export function DockerView({ active }: { active: boolean }) {
   }, []);
   const loadLogs = useCallback(async (id: string, n: number) => {
     const seq = ++logSeq.current; // drop a slow response if the container changed
-    try { const r = await api.dockerLogs(id, n); if (seq !== logSeq.current) return; setLogs(r.ok ? stripAnsi(r.text) : (r.error || "no logs")); }
+    try { const r = await api.dockerLogs(id, n); if (seq !== logSeq.current) return; setLogs(r.ok ? stripAnsi(r.text) : (r.error || "No logs")); }
     catch (e) { if (seq === logSeq.current) setLogs(String(e)); }
   }, []);
 
@@ -425,7 +425,7 @@ export function DockerView({ active }: { active: boolean }) {
     } else if (tab === "top") {
       void api.dockerTop(id).then((r) => {
         if (!live) return;
-        if (!r.ok) { setDetailErr(r.error || "not running"); setTop(null); return; }
+        if (!r.ok) { setDetailErr(r.error || "Not running"); setTop(null); return; }
         setTop(r.text); setDetailErr(null);
       });
     }
@@ -470,7 +470,7 @@ export function DockerView({ active }: { active: boolean }) {
     try {
       const fn = verb === "start" ? api.dockerStart : verb === "stop" ? api.dockerStop : verb === "restart" ? api.dockerRestart : api.dockerRm;
       const r = await fn(id);
-      flash(r.ok, r.ok ? (r.output || `${verb}ed`) : (r.error || "failed"));
+      flash(r.ok, r.ok ? (r.output || `${verb}ed`) : (r.error || "Failed"));
       await loadOverview(); await loadStats();
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
@@ -508,31 +508,31 @@ export function DockerView({ active }: { active: boolean }) {
                 <style>{SCROLLBAR_CSS}</style>
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
                   <span className={viewTitleClass} style={{ color: "var(--text)" }}>Docker</span>
-                  {ov?.version && <span className="text-[10px] t-dim2">engine {ov.version}</span>}
+                  {ov?.version && <span className="text-[10px] t-dim2">Engine {ov.version}</span>}
                   {/* Scoped to the open project. The fallback case is spelled out
                       rather than shown as an empty list, so an unlabelled stack
                       doesn't read as "docker is broken". */}
                   {ov?.scope && (
                     <span className="text-[9.5px] px-1.5 py-0.5 rounded shrink-0" title={ov.scope.showingAll
-                      ? `no container is labelled for ${ov.scope.project} (${ov.scope.workspace}) — showing every container on this host`
-                      : `showing containers for ${ov.scope.workspace}`}
+                      ? `No container is labelled for ${ov.scope.project} (${ov.scope.workspace}) — showing every container on this host`
+                      : `Showing containers for ${ov.scope.workspace}`}
                       style={ov.scope.showingAll
                         ? { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning)" }
                         : { background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--text2)" }}>
-                      {ov.scope.showingAll ? `no ${ov.scope.project} containers · showing all` : ov.scope.project}
+                      {ov.scope.showingAll ? `No ${ov.scope.project} containers · showing all` : ov.scope.project}
                     </span>
                   )}
                   {/* The tabs used to live here and are now the stacked
                       column's headers — two ways to switch the same thing, one
                       of which hid three quarters of what docker was doing. */}
                   <div className="ml-auto flex items-center gap-1.5">
-                    {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">read-only</span>}
+                    {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">Read-only</span>}
                     <button onClick={() => setDense((v) => !v)} title={dense ? "Show each container's image" : "Fit more containers on screen"}
                       className="text-[10px] px-2 py-0.5 rounded-lg"
                       style={dense
                         ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
                         : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
-                      dense
+                      Dense
                     </button>
                     <button onClick={() => { loadOverview(); loadStats(); }} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
                   </div>
@@ -545,7 +545,7 @@ export function DockerView({ active }: { active: boolean }) {
                   cap && !cap.available ? (
                     <DockerMissing reason={cap.reason} />
                   ) : (
-                    <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{ov?.error || "connecting to docker…"}</div>
+                    <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{ov?.error || "Connecting to Docker…"}</div>
                   )
                 ) : (
                   <div className="flex-1 min-h-0 flex">
@@ -651,10 +651,10 @@ export function DockerView({ active }: { active: boolean }) {
                                 <button onClick={() => { setConsoleOpen(true); runInConsole(consoleRoot(), `docker exec -it ${selected.id.slice(0, 12)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'`); }}
                                   className="text-[10px] px-2 py-0.5 rounded mr-1"
                                   style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
-                                  title={`Open a shell inside ${selected.name}`}>exec</button>
+                                  title={`Open a shell inside ${selected.name}`}>Exec</button>
                               )}
                               {DETAIL_TABS.map((t) => (
-                                <button key={t} onClick={() => setTab(t)} className="text-[10px] px-2 py-0.5 rounded" style={{ background: tab === t ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: tab === t ? "var(--text)" : "var(--text3)" }}>{t}</button>
+                                <button key={t} onClick={() => setTab(t)} className="text-[10px] px-2 py-0.5 rounded" style={{ background: tab === t ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: tab === t ? "var(--text)" : "var(--text3)" }}>{t[0].toUpperCase() + t.slice(1)}</button>
                               ))}
                               {tab === "logs" && (
                                 <Select value={String(tail)} onChange={(v) => setTail(Number(v))} align="right"
@@ -679,7 +679,7 @@ export function DockerView({ active }: { active: boolean }) {
                             </div>
                           )}
                         </>
-                    ) : <div className="flex-1 grid place-items-center t-dim2 text-[12px]">no containers</div>}
+                    ) : <div className="flex-1 grid place-items-center t-dim2 text-[12px]">No containers</div>}
                     </div>
                   </div>
                 )}
@@ -715,10 +715,10 @@ export function DockerView({ active }: { active: boolean }) {
                       }}
                     >
                       <span style={{ fontSize: 11 }}>{consoleOpen ? "▾" : "▸"}</span>
-                      <span>console</span>
+                      <span>Console</span>
                       <kbd className="text-[8.5px] px-1 py-[1px] rounded" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: 0.85 }}>shell</kbd>
                     </button>
-                    <span className="ml-auto">logs auto-refresh · stats every 5s</span>
+                    <span className="ml-auto">Logs auto-refresh · stats every 5s</span>
                   </div>
                 )}
                 {toast && (

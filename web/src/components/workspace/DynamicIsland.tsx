@@ -265,11 +265,11 @@ function useNotes(): { note: Note | null; behind: number; ahead: number } {
         if (first || c.attention === prev || c.attention === "none") continue;
         if (c.attention === "blocked") {
           // Blocked, not merely finished: the chat cannot continue without you.
-          push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error)", title: c.title || "chat", sub: c.blockedTool ? `needs "${c.blockedTool}"` : "waiting on you", urgent: true });
-          recordNote({ app: "chat", summary: c.title || "chat", body: c.blockedTool ? `blocked — needs "${c.blockedTool}"` : "blocked — waiting on you", urgency: 2 });
+          push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error)", title: c.title || "Chat", sub: c.blockedTool ? `Needs "${c.blockedTool}"` : "Waiting on you", urgent: true });
+          recordNote({ app: "chat", summary: c.title || "Chat", body: c.blockedTool ? `Blocked — needs "${c.blockedTool}"` : "Blocked — waiting on you", urgency: 2 });
         } else if (c.attention === "done") {
-          push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success)", title: c.title || "chat", sub: "turn finished" });
-          recordNote({ app: "chat", summary: c.title || "chat", body: "turn finished" });
+          push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success)", title: c.title || "Chat", sub: "Turn finished" });
+          recordNote({ app: "chat", summary: c.title || "Chat", body: "Turn finished" });
         }
       }
       first = false;
@@ -412,16 +412,16 @@ function HistoryRow({ n, onGone }: { n: SystemNote; onGone: () => void }) {
               onClick={() => void openNote(n.id)}
               title={n.url}
             >
-              ↗ open {hostOf(n.url)}
+              ↗ Open {hostOf(n.url)}
             </button>
           )}
         </span>
         <span className="flex items-center gap-1 shrink-0">
           {long && (
             <button className="agx-note-btn" onClick={() => setOpen((v) => !v)}
-              title={open ? "collapse" : "show the whole message"}>{open ? "▴" : "▾"}</button>
+              title={open ? "Collapse" : "Show the whole message"}>{open ? "▴" : "▾"}</button>
           )}
-          <button className="agx-note-btn" onClick={onGone} title="dismiss">✕</button>
+          <button className="agx-note-btn" onClick={onGone} title="Dismiss">✕</button>
         </span>
       </div>
     </div>
@@ -492,7 +492,7 @@ export function DynamicIsland() {
         onClick={(e) => { e.stopPropagation(); if (hist.length) setInbox((v) => !v); }}
         // Only while closed: once the panel is open the tooltip floats over
         // the list, labelling something you are already looking at.
-        title={hist.length && !inbox ? "notifications" : undefined}
+        title={hist.length && !inbox ? "Notifications" : undefined}
       >
         {/* A wipe, not a fade. The content sweeps in from one side and, when its
             few seconds are up, sweeps out the same way -- a barrido that reads
@@ -598,8 +598,8 @@ export function DynamicIsland() {
               ) : rateLimited ? (
                 <>
                   <span className="agx-sep" />
-                  <Pill cap="PLAN" title="the usage endpoint is rate-limiting us; retrying">
-                    <span className="text-[10px]" style={{ color: "color-mix(in srgb, #fff 55%, transparent)" }}>rate-limited</span>
+                  <Pill cap="PLAN" title="The usage endpoint is rate-limiting us; retrying">
+                    <span className="text-[10px]" style={{ color: "color-mix(in srgb, #fff 55%, transparent)" }}>Rate-limited</span>
                   </Pill>
                 </>
               ) : null}
@@ -633,10 +633,10 @@ export function DynamicIsland() {
                   : "Quiet mirrored notifications: keep collecting them, stop letting them interrupt"}
                 style={quiet ? { color: "var(--warning)" } : undefined}
               >
-                {quiet ? "quiet on" : "quiet"}
+                {quiet ? "Quiet on" : "Quiet"}
               </button>
-              <button className="agx-note-btn ml-auto" onClick={() => { clearNotes(); setInbox(false); }}>clear all</button>
-              <button className="agx-note-btn" onClick={() => setInbox(false)} title="close (Esc)">✕</button>
+              <button className="agx-note-btn ml-auto" onClick={() => { clearNotes(); setInbox(false); }}>Clear all</button>
+              <button className="agx-note-btn" onClick={() => setInbox(false)} title="Close (Esc)">✕</button>
             </div>
             <div className="agx-inbox-list">
               {hist.map((n) => (

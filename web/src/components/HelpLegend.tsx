@@ -12,10 +12,10 @@ const EVENTS: [string, string][] = [
   ["Subagent activity", "#a3e635"],
 ];
 const STATUS: [string, string][] = [
-  ["working", "#34d399"],
-  ["waiting on you", "#fbbf24"],
-  ["errored", "#f87171"],
-  ["idle", "#64748b"],
+  ["Working", "#34d399"],
+  ["Waiting on you", "#fbbf24"],
+  ["Errored", "#f87171"],
+  ["Idle", "#64748b"],
 ];
 
 export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -60,31 +60,31 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
               <div className="mt-4 pt-3 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                 <div className="panel-eyebrow mb-2">shortcuts & tips</div>
                 <div className="grid grid-cols-2 gap-y-1 text-[11px] t-dim">
-                  <span><kbd className="chip">{MOD_KEY}K</kbd> command palette</span>
-                  <span><kbd className="chip">?</kbd> this help</span>
-                  <span><kbd className="chip">s</kbd> statistics</span>
-                  <span><kbd className="chip">k</kbd> skills explorer</span>
-                  <span><kbd className="chip">/</kbd> search all history</span>
+                  <span><kbd className="chip">{MOD_KEY}K</kbd> Command palette</span>
+                  <span><kbd className="chip">?</kbd> This help</span>
+                  <span><kbd className="chip">s</kbd> Statistics</span>
+                  <span><kbd className="chip">k</kbd> Skills explorer</span>
+                  <span><kbd className="chip">/</kbd> Search all history</span>
                   {IS_DESKTOP && (
-                    <span><kbd className="chip">{MOD_KEY}+</kbd> <kbd className="chip">{MOD_KEY}−</kbd> display size</span>
+                    <span><kbd className="chip">{MOD_KEY}+</kbd> <kbd className="chip">{MOD_KEY}−</kbd> Display size</span>
                   )}
                   <span>Click an event → full details</span>
                   <span>Click an agent → filter to it</span>
                 </div>
                 <div className="panel-eyebrow mt-3 mb-2">workspace</div>
                 <div className="grid grid-cols-2 gap-y-1 text-[11px] t-dim">
-                  <span><kbd className="chip">{MOD_KEY}\</kbd> open / close</span>
-                  <span><kbd className="chip">{MOD_KEY}1</kbd>…<kbd className="chip">{MOD_KEY}5</kbd> jump to a view</span>
-                  <span><kbd className="chip">g</kbd> git</span>
-                  <span><kbd className="chip">d</kbd> diff</span>
-                  <span><kbd className="chip">o</kbd> docker</span>
-                  <span><kbd className="chip">t</kbd> terminal</span>
-                  <span><kbd className="chip">c</kbd> chat</span>
-                  <span><kbd className="chip">{MOD_KEY}[</kbd> <kbd className="chip">{MOD_KEY}]</kbd> cycle views</span>
+                  <span><kbd className="chip">{MOD_KEY}\</kbd> Open / close</span>
+                  <span><kbd className="chip">{MOD_KEY}1</kbd>…<kbd className="chip">{MOD_KEY}5</kbd> Jump to a view</span>
+                  <span><kbd className="chip">g</kbd> Git</span>
+                  <span><kbd className="chip">d</kbd> Diff</span>
+                  <span><kbd className="chip">o</kbd> Docker</span>
+                  <span><kbd className="chip">t</kbd> Terminal</span>
+                  <span><kbd className="chip">c</kbd> Chat</span>
+                  <span><kbd className="chip">{MOD_KEY}[</kbd> <kbd className="chip">{MOD_KEY}]</kbd> Cycle views</span>
                   {/* The distinction that actually bites: bare letters are
                       swallowed by the shell and the composer, the ⌘ pair never
                       is. */}
-                  <span className="col-span-2 t-dim2">letters switch views unless you're typing; {MOD_KEY} shortcuts always work</span>
+                  <span className="col-span-2 t-dim2">Letters switch views unless you're typing; {MOD_KEY} shortcuts always work</span>
                 </div>
               </div>
             </motion.div>
