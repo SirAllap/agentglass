@@ -287,8 +287,15 @@ export function ptyOpen(ws: PtyWs) {
     if (now !== sawTmux) {
       sawTmux = now;
       if (!now) {
-        // Detached. Forget the client rather than keep polling a target that
-        // is no longer ours, and stop describing windows nobody is looking at.
+        // Detached. Hand the session its status line back before forgetting we
+        // borrowed it — a detach ends the client, not the server: the session
+        // stays alive, so a status left hidden here comes up blank on every
+        // future attach. Same restore followSession() does when the client
+        // moves on with `^b s`; the sweep missing it was the leak.
+        const borrowed = session.tmuxStatusHiddenOn;
+        if (borrowed) setStatusLine(borrowed, true);
+        // Forget the client rather than keep polling a target that is no longer
+        // ours, and stop describing windows nobody is looking at.
         session.tmuxClient = null;
         session.tmux = null;
         session.tmuxPrefix = [];
