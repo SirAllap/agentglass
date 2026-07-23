@@ -119,13 +119,19 @@ export function completePath(input: unknown): FsCompletion {
     names.push(ent.name);
   }
   names.sort((a, b) => a.localeCompare(b));
-  const truncated = names.length > MAX_ENTRIES;
+  // Cap and truncation are counted over *directories that survive the stat*, not
+  // the raw name list. Slicing to MAX_ENTRIES up front let a symlink pointing at
+  // a non-directory — dropped just below — burn a slot that a real directory
+  // further down never got to fill, silently omitting openable directories. Stat
+  // as we go and stop once one directory past the cap proves there are more.
   const entries: FsEntry[] = [];
-  for (const name of names.slice(0, MAX_ENTRIES)) {
+  let truncated = false;
+  for (const name of names) {
     const abs = dir === sep ? sep + name : dir + sep + name;
-    // A symlink to a file survived the filter above; drop it here, where we're
-    // already paying for a stat to answer the repo question.
+    // A symlink to a file survived the name filter above; drop it here, where
+    // we're already paying for a stat to answer the repo question.
     try { if (!statSync(abs).isDirectory()) continue; } catch { continue; }
+    if (entries.length >= MAX_ENTRIES) { truncated = true; break; }
     entries.push({ name, path: abs, repo: isRepo(abs) });
   }
   return { base: dir, entries, truncated };
