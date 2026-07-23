@@ -1532,7 +1532,7 @@ function parseWorktreeList(stdout: string, root: string): GitWorktree[] {
   const out: GitWorktree[] = [];
   let cur: Partial<GitWorktree> | null = null;
   const flush = () => {
-    if (cur && cur.path) out.push({ path: cur.path, branch: cur.branch || "(detached)", head: cur.head || "", current: cur.path === root, bare: !!cur.bare, locked: !!cur.locked });
+    if (cur && cur.path) out.push({ path: cur.path, branch: cur.branch || "(detached)", head: cur.head || "", current: cur.path === root, bare: !!cur.bare, locked: !!cur.locked, prunable: !!cur.prunable });
     cur = null;
   };
   for (const line of stdout.split("\n")) {
@@ -1544,6 +1544,9 @@ function parseWorktreeList(stdout: string, root: string): GitWorktree[] {
     else if (line === "bare") cur.bare = true;
     else if (line === "detached") cur.branch = "(detached)";
     else if (line.startsWith("locked")) cur.locked = true;
+    // A gitdir that points nowhere valid — including one an attacker fabricated
+    // to name an arbitrary path. Captured so privileged callers can refuse it.
+    else if (line.startsWith("prunable")) cur.prunable = true;
   }
   flush();
   return out;
@@ -2117,7 +2120,13 @@ export function fixWorktreeOwnership(rootIn: string, pathIn: unknown): GitAction
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
   // Only a path git itself vouches for, and never the checkout we are in.
   if (abs === root) return { ok: false, error: "that is the main checkout" };
-  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
+  // Must be a *live* worktree, not a prunable one: a prunable entry is a broken
+  // registration whose gitdir points nowhere valid, and an attacker with write
+  // access to the repo can fabricate one aimed at an arbitrary root-owned path.
+  // Trusting it here would point `pkexec chown -R` at that path — a privilege
+  // escalation. `git worktree list` flags such entries prunable, so we require a
+  // non-prunable match before handing the path to root.
+  if (!worktreeList(root).some((w) => w.path === abs && !w.prunable)) return { ok: false, error: "not a worktree of this repository" };
   if (!foreignOwned(abs)) return { ok: true, output: "already yours" };
 
   const uid = typeof process.getuid === "function" ? process.getuid() : -1;
