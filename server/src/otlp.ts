@@ -84,6 +84,17 @@ function firstStr(a: Record<string, unknown>, keys: string[]): string | undefine
 const TOOL_OPS = new Set(["execute_tool", "invoke_tool", "tool"]);
 const LLM_OPS = new Set(["chat", "text_completion", "completion", "generate_content", "responses", "embeddings"]);
 
+// A single OTLP request must not be able to schedule unbounded synchronous work
+// on the server's one thread: every event produced here becomes one SQLite
+// insert back in index.ts, so an export carrying millions of spans/records would
+// freeze the terminal for the length of that write. /v1/traces and /v1/logs are
+// unauthenticated (auth.ts exempts them), so the input is not trusted. Cap the
+// events one request may yield — well above any honest batch, since an OTLP
+// exporter flushes on the order of 512 spans at a time — and drop the excess
+// with a warning rather than block. The cap is on the produced array, here,
+// because index.ts must stay out of this batch's shape.
+export const MAX_OTLP_EVENTS_PER_REQUEST = 10_000;
+
 function spanToEvents(span: OtlpSpan, resAttrs: Record<string, unknown>): IngestBody[] {
   const a = flatten(span.attributes);
   const isGenAI =
@@ -146,18 +157,29 @@ function spanToEvents(span: OtlpSpan, resAttrs: Record<string, unknown>): Ingest
 export function otlpTracesToEvents(body: unknown): IngestBody[] {
   const out: IngestBody[] = [];
   const rs = (body as { resourceSpans?: unknown[] })?.resourceSpans;
-  if (!Array.isArray(rs)) return out;
-  for (const r of rs as Array<Record<string, unknown>>) {
-    const resAttrs = flatten((r?.resource as { attributes?: KeyValue[] })?.attributes);
-    const scopeSpans = (r?.scopeSpans ?? r?.instrumentationLibrarySpans ?? []) as Array<{ spans?: OtlpSpan[] }>;
-    for (const ss of scopeSpans) {
-      for (const span of ss?.spans ?? []) {
-        try {
-          out.push(...spanToEvents(span, resAttrs));
-        } catch {
-          /* skip a malformed span rather than fail the whole batch */
+  if (Array.isArray(rs)) {
+    let capped = false;
+    for (const r of rs as Array<Record<string, unknown>>) {
+      if (capped) break;
+      const resAttrs = flatten((r?.resource as { attributes?: KeyValue[] })?.attributes);
+      const scopeSpans = (r?.scopeSpans ?? r?.instrumentationLibrarySpans ?? []) as Array<{ spans?: OtlpSpan[] }>;
+      for (const ss of scopeSpans) {
+        if (capped) break;
+        for (const span of ss?.spans ?? []) {
+          try {
+            out.push(...spanToEvents(span, resAttrs));
+          } catch {
+            /* skip a malformed span rather than fail the whole batch */
+          }
+          // A tool span yields two events, so this can overshoot by one before
+          // the check; the trim below makes the returned array exact.
+          if (out.length >= MAX_OTLP_EVENTS_PER_REQUEST) { capped = true; break; }
         }
       }
+    }
+    if (capped) {
+      out.length = MAX_OTLP_EVENTS_PER_REQUEST;
+      console.warn(`[otlp] traces request hit the ${MAX_OTLP_EVENTS_PER_REQUEST}-event cap — dropping the rest to keep the single ingest thread responsive`);
     }
   }
   // Insert oldest-first so a tool span's PreToolUse lands before its PostToolUse
@@ -255,19 +277,28 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
 export function otlpLogsToEvents(body: unknown): IngestBody[] {
   const out: IngestBody[] = [];
   const rl = (body as { resourceLogs?: unknown[] })?.resourceLogs;
-  if (!Array.isArray(rl)) return out;
-  for (const r of rl as Array<Record<string, unknown>>) {
-    const resAttrs = flatten((r?.resource as { attributes?: KeyValue[] })?.attributes);
-    const scopeLogs = (r?.scopeLogs ?? r?.instrumentationLibraryLogs ?? []) as Array<{ logRecords?: OtlpLogRecord[] }>;
-    for (const sl of scopeLogs) {
-      for (const rec of sl?.logRecords ?? []) {
-        try {
-          const ev = logRecordToEvent(rec, resAttrs);
-          if (ev) out.push(ev);
-        } catch {
-          /* skip a malformed record */
+  if (Array.isArray(rl)) {
+    let capped = false;
+    for (const r of rl as Array<Record<string, unknown>>) {
+      if (capped) break;
+      const resAttrs = flatten((r?.resource as { attributes?: KeyValue[] })?.attributes);
+      const scopeLogs = (r?.scopeLogs ?? r?.instrumentationLibraryLogs ?? []) as Array<{ logRecords?: OtlpLogRecord[] }>;
+      for (const sl of scopeLogs) {
+        if (capped) break;
+        for (const rec of sl?.logRecords ?? []) {
+          try {
+            const ev = logRecordToEvent(rec, resAttrs);
+            if (ev) out.push(ev);
+          } catch {
+            /* skip a malformed record */
+          }
+          if (out.length >= MAX_OTLP_EVENTS_PER_REQUEST) { capped = true; break; }
         }
       }
+    }
+    if (capped) {
+      out.length = MAX_OTLP_EVENTS_PER_REQUEST;
+      console.warn(`[otlp] logs request hit the ${MAX_OTLP_EVENTS_PER_REQUEST}-event cap — dropping the rest to keep the single ingest thread responsive`);
     }
   }
   out.sort((x, y) => (x.timestamp ?? 0) - (y.timestamp ?? 0));

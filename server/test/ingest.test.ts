@@ -1,7 +1,10 @@
 // Ingest pure helpers from #10 wishlist: detectError on tool_response shapes
 // and transcript token summing (usage_is_cumulative path).
 import { describe, expect, test } from "bun:test";
-import { detectError, sumTranscriptTokens } from "../src/ingest.ts";
+import { detectError, sumTranscriptTokens, normalize } from "../src/ingest.ts";
+import type { IngestBody } from "../../shared/types.ts";
+
+const MAX_FIELD = 64 * 1024; // must match ingest.ts
 
 describe("detectError", () => {
   test("PostToolUseFailure is always an error", () => {
@@ -82,5 +85,67 @@ describe("sumTranscriptTokens", () => {
   test("empty / non-array chat yields zeros", () => {
     expect(sumTranscriptTokens(undefined).input_tokens).toBe(0);
     expect(sumTranscriptTokens([] as unknown[]).output_tokens).toBe(0);
+  });
+
+  test("a forged transcript cannot sum past the session ceiling", () => {
+    // Each entry is clamped to the 20M per-turn max, but the running sum had no
+    // ceiling of its own — 200 fabricated max turns used to total 4 billion,
+    // sailing past the clamp it was supposed to respect. The total is bounded now
+    // (1e9), so no honest session is affected while a forged one is capped.
+    const chat = Array.from({ length: 200 }, () => ({
+      message: { usage: { input_tokens: 20_000_000, output_tokens: 20_000_000, cache_read_input_tokens: 20_000_000 } },
+    }));
+    const u = sumTranscriptTokens(chat);
+    expect(u.input_tokens).toBeLessThanOrEqual(1_000_000_000);
+    expect(u.output_tokens).toBeLessThanOrEqual(1_000_000_000);
+    expect(u.cache_read_tokens).toBeLessThanOrEqual(1_000_000_000);
+  });
+
+  test("an honest transcript is summed exactly, well under the ceiling", () => {
+    const chat = Array.from({ length: 10 }, () => ({ message: { usage: { input_tokens: 1000, output_tokens: 200 } } }));
+    const u = sumTranscriptTokens(chat);
+    expect(u.input_tokens).toBe(10_000);
+    expect(u.output_tokens).toBe(2_000);
+  });
+});
+
+describe("normalize bounds every untrusted string", () => {
+  const big = "x".repeat(MAX_FIELD + 50_000);
+  const base = (over: Partial<IngestBody>): IngestBody =>
+    ({ source_app: "app", session_id: "sess", hook_event_type: "Notification", ...over }) as IngestBody;
+
+  test("caps a large value under a key the old allowlist never named", () => {
+    // The hole: capPayload only truncated a fixed set of keys, so a 32MB blob
+    // under any other key became a 32MB row, FTS entry and websocket frame.
+    const ev = normalize(base({ payload: { some_unlisted_key: big, nested: { deep: big } } }));
+    expect((ev.payload.some_unlisted_key as string).length).toBeLessThanOrEqual(MAX_FIELD + 20);
+    expect(((ev.payload.nested as Record<string, unknown>).deep as string).length).toBeLessThanOrEqual(MAX_FIELD + 20);
+  });
+
+  test("caps a large string buried inside an array", () => {
+    const ev = normalize(base({ payload: { items: ["ok", big] } }));
+    expect(((ev.payload.items as string[])[1]).length).toBeLessThanOrEqual(MAX_FIELD + 20);
+  });
+
+  test("caps the top-level summary, which skipped capPayload entirely", () => {
+    const ev = normalize(base({ summary: big }));
+    expect((ev.summary as string).length).toBeLessThanOrEqual(MAX_FIELD + 20);
+  });
+
+  test("caps the top-level column strings too (source_app, session_id, tool name)", () => {
+    const ev = normalize(base({
+      source_app: big, session_id: big,
+      payload: { tool_name: big },
+    }));
+    expect(ev.source_app.length).toBeLessThanOrEqual(MAX_FIELD + 20);
+    expect(ev.session_id.length).toBeLessThanOrEqual(MAX_FIELD + 20);
+    expect((ev.tool_name ?? "").length).toBeLessThanOrEqual(MAX_FIELD + 20);
+  });
+
+  test("leaves small fields untouched", () => {
+    const ev = normalize(base({ summary: "all good", payload: { prompt: "hi", n: 3 } }));
+    expect(ev.summary).toBe("all good");
+    expect(ev.payload.prompt).toBe("hi");
+    expect(ev.payload.n).toBe(3);
   });
 });
