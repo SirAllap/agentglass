@@ -157,7 +157,13 @@ export function restoreGates(): { restored: number; expired: number } {
   for (const row of undecidedGates()) {
     if (row.expires <= now) {
       const out = timeoutOutcome();
-      resolveGateRow(row.id, out.decision, out.reason || `gate expired while the server was down (${out.decision})`, "restart", now);
+      // out.reason verbatim — never backfilled. timeoutOutcome() leaves the
+      // reason EMPTY on a fail-open allow on purpose, so the re-attaching hook
+      // falls through to Claude Code's own permission prompt; a non-empty reason
+      // makes the hook force-allow and skip that prompt. The live-timeout path
+      // (finish → resolveGateRow) preserves the empty reason too, and a restart
+      // must not silently turn a pending gate into a prompt-skipping auto-allow.
+      resolveGateRow(row.id, out.decision, out.reason, "restart", now);
       expired++;
       continue;
     }

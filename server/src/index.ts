@@ -90,7 +90,13 @@ const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
 // Optional shared-secret auth. Null on a loopback-only box with no token set
 // (unchanged zero-config UX); required otherwise. Exposing without a token
 // mints and prints one rather than running unauthenticated.
-const AUTH = resolveToken(LOOPBACK_ONLY);
+// TRUST_LAN widens the CSRF origin gate to trust any private-IP page, so it must
+// bring a token with it — otherwise a loopback instance (token skipped because
+// the bind is local) would let a LAN-origin page drive token-less destructive
+// writes through the victim's own loopback. Treating TRUST_LAN as "not loopback
+// only" for the token decision forces a token exactly when one is needed; net.ts
+// already documents TRUST_LAN as something used on top of a token.
+const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
 /** One socket, three roles: the live event stream, PTY terminal shells, and
  *  the desktop-notification mirror. */
