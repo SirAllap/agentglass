@@ -45,7 +45,7 @@ import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
-  startContainer, stopContainer, restartContainer, removeContainer,
+  startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
 } from "./docker.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
@@ -796,6 +796,12 @@ const server = Bun.serve<WsData>({
     }
 
     // --- live docker panel (lazydocker-style) ---
+    // Is docker even installed, as opposed to the daemon being down? A plain
+    // read like the rest of /docker/*, so the surface-wide origin/rebinding gate
+    // is the whole authorisation story. Lets the panel show install guidance for
+    // a missing binary instead of the overview's daemon message. Mirrors
+    // /git/capability.
+    if (pathname === "/docker/capability") return json(await dockerCapability());
     if (pathname === "/docker/overview") return json(await dockerOverview());
     if (pathname === "/docker/stats") {
       // Sample what the panel is showing. The overview is cached and scoped, so
