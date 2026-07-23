@@ -745,10 +745,14 @@ const cmdCache = new Map<string, { at: number; data: TerminalCommands }>();
  *  cached — see commandDirsAsync and cmdCache for why. */
 export async function projectCommands(root: unknown): Promise<TerminalCommands> {
   const cwd = safeAbs(root);
+  // inScope, like the shell-spawn path: without it a cockpit opened for one
+  // project answers /terminal/commands?root=/any/other/repo, handing back that
+  // repo's Makefile targets and script names — the file contents of a project
+  // outside the open scope. safeAbs alone does not confine to the workspace.
   // repoRootOfAsync, not repoRootOf: polled on every scope switch and new
   // terminal, so its `git rev-parse` queues through the shared pool rather than
   // blocking the loop between keystrokes.
-  if (!cwd || !(await repoRootOfAsync(cwd))) return { enabled: TERMINAL_ENABLED, make: [], scripts: [] };
+  if (!cwd || !inScope(cwd) || !(await repoRootOfAsync(cwd))) return { enabled: TERMINAL_ENABLED, make: [], scripts: [] };
   const hit = cmdCache.get(cwd);
   if (hit && Date.now() - hit.at < CMD_CACHE_TTL_MS) return hit.data;
   const dirs = await commandDirsAsync(cwd); // one walk, shared by both lists, yielding between dirs
