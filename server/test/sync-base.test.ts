@@ -75,14 +75,14 @@ describe("base branch", () => {
 describe("undo merge", () => {
   it("offers nothing when the tip is an ordinary commit", async () => {
     // Not a merge: there is no single "before" to return to.
-    expect(gw.undoableMerge(repo, 1, null)).toBe(false);
+    expect(await gw.undoableMerge(repo, 1, null)).toBe(false);
   });
 
   it("offers nothing for work that has been pushed", async () => {
     // ahead === 0 means the remote already has it, and rewriting published
     // history is a different, worse problem than undoing a local mistake.
     // Upstream present and nothing ahead of it: the remote already has this.
-    expect(gw.undoableMerge(repo, 0, "origin/main")).toBe(false);
+    expect(await gw.undoableMerge(repo, 0, "origin/main")).toBe(false);
   });
 
   it("undoes an unpushed merge exactly, and refuses once there is nothing to undo", async () => {
@@ -100,7 +100,7 @@ describe("undo merge", () => {
     run(repo, "merge", "--no-edit", "undo-side");
     const merged = run(repo, "rev-parse", "HEAD").stdout.trim();
     expect(merged).not.toBe(before);
-    expect(gw.undoableMerge(repo, 1, null)).toBe(true);
+    expect(await gw.undoableMerge(repo, 1, null)).toBe(true);
 
     expect((await gw.undoMerge(repo)).ok).toBe(true);
     expect(run(repo, "rev-parse", "HEAD").stdout.trim()).toBe(before);
@@ -117,7 +117,7 @@ describe("undo merge", () => {
     run(repo, "checkout", "-q", "-b", "undo-dirty");
     run(repo, "merge", "--no-edit", "undo-side");
     writeFileSync(join(repo, "scratch.txt"), "work in progress\n");
-    expect(gw.undoableMerge(repo, 1, null)).toBe(false);
+    expect(await gw.undoableMerge(repo, 1, null)).toBe(false);
     expect((await gw.undoMerge(repo)).ok).toBe(false);
     rmSync(join(repo, "scratch.txt"));
     run(repo, "checkout", "-q", "main");

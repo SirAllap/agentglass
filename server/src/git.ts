@@ -216,6 +216,26 @@ export function repoRootOf(anchor: string): string | null {
 }
 
 /**
+ * Awaited twin of {@link repoRootOf}, for the one caller that runs on the poll.
+ *
+ * `statusForPaths` is asked on every /git/status poll while the in-browser
+ * terminal rides the same single thread, so its `rev-parse` must not be a
+ * synchronous spawn holding the loop between keystrokes. The sync version above
+ * stays for the on-demand callers — a chat send, a PR lookup, the repo-picker
+ * sweep — which run once off the poll and where a queued spawn would only add
+ * latency to a call nobody is typing behind.
+ */
+export async function repoRootOfAsync(anchor: string): Promise<string | null> {
+  const abs = safeAbs(anchor);
+  if (!abs) return null;
+  let dir = abs;
+  try { if (!statSync(abs).isDirectory()) dir = dirname(abs); } catch { dir = dirname(abs); }
+  const r = await gitAsync(dir, ["rev-parse", "--show-toplevel"]);
+  if (r.code !== 0) return null;
+  return r.stdout.trim() || null;
+}
+
+/**
  * The *project* a telemetry path belongs to — the main repo root.
  *
  * Two things `--show-toplevel` gets wrong when labeling projects:
@@ -245,8 +265,11 @@ export function projectRootOf(anchor: string): string | null {
   return wt === -1 ? null : base;
 }
 
-export function currentBranch(root: string): string {
-  const b = git(root, ["rev-parse", "--abbrev-ref", "HEAD"]).stdout.trim();
+// Awaited: this reads on the /git/status and /git/tree hot paths (via
+// statusForPaths and branchInfo), both on a poll the PTY shares the loop with —
+// so the rev-parse goes through the pool rather than blocking between keystrokes.
+export async function currentBranch(root: string): Promise<string> {
+  const b = (await gitAsync(root, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
   return !b || b === "HEAD" ? "(detached)" : b;
 }
 
@@ -258,8 +281,8 @@ function statusLabel(x: string, y: string): GitFileStatus["status"] {
 }
 
 /** Parse `git status --porcelain=v1 -z` into per-file staged/unstaged flags. */
-function parseStatus(root: string): GitFileStatus[] {
-  const r = git(root, ["status", "--porcelain=v1", "-z"]);
+async function parseStatus(root: string): Promise<GitFileStatus[]> {
+  const r = await gitAsync(root, ["status", "--porcelain=v1", "-z"]);
   if (r.code !== 0) return [];
   const parts = r.stdout.split("\0");
   const files: GitFileStatus[] = [];
@@ -280,28 +303,38 @@ function parseStatus(root: string): GitFileStatus[] {
   return files;
 }
 
-/** Live status of every repo touched by the given file paths, grouped by root. */
-export function statusForPaths(paths: string[]): RepoStatus[] {
+/**
+ * Live status of every repo touched by the given file paths, grouped by root.
+ *
+ * Awaited throughout — this used to be a chain of synchronous `git()` spawns
+ * (one rev-parse per path, then a status and a branch read per root) and it was
+ * the last thing on the /git/status poll still freezing the loop the terminal
+ * rides. Every read now goes through the shared pool, and the independent ones
+ * run concurrently so the endpoint's wall clock stays one status' worth rather
+ * than the sum of them.
+ */
+export async function statusForPaths(paths: string[]): Promise<RepoStatus[]> {
   const byRoot = new Map<string, Set<string>>();
-  for (const p of paths) {
-    const root = repoRootOf(p);
-    const abs = safeAbs(p);
+  // The rev-parse per path, off the loop and all at once — duplicates (many
+  // paths in one repo) still collapse to one root key below.
+  const resolved = await Promise.all(paths.map(async (p) => ({ root: await repoRootOfAsync(p), abs: safeAbs(p) })));
+  for (const { root, abs } of resolved) {
     if (!root || !abs) continue;
     if (!byRoot.has(root)) byRoot.set(root, new Set());
     byRoot.get(root)!.add(relative(root, abs));
   }
-  const out: RepoStatus[] = [];
-  for (const [root, suggested] of byRoot) {
-    const files = parseStatus(root);
+  // Each root is a status read and a branch read; run the two together, and the
+  // roots together, so nothing waits on the sum of the others.
+  return Promise.all([...byRoot].map(async ([root, suggested]) => {
+    const [files, branch] = await Promise.all([parseStatus(root), currentBranch(root)]);
     const dirty = new Set(files.map((f) => f.path));
-    out.push({
+    return {
       root,
-      branch: currentBranch(root),
+      branch,
       files,
       suggested: [...suggested].filter((rel) => dirty.has(rel)),
-    });
-  }
-  return out;
+    };
+  }));
 }
 
 function summarize(out: string): string {

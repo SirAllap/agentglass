@@ -179,12 +179,19 @@ function treeState(root: string): GitTreeState {
 }
 
 async function branchInfo(root: string): Promise<GitBranchInfo> {
-  const name = currentBranch(root);
+  // The two independent opening reads — the branch name and its upstream —
+  // fired together and awaited, so neither is a synchronous spawn holding the
+  // loop the terminal rides. This whole function was a chain of blocking git()
+  // calls on the /git/tree poll; it is the one the load harness pinned as the
+  // last stall once /git/status was moved off.
+  const [name, upstream] = await Promise.all([
+    currentBranch(root),
+    gitAsync(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).then((r) => r.stdout.trim() || null),
+  ]);
   const detached = name === "(detached)";
-  const upstream = git(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).stdout.trim() || null;
   let ahead = 0, behind = 0;
   if (upstream) {
-    const c = git(root, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`]).stdout.trim().split(/\s+/);
+    const c = (await gitAsync(root, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`])).stdout.trim().split(/\s+/);
     behind = Number(c[0]) || 0;
     ahead = Number(c[1]) || 0;
   }
@@ -198,8 +205,8 @@ async function branchInfo(root: string): Promise<GitBranchInfo> {
     // Two rev-parses, so only when the answer can change a decision: the
     // panel asks it to decide whether being behind upstream is a reason to
     // refuse a base merge, and that question only exists while behind.
-    upstreamIsBase: upstream && base && behind > 0 ? sameBranch(root, upstream, base) : undefined,
-    canUndoMerge: undoableMerge(root, ahead, upstream),
+    upstreamIsBase: upstream && base && behind > 0 ? await sameBranch(root, upstream, base) : undefined,
+    canUndoMerge: await undoableMerge(root, ahead, upstream),
   };
 }
 
@@ -871,11 +878,16 @@ const validHash = (h: string) => typeof h === "string" && /^[0-9a-fA-F]{4,40}$/.
  * neither `main` nor `master`. It's only a local symref though, so it can be
  * missing on a clone made with `--single-branch`; the fallbacks cover that.
  */
-export function defaultBranch(root: string): string | null {
-  const sym = git(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]).stdout.trim();
+// Awaited: reached from branchInfo (/git/tree) and from baseOf, and baseOf is
+// asked once per checkout by the worktrees sweep — so left synchronous this was
+// up to five spawns × seventeen worktrees blocking the loop on a single poll.
+// The lookups are sequential by nature (first match wins), but none holds the
+// thread now.
+export async function defaultBranch(root: string): Promise<string | null> {
+  const sym = (await gitAsync(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])).stdout.trim();
   if (sym) return sym;
   for (const ref of ["origin/main", "origin/master", "main", "master"]) {
-    if (git(root, ["rev-parse", "--verify", "--quiet", ref]).code === 0) return ref;
+    if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", ref])).code === 0) return ref;
   }
   return null;
 }
@@ -1141,7 +1153,12 @@ export async function branches(rootIn: unknown): Promise<{ current: string; bran
   const root = repoRoot(rootIn);
   if (!root) return { current: "", branches: [], trunk: null };
   const fmt = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)`;
-  const [r, trunk] = [git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]), defaultBranch(root)];
+  // The ref list and the trunk lookup are independent; run them together and
+  // off the loop (this recomputes on /git/branches whenever a ref moves).
+  const [r, trunk] = await Promise.all([
+    gitAsync(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]),
+    defaultBranch(root),
+  ]);
   const merged = trunk ? await mergedInto(root, trunk) : null;
   const list: GitBranch[] = [];
   for (const line of r.stdout.split("\n")) {
@@ -1161,7 +1178,7 @@ export async function branches(rootIn: unknown): Promise<{ current: string; bran
   // flag was a question asked immediately after switching it on. The count
   // settling a beat later is the honest behaviour, and a permanent label
   // explaining it was worse than the thing it explained.
-  return { current: currentBranch(root), branches: list, trunk };
+  return { current: await currentBranch(root), branches: list, trunk };
 }
 
 // lazygit-style branch ops
@@ -1226,7 +1243,7 @@ export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "al
   }
   // Named so the pane can say whose history it is showing rather than leaving
   // the user to infer it from the commits.
-  return { lines, scope, branch: currentBranch(root) };
+  return { lines, scope, branch: await currentBranch(root) };
 }
 
 // --- worktrees (the user's per-card unit of work) ----------------------------
@@ -1253,7 +1270,7 @@ export async function baseOf(root: string, branch: string): Promise<string | nul
   // still cost after everything around them had been awaited.
   const cfg = (await gitAsync(root, ["config", "--get", `branch.${branch}.agentglassbase`])).stdout.trim();
   if (cfg && validRef(cfg) && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", cfg])).code === 0) return cfg;
-  const trunk = defaultBranch(root);
+  const trunk = await defaultBranch(root);
   // A branch is not its own base; the trunk checkout simply has none.
   if (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch) return null;
   return trunk;
@@ -1273,15 +1290,16 @@ export async function baseOf(root: string, branch: string): Promise<string | nul
  * names contain slashes too: chopping the first segment off `native/egui-shell`
  * leaves `egui-shell`, which is not a branch anyone has.
  */
-function sameBranch(root: string, a: string, b: string): boolean {
-  const short = (ref: string): string => {
-    const full = git(root, ["rev-parse", "--symbolic-full-name", ref]).stdout.trim();
+// Awaited: two rev-parses on the branchInfo (/git/tree) path, off the loop.
+async function sameBranch(root: string, a: string, b: string): Promise<boolean> {
+  const short = async (ref: string): Promise<string> => {
+    const full = (await gitAsync(root, ["rev-parse", "--symbolic-full-name", ref])).stdout.trim();
     return full
       .replace(/^refs\/heads\//, "")
       .replace(/^refs\/remotes\/[^/]+\//, "");
   };
-  const x = short(a);
-  return !!x && x === short(b);
+  const x = await short(a);
+  return !!x && x === await short(b);
 }
 
 export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitActionResult {
@@ -1324,7 +1342,7 @@ export async function behindBase(root: string, branch: string, base: string): Pr
 export async function syncFromBase(dirIn: unknown, baseIn?: unknown): Promise<GitActionResult> {
   const dir = repoRoot(dirIn); if (!dir) return { ok: false, error: "not a git repository root" };
   const g = guard(dir); if (g) return g;
-  const branch = currentBranch(dir);
+  const branch = await currentBranch(dir);
   if (!branch || branch === "(detached)") return { ok: false, error: "this checkout is not on a branch" };
   const base = typeof baseIn === "string" && baseIn ? baseIn : await baseOf(dir, branch);
   if (!base) return { ok: false, error: "no base branch is known for this checkout" };
@@ -1435,7 +1453,10 @@ export function baseCandidates(rootIn: unknown): { ok: boolean; refs: { name: st
  * A dirty tree disqualifies it too: the undo is a hard reset, and there is no
  * version of "discard your uncommitted work as a side effect" worth offering.
  */
-export function undoableMerge(root: string, ahead: number, upstream: string | null): boolean {
+// Awaited: reached from branchInfo (/git/tree) on every poll, and its two reads
+// were among the synchronous spawns holding the loop there. The write path
+// (undoMerge) awaits it too.
+export async function undoableMerge(root: string, ahead: number, upstream: string | null): Promise<boolean> {
   // Pushed work is never undone this way. `ahead` is already computed for the
   // header, so this costs nothing for a branch level with its remote.
   //
@@ -1444,9 +1465,9 @@ export function undoableMerge(root: string, ahead: number, upstream: string | nu
   // ahead===0 as "already pushed" got that exactly backwards and refused the
   // one situation where the undo is unambiguously free.
   if (upstream && ahead < 1) return false;
-  const parents = git(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).stdout.trim().split(/\s+/);
+  const parents = (await gitAsync(root, ["rev-list", "--parents", "-n", "1", "HEAD"])).stdout.trim().split(/\s+/);
   if (parents.length < 3) return false; // sha + two parents = a merge
-  return !git(root, ["status", "--porcelain"]).stdout.trim();
+  return !(await gitAsync(root, ["status", "--porcelain"])).stdout.trim();
 }
 
 /** Put the branch back exactly as it stood before its last merge. */
@@ -1456,7 +1477,7 @@ export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
   // Re-checked here, never trusted from the client: this is a hard reset, and
   // these conditions are the only thing making it safe.
   const info = await branchInfo(root);
-  if (!undoableMerge(root, info.ahead, info.upstream)) {
+  if (!await undoableMerge(root, info.ahead, info.upstream)) {
     return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
   }
   return run(root, ["reset", "--hard", "HEAD^1"]);
@@ -2246,11 +2267,11 @@ export function trackRemoteBranch(rootIn: unknown, refIn: unknown, opts: { switc
 
 /** Tags, newest first. `creatordate` rather than `taggerdate` so lightweight
  *  tags — which have no tagger — sort by their commit instead of sorting last. */
-export function tags(rootIn: unknown, limit = 300): GitTag[] {
+export async function tags(rootIn: unknown, limit = 300): Promise<GitTag[]> {
   const root = repoRoot(rootIn);
   if (!root) return [];
   const fmt = `%(refname:short)${US}%(objecttype)${US}%(contents:subject)${US}%(creatordate:relative)${US}%(objectname:short)`;
-  const r = git(root, ["for-each-ref", "--sort=-creatordate", `--count=${Math.max(1, Math.min(1000, limit | 0))}`, "refs/tags", `--format=${fmt}`]);
+  const r = await gitAsync(root, ["for-each-ref", "--sort=-creatordate", `--count=${Math.max(1, Math.min(1000, limit | 0))}`, "refs/tags", `--format=${fmt}`]);
   const out: GitTag[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
