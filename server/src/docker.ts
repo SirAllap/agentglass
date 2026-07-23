@@ -42,7 +42,11 @@ async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
 async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
   const owner = currentLabel();
   try {
-    const proc = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
+    // Spawn the exact binary dockerBin() vouched for, not a bare "docker": bare
+    // spawn resolves against a PATH snapshotted at process start (the same trap
+    // dockerBin() documents), so the two could disagree about which docker is
+    // even being run. Falls back to the bare name only when nothing was resolved.
+    const proc = Bun.spawn([dockerBin() ?? "docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -52,7 +56,14 @@ async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
     // things: the CLI answering "cannot connect to the daemon" is a fact, while
     // a SIGTERM at the deadline says only that we ran out of patience. Callers
     // that cache a verdict need to be able to tell those apart.
-    return { code: code ?? 1, stdout, stderr, killed: proc.killed || !!proc.signalCode };
+    //
+    // `proc.killed` cannot make that distinction: with the `timeout` option set,
+    // Bun reports it true for a process that exited entirely on its own (seen on
+    // 1.3.9), so keying on it marks every refusal "inconclusive" and a dead
+    // daemon reads as "still trying" forever. The signal is the honest witness —
+    // a timeout kill lands as SIGTERM (signalCode set, exitCode null); a normal
+    // exit, zero or not, has no signal.
+    return { code: code ?? 1, stdout, stderr, killed: proc.signalCode != null };
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e) };
   }
@@ -100,6 +111,12 @@ const VERSION_RETRY_MS = 15_000;
  *  timed out proves nothing, and the panel should not spend fifteen seconds
  *  telling the user their daemon is down on the strength of it. */
 const VERSION_UNSURE_RETRY_MS = 2_000;
+/** How long a *success* is trusted before we re-confirm the daemon is still
+ *  there. The version does not change under a running server, but the server
+ *  can stop — so a cached success is a liveness claim with a shelf life, not a
+ *  fact for the whole session. Re-probing past this window is what lets a daemon
+ *  that died mid-session surface as down instead of a phantom empty daemon. */
+const VERSION_OK_TTL_MS = 15_000;
 let versionInflight: Promise<DaemonProbe> | null = null;
 /** Whether the last failure was the CLI answering, or us giving up on it. */
 let lastProbeInconclusive = false;
@@ -135,17 +152,27 @@ interface DaemonProbe {
  *     was running the whole time.
  */
 async function probeDaemon(): Promise<DaemonProbe> {
-  if (cachedVersion) return { version: cachedVersion, inconclusive: false };
+  // A cached success is trusted for a liveness window, not forever. Within it we
+  // answer from cache and spend no process; past it we re-probe, because the
+  // daemon may have stopped since — the one case the old "cache for good" branch
+  // could never report.
+  if (cachedVersion && Date.now() - versionCheckedAt < VERSION_OK_TTL_MS) {
+    return { version: cachedVersion, inconclusive: false };
+  }
   // No CLI to ask: spawning would throw ENOENT and burn a pool slot on every
   // poll, and its caught stderr is what used to masquerade as the daemon saying
   // "no". A missing binary is a *conclusive* no-daemon we know without asking —
   // returning it here is what lets overview() say "not installed" instead of
   // blaming a daemon that was never contacted.
-  if (!dockerBin()) return { version: null, inconclusive: false };
+  if (!dockerBin()) { cachedVersion = null; return { version: null, inconclusive: false }; }
   if (versionInflight) return versionInflight;
-  const wait = lastProbeInconclusive ? VERSION_UNSURE_RETRY_MS : VERSION_RETRY_MS;
-  if (versionCheckedAt && Date.now() - versionCheckedAt < wait) {
-    return { version: null, inconclusive: lastProbeInconclusive };
+  // Failure-retry cadence only applies when we have no trusted version to serve:
+  // with a (now expired) cached version we always want the confirming re-probe.
+  if (!cachedVersion) {
+    const wait = lastProbeInconclusive ? VERSION_UNSURE_RETRY_MS : VERSION_RETRY_MS;
+    if (versionCheckedAt && Date.now() - versionCheckedAt < wait) {
+      return { version: null, inconclusive: lastProbeInconclusive };
+    }
   }
   versionInflight = (async () => {
     try {
@@ -163,10 +190,14 @@ async function probeDaemon(): Promise<DaemonProbe> {
         lastProbeInconclusive = !cachedVersion; // exit 0 with no version is not an answer either
         return { version: cachedVersion, inconclusive: lastProbeInconclusive };
       }
-      // Killed at the deadline, or dead with nothing to say — either way the
-      // daemon has not told us anything.
+      // The probe failed. A timeout (killed) or an empty stderr tells us nothing,
+      // so a version we already trusted is kept and the daemon stays "up" — a
+      // busy daemon must not flap to "down" on one slow probe. But a conclusive
+      // failure (the CLI answered with an error) means the daemon is genuinely
+      // gone, so we drop the stale version and report it down.
       lastProbeInconclusive = !!r.killed || !r.stderr.trim();
-      return { version: null, inconclusive: lastProbeInconclusive };
+      if (!lastProbeInconclusive) cachedVersion = null;
+      return { version: cachedVersion, inconclusive: !cachedVersion && lastProbeInconclusive };
     } finally {
       versionInflight = null;
     }
@@ -218,6 +249,12 @@ export function __resetDockerCapForTest(): void {
   versionCheckedAt = 0;
   lastProbeInconclusive = false;
   versionInflight = null;
+}
+
+/** Test seam: pretend the liveness window elapsed, keeping any cached version so
+ *  a test can drive the re-probe (and its cache-clearing) without a real wait. */
+export function __expireDockerVersionForTest(): void {
+  versionCheckedAt = 0;
 }
 
 // Every field is named explicitly instead of using `{{json .}}`, which looks
