@@ -2149,6 +2149,12 @@ export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean):
   const g = guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
   if (abs === root) return { ok: false, error: "can't remove the current worktree" };
+  // Must be a worktree git reports for THIS root — the same check its siblings
+  // (worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership) all make. Without
+  // it, a linked worktree of a *different* repo makes `git worktree remove` fail
+  // and the restoreRegistration fallback below fabricates a phantom registration
+  // inside this repo's .git, corrupting its metadata.
+  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
 
   // Refuse rather than start something that cannot finish. Git deletes the
   // registration before the files, so "try it and see" is not free: the failure
