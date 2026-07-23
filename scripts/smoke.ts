@@ -217,6 +217,17 @@ async function main() {
   let chrome: Awaited<ReturnType<typeof launchChrome>> | undefined;
   let cdp: Cdp | undefined;
 
+  // SIGTERM/SIGINT skip the finally below, so an interrupted smoke would leave
+  // the headless Chrome it spawned orphaned (the static server is in-process,
+  // but Chrome is a real subprocess). Wire the same teardown to those signals.
+  for (const s of ["SIGINT", "SIGTERM"] as const) {
+    process.on(s, () => {
+      try { chrome?.proc.kill(); } catch { /* already gone */ }
+      try { server.stop(true); } catch { /* already down */ }
+      process.exit(1);
+    });
+  }
+
   try {
     chrome = await launchChrome(process.argv.includes("--headful"));
     cdp = await Cdp.connect(chrome.wsUrl);
