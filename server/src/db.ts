@@ -159,6 +159,54 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd ON events(cwd_path)");
 // index, and the covering scan it enables is what the other two already had.
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_model ON events(model_name)");
 
+// Covering indexes for /stats — the endpoint that freezes the terminal.
+//
+// statsSummary() runs six aggregations over a time window, and every one of
+// them used to land on the `events` table itself: the single-column indexes it
+// had (idx_events_ts / _model / _source / _type) satisfy the WHERE or the
+// GROUP BY, but not the columns being SUMmed, so SQLite seeks each matching
+// rowid back into the table to read them. That table is the problem — its rows
+// carry a `payload` TEXT up to 68 KB (a full prompt, a file's contents, command
+// output), so a "scan and sum a few integers" is really a walk over 190 MB of
+// pages that are 98% payload the query never looks at. Warm it is tens of ms;
+// with those historical pages evicted (nothing else keeps eight-day-old rows
+// hot) each probe is a disk seek, and the six of them together are the 2–4 s
+// `/stats` stalls the loop watchdog caught — on the one thread that also pumps
+// the PTY WebSocket, so the terminal stops echoing for the duration.
+//
+// Worse, the GROUP BY queries drove off idx_events_{model,source,type}, which
+// carry no timestamp, so they scanned *every* row and probed the table to
+// re-check the window — the default 1 h view paid a full 50 k-row table walk
+// three times over, five-second poll after five-second poll.
+//
+// The columns each aggregation reads are few and small, so fold them into the
+// index and the query never touches the table at all — SQLite answers straight
+// from index leaves (EXPLAIN: "USING COVERING INDEX"). Leading with the GROUP
+// BY / range column keeps the grouping and the `timestamp >= ?` cutoff working
+// off the same b-tree. Measured on the 50 k-row production copy: the whole
+// /stats dropped 69 ms → 3.7 ms at 1 h and 125 ms → 35 ms at "all" *warm*, and
+// far more cold, because a covering scan reads a few MB of compact index rather
+// than seeking all over a 190 MB table. The indexes reused free pages left by
+// retention pruning (net file growth ~0), and a fatter write path costs about
+// 1 µs per inserted event — nothing next to the read it saves.
+//
+// One index per grouping, because the leading column has to match the GROUP BY
+// for the scan to stay ordered *and* covering; a single timestamp-leading index
+// covers the columns but the planner won't take it for a GROUP BY (it would owe
+// a sort), so it falls back to the table probe. Kept alongside the narrow
+// indexes, which still win the plain `col = ?` point lookups elsewhere.
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_stats ON events(
+  timestamp, hook_event_type, is_error, session_id,
+  input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd)`); // totals + timeline
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_model_cov ON events(
+  model_name, timestamp, session_id,
+  input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd)`); // by_model
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_app_cov ON events(
+  source_app, timestamp, session_id, hook_event_type,
+  cost_usd, input_tokens, output_tokens)`); // by_app (hook_event_type for the tool_calls CASE)
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_type_cov ON events(
+  hook_event_type, timestamp, tool_name, duration_ms, is_error)`); // by_type + tool-latency durations
+
 // Sessions have no payload of their own, so these are real columns, written at
 // upsert and backfilled from the session's events for rows that predate them.
 //
@@ -783,10 +831,45 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
+/**
+ * Short-TTL memo for /stats, on top of the covering-index fix above.
+ *
+ * The dashboard polls /stats on a timer (every 4 s for the live 1 h view) and
+ * usually from more than one surface at once — the desktop app and a browser
+ * tab, a StrictMode double-mount, a modal opened over the header — so the same
+ * (window, provider, project) summary gets asked for several times inside a
+ * second. The indexes made one computation cheap; this stops the loop from
+ * doing three or four identical ones back to back, which matters precisely
+ * because that loop also drives the PTY. A one-second life keeps it live: the
+ * numbers are a rolling summary the eye reads for shape, not a counter anyone
+ * watches tick, and the poll cadence is slower than the TTL anyway. Same idea
+ * as filterCache above, keyed the same way (scope in the key, so switching
+ * project can never serve another project's totals).
+ *
+ * Deliberately not applied to /gate/pending: that queue is what a human is
+ * waiting on to approve a tool call, and a held-back gate is worse than a slow
+ * one — it already answers from memory, not the DB, so it needs no cache.
+ */
+const STATS_TTL_MS = 1000;
+const statsCache = new Map<string, { at: number; data: StatsSummary }>();
+
 /** Full analytics summary over a rolling window (default 24h), optionally scoped
  *  to a single provider (Anthropic / OpenAI / Google / …). Always scoped to the
  *  open project, so spend, tool mix and the radar describe that project alone. */
 export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): StatsSummary {
+  const key = `${windowMs}|${provider ?? ""}|${workspaceRoot() ?? ""}`;
+  const hit = statsCache.get(key);
+  if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
+  const data = computeStatsSummary(windowMs, provider);
+  // One entry per (window, provider, scope). The window set is fixed and small
+  // (the header's chips) and scope rarely changes, so this never grows unbounded
+  // in practice; prune stale entries anyway so a long-lived server can't leak.
+  statsCache.set(key, { at: Date.now(), data });
+  if (statsCache.size > 64) for (const [k, v] of statsCache) if (Date.now() - v.at >= STATS_TTL_MS) statsCache.delete(k);
+  return data;
+}
+
+function computeStatsSummary(windowMs: number, provider?: string): StatsSummary {
   const since = Date.now() - windowMs;
   const { clause: prov, args: pa } = providerScope(provider);
   const { clause: sc, args: sa } = scopeClause();
