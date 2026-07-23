@@ -6,6 +6,7 @@
 // running job — reopening reattaches to the live session, scrollback intact.
 import { Fragment, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { keepTermFocus } from "../lib/keepFocus.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -551,7 +552,15 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement>(null);
-  useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); });
+  /** Put the cursor back in the console after a menu that had to borrow the
+   *  focus (the repo filter, the commands filter) closes again. Deferred a
+   *  frame so it lands after the menu's own input has finished unmounting —
+   *  otherwise the browser moves focus to <body> right after we set it. */
+  const focusConsole = useCallback(() => {
+    const s = sessions.get(sid);
+    if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
+  }, [sid]);
+  useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); focusConsole(); });
   // On demand: the Docker panel mounts this strip on every open, and most opens
   // never touch the picker.
   useEffect(() => {
@@ -562,6 +571,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     setPicked(next);
     try { localStorage.setItem(CONSOLE_ROOT_KEY, next); } catch { /* private mode — lasts the session */ }
     setRepoOpen(false); setRepoQuery("");
+    focusConsole();
   };
   const runHere = useCallback((cmd: string) => {
     const s = sessions.get(sid);
@@ -649,7 +659,10 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
             the one the terminal view happens to be sitting in — so it picks its
             own, and remembers it. */}
         <div className="relative shrink-0" ref={pickerRef} onMouseDown={(e) => e.stopPropagation()}>
-          <button onClick={() => setRepoOpen((o) => !o)} disabled={IS_DEMO}
+          {/* keepTermFocus so opening the picker does not blur the console; the
+              filter input inside autofocuses on its own, and closing hands the
+              cursor back (see chooseRepo / the useDismiss above). */}
+          <button onMouseDown={keepTermFocus} onClick={() => setRepoOpen((o) => !o)} disabled={IS_DEMO}
             className="flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-md max-w-[200px]"
             style={{ background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
             title={root || "no repo"}>
@@ -687,7 +700,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
             component, so the two shells cannot drift apart again. Opens upward:
             there is nothing below this strip to open into. */}
         <div className="flex items-center gap-2 min-w-0" onMouseDown={(e) => e.stopPropagation()}>
-          <CommandBar root={root} disabled={!sid} font={TERM_FONT} onRun={runHere} dropUp />
+          <CommandBar root={root} disabled={!sid} font={TERM_FONT} onRun={runHere} onClose={focusConsole} dropUp />
         </div>
 
         <span className="ml-auto text-[9px] t-dim2 shrink-0">drag to resize</span>
@@ -713,8 +726,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
 
-  useDismiss(repoOpen, pickersRef, () => setRepoOpen(false));
-
   useEffect(() => {
     if (!open) return;
     api.gitRepos().then(({ repos }) => {
@@ -739,6 +750,20 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [paneIds, setPaneIds] = useState<string[]>([]);
   const [focusIdx, setFocusIdx] = useState(0);
   const paneRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  /** Put the cursor back in the pane you were in. Called when a menu that had
+   *  to borrow the focus for its own input — the repo filter, the commands
+   *  filter, a window rename — closes again: the terminal is where typing
+   *  should resume. Deferred a frame so it lands after the menu's input has
+   *  unmounted, or the browser moves focus to <body> straight after we set it. */
+  const focusTerm = useCallback(() => {
+    const s = sessions.get(paneIds[focusIdx] ?? "");
+    if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
+  }, [paneIds, focusIdx]);
+  // The repo picker's filter takes focus off the shell while it is open, so
+  // dismissing it (Escape, an outside click) has to give the shell its cursor
+  // back — see focusTerm.
+  useDismiss(repoOpen, pickersRef, () => { setRepoOpen(false); focusTerm(); });
 
   const tabs = !IS_DEMO && root ? sessionsFor(root) : [];
 
@@ -974,9 +999,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 {/* header: repo picker + command launcher + actions */}
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
                   <span className={viewTitleClass} style={{ color: "var(--text)" }}>Terminal</span>
-                  <div ref={pickersRef} className="flex items-center gap-3">
+                  {/* keepTermFocus on the picker group so pressing the trigger
+                      or a repo row never blurs the shell; the filter input is
+                      excluded by the handler and still takes focus, and every
+                      way out of the menu below hands the cursor back. */}
+                  <div ref={pickersRef} className="flex items-center gap-3" onMouseDown={keepTermFocus}>
                   <div className="relative">
-                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
+                    <button onClick={() => { if (repoOpen) { setRepoOpen(false); focusTerm(); } else setRepoOpen(true); }} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
                       <span className="font-medium">{repoRef ? repoName(repoRef.root) : "pick a repo"}</span><span className="t-dim2">▼</span>
                     </button>
                     {repoOpen && (
@@ -995,7 +1024,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch + " " + r.root).toLowerCase().includes(q); }).map((r) => {
                             const live = sessionsFor(r.root).some((s) => s.status === "live");
                             return (
-                              <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
+                              <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); focusTerm(); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                                 {/* Indented under its project — a shell in a
                                     worktree is a shell in that branch, not in
                                     some unrelated repo that looks similar. */}
@@ -1047,9 +1076,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       mounts, so the two shells offer the same thing. Its own
                       dropdown state lives inside it, which is why it sits
                       outside the pickers group above. */}
-                  <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} />
+                  <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} onClose={focusTerm} />
 
-                  <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                  {/* keepTermFocus so none of these buttons — split, restart,
+                      clear, the status pill — steals the shell's cursor on
+                      press; they act and the terminal keeps the keyboard. */}
+                  <div className="ml-auto flex items-center gap-1.5 shrink-0" onMouseDown={keepTermFocus}>
                     <span onClick={status === "unauthorized" ? reauthPrompt : undefined}
                       className={`flex items-center gap-1.5 text-[10px] t-dim2 mr-1 ${status === "unauthorized" ? "cursor-pointer" : ""}`}
                       title={status === "unauthorized" ? "this server needs an access token — click to enter it" : "shell status"}>
@@ -1061,9 +1093,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   </div>
                 </div>
 
-                {/* shells open in this repo — scrolls, so the count can grow */}
+                {/* shells open in this repo — scrolls, so the count can grow.
+                    keepTermFocus on the strip so switching, closing or adding a
+                    shell by click doesn't blur the terminal underneath. */}
                 {!IS_DEMO && !disabled && !tmuxActive && (
-                  <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
                     {tabs.map((t) => {
                       const shown = paneIds.includes(t.id);
                       const focused = t.id === paneIds[focusIdx];
@@ -1090,7 +1124,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     user's side this is the same control, and which program is
                     behind it should not change how the workspace looks. */}
                 {tmuxActive && tmuxWindows.length > 0 && (
-                  <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                  // keepTermFocus so switching tmux windows by click (and the +,
+                  // kill, hide-bar buttons) never blurs the pane — tmux keeps
+                  // owning the keyboard the instant the tab changes. The rename
+                  // input is excluded by the handler, so it can still be typed
+                  // in; it hands focus back on close (see below).
+                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
                     <span
                       title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
                       className="shrink-0 px-1.5 py-1 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
@@ -1141,11 +1180,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               onClick={(e) => e.stopPropagation()}
                               onBlur={() => setRenaming(null)}
                               onKeyDown={(e) => {
-                                if (e.key === "Escape") { setRenaming(null); return; }
+                                // Escape and Enter close the rename box on
+                                // purpose, so both hand the keyboard back to the
+                                // pane rather than leaving it on the vanishing
+                                // input.
+                                if (e.key === "Escape") { setRenaming(null); focusTerm(); return; }
                                 if (e.key !== "Enter") return;
                                 const name = (e.target as HTMLInputElement).value.trim();
                                 if (name && name !== w.name) tmuxCmd("rename", { window: w.id, name });
                                 setRenaming(null);
+                                focusTerm();
                               }}
                               className="bg-transparent outline-none w-20 text-[10.5px]"
                               style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" }}
