@@ -2478,9 +2478,13 @@ const C_END = /^>>>>>>> ?(.*)$/;
  * shown, whereas patching the original by line number can if anything touched
  * the file in between.
  */
-function splitConflicts(text: string): { segments: (string | ConflictBlock)[]; blocks: ConflictBlock[] } {
+function splitConflicts(text: string): { segments: (string[] | ConflictBlock)[]; blocks: ConflictBlock[] } {
   const lines = text.split("\n");
-  const segments: (string | ConflictBlock)[] = [];
+  // Plain runs are kept as line arrays, not joined strings: an empty run (a
+  // conflict at the very start or end of the file, or two adjacent conflicts)
+  // must contribute zero lines on reassembly. Joining "" with "\n" instead
+  // injected a spurious blank line and silently corrupted the staged file.
+  const segments: (string[] | ConflictBlock)[] = [];
   const blocks: ConflictBlock[] = [];
   let plain: string[] = [];
 
@@ -2522,12 +2526,12 @@ function splitConflicts(text: string): { segments: (string | ConflictBlock)[]; b
       ...(base ? { base } : {}),
       ourLabel: m[1] || "ours", theirLabel: theirLabel || "theirs",
     };
-    segments.push(plain.join("\n"));
+    segments.push(plain);
     plain = [];
     segments.push(block);
     blocks.push(block);
   }
-  segments.push(plain.join("\n"));
+  segments.push(plain);
   return { segments, blocks };
 }
 
@@ -2574,15 +2578,22 @@ export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknow
   }
   if (!blocks.length) return { ok: false, error: "no conflicts left in that file" };
 
-  const out = segments.map((seg) => {
-    if (typeof seg === "string") return seg;
+  // Reassemble by flattening line arrays, not by joining segment strings: the
+  // markers occupied whole lines, so a resolved block simply substitutes its
+  // chosen lines for the marker region. An empty plain run adds no line and so
+  // no newline — which is exactly what a boundary conflict needs.
+  const outLines: string[] = [];
+  for (const seg of segments) {
+    if (Array.isArray(seg)) { outLines.push(...seg); continue; }
     const c = choices[seg.index]!;
-    const lines = c === "ours" ? seg.ours
+    outLines.push(...(
+      c === "ours" ? seg.ours
       : c === "theirs" ? seg.theirs
       : c === "both" ? [...seg.ours, ...seg.theirs]
-      : [...seg.theirs, ...seg.ours];
-    return lines.join("\n");
-  }).join("\n");
+      : [...seg.theirs, ...seg.ours]
+    ));
+  }
+  const out = outLines.join("\n");
 
   try { writeFileSync(abs, out); } catch { return { ok: false, error: "cannot write that file" }; }
   return run(root, ["add", "--", rels[0]!]);
