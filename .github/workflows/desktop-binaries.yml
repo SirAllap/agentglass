@@ -38,6 +38,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags, so `git describe --tags` in build.mjs can name
+          # the release this build descends from. A shallow checkout has no tag
+          # object, which would stamp the installer with an empty baseTag and
+          # leave the About pane unable to say which release it is.
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -72,6 +78,19 @@ jobs:
             p.version = process.argv[1]
             fs.writeFileSync(f, JSON.stringify(p, null, 2) + "\n")
           ' "${GITHUB_REF_NAME#v}"
+
+      # Stamp provenance INTO staging, next to the sidecar CI just compiled, so
+      # the installer carries build-info.json (version/commit/origin/baseTag)
+      # and self-update.sh. Without this the packaged app records no origin, and
+      # updateStatus() blocks with "reinstall from source" — no update badge,
+      # no notification, no way to install a new release. --provenance-only is
+      # deliberate: it must not rebuild the web UI or recompile the sidecar,
+      # which is cross-built for this matrix target and cannot be reproduced on
+      # the runner's own arch. Runs after the version sync so build-info carries
+      # the tag's version, and before packaging so extraResources picks it up.
+      - name: Stamp provenance (build-info.json + self-update.sh)
+        shell: bash
+        run: node electron/build.mjs --provenance-only
 
       # electron-builder packages the app; the web build and staged sidecar come
       # in via extraResources (see electron/package.json "build").
