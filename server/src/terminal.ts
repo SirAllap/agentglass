@@ -20,13 +20,26 @@ import { readdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
-import type { ProjectCommand, TerminalCommands } from "../../shared/types.ts";
+import type { ProjectCommand, TerminalCommands, TerminalDisabledReason } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot } from "./config.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
-export const TERMINAL_ENABLED = process.env.AGENTGLASS_TERMINAL_DISABLED !== "1";
+// The PTY backend is POSIX-only: every strategy below needs a real
+// pseudo-terminal (python3's pty, util-linux `script`) plus setsid job control
+// and SIGWINCH resize, none of which exist on Windows — ConPTY would be a
+// separate integration (issue #98). So Windows is a first-class "off" state at
+// the SAME seam as the env-var kill switch: the panel greys its buttons, the
+// PTY socket is never opened, and the overlay reads the reason off the wire —
+// rather than a shell that opens and then dies on the first spawn. This gate is
+// server-side on purpose: the shell runs here, so process.platform is the host
+// that matters, not the browser's navigator (a Windows laptop can open a
+// dashboard served by a Linux box, and that terminal works fine).
+const IS_WINDOWS = process.platform === "win32";
+export const TERMINAL_DISABLED_REASON: TerminalDisabledReason | null =
+  IS_WINDOWS ? "windows" : process.env.AGENTGLASS_TERMINAL_DISABLED === "1" ? "env" : null;
+export const TERMINAL_ENABLED = TERMINAL_DISABLED_REASON === null;
 
 const HAS_SETSID = !!Bun.which("setsid");
 const PYTHON = Bun.which("python3") || Bun.which("python");
@@ -190,7 +203,12 @@ function fallbackCwd(): string {
 /** WebSocket opened at /terminal/pty — spawn the shell and start pumping. */
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
-  if (!TERMINAL_ENABLED) { ctl(ws, { t: "fatal", error: "terminal is disabled (AGENTGLASS_TERMINAL_DISABLED=1)" }); ws.close(1008, "disabled"); return; }
+  if (!TERMINAL_ENABLED) {
+    const why = TERMINAL_DISABLED_REASON === "windows"
+      ? "terminal is not available on Windows yet (no POSIX PTY backend)"
+      : "terminal is disabled (AGENTGLASS_TERMINAL_DISABLED=1)";
+    ctl(ws, { t: "fatal", error: why }); ws.close(1008, "disabled"); return;
+  }
   // A shell is the widest thing this app hands out, and a terminal that refuses
   // to give you one is not a terminal — so it ALWAYS opens. The requested
   // directory is used only when it is genuinely usable: a real repo, in scope.
@@ -752,11 +770,11 @@ export async function projectCommands(root: unknown): Promise<TerminalCommands> 
   // repoRootOfAsync, not repoRootOf: polled on every scope switch and new
   // terminal, so its `git rev-parse` queues through the shared pool rather than
   // blocking the loop between keystrokes.
-  if (!cwd || !inScope(cwd) || !(await repoRootOfAsync(cwd))) return { enabled: TERMINAL_ENABLED, make: [], scripts: [] };
+  if (!cwd || !inScope(cwd) || !(await repoRootOfAsync(cwd))) return { enabled: TERMINAL_ENABLED, reason: TERMINAL_DISABLED_REASON ?? undefined, make: [], scripts: [] };
   const hit = cmdCache.get(cwd);
   if (hit && Date.now() - hit.at < CMD_CACHE_TTL_MS) return hit.data;
   const dirs = await commandDirsAsync(cwd); // one walk, shared by both lists, yielding between dirs
-  const data: TerminalCommands = { enabled: TERMINAL_ENABLED, make: makeCommands(cwd, dirs), scripts: scriptCommands(cwd, dirs) };
+  const data: TerminalCommands = { enabled: TERMINAL_ENABLED, reason: TERMINAL_DISABLED_REASON ?? undefined, make: makeCommands(cwd, dirs), scripts: scriptCommands(cwd, dirs) };
   if (cmdCache.size > 40) cmdCache.clear();
   cmdCache.set(cwd, { at: Date.now(), data });
   return data;

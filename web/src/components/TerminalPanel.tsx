@@ -1264,7 +1264,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   </div>
                   {(IS_DEMO || disabled) && (
                     <div className="absolute inset-0 flex items-center justify-center text-[12px] t-dim2" style={{ background: "color-mix(in srgb, var(--bg) 80%, transparent)" }}>
-                      {IS_DEMO ? "the terminal is disabled in the demo — run agentglass locally for a real shell" : "terminal disabled (AGENTGLASS_TERMINAL_DISABLED=1)"}
+                      {IS_DEMO
+                        ? "the terminal is disabled in the demo — run agentglass locally for a real shell"
+                        : cmds?.reason === "windows"
+                        ? "the terminal is not available on Windows yet (the PTY backend needs POSIX; ConPTY support is planned)"
+                        : "terminal disabled (AGENTGLASS_TERMINAL_DISABLED=1)"}
                     </div>
                   )}
                 </div>
