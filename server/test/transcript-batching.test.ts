@@ -36,7 +36,7 @@ beforeAll(async () => {
   mkdirSync(CWD, { recursive: true });
 });
 
-const FIXTURES = ["b-many", "b-usage", "b-oversize"];
+const FIXTURES = ["b-many", "b-usage", "b-oversize", "b-drift"];
 afterAll(() => {
   process.env.AGENTGLASS_SCAN_BATCH_LINES = priorBatchLines;
   process.env.AGENTGLASS_SCAN_BATCH_BYTES = priorBatchBytes;
@@ -100,6 +100,31 @@ describe("batched transcript sweep", () => {
     // Unchanged file: no manufacturing on a re-run.
     await sweep();
     expect(prompts(sid).length).toBe(19);
+  });
+
+  test("a newline-less record doesn't drift lines_done and drop the next one", async () => {
+    const sid = "b-drift";
+    // A, then B: a complete record whose terminating newline hasn't landed yet
+    // — a live write caught between the record's bytes and its "\n". Raw writes,
+    // because the helpers always append a newline.
+    writeFileSync(path("drift"), prompt(sid, "A") + "\n" + prompt(sid, "B"));
+    await sweep();
+    expect(prompts(sid)).toEqual(["A", "B"]); // B is taken now, not held forever
+
+    // B's newline lands. This must NOT be counted as a new (empty) line: the
+    // record was already ingested, and drifting lines_done past the true count
+    // is what makes a later cold re-read over-skip.
+    appendFileSync(path("drift"), "\n");
+    await sweep();
+    expect(prompts(sid)).toEqual(["A", "B"]); // no duplicate
+    expect(progress("drift")?.lines_done).toBe(2); // two records, not three
+
+    // A restart drops the byte offsets but keeps lines_done. A new record C then
+    // arrives; with a drifted lines_done the from-zero re-read would skip it.
+    scan.__dropTailCache();
+    appendFileSync(path("drift"), prompt(sid, "C") + "\n");
+    await sweep();
+    expect(prompts(sid)).toEqual(["A", "B", "C"]); // C must survive
   });
 
   test("one reply's usage survives the batch boundary and is not double counted", async () => {

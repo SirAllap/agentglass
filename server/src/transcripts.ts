@@ -465,6 +465,12 @@ interface Tail {
   bytes: number;
   /** Complete lines processed — must stay equal to transcript_files.lines_done. */
   lines: number;
+  /** Whether `bytes` sits right after a newline. False when the last record was
+   *  taken before its terminating newline landed (a live write caught mid-write,
+   *  accepted by the restIsWholeRecord branch): the newline is then the head of
+   *  the next chunk and must be consumed as that record's terminator, not split
+   *  into a phantom empty line that drifts `lines` past the true record count. */
+  endedWithNewline: boolean;
   toolCalls: Map<string, { name: string; input: unknown }>;
   seenUsage: Set<string>;
   customTitle: string | null;
@@ -527,9 +533,24 @@ async function ingestFile(
   const tail = cached && cached.lines === from && cached.bytes <= file.size ? cached : undefined;
   if (!tail) tails.delete(path);
 
-  const baseByte = tail?.bytes ?? 0;
+  let baseByte = tail?.bytes ?? 0;
   const baseLine = tail?.lines ?? 0;
-  const chunk = tail ? await file.slice(baseByte).text() : await file.text();
+  let chunk = tail ? await file.slice(baseByte).text() : await file.text();
+
+  // The previous sweep committed a record whose terminating newline hadn't
+  // landed yet (a live write caught between the record's bytes and its "\n",
+  // taken by the restIsWholeRecord branch below), so it left the byte offset
+  // just before that newline. The newline is now the head of this chunk:
+  // consume it as the record's terminator here. Splitting it into a line
+  // instead would add a phantom empty record, drift lines_done one past the
+  // true count, and make a later cold re-read over-skip — dropping the newest
+  // records for good.
+  let strippedNewline = false;
+  if (tail && !tail.endedWithNewline && chunk.startsWith("\n")) {
+    chunk = chunk.slice(1);
+    baseByte += 1;
+    strippedNewline = true;
+  }
 
   // Cut at the last newline. An active session is appended record by record and
   // a sweep lands mid-write often enough to matter: parsing the half-flushed
@@ -643,9 +664,17 @@ async function ingestFile(
 
   // The tail row we hand the next sweep, updated to match each committed batch.
   const saveTail = (bytes: number, doneLines: number): void => {
+    // At a newline boundary unless we stopped on the file's newline-less final
+    // line. When no line was processed this sweep, the offset either advanced by
+    // exactly the newline we stripped (now at a boundary) or did not move at all
+    // (carry the prior tail's answer forward).
+    const endedWithNewline = lines.length === 0
+      ? (strippedNewline || (tail?.endedWithNewline ?? true))
+      : (i >= lines.length ? endsWithNewline : true);
     tails.set(path, {
       bytes,
       lines: doneLines,
+      endedWithNewline,
       toolCalls,
       seenUsage,
       customTitle,
