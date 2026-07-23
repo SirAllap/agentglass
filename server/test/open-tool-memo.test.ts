@@ -37,6 +37,10 @@ const base = {
 // Pre and Post share a tool_use_id so the Post pairs (closes) the Pre.
 const pre = (session: string) => ({ ...base, session_id: session, hook_event_type: "PreToolUse", tool_use_id: session + "-t", timestamp: Date.now() });
 const post = (session: string) => ({ ...base, session_id: session, hook_event_type: "PostToolUse", tool_use_id: session + "-t", timestamp: Date.now() });
+// The legacy path: no tool_use_id, so a Post closes a Pre by session + tool +
+// a later timestamp instead. Guards the split-OR rewrite of openToolSql.
+const preNoId = (session: string, at: number) => ({ ...base, session_id: session, hook_event_type: "PreToolUse", tool_name: "Bash", tool_use_id: null, timestamp: at });
+const postNoId = (session: string, at: number) => ({ ...base, session_id: session, hook_event_type: "PostToolUse", tool_name: "Bash", tool_use_id: null, timestamp: at });
 
 beforeAll(async () => {
   db = await import("../src/db.ts");
@@ -65,6 +69,29 @@ describe("open-tool memo", () => {
     const a = db.openToolCalls();
     db.invalidateOpenTools();
     expect(db.openToolCalls()).not.toBe(a);
+  });
+});
+
+describe("open-tool pairing without a tool_use_id (legacy path)", () => {
+  test("a Post closes a Pre by session + tool + a later timestamp", () => {
+    const s = "s-legacy";
+    const t0 = Date.now();
+    db.insertEvent(preNoId(s, t0) as any);
+    db.invalidateOpenTools();
+    expect(db.openToolCalls().some((c) => c.session_id === s)).toBe(true); // open
+
+    db.insertEvent(postNoId(s, t0 + 1000) as any); // same session+tool, later → closes it
+    db.invalidateOpenTools();
+    expect(db.openToolCalls().some((c) => c.session_id === s)).toBe(false); // closed
+  });
+
+  test("a Post for a DIFFERENT tool does not close it", () => {
+    const s = "s-legacy-2";
+    const t0 = Date.now();
+    db.insertEvent(preNoId(s, t0) as any); // tool_name Bash
+    db.insertEvent({ ...postNoId(s, t0 + 1000), tool_name: "Read" } as any); // different tool
+    db.invalidateOpenTools();
+    expect(db.openToolCalls().some((c) => c.session_id === s)).toBe(true); // still open
   });
 });
 
