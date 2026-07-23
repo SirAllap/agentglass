@@ -6,8 +6,7 @@
 
 import { resolve, basename, relative, dirname, sep, join } from "node:path";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
+import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import { entered, backoff } from "./loopwatch.ts";
@@ -303,66 +302,17 @@ function reposUnder(baseDir: string, depth = REPO_SCAN_DEPTH): string[] {
   return out;
 }
 
-/**
- * The directories a user keeps code in, inferred from where their projects
- * already live.
- *
- * Only the parent of a known project counts, and only when it's specific
- * enough to be somebody's code folder: sweeping `/`, `/home` or `/mnt` would
- * walk other users and whole mounted disks for no benefit. A project sitting
- * directly in one of those (a home directory that is itself a repo) still gets
- * listed on its own — it just doesn't drag its neighbours in.
- */
-/**
- * Where code tends to live, for an install that has nothing else to go on.
- *
- * Every other source of roots describes a machine that has already been used:
- * the cwd the app was launched from (a shortcut, so not a repo), projects the
- * transcript scan found (no sessions yet), the parents of those projects, repos
- * seen in telemetry (no events yet), and configured directories (unset). On a
- * fresh install all five are empty, so the picker offered "Whole machine" and
- * nothing else — which reads as discovery being broken, when it is discovery
- * working exactly as written.
- *
- * The list is short and conventional on purpose. This is a guess, and a guess
- * that walks somewhere surprising is worse than no guess at all: each of these
- * is a directory whose name says "my code is in here", and one `readdir` is the
- * whole cost of trying. Anything more exotic is what `repoDirs` is for, which
- * the empty state now names.
- */
-const CODE_HOMES = ["code", "src", "projects", "dev", "repos", "workspace", "Developer", "Documents/GitHub"];
+// firstRunRoots() and codeRootsOf() lived here: a conventional-homes guess
+// (~/code, ~/src, …) and the parents-of-known-projects inference that together
+// drove the speculative filesystem walk. Both are gone — discoverRepos no longer
+// crawls the disk on the whole-machine path, so there is nothing for them to
+// feed. See the note in discoverRepos for what replaced them (telemetry +
+// configured dirs + own repo) and why.
 
-export function firstRunRoots(): string[] {
-  // `$HOME` first, `homedir()` behind it. On POSIX the variable is the user's
-  // own statement about where their home is, and honouring it is also what
-  // makes this testable against a fixture rather than against the machine the
-  // test happens to run on.
-  const home = process.env.HOME || homedir();
-  const out: string[] = [];
-  for (const name of CODE_HOMES) {
-    const dir = resolve(home, name);
-    try { if (statSync(dir).isDirectory()) out.push(dir); } catch { /* not on this machine */ }
-  }
-  return out;
-}
-
-function codeRootsOf(knownRoots: string[]): string[] {
-  const TOO_BROAD = new Set(["/", "/home", "/mnt", "/media", "/run", "/usr", "/opt", "/var", "/tmp", "/etc", "/srv"]);
-  const out = new Set<string>();
-  for (const r of knownRoots) {
-    const abs = safeAbs(r);
-    if (!abs) continue;
-    const parent = dirname(abs);
-    if (TOO_BROAD.has(parent) || parent === abs) continue;
-    out.add(parent);
-  }
-  return [...out];
-}
-
-/** Repos agentglass offers in the panel: the server's own repo, its sibling
- *  repos (e.g. everything under ~/code), every project the transcript scan
- *  found, any repo seen in recent telemetry, and env-configured extras
- *  (AGENTGLASS_REPOS=path1:path2, AGENTGLASS_REPO_DIRS=dir1:dir2).
+/** Repos agentglass offers in the panel: the server's own repo, every project
+ *  the transcript scan found, any repo seen in recent telemetry, and
+ *  env-configured extras (AGENTGLASS_REPOS=path1:path2,
+ *  AGENTGLASS_REPO_DIRS=dir1:dir2). No blind directory sweep — see discoverRepos.
  *
  *  `knownRoots` are already-resolved project roots, so they're added directly.
  *  They matter because the panel would otherwise only reach repos that sit next
@@ -477,8 +427,15 @@ function touchedAt(root: string, tipMs: number): number {
  * working tree has its own 2.5s poll through `/git/tree`, and a dot beside a
  * checkout you are not looking at can be a few seconds old. Every write still
  * clears this immediately, so anything you do shows up at once.
+ *
+ * Read per call, not fixed at import, for the reason spawnpool's limit() gives:
+ * a module constant is decided by whichever file imports this first, which in a
+ * test run is never the file doing the overriding. The load harness leans on it
+ * to shrink the window so the pathological shape — a sweep that outlasts its own
+ * TTL, which is what pins a whole-machine install at 99.9% — reproduces in
+ * seconds instead of needing a filesystem large enough to walk for fifteen.
  */
-const REPO_CACHE_MS = 15_000;
+const repoCacheMs = () => Number(process.env.AGENTGLASS_REPO_CACHE_MS ?? 15_000);
 // A small map rather than one slot: the scoped panels and the machine-wide
 // project picker ask with different keys, and alternating between them must
 // not evict each other's still-fresh answer (each miss re-runs a directory
@@ -505,7 +462,7 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // Held longer while a shell is in use or the loop is stalling: this sweep is
   // eighteen `git status` calls on a worktree-heavy repo, and none of them is
   // worth a late keystroke. See backoff().
-  if (hit && Date.now() - hit.at < REPO_CACHE_MS * backoff()) return hit.repos;
+  if (hit && Date.now() - hit.at < repoCacheMs() * backoff()) return hit.repos;
   if (repoCache.size > 8) repoCache.clear(); // scope churn — don't hoard stale lists
   const roots = new Set<string>();
 
@@ -550,40 +507,62 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     return scoped;
   }
 
-  // Naming directories has to mean *only* these. The other sources below —
-  // agentglass's own neighbours, projects with history, repos seen in
-  // telemetry — are how an unconfigured install finds anything at all, but
-  // left additive they quietly put back everything the setting was meant to
-  // exclude. So they still run (a configured directory is about scope, not
-  // about disabling discovery within it) and the result is filtered at the
-  // end.
-  const only = configuredRepoDirs();
-  const selfRoot = repoRootOf(process.cwd());
-  if (selfRoot) { roots.add(selfRoot); for (const r of reposUnder(dirname(selfRoot))) roots.add(r); }
-  for (const r of knownRoots) { const a = safeAbs(r); if (a && repoRoot(a)) roots.add(a); }
-  // Where to sweep for repos no agent has touched yet — without this the panel
-  // only offers projects that already have history, which is the wrong way
-  // round for a picker you use to *start* working somewhere.
+  // "Whole machine" does not mean "walk the machine". agentglass discovers
+  // projects from what it already knows — where agents have actually run — not by
+  // speculatively crawling the disk. The old path did the latter: firstRunRoots()
+  // guessed at ~/code, ~/src and six more conventional homes, codeRootsOf() added
+  // the parent directory of every known project, and reposUnder() then recursed
+  // each of those to REPO_SCAN_DEPTH with readdirSync. On an unconfigured
+  // whole-machine install that is a blind sweep of the user's home — pure
+  // JS/native with zero git subprocesses — and on a real ~/code it outran its own
+  // cache and pinned a core at 99.9% while the terminal sharing this one thread
+  // froze. Measured in the load harness (AGX_LOAD_WHOLE_MACHINE=1): the walk was
+  // the loop stall the watchdog named GET /git/repos.
   //
-  // Configured directories win outright: naming them is faster than inferring
-  // them and, more to the point, predictable. Inference is only the fallback
-  // for an unconfigured install, and it can do no better than guess from the
-  // directories that happen to hold existing projects.
-  // Inferred parents first, then the conventional homes — and the homes only
-  // when inference came back with nothing, which is exactly the fresh-install
-  // case. A machine that has been used has better information about itself than
-  // this list does, and adding `~/code` to it would put back projects the user
-  // has never opened here alongside the ones they work in daily.
-  const inferred = codeRootsOf(knownRoots);
-  const bases = only.length ? only : (inferred.length ? inferred : firstRunRoots());
-  for (const base of bases) for (const r of reposUnder(base)) roots.add(r);
-  // env overrides for repos that live elsewhere
-  for (const p of (process.env.AGENTGLASS_REPOS || "").split(":").filter(Boolean)) { const r = repoRootOf(p); if (r) roots.add(r); }
-  // repos seen in recent telemetry — dedupe by parent dir first so this is one
-  // `rev-parse` per unique directory, not one per file path.
+  // So the walk is gone. Each source that remains describes a project the app has
+  // a concrete reason to know about:
+  //
+  //   * telemetry — the project/cwd paths of turns agents have actually run (the
+  //     PRIMARY source; already in hand as `paths`, one indexed query upstream in
+  //     getChanges, ~0 cost here);
+  //   * transcript-scanned project roots (`knownRoots`);
+  //   * directories the user explicitly configured (repoDirs / AGENTGLASS_REPOS);
+  //   * agentglass's own repo.
+  //
+  // A project with none of those — no history, never configured — no longer
+  // appears on its own. That is the deliberate trade: the user names it once with
+  // `repoDirs` and it is back for good, and in exchange the picker reflects the
+  // fleet's activity rather than the filesystem's contents. The empty state names
+  // `repoDirs` precisely so this is discoverable.
+  const only = configuredRepoDirs();
+  // The one place a directory *walk* is still invited — and only because the user
+  // named the directory. `~/code` in repoDirs is an explicit "my repos live
+  // here", which is bounded and predictable in a way that crawling $HOME never
+  // was; a configured directory is about scope, not about disabling discovery
+  // within it, so the result is still filtered to `only` at the end.
+  for (const base of only) for (const r of reposUnder(base)) roots.add(r);
+  // Every git rev-parse below is awaited through the spawn pool, not spawnSync:
+  // on this path they blocked the loop one subprocess at a time — the server's
+  // own repo, each env repo, and each telemetry directory — on the endpoint the
+  // terminal shares a thread with. Resolve them together, off the loop.
+  //
+  //   * agentglass's own repo, and only it — not its neighbours, which was
+  //     another speculative reposUnder(dirname(selfRoot)) sweep;
+  //   * env-configured repos that live elsewhere (AGENTGLASS_REPOS);
+  //   * telemetry directories, deduped by parent dir first so this is one
+  //     rev-parse per directory rather than one per file path.
   const dirs = new Set<string>();
   for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
-  for (const d of dirs) { const r = repoRootOf(d); if (r) roots.add(r); }
+  const resolved = await Promise.all([
+    repoRootOfAsync(process.cwd()),
+    ...(process.env.AGENTGLASS_REPOS || "").split(":").filter(Boolean).map((p) => repoRootOfAsync(p)),
+    ...[...dirs].map((d) => repoRootOfAsync(d)),
+  ]);
+  for (const r of resolved) if (r) roots.add(r);
+  // Transcript-scanned roots are already resolved project tops; add them straight
+  // in and let repoRef below drop any that is no longer a repo. The old per-root
+  // repoRoot() re-validation here was one more synchronous spawn apiece.
+  for (const r of knownRoots) { const a = safeAbs(r); if (a) roots.add(a); }
   // Fold linked worktrees into the project they belong to — for the PICKER only.
   //
   // A user working the way worktrees are meant to be used has a dozen sibling
