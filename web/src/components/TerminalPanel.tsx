@@ -837,6 +837,22 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // were dragging and cycles focus mid-keystroke.
   }, [open, paneIds, focusIdx]);
 
+  // Return the keyboard focus to the shell when the terminal view becomes
+  // visible again — e.g. after clicking the left sidebar to another view and
+  // coming back, or dismissing the app header. The mount effect above
+  // deliberately omits `active` so returning does not detach/reload the
+  // terminal, so it never refocuses on return; this does, and only that. Guard
+  // on the rising edge (hidden → visible) so an already-focused shell is not
+  // re-grabbed on every unrelated re-render.
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current && open) {
+      const s = sessions.get(paneIds[focusIdx] ?? "");
+      if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
+    }
+    wasActive.current = active;
+  }, [active, open, paneIds, focusIdx]);
+
   const sess = sessions.get(paneIds[focusIdx] ?? "");
   // tmux is running in the shell you're looking at, so it owns the tabs and the
   // splits. Ours would be a second set of controls doing the same job worse —
