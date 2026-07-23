@@ -862,8 +862,13 @@ export interface ProjectCommand {
   desc: string; // what it does — from `## comment`, `# comment` above, or the script body
   dir: string;  // repo-relative folder the Makefile/package.json lives in ("" = repo root)
 }
+/** Why the terminal is off, when it is. "env" = the AGENTGLASS_TERMINAL_DISABLED
+ *  kill switch; "windows" = no POSIX PTY backend on this host. Lets the panel
+ *  print the server's actual answer instead of guessing from the browser. */
+export type TerminalDisabledReason = "env" | "windows";
 export interface TerminalCommands {
-  enabled: boolean; // AGENTGLASS_TERMINAL_DISABLED gate
+  enabled: boolean; // false when the shell backend is unavailable
+  reason?: TerminalDisabledReason; // set only when enabled is false — why it's off
   make: ProjectCommand[];    // Makefile targets, with descriptions
   scripts: ProjectCommand[]; // package.json scripts, runner-aware
 }
