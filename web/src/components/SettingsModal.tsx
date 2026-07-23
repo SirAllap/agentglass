@@ -318,6 +318,13 @@ function AboutPane({ open }: { open: boolean }) {
               ))}
             </div>
             {err && <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>}
+            {/* The install compiles the release on this machine, so the
+                toolchain has to be here before it starts — said up front
+                rather than left to fail the build and report it in the panel
+                above, after the app has already gone down to restart. */}
+            <div className="text-[10.5px] px-2.5 py-1.5 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+              Built on your machine from source — needs <span style={{ color: "var(--warning)" }}>git</span> and <span style={{ color: "var(--warning)" }}>bun</span> installed, and is Linux-only for now.
+            </div>
             <div className="flex items-center gap-2">
               <button onClick={run} disabled={busy}
                 className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
@@ -334,7 +341,7 @@ function AboutPane({ open }: { open: boolean }) {
               </button>
             </div>
             <span className="text-[9.5px] t-dim2">
-              Builds the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.
+              Compiles the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.
             </span>
           </>
         )}
