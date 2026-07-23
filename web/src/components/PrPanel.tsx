@@ -113,20 +113,24 @@ function Avatar({ login, size = 18 }: { login: string; size?: number }) {
   );
 }
 
-function Btn({ children, onClick, disabled, danger, primary, ok, title, small }: {
+function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;
-  danger?: boolean; primary?: boolean; ok?: boolean; title?: string; small?: boolean;
+  danger?: boolean; primary?: boolean; ok?: boolean; warn?: boolean; title?: string; small?: boolean;
 }) {
-  const edge = danger ? "var(--error)" : ok ? "var(--success)" : primary ? "var(--primary)" : "var(--border)";
+  // `warn` is the amber "this mutates the branch" accent, matching the Source
+  // Control bar's sync/behind colour (--warning). Used for update-branch, which
+  // merges the base into this branch — a consequential action that should not
+  // read the same as its plain neighbours.
+  const edge = danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : primary ? "var(--primary)" : "var(--border)";
   return (
     <button onClick={onClick} disabled={disabled} title={title}
       className={`rounded disabled:opacity-40 ${small ? "text-[10px] px-2 py-0.5" : "text-[10.5px] px-2.5 py-1"}`}
       style={{
-        color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : "var(--text2)",
-        background: primary ? "var(--primary)" : "transparent",
-        border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : 50}%, transparent)`,
+        color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : "var(--text2)",
+        background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
+        border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : warn ? 55 : 50}%, transparent)`,
         cursor: disabled ? "not-allowed" : "pointer",
-        fontWeight: primary ? 500 : 400,
+        fontWeight: primary || warn ? 500 : 400,
       }}>{children}</button>
   );
 }
@@ -941,7 +945,7 @@ function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpd
           style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
           <Btn onClick={onMerge} disabled={busy || !canMerge} primary title={canMerge ? "squash, merge and delete the branch" : MERGE_WHY[d.mergeState]}>squash &amp; merge</Btn>
           <Btn onClick={onAutoMerge} disabled={busy} title="merge automatically once everything passes">merge when green</Btn>
-          <Btn onClick={onUpdateBranch} disabled={busy} title="merge the base branch into this one">update branch</Btn>
+          <Btn onClick={onUpdateBranch} disabled={busy} warn title="merge the base branch into this one — this updates the branch on GitHub">↻ update branch</Btn>
           {c.failure > 0 && <Btn onClick={onRerun} disabled={busy}>re-run failed</Btn>}
           <span className="ml-auto flex gap-1.5">
             <Btn onClick={onDraft} disabled={busy} small>{d.isDraft ? "mark ready" : "to draft"}</Btn>
