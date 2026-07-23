@@ -148,6 +148,12 @@ const sessions = new Map<string, Sess>();
 let seq = 0;
 /** Shells for one repo, in creation order. */
 const sessionsFor = (root: string) => [...sessions.values()].filter((s) => s.root === root).sort((a, b) => a.createdAt - b.createdAt);
+/** Shells the Terminal *view* owns: every one for a repo except the shell tagged
+ *  for the docked console strip. That shell's xterm holder lives in the strip;
+ *  a single holder can only be in one slot, so listing it here too would have the
+ *  view mount it as a tab/pane and steal it — the console going blank the moment
+ *  you open the terminal. The console strip keeps using sessionsFor to find it. */
+const termSessionsFor = (root: string) => sessionsFor(root).filter((s) => s.title !== CONSOLE_TITLE);
 const notify = (s: Sess) => { s.subs.forEach((fn) => fn()); rosterChanged(); };
 
 // --- roster: "is any shell alive?", for the workspace rail ---------------------
@@ -765,13 +771,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // back — see focusTerm.
   useDismiss(repoOpen, pickersRef, () => { setRepoOpen(false); focusTerm(); });
 
-  const tabs = !IS_DEMO && root ? sessionsFor(root) : [];
+  const tabs = !IS_DEMO && root ? termSessionsFor(root) : [];
 
   // Every repo opens with a shell, and the panes always name shells that still
   // exist — closing one must not leave an empty frame behind.
   useEffect(() => {
     if (!open || !root || IS_DEMO) return;
-    const live = sessionsFor(root);
+    const live = termSessionsFor(root);
     const first = live[0] ?? createSession(root);
     setPaneIds((prev) => {
       const kept = prev.filter((id) => sessions.get(id)?.root === root);
@@ -927,7 +933,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (!root || IS_DEMO) return;
     setPaneIds((prev) => {
       if (prev.length >= 4) return prev; // beyond four a pane is too small to use
-      const spare = sessionsFor(root).find((s) => !prev.includes(s.id)) ?? createSession(root);
+      const spare = termSessionsFor(root).find((s) => !prev.includes(s.id)) ?? createSession(root);
       return [...prev, spare.id];
     });
   }, [root]);
@@ -942,7 +948,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     setPaneIds((prev) => {
       const kept = prev.filter((x) => x !== id);
       if (kept.length) return kept;
-      const next = sessionsFor(r)[0] ?? createSession(r);
+      const next = termSessionsFor(r)[0] ?? createSession(r);
       return [next.id];
     });
     setFocusIdx(0);

@@ -348,8 +348,11 @@ const realApi = {
   prDiff: (root: string, number: number) =>
     get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}`),
   /** Images in a PR body go through the server, which attaches the gh token —
-   *  GitHub's own attachment URLs 404 without it. */
-  prAssetUrl: (raw: string) => `${SERVER}/prs/asset?url=${encodeURIComponent(raw)}`,
+   *  GitHub's own attachment URLs 404 without it. This is an `<img src>`, a
+   *  navigation the browser can't put an auth header on, so the shared secret
+   *  rides as ?token= (see withToken) — omit it and every avatar 401s when a
+   *  token is configured. */
+  prAssetUrl: (raw: string) => withToken(`${SERVER}/prs/asset?url=${encodeURIComponent(raw)}`),
   prReview: (root: string, number: number, verb: "approve" | "request_changes" | "comment", body: string) =>
     post<PrActionResult>("/prs/review", { root, number, verb, body }),
   /** A verdict plus every line comment queued while reading the diff, in one

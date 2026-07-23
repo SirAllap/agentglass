@@ -583,6 +583,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [walkLoading, setWalkLoading] = useState(false);
   const walkReqSig = useRef<string | null>(null);
   const treeSeq = useRef(0); // guards stale working-tree responses (repo switches)
+  const viewSeq = useRef(0); // same, for the non-Changes list views (repo/remote/view switches)
   const frameRef = useRef<HTMLDivElement>(null);
 
   const all = useMemo(() => [...(tree?.staged ?? []), ...(tree?.unstaged ?? [])], [tree]);
@@ -681,9 +682,16 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // empty states need to tell the two apart.
   const loadView = useCallback(() => {
     if (!open || !root) return;
+    // Like treeSeq for the working tree: each run claims a sequence number, and a
+    // reply from a repo/remote/view you have since switched away from is dropped
+    // rather than painted under the current selection. The busyView guard below
+    // owns only the spinner — and keys on `view`, so it cannot tell two answers
+    // for the *same* view apart (a remote switch stays on "remotes"), which is
+    // exactly the stale-write this closes.
+    const seq = ++viewSeq.current;
     const track = <T,>(p: Promise<T>, use: (v: T) => void) => {
       setBusyView(view);
-      p.then(use).catch(() => {}).finally(() => {
+      p.then((v) => { if (seq === viewSeq.current) use(v); }).catch(() => {}).finally(() => {
         // Only clear if this is still the view being looked at: switching tabs
         // mid-flight would otherwise have the old request turn off the new
         // one's spinner.
@@ -698,7 +706,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       // Two answers, because the pane asks two questions: which remotes there
       // are (the picker) and what is on the selected one (the list). Asked
       // together rather than chained, so the list doesn't wait on the picker.
-      api.gitRemotes(root).then((r) => setRemotes(r.remotes)).catch(() => {});
+      api.gitRemotes(root).then((r) => { if (seq === viewSeq.current) setRemotes(r.remotes); }).catch(() => {});
       track(api.gitRemoteBranches(root, remoteSel), (r) => {
         setRemoteRows(r.branches);
         // Which remote the server actually read — how the picker gets its

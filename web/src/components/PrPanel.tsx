@@ -361,6 +361,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
    *  without this the slower reply from the filter you just left overwrites the
    *  one you switched to — the old selection reappearing under the new tab. */
   const listReq = useRef(0);
+  /** Which whole-PR diff / commit diff is current. Same shape as listReq: the
+   *  diff of a pull request (or commit) you have since left can take seconds to
+   *  arrive, and without this its late reply overwrites the one you switched to. */
+  const diffReq = useRef(0);
+  const commitReq = useRef(0);
 
   const flash = useCallback((ok: boolean, msg: string) => {
     setToast({ ok, msg });
@@ -490,7 +495,8 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
   useEffect(() => {
     if ((tab !== "files" && tab !== "review") || !detail || diff || !root) return;
-    api.prDiff(root, detail.number).then((r) => setDiff(r.ok ? (r.text || "") : "")).catch(() => {});
+    const req = ++diffReq.current; // a later selection's diff must win over a slow earlier one
+    api.prDiff(root, detail.number).then((r) => { if (req === diffReq.current) setDiff(r.ok ? (r.text || "") : ""); }).catch(() => {});
   }, [tab, detail, diff, root]);
 
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
@@ -501,12 +507,13 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   }, [parsed]);
 
   const openCommit = useCallback((sha: string) => {
+    const req = ++commitReq.current; // invalidates any in-flight commit diff, whether opening another or closing
     if (!root || !sha) { setSelCommit(null); return; }
     setSelCommit(sha); setCommitText(""); setCommitBusy(true);
     api.prCommitDiff(root, sha)
-      .then((r) => setCommitText(r.ok ? (r.text || "") : ""))
-      .catch(() => setCommitText(""))
-      .finally(() => setCommitBusy(false));
+      .then((r) => { if (req === commitReq.current) setCommitText(r.ok ? (r.text || "") : ""); })
+      .catch(() => { if (req === commitReq.current) setCommitText(""); })
+      .finally(() => { if (req === commitReq.current) setCommitBusy(false); });
   }, [root]);
 
   const commitFiles = useMemo(() => parseUnifiedDiff(commitText).map(toFileChange), [commitText]);
