@@ -270,7 +270,15 @@ export function projectRootOf(anchor: string): string | null {
 // so the rev-parse goes through the pool rather than blocking between keystrokes.
 export async function currentBranch(root: string): Promise<string> {
   const b = (await gitAsync(root, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
-  return !b || b === "HEAD" ? "(detached)" : b;
+  if (b && b !== "HEAD") return b;
+  // "HEAD" from --abbrev-ref is two different states: a real detached HEAD, and
+  // an unborn branch — a freshly `git init`'d repo (or `checkout --orphan`) that
+  // has a branch name but no commit yet. symbolic-ref tells them apart: it
+  // resolves the branch name while unborn and fails only when truly detached, so
+  // a brand-new repo shows "main", not "(detached)".
+  const sym = await gitAsync(root, ["symbolic-ref", "--short", "HEAD"]);
+  const name = sym.stdout.trim();
+  return sym.code === 0 && name ? name : "(detached)";
 }
 
 function statusLabel(x: string, y: string): GitFileStatus["status"] {

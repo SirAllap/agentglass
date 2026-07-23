@@ -213,8 +213,13 @@ export function normalize(body: IngestBody): NormalizedEvent {
   // Token usage: prefer explicit payload.usage, else sum the transcript.
   const chat = Array.isArray(body.chat) ? body.chat : null;
   const payloadUsage = usageFrom(pick(payload, "usage") as Record<string, unknown> | undefined);
+  // All four token kinds count as "usage present". Summing only input+output
+  // dropped a usage object carrying only cache tokens (a cache-read-only reply):
+  // its cache tokens were discarded and the event was mislabeled cumulative,
+  // then re-summed from the transcript.
   const hasPayloadUsage =
-    (payloadUsage.input_tokens ?? 0) + (payloadUsage.output_tokens ?? 0) > 0;
+    (payloadUsage.input_tokens ?? 0) + (payloadUsage.output_tokens ?? 0)
+    + (payloadUsage.cache_creation_tokens ?? 0) + (payloadUsage.cache_read_tokens ?? 0) > 0;
   const usage: TokenUsage = hasPayloadUsage ? payloadUsage : sumTranscriptTokens(chat ?? undefined);
 
   const model_name = str(body.model_name) ?? str(pick(payload, "model", "model_name"));
