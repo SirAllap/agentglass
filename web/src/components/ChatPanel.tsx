@@ -838,7 +838,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                           <div className="max-w-[86%] min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
                             style={{
-                              ...CODE_FONT_STYLE, fontFamily: undefined, opacity: m.historical ? 0.72 : 1,
+                              // Resumed history reads at full strength, same as
+                              // live: the "resumed here" divider already marks the
+                              // seam, so dimming the bubbles on top of it only made
+                              // a restored conversation look degraded next to the
+                              // console it mirrors.
+                              ...CODE_FONT_STYLE, fontFamily: undefined,
                               // Stronger than the old 16%/45% wash: at that
                               // strength every bubble was the same violet as the
                               // panel behind it, and on some themes the two roles
