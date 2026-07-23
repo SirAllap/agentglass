@@ -38,6 +38,7 @@ import {
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
+import { worktreeParent } from "./worktree.ts";
 import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
@@ -250,11 +251,31 @@ const refsCache = new Map<string, { refs: number; body: string }>();
 // the whole point is that the terminal's thread runs none of them. It queues
 // behind the shared pool now; the answer it gates is cached, so a slightly later
 // fingerprint only defers a recompute, never a keystroke.
+//
+// Keyed off the family, and cached for a beat. `refs/heads` and `refs/remotes`
+// live in the shared object store, so every worktree of a repo has the identical
+// fingerprint — yet `/git/branches`, `/git/graph` and `/git/tags` each read it
+// per QUERY ROOT on every poll, which on a repo with fourteen worktrees is
+// dozens of identical for-each-refs a second the moment you start switching
+// between checkouts. `worktreeParent` finds the family's main checkout with a
+// file read and no subprocess; a 250ms hold then collapses that storm to one
+// read per family. Short by design: it only gates recomputes that are themselves
+// cached far longer (whileRefsHoldAsync), so a fingerprint 250ms late defers a
+// panel refresh by a frame, never a keystroke — and every write clears the caches
+// behind it directly anyway.
+const REFS_FP_TTL_MS = 250;
+const refsFpCache = new Map<string, { at: number; fp: number }>();
 async function refsFingerprint(root: string): Promise<number> {
-  const r = await gitAsync(root, ["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]);
+  const famRoot = worktreeParent(root) ?? root;
+  const hit = refsFpCache.get(famRoot);
+  if (hit && Date.now() - hit.at < REFS_FP_TTL_MS) return hit.fp;
+  const r = await gitAsync(famRoot, ["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]);
   // A failure fingerprints as "different every time", so a broken repo falls
   // back to recomputing rather than serving one wrong answer forever.
-  return r.code === 0 ? Number(Bun.hash(r.stdout + ":" + r.stdout.length)) : Math.random();
+  const fp = r.code === 0 ? Number(Bun.hash(r.stdout + ":" + r.stdout.length)) : Math.random();
+  if (refsFpCache.size > 200) refsFpCache.clear();
+  refsFpCache.set(famRoot, { at: Date.now(), fp });
+  return fp;
 }
 
 /** Recompute only when a ref moved, off the loop. `key` separates answers that
@@ -272,7 +293,38 @@ async function whileRefsHoldAsync(key: string, root: string, compute: () => Prom
 
 const TREE_TTL_MS = 1_000;
 const treeCache = new Map<string, { at: number; data: WorkingTree }>();
-setGitChangeHook(() => { treeCache.clear(); broadcast({ type: "git" }); });
+// The worktree panel is the heaviest git poll (a list plus base/behind/dirty per
+// checkout). Its inner reads are cached and family-shared now, but the assembled
+// answer had no cache of its own — so every poll of every open tab still rebuilt
+// it. A short TTL (scaled by backoff while a shell is hot) holds it across the
+// 10s panel poll and the burst a scope switch fires, and every write clears it
+// through the same git-change hook the tree cache uses.
+const WORKTREES_TTL_MS = 2_500;
+const worktreesCache = new Map<string, { at: number; body: string }>();
+setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); broadcast({ type: "git" }); });
+
+/**
+ * Session detail, held briefly, and invalidated when the session gets an event.
+ *
+ * `getSession` is a synchronous SQLite scan of the whole session, and a big one
+ * (8000+ events) measured ~50ms warm and several times that under load — 50ms+
+ * of the loop the PTY rides, per call. The detail modal polls it, and the
+ * interaction load hammered it: the watchdog showed GET /session as the single
+ * worst loop-blocker, six recomputations of the same static session queued back
+ * to back. The body is cached per id so a re-open or a poll is free, and cleared
+ * the instant an event lands for that session (ingestBody) so a LIVE session
+ * still updates at once — a historical one, which is what you actually sit and
+ * read, never recomputes. Combined with the single-flight on the endpoint, N
+ * concurrent opens of the same session cost one scan, not N.
+ *
+ * The TTL is only a backstop: correctness comes from the two invalidation points
+ * (HTTP ingest and the scanner tail), which fire on the exact events that change
+ * the answer. So it is long — a short one would just spend ~50ms of the PTY's
+ * thread re-deriving output that has not changed, which is the very spike this
+ * removes — and scaled by backoff() so it holds even longer while a shell is hot.
+ */
+const SESSION_TTL_MS = 15_000;
+const sessionCache = new Map<string, { at: number; body: string | null }>();
 
 function broadcast(frame: WsFrame) {
   // Serialising an event and writing it to every open client. Small per client,
@@ -324,6 +376,10 @@ setInterval(pushOpenTools, OPEN_TOOL_TICK_MS).unref?.();
 function ingestBody(body: IngestBody) {
   const n = normalize(body);
   const { event, session } = insertEvent(n);
+  // The session just grew, so its cached detail is stale — drop it so a live
+  // session refreshes on the next open, while static sessions keep serving from
+  // cache. Cheap: one Map delete on a path already doing a DB write.
+  sessionCache.delete(event.session_id);
   broadcast({ type: "event", data: event });
   broadcast({ type: "session", data: session });
   // A Pre opens a call and a Post closes one, so the list the fleet is drawing
@@ -684,8 +740,17 @@ const server = Bun.serve<WsData>({
       const root = url.searchParams.get("root") || "";
       // The heaviest git read the panel polls: a worktree list plus a status,
       // base and rev-list per checkout — a dozen-plus subprocesses on a
-      // worktree-heavy repo. Concurrent identical polls collapse to one.
-      return body(await singleFlight(`worktrees:${root}`, async () => JSON.stringify({ worktrees: await gitWorktrees(root) })));
+      // worktree-heavy repo. Concurrent identical polls collapse via single-flight;
+      // a short TTL cache (× backoff) holds the assembled answer across the poll
+      // and the burst a scope switch fires, cleared on any write by the git hook.
+      return body(await singleFlight(`worktrees:${root}`, async () => {
+        const hit = worktreesCache.get(root);
+        if (hit && Date.now() - hit.at < WORKTREES_TTL_MS * backoff()) return hit.body;
+        const b = JSON.stringify({ worktrees: await gitWorktrees(root) });
+        if (worktreesCache.size > 40) worktreesCache.clear();
+        worktreesCache.set(root, { at: Date.now(), body: b });
+        return b;
+      }));
     }
     // What a worktree removal would destroy, per path — asked before offering
     // the removal, never after. Repeatable `path=` so the bulk delete can price
@@ -927,7 +992,15 @@ const server = Bun.serve<WsData>({
     }
 
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
-    if (pathname === "/terminal/commands") return json(projectCommands(url.searchParams.get("root") || ""));
+    // Async + cached in terminal.ts (the depth-3 Makefile/package.json walk used
+    // to run synchronously on the loop the PTY rides — the watchdog named it at
+    // 84s under load); single-flighted here so the several tabs / the
+    // new-terminal + ⚙-menu that ask at the same instant share one walk rather
+    // than each launching the whole thing.
+    if (pathname === "/terminal/commands") {
+      const root = url.searchParams.get("root") || "";
+      return body(await singleFlight(`cmds:${root}`, async () => JSON.stringify(await projectCommands(root))));
+    }
 
     // --- multi-chat: drive claude sessions from the browser ---
     // `bypass` rides along so the mode picker can stop offering a mode the
@@ -955,8 +1028,20 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/session") {
       const id = url.searchParams.get("id") || "";
-      const detail = id ? getSession(id) : null;
-      return detail ? json(detail) : json({ error: "not found" }, 404);
+      if (!id) return json({ error: "not found" }, 404);
+      // Cached per id (cleared on a new event for the session — see ingestBody)
+      // and single-flighted, so a huge session's synchronous scan runs at most
+      // once per change instead of once per poll per open tab.
+      const out = await singleFlight(`session:${id}`, async () => {
+        const hit = sessionCache.get(id);
+        if (hit && Date.now() - hit.at < SESSION_TTL_MS * backoff()) return hit.body;
+        const detail = getSession(id);
+        const b = detail ? JSON.stringify(detail) : null;
+        if (sessionCache.size > 40) sessionCache.clear();
+        sessionCache.set(id, { at: Date.now(), body: b });
+        return b;
+      });
+      return out ? body(out) : json({ error: "not found" }, 404);
     }
     if (pathname === "/skills") return json({ skills: await getSkills(), generated_at: Date.now() });
     if (pathname === "/skills/export") {
@@ -1146,6 +1231,11 @@ setInterval(prune, 3_600_000);
 // keep watching. This is what makes the dashboard cover all projects at once
 // instead of only the directory agentglass happens to run from.
 startScanner(({ event, session }) => {
+  // Same as ingestBody: the scanner tails live transcripts straight through
+  // insertEvent (not ingestBody), so this is the other path a session grows on
+  // — drop its cached detail here too, or a session being watched live would
+  // read stale until the TTL backstop.
+  sessionCache.delete(event.session_id);
   broadcast({ type: "event", data: event });
   broadcast({ type: "session", data: session });
   // A Pre opens a call and a Post closes one, so the list the fleet is drawing
