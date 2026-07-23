@@ -638,6 +638,11 @@ export interface GitWorktree {
   current: boolean;
   bare: boolean;
   locked: boolean;
+  /** Git reports the registration as broken — its gitdir points nowhere valid.
+   *  A fabricated entry (an attacker-written .git/worktrees/<x>/gitdir aimed at
+   *  an arbitrary path) surfaces as prunable, so any privileged action must not
+   *  trust a prunable path as a real worktree of this repo. */
+  prunable?: boolean;
   /** The branch this one was cut from — trunk unless overridden per branch.
    *  Null on the trunk checkout itself, which has no base. */
   base?: string | null;
