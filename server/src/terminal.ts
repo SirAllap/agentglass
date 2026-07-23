@@ -15,13 +15,15 @@
 // socket close reaches the whole job tree, not just the shell. Gated by
 // AGENTGLASS_TERMINAL_DISABLED; cwd must be a real git dir; the CSRF/origin
 // guard is applied at the upgrade route.
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, renameSync, rmSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, mkdtempSync, writeFileSync, renameSync, rmSync, readdirSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
 import type { ProjectCommand, TerminalCommands } from "../../shared/types.ts";
-import { safeAbs, repoRootOf } from "./git.ts";
-import { inScope } from "./config.ts";
+import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
+import { terminalActive } from "./loopwatch.ts";
+import { inScope, workspaceRoot } from "./config.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 export const TERMINAL_ENABLED = process.env.AGENTGLASS_TERMINAL_DISABLED !== "1";
@@ -80,6 +82,27 @@ type Session = {
   /** Cleared on close — a stray interval would keep reading /proc for a pty
    *  that no longer exists, once per session, forever. */
   tmuxPoll?: ReturnType<typeof setInterval> | null;
+  /** The tmux client in this shell, once one is found. Survives a session
+   *  switch, which is the whole reason it is kept apart from the target. */
+  tmuxClient?: TmuxClient | null;
+  /** The tmux session that client is showing, re-read every poll. */
+  tmux?: TmuxTarget | null;
+  /** tmux's prefix keys, re-read whenever the session changes rather than every
+   *  tick: it is a config value, not a live one. */
+  tmuxPrefix?: string[];
+  /** Re-read tmux and push if anything moved. Held so an action can refresh
+   *  immediately instead of leaving the strip stale until the next tick. */
+  tmuxSweep?: () => void;
+  /** Whether the panel wants tmux's own status line drawn. Remembered rather
+   *  than applied and forgotten, so the answer can be re-applied to whatever
+   *  session the client moves to next. Undefined until the panel says. */
+  tmuxStatusVisible?: boolean;
+  /** The session we actually hid it on, so it can be given back on the way out.
+   *  Restoring is not optional: a session left with `status off` after the panel
+   *  closed would look broken in the user's real terminal, and they would have
+   *  no reason to connect it to us. It is the session and not a boolean because
+   *  the one we borrowed from is not always the one we end up on. */
+  tmuxStatusHiddenOn?: TmuxTarget | null;
 };
 const sessions = new Map<PtyWs, Session>();
 
@@ -107,6 +130,9 @@ function killGroup(s: Session, sigNum: number) {
     else s.proc.kill(sigNum);
   } catch { /* already gone */ }
 }
+
+import { resolveClient, readFrame, runAction, setStatusLine, prefixKeys, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { applyThemeTo } from "./themesync.ts";
 
 const enc = new TextEncoder();
 const ctl = (ws: PtyWs, frame: Record<string, unknown>) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
@@ -143,17 +169,38 @@ function tmuxRunning(pid: number, depth = 0): boolean {
   return false;
 }
 
+/**
+ * Where a shell opens when the requested directory can't be used.
+ *
+ * Always inside scope: the scope root itself when the cockpit is scoped to one
+ * project (it is in scope by definition), otherwise the user's HOME, otherwise
+ * "/". So a scoped instance never lands a shell outside its project even on the
+ * fallback — it gives you the project's own root instead of refusing outright,
+ * and inScope keeps confining WHERE the shell may be, just not WHETHER you get one.
+ */
+function fallbackCwd(): string {
+  const scope = workspaceRoot();
+  for (const c of [scope, process.env.HOME, "/"]) {
+    if (!c || !inScope(c)) continue; // HOME is out of a scoped instance — skip to "/"
+    try { if (statSync(c).isDirectory()) return c; } catch { /* gone; try the next */ }
+  }
+  return "/";
+}
+
 /** WebSocket opened at /terminal/pty — spawn the shell and start pumping. */
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) { ctl(ws, { t: "fatal", error: "terminal is disabled (AGENTGLASS_TERMINAL_DISABLED=1)" }); ws.close(1008, "disabled"); return; }
-  const cwd = safeAbs(d.root);
-  if (!cwd || !repoRootOf(cwd)) { ctl(ws, { t: "fatal", error: "invalid or non-repo directory" }); ws.close(1008, "bad root"); return; }
-  // A shell is the widest capability here — anything it can reach, it can
-  // change. An instance opened for one project must not hand one out anywhere
-  // else, or "open a project" narrows the view while leaving the blast radius
-  // machine-wide.
-  if (!inScope(cwd)) { ctl(ws, { t: "fatal", error: "outside the open project — open the parent folder to work across repos" }); ws.close(1008, "out of scope"); return; }
+  // A shell is the widest thing this app hands out, and a terminal that refuses
+  // to give you one is not a terminal — so it ALWAYS opens. The requested
+  // directory is used only when it is genuinely usable: a real repo, in scope.
+  // Anything else — not a repo, git not installed, a path that has since gone,
+  // out of scope — is not an error but a fallback to a directory that is in
+  // scope by construction (see fallbackCwd). The blast radius stays confined —
+  // an out-of-scope request lands in the scope root, never where it asked — it
+  // just no longer costs the user their shell.
+  const requested = safeAbs(d.root);
+  const cwd = requested && repoRootOf(requested) && inScope(requested) ? requested : fallbackCwd();
   if (sessions.size >= MAX_SESSIONS) { ctl(ws, { t: "fatal", error: `too many open terminals (max ${MAX_SESSIONS})` }); ws.close(1013, "busy"); return; }
 
   const cols = clampCols(d.cols) || 80;
@@ -192,35 +239,192 @@ export function ptyOpen(ws: PtyWs) {
   sessions.set(ws, session);
   ctl(ws, { t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir });
 
-  /*
-   * Watch for tmux coming and going.
+  /**
+   * The client moved to a different session — follow it there.
    *
-   * Polled rather than detected once at startup, because the interesting case
-   * is exactly the one that changes: you open a plain shell, type `tmux`, and
-   * the panel's tabs and split button should stand down at that moment — and
-   * come back when you detach. Two seconds is well under the threshold where a
-   * stale layout is noticeable, and the check is a couple of small /proc reads.
+   * Everything we hold about a session is about *that* session: the prefix we
+   * advertise, and the status line we borrowed. Hand the old one its status line
+   * back before borrowing the next one's, so a user who switches away with `^b s`
+   * finds their other session exactly as their config left it.
+   */
+  const followSession = (t: TmuxTarget) => {
+    const borrowed = session.tmuxStatusHiddenOn;
+    if (borrowed && borrowed.id !== t.id) {
+      setStatusLine(borrowed, true);
+      session.tmuxStatusHiddenOn = null;
+    }
+    session.tmux = t;
+    session.tmuxPrefix = prefixKeys(t);
+    // Repaint this server in the cockpit's palette. A tmux that started after
+    // the last theme switch — a reboot, or a continuum restore — has never
+    // heard of it, and the parts the panel does not draw itself (the message
+    // row, the prompt, the pane borders) come up in tmux's own colours in the
+    // middle of a themed panel. Best-effort, and silent when there is no theme
+    // file yet: this is a repaint, not a precondition.
+    applyThemeTo(t.socket);
+    // Re-apply the panel's answer to the new session. Without this a restored
+    // session comes up with tmux's own status line on top of our tabs, and
+    // nothing in the panel changed to make the browser re-ask for it.
+    if (session.tmuxStatusVisible === false && !session.tmuxStatusHiddenOn) {
+      if (setStatusLine(t, false)) session.tmuxStatusHiddenOn = t;
+    }
+  };
+
+  /*
+   * Watch for tmux coming and going, and for the session under it moving.
+   *
+   * Polled rather than detected once at startup, because the interesting cases
+   * are exactly the ones that change: you open a plain shell, type `tmux`, and
+   * the panel's split button should stand down at that moment — and come back
+   * when you detach. The same is true one level down, for which session that
+   * client is showing.
    */
   let sawTmux = false;
-  const tmuxPoll = setInterval(() => {
+  let sent = "";
+  const sweep = () => {
     if (session.closed || session.exited) return;
     const now = tmuxRunning(proc.pid);
-    if (now === sawTmux) return;
-    sawTmux = now;
-    ctl(ws, { t: "tmux", active: now });
-  }, 2000);
+    if (now !== sawTmux) {
+      sawTmux = now;
+      if (!now) {
+        // Detached. Hand the session its status line back before forgetting we
+        // borrowed it — a detach ends the client, not the server: the session
+        // stays alive, so a status left hidden here comes up blank on every
+        // future attach. Same restore followSession() does when the client
+        // moves on with `^b s`; the sweep missing it was the leak.
+        const borrowed = session.tmuxStatusHiddenOn;
+        if (borrowed) setStatusLine(borrowed, true);
+        // Forget the client rather than keep polling a target that is no longer
+        // ours, and stop describing windows nobody is looking at.
+        session.tmuxClient = null;
+        session.tmux = null;
+        session.tmuxPrefix = [];
+        session.tmuxStatusHiddenOn = null;
+        sent = "";
+        ctl(ws, { t: "tmux", active: false, windows: [] });
+        return;
+      }
+    }
+    if (!now) return;
+    // The client is resolved once per attach — that walk is /proc and it does
+    // not change while the same client is up. Which session it is *showing* is
+    // read every tick, because that does change: `^b s`, and every continuum
+    // restore, which switches the client to the restored session and kills the
+    // one it attached to. A target cached at attach time points at that dead
+    // session for the rest of the shell's life.
+    if (!session.tmuxClient) session.tmuxClient = resolveClient(proc.pid);
+    const frame = session.tmuxClient ? readFrame(session.tmuxClient) : null;
+    if (frame) {
+      if (frame.target.id !== session.tmux?.id) followSession(frame.target);
+      else session.tmux = frame.target; // a rename keeps the id and changes the name
+    } else {
+      // Unreachable: the server went away, or the client is mid-attach. Drop it
+      // and resolve again next tick rather than answer from something stale.
+      session.tmuxClient = null;
+      session.tmux = null;
+    }
+    const windows = frame?.windows ?? [];
+    // Only speak when something changed. A tab strip that re-renders on every
+    // tick is a tab strip that drops the click you were halfway through. The
+    // session is part of "changed": switching between two sessions with the
+    // same window names is still a switch, and the panel says which one it is.
+    const shape = JSON.stringify([session.tmux?.id ?? null, windows]);
+    if (shape === sent) return;
+    sent = shape;
+    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, prefix: session.tmuxPrefix ?? [], windows });
+  };
+  session.tmuxSweep = sweep;
+  /*
+   * How often to look.
+   *
+   * Two seconds was chosen for "has tmux appeared", where being a beat late
+   * costs nothing. It is far too slow for a tab strip: `^b n` moved the focus
+   * instantly in the terminal and the tabs sat on the old answer for up to two
+   * seconds, which reads as the app being broken rather than behind. Half a
+   * second is the ceiling for "instant" and the check is one small tmux call
+   * that only speaks when something actually changed.
+   */
+  const tmuxPoll = setInterval(sweep, 500);
   session.tmuxPoll = tmuxPoll;
+
+  /**
+   * Shell output → socket, coalesced and back-pressured.
+   *
+   * It used to be one WebSocket frame per read off the pty. That is fine for a
+   * prompt and terrible for `cat` on a large file or a build log: the pty hands
+   * over whatever the kernel has, so a fast producer becomes thousands of tiny
+   * frames a second, each one a send here, a message event there, and a
+   * separate `term.write()` in the renderer. The cost is not the bytes, it is
+   * the per-frame overhead on both ends.
+   *
+   * Two things fix it, and they are the two the terminal actually needs:
+   *
+   *   * **Coalesce.** Hold what arrives for one frame's worth of time (8ms) and
+   *     send it as one message. A burst collapses into ~120 frames a second
+   *     instead of thousands. Typing is unaffected in any way a human can
+   *     perceive — 8ms is a third of the time it takes the key to travel — and
+   *     anything already large goes immediately rather than waiting.
+   *   * **Push back.** If the socket is behind, stop reading the pty. There is
+   *     no pause/resume call to make: not draining the stream lets the pipe
+   *     fill, and the kernel stops the producer for us — which is the whole
+   *     point of a pty being a pty. Without this, a runaway `yes` is buffered
+   *     in this process until something gives, and the something is memory.
+   */
+  const FRAME_MS = 8;
+  const BIG = 64 * 1024;          // send at once rather than waiting out the frame
+  const HIGH_WATER = 512 * 1024;  // socket queue past which we stop reading
 
   const pump = async (readable: ReadableStream<Uint8Array> | null | undefined) => {
     if (!readable) return;
     const reader = readable.getReader();
+    let held: Uint8Array[] = [];
+    let size = 0;
+    let backedUp = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (!held.length) return;
+      const out = held.length === 1 ? held[0] : (() => {
+        const all = new Uint8Array(size);
+        let at = 0;
+        for (const c of held) { all.set(c, at); at += c.length; }
+        return all;
+      })();
+      held = []; size = 0;
+      if (session.closed) return;
+      // Bun answers with the bytes queued, or -1 when the socket is already
+      // backed up. That is a real backpressure signal from the transport
+      // itself — better than inferring it from a byte count — so remember it
+      // and let the read loop stop pulling on the pty until it clears.
+      try { if (ws.send(out) === -1) backedUp = true; } catch { /* socket gone; the read loop will notice */ }
+    };
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (value && !session.closed) { try { ws.send(value); } catch { break; } }
+        if (session.closed) break;
+        if (value?.length) {
+          held.push(value);
+          size += value.length;
+          if (size >= BIG) flush();
+          else if (!timer) timer = setTimeout(flush, FRAME_MS);
+        }
+        // Let the client catch up before pulling more out of the shell. Two
+        // ways to know it is behind: the transport said so on the last send, or
+        // the queue is deep. The wait is bounded — a client that never drains
+        // is a dead client, and holding the shell for it forever is worse than
+        // dropping behind.
+        let waited = 0;
+        while (!session.closed && waited < 10_000 &&
+               (backedUp || (ws.getBufferedAmount?.() ?? 0) > HIGH_WATER)) {
+          flush();
+          await Bun.sleep(4);
+          waited += 4;
+          backedUp = (ws.getBufferedAmount?.() ?? 0) > HIGH_WATER;
+        }
       }
     } catch { /* stream torn down */ }
+    finally { flush(); }
   };
 
   (async () => {
@@ -240,9 +444,12 @@ export function ptyOpen(ws: PtyWs) {
 export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   const s = sessions.get(ws);
   if (!s) return;
-  let msg: { t?: string; d?: string; cols?: number; rows?: number };
+  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean };
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
+    // A keystroke is the least ambiguous "a human is waiting on this process"
+    // signal there is; the background sweeps stand back while it is fresh.
+    terminalActive();
     try {
       const sink = s.proc.stdin as { write?: (b: Uint8Array) => void; flush?: () => void };
       sink.write?.(enc.encode(msg.d));
@@ -256,6 +463,35 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       writeSizeFile(s.sizeDir, rows, cols);
       process.kill(s.proc.pid, "SIGWINCH"); // bridge applies TIOCSWINSZ + forwards
     } catch { /* shell gone */ }
+  } else if (msg.t === "tmux") {
+    /*
+     * A tab was clicked.
+     *
+     * Everything here is something a keybinding could already do, so this adds
+     * no capability to a socket that already carries a shell — it adds a second
+     * way to reach four commands. The target is the session *we* resolved from
+     * /proc, never one the client names, so a page cannot address somebody
+     * else's tmux by asking nicely.
+     */
+    if (msg.cmd === "status") {
+      const visible = msg.visible !== false;
+      // Remembered before it is applied, and remembered even with no session
+      // resolved yet: this is a preference about tmux's chrome, not about one
+      // session, and it has to survive the client being switched to another.
+      s.tmuxStatusVisible = visible;
+      if (!s.tmux) return;
+      if (setStatusLine(s.tmux, visible)) s.tmuxStatusHiddenOn = visible ? null : s.tmux;
+      return;
+    }
+    if (!s.tmux) return;
+    const action = msg.cmd as TmuxAction;
+    if (!["select", "new", "kill", "rename"].includes(action)) return;
+    if (!runAction(s.tmux, action, msg.window, msg.name)) return;
+    // Answer now rather than at the next tick. The command has already been
+    // applied by the time it returns, so the strip can be correct within a
+    // round trip instead of within half a second — and the click that caused
+    // it is exactly when a stale answer is most obvious.
+    s.tmuxSweep?.();
   }
 }
 
@@ -276,6 +512,10 @@ export function ptyClose(ws: PtyWs) {
 function cleanup(ws: PtyWs, s: Session) {
   sessions.delete(ws);
   if (s.tmuxPoll) { clearInterval(s.tmuxPoll); s.tmuxPoll = null; }
+  // Give the status line back before letting go. The panel borrowed it; a
+  // session left with `status off` after the panel closed looks broken in the
+  // user's real terminal, and nothing there would point back at us.
+  if (s.tmuxStatusHiddenOn) { setStatusLine(s.tmuxStatusHiddenOn, true); s.tmuxStatusHiddenOn = null; }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
 }
 
@@ -292,6 +532,21 @@ export function shutdownTerminals() {
 }
 
 // --- project commands: Makefile targets + package.json scripts ---------------
+
+/**
+ * How many targets to take from a single Makefile.
+ *
+ * Was 60, which is fewer than a real project's Makefile holds: a monorepo root
+ * here defines 153, so 93 of them — everything after the sixtieth line of the
+ * file — were dropped, silently, while the picker still advertised a total as
+ * though that were all of them. `make migrate` sat at line 851 and simply did
+ * not exist as far as the app was concerned.
+ *
+ * The cap exists to stop a generated Makefile from flooding the list, so it
+ * stays; it is now set above what a hand-written Makefile plausibly contains,
+ * and the picker has a filter, which is what actually makes a long list usable.
+ */
+const MAKE_MAX_PER_FILE = 400;
 
 /** Parse Makefile text into named targets WITH their descriptions. A
  * description is taken from the `target: ## comment` convention, or from the
@@ -320,7 +575,7 @@ export function parseMakeTargets(text: string): { name: string; desc: string }[]
     }
     pendingComment = [];
   }
-  return out.slice(0, 60);
+  return out.slice(0, MAKE_MAX_PER_FILE);
 }
 
 /** How deep below the repo root to look for Makefiles / package.jsons. A
@@ -328,7 +583,12 @@ export function parseMakeTargets(text: string): { name: string; desc: string }[]
  *  deeper is almost always vendored code. */
 const CMD_SCAN_DEPTH = 3;
 const CMD_MAX_DIRS = 40; // dropdown budget — beyond this it's noise, not help
-const CMD_MAX_TOTAL = 120; // across all folders; per-manifest caps still apply
+// Across all folders; per-manifest caps still apply. Raised with the per-file
+// cap: a monorepo root Makefile alone can hold 150+ targets, and a list you can
+// filter is not made better by being short — it is made wrong by being
+// incomplete, because a missing target reads as "this project has no such
+// command" rather than "the picker stopped counting".
+const CMD_MAX_TOTAL = 500;
 
 /** Directories that never hold the *project's own* commands — the repo
  *  sweeper's list plus build-output names that don't contain git checkouts. */
@@ -383,7 +643,7 @@ export function makeCommands(root: string, dirs: CommandDir[] = commandDirs(root
     if (!makefile) continue;
     let text: string;
     try { text = readFileSync(join(root, rel, makefile), "utf8"); } catch { continue; }
-    for (const t of parseMakeTargets(text)) { // parseMakeTargets caps each file at 60
+    for (const t of parseMakeTargets(text)) { // capped per file — see MAKE_MAX_PER_FILE
       out.push({ name: t.name, cmd: rel ? `make -C ${rel} ${t.name}` : `make ${t.name}`, desc: t.desc, dir: rel });
     }
     if (out.length >= CMD_MAX_TOTAL) break;
@@ -432,10 +692,72 @@ export function scriptCommands(root: string, dirs: CommandDir[] = commandDirs(ro
   return out.slice(0, CMD_MAX_TOTAL);
 }
 
-/** Everything runnable in a repo, for the terminal's command list. */
-export function projectCommands(root: unknown): TerminalCommands {
+/**
+ * Awaited twin of {@link commandDirs}.
+ *
+ * The walk is the expensive half — a monorepo with no manifest in a subtree
+ * makes it descend to the depth cap in every branch — and left synchronous it
+ * was a readdirSync-per-directory burst holding the one thread the PTY rides.
+ * Under interaction load the watchdog named GET /terminal/commands at 84s: it
+ * was queued behind the git fan-out and then blocked the loop when it ran. Each
+ * `await readdir` yields, so a keystroke lands between directories rather than
+ * after the whole walk.
+ */
+async function commandDirsAsync(root: string): Promise<CommandDir[]> {
+  const found: CommandDir[] = [];
+  const visit = async (dir: string, rel: string, left: number): Promise<void> => {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    const names = new Set(entries.map((e) => e.name));
+    if (rel && names.has(".git")) return; // a nested checkout is its own project
+    const makefile = ["GNUmakefile", "makefile", "Makefile"].find((n) => names.has(n)) ?? null;
+    const pkg = names.has("package.json");
+    if (makefile || pkg) found.push({ rel, makefile, pkg });
+    if (found.length >= CMD_MAX_DIRS || left <= 0) return;
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue; // real dirs only — symlinks loop or escape
+      if (ent.name.startsWith(".") || CMD_SKIP.has(ent.name)) continue;
+      const childRel = rel ? `${rel}/${ent.name}` : ent.name;
+      if (!shellSafeRel(childRel)) continue;
+      await visit(join(dir, ent.name), childRel, left - 1);
+      if (found.length >= CMD_MAX_DIRS) return;
+    }
+  };
+  await visit(root, "", CMD_SCAN_DEPTH);
+  return found;
+}
+
+/**
+ * The command list per repo root, held briefly.
+ *
+ * A Makefile or package.json is edited far less often than the picker asks for
+ * it — a scope switch, every new terminal, the ⚙ menu — and the answer is a
+ * depth-3 walk plus a handful of file reads. So it is computed once and reused:
+ * under the interaction load the same root was asked on every burst, and without
+ * this each one re-walked the tree on the loop the PTY rides. Short enough that
+ * an edited Makefile shows up almost at once. (The web layer has its own 30s
+ * cache; this is the server-side half the fan-out was missing.)
+ */
+const CMD_CACHE_TTL_MS = 30_000;
+const cmdCache = new Map<string, { at: number; data: TerminalCommands }>();
+
+/** Everything runnable in a repo, for the terminal's command list. Awaited and
+ *  cached — see commandDirsAsync and cmdCache for why. */
+export async function projectCommands(root: unknown): Promise<TerminalCommands> {
   const cwd = safeAbs(root);
-  if (!cwd || !repoRootOf(cwd)) return { enabled: TERMINAL_ENABLED, make: [], scripts: [] };
-  const dirs = commandDirs(cwd); // one walk, shared by both lists
-  return { enabled: TERMINAL_ENABLED, make: makeCommands(cwd, dirs), scripts: scriptCommands(cwd, dirs) };
+  // inScope, like the shell-spawn path: without it a cockpit opened for one
+  // project answers /terminal/commands?root=/any/other/repo, handing back that
+  // repo's Makefile targets and script names — the file contents of a project
+  // outside the open scope. safeAbs alone does not confine to the workspace.
+  // repoRootOfAsync, not repoRootOf: polled on every scope switch and new
+  // terminal, so its `git rev-parse` queues through the shared pool rather than
+  // blocking the loop between keystrokes.
+  if (!cwd || !inScope(cwd) || !(await repoRootOfAsync(cwd))) return { enabled: TERMINAL_ENABLED, make: [], scripts: [] };
+  const hit = cmdCache.get(cwd);
+  if (hit && Date.now() - hit.at < CMD_CACHE_TTL_MS) return hit.data;
+  const dirs = await commandDirsAsync(cwd); // one walk, shared by both lists, yielding between dirs
+  const data: TerminalCommands = { enabled: TERMINAL_ENABLED, make: makeCommands(cwd, dirs), scripts: scriptCommands(cwd, dirs) };
+  if (cmdCache.size > 40) cmdCache.clear();
+  cmdCache.set(cwd, { at: Date.now(), data });
+  return data;
 }

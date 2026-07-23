@@ -9,6 +9,7 @@
 // usable somewhere around a dozen, and this is meant to hold far more than
 // that. It filters, and it says which chats answered while you were elsewhere.
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import type { GitRepoRef, SessionRollup } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
@@ -28,6 +29,8 @@ import {
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
   restoredActiveId, setActiveChatId,
 } from "../lib/chatStore.ts";
+import { useSidebarWidth } from "../lib/sidebarWidth.ts";
+import { SidebarGrip } from "./SidebarGrip.tsx";
 
 // Still hand-maintained, and still drifts every release — the runtime-sourced
 // list is its own job. The 1M entry is here because it is what this fix buys:
@@ -396,12 +399,19 @@ function ClipIcon() {
 // `active` is destructured as `visible` because this component already has an
 // `active` of its own — the currently selected chat.
 export function ChatView({ active: visible, focusId, onClose = () => {} }: { active: boolean; focusId?: string | null; onClose?: () => void }) {
+  const sidebarW = useSidebarWidth();
   const open = visible;
   const allChats = useSyncExternalStore(subscribe, listChats, listChats);
   // `null` until we know, which is not the same as "unscoped". See the filter
   // below, which must not run on a guess.
   const [workspace, setWorkspace] = useState<string | null>(null);
   const [scopeKnown, setScopeKnown] = useState(false);
+  /** Whether the repo list has come back yet. Distinguishes "still finding your
+   *  projects" from "there are none" — the panel used to render both as the
+   *  same empty list, which reads as a broken feature rather than a pending one. */
+  const [reposKnown, setReposKnown] = useState(false);
+  /** Set when + new was pressed with nowhere to run. */
+  const [noRepo, setNoRepo] = useState(false);
 
   // Chats outlive the page now, so the panel can be holding tabs from a project
   // you are no longer in. They stay in the store, and stay saved, but a project
@@ -480,7 +490,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     api.gitRepos().then(({ repos }) => {
       setRepos(repos);
       setDefaultCwd((c) => c || repos[0]?.root || "");
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setReposKnown(true));
     api.chatEnabled().then((r) => { setEnabled(r.enabled); setBypassAllowed(!!r.bypass); }).catch(() => {});
     // Which project this instance is scoped to, if any. A failure here means we
     // never learn of a scope, so nothing is hidden, which is the safe direction.
@@ -542,11 +552,20 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     useStuckBottom(open ? active?.id ?? "" : null);
 
   const add = useCallback(() => {
-    const cwd = active?.cwd || defaultCwd || repos[0]?.root || "";
+    // `workspace` last: a scoped instance always has one, so the only way to
+    // reach "" now is a machine with no repo at all.
+    const cwd = active?.cwd || defaultCwd || repos[0]?.root || workspace || "";
+    // A chat with no directory cannot run — `claude` needs somewhere to start —
+    // so it used to appear in the list as "no repo" and fail at the first
+    // message. Before the repos call resolves every one of those fallbacks is
+    // empty, so clicking + new in that window produced exactly that dead tab
+    // and looked like new chats were broken. Refuse instead, and say why.
+    if (!cwd) { setNoRepo(true); return; }
+    setNoRepo(false);
     const c = newChat(cwd, active?.model ?? DEFAULT_MODEL, active?.mode ?? DEFAULT_MODE);
     setActiveId(c.id);
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [active, defaultCwd, repos]);
+  }, [active, defaultCwd, repos, workspace]);
 
   // Adopt an existing claude session. Focusing an already-open tab rather than
   // opening a second one is not a nicety: two chats resuming one session id
@@ -589,11 +608,10 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // intercepted when there is at least one image among them — a normal text
   // paste has to fall through to the textarea untouched.
   //
-  // Both `files` and `items` are read because the two engines this runs on
-  // disagree. Chromium populates `clipboardData.files` for a pasted image;
-  // WebKitGTK — which is what Tauri uses on Linux, i.e. the desktop app —
-  // delivers it through `items` and leaves `files` empty. Reading only `files`
-  // worked in a browser and silently did nothing in the app.
+  // Both `files` and `items` are read because engines disagree on where a
+  // pasted image lands. Chromium populates `clipboardData.files`; some engines
+  // deliver it only through `items` and leave `files` empty. Reading both
+  // covers either, so a paste never silently does nothing.
   const imagesFrom = (dt: DataTransfer): File[] => {
     const out = new Map<string, File>();
     for (const f of Array.from(dt.files)) {
@@ -703,7 +721,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   );
 
   return (
-    <div className="relative flex-1 min-h-0 flex overflow-hidden">
+    <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
                 <style>{SCROLLBAR_CSS}</style>
 
                 {/* Anchored inside the modal rather than portalled like Select:
@@ -713,31 +731,52 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   {resumeOpen && <ResumePicker onPick={resume} onClose={() => setResumeOpen(false)} />}
                 </AnimatePresence>
 
+                {/* The title belongs to the view, so it spans the view — the
+                    same bar every other section has. It used to sit inside the
+                    sidebar, which made Chat look like a different application:
+                    two half-width bars where the others have one. */}
+                <ViewHeader title="Chats" count={chats.length} actions={<>
+                  <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
+                    className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+                    title="continue a session that already exists — e.g. one you started in a terminal">↩ resume</button>
+                  <button onClick={add} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="new chat">+ new</button>
+                </>} />
+
+                <div className="flex-1 min-h-0 flex overflow-hidden">
                 {/* ---- sidebar: every open chat ---- */}
-                <div className="w-[236px] shrink-0 flex flex-col border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
-                  <div className="flex items-center gap-1.5 px-3 py-3 shrink-0">
-                    <span className="text-[13px] font-semibold shrink-0" style={{ color: "var(--text)" }}>💬 Chats</span>
-                    <span className="text-[10px] t-dim2 tabular-nums shrink-0">{chats.length}</span>
-                    <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
-                      className="ml-auto text-[11px] px-1.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
-                      title="continue a session that already exists — e.g. one you started in a terminal">↩ resume</button>
-                    <button onClick={add} className="text-[11px] px-1.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="new chat">+ new</button>
-                  </div>
+                <div className="shrink-0 flex flex-col" style={{ width: sidebarW, background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
                   {chats.length > 6 && (
                     <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="filter chats…"
-                      className="mx-2.5 mb-2 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
+                      className="mx-2.5 mt-2.5 mb-2 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                       style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
                   )}
-                  <div role="listbox" aria-label="open chats" className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-2 flex flex-col gap-0.5">
+                  <div role="listbox" aria-label="open chats" className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pt-2.5 pb-2 flex flex-col gap-0.5">
                     {shown.map((c) => (
                       <ChatRow key={c.id} chat={c} active={c.id === activeId} onPick={() => setActiveId(c.id)} onClose={() => drop(c.id)} />
                     ))}
-                    {!shown.length && <div className="px-2.5 py-3 text-[11px] t-dim2">no chats match</div>}
+                    {/* Three different situations that all used to say "no
+                        chats match": a filter that excluded everything, a list
+                        still being fetched, and a machine with no repo to run
+                        one in. Only the first is about matching. */}
+                    {!shown.length && (
+                      <div className="px-2.5 py-3 text-[11px] t-dim2">
+                        {query.trim() ? "no chats match"
+                          : !reposKnown || !scopeKnown ? "finding your projects…"
+                          : !repos.length ? "no git repository found to run a chat in"
+                          : "no chats yet — press + new"}
+                      </div>
+                    )}
+                    {noRepo && (
+                      <div className="px-2.5 py-2 text-[11px]" style={{ color: "var(--warning)" }}>
+                        nowhere to run a chat: no git repository was found
+                      </div>
+                    )}
                   </div>
                   {/* Pinned under the list, so context and spend for the chat you
                       are reading stay on screen while you scroll its history. */}
                   {active && <Inspector chat={active} />}
                 </div>
+                <SidebarGrip />
 
                 {/* ---- the active conversation ---- */}
                 <div className="flex-1 min-w-0 flex flex-col">
@@ -764,7 +803,6 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                       </>
                     ) : <span className="text-[12px] t-dim2">no chat selected</span>}
-                    <button onClick={onClose} className="ml-auto text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
 
                   {/* Bottom-anchored: a short conversation sits above the input
@@ -1032,6 +1070,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       {active?.mode === "bypassPermissions" && <span style={{ color: "var(--warning)" }}> · ⚡ runs tools unattended</span>}
                     </div>
                   </div>
+                </div>
                 </div>
     </div>
   );

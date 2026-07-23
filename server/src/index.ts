@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, WorkingTree } from "../../shared/types.ts";
 import { normalize, detectError } from "./ingest.ts";
 import { db } from "./db.ts";
 import {
@@ -17,32 +17,43 @@ import {
   searchEvents,
   ftsText,
   providerOf,
+  gateHistory,
 } from "./db.ts";
 import { maybeAlert } from "./alerts.ts";
 import { getSkills, catalogMarkdown, catalogCsv } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getUsage } from "./usage.ts";
-import { submitGate, decideGate, pendingGates, GATE_MAX_MS } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED } from "./git.ts";
+import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability } from "./git.ts";
 import {
   workingTree, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktrees as gitWorktrees, addWorktree, removeWorktree, startAutoFetch,
-  remotes as gitRemotes, tags as gitTags, reflog as gitReflog,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
+  conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
+  remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
+import { worktreeParent } from "./worktree.ts";
+import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
+import { spawnPoolStats } from "./spawnpool.ts";
+import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
-  overview as dockerOverview, stats as dockerStats, logs as dockerLogs,
-  startContainer, stopContainer, restartContainer, removeContainer,
+  overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
+  startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
 } from "./docker.ts";
+import {
+  listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
+  setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
+  rerunFailedChecks, mergePr, closePr, prepareLocalReview, discardLocalReview, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
+} from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
 import { chatStream, CHAT_ENABLED, CHAT_BYPASS_ALLOWED } from "./chat.ts";
@@ -50,8 +61,13 @@ import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } f
 import { workspaceRoot, setWorkspaceRoot, inScope, CONFIG_PATH } from "./config.ts";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
+import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
 import { parseWindowMs } from "./params.ts";
+import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
+import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
+import { markIgnored } from "./ignored.ts";
+import { withEvidence } from "./evidence.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 /** When this process came up. /stats ships it so the dashboard's uptime is
@@ -74,11 +90,21 @@ const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
 // Optional shared-secret auth. Null on a loopback-only box with no token set
 // (unchanged zero-config UX); required otherwise. Exposing without a token
 // mints and prints one rather than running unauthenticated.
-const AUTH = resolveToken(LOOPBACK_ONLY);
+// TRUST_LAN widens the CSRF origin gate to trust any private-IP page, so it must
+// bring a token with it — otherwise a loopback instance (token skipped because
+// the bind is local) would let a LAN-origin page drive token-less destructive
+// writes through the victim's own loopback. Treating TRUST_LAN as "not loopback
+// only" for the token decision forces a token exactly when one is needed; net.ts
+// already documents TRUST_LAN as something used on top of a token.
+const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
-/** One socket, two roles: the live event stream and PTY terminal shells. */
-type WsData = { kind: "events" } | PtyWsData;
+/** One socket, three roles: the live event stream, PTY terminal shells, and
+ *  the desktop-notification mirror. */
+type WsData = { kind: "events" } | { kind: "notify" } | PtyWsData;
 const clients = new Set<ServerWebSocket<WsData>>();
+/** Notification sockets, each holding the unsubscribe that keeps the D-Bus
+ *  monitor alive. Empty map => no monitor process. */
+const notifySubs = new Map<ServerWebSocket<WsData>, () => void>();
 
 // Reflect the caller's Origin instead of a blanket `*`. Foreign origins are
 // already turned away by localOrigin() before any body is served, so the old
@@ -110,9 +136,26 @@ const isPrivate = (h: string): boolean => privateHost(h, TRUST_LAN);
 // website is rejected. A request with NO Origin is not a browser, so it can't
 // be a drive-by — but it also can't be vouched for, which is why the routes
 // that hand out real capability check ORIGIN_REQUIRED instead.
+/**
+ * The desktop shell serves its renderer from its own scheme, not a loopback
+ * port — a port is assigned fresh on every launch, and localStorage is keyed
+ * by origin, so the app used to lose every preference each time it started.
+ *
+ * Trusting this origin is no weaker than trusting 127.0.0.1: nothing on the
+ * web can be served under a scheme that only exists inside the packaged app,
+ * and a page cannot forge an Origin header. Both origin gates below defer to
+ * it, so the two can never drift apart — which they did once already, and the
+ * app came up unable to reach its own API.
+ */
+const DESKTOP_ORIGIN_SCHEME = "agentglass:";
+function fromDesktopShell(origin: string): boolean {
+  try { return new URL(origin).protocol === DESKTOP_ORIGIN_SCHEME; } catch { return false; }
+}
+
 function localOrigin(req: Request): boolean {
   const o = req.headers.get("origin");
   if (!o) return true;
+  if (fromDesktopShell(o)) return true;
   try {
     return isPrivate(new URL(o).hostname);
   } catch { return false; }
@@ -128,9 +171,24 @@ function localOrigin(req: Request): boolean {
  * `websocat ws://host:4000/terminal/pty` case that otherwise hands a login
  * shell to anyone who can reach the port.
  */
+/**
+ * The strictest gate in the server: the desktop shell and nothing else.
+ *
+ * `trustedCaller` admits any private-network origin, which is right for a
+ * dashboard you might open from a laptop on the same wifi and wrong for a route
+ * that builds and runs code. This one requires the custom scheme, which only
+ * the packaged shell can present — a browser cannot forge it, because browsers
+ * cannot be served from it.
+ */
+function desktopOnly(req: Request): boolean {
+  const o = req.headers.get("origin");
+  return !!o && fromDesktopShell(o);
+}
+
 function trustedCaller(req: Request): boolean {
   const o = req.headers.get("origin");
   if (!o) return LOOPBACK_ONLY; // no origin is only safe when nobody remote can connect
+  if (fromDesktopShell(o)) return true;
   try {
     return isPrivate(new URL(o).hostname);
   } catch { return false; }
@@ -153,7 +211,132 @@ const ALLOWED_HOSTS = new Set(
 );
 const trustedHost = (url: URL) => isPrivate(url.hostname) || ALLOWED_HOSTS.has(url.hostname.toLowerCase());
 
+// Every git mutation nudges the clients that are showing git state. Registered
+// here rather than in gitwork so that module stays unaware of the socket.
+/**
+ * The working tree, held for a moment — a property of this endpoint, not of
+ * `workingTree()`, which stays truthful for every other caller.
+ *
+ * Measured by the loop watchdog with the git panel open and someone typing:
+ * 618ms per call, eight calls in two minutes, the largest single source of
+ * blocked event loop in the app. It is four synchronous git invocations (two
+ * diffs, a status, the branch state) on a 2.5s client poll, and the terminal
+ * rides the same thread.
+ *
+ * Making those four async is the real fix, is a deep change through parseDiff,
+ * treeState and branchInfo, and is not worth doing badly. Meanwhile: one second,
+ * scaled by `backoff()` so it holds longer while a shell is in use, and dropped
+ * the instant anything mutates a repository — which is what keeps staging a
+ * file from reading back the state before it.
+ */
+/**
+ * Expensive git reads, held until the repository actually moves.
+ *
+ * `/git/branches` is ~1042ms on a real repo and `/git/graph` ~934ms, and both
+ * are on 10s polls while their tab is open — so a TTL cache is no use, the poll
+ * outlives any sane one. But asking "has anything moved?" costs 2ms: one
+ * `for-each-ref` over every local and remote ref. If not one hash has changed,
+ * last time's answer is not stale, it is *identical*, and recomputing it is
+ * ~800ms of a thread the terminal is trying to use.
+ *
+ * Better than a TTL in the way that matters: there is no staleness window at
+ * all. A commit made in the app, in the terminal, or by an agent moves a ref,
+ * the fingerprint changes, and the next poll recomputes. Nothing has to know to
+ * invalidate anything.
+ *
+ * Measured on the repo this was built against: 761ms for the graph, 644ms for
+ * `branch --merged` alone, against 2ms for the fingerprint.
+ */
+// The *serialised* answer, not the object. A cache hit on the graph would
+// otherwise re-stringify 164KB of it on every poll, which is most of what was
+// left of the cost once the git call was skipped.
+const refsCache = new Map<string, { refs: number; body: string }>();
+
+// Awaited: even at ~2ms this is one for-each-ref on the loop for every poll of
+// /git/branches, /git/graph and /git/tags — three endpoints, several tabs — and
+// the whole point is that the terminal's thread runs none of them. It queues
+// behind the shared pool now; the answer it gates is cached, so a slightly later
+// fingerprint only defers a recompute, never a keystroke.
+//
+// Keyed off the family, and cached for a beat. `refs/heads` and `refs/remotes`
+// live in the shared object store, so every worktree of a repo has the identical
+// fingerprint — yet `/git/branches`, `/git/graph` and `/git/tags` each read it
+// per QUERY ROOT on every poll, which on a repo with fourteen worktrees is
+// dozens of identical for-each-refs a second the moment you start switching
+// between checkouts. `worktreeParent` finds the family's main checkout with a
+// file read and no subprocess; a 250ms hold then collapses that storm to one
+// read per family. Short by design: it only gates recomputes that are themselves
+// cached far longer (whileRefsHoldAsync), so a fingerprint 250ms late defers a
+// panel refresh by a frame, never a keystroke — and every write clears the caches
+// behind it directly anyway.
+const REFS_FP_TTL_MS = 250;
+const refsFpCache = new Map<string, { at: number; fp: number }>();
+async function refsFingerprint(root: string): Promise<number> {
+  const famRoot = worktreeParent(root) ?? root;
+  const hit = refsFpCache.get(famRoot);
+  if (hit && Date.now() - hit.at < REFS_FP_TTL_MS) return hit.fp;
+  const r = await gitAsync(famRoot, ["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]);
+  // A failure fingerprints as "different every time", so a broken repo falls
+  // back to recomputing rather than serving one wrong answer forever.
+  const fp = r.code === 0 ? Number(Bun.hash(r.stdout + ":" + r.stdout.length)) : Math.random();
+  if (refsFpCache.size > 200) refsFpCache.clear();
+  refsFpCache.set(famRoot, { at: Date.now(), fp });
+  return fp;
+}
+
+/** Recompute only when a ref moved, off the loop. `key` separates answers that
+ *  come from the same repo but different questions (the log's scope, a limit). */
+async function whileRefsHoldAsync(key: string, root: string, compute: () => Promise<unknown>): Promise<string> {
+  if (!root) return JSON.stringify(await compute());
+  const refs = await refsFingerprint(root);
+  const hit = refsCache.get(key);
+  if (hit && hit.refs === refs) return hit.body;
+  const body = JSON.stringify(await compute());
+  if (refsCache.size > 40) refsCache.clear();
+  refsCache.set(key, { refs, body });
+  return body;
+}
+
+const TREE_TTL_MS = 1_000;
+const treeCache = new Map<string, { at: number; data: WorkingTree }>();
+// The worktree panel is the heaviest git poll (a list plus base/behind/dirty per
+// checkout). Its inner reads are cached and family-shared now, but the assembled
+// answer had no cache of its own — so every poll of every open tab still rebuilt
+// it. A short TTL (scaled by backoff while a shell is hot) holds it across the
+// 10s panel poll and the burst a scope switch fires, and every write clears it
+// through the same git-change hook the tree cache uses.
+const WORKTREES_TTL_MS = 2_500;
+const worktreesCache = new Map<string, { at: number; body: string }>();
+setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); broadcast({ type: "git" }); });
+
+/**
+ * Session detail, held briefly, and invalidated when the session gets an event.
+ *
+ * `getSession` is a synchronous SQLite scan of the whole session, and a big one
+ * (8000+ events) measured ~50ms warm and several times that under load — 50ms+
+ * of the loop the PTY rides, per call. The detail modal polls it, and the
+ * interaction load hammered it: the watchdog showed GET /session as the single
+ * worst loop-blocker, six recomputations of the same static session queued back
+ * to back. The body is cached per id so a re-open or a poll is free, and cleared
+ * the instant an event lands for that session (ingestBody) so a LIVE session
+ * still updates at once — a historical one, which is what you actually sit and
+ * read, never recomputes. Combined with the single-flight on the endpoint, N
+ * concurrent opens of the same session cost one scan, not N.
+ *
+ * The TTL is only a backstop: correctness comes from the two invalidation points
+ * (HTTP ingest and the scanner tail), which fire on the exact events that change
+ * the answer. So it is long — a short one would just spend ~50ms of the PTY's
+ * thread re-deriving output that has not changed, which is the very spike this
+ * removes — and scaled by backoff() so it holds even longer while a shell is hot.
+ */
+const SESSION_TTL_MS = 15_000;
+const sessionCache = new Map<string, { at: number; body: string | null }>();
+
 function broadcast(frame: WsFrame) {
+  // Serialising an event and writing it to every open client. Small per client,
+  // but it is a fan-out on the hot path of ingest and it was one of the things
+  // hiding inside "(background)".
+  entered("broadcast to clients");
   const msg = JSON.stringify(frame);
   for (const ws of clients) {
     try {
@@ -164,12 +347,51 @@ function broadcast(frame: WsFrame) {
   }
 }
 
+/**
+ * Push the open-tool list, with evidence read at this moment.
+ *
+ * Evidence is a claim about *now* — "the file it promised to touch has not
+ * changed since the call opened" — and one taken when a client connected is
+ * worth nothing a minute later. It used to be sent only in the `initial` frame,
+ * which was fine while nothing depended on it and is not fine now that it
+ * decides whether a session is reported as stuck.
+ *
+ * Silent when nothing is open and when nobody is listening, so an idle machine
+ * pays for one SQL query on a four-second tick and no filesystem work at all.
+ */
+function pushOpenTools() {
+  if (!clients.size) return;
+  const open = openToolCalls();
+  if (!open.length && !lastOpenCount) return;
+  lastOpenCount = open.length;
+  broadcast({ type: "openTools", data: withEvidence(open) });
+}
+let lastOpenCount = 0;
+/**
+ * How often the verdict is re-read.
+ *
+ * Fast enough that "stuck" appears while the user is still looking at the
+ * session, slow enough that the filesystem work — one stat per session, one
+ * shallow directory scan per working directory — is nothing. The classifier's
+ * own thresholds are in minutes, so a tighter tick would buy no accuracy.
+ */
+const OPEN_TOOL_TICK_MS = 4000;
+setInterval(pushOpenTools, OPEN_TOOL_TICK_MS).unref?.();
+
 /** Normalize → persist → broadcast → alert. Shared by /ingest and /v1/traces. */
 function ingestBody(body: IngestBody) {
   const n = normalize(body);
   const { event, session } = insertEvent(n);
+  // The session just grew, so its cached detail is stale — drop it so a live
+  // session refreshes on the next open, while static sessions keep serving from
+  // cache. Cheap: one Map delete on a path already doing a DB write.
+  sessionCache.delete(event.session_id);
   broadcast({ type: "event", data: event });
   broadcast({ type: "session", data: session });
+  // A Pre opens a call and a Post closes one, so the list the fleet is drawing
+  // from just changed. Pushed now rather than up to a tick later, because the
+  // moment a tool starts is exactly when the card should say so.
+  if (event.hook_event_type === "PreToolUse" || event.hook_event_type.startsWith("PostToolUse")) pushOpenTools();
   maybeAlert(event);
   return event;
 }
@@ -196,12 +418,19 @@ const server = Bun.serve<WsData>({
   async fetch(req, srv) {
     const url = new URL(req.url);
     const { pathname } = url;
+    // Name this request for the loop watchdog: if the loop stalls in the next
+    // moment, the stall is reported against this path instead of being one more
+    // anonymous freeze in a terminal. See loopwatch.ts.
+    entered(`${req.method} ${pathname}`);
 
     // Per-request response helpers: `cors` reflects this caller's Origin, so it
     // has to be built here rather than shared as a module constant.
     const cors = corsFor(req);
     const json = (data: unknown, status = 200) =>
       new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json", ...cors } });
+    /** Already-serialised JSON — see whileRefsHold. */
+    const body = (s: string, status = 200) =>
+      new Response(s, { status, headers: { "content-type": "application/json", ...cors } });
     const csrfBlocked = () => json({ ok: false, error: "cross-origin write blocked" }, 403);
     const rebindBlocked = () =>
       json({ ok: false, error: "request Host is not a local or private address (DNS-rebinding guard — set AGENTGLASS_ALLOWED_HOSTS for a reverse-proxy name)" }, 403);
@@ -217,6 +446,18 @@ const server = Bun.serve<WsData>({
     // missing Origin is a non-browser caller (curl, the hooks), not a drive-by,
     // so it's allowed; a foreign website is turned away here.
     if (!localOrigin(req)) return csrfBlocked();
+
+    // --- built web UI (single-port mode) ---
+    // Exact files only, GET/HEAD only, and ahead of the token gate: the bundle
+    // is the same public code that ships in the repo, and the ?token= flow
+    // needs index.html and its assets to load before the app can pick the
+    // token up and attach it — every data route below stays gated. API paths
+    // never collide here: none of them maps to a real file under web/dist, so
+    // for them this falls straight through to the routes.
+    if (req.method === "GET" || req.method === "HEAD") {
+      const asset = serveWeb(pathname, cors);
+      if (asset) return asset;
+    }
 
     // Shared-secret gate. When a token is configured, every route but the
     // append-only intake sinks needs it — this is what closes the door on other
@@ -260,8 +501,33 @@ const server = Bun.serve<WsData>({
       return new Response("upgrade failed", { status: 426 });
     }
 
+    // --- desktop notifications mirrored onto the notch ---
+    //
+    // The monitor runs only while a socket is open here, and the UI only opens
+    // one when the user has switched the feature on. Off means nothing is
+    // spawned and nothing is read — not "read it and don't show it".
+    if (pathname === "/notifications/capability") return json(notifyCapability());
+    if (pathname === "/notifications/open" && req.method === "POST") {
+      if (!trustedCaller(req)) return csrfBlocked();
+      let body: { id?: unknown };
+      try { body = (await req.json()) as { id?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = openNote(body?.id);
+      return json(r, r.ok ? 200 : 404);
+    }
+    if (pathname === "/notifications") {
+      if (!trustedCaller(req)) return csrfBlocked();
+      const cap = notifyCapability();
+      if (!cap.supported) return json({ error: cap.reason ?? "unsupported" }, 501);
+      if (srv.upgrade(req, { data: { kind: "notify" } })) return undefined as unknown as Response;
+      return new Response("upgrade failed", { status: 426 });
+    }
+
     // --- health ---
-    if (pathname === "/health") return json({ ok: true, clients: clients.size });
+    // `service` is the identity marker: the desktop shell probes :4000 before
+    // spawning its sidecar, and "answers 200" is not the same as "is us". Any
+    // other local dev server squatting the port answers 200 too, and adopting
+    // it pointed the whole cockpit at a stranger's API. See electron/main.js.
+    if (pathname === "/health") return json({ ok: true, service: "agentglass", clients: clients.size, notifyWatching: notifyWatching() });
 
     // --- ingest ---
     if (pathname === "/ingest" && req.method === "POST") {
@@ -364,12 +630,27 @@ const server = Bun.serve<WsData>({
       const ti = b.tool_input ?? {};
       const summary = String(ti.command || ti.file_path || ti.path || ti.pattern || ti.query || ti.description || b.tool_name || "").slice(0, 300);
       const decision = await submitGate(
-        { source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
+        // The hook picks the id so it can re-attach to this exact request after
+        // a dropped connection (see /gate/status). Shape-checked in gate.ts;
+        // anything else falls back to a server-generated one.
+        { id: typeof b.id === "string" ? b.id : undefined, source_app: String(b.source_app || "unknown"), session_id: String(b.session_id || "unknown"), tool_name: String(b.tool_name || "?"), summary },
         Math.min(GATE_MAX_MS, Number(b.timeout_ms) || 60_000)
       );
       return json(decision);
     }
+    // Re-attach to a request whose connection dropped — a server restart, a
+    // proxy hanging up. Holds open like /gate does when it's still pending,
+    // answers immediately when it's already decided, and 404s on an id it has
+    // never heard of so the hook falls back to its own policy instead of
+    // reading "no answer" as an approval.
+    if (pathname === "/gate/status") {
+      const out = await awaitGate(String(url.searchParams.get("id") || ""));
+      return out ? json(out) : json({ decision: null, reason: "unknown gate" }, 404);
+    }
     if (pathname === "/gate/pending") return json({ gates: pendingGates() });
+    // What was decided while you weren't looking — including the requests a
+    // timeout or a restart resolved for you.
+    if (pathname === "/gate/history") return json({ gates: gateHistory(Number(url.searchParams.get("limit") || 50)) });
     if (pathname === "/gate/decide" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
@@ -384,7 +665,11 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/changes") {
       const limit = Math.min(500, Number(url.searchParams.get("limit") || 200));
-      return json({ changes: getChanges(limit) });
+      const changes = getChanges(limit);
+      // One `git check-ignore` per repo, not per file, so the client can fold
+      // away build output without having to guess at .gitignore semantics.
+      const ignored = markIgnored(changes.map((c) => c.file_path));
+      return json({ changes: changes.map((c) => ({ ...c, ignored: ignored.get(c.file_path) === true })) });
     }
 
     // --- commit composer: live git working-tree status + commit ---
@@ -393,7 +678,7 @@ const server = Bun.serve<WsData>({
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       const paths = Array.isArray(b.paths) ? b.paths.filter((p: unknown) => typeof p === "string").slice(0, 500) : [];
-      return json({ repos: statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
+      return json({ repos: await statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
     }
     if (pathname === "/git/commit" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
@@ -404,12 +689,21 @@ const server = Bun.serve<WsData>({
     }
 
     // --- live git panel (lazygit-style working tree) ---
+    // Is git even installed? A plain read like the rest of /git/*, so the
+    // surface-wide origin/rebinding gate is the whole authorisation story.
+    if (pathname === "/git/capability") return json(gitCapability());
     if (pathname === "/git/repos") {
-      const paths = getChanges(300).map((c) => c.file_path);
       // `all=1` is the project picker: it needs the whole machine even when the
       // cockpit is currently scoped to one project, or there'd be no way out.
       const ignoreScope = url.searchParams.get("all") === "1";
-      return json({ repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }) });
+      // Single-flighted: this sweep is a `git status` per repo across every
+      // checkout, and several open tabs asking at the same instant would each
+      // launch the whole fan-out. They share one now. (The 15s repoCache behind
+      // it still handles reuse across time; this handles reuse across callers.)
+      return body(await singleFlight(`repos:${ignoreScope}`, async () => {
+        const paths = getChanges(300).map((c) => c.file_path);
+        return JSON.stringify({ repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }) });
+      }));
     }
     // Directory completion for the project picker's free-text path input. A
     // plain read, so the surface-wide origin/rebinding/token gate above is the
@@ -423,20 +717,96 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/git/tree") {
       const root = url.searchParams.get("root") || "";
-      return json(workingTree(root));
+      // The 1s cache handles the 2.5s re-poll; single-flight handles the tabs
+      // that miss it together. workingTree is four git reads on the loop, so
+      // one caller doing them for all is the difference under a fan-out.
+      return body(await singleFlight(`tree:${root}`, async () => {
+        const hit = treeCache.get(root);
+        if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return JSON.stringify(hit.data);
+        const data = await workingTree(root);
+        if (treeCache.size > 40) treeCache.clear();
+        treeCache.set(root, { at: Date.now(), data });
+        return JSON.stringify(data);
+      }));
     }
-    if (pathname === "/git/branches") return json(gitBranches(url.searchParams.get("root") || ""));
-    if (pathname === "/git/graph") return json(logGraph(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 400)));
-    if (pathname === "/git/worktrees") return json({ worktrees: gitWorktrees(url.searchParams.get("root") || "") });
+    if (pathname === "/git/branches") {
+      const root = url.searchParams.get("root") || "";
+      return body(await singleFlight(`branches:${root}`, () => whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root))));
+    }
+    // `scope=all` is the whole graph; anything else is this checkout's own
+    // history, which is what the pane defaults to.
+    if (pathname === "/git/graph") {
+      const root = url.searchParams.get("root") || "";
+      const limit = Number(url.searchParams.get("limit") || 400);
+      const scope = url.searchParams.get("scope") === "all" ? "all" : "head";
+      const key = `graph:${root}:${limit}:${scope}`;
+      return body(await singleFlight(key, () => whileRefsHoldAsync(key, root, () => logGraph(root, limit, scope))));
+    }
+    if (pathname === "/git/worktrees") {
+      const root = url.searchParams.get("root") || "";
+      // The heaviest git read the panel polls: a worktree list plus a status,
+      // base and rev-list per checkout — a dozen-plus subprocesses on a
+      // worktree-heavy repo. Concurrent identical polls collapse via single-flight;
+      // a short TTL cache (× backoff) holds the assembled answer across the poll
+      // and the burst a scope switch fires, cleared on any write by the git hook.
+      return body(await singleFlight(`worktrees:${root}`, async () => {
+        const hit = worktreesCache.get(root);
+        if (hit && Date.now() - hit.at < WORKTREES_TTL_MS * backoff()) return hit.body;
+        const b = JSON.stringify({ worktrees: await gitWorktrees(root) });
+        if (worktreesCache.size > 40) worktreesCache.clear();
+        worktreesCache.set(root, { at: Date.now(), body: b });
+        return b;
+      }));
+    }
+    // What a worktree removal would destroy, per path — asked before offering
+    // the removal, never after. Repeatable `path=` so the bulk delete can price
+    // every worktree it is about to touch in one round trip; concurrent because
+    // each is a `git status --ignored` and a dozen sequential ones is a second.
+    if (pathname === "/git/worktree-leftovers") {
+      const root = url.searchParams.get("root") || "";
+      const paths = url.searchParams.getAll("path").slice(0, 50);
+      return json({ leftovers: await Promise.all(paths.map((p) => worktreeLeftovers(root, p))) });
+    }
+    // Update: reads are gated too, since the status alone reveals the source
+    // path on disk.
+    if (pathname === "/update/status") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      return json(await updateStatus());
+    }
+    // What changed in the release this build came from. Same desktop-only gate
+    // as the rest of /update: the build's origin and tag are in the answer.
+    if (pathname === "/update/notes") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      return json(await releaseNotes(url.searchParams.get("tag") || undefined));
+    }
+    if (pathname === "/update/log") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      return json(updateLog());
+    }
+    if (pathname === "/git/conflicts") return json(gitConflicts(url.searchParams.get("root") || ""));
+    if (pathname === "/git/conflict-blocks") return json(conflictBlocks(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
+    if (pathname === "/git/base-candidates") return json(baseCandidates(url.searchParams.get("root") || ""));
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
     // Every git command this server has run — the command log panel.
     if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
+    // Every moment this process stopped answering, and what was running. The
+    // terminal rides this loop, so these ARE the freezes the user feels.
+    if (pathname === "/api/loopwatch") return json({ ...stalls(Number(url.searchParams.get("since") || 0)), spawns: spawnPoolStats(), coalescing: inflightCount() });
     // Open a file at a line in the editor the user already has running.
     if (pathname === "/editor/target") return json({ ...(await editorTarget(url.searchParams.get("path") || "")), hasNvim: HAS_NVIM });
     if (pathname === "/git/remotes") return json({ remotes: gitRemotes(url.searchParams.get("root") || "") });
-    if (pathname === "/git/tags") return json({ tags: gitTags(url.searchParams.get("root") || "") });
+    // Every branch on one remote, as the last fetch left them. Whole, not
+    // paged — see remoteBranches() for why.
+    if (pathname === "/git/remote-branches") return json(gitRemoteBranches(url.searchParams.get("root") || "", url.searchParams.get("remote") || ""));
+    if (pathname === "/git/tags") {
+      // 125 tags is one `for-each-ref` and cheap, but it is on the same 10s poll
+      // and answers from the same refs — free to include. Awaited like the other
+      // refs-held reads so its for-each-ref stays off the terminal's thread.
+      const root = url.searchParams.get("root") || "";
+      return body(await whileRefsHoldAsync(`tags:${root}`, root, async () => ({ tags: await gitTags(root) })));
+    }
     if (pathname === "/git/reflog") return json({ entries: gitReflog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 200)) });
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
     if (pathname === "/editor/capability") return json(editorCapability());
@@ -484,20 +854,67 @@ const server = Bun.serve<WsData>({
         case "/git/rebase": res = rebaseBranch(root, String(b.name || "")); break;
         case "/git/branch-rename": res = renameBranch(root, String(b.name || ""), String(b.to || "")); break;
         case "/git/reset": res = resetTo(root, String(b.ref || ""), b.mode); break;
-        case "/git/worktree-add": res = addWorktree(root, b.path, String(b.branch || ""), !!b.newBranch); break;
+        case "/git/worktree-add": res = addWorktree(root, b.path, String(b.branch || ""), !!b.newBranch, b.startPoint); break;
+        // Bring a remote branch local. `switch` moves this checkout onto it;
+        // without it the branch is created and nothing else moves.
+        case "/git/track-remote": res = trackRemoteBranch(root, String(b.ref || ""), { switch: !!b.switch }); break;
         case "/git/worktree-remove": res = removeWorktree(root, b.path, !!b.force); break;
+        // Copy chosen leftovers into the main checkout before the worktree
+        // holding them is removed. Never overwrites — see rescueLeftovers().
+        case "/git/worktree-rescue": res = await rescueLeftovers(root, b.path, b.paths); break;
+        // Elevates — the only route that does. chown only, never rm, and the
+        // path must match a worktree git reports. See fixWorktreeOwnership().
+        case "/git/worktree-chown": res = fixWorktreeOwnership(root, b.path); break;
+        // `root` here is the checkout being updated — a worktree updates
+        // itself, because the merge has to run where the branch is checked out.
+        case "/git/sync-base": res = await syncFromBase(root, b.base); break;
+        case "/git/set-base": res = setBase(root, b.branch, b.base ?? null); break;
+        case "/git/resolve": res = resolveWith(root, b.paths ?? b.path, b.side); break;
+        case "/git/resolve-blocks": res = resolveBlocks(root, b.path, b.choices); break;
+        case "/git/merge-abort": res = mergeAbort(root); break;
+        case "/git/merge-continue": res = mergeContinue(root); break;
+        case "/git/undo-merge": res = await undoMerge(root); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);
     }
 
     // --- live docker panel (lazydocker-style) ---
-    if (pathname === "/docker/overview") return json(await dockerOverview());
-    if (pathname === "/docker/stats") return json({ stats: await dockerStats() });
+    // Is docker even installed, as opposed to the daemon being down? A plain
+    // read like the rest of /docker/*, so the surface-wide origin/rebinding gate
+    // is the whole authorisation story. Lets the panel show install guidance for
+    // a missing binary instead of the overview's daemon message. Mirrors
+    // /git/capability.
+    if (pathname === "/docker/capability") return json(await dockerCapability());
+    // Single-flighted alongside the git reads: `docker ps`/`docker stats` are
+    // slow spawns (seconds each) behind a short cache, and several tabs missing
+    // that cache together would each launch one. One sample now serves them all.
+    if (pathname === "/docker/overview") return body(await singleFlight("docker:overview", async () => JSON.stringify(await dockerOverview())));
+    if (pathname === "/docker/stats") {
+      // Sample what the panel is showing. The overview is cached and scoped, so
+      // this costs nothing extra and keeps the two answers about the same set of
+      // containers — a scoped panel asking the daemon about the whole host was
+      // the inconsistency worth removing.
+      // Running and paused: those are the states `docker stats` has numbers for.
+      // A restarting container is deliberately left out — it is between processes
+      // often enough that naming it can take the whole sample down with a "no such
+      // container", and it has nothing to report either way.
+      return body(await singleFlight("docker:stats", async () => {
+        const shown = await dockerOverview();
+        const sampleable = shown.containers.filter((c) => c.state === "running" || c.state === "paused").map((c) => c.id);
+        return JSON.stringify({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
+      }));
+    }
+    if (pathname === "/docker/inspect") return json(await dockerInspect(url.searchParams.get("id") || ""));
+    if (pathname === "/docker/top") return json(await dockerTop(url.searchParams.get("id") || ""));
     if (pathname === "/docker/logs") {
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);
-      return json(dockerLogs(id, tail));
+      return json(await dockerLogs(id, tail));
+    }
+    if (pathname === "/update/run" && req.method === "POST") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      return json(await startUpdate());
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
@@ -506,17 +923,90 @@ const server = Bun.serve<WsData>({
       const id = String(b.id || "");
       let res;
       switch (pathname) {
-        case "/docker/start": res = startContainer(id); break;
-        case "/docker/stop": res = stopContainer(id); break;
-        case "/docker/restart": res = restartContainer(id); break;
-        case "/docker/rm": res = removeContainer(id); break;
+        case "/docker/start": res = await startContainer(id); break;
+        case "/docker/stop": res = await stopContainer(id); break;
+        case "/docker/restart": res = await restartContainer(id); break;
+        case "/docker/rm": res = await removeContainer(id); break;
+        default: res = null;
+      }
+      if (res) return json(res, res.ok ? 200 : 400);
+    }
+
+    // --- pull requests (gh-backed) ---
+    //
+    // Reads answer from a cache that refreshes behind them, so none of these
+    // waits on a subprocess. Writes are all POST and all origin-checked; the
+    // irreversible ones additionally carry the head sha the UI showed.
+    if (pathname === "/prs/capability") return json(await ghCapability(url.searchParams.get("force") === "1"));
+    if (pathname === "/prs/list") {
+      return json(await listPrs(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("filter") || "mine",
+        url.searchParams.get("force") === "1",
+      ));
+    }
+    if (pathname === "/prs/detail") {
+      return json(await prDetail(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("number") || "",
+        url.searchParams.get("force") === "1",
+      ));
+    }
+    if (pathname === "/prs/diff") {
+      return json(await prDiff(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));
+    }
+    // Images in a PR body. Not JSON — it streams the bytes back, because
+    // GitHub's own attachment URLs 404 without the token this attaches.
+    if (pathname === "/prs/asset") return prAsset(url.searchParams.get("url") || "");
+    if (pathname === "/prs/commit-diff") {
+      return json(await prCommitDiff(url.searchParams.get("root") || "", url.searchParams.get("sha") || ""));
+    }
+    if (pathname === "/prs/branch-url") {
+      return json(await branchUrl(
+        url.searchParams.get("root") || "",
+        url.searchParams.get("branch") || "",
+        url.searchParams.get("gone") || "",
+      ));
+    }
+    if (pathname.startsWith("/prs/") && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const root = b.root ?? "";
+      const n = b.number;
+      let res;
+      switch (pathname) {
+        case "/prs/review": res = await submitReview(root, n, b.verb, b.body); break;
+        case "/prs/review-with": res = await submitReviewWith(root, n, b.verb, b.body, b.comments); break;
+        case "/prs/comment": res = await addComment(root, n, b.body); break;
+        case "/prs/reply": res = await replyToThread(root, n, b.commentId, b.body); break;
+        case "/prs/thread-resolved": res = await setThreadResolved(root, b.threadId, b.resolved); break;
+        case "/prs/react": res = await react(root, b.commentId, b.content); break;
+        case "/prs/edit": res = await editPr(root, n, { title: b.title, body: b.body, base: b.base }); break;
+        case "/prs/labels": res = await setLabels(root, n, b.add, b.remove); break;
+        case "/prs/reviewers": res = await setReviewers(root, n, b.add, b.remove); break;
+        case "/prs/draft": res = await setDraft(root, n, b.draft); break;
+        case "/prs/update-branch": res = await updateBranch(root, n); break;
+        case "/prs/rerun": res = await rerunFailedChecks(root, n); break;
+        case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha }); break;
+        case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
+        case "/prs/local-review": res = await prepareLocalReview(root, n); break;
+        case "/prs/local-review-discard": res = await discardLocalReview(root, n); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);
     }
 
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
-    if (pathname === "/terminal/commands") return json(projectCommands(url.searchParams.get("root") || ""));
+    // Async + cached in terminal.ts (the depth-3 Makefile/package.json walk used
+    // to run synchronously on the loop the PTY rides — the watchdog named it at
+    // 84s under load); single-flighted here so the several tabs / the
+    // new-terminal + ⚙-menu that ask at the same instant share one walk rather
+    // than each launching the whole thing.
+    if (pathname === "/terminal/commands") {
+      const root = url.searchParams.get("root") || "";
+      return body(await singleFlight(`cmds:${root}`, async () => JSON.stringify(await projectCommands(root))));
+    }
 
     // --- multi-chat: drive claude sessions from the browser ---
     // `bypass` rides along so the mode picker can stop offering a mode the
@@ -544,19 +1034,31 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/session") {
       const id = url.searchParams.get("id") || "";
-      const detail = id ? getSession(id) : null;
-      return detail ? json(detail) : json({ error: "not found" }, 404);
+      if (!id) return json({ error: "not found" }, 404);
+      // Cached per id (cleared on a new event for the session — see ingestBody)
+      // and single-flighted, so a huge session's synchronous scan runs at most
+      // once per change instead of once per poll per open tab.
+      const out = await singleFlight(`session:${id}`, async () => {
+        const hit = sessionCache.get(id);
+        if (hit && Date.now() - hit.at < SESSION_TTL_MS * backoff()) return hit.body;
+        const detail = getSession(id);
+        const b = detail ? JSON.stringify(detail) : null;
+        if (sessionCache.size > 40) sessionCache.clear();
+        sessionCache.set(id, { at: Date.now(), body: b });
+        return b;
+      });
+      return out ? body(out) : json({ error: "not found" }, 404);
     }
-    if (pathname === "/skills") return json({ skills: getSkills(), generated_at: Date.now() });
+    if (pathname === "/skills") return json({ skills: await getSkills(), generated_at: Date.now() });
     if (pathname === "/skills/export") {
       const fmt = url.searchParams.get("format") || "md";
       const dl = (body: string, type: string, name: string) =>
         new Response(body, {
           headers: { "content-type": type, "content-disposition": `attachment; filename="${name}"`, ...cors },
         });
-      if (fmt === "json") return dl(JSON.stringify(getSkills(), null, 2), "application/json", "skills-catalog.json");
-      if (fmt === "csv") return dl(catalogCsv(), "text/csv", "skills-catalog.csv");
-      return dl(catalogMarkdown(), "text/markdown", "skills-catalog.md");
+      if (fmt === "json") return dl(JSON.stringify(await getSkills(), null, 2), "application/json", "skills-catalog.json");
+      if (fmt === "csv") return dl(await catalogCsv(), "text/csv", "skills-catalog.csv");
+      return dl(await catalogMarkdown(), "text/markdown", "skills-catalog.md");
     }
     if (pathname === "/sessions") {
       const limit = Math.min(1000, Number(url.searchParams.get("limit") || 100));
@@ -597,21 +1099,47 @@ const server = Bun.serve<WsData>({
       });
     }
 
+    // --- SPA fallback ---
+    // Every API route above has declined by now. A GET that asks for html is a
+    // browser navigating to a UI deep-link (or a bookmark of one) — hand it
+    // index.html and let the bundle take it from there. Anything else — curl,
+    // fetch, an exporter probing a bad path — still gets the JSON 404.
+    if (req.method === "GET" && (req.headers.get("accept") || "").includes("text/html")) {
+      const page = serveIndex(cors);
+      if (page) return page;
+    }
+
     return json({ error: "not found" }, 404);
   },
 
   websocket: {
     open(ws: ServerWebSocket<WsData>) {
       if (ws.data?.kind === "pty") { ptyOpen(ws); return; }
+      if (ws.data?.kind === "notify") {
+        notifySubs.set(ws, subscribeNotifications((n) => {
+          try { ws.send(JSON.stringify(n)); } catch { /* closing */ }
+        }));
+        return;
+      }
       clients.add(ws);
       // openTools seeds the client's "running" state for tools whose PreToolUse
       // predates the 300-event initial slice — otherwise a long job in flight
       // when the page loads shows as idle (or missing) until its Post arrives.
-      const frame: WsFrame = { type: "initial", data: getRecent(300), openTools: openToolCalls() };
+      // Each open call carries when its session last showed evidence of life —
+      // read here rather than in db.ts, which has no business touching the
+      // filesystem. See evidence.ts for why elapsed time alone cannot answer it.
+      const frame: WsFrame = { type: "initial", data: getRecent(300), openTools: withEvidence(openToolCalls()) };
       ws.send(JSON.stringify(frame));
     },
     close(ws: ServerWebSocket<WsData>) {
       if (ws.data?.kind === "pty") { ptyClose(ws); return; }
+      if (ws.data?.kind === "notify") {
+        // Unsubscribing is what stops the monitor process once the last
+        // listener goes, so this must run on every close path.
+        notifySubs.get(ws)?.();
+        notifySubs.delete(ws);
+        return;
+      }
       clients.delete(ws);
     },
     message(ws: ServerWebSocket<WsData>, msg) {
@@ -709,15 +1237,68 @@ setInterval(prune, 3_600_000);
 // keep watching. This is what makes the dashboard cover all projects at once
 // instead of only the directory agentglass happens to run from.
 startScanner(({ event, session }) => {
+  // Same as ingestBody: the scanner tails live transcripts straight through
+  // insertEvent (not ingestBody), so this is the other path a session grows on
+  // — drop its cached detail here too, or a session being watched live would
+  // read stale until the TTL backstop.
+  sessionCache.delete(event.session_id);
   broadcast({ type: "event", data: event });
   broadcast({ type: "session", data: session });
+  // A Pre opens a call and a Post closes one, so the list the fleet is drawing
+  // from just changed. Pushed now rather than up to a tick later, because the
+  // moment a tool starts is exactly when the card should say so.
+  if (event.hook_event_type === "PreToolUse" || event.hook_event_type.startsWith("PostToolUse")) pushOpenTools();
   maybeAlert(event);
 });
+
+// Bring back the gate requests that were in flight when this process last
+// stopped. Anything still inside its window returns to "what needs you"; the
+// rest is resolved by the configured policy and recorded, never dropped.
+const gates = restoreGates();
+if (gates.restored || gates.expired) {
+  console.log(`✋ gate: ${gates.restored} pending restored, ${gates.expired} expired while down (${process.env.AGENTGLASS_GATE_FAILCLOSED === "1" ? "denied" : "allowed"})`);
+}
 
 // Hang up shells and clean temp dirs on the way out — a bare kill leaves them
 // orphaned. Re-raise so the default disposition still terminates the process.
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => { shutdownTerminals(); process.exit(0); });
+}
+
+// Parent-death watchdog: a server must never outlive whoever launched it.
+//
+// The signal handlers above only cover a clean SIGINT/SIGTERM. They do nothing
+// when the launcher is SIGKILLed or crashes, and there is no launcher-side
+// cleanup at all for `make dev`, the perf/soak scripts, or a server an agent
+// left running inside a worktree that was later deleted (cwd `(deleted)`). The
+// only other thing that stops a sidecar is Electron's in-process stopSidecar
+// handler, which likewise cannot survive its own SIGKILL. The observed result:
+// a dozen servers reparented to init, each holding a port and a fistful of
+// shells, still running ~18h later and saturating the box. This gives the
+// server its own defence — it remembers the pid it was born under and, every
+// few seconds, checks that pid is still both its parent and alive. Reparented
+// to init (ppid 1), handed to a different parent, or the original gone → hang
+// up the shells and exit under its own power, within ~3s of losing its parent.
+//
+// Gated behind a flag the launcher opts into, so a deliberately daemonized
+// `make start` is never self-terminated. Every launcher that expects the
+// server to die with it sets the flag (the electron spawn, the dev script, the
+// perf/soak spawns); the 432-test suite never sets it, so the watchdog stays
+// dormant under `make test` — which is why the interval is not even registered
+// unless the flag is present. `process.ppid === 1` is the robust signal: a
+// crash of an intermediate wrapper (`bun --watch`, `concurrently`) reparents
+// the whole subtree to init, which a bare `!== bornUnder` on a still-live
+// wrapper would miss; `!== bornUnder` in turn catches the immediate parent
+// alone going away and the pid being recycled under a new owner.
+if (process.env.AGENTGLASS_DIE_WITH_PARENT === "1") {
+  const bornUnder = process.ppid;
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  setInterval(() => {
+    if (process.ppid === 1 || process.ppid !== bornUnder || !alive(bornUnder)) {
+      shutdownTerminals();
+      process.exit(0);
+    }
+  }, 3000).unref?.();
 }
 
 console.log(`🛰  agentglass server on http://${LOOPBACK_ONLY ? "localhost" : BIND}:${server.port}`);
@@ -737,6 +1318,7 @@ if (AUTH_TOKEN) {
     console.log(`🔑 AGENTGLASS_TOKEN set — clients must pass ?token= or Authorization: Bearer`);
   }
 }
+if (WEB_UI_ENABLED) console.log(`   Web UI      → http://localhost:${server.port}/ (serving web/dist)`);
 console.log(`   POST events → http://localhost:${server.port}/ingest`);
 console.log(`   WebSocket   → ws://localhost:${server.port}/stream`);
 console.log(`   Stats API   → http://localhost:${server.port}/stats`);
@@ -745,3 +1327,19 @@ const ws = workspaceRoot();
 console.log(ws ? `   Project     → ${ws} (this project only)` : "   Project     → every project on this machine");
 // Only meaningful once a project is open — see startAutoFetch().
 startAutoFetch();
+// A pull request's checks finished. The latch is on the server so the message
+// arrives once per verdict no matter how many browser tabs are watching, and
+// the frame carries the names of what failed rather than only a count.
+subscribeCi((v) => broadcast({ type: "ci", data: v }));
+// Watch our own event loop. Cheap (one timer, one subtraction) and the only
+// thing that turns "the terminal feels laggy" into a name and a number.
+watchLoop();
+
+// Say it once at boot if git is missing. Every git/diff/PR panel and the
+// terminal need it, and without this the only symptom is empty panels that
+// blame the repo — the log line is where an installer user finds the real
+// cause without opening devtools.
+{
+  const gc = gitCapability();
+  if (!gc.available) console.warn(`⚠  git not found on PATH — the git, diff, pull-request and terminal panels will not work. Install git to enable them.`);
+}

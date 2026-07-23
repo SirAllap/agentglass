@@ -12,6 +12,11 @@ Safety by design — it NEVER blocks your agents by accident:
   * if no one decides within the timeout → the server auto-allows
   * only sessions wired to this hook are gated; everything else is untouched
 
+Durable across a server restart: the hook picks the request id, so if the
+connection drops mid-wait (agentglass restarted, a crash, a proxy hanging up)
+it re-attaches to that same request instead of giving up and falling into the
+timeout branch. It only gives up once its own deadline has passed.
+
 Deny/allow are returned to Claude Code via the PreToolUse permissionDecision.
 
 Env:
@@ -22,7 +27,11 @@ import argparse
 import json
 import os
 import sys
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
 
 DEFAULT_SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000")
 
@@ -81,7 +90,12 @@ def main():
     except json.JSONDecodeError:
         allow_silently()
 
+    # The id is ours, not the server's. That is what makes a dropped connection
+    # recoverable: without it there is no name for the request we were waiting
+    # on, and a restart mid-wait can only be read as "no answer".
+    gate_id = str(uuid.uuid4())
     body = json.dumps({
+        "id": gate_id,
         "source_app": args.source_app,
         "session_id": payload.get("session_id") or "unknown",
         "tool_name": payload.get("tool_name") or "?",
@@ -98,17 +112,68 @@ def main():
     if token:
         headers["Authorization"] = "Bearer " + token
 
-    req = urllib.request.Request(
-        args.server.rstrip("/") + "/gate",
-        data=body,
-        headers=headers,
-        method="POST",
-    )
+    base = args.server.rstrip("/")
+
+    def submit(remaining):
+        """POST the request. Idempotent on our id: the server re-attaches to a
+        live request rather than raising a second prompt for the same call."""
+        req = urllib.request.Request(base + "/gate", data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=remaining) as resp:
+            return json.loads(resp.read())
+
+    def reattach(remaining):
+        """Long-poll the request we already sent. 404 means the server has no
+        record of it — it never arrived — so the caller re-submits."""
+        url = base + "/gate/status?" + urllib.parse.urlencode({"id": gate_id})
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=remaining) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+
+    # Our own deadline, a little past the server's, so a decision that lands
+    # just as the window closes still reaches us. Every drop inside it is a
+    # reconnect, not a verdict: the request is persisted server-side, so giving
+    # up early would convert "a human is deciding" into a silent auto-allow.
+    deadline = time.monotonic() + TIMEOUT + 10
+    out = None
+    sent = True
+    backoff = 0.5
+    # The first POST is still allowed to fail fast. "Nothing is listening" is not
+    # the same failure as "the thing we were talking to went away": retrying a
+    # refused connection for a full timeout would stall every gated tool call on
+    # a machine where agentglass simply isn't running.
     try:
-        # Wait a hair longer than the server's own timeout.
-        with urllib.request.urlopen(req, timeout=TIMEOUT + 5) as resp:
-            out = json.loads(resp.read())
+        out = submit(TIMEOUT + 5)
+    except urllib.error.HTTPError:
+        # The server answered, just not with a decision — retrying won't help.
+        deadline = time.monotonic()
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ConnectionRefusedError):
+            deadline = time.monotonic()  # nobody home — skip the retry loop
     except Exception:
+        pass  # connected, then dropped — worth re-attaching
+
+    while out is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(backoff, remaining))
+        backoff = min(backoff * 2, 5)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            out = reattach(remaining) if sent else submit(remaining)
+            if out is None:
+                sent = False  # 404 — the POST never landed, so send it again
+        except Exception:
+            sent = True  # dropped again mid-wait — keep re-attaching
+
+    if out is None:
         if FAIL_CLOSED:
             emit("deny", "agentglass unreachable (fail-closed)")
         allow_silently()  # unreachable / error → never block (default)

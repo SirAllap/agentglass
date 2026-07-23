@@ -1,8 +1,8 @@
 name: Desktop binaries
 
-# Builds the desktop app for every platform and attaches the installers to the
-# GitHub Release for the tag. It deliberately only ever *uploads assets* — the
-# release itself and its hand-written notes belong to release.yml, which is
+# Builds the Electron desktop app for every platform and attaches the installers
+# to the GitHub Release for the tag. It deliberately only ever *uploads assets* —
+# the release itself and its hand-written notes belong to release.yml, which is
 # careful never to overwrite them. Nothing here touches the release body.
 #
 # Run it by hand (workflow_dispatch) to check the build still works without
@@ -22,111 +22,106 @@ jobs:
       fail-fast: false # one platform failing shouldn't strand the others
       matrix:
         include:
-          # .deb only: linuxdeploy fails bundling the ~100MB compiled sidecar
-          # into an AppImage, and .deb covers the distros this targets anyway.
           - os: ubuntu-22.04 # oldest supported glibc — newer runners break older distros
-            triple: x86_64-unknown-linux-gnu
             bunTarget: bun-linux-x64
-            bundles: deb
+            builder: --linux AppImage deb
           - os: macos-14
-            triple: aarch64-apple-darwin
             bunTarget: bun-darwin-arm64
-            bundles: dmg
-          # Intel macOS is cross-compiled from the arm64 runner: macos-13 has no
-          # runners left and its job just waits forever. Rust and Bun both take
-          # an explicit target, so nothing here depends on the host arch.
-          - os: macos-14
-            triple: x86_64-apple-darwin
+            builder: --mac dmg --arm64
+          - os: macos-14 # Intel mac cross-built from the arm64 runner
             bunTarget: bun-darwin-x64
-            bundles: dmg
+            builder: --mac dmg --x64
           - os: windows-latest
-            triple: x86_64-pc-windows-msvc
             bunTarget: bun-windows-x64
-            bundles: msi,nsis
+            builder: --win nsis
 
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags, so `git describe --tags` in build.mjs can name
+          # the release this build descends from. A shallow checkout has no tag
+          # object, which would stamp the installer with an empty baseTag and
+          # leave the About pane unable to say which release it is.
+          fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.triple }}
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri -> target
-
-      - name: Linux build deps
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            libgtk-3-dev libxdo-dev libssl-dev build-essential file
-
       - name: Install
         run: bun install
 
-      # Mirrors `make desktop-server`. The triple suffix is how Tauri picks the
-      # right sidecar per platform; on Windows it also needs the .exe extension.
-      - name: Build server sidecar
+      - name: Build web
+        run: cd web && bun run build
+
+      # The server ships as a compiled sidecar, cross-built for the target. On
+      # Windows it needs the .exe extension so the app can spawn it.
+      - name: Compile server sidecar
         shell: bash
         run: |
           ext=""
           [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
+          mkdir -p electron/staging
           bun build --compile --target=${{ matrix.bunTarget }} server/src/index.ts \
-            --outfile "src-tauri/bin/agentglass-server-${{ matrix.triple }}${ext}"
+            --outfile "electron/staging/agentglass-server${ext}"
 
-      # Mirrors `make desktop-web`. The address is pinned because inside the app
-      # window location.hostname is the Tauri scheme, not localhost.
-      - name: Build web
-        shell: bash # Windows defaults to PowerShell, where VAR=value cmd is a syntax error
-        run: cd web && VITE_CW_SERVER=http://localhost:4000 bun run build
-
-      # tauri.conf.json carries a hardcoded version and nothing bumps it, so a
-      # v0.2.0 tag would otherwise ship files named agentglass_0.1.0. The tag is
-      # the source of truth here; this edit is build-only and never committed.
-      - name: Sync bundle version to the tag
+      # Sync the package version to the tag so a v0.2.0 tag ships v0.2.0 files.
+      - name: Sync version to the tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           node -e '
             const fs = require("fs")
-            const f = "src-tauri/tauri.conf.json"
-            const conf = JSON.parse(fs.readFileSync(f, "utf8"))
-            conf.version = process.argv[1]
-            fs.writeFileSync(f, JSON.stringify(conf, null, 2) + "\n")
+            const f = "electron/package.json"
+            const p = JSON.parse(fs.readFileSync(f, "utf8"))
+            p.version = process.argv[1]
+            fs.writeFileSync(f, JSON.stringify(p, null, 2) + "\n")
           ' "${GITHUB_REF_NAME#v}"
-          echo "bundle version → ${GITHUB_REF_NAME#v}"
 
-      - uses: tauri-apps/tauri-action@v0
-        id: tauri
-        with:
-          args: --target ${{ matrix.triple }} --bundles ${{ matrix.bundles }}
+      # Stamp provenance INTO staging, next to the sidecar CI just compiled, so
+      # the installer carries build-info.json (version/commit/origin/baseTag)
+      # and self-update.sh. Without this the packaged app records no origin, and
+      # updateStatus() blocks with "reinstall from source" — no update badge,
+      # no notification, no way to install a new release. --provenance-only is
+      # deliberate: it must not rebuild the web UI or recompile the sidecar,
+      # which is cross-built for this matrix target and cannot be reproduced on
+      # the runner's own arch. Runs after the version sync so build-info carries
+      # the tag's version, and before packaging so extraResources picks it up.
+      - name: Stamp provenance (build-info.json + self-update.sh)
+        shell: bash
+        run: node electron/build.mjs --provenance-only
 
-      # Assets only. `--clobber` makes re-runs idempotent; the release body is
-      # never passed, so release.yml's notes stay exactly as written.
+      # electron-builder packages the app; the web build and staged sidecar come
+      # in via extraResources (see electron/package.json "build").
+      - name: Package
+        shell: bash
+        working-directory: electron
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bunx electron-builder ${{ matrix.builder }} --publish never
+
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo '${{ steps.tauri.outputs.artifactPaths }}' \
-            | tr -d '[]"' | tr ',' '\n' | sed '/^\s*$/d' \
-            | while read -r path; do
-                echo "uploading $path"
-                gh release upload "$GITHUB_REF_NAME" "$path" --clobber --repo "$GITHUB_REPOSITORY"
-              done
+          find electron/dist-app -maxdepth 1 -type f \
+            \( -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' -o -name '*.exe' \) \
+            -print0 | while IFS= read -r -d '' path; do
+              echo "uploading $path"
+              gh release upload "$GITHUB_REF_NAME" "$path" --clobber --repo "$GITHUB_REPOSITORY"
+            done
 
       - name: Keep the build even when there is no tag
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
-          name: agentglass-${{ matrix.triple }}
-          path: src-tauri/target/${{ matrix.triple }}/release/bundle/**/*
-          if-no-files-found: error
+          name: agentglass-${{ matrix.bunTarget }}
+          path: |
+            electron/dist-app/*.AppImage
+            electron/dist-app/*.deb
+            electron/dist-app/*.dmg
+            electron/dist-app/*.exe
+          if-no-files-found: warn

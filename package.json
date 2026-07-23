@@ -1,17 +1,20 @@
 {
   "name": "agentglass",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Real-time observability dashboard for Claude Code multi-agent workflows — cost, tokens, tool latency, error rates, and session timelines.",
   "license": "MIT",
   "type": "module",
-  "workspaces": ["server", "web"],
+  "workspaces": ["server", "web", "electron"],
   "scripts": {
     "dev": "concurrently -n server,web -c cyan,magenta \"bun run dev:server\" \"bun run dev:web\"",
     "dev:server": "cd server && bun run dev",
     "dev:web": "cd web && bun run dev",
     "start": "cd server && bun run start",
     "build": "cd web && bun run build",
+    "desktop": "cd web && bun run build && cd ../electron && bun run start",
+    "desktop:dist": "cd electron && bun run dist",
+    "desktop:dist:linux": "cd electron && bun run dist:linux",
     "install:all": "bun install",
     "setup": "python3 hooks/install_hooks.py",
     "setup:undo": "python3 hooks/install_hooks.py --uninstall",
@@ -20,7 +23,6 @@
     "postinstall": "node -e \"console.log('agentglass: run [bun run setup] to wire Claude Code hooks, [bun run connect] for OTel CLIs')\""
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4",
     "concurrently": "^9.1.0"
   }
 }

@@ -11,7 +11,7 @@
 // images the turn goes out as `--input-format stream-json` instead — one JSON
 // line carrying text and image content blocks together, which is the only
 // channel structured content has into a `claude -p` run.
-import { safeAbs, repoRootOf } from "./git.ts";
+import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
 import { inScope, chatBypassAllowed } from "./config.ts";
 import type { ChatImage, ChatImageMediaType } from "../../shared/types.ts";
 
@@ -195,7 +195,12 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   if (!bin) return err("no local `claude` CLI — install Claude Code to chat", 403);
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403);
   const dir = safeAbs(cwd);
-  if (!dir || !repoRootOf(dir)) return err("invalid or non-repo directory");
+  if (!dir || !repoRootOf(dir)) {
+    // With no git, repoRootOf fails for every directory — name the real cause
+    // rather than blaming the folder.
+    const cap = gitCapability();
+    return err(cap.available ? "invalid or non-repo directory" : (cap.reason || "git is not installed"));
+  }
   // The last write path still outside the scope boundary (#67 covered git and
   // the terminal). A chat runs a real `claude` with tools in that directory, so
   // it can change anything a shell could — leaving it machine-wide would have

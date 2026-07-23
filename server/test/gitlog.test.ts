@@ -50,10 +50,14 @@ test("an unknown subcommand is treated as a read", () => {
 });
 
 test("records exit code, duration and the first stderr line on failure", () => {
-  const before = recent().length;
+  // Identify the new entry by its id, not by the list getting longer: the ring
+  // is capped (AGENTGLASS_GITLOG_SIZE, 400 by default) and the rest of the
+  // suite runs enough real git to fill it, after which recording one more
+  // evicts one more and the length never moves. The id is monotonic either way.
+  const before = recent().at(-1)?.id ?? 0;
   record("/repo", ["commit", "-m", "x"], 1, 12.5, "fatal: nothing to commit\nsecond line\n");
   const all = recent();
-  expect(all.length).toBe(before + 1);
+  expect(all.at(-1)!.id).toBe(before + 1);
   const e = all[all.length - 1];
   expect(e.args).toEqual(["commit", "-m", "x"]);
   expect(e.exitCode).toBe(1);
@@ -75,4 +79,48 @@ test("since returns only newer entries", () => {
   const after = recent(mark);
   expect(after).toHaveLength(2);
   expect(after.every((e) => e.id > mark)).toBe(true);
+});
+
+test("a since-poll returns the OLDEST entries after the cursor, so a burst loses nothing", () => {
+  // The bug: recent() returned the newest `limit` after `since` while the client
+  // advances `since` to the last id it received — so a burst of more than
+  // `limit` entries between two polls dropped everything between `since` and the
+  // newest page, for good. Poll incrementally the way the client does and assert
+  // every id is delivered exactly once, contiguous, in order.
+  const start = recent().at(-1)?.id ?? 0;
+  for (let i = 0; i < 25; i++) record("/repo", ["status"], 0, 1, "");
+  let since = start;
+  const seen: number[] = [];
+  for (let poll = 0; poll < 20; poll++) {
+    const batch = recent(since, 10);
+    if (!batch.length) break;
+    for (let i = 1; i < batch.length; i++) expect(batch[i]!.id).toBeGreaterThan(batch[i - 1]!.id); // ascending
+    for (const e of batch) seen.push(e.id);
+    since = batch[batch.length - 1]!.id;
+  }
+  const mine = seen.filter((id) => id > start);
+  expect(mine.length).toBeGreaterThanOrEqual(25); // all of them, not just the newest page
+  for (let i = 1; i < mine.length; i++) expect(mine[i]).toBe(mine[i - 1]! + 1); // no gap
+});
+
+test("a first load (no cursor) still shows the most recent activity", () => {
+  for (let i = 0; i < 5; i++) record("/repo", ["status"], 0, 1, "");
+  const newest = recent().at(-1)!.id;
+  // With a small limit and no cursor, the page ends at the newest entry.
+  expect(recent(0, 3).at(-1)!.id).toBe(newest);
+});
+
+test("a non-numeric AGENTGLASS_GITLOG_SIZE falls back to the default, staying bounded", async () => {
+  // NaN used to skip BOTH the disable guard (`NaN <= 0` is false) and the trim
+  // (`length > NaN` is false), so the ring grew without any bound at all.
+  const prev = process.env.AGENTGLASS_GITLOG_SIZE;
+  process.env.AGENTGLASS_GITLOG_SIZE = "four hundred";
+  try {
+    const gl = await import(`../src/gitlog.ts?u=${Math.random()}`);
+    for (let i = 0; i < 500; i++) gl.record("/r", ["status"], 0, 1, "");
+    expect(gl.recent(0, 1000).length).toBeLessThanOrEqual(400);
+  } finally {
+    if (prev === undefined) delete process.env.AGENTGLASS_GITLOG_SIZE;
+    else process.env.AGENTGLASS_GITLOG_SIZE = prev;
+  }
 });

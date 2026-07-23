@@ -1,4 +1,4 @@
-/** The five workspace glyphs, shared by the rail and the header button.
+/** The workspace glyphs, shared by the rail and the header button.
  *  They used to live in Header.tsx, where the rail couldn't reach them. */
 
 const svg = {
@@ -25,6 +25,17 @@ export function DiffIcon({ size = 15 }: P) {
   );
 }
 
+/** Two commits reconciling into one line — a pull request, not a branch. */
+export function PrIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <circle cx="6" cy="6" r="2.2" /><path d="M6 8.2V18" /><circle cx="6" cy="20" r="2" />
+      <circle cx="18" cy="18" r="2.2" /><path d="M18 15.8V10a4 4 0 0 0-4-4h-2.5" />
+      <path d="M13 3.5 10.5 6 13 8.5" />
+    </svg>
+  );
+}
+
 export function DockerIcon({ size = 15 }: P) {
   return <svg {...svg} width={size} height={size}><path d="M3 9l9-5 9 5v6l-9 5-9-5z" /><path d="M3 9l9 5 9-5M12 14v6" /></svg>;
 }
@@ -40,6 +51,17 @@ export function ChatIcon({ size = 15 }: P) {
 /** The single header button that replaced the five. A pane split off a frame. */
 export function WorkspaceIcon({ size = 15 }: P) {
   return <svg {...svg} width={size} height={size}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>;
+}
+
+/** The skills catalog: a reference you open, not a view you work in — which is
+ *  why it sits with close at the foot of the rail rather than among the tabs. */
+export function SkillsIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5v-13A2.5 2.5 0 0 1 6.5 3z" />
+    </svg>
+  );
 }
 
 export function CloseIcon({ size = 15 }: P) {

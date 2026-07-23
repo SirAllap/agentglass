@@ -10,8 +10,13 @@ help: ## List every make command with what it does
 install: ## Install all workspace dependencies (bun)
 	bun install
 
+# `trap 'kill 0'` tears the whole process group (concurrently, bun --watch, the
+# server, vite) down on Ctrl-C or a SIGTERM to make, so an abandoned `make dev`
+# leaves nothing behind. The server also carries its own parent-death watchdog
+# (AGENTGLASS_DIE_WITH_PARENT, set in server/package.json's dev script) as the
+# backstop for the SIGKILL case this trap cannot catch.
 dev: ## Run server (:4000) + web dashboard (:6180) together, live-reload
-	bun run dev
+	trap 'kill 0' INT TERM; bun run dev
 
 server: ## Run only the Bun + SQLite server on :4000
 	bun run dev:server
@@ -25,8 +30,19 @@ build: ## Production build of the web dashboard (web/dist)
 test: ## Run the server test suite (what CI runs)
 	cd server && bun test
 
+# The scripts kill the server/Chrome they spawn on their own SIGINT/SIGTERM;
+# `trap 'kill 0'` here is the group-wide backstop for a SIGTERM aimed at make.
 smoke: build ## Boot the production bundle in headless Chrome — fails on a blank screen or any console error
-	bun scripts/smoke.ts
+	trap 'kill 0' INT TERM; bun scripts/smoke.ts
+
+perf: ## Check the server still answers while it works — fails if the event loop (and so the terminal) stalls
+	trap 'kill 0' INT TERM; bun scripts/perfbudget.ts
+
+soak: ## Run the server hard for a few minutes and fail if its memory keeps climbing (AGX_SOAK_MINUTES=30 for a real one)
+	trap 'kill 0' INT TERM; bun scripts/soak.ts
+
+loadtest: ## Hammer the server (many clients × every panel) against a copy of the REAL DB and fail if the PTY stutters (AGX_LOAD_CLIENTS=10 for heavier)
+	trap 'kill 0' INT TERM; bun scripts/loadtest.ts
 
 typecheck: ## Type-check both halves (vite build and bun both strip types without checking)
 	cd web && bunx tsc --noEmit
@@ -47,39 +63,51 @@ connect: ## Auto-connect OTel-capable CLIs (Codex, Gemini, …) to agentglass
 connect-undo: ## Undo the OTel auto-connect
 	python3 hooks/connect_otel.py --undo
 
+assets: ## Regenerate the README screenshots and hero GIF (demo data only)
+	@echo "==> demo stills + hero.gif"
+	cd web && bun run build:demo
+	bun scripts/capture.ts
+	@echo "==> the terminal, against a throwaway repo"
+	cd web && bun run build
+	bun scripts/capture-live.ts
+	@echo "==> done — review .github/assets before committing"
+
 demo-feed: ## Stream fabricated demo events into a running server
 	python3 hooks/seed_demo.py
 
 # --- desktop app -------------------------------------------------------------
-# The server is compiled to a standalone binary and shipped as a Tauri sidecar,
-# so the app carries its own backend. The frontend is pinned to the server's
-# real address because inside the app window `location.hostname` is the Tauri
-# scheme, not localhost.
+# The desktop app is Electron: it runs the exact web/ UI in Chromium (which
+# GPU-composites, where WebKitGTK fell back to software), and brings the Bun
+# server up with it. The web UI loads over loopback HTTP so it reaches the
+# server on :4000 the same way a browser tab does — no address pinning needed.
 
-TRIPLE := $(shell rustc -vV | sed -n 's/^host: //p')
+desktop: ## Run the desktop app (builds the UI, then launches Electron + sidecar)
+	cd web && bun run build
+	cd electron && bun run start
 
-desktop-server: ## Compile the server to a standalone binary (Tauri sidecar)
-	bun build --compile server/src/index.ts \
-	  --outfile src-tauri/bin/agentglass-server-$(TRIPLE)
+desktop-dev: ## Run the desktop app against an already-running dev server
+	cd electron && bun run start
 
-desktop-web: ## Build the dashboard for the desktop window
-	cd web && VITE_CW_SERVER=http://localhost:4000 bun run build
+desktop-dist: ## Package installable binaries for the host platform (electron-builder)
+	cd electron && bun run dist
 
-desktop: desktop-server desktop-web ## Build the desktop app (icon + native window)
-	bunx tauri build
-
-desktop-dev: desktop-server ## Run the desktop app against the live dev server
-	bunx tauri dev
+desktop-dist-linux: ## Package Linux binaries (AppImage + deb)
+	cd electron && bun run dist:linux
 
 desktop-install: ## Install the built app for this user (no root)
-	src-tauri/install-local.sh
+	electron/install-local.sh
+
+desktop-update: ## Pull the latest and reinstall the desktop app (fast-forward only)
+	git pull --ff-only
+	bun install
+	$(MAKE) desktop-install
 
 # Open the cockpit for ONE project: only that repo (and its worktrees) appear,
 # and the dashboard shows that project's work rather than the whole machine.
 # Without DIR it covers every project, as before.
 desktop-open: ## Open the desktop app scoped to a project — make desktop-open DIR=/path/to/repo
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
-	~/.local/share/agentglass/agentglass "$(DIR)"
+	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test smoke typecheck start setup setup-undo connect connect-undo demo-feed \
-        desktop desktop-server desktop-web desktop-dev desktop-install desktop-open
+.PHONY: help install dev server web build test smoke perf soak typecheck start setup setup-undo connect connect-undo demo-feed assets \
+        desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open

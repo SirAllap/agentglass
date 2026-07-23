@@ -217,6 +217,17 @@ async function main() {
   let chrome: Awaited<ReturnType<typeof launchChrome>> | undefined;
   let cdp: Cdp | undefined;
 
+  // SIGTERM/SIGINT skip the finally below, so an interrupted smoke would leave
+  // the headless Chrome it spawned orphaned (the static server is in-process,
+  // but Chrome is a real subprocess). Wire the same teardown to those signals.
+  for (const s of ["SIGINT", "SIGTERM"] as const) {
+    process.on(s, () => {
+      try { chrome?.proc.kill(); } catch { /* already gone */ }
+      try { server.stop(true); } catch { /* already down */ }
+      process.exit(1);
+    });
+  }
+
   try {
     chrome = await launchChrome(process.argv.includes("--headful"));
     cdp = await Cdp.connect(chrome.wsUrl);
@@ -301,23 +312,52 @@ async function main() {
 
       await press("\\", true); // ⌘\ / Ctrl-\ opens it
       const railTabs = await evaluate(`document.querySelectorAll('${railSel} [role="tab"]').length`);
-      if (railTabs !== 5) failures.push(`[workspace] expected 5 rail tabs after Ctrl-\\, found ${railTabs}`);
+      if (railTabs !== 6) failures.push(`[workspace] expected 6 rail tabs after Ctrl-\\, found ${railTabs}`);
 
       // Every view mounts up front; only one is visible.
       const panes = await evaluate(`document.querySelectorAll('${railSel}')[0]?.parentElement?.querySelectorAll(':scope > div > [aria-hidden]').length ?? 0`);
-      if (panes !== 5) failures.push(`[workspace] expected all 5 views mounted, found ${panes}`);
+      if (panes !== 6) failures.push(`[workspace] expected all 6 views mounted, found ${panes}`);
 
-      await press("d"); // bare letter switches while the frame holds focus
-      const afterD = await selectedView();
-      if (afterD !== "diff") failures.push(`[workspace] "d" should select diff, selected ${afterD}`);
+      /**
+       * Press a key and wait for the view to actually be the one expected.
+       *
+       * Two animation frames is not a synchronisation primitive. Under load —
+       * a parallel build, a busy runner — React had not always committed the
+       * previous switch before the next key was read, and the run failed with
+       * `"t" should select term, selected diff`. The app was fine; the test was
+       * racing it. Poll for the outcome instead, with a ceiling so a genuine
+       * regression still fails rather than hanging.
+       */
+      const pressUntilView = async (key: string, want: string, mod = false) => {
+        await press(key, mod);
+        for (let i = 0; i < 40; i++) {
+          if ((await selectedView()) === want) return true;
+          await Bun.sleep(50);
+        }
+        return false;
+      };
 
-      await press("t");
-      const afterT = await selectedView();
-      if (afterT !== "term") failures.push(`[workspace] "t" should select term, selected ${afterT}`);
+      // Inside the workspace, navigation carries a modifier. VIEWS order is
+      // git, diff, pr, docker, term, chat — so ⌘2 is diff and ⌘5 is term.
+      // These numbers are deliberately literal rather than derived from the
+      // rail: a check that reads the app's own list would agree with it however
+      // wrong it got, and the point is to notice when the order moves. It moved
+      // here — `pr` was inserted third and pushed term from 4 to 5.
+      if (!(await pressUntilView("2", "diff", true))) failures.push(`[workspace] Ctrl-2 should select diff, selected ${await selectedView()}`);
+      if (!(await pressUntilView("5", "term", true))) failures.push(`[workspace] Ctrl-5 should select term, selected ${await selectedView()}`);
+      if (!(await pressUntilView("1", "git", true))) failures.push(`[workspace] Ctrl-1 should select git, selected ${await selectedView()}`);
 
-      await press("1", true); // ⌘1 works even from inside a field
-      const after1 = await selectedView();
-      if (after1 !== "git") failures.push(`[workspace] Ctrl-1 should select git, selected ${after1}`);
+      // And the property this replaced a heuristic to guarantee: a bare letter
+      // inside the workspace belongs to whatever has focus — a shell, a commit
+      // message — and must never navigate. It used to, whenever focus happened
+      // to sit on <body>, which is why typing `g` in the terminal jumped to git
+      // at random. Pressed with focus deliberately on the body: the worst case
+      // for the old guard.
+      await evaluate(`document.activeElement?.blur?.(); document.body.focus?.(); true`);
+      await press("d");
+      await Bun.sleep(400);
+      const afterBare = await selectedView();
+      if (afterBare !== "git") failures.push(`[workspace] a bare letter must not navigate inside the workspace — "d" moved to ${afterBare}`);
 
       // Poll rather than check once: closing runs an AnimatePresence exit
       // animation, so the rail outlives the state change by a few hundred ms.
@@ -329,7 +369,7 @@ async function main() {
       }
       if (!closed) failures.push("[workspace] Escape did not close the workspace");
 
-      if (!failures.length) console.log("✓ smoke: workspace opens, all 5 views mount, keys switch and close");
+      if (!failures.length) console.log("✓ smoke: workspace opens, all 6 views mount, keys switch and close");
 
       // Chats have to outlive the page, which is a property no unit test can
       // reach: the store restores at module load, from real storage, in a real

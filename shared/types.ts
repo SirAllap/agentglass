@@ -187,6 +187,21 @@ export interface StatsSummary {
   server_started_at?: number;
 }
 
+/** One tmux window, as tmux itself reports it. The panel renders these as its
+ *  own tabs; tmux stays the source of truth for which is active. `flags` is
+ *  tmux's own marks (`*` current, `-` last, `!` bell, `#` activity, `Z` zoomed),
+ *  passed through rather than interpreted server-side. */
+export interface TmuxWindow {
+  /** tmux's own id for the window (`@3`). Stable for the window's whole life,
+   *  which the index is not: killing a window renumbers the ones after it when
+   *  `renumber-windows` is on. Commands target this; the index is for display. */
+  id: string;
+  index: number;
+  name: string;
+  active: boolean;
+  flags: string;
+}
+
 /** A tool call held at the gate, awaiting a remote approve/deny. */
 export interface PendingGate {
   id: string;
@@ -195,6 +210,18 @@ export interface PendingGate {
   tool_name: string;
   summary: string;
   created: number;
+}
+
+/** A gate request that has been resolved. `resolution` is who resolved it:
+ *  a human from the dashboard, the timeout, or a restart that found the window
+ *  already closed. The last one is why this record exists — an outcome nobody
+ *  chose is exactly the one that must not disappear. */
+export interface GateRecord extends PendingGate {
+  expires: number;
+  decision: "allow" | "deny";
+  reason: string | null;
+  resolution: "human" | "timeout" | "restart" | null;
+  decided_at: number | null;
 }
 
 export interface SearchHit {
@@ -306,6 +333,11 @@ export interface FileChange {
   additions: number;
   deletions: number;
   hunks: DiffHunk[];
+  /** git ignores this path. The list hides these by default — an agent's edit
+   *  to build output is recorded like any other, and on a busy session that
+   *  buries the edits worth reviewing. Absent means "not asked" / "unknown",
+   *  which is never hidden. */
+  ignored?: boolean;
 }
 
 /** A tool call the server sees as still running: a PreToolUse with no matching
@@ -317,13 +349,66 @@ export interface OpenToolCall {
   source_app: string;
   tool_name: string;
   since: number; // ms — the PreToolUse timestamp
+  /** The file this tool's own input said it would touch, when it named one.
+   *  Null for Bash and for anything that writes nowhere in particular. */
+  target?: string | null;
+  /** When this session last showed evidence of being alive: the transcript
+   *  growing, or the file above changing. Independent of the hook stream, which
+   *  by definition has gone quiet while a call is open. Absent when there was
+   *  nothing to read. */
+  evidenceAt?: number;
+  /** Which evidence the timestamp came from. `none` means no source was
+   *  readable — deliberately not the same claim as "nothing happened". */
+  evidenceKind?: "transcript" | "target" | "dir" | "none";
+  /** The directory this call is running in, for tools whose only possible
+   *  evidence is that something moved in it. */
+  dir?: string | null;
+  /** What the evidence supports. Absent from a server too old to send it, which
+   *  the client reads as `unknown` rather than as good news. */
+  liveness?: Liveness;
 }
+
+/**
+ * What the evidence says about a running tool call.
+ *
+ * `unknown` is a real answer and is rendered as one: a WebFetch and a `curl`
+ * leave nothing local behind, and claiming a hang we cannot see is how a
+ * five-minute timer lost its credibility in the first place.
+ *
+ * `lost` is not a hang either — it is our own bookkeeping failing. The CLI
+ * wrote more transcript after this call opened, so the result arrived and the
+ * Post event did not.
+ */
+export type Liveness = "working" | "stuck" | "lost" | "unknown";
 
 /** WebSocket frames. */
 export type WsFrame =
   | { type: "initial"; data: WatchEvent[]; openTools?: OpenToolCall[] }
+  /** The open-tool list again, with fresh evidence. Pushed on a timer while any
+   *  call is open: evidence is a claim about *now*, and one taken at connect
+   *  time is worth nothing thirty seconds later. */
+  | { type: "openTools"; data: OpenToolCall[] }
   | { type: "event"; data: WatchEvent }
-  | { type: "session"; data: SessionRollup };
+  | { type: "session"; data: SessionRollup }
+  /** Something mutated a repository. Carries no payload on purpose: the panels
+   *  each need a different slice of git state, so they re-read what they show
+   *  rather than the server guessing which of them cares about what. */
+  | { type: "git" }
+  /** A pull request's checks all finished. One frame per PR per verdict — the
+   *  server holds the latch, so a suite of sixty-one checks sends one of these,
+   *  not sixty-one. */
+  | { type: "ci"; data: CiVerdict };
+
+/** The aggregate outcome of a PR's checks, once every one of them is terminal. */
+export interface CiVerdict {
+  repo: string;
+  number: number;
+  title: string;
+  verdict: "green" | "red";
+  /** Named, so the message can say what broke instead of just that something did. */
+  failing: string[];
+  url: string;
+}
 
 // --- commit composer (live git working-tree) ---------------------------------
 export interface GitFileStatus {
@@ -371,6 +456,20 @@ export interface GitBranchInfo {
   detached: boolean;
   /** Absent on older payloads; treat as "clean". */
   state?: GitTreeState;
+  /** The branch this one was cut from — what a PR calls its base. Null on the
+   *  trunk itself. Merging it in is "update from base". */
+  base?: string | null;
+  /** Commits the base has that this branch does not. */
+  behindBase?: number;
+  /** `@{upstream}` and the base are the same branch under two names —
+   *  a local-only branch tracking the trunk (upstream `origin/main`, base
+   *  `main`). Then "behind upstream" and "behind base" count the same commits,
+   *  and merging the base is the way to close both. Only computed while it
+   *  could matter (behind > 0, base known); absent otherwise. */
+  upstreamIsBase?: boolean;
+  /** The tip is an unpushed merge on a clean tree — so it can be undone
+   *  exactly, by resetting to its first parent. */
+  canUndoMerge?: boolean;
 }
 export interface WorkingTree {
   root: string;
@@ -397,6 +496,20 @@ export interface GitRepoRef {
   /** How many linked worktrees were folded into this project — what the picker
    *  shows so a dozen hidden checkouts aren't invisible. */
   worktrees?: number;
+  /**
+   * When this checkout was last worked in, as an epoch ms — what the pickers
+   * sort on, most recent first.
+   *
+   * Read from the mtime of the checkout's own `HEAD` and reflog, which git
+   * writes on every commit, checkout, merge, rebase, reset and pull. That makes
+   * it "when did I last do something here", which is the question a list of
+   * seventeen ticket worktrees is really being asked — and it costs two stats
+   * rather than a `git log` per checkout. See touchedAt() for why it is not the
+   * index.
+   *
+   * 0 when it could not be read; those sort last rather than first.
+   */
+  touchedAt: number;
 }
 /** One candidate directory from the project picker's path completion. Names and
  *  a `.git` flag only — the completion endpoint never reports files. */
@@ -474,6 +587,33 @@ export interface GitRemote {
   /** Branches on this remote, as short names ("main"), without the remote prefix. */
   branches: number;
 }
+/**
+ * One branch on a remote, as the local repository last saw it.
+ *
+ * These come from `refs/remotes/<remote>/*` — what the last fetch left behind,
+ * not a live call to the server. That distinction matters in the UI: a branch
+ * pushed by a colleague ten seconds ago is not here until you fetch.
+ *
+ * `local` and `worktree` are the whole point of the list. On a repo with 800
+ * remote branches the useful question is never "what exists" — it's "do I
+ * already have this one, and where".
+ */
+export interface GitRemoteBranch {
+  /** Short name, without the remote prefix — "WEB-1042-quota-banner". */
+  name: string;
+  /** Full short ref — "origin/WEB-1042-quota-banner", i.e. what you pass to git. */
+  ref: string;
+  hash: string;
+  subject: string;
+  author: string;
+  date: string; // relative
+  /** A local branch of the same name already exists. */
+  local: boolean;
+  /** …and it tracks this remote branch, rather than merely sharing its name. */
+  tracking: boolean;
+  /** A checkout that already has that local branch out, if any. */
+  worktree?: string;
+}
 export interface GitTag {
   name: string;
   /** Annotated tags carry their own message; lightweight ones borrow the commit's. */
@@ -498,6 +638,103 @@ export interface GitWorktree {
   current: boolean;
   bare: boolean;
   locked: boolean;
+  /** Git reports the registration as broken — its gitdir points nowhere valid.
+   *  A fabricated entry (an attacker-written .git/worktrees/<x>/gitdir aimed at
+   *  an arbitrary path) surfaces as prunable, so any privileged action must not
+   *  trust a prunable path as a real worktree of this repo. */
+  prunable?: boolean;
+  /** The branch this one was cut from — trunk unless overridden per branch.
+   *  Null on the trunk checkout itself, which has no base. */
+  base?: string | null;
+  /** Commits the base has that this checkout does not. */
+  behindBase?: number;
+  /**
+   * Uncommitted entries in that checkout (`git status --porcelain` lines).
+   *
+   * Costs one `git status` per worktree, and is worth it: a merge into a dirty
+   * checkout is refused by the server, so without this the panel offers a sync
+   * button that can only fail. Undefined means "not asked" — a bare worktree,
+   * or a caller that didn't want to pay for it.
+   */
+  dirty?: number;
+}
+
+/**
+ * What removing a worktree would destroy, named before you agree to it.
+ *
+ * `git status` is not the answer to that question. It reports a checkout with a
+ * `.env` and a page of local notes in it as perfectly clean, because both are
+ * gitignored — and `git worktree remove` deletes the whole directory, ignored
+ * files included, without `--force` and without a word. So a caller about to
+ * offer "remove these worktrees" has to look at the disk itself.
+ */
+export interface WorktreeLeftovers {
+  path: string;
+  /** What would go, worst-first. Capped — see `more`. */
+  entries: LeftoverEntry[];
+  /** How many more there were beyond the ones listed. */
+  more: number;
+  /** Ignored entries dropped as rebuildable (`__pycache__/`, `node_modules/`).
+   *  Reported so the count in the UI can say what it chose not to show. */
+  skipped: number;
+  /** Entries byte-identical to the same path in the main checkout. Counted and
+   *  NOT listed: deleting a copy loses nothing, and listing them buried the
+   *  four that mattered under twenty that didn't. */
+  identical: number;
+  /** Set when the directory could not be read — treat as "assume work is
+   *  there", never as "nothing to lose". */
+  error?: string;
+  /** Files in this checkout owned by somebody else — almost always root,
+   *  written by a container that mounted the repo and ran as root. Present
+   *  means the removal CANNOT succeed and must not be attempted: git deletes
+   *  the worktree's registration before its files, so a half-done removal
+   *  leaves an orphan directory that no longer belongs to any repository. */
+  blocked?: BlockedByOwner;
+}
+
+/** Why a worktree cannot be deleted, and the one command that fixes it. */
+export interface BlockedByOwner {
+  /** How many foreign-owned paths were found before the walk gave up. */
+  count: number;
+  /** True when the count is a floor rather than a total. */
+  more: boolean;
+  /** Top-level directories to hand to chown — the useful unit, since these
+   *  come from a container writing a whole `tmp/` or `.mypy_cache/`. */
+  paths: string[];
+  /** Owner names seen, e.g. ["root"]. */
+  owners: string[];
+}
+
+/**
+ * One thing that disappears with the worktree, and what the main checkout has
+ * to say about it.
+ *
+ * `vsMain` is the whole reason this can be offered as a rescue rather than just
+ * a warning. A worktree is a second copy of a repo, so most of what looks
+ * alarming in it — every `compose/envs/*.env`, every generated `reverse.js` —
+ * is byte-identical to the file already sitting in the main checkout. Those are
+ * dropped before they reach here (see `identical`). What remains is:
+ *
+ *   * `absent`  — the main checkout has nothing at this path. Copying it there
+ *                 is pure gain and cannot destroy anything, so these are the
+ *                 ones offered pre-selected.
+ *   * `differs` — a file exists there and is NOT the same. Copying OVERWRITES
+ *                 the main checkout's version, which is how a rescue turns into
+ *                 the thing it was meant to prevent. Never pre-selected, and
+ *                 the UI has to say "overwrites" out loud.
+ *
+ * A directory is reported `differs` whenever the main checkout has one at that
+ * path, without recursing to prove it: walking a 12 MB `dist/` to answer a
+ * question whose safe answer is already "don't pre-select it" is work spent to
+ * reach the same place.
+ */
+export interface LeftoverEntry {
+  /** Path relative to the worktree root. Trailing "/" when it's a directory. */
+  path: string;
+  /** Bytes, recursive for a directory. -1 when it could not be measured. */
+  bytes: number;
+  dir: boolean;
+  vsMain: "absent" | "differs";
 }
 
 // --- live docker panel (lazydocker replacement) ------------------------------
@@ -555,6 +792,32 @@ export interface DockerOverview {
 }
 export interface DockerActionResult { ok: boolean; error?: string; output?: string; }
 
+/**
+ * Whether docker is usable, told apart into the three states that need three
+ * different answers on screen.
+ *
+ * The overview carries a single `available: false` + `error` for any failure,
+ * which conflated the two that matter: a *missing binary* and a *downed daemon*
+ * are different problems with different fixes ("install Docker" vs "start the
+ * daemon"), and the panel used to send everyone to the daemon message — even on
+ * a machine with no docker at all. This is the docker counterpart to
+ * GitCapability, and `available` here means the same thing it does there: the
+ * CLI is on PATH.
+ *
+ *   (a) not installed → available:false, reason names it (install guidance)
+ *   (b) installed, daemon down → available:true, reason (no version)
+ *   (c) OK → available:true, version (no reason)
+ */
+export interface DockerCapability {
+  /** The `docker` CLI is on this machine. False → not installed at all. */
+  available: boolean;
+  /** The daemon's version, present only when it answered — i.e. state (c). */
+  version?: string;
+  /** Why docker isn't usable: the binary is missing (a), or the daemon isn't
+   *  responding (b). Absent in the healthy case. */
+  reason?: string;
+}
+
 // --- LLM walkthrough (AI-authored review itinerary) --------------------------
 export interface WalkthroughInputFile {
   path: string;
@@ -604,3 +867,250 @@ export interface TerminalCommands {
   make: ProjectCommand[];    // Makefile targets, with descriptions
   scripts: ProjectCommand[]; // package.json scripts, runner-aware
 }
+
+/** Whether `git` is on this machine at all. `available: false` is a first-class
+ *  UI state — the git/diff/PR panels and the terminal all need git — not an
+ *  error to bury behind an empty "no repos found". */
+export interface GitCapability {
+  available: boolean;
+  version?: string;
+  reason?: string;
+}
+
+/** One `<<<<<<< / ======= / >>>>>>>` region of a conflicted file. */
+export type ConflictBlock = {
+  index: number;
+  /** 1-based line the `<<<<<<<` sits on. */
+  line: number;
+  ours: string[];
+  theirs: string[];
+  /** Only with merge.conflictStyle=diff3/zdiff3. */
+  base?: string[];
+  ourLabel: string;
+  theirLabel: string;
+};
+
+/** What to write for one block. `both` keeps ours then theirs. */
+export type BlockChoice = "ours" | "theirs" | "both" | "theirs-first";
+
+/** The notes for one release: the tag annotation the GitHub release was made
+ *  from, read from the update clone when there is one and from the releases API
+ *  otherwise. `source` says which, because "offline" is a useful thing to know
+ *  when the answer is empty. */
+export interface ReleaseNotes {
+  ok: boolean;
+  tag: string;
+  notes: string;
+  source: "clone" | "github" | "";
+  error?: string;
+}
+
+/** What the installed app was built from, and what is waiting upstream. */
+export type UpdateStatus = {
+  ok: boolean;
+  available: boolean;
+  info: {
+    version: string;
+    commit: string;
+    builtAt: string;
+    source: string;
+    /** Remote the updater clones from. */
+    origin: string;
+    /** Nearest release this build descends from, and how far past it — this,
+     *  not `version`, is what decides whether a published tag is newer. */
+    baseTag: string;
+    distance: number;
+  };
+  branch: string;
+  behind: number;
+  ahead: number;
+  incoming: { sha: string; subject: string }[];
+  blocked?: string;
+  last?: { at: string; ok: boolean; tail: string };
+};
+
+// --- pull requests (gh-backed) ---------------------------------------------
+
+/**
+ * A repo's identity on the forge, not on disk.
+ *
+ * Eighteen worktrees of the same clone are one repo here. Keying PRs by path
+ * would fetch the same list eighteen times — at ~1.9s a call on a server with
+ * one thread, which is the stall this whole panel is written to avoid.
+ */
+export interface PrRepoId {
+  /** "github.com/acme/orbit" — the cache key, and what `gh -R` is given. */
+  key: string;
+  host: string;
+  owner: string;
+  name: string;
+  /** "acme/orbit" */
+  nameWithOwner: string;
+}
+
+export type PrCheckState = "success" | "failure" | "pending" | "skipped" | "neutral";
+
+export interface PrCheck {
+  name: string;
+  workflow: string;
+  state: PrCheckState;
+  /** Terminal means it will not change without a new push or a re-run. */
+  done: boolean;
+  url?: string;
+}
+
+export interface PrCheckRollup {
+  total: number;
+  success: number;
+  failure: number;
+  skipped: number;
+  pending: number;
+  /** Every check has reached a terminal state. The notification latch waits
+   *  for this, so 61 checks produce one message rather than 61. */
+  allDone: boolean;
+  /** Only meaningful with `allDone`. Skipped never counts as failure. */
+  verdict: "green" | "red" | null;
+  /** The failing ones, named — a count alone sends you to the browser. */
+  failing: PrCheck[];
+}
+
+export interface PrLabel { name: string; color?: string }
+
+export interface PrSummary {
+  number: number;
+  title: string;
+  author: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
+  headRefName: string;
+  baseRefName: string;
+  url: string;
+  updatedAt: string;
+  reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  labels: PrLabel[];
+  checks: PrCheckRollup;
+  /** This checkout is on the PR's head branch — "you are here". */
+  isCurrentBranch?: boolean;
+  /** Whether `checks` has actually been fetched. The list arrives in two
+   *  passes because the check rollup costs four times the rest of the row, and
+   *  a row that has not had its second pass must say "loading" rather than
+   *  "no checks" — those are different claims. */
+  checksLoaded?: boolean;
+}
+
+/** Why the merge button is grey. A disabled control that can't say why is the
+ *  thing this panel exists to replace. */
+export type PrMergeState =
+  | "CLEAN" | "BLOCKED" | "BEHIND" | "DIRTY" | "UNSTABLE" | "DRAFT" | "HAS_HOOKS" | "UNKNOWN";
+
+export interface PrThreadComment {
+  id: string;
+  /** The numeric id the REST reply endpoint wants; the `id` above is a GraphQL
+   *  node id and the two are not interchangeable. */
+  databaseId?: number | null;
+  author: string;
+  isBot: boolean;
+  body: string;
+  createdAt: string;
+  /** Straight to this comment on GitHub, for when you need the full thing. */
+  url?: string;
+}
+
+export interface PrThread {
+  /** GraphQL node id — the only handle `resolveReviewThread` accepts. */
+  id: string;
+  path: string;
+  line: number | null;
+  isResolved: boolean;
+  /** The code under it has changed since; usually safe to skip. */
+  isOutdated: boolean;
+  /** The diff hunk GitHub kept with the comment. Present even when the thread
+   *  is outdated and those lines are gone from the current diff. */
+  diffHunk?: string;
+  /** The line in the file as it was when the comment was written. */
+  originalLine?: number | null;
+  url?: string;
+  comments: PrThreadComment[];
+}
+
+export interface PrReview {
+  author: string;
+  isBot: boolean;
+  state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
+  body: string;
+  submittedAt: string;
+  url?: string;
+}
+
+export interface PrComment {
+  id: number;
+  author: string;
+  isBot: boolean;
+  body: string;
+  createdAt: string;
+  url?: string;
+  /** Bot noise reduced to its point — a 46KB coverage table is three numbers
+   *  and 1,847 rows nobody reads. Null when nothing could be extracted. */
+  digest?: string | null;
+}
+
+export interface PrCommit { oid: string; short: string; message: string; author: string; isMerge: boolean }
+
+export interface PrFile {
+  path: string;
+  additions: number;
+  deletions: number;
+  status: string;
+  /** Unresolved threads anchored to this file. */
+  comments: number;
+}
+
+export interface PrChecklistItem { checked: boolean; text: string }
+
+export interface PrDetail extends PrSummary {
+  body: string;
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  mergeState: PrMergeState;
+  /** Parsed out of the body — unchecked boxes are a merge signal on repos
+   *  whose template carries a real checklist. */
+  checklist: PrChecklistItem[];
+  reviewers: string[];
+  assignees: string[];
+  reviews: PrReview[];
+  comments: PrComment[];
+  threads: PrThread[];
+  commits: PrCommit[];
+  files: PrFile[];
+  checks: PrCheckRollup;
+  checksAll: PrCheck[];
+  /** The author force-pushed after a review was submitted: that review is
+   *  stale and the reviewer should be told rather than left guessing. */
+  forcePushedSinceReview: boolean;
+  /** You opened this one. GitHub will not let you review your own work, and
+   *  neither should the panel. */
+  viewerDidAuthor: boolean;
+  /** Somebody asked you for a review. This is what the review tab is for. */
+  viewerRequested: boolean;
+}
+
+export interface PrListResponse {
+  ok: boolean;
+  /** Null when this directory has no forge remote we understand. */
+  repo: PrRepoId | null;
+  prs: PrSummary[];
+  /** When the cached copy was taken. The UI shows this rather than pretending
+   *  to be live — every number here costs a subprocess. */
+  fetchedAt: number;
+  stale: boolean;
+  loading: boolean;
+  /** The rows are here but their check states are still being fetched. */
+  checksPending?: boolean;
+  error?: string;
+  /** `gh` missing or not logged in — a first-class state, not an error toast. */
+  needsAuth?: boolean;
+}
+
+export interface PrActionResult { ok: boolean; error?: string; detail?: string }

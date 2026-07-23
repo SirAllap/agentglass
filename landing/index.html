@@ -4,9 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>agentglass — mission control for every AI coding agent on your machine</title>
-<meta name="description" content="Open-source real-time dashboard and workspace for AI coding agents. Claude Code, Codex, Gemini CLI — every tool call, token and dollar on one radar, plus diff, git, docker and a real terminal." />
+<meta name="description" content="Open-source mission control and workspace for AI coding agents. Claude Code, Codex, Gemini CLI — every tool call, token and dollar on one radar, plus diff review, git, docker, a real terminal with native tmux tabs, and a control plane that holds risky tool calls for your approval. Desktop app for macOS, Linux and Windows." />
 <meta property="og:title" content="agentglass — every agent, one tower" />
-<meta property="og:description" content="Open-source mission control for AI coding agents. Watch the whole fleet live, then act — without leaving the glass." />
+<meta property="og:description" content="Open-source mission control for AI coding agents. Watch the whole fleet live, hold risky tool calls for approval, then act — diff, git, docker, terminal and chat, without leaving the glass." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://sirallap.github.io/agentglass/" />
 <meta property="og:image" content="https://sirallap.github.io/agentglass/og.png" />
@@ -15,7 +15,7 @@
 <meta property="og:image:alt" content="agentglass — a loupe whose lens is a mission-control radar, tracking your fleet of AI coding agents" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="agentglass — every agent, one tower" />
-<meta name="twitter:description" content="Open-source mission control for AI coding agents. Watch the whole fleet live, then act — without leaving the glass." />
+<meta name="twitter:description" content="Open-source mission control for AI coding agents. Watch the whole fleet live, hold risky tool calls for approval, then act — diff, git, docker, terminal and chat, without leaving the glass." />
 <meta name="twitter:image" content="https://sirallap.github.io/agentglass/og.png" />
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2032%2032%22%3E%3Cline%20x1=%2220.2%22%20y1=%2220.2%22%20x2=%2227%22%20y2=%2227%22%20stroke=%22%237c3aed%22%20stroke-width=%223.4%22%20stroke-linecap=%22round%22/%3E%3Ccircle%20cx=%2213.5%22%20cy=%2213.5%22%20r=%229%22%20fill=%22%23a78bfa%22%20fill-opacity=%220.14%22/%3E%3Ccircle%20cx=%2213.5%22%20cy=%2213.5%22%20r=%225.6%22%20fill=%22none%22%20stroke=%22%23a78bfa%22%20stroke-opacity=%220.35%22%20stroke-width=%221%22/%3E%3Cpath%20d=%22M13.5%2013.5%20L13.5%204.6%20A8.9%208.9%200%200%201%2019.7%207%20Z%22%20fill=%22%23a78bfa%22%20fill-opacity=%220.28%22/%3E%3Cline%20x1=%2213.5%22%20y1=%2213.5%22%20x2=%2219.7%22%20y2=%227%22%20stroke=%22%23c4b5fd%22%20stroke-width=%221%22/%3E%3Ccircle%20cx=%229%22%20cy=%2216.4%22%20r=%221.9%22%20fill=%22%2334d399%22/%3E%3Ccircle%20cx=%2213.5%22%20cy=%2213.5%22%20r=%229.6%22%20fill=%22none%22%20stroke=%22%237c3aed%22%20stroke-width=%222.5%22/%3E%3C/svg%3E" />
 <style>
@@ -35,6 +35,11 @@
     --success:#34d399; --warning:#facc15; --error:#f87171; --info:#60a5fa;
     --shadow:rgba(0,0,0,.8);
     --glow:rgba(251,146,60,.22);
+    /* the app sets panel titles in its sans; the rest of this page is mono */
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    /* workspace bento motion, in one place so it stays consistent */
+    --wsease:cubic-bezier(.22,.9,.24,1);
+    --wsdwell:10s;
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   html{scroll-behavior:smooth;}
@@ -243,37 +248,108 @@
   .card .read .r{color:var(--error);} .card .read .w{color:var(--warning);}
 
 
-  /* ============ workspace showcase — press a key, switch a panel ============ */
-  .ws-body{display:grid; grid-template-columns:210px 1fr; min-height:430px;}
-  @media(max-width:760px){.ws-body{grid-template-columns:1fr;}}
-  .ws-tabs{
-    display:flex; flex-direction:column; gap:6px; padding:14px;
-    border-right:1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  /* ============ workspace bento — all six panels at once ============
+     Built from the app's own recipe (web/src/index.css): the panel gradient,
+     the primary-12% hairline, the 1rem radius and the eyebrow + sentence title
+     header every panel in the app wears. Token-only, so it survives all 22
+     themes.
+
+     The active tile grows by interpolating flex-grow — grid `span` is not
+     animatable, and a FLIP/scale trick would squash the type. Flex means every
+     tile keeps its home cell forever, so the eye follows one box swelling
+     instead of chasing a reshuffle.
+     ============================================================== */
+  .bento{display:flex; gap:11px; padding:0 12px 12px; height:560px;}
+  .bento .bcol{
+    display:flex; flex-direction:column; gap:11px; min-width:0; flex:1 1 0;
+    transition:flex-grow .64s var(--wsease);
   }
-  @media(max-width:760px){
-    .ws-tabs{flex-direction:row; overflow-x:auto; border-right:none;
-      border-bottom:1px solid color-mix(in srgb, var(--border) 55%, transparent);}
+  .bt{
+    position:relative; flex:1 1 0; min-height:0; overflow:hidden; text-align:left;
+    background:color-mix(in srgb, var(--bg2) 60%, transparent);
+    border:1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    border-radius:.85rem; color:var(--text3);
+    transition:flex-grow .64s var(--wsease), border-color .64s var(--wsease),
+               background .64s var(--wsease), box-shadow .64s var(--wsease);
   }
-  .wtab{
-    display:flex; align-items:center; gap:10px; text-align:left;
-    background:transparent; border:1px solid transparent; border-radius:10px;
-    padding:10px 12px; color:var(--text3); font-size:13px; font-weight:600;
-    transition:background .15s, border-color .15s, color .15s; white-space:nowrap;
+  .bt::after{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background:linear-gradient(180deg, color-mix(in srgb, var(--primary) 10%, transparent), transparent 60%);
   }
-  .wtab b{
-    color:var(--primary); font-weight:700; font-size:12px;
-    border:1px solid var(--border2); border-radius:5px; padding:0 7px; line-height:1.7;
-    background:color-mix(in srgb, var(--bg) 60%, transparent); flex:none;
+  .bt:hover{border-color:color-mix(in srgb, var(--primary) 35%, transparent);}
+  .bt.on{
+    background:color-mix(in srgb, var(--bg2) 84%, transparent);
+    border-color:color-mix(in srgb, var(--primary) 45%, transparent);
+    box-shadow:0 18px 40px -28px var(--shadow), inset 0 1px 0 0 rgba(255,255,255,.05);
   }
-  .wtab:hover{background:color-mix(in srgb, var(--primary) 8%, transparent); color:var(--text);}
-  .wtab.on{
-    background:color-mix(in srgb, var(--primary) 14%, transparent);
-    border-color:var(--border2); color:var(--text);
+  .bt .pad{position:relative; z-index:1; padding:11px 14px 12px; height:100%; display:flex; flex-direction:column; min-height:0;}
+  .bt .bh{display:flex; align-items:flex-start; justify-content:space-between; gap:10px; flex:none;}
+  .bt .eyebrow{
+    font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; font-weight:700;
+    color:color-mix(in srgb, var(--primary) 85%, var(--text));
+    display:flex; align-items:center; gap:6px;
   }
-  .ws-view{position:relative; padding:16px 18px; overflow-x:auto;}
-  .wpane{display:none; animation:wfade .3s ease;}
-  .wpane.on{display:block;}
-  @keyframes wfade{from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:none}}
+  .bt .eyebrow .new{
+    font-size:8.5px; font-weight:800; letter-spacing:.1em; padding:1px 6px;
+    background:var(--primary); color:var(--bg); border-radius:20px;
+  }
+  .bt .btitle{
+    font-family:var(--sans); font-size:13.5px; font-weight:600; color:var(--text);
+    letter-spacing:-.01em; margin-top:2px; line-height:1.25; opacity:.82;
+    transition:opacity .64s var(--wsease);
+  }
+  .bt.on .btitle{opacity:1;}
+  .bt .kchip{
+    flex:none; color:var(--primary); font-size:10.5px; font-weight:700; padding:0 6px;
+    border:1px solid color-mix(in srgb, var(--primary) 35%, transparent); border-radius:5px;
+    background:color-mix(in srgb, var(--bg) 45%, transparent);
+  }
+  /* mini and full share one cell, so the swap is a crossfade, not a jump */
+  .bt .bc{position:relative; display:grid; flex:1; min-height:0; margin-top:9px;}
+  .bt .bc > *{grid-area:1/1; min-width:0;}
+  .bt .mini{
+    font-size:11.5px; line-height:1.65; color:var(--text4);
+    transition:opacity .22s var(--wsease), transform .22s var(--wsease);
+  }
+  .bt .mini s{text-decoration:none; color:var(--text3);}
+  .bt .mini em{display:block; margin-top:6px; font-style:normal; font-size:10.5px; color:color-mix(in srgb, var(--text4) 75%, transparent);}
+  .bt .mini em b{color:var(--text3); border:1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius:4px; padding:0 4px;}
+  .bt .full{
+    overflow:hidden; opacity:0; transform:translateY(7px); pointer-events:none;
+    transition:opacity .24s var(--wsease) .17s, transform .3s var(--wsease) .17s;
+    -webkit-mask-image:linear-gradient(180deg,#000 90%,transparent);
+    mask-image:linear-gradient(180deg,#000 90%,transparent);
+  }
+  .bt.on .full{opacity:1; transform:none; pointer-events:auto;}
+  .bt.on .mini{opacity:0; transform:translateY(-6px);}
+  /* a tile is a third of the panel even when it is the big one, so the mock
+     rows have to wrap here where the old full-width pane let them run */
+  .bt .full .m-row{flex-wrap:wrap; white-space:normal; row-gap:4px;}
+  .bt .full .m-code{overflow-x:auto;}
+  /* the dwell line: how long this tile keeps the floor */
+  .bt .prog{position:absolute; left:0; bottom:0; height:2px; width:0; z-index:2; opacity:0;
+    background:linear-gradient(90deg, transparent, var(--primary));}
+  .bt.on .prog{opacity:.85; animation:bfill var(--wsdwell) linear;}
+  @keyframes bfill{from{width:0} to{width:100%}}
+  .ws-meter{position:relative; width:110px; height:3px; border-radius:3px; overflow:hidden;
+    background:color-mix(in srgb, var(--border) 55%, transparent);}
+  .ws-meter i{position:absolute; inset:0 auto 0 0; width:0; border-radius:3px; background:var(--primary);}
+  .ws-meter.run i{animation:bfill var(--wsdwell) linear;}
+  /* hover, hidden tab and off-screen all park the lap where it stands */
+  .panel.wspaused .ws-meter i, .panel.wspaused .bt.on .prog{animation-play-state:paused;}
+  /* once the visitor takes the controls the timer is gone for good */
+  .panel.wsmanual .prog{display:none;}
+  .panel.wsmanual .ws-meter{opacity:.2;}
+
+  /* Phones: no growth, no rotation, no timer — six readable cards. The whole
+     point of the bento is peripheral vision, and a phone has none. */
+  @media(max-width:820px){
+    .bento{flex-direction:column; height:auto; padding:0 10px 10px; gap:9px;}
+    .bento .bcol{flex:none; gap:9px;}
+    .bt{flex:none;}
+    .bt .full, .bt .prog, .ws-meter, #ws-mode{display:none;}
+    .bt .mini{opacity:1 !important; transform:none !important;}
+  }
   /* shared mock bits */
   .m-row{display:flex; align-items:center; gap:10px; padding:6px 8px; border-radius:7px; font-size:12.5px; color:var(--text3); white-space:nowrap;}
   .m-row:hover{background:color-mix(in srgb, var(--primary) 5%, transparent);}
@@ -314,6 +390,36 @@
   .m-typing i{display:inline-block; width:5px; height:5px; border-radius:50%; background:var(--text4); margin-right:3px; animation:mty 1.1s infinite;}
   .m-typing i:nth-child(2){animation-delay:.18s} .m-typing i:nth-child(3){animation-delay:.36s}
   @keyframes mty{0%,100%{opacity:.25; transform:translateY(0)} 50%{opacity:1; transform:translateY(-3px)}}
+  /* pull request bits — the three lanes the real panel reads in */
+  .m-chip.ok{color:var(--success); border-color:color-mix(in srgb, var(--success) 45%, transparent);}
+  .m-chip.bad{color:var(--error); border-color:color-mix(in srgb, var(--error) 45%, transparent);}
+  .m-chip.warn{color:var(--warning); border-color:color-mix(in srgb, var(--warning) 45%, transparent);}
+  .m-btn.ok{color:var(--success); border-color:color-mix(in srgb, var(--success) 55%, transparent);}
+  .m-btn.bad{color:var(--error); border-color:color-mix(in srgb, var(--error) 55%, transparent);}
+  .pr-lane{display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;}
+  .pr-lane span{
+    font-size:10.5px; border-radius:20px; padding:3px 10px; color:var(--text4);
+    border:1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  }
+  .pr-lane span.on{color:var(--bg); background:var(--primary); border-color:transparent; font-weight:700;}
+  .pr-thread{
+    margin:8px 0; padding:8px 10px; font-size:11.5px; line-height:1.6; color:var(--text3);
+    border:1px solid color-mix(in srgb, var(--border) 45%, transparent); border-radius:10px;
+  }
+  .pr-thread .who{display:flex; align-items:center; gap:7px; font-size:11px; color:var(--text2); margin-bottom:4px;}
+  .pr-thread b{color:var(--text2);}
+  .av{
+    width:17px; height:17px; border-radius:50%; flex:none; display:inline-flex;
+    align-items:center; justify-content:center; font-size:8.5px; font-weight:700;
+    background:var(--primary); color:var(--bg);
+  }
+  .av.bot{background:var(--info);}
+  .pr-bots{
+    margin:7px 0; padding:7px 10px; font-size:10.5px; color:var(--text4);
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    border:1px dashed color-mix(in srgb, var(--border) 60%, transparent); border-radius:10px;
+  }
+  .pr-acts{display:flex; gap:6px; flex-wrap:wrap; margin-top:9px;}
   /* reveals */
   .rv{opacity:0; transform:translateY(22px); transition:opacity .55s ease, transform .55s ease;}
   .rv.in{opacity:1; transform:none;}
@@ -338,6 +444,42 @@
   @keyframes blink{50%{opacity:0}}
 
   /* ============ stat band ============ */
+  /* ============ download ============ */
+  .dlgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:26px;}
+  @media(max-width:900px){.dlgrid{grid-template-columns:1fr;}}
+  .dl{
+    position:relative; background:color-mix(in srgb, var(--bg2) 92%, transparent);
+    border:1px solid color-mix(in srgb, var(--border) 70%, transparent); border-radius:14px; padding:20px;
+    display:flex; flex-direction:column; gap:12px;
+  }
+  /* The one that matches the visitor's machine, decided in JS. */
+  .dl.you{border-color:var(--primary); box-shadow:0 0 0 1px color-mix(in srgb, var(--primary) 35%, transparent), 0 10px 40px var(--glow);}
+  .dl .os{display:flex; align-items:center; gap:10px; font-weight:700; font-size:15px;}
+  .dl .os .ico{font-size:18px;}
+  .dl .yours{
+    margin-left:auto; font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; font-weight:700;
+    color:var(--bg2); background:var(--primary); border-radius:999px; padding:3px 9px; display:none;
+  }
+  .dl.you .yours{display:inline-block;}
+  .dl a.get{
+    display:flex; align-items:center; gap:10px; padding:11px 14px; border-radius:10px;
+    border:1px solid var(--border2); font-size:13px; font-weight:600; color:var(--text2);
+    transition:border-color .18s, background .18s;
+  }
+  .dl a.get:hover{border-color:var(--primary); background:color-mix(in srgb, var(--primary) 10%, transparent);}
+  .dl a.get.pri{background:var(--primary); color:var(--bg); border-color:transparent; font-weight:800;}
+  .dl a.get .sz{margin-left:auto; font-size:11px; font-weight:400; opacity:.75; font-variant-numeric:tabular-nums;}
+  .dl .first{font-size:11.5px; line-height:1.65; color:var(--text3); border-top:1px dashed color-mix(in srgb, var(--border) 60%, transparent); padding-top:11px;}
+  .dl .first b{color:var(--text2); font-weight:600;}
+  .dl code{
+    display:block; margin-top:6px; padding:7px 9px; border-radius:7px; font-size:11px; overflow-x:auto;
+    background:color-mix(in srgb, var(--bg) 70%, transparent); color:var(--text2);
+    border:1px solid color-mix(in srgb, var(--border) 50%, transparent); white-space:pre;
+  }
+  .dlnote{margin-top:18px; font-size:12.5px; color:var(--text3); line-height:1.8;}
+  .dlnote b{color:var(--text2);}
+  .dlnote a{text-decoration:underline;}
+
   .band{
     max-width:1200px; margin:84px auto 0; padding:0 28px;
     display:grid; grid-template-columns:repeat(4,1fr); gap:14px;
@@ -448,10 +590,8 @@
     .pfoot span[style]{margin-left:0 !important;}
     thead th{padding:10px 12px;}
     tbody td{padding:11px 12px; font-size:12.5px;}
-    .ws-tabs{padding:10px; gap:5px;}
-    .wtab{padding:9px 11px; font-size:12.5px;}
-    .ws-view{padding:14px 12px;}
-    .ws-body{min-height:0;}
+    .bt .pad{padding:11px 12px 12px;}
+    .bt .btitle{font-size:13px;}
     .m-row{font-size:12px; gap:8px;}
     .m-bar{width:56px;}
     .m-keys{font-size:10.5px; line-height:1.8; margin-top:10px;}
@@ -484,7 +624,8 @@
   <div class="in">
     <span class="logo"><span class="sat" aria-hidden="true"><svg viewBox="0 0 32 32" width="24" height="24" style="display:block; color:var(--primary)"><line x1="20.2" y1="20.2" x2="27" y2="27" stroke="currentColor" stroke-width="3.1" stroke-linecap="round"/><circle cx="13.5" cy="13.5" r="9" fill="currentColor" fill-opacity="0.1"/><circle cx="13.5" cy="13.5" r="5.6" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1"/><path d="M13.5 5.6 V21.4 M5.6 13.5 H21.4" stroke="currentColor" stroke-opacity="0.16" stroke-width="1"/><path d="M13.5 13.5 L13.5 4.6 A8.9 8.9 0 0 1 19.7 7 Z" fill="currentColor" fill-opacity="0.2"/><line x1="13.5" y1="13.5" x2="19.7" y2="7" stroke="currentColor" stroke-width="1" stroke-opacity="0.8"/><circle cx="9" cy="16.4" r="3" fill="none" stroke="var(--success)" stroke-opacity="0.5" stroke-width="1"/><circle cx="9" cy="16.4" r="1.7" fill="var(--success)"/><circle cx="16.4" cy="16" r="1.1" fill="currentColor" fill-opacity="0.75"/><circle cx="13.5" cy="13.5" r="9.6" fill="none" stroke="currentColor" stroke-width="2.3"/></svg></span><span>agentglass<small>a loupe for your agents</small></span></span>
     <span class="lamp"></span>
-    <span class="links"><a href="#workspace">Workspace</a><a href="#fleet">Fleet</a><a href="#quickstart">Quickstart</a></span>
+    <span class="links"><a href="#workspace">Workspace</a><a href="#fleet">Fleet</a><a href="#download">Download</a>
+      <a href="#quickstart">Quickstart</a></span>
     <span class="sp"></span>
     <a class="gh" href="https://github.com/SirAllap/agentglass" target="_blank" rel="noopener">★ <b>GitHub</b></a>
   </div>
@@ -502,20 +643,25 @@
     <p class="sub">
       Claude Code, Codex, Gemini CLI — every AI coding agent on your machine, on one radar.
       But <b>agentglass</b> is not a viewer: it's mission control <b>and a full workspace</b>.
-      The dashboard watches every tool call, token and dollar live; the cockpit acts —
-      review diffs, stage &amp; push, drive docker, drop into a <b>real terminal</b>,
-      chat with Claude — without leaving the glass.
+      The dashboard watches every tool call, token and dollar live. The control plane can
+      <b>hold a risky tool call until you approve it</b>, from any device, and it survives a
+      restart. And the cockpit acts — review diffs, stage &amp; push, <b>review a pull request
+      and merge it</b> without opening a browser, drive docker, drop into a <b>real terminal</b>
+      (with your tmux windows as native tabs), chat with Claude — without leaving the glass.
+      A desktop app, with its server built in.
     </p>
 
     <div class="ctas">
       <a class="btn-a" href="./demo/">▶ Enter the live demo</a>
-      <button class="btn-b" id="copy-npx" title="Copy to clipboard"><span class="c">$</span> <span id="npx-txt">npx agentglass</span></button>
+      <a class="btn-b" data-dl="any" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ Download <span data-agx="version">the desktop app</span></a>
+      <button class="btn-b" id="copy-npx" data-copy="git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run setup" title="Copy: git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run setup"><span class="c">$</span> <span id="npx-txt">git clone … &amp;&amp; bun run setup</span></button>
     </div>
 
     <div class="keys" aria-label="Workspace panels, one keystroke away">
       <span class="klbl">the whole workspace, one keystroke away —</span>
-      <a class="key" href="#workspace" data-panel="d"><b>d</b> diff</a>
       <a class="key" href="#workspace" data-panel="g"><b>g</b> git</a>
+      <a class="key" href="#workspace" data-panel="d"><b>d</b> diff</a>
+      <a class="key" href="#workspace" data-panel="p"><b>p</b> pull requests</a>
       <a class="key" href="#workspace" data-panel="o"><b>o</b> docker</a>
       <a class="key" href="#workspace" data-panel="t"><b>t</b> terminal</a>
       <a class="key" href="#workspace" data-panel="c"><b>c</b> chat</a>
@@ -535,6 +681,12 @@
       <span><b>o</b> api-worker <i>restarted</i> · logs streaming</span>
       <span><b>t</b> make test · <i>running</i> in a real PTY</span>
       <span><b>c</b> claude replied · shop-web chat</span>
+      <span>✓ approved · gate restored after restart, agent still held</span>
+      <span><b>t</b> tmux · 3 windows as native tabs · C-f listening</span>
+      <span><b>p</b> #482 · 1 review waiting · checks 3 ✓ 1 ✗</span>
+      <span><b>p</b> review handed to claude · branch checked out locally</span>
+      <span>◷ AG-5F6D open 9m · transcript still growing — working, not stuck</span>
+      <span>⬇ <span data-agx="version">a new release</span> available · release notes in Settings ▸ About</span>
     </div>
   </div>
 </header>
@@ -544,68 +696,126 @@
   <div class="rv">
     <span class="plabel">Workspace</span>
     <h2>Press a key. Fly the cockpit.</h2>
-    <p class="note">Each panel below is the real layout of the app — and the keys are real too. Try it: press <b>d</b>, <b>g</b>, <b>o</b>, <b>t</b> or <b>c</b> on your keyboard right now.</p>
+    <p class="note">Every panel of the real app, all six at once — and the keys are real. Press <b>g</b>, <b>d</b>, <b>p</b>, <b>o</b>, <b>t</b> or <b>c</b> on your keyboard right now. Leave it alone and it flies itself.</p>
   </div>
-  <div class="panel rv d1">
+  <div class="panel rv d1" id="ws-panel">
     <div class="phead">
       <span class="live"><span class="lamp"></span>WORKSPACE</span>
-      <span class="t" id="ws-title">Diff — everything the fleet changed</span>
+      <span class="t" id="ws-title">Pull requests — review without the browser</span>
       <span class="sp"></span>
-      <span class="t">one keystroke away</span>
+      <span class="t" id="ws-mode">auto · one lap a minute</span>
+      <span class="ws-meter" id="ws-meter" aria-hidden="true"><i></i></span>
     </div>
-    <div class="ws-body">
-      <div class="ws-tabs" role="tablist" aria-label="Workspace panels">
-        <button class="wtab on" data-panel="d" role="tab"><b>d</b> Diff &amp; review</button>
-        <button class="wtab" data-panel="g" role="tab"><b>g</b> Source control</button>
-        <button class="wtab" data-panel="o" role="tab"><b>o</b> Docker</button>
-        <button class="wtab" data-panel="t" role="tab"><b>t</b> Terminal</button>
-        <button class="wtab" data-panel="c" role="tab"><b>c</b> Chat</button>
+    <div class="bento" role="tablist" aria-label="Workspace panels">
+
+      <div class="bcol" data-col="gp">
+        <button class="bt" data-panel="g" role="tab" aria-selected="false">
+          <span class="pad">
+            <span class="bh">
+              <span>
+                <span class="eyebrow">
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M5 3v10M5 6h4a2 2 0 0 1 2 2v5"/><circle cx="5" cy="2.6" r="1.6"/><circle cx="5" cy="13.4" r="1.6"/><circle cx="11" cy="13.4" r="1.6"/></svg>
+                  git
+                </span>
+                <span class="btitle">Stage, commit, push</span>
+              </span>
+              <span class="kchip">g</span>
+            </span>
+            <span class="bc">
+              <span class="mini"><s>shop-api · main</s> ↑2 ahead · 2 staged, 1 unstaged<em><b>s</b> stage · <b>u</b> unstage · <b>x</b> discard · hunk staging</em></span>
+              <span class="full">
+                <div class="m-row"><span class="m-status"><i></i>shop-api · main</span><span class="m-chip">↑2 ahead</span><span style="margin-left:auto"></span><span class="m-btn">Pull</span><span class="m-btn pri">Push ↑2</span></div>
+                <div class="m-hd">Staged (2)</div>
+                <div class="m-row"><span style="color:var(--warning)">M</span> src/services/pricing.ts</div>
+                <div class="m-row"><span style="color:var(--warning)">M</span> src/routes/checkout.ts</div>
+                <div class="m-hd">Unstaged (1)</div>
+                <div class="m-row"><span style="color:var(--warning)">M</span> web/src/components/Cart.tsx</div>
+                <div class="m-keys">lazygit-style, write-gated · <b>s</b> stage · <b>u</b> unstage · <b>x</b> discard · interactive hunk staging · branches, log, stashes, worktrees · resolve conflicts, or hand them to a chat</div>
+              </span>
+            </span>
+          </span>
+          <span class="prog"></span>
+        </button>
+
+        <button class="bt on" data-panel="p" role="tab" aria-selected="true">
+          <span class="pad">
+            <span class="bh">
+              <span>
+                <span class="eyebrow">
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.6" cy="3.4" r="1.7"/><circle cx="4.6" cy="12.6" r="1.7"/><circle cx="11.4" cy="12.6" r="1.7"/><path d="M4.6 5.1v5.8M11.4 10.9V6.4a2 2 0 0 0-2-2H7.6"/><path d="M9.2 2.8 7.4 4.4l1.8 1.6"/></svg>
+                  pull requests <span class="new">new</span>
+                </span>
+                <span class="btitle">Review without the browser</span>
+              </span>
+              <span class="kchip">p</span>
+            </span>
+            <span class="bc">
+              <span class="mini"><s>#482 · 1 review waiting</s> checks 3 ✓ 1 ✗<em>approve, request changes, merge — or hand it to claude</em></span>
+              <span class="full">
+                <div class="m-row" style="padding-left:0"><span class="m-status"><i style="background:var(--warning); box-shadow:0 0 7px var(--warning)"></i>#482 round prices at checkout</span><span class="m-chip">shop-api ← fix/rounding</span><span style="margin-left:auto"></span><span class="m-chip ok">3 ✓</span><span class="m-chip bad">1 ✗</span><span class="m-chip warn">review required</span></div>
+                <div class="pr-lane"><span class="on">humans 1</span><span>line threads 2</span><span>automation 12 ▸ digest</span></div>
+                <div class="pr-thread"><div class="who"><span class="av">RC</span> richard · requested changes · 2h</div>Rounding at the boundary is right, but <b>assertRounded</b> throws on legacy carts. Guard it?</div>
+                <div class="pr-bots"><span class="av bot">CI</span> 12 automation comments collapsed · coverage table 46,551 chars · expand</div>
+                <div class="m-code">
+                  <div class="ln add"><span class="no">18</span><span>+   <span class="fn">assertRounded</span>(cart.total)</span></div>
+                  <div class="ln"><span class="no">19</span><span>    <span class="kw">return</span> pay(cart) }</span></div>
+                  <div class="ln"><span class="no"> </span><span class="cm">  ⤷ your pending comment · sends with the review</span></div>
+                </div>
+                <div class="pr-acts"><span class="m-btn ok">✓ Approve</span><span class="m-btn bad">Request changes</span><span class="m-btn">Squash &amp; merge</span><span class="m-btn pri">→ hand to claude</span></div>
+                <div class="m-keys">review a pull request without opening a browser · humans, line threads and CI in separate lanes, machines collapsed to a digest · line comments queue as a pending review · merge is pinned to the head SHA, so a push you have not seen makes GitHub refuse · <b>→ claude</b> checks the branch out locally and opens a chat with the review prompt loaded</div>
+              </span>
+            </span>
+          </span>
+          <span class="prog"></span>
+        </button>
       </div>
-      <div class="ws-view">
 
-        <div class="wpane on" id="wp-d" role="tabpanel">
-          <div class="m-row"><span class="m-status"><i></i>src/services/pricing.ts</span><span class="m-chip">M · 2 chunks</span><span style="margin-left:auto"></span><button class="m-btn">✦ Explain</button><button class="m-btn pri">Commit…</button></div>
-          <div class="m-code" style="margin-top:8px">
-            <div class="ln"><span class="no">41</span><span>  <span class="kw">const</span> rate = taxRate(region)</span></div>
-            <div class="ln del"><span class="no">42</span><span>- <span class="kw">const</span> price = subtotal * rate</span></div>
-            <div class="ln add"><span class="no">42</span><span>+ <span class="kw">const</span> price = <span class="tok"><span class="fn">round</span>(</span>subtotal * rate<span class="tok">)</span></span></div>
-            <div class="ln"><span class="no">43</span><span>  cart.total = price <span class="cm">// word-level diff, shiki-highlighted</span></span></div>
-          </div>
-          <div class="m-code" style="margin-top:8px">
-            <div class="ln"><span class="no">17</span><span>  <span class="kw">export</span> <span class="kw">function</span> <span class="fn">checkout</span>(cart: Cart) {</span></div>
-            <div class="ln add"><span class="no">18</span><span>+   <span class="fn">assertRounded</span>(cart.total)</span></div>
-            <div class="ln"><span class="no">19</span><span>    <span class="kw">return</span> pay(cart) }</span></div>
-          </div>
-          <div class="m-keys">every Edit/Write the fleet made, chaptered per session · <b>j/k</b> move · <b>v</b> split/unified · check off reviewed files</div>
-        </div>
+      <div class="bcol" data-col="dt">
+        <button class="bt" data-panel="d" role="tab" aria-selected="false">
+          <span class="pad">
+            <span class="bh">
+              <span>
+                <span class="eyebrow">
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><rect x="2.2" y="2.2" width="11.6" height="11.6" rx="2.4"/><path d="M5 6.2h6M5 9.8h6"/></svg>
+                  diff
+                </span>
+                <span class="btitle">Everything the fleet changed</span>
+              </span>
+              <span class="kchip">d</span>
+            </span>
+            <span class="bc">
+              <span class="mini"><s>3 files</s> chaptered per session · word-level diff<em><b>j/k</b> move · <b>v</b> split or unified · check off reviewed</em></span>
+              <span class="full">
+                <div class="m-row" style="padding-left:0"><span class="m-status"><i></i>src/services/pricing.ts</span><span class="m-chip">M · 2 chunks</span><span style="margin-left:auto"></span><span class="m-btn">✦ Explain</span><span class="m-btn pri">Commit…</span></div>
+                <div class="m-code" style="margin-top:8px">
+                  <div class="ln"><span class="no">41</span><span>  <span class="kw">const</span> rate = taxRate(region)</span></div>
+                  <div class="ln del"><span class="no">42</span><span>- <span class="kw">const</span> price = subtotal * rate</span></div>
+                  <div class="ln add"><span class="no">42</span><span>+ <span class="kw">const</span> price = <span class="tok"><span class="fn">round</span>(</span>subtotal * rate<span class="tok">)</span></span></div>
+                  <div class="ln"><span class="no">43</span><span>  cart.total = price <span class="cm">// word-level diff, shiki-highlighted</span></span></div>
+                </div>
+                <div class="m-keys">every Edit/Write the fleet made, chaptered per session · <b>j/k</b> move · <b>v</b> split/unified · check off reviewed files</div>
+              </span>
+            </span>
+          </span>
+          <span class="prog"></span>
+        </button>
 
-        <div class="wpane" id="wp-g" role="tabpanel">
-          <div class="m-row"><span class="m-status"><i></i>shop-api · main</span><span class="m-chip">↑2 ahead</span><span style="margin-left:auto"></span><button class="m-btn">Pull</button><button class="m-btn pri">Push ↑2</button></div>
-          <div class="m-hd">Staged (2)</div>
-          <div class="m-row"><span style="color:var(--warning)">M</span> src/services/pricing.ts</div>
-          <div class="m-row"><span style="color:var(--warning)">M</span> src/routes/checkout.ts</div>
-          <div class="m-hd">Unstaged (1)</div>
-          <div class="m-row"><span style="color:var(--warning)">M</span> web/src/components/Cart.tsx</div>
-          <div class="m-hd">Commit</div>
-          <div class="m-row" style="border:1px solid color-mix(in srgb, var(--border) 60%, transparent); border-radius:8px; color:var(--text2)">fix: round prices at checkout<span style="margin-left:auto"></span><button class="m-btn pri">Commit</button></div>
-          <div class="m-keys">lazygit-style, write-gated · <b>s</b> stage · <b>u</b> unstage · <b>x</b> discard · interactive hunk staging · branches, log, stashes</div>
-        </div>
-
-        <div class="wpane" id="wp-o" role="tabpanel">
-          <div class="m-hd" style="margin-top:0">compose: shop</div>
-          <div class="m-row"><span class="m-status"><i></i>api-worker</span><span class="m-chip">running</span><span class="m-bar"><i style="width:34%"></i></span><span>cpu 34%</span><span class="m-chip">212 MB</span></div>
-          <div class="m-row"><span class="m-status"><i></i>postgres</span><span class="m-chip">running</span><span class="m-bar"><i style="width:12%"></i></span><span>cpu 12%</span><span class="m-chip">148 MB</span></div>
-          <div class="m-row"><span class="m-status"><i></i>redis</span><span class="m-chip">running</span><span class="m-bar"><i style="width:3%"></i></span><span>cpu 3%</span><span class="m-chip">18 MB</span></div>
-          <div class="m-hd" style="margin-top:14px">logs — api-worker</div>
-          <div class="m-log"><span class="t">13:46:02</span> <span class="ok">INFO</span>  worker started · queue=payments
-<span class="t">13:46:04</span> <span class="ok">INFO</span>  processed 14 jobs in 412ms
-<span class="t">13:46:07</span> <span class="wr">WARN</span>  retry #1 · stripe timeout (2.1s)
-<span class="t">13:46:08</span> <span class="ok">INFO</span>  ok · job 8842 settled $129.00</div>
-          <div class="m-keys">lazydocker-style, write-gated · <b>r</b> restart · <b>l</b> logs · <b>s</b> stop · images, volumes, networks</div>
-        </div>
-
-        <div class="wpane" id="wp-t" role="tabpanel">
-          <div class="m-log"><span style="color:var(--success)">dev@machine</span> <span style="color:var(--info)">shop-api</span> % make test
+        <button class="bt" data-panel="t" role="tab" aria-selected="false">
+          <span class="pad">
+            <span class="bh">
+              <span>
+                <span class="eyebrow">
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.8" y="2.6" width="12.4" height="10.8" rx="2.2"/><path d="M4.6 6.4 6.8 8l-2.2 1.6M8.4 10.2h3"/></svg>
+                  terminal
+                </span>
+                <span class="btitle">A real PTY on your machine</span>
+              </span>
+              <span class="kchip">t</span>
+            </span>
+            <span class="bc">
+              <span class="mini"><s>3 pass · 0 fail</s> real PTY · tmux windows as native tabs<em>your login shell, per repo, persistent across reloads</em></span>
+              <span class="full">
+                <div class="m-log"><span style="color:var(--success)">dev@machine</span> <span style="color:var(--info)">shop-api</span> % make test
 bun test v1.2.19
 <span class="ok">✓</span> pricing rounds correctly <span class="t">(12ms)</span>
 <span class="ok">✓</span> checkout asserts rounded totals <span class="t">(8ms)</span>
@@ -613,21 +823,74 @@ bun test v1.2.19
 
  <span class="ok">3 pass</span> · 0 fail · 41 expect() calls
 <span style="color:var(--success)">dev@machine</span> <span style="color:var(--info)">shop-api</span> % <span class="caret"></span></div>
-          <div class="m-keys">a real PTY — your login shell over a WebSocket, not an emulation · per-repo, persistent · <b>⚙</b> discovers Makefile targets &amp; package.json scripts</div>
-        </div>
-
-        <div class="wpane" id="wp-c" role="tabpanel">
-          <div class="m-row" style="padding:2px 8px"><span class="m-status"><i></i>shop-web</span><span class="m-chip">Opus</span><span class="m-chip">acceptEdits</span></div>
-          <div class="m-msg user">fix the cart rounding bug</div>
-          <div class="m-msg ai">
-            <div class="tools"><span>Read Cart.tsx</span><span>Grep pricing</span><span>Edit pricing.ts</span></div>
-            Found it — totals were summed before rounding. Patched <b>round()</b> into <b>pricing.ts</b> and added a guard in checkout. Running the tests now.
-          </div>
-          <div class="m-msg ai m-typing"><i></i><i></i><i></i></div>
-          <div class="m-keys">drives your local <b>claude</b> CLI · pick repo, model, permission mode · sessions join the fleet like any other agent</div>
-        </div>
-
+                <div class="m-keys">a real PTY — your login shell over a WebSocket, not an emulation · per-repo, persistent · <b>⚙</b> discovers Makefile targets &amp; package.json scripts · run <b>tmux</b> and its windows become native tabs, keybindings untouched</div>
+              </span>
+            </span>
+          </span>
+          <span class="prog"></span>
+        </button>
       </div>
+
+      <div class="bcol" data-col="oc">
+        <button class="bt" data-panel="o" role="tab" aria-selected="false">
+          <span class="pad">
+            <span class="bh">
+              <span>
+                <span class="eyebrow">
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7.4" width="3" height="3"/><rect x="5.5" y="7.4" width="3" height="3"/><rect x="9" y="7.4" width="3" height="3"/><rect x="5.5" y="4" width="3" height="3"/><path d="M1.6 10.6c1.8 3.4 10.6 3.6 12.8-2.2"/></svg>
+                  docker
+                </span>
+                <span class="btitle">Containers, logs, stats</span>
+              </span>
+              <span class="kchip">o</span>
+            </span>
+            <span class="bc">
+              <span class="mini"><s>3 running</s> api-worker · postgres · redis<em><b>r</b> restart · <b>l</b> logs · <b>s</b> stop · images, volumes</em></span>
+              <span class="full">
+                <div class="m-hd" style="margin-top:0">compose: shop</div>
+                <div class="m-row"><span class="m-status"><i></i>api-worker</span><span class="m-chip">running</span><span class="m-bar"><i style="width:34%"></i></span><span>cpu 34%</span><span class="m-chip">212 MB</span></div>
+                <div class="m-row"><span class="m-status"><i></i>postgres</span><span class="m-chip">running</span><span class="m-bar"><i style="width:12%"></i></span><span>cpu 12%</span><span class="m-chip">148 MB</span></div>
+                <div class="m-row"><span class="m-status"><i></i>redis</span><span class="m-chip">running</span><span class="m-bar"><i style="width:3%"></i></span><span>cpu 3%</span><span class="m-chip">18 MB</span></div>
+                <div class="m-hd">logs — api-worker</div>
+                <div class="m-log"><span class="t">13:46:04</span> <span class="ok">INFO</span>  processed 14 jobs in 412ms
+<span class="t">13:46:07</span> <span class="wr">WARN</span>  retry #1 · stripe timeout (2.1s)
+<span class="t">13:46:08</span> <span class="ok">INFO</span>  ok · job 8842 settled $129.00</div>
+                <div class="m-keys">lazydocker-style, write-gated · <b>r</b> restart · <b>l</b> logs · <b>s</b> stop · images, volumes, networks</div>
+              </span>
+            </span>
+          </span>
+          <span class="prog"></span>
+        </button>
+
+        <button class="bt" data-panel="c" role="tab" aria-selected="false">
+          <span class="pad">
+            <span class="bh">
+              <span>
+                <span class="eyebrow">
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4.4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4.6a2 2 0 0 1-2 2H7l-3.4 2.6V11H4a2 2 0 0 1-2-2z"/></svg>
+                  chat
+                </span>
+                <span class="btitle">Drive Claude in any repo</span>
+              </span>
+              <span class="kchip">c</span>
+            </span>
+            <span class="bc">
+              <span class="mini"><s>shop-web · Opus</s> queue a message mid-turn<em>pick repo, model and permission mode · survives a crash</em></span>
+              <span class="full">
+                <div class="m-row" style="padding:2px 8px"><span class="m-status"><i></i>shop-web</span><span class="m-chip">Opus</span><span class="m-chip">acceptEdits</span></div>
+                <div class="m-msg user">fix the cart rounding bug</div>
+                <div class="m-msg ai">
+                  <div class="tools"><span>Read Cart.tsx</span><span>Grep pricing</span><span>Edit pricing.ts</span></div>
+                  Found it — totals were summed before rounding. Patched <b>round()</b> into <b>pricing.ts</b> and added a guard in checkout.
+                </div>
+                <div class="m-keys">drives your local <b>claude</b> CLI · pick repo, model, permission mode · queue a message mid-turn · chats survive a crash or a project switch · sessions join the fleet like any other agent</div>
+              </span>
+            </span>
+          </span>
+          <span class="prog"></span>
+        </button>
+      </div>
+
     </div>
   </div>
 </section>
@@ -684,9 +947,9 @@ bun test v1.2.19
       <div class="read">Opus 352.0k <span class="a">$188.00</span> · GPT-4o 275.2k <span class="a">$94.42</span> · Sonnet <span class="a">$34.42</span></div>
     </div>
     <div class="card arm rv d1">
-      <div class="head"><span class="led"></span><span class="klabel">Alerts</span></div>
+      <div class="head"><span class="led"></span><span class="klabel">Control plane</span></div>
       <h3>What needs you</h3>
-      <p>Dangerous tool calls <b>hold for your clearance</b>. Approve or deny remotely — opt-in, audited.</p>
+      <p>Dangerous tool calls <b>hold for your clearance</b>. Approve or deny remotely — opt-in, audited, and <b>durable</b>: restart the server and the request is still there, still held.</p>
       <div class="read"><span class="w">✋ Approve Bash?</span> kubectl delete deploy api <span class="g">[Approve]</span> <span class="r">[Deny]</span></div>
     </div>
     <div class="card rv d2">
@@ -695,7 +958,87 @@ bun test v1.2.19
       <p>Claude Code hooks, or <b>any OpenTelemetry GenAI exporter</b>: Codex, Gemini CLI, Bedrock, LangChain, LiteLLM.</p>
       <div class="read">otel/genai ▸ rx <span class="a">1.33 events/sec</span> · peak 2/s</div>
     </div>
+    <div class="card rv">
+      <div class="head"><span class="led"></span><span class="klabel">Stuck or slow</span></div>
+      <h3>Evidence of life</h3>
+      <p>A tool call open for nine minutes is a long build or a wedged CLI, and elapsed time cannot tell you which. So the glass reads what the session is <b>still doing</b> — the transcript growing, the file a write tool named changing — instead of guessing from a stopwatch.</p>
+      <div class="read">AG-5F6D · Bash <span class="a">9m 12s</span> · transcript touched <span class="a">3s ago</span></div>
+    </div>
+    <div class="card rv d1">
+      <div class="head"><span class="led"></span><span class="klabel">The notch</span></div>
+      <h3>Above everything</h3>
+      <p>Approvals, finished turns and desktop notifications land in a notch that hangs from the top of the frame, wherever you are in the app. One switch mutes it without touching your system's Do Not Disturb.</p>
+      <div class="read">✋ 1 waiting · <span class="a">2 turns finished</span> · quiet <span class="g">off</span></div>
+    </div>
+    <div class="card rv d2">
+      <div class="head"><span class="led"></span><span class="klabel">Desktop</span></div>
+      <h3>Not just a tab</h3>
+      <p>Installers for <b>macOS</b> (Apple silicon and Intel), <b>Linux</b> (deb and AppImage) and <b>Windows</b>. It checks for new releases in the background and shows you the incoming commits before you take them.</p>
+      <div class="read"><span data-agx="version">a new release</span> available · <span class="a">the commits it brings</span>, listed before you take them</div>
+    </div>
   </div>
+</section>
+
+<!-- ══════════ DOWNLOAD ══════════ -->
+<section class="sec" id="download">
+  <div class="rv">
+    <span class="plabel">Download</span>
+    <h2>The desktop app, for your machine.</h2>
+    <p class="note">Version and links are stamped from the latest release when this page deploys — they are never a hand-typed guess. Same app as the browser build, with its own window and a background update check.</p>
+  </div>
+  <div class="dlgrid">
+
+    <div class="dl rv" data-os="mac">
+      <div class="os"><span class="ico">&#127822;</span> macOS <span class="yours">your machine</span></div>
+      <a class="get pri" data-dl="mac-arm" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        Apple silicon <span class="sz" data-size="mac-arm">.dmg</span>
+      </a>
+      <a class="get" data-dl="mac-x64" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        Intel <span class="sz" data-size="mac-x64">.dmg</span>
+      </a>
+      <div class="first">
+        <b>First run:</b> the build is unsigned, so Gatekeeper quarantines it and says the app is
+        <i>damaged</i>. It is not. Right-click the app &rarr; <b>Open</b>, or clear the flag:
+        <code>xattr -dr com.apple.quarantine /Applications/agentglass.app</code>
+      </div>
+    </div>
+
+    <div class="dl rv d1" data-os="linux">
+      <div class="os"><span class="ico">&#128039;</span> Linux <span class="yours">your machine</span></div>
+      <a class="get pri" data-dl="linux-appimage" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        AppImage <span class="sz" data-size="linux-appimage">any distro</span>
+      </a>
+      <a class="get" data-dl="linux-deb" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        .deb <span class="sz" data-size="linux-deb">Debian / Ubuntu</span>
+      </a>
+      <div class="first">
+        <b>First run:</b> mark the AppImage executable, or install the .deb:
+        <code>chmod +x agentglass_*.AppImage &amp;&amp; ./agentglass_*.AppImage
+sudo apt install ./agentglass_*.deb</code>
+      </div>
+    </div>
+
+    <div class="dl rv d2" data-os="win">
+      <div class="os"><span class="ico">&#129003;</span> Windows <span class="yours">your machine</span></div>
+      <a class="get pri" data-dl="win-exe" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">
+        Installer <span class="sz" data-size="win-exe">.exe</span>
+      </a>
+      <div class="first">
+        <b>First run:</b> unsigned, so SmartScreen warns. <b>More info</b> &rarr; <b>Run anyway</b>.
+        <br><b>Known gap:</b> the terminal panel is POSIX-only and does not work here yet
+        (<a href="https://github.com/SirAllap/agentglass/issues/98" target="_blank" rel="noopener">#98</a>).
+        Everything else runs.
+      </div>
+    </div>
+
+  </div>
+  <p class="dlnote">
+    Prefer to run it from source, or want the hooks wired for every project? <b>git clone</b>, <b>bun install</b>, <b>bun run dev</b> — see the
+    <a href="https://github.com/SirAllap/agentglass#quickstart" target="_blank" rel="noopener">quickstart</a>.
+    The app is local-first either way: SQLite on your own disk, nothing phones home. Every installer is built by
+    <a href="https://github.com/SirAllap/agentglass/actions" target="_blank" rel="noopener">CI from a tagged commit</a>, and
+    <a href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">every asset is on the release</a> if you want a different one.
+  </p>
 </section>
 
 <!-- ══════════ QUICKSTART ══════════ -->
@@ -708,17 +1051,19 @@ bun test v1.2.19
   <div class="txgrid">
     <div class="txlog rv">
       <div><span class="who p">pilot ▸</span> request startup.</div>
-      <div><span class="who">tower ▸</span> cleared. run <span class="cmd">npx agentglass</span></div>
-      <div class="dim">◇ server listening on :4177</div>
+      <div><span class="who">tower ▸</span> cleared. one way in —</div>
+      <div class="dim">◇ <a href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener" style="text-decoration:underline">download the desktop app</a> · macOS, Linux, Windows</div>
+      <div class="dim">◇ launch it — the server ships inside, nothing to run</div>
       <div class="dim">◇ scanning ~/.claude/projects … 18 sessions found</div>
-      <div class="dim">◇ claude code hooks installed</div>
+      <div class="dim">◇ <span class="cmd">bun run setup</span> wires the Claude Code hooks — opt-in</div>
       <div><span class="who p">pilot ▸</span> tower in sight. <span class="caret"></span></div>
     </div>
     <div class="txlog rv d1">
       <div><span class="who">tower ▸</span> a note on security —</div>
       <div class="dim">◇ local-first: SQLite on your disk, nothing phones home</div>
       <div class="dim">◇ the control plane is opt-in and audited</div>
-      <div class="dim">◇ MIT license · Bun server · React UI · Tauri desktop app</div>
+      <div class="dim">◇ the approval queue is persisted — a crash cannot silently auto-allow</div>
+      <div class="dim">◇ MIT license · Bun server · React UI · Electron desktop app</div>
       <div class="dim">◇ read <a href="https://github.com/SirAllap/agentglass/blob/main/SECURITY.md" target="_blank" rel="noopener" style="text-decoration:underline">SECURITY.md</a> before installing — we mean it</div>
       <div><span class="who">tower ▸</span> <a href="https://github.com/SirAllap/agentglass/issues" target="_blank" rel="noopener" style="text-decoration:underline">github issues</a> welcome, frequency monitored.</div>
     </div>
@@ -727,8 +1072,8 @@ bun test v1.2.19
 
 <!-- ══════════ STAT BAND ══════════ -->
 <div class="band">
-  <div class="tile rv"><div class="n">1 <em>cmd</em></div><div class="k">from zero to cockpit — npx agentglass</div></div>
-  <div class="tile rv d1"><div class="n">p50/<em>p95</em></div><div class="k">tool-latency percentiles, live</div></div>
+  <div class="tile rv"><div class="n">3 <em>OSes</em></div><div class="k">desktop installers — macOS (Apple silicon &amp; Intel), Linux (deb &amp; AppImage), Windows</div></div>
+  <div class="tile rv d1"><div class="n">p50/<em>p95</em></div><div class="k">tool-latency percentiles, live — measured PreToolUse ▸ PostToolUse</div></div>
   <div class="tile rv d2"><div class="n">22</div><div class="k">themes — this page rolled <b id="th-tile">Ember</b>; hit 🎲 below to reroll</div></div>
   <div class="tile rv"><div class="n"><em>100%</em></div><div class="k">local-first — your data never leaves your machine</div></div>
 </div>
@@ -738,12 +1083,15 @@ bun test v1.2.19
   <div class="rv">
     <span class="stamp">Cleared for takeoff</span>
     <h2>Your agents are already flying.<br><em>Get a tower.</em></h2>
-    <button class="cmdline" id="copy-npx2" title="Copy to clipboard"><span class="p">$</span> <span id="npx-txt2">npx agentglass</span></button>
+    <button class="cmdline" id="copy-npx2" data-copy="git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run setup" title="Copy: git clone https://github.com/SirAllap/agentglass.git &amp;&amp; cd agentglass &amp;&amp; bun install &amp;&amp; bun run setup"><span class="p">$</span> <span id="npx-txt2">git clone … &amp;&amp; bun run setup</span></button>
     <div class="row">
       <a class="btn-a" href="./demo/">▶ Live demo — no install</a>
+      <a class="btn-b" data-dl="mac" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ macOS</a>
+      <a class="btn-b" data-dl="linux" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ Linux</a>
+      <a class="btn-b" data-dl="win" href="https://github.com/SirAllap/agentglass/releases/latest" target="_blank" rel="noopener">⬇ Windows</a>
       <a class="btn-b" href="https://github.com/SirAllap/agentglass" target="_blank" rel="noopener">★ Star on GitHub</a>
     </div>
-    <p class="meta">Open source · MIT · Bun + SQLite · React + Vite · Tauri desktop · 22 themes</p>
+    <p class="meta">Open source · MIT · Bun + SQLite · React + Vite · Electron desktop · 22 themes</p>
   </div>
 </footer>
 
@@ -865,16 +1213,42 @@ bun test v1.2.19
     applyTheme(current); /* re-sync active state now that options exist */
   })();
 
-  /* ── copy npx command ── */
+  /* ── which download is yours ──
+     Highlights one card rather than hiding the others: the guess is a user-agent
+     string, which is wrong often enough (a Mac told to report Windows, a Linux
+     browser on ChromeOS) that hiding the rest would strand people. Apple silicon
+     is offered first because the UA cannot tell it from Intel, and it is the
+     larger half of Macs now. */
+  (function(){
+    var ua = navigator.userAgent || '';
+    var plat = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+    var hay = (plat + ' ' + ua).toLowerCase();
+    var os = /mac|iphone|ipad/.test(hay) ? 'mac'
+           : /win/.test(hay) ? 'win'
+           : /linux|x11|cros|android/.test(hay) ? 'linux'
+           : null;
+    if(!os) return;
+    var card = document.querySelector('.dl[data-os="' + os + '"]');
+    if(card) card.classList.add('you');
+  })();
+
+  /* ── copy the command the button is showing ── */
   function wireCopy(btnId, txtId){
     var btn = document.getElementById(btnId);
-    if(!btn) return;
+    var txt = document.getElementById(txtId);
+    if(!btn || !txt) return;
+    /* Captured once, at wire time. The label is swapped to "copied ✓" while the
+       toast is up, so reading it at click time can copy the toast — and it used
+       to copy a hardcoded string, which meant the button could paste something
+       other than what it was showing. */
+    /* The label may be abbreviated with an ellipsis to fit the button; what
+       gets copied is the whole command, carried on the element itself. */
+    var cmd = btn.getAttribute('data-copy') || txt.textContent;
     btn.addEventListener('click', function(){
-      var txt = document.getElementById(txtId);
-      navigator.clipboard && navigator.clipboard.writeText('npx agentglass').then(function(){
-        var old = txt.textContent;
+      if(!navigator.clipboard) return;
+      navigator.clipboard.writeText(cmd).then(function(){
         txt.textContent = 'copied ✓';
-        setTimeout(function(){ txt.textContent = old; }, 1400);
+        setTimeout(function(){ txt.textContent = cmd; }, 1400);
       });
     });
   }
@@ -1023,50 +1397,116 @@ bun test v1.2.19
     });
   });
 
-  /* ── workspace showcase: tabs, real keyboard shortcuts, auto-rotate ── */
+  /* ── workspace bento: the six panels, real keys, a lap a minute ──
+     Motion is flex-grow interpolating on the tile and its column; the CSS owns
+     the curve, this only sets the numbers. Everything about the rotation is
+     built to yield: it stops for good the first time the visitor touches it,
+     and parks itself on hover, on a hidden tab, and once it scrolls away.
+     Phones never rotate — there is no peripheral vision on a phone, so the
+     bento is a plain stack there and a timer would only burn battery. */
   (function(){
-    var order = ['d','g','o','t','c'];
+    var panel = document.getElementById('ws-panel');
+    if(!panel) return;
+    var bento = panel.querySelector('.bento');
+    var meter = document.getElementById('ws-meter');
+    var titleEl = document.getElementById('ws-title');
+    var modeEl = document.getElementById('ws-mode');
+    var tiles = [].slice.call(panel.querySelectorAll('.bt'));
+    var cols = [].slice.call(panel.querySelectorAll('.bcol'));
+
+    /* the lap, fixed and never random: it opens on pull requests because that
+       is the newest thing here, then walks the rest of the workspace */
+    var order = ['p','t','g','d','o','c'];
     var titles = {
-      d:'Diff — everything the fleet changed',
       g:'Source control — stage, commit, push',
+      d:'Diff — everything the fleet changed',
+      p:'Pull requests — review without the browser',
       o:'Docker — containers, logs, stats',
       t:'Terminal — a real PTY on your machine',
       c:'Chat — drive local Claude sessions'
     };
-    var interacted = false;
-    function activate(k){
-      document.querySelectorAll('.wtab').forEach(function(b){ b.classList.toggle('on', b.dataset.panel===k); });
-      document.querySelectorAll('.wpane').forEach(function(p2){ p2.classList.toggle('on', p2.id==='wp-'+k); });
-      var t = document.getElementById('ws-title'); if(t) t.textContent = titles[k];
+    /* one source of truth for the dwell, read off the stylesheet so the CSS
+       progress line and this timer can never drift apart */
+    function dwellMs(){
+      var v = getComputedStyle(document.documentElement).getPropertyValue('--wsdwell');
+      var n = parseFloat(v) || 10;
+      return /ms\s*$/.test(v) ? n : n * 1000;
     }
-    document.querySelectorAll('.wtab').forEach(function(b){
-      b.addEventListener('click', function(){ interacted = true; activate(b.dataset.panel); });
+    var phone = matchMedia('(max-width: 820px)');
+    var i = 0, timer = null, manual = false, hovered = false, onScreen = true;
+
+    function activate(k){
+      i = Math.max(0, order.indexOf(k));
+      tiles.forEach(function(t){
+        var on = t.dataset.panel === k;
+        t.classList.toggle('on', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        t.style.flexGrow = on ? '3.4' : '1';
+      });
+      cols.forEach(function(c){ c.style.flexGrow = c.dataset.col.indexOf(k) === -1 ? '1' : '2.15'; });
+      if(titleEl) titleEl.textContent = titles[k];
+      /* restart the header meter from zero; removing the class and forcing a
+         reflow is the only reliable way to replay a CSS animation */
+      if(meter){
+        meter.classList.remove('run');
+        void meter.offsetWidth;
+        if(!manual && !reduced && !phone.matches) meter.classList.add('run');
+      }
+    }
+    function schedule(){
+      clearTimeout(timer);
+      if(manual || reduced || phone.matches || hovered || !onScreen || document.hidden) return;
+      timer = setTimeout(function(){ activate(order[(i+1) % order.length]); schedule(); }, dwellMs());
+    }
+    function park(on){
+      panel.classList.toggle('wspaused', on);
+      if(on) clearTimeout(timer); else schedule();
+    }
+    /* a carousel that fights the visitor is worse than no carousel */
+    function takeOver(k){
+      manual = true;
+      clearTimeout(timer);
+      panel.classList.add('wsmanual');
+      if(modeEl) modeEl.textContent = 'you have the controls';
+      activate(k);
+    }
+
+    tiles.forEach(function(t){
+      t.addEventListener('click', function(){ takeOver(t.dataset.panel); });
     });
     /* hero keycaps jump to the section AND open their panel */
     document.querySelectorAll('.keys .key[data-panel]').forEach(function(a){
-      a.addEventListener('click', function(){ interacted = true; activate(a.dataset.panel); });
+      a.addEventListener('click', function(){ takeOver(a.dataset.panel); });
     });
-    /* the real thing: press d/g/o/t/c anywhere on the page */
+    /* the real thing: press g/d/p/o/t/c anywhere on the page */
     document.addEventListener('keydown', function(e){
       if(e.metaKey || e.ctrlKey || e.altKey) return;
       var tag = (e.target && e.target.tagName) || '';
       if(tag === 'INPUT' || tag === 'TEXTAREA') return;
       var k = e.key.toLowerCase();
       if(order.indexOf(k) === -1) return;
-      interacted = true; activate(k);
+      takeOver(k);
       var sec = document.getElementById('workspace');
       var r = sec.getBoundingClientRect();
       if(r.bottom < 80 || r.top > innerHeight - 80) sec.scrollIntoView({behavior:'smooth', block:'nearest'});
     });
-    /* gentle auto-rotate until the visitor touches it */
-    if(!reduced){
-      var i = 0;
-      var iv = setInterval(function(){
-        if(interacted){ clearInterval(iv); return; }
-        i = (i+1) % order.length;
-        activate(order[i]);
-      }, 5000);
+
+    if(bento){
+      bento.addEventListener('mouseenter', function(){ hovered = true; park(true); });
+      bento.addEventListener('mouseleave', function(){ hovered = false; park(false); });
     }
+    document.addEventListener('visibilitychange', function(){ park(document.hidden || hovered); });
+    if('IntersectionObserver' in window){
+      new IntersectionObserver(function(entries){
+        onScreen = entries[0].isIntersecting;
+        park(!onScreen || hovered);
+      }, {threshold:.2}).observe(panel);
+    }
+    /* rotating in a phone layout would grow nothing and time nothing */
+    if(phone.addEventListener) phone.addEventListener('change', function(){ clearTimeout(timer); activate(order[i]); schedule(); });
+
+    activate(order[0]);
+    schedule();
   })();
 
   /* ── reveals ── */

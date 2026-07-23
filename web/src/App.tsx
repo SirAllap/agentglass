@@ -6,6 +6,7 @@ import { deriveAgents, deriveAlerts, buildTitles } from "./lib/derive.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
 import { initialTheme, applyTheme } from "./lib/themes.ts";
+import { actionFor } from "./lib/keybindings.ts";
 import { currentScale, nudgeScale, resetScale } from "./lib/uiScale.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
 import { useAlertSound } from "./lib/useSound.ts";
@@ -27,11 +28,15 @@ import { HelpLegend } from "./components/HelpLegend.tsx";
 import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
-import { LETTER_TO_VIEW, VIEW_IDS, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import { VIEW_IDS, loadViewOrder, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import ServerBanner from "./components/ServerBanner.tsx";
+import GitMissingBanner from "./components/GitMissingBanner.tsx";
+import { chordFromEvent, viewForChord } from "./lib/keybindings.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
+import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
 
@@ -103,6 +108,13 @@ export default function App() {
   // lives in lib/uiScale.ts, applied before this component ever mounts.
   const [scale, setScale] = useState(currentScale);
   const [workspace, setWorkspace] = useState<string | null>(null);
+
+  // Stable, and it has to be. This is passed down to the terminal, whose mount
+  // effect lists it as a dependency — an inline arrow is a new identity on
+  // every render of this component, which made that effect tear down and
+  // re-run, detaching and re-appending the live xterm DOM. Measured at eleven
+  // times in twenty seconds on a completely idle app.
+  const closeWorkspace = useCallback(() => setWsOpen(false), []);
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
 
@@ -123,6 +135,11 @@ export default function App() {
   wsOpenRef.current = wsOpen;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
+  // The catalog is the one panel that can open *over* the workspace, from the
+  // rail. Escape has to be able to tell the two apart, or one keystroke closes
+  // both and you lose the shell you were looking at to read a description.
+  const skillsOpenRef = useRef(skillsOpen);
+  skillsOpenRef.current = skillsOpen;
 
   // The workspace covers the dashboard, so the dashboard's ambient loops are
   // animating for nobody. The stylesheet freezes them on `data-ws`, the same way
@@ -214,7 +231,7 @@ export default function App() {
   const sessionProvider = useMemo(() => {
     const map = new Map<string, string>();
     for (const a of agentsAll) if (a.model_name) map.set(a.session_id, providerOf(a.model_name));
-    const sig = [...map].map(([k, v]) => k + " " + v).join("");
+    const sig = [...map].map(([k, v]) => k + "\u0000" + v).join("\u0001");
     if (sig === providerSig.current) return providerRef.current;
     providerSig.current = sig;
     providerRef.current = map;
@@ -270,6 +287,20 @@ export default function App() {
       // bare keys; a Spanish keyboard sends `+` and `-` directly.
       // Calls uiScale directly rather than the `zoom` callback so this effect
       // can keep its empty dep array and never re-subscribe.
+      // Before the fixed bindings below, because a view chord may carry Alt and
+      // that block deliberately ignores anything Alt-modified. Reserved chords
+      // cannot be bound, so nothing here can shadow zoom or the palette.
+      const chord = chordFromEvent(e);
+      if (chord) {
+        const target = viewForChord(chord, loadViewOrder().map((v) => v.id));
+        if (target) {
+          e.preventDefault();
+          setWsView(target);
+          setWsOpen(true);
+          return;
+        }
+      }
+
       if ((e.metaKey || e.ctrlKey) && !e.altKey) {
         const k = e.key;
         if (k === "=" || k === "+") { e.preventDefault(); setScale(nudgeScale(1)); return; }
@@ -279,17 +310,15 @@ export default function App() {
         // Workspace navigation, and the reason it carries a modifier: these
         // have to work while the caret sits in the chat composer or a commit
         // message, where a bare letter is just a letter.
-        if (k >= "1" && k <= String(VIEW_IDS.length)) {
-          e.preventDefault();
-          setWsView(VIEW_IDS[Number(k) - 1]);
-          setWsOpen(true);
-          return;
-        }
+        // The user's rail order, not the shipped one: the rail labels each
+        // icon with the number that reaches it, and a tooltip that stops being
+        // true after a reorder is worse than no tooltip.
+        const railIds = loadViewOrder().map((v) => v.id);
         if (k === "[" || k === "]") {
           e.preventDefault();
           setWsView((cur) => {
-            const i = VIEW_IDS.indexOf(cur);
-            return VIEW_IDS[(i + (k === "]" ? 1 : VIEW_IDS.length - 1)) % VIEW_IDS.length];
+            const i = railIds.indexOf(cur);
+            return railIds[(i + (k === "]" ? 1 : railIds.length - 1)) % railIds.length]!;
           });
           setWsOpen(true);
           return;
@@ -308,6 +337,9 @@ export default function App() {
       // because a focused textarea can swallow it before it reaches here.
       if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
+        // Peel one layer at a time: the catalog opened from the rail sits on
+        // top of the workspace, so it goes first and the workspace stays.
+        if (wsOpenRef.current && skillsOpenRef.current) { setSkillsOpen(false); return; }
         setSelected(null);
         setPaletteOpen(false);
         setHelpOpen(false);
@@ -329,39 +361,49 @@ export default function App() {
       const a = document.activeElement;
       const focusFree = !a || a === document.body || a === document.documentElement;
 
-      // Inside the workspace the frame itself holds focus, so `focusFree` is
-      // false and the old guard would swallow every letter. What actually
-      // matters there is narrower: is the keystroke going into a field or a
-      // shell? If not, it's navigation.
-      const typing = !!a && (
-        /^(input|textarea|select)$/i.test(a.tagName) ||
-        (a as HTMLElement).isContentEditable ||
-        !!a.closest?.(".xterm")
-      );
-      const canNavigate = (focusFree && !anyPanelOpenRef.current) || (wsOpenRef.current && !typing);
+      // Bare letters belong to the dashboard, and only to it.
+      //
+      // They used to switch views inside the workspace too, guarded by asking
+      // `document.activeElement` whether the keystroke was going into a field
+      // or a shell. That guard could not hold: focus inside the workspace falls
+      // back to <body> constantly — xterm losing it, a click landing on padding
+      // — and a body-focused keystroke read as "not typing", so a `g` typed
+      // into the terminal jumped to git. Intermittently, which is the worst
+      // way for a keyboard to be wrong: you stop trusting every key you press.
+      //
+      // There is no version of "is this keystroke meant for the app or for the
+      // shell" that a heuristic answers reliably, so the rule is positional
+      // instead of behavioural. Inside the workspace, navigation carries a
+      // modifier — ⌘1..5, ⌘\, ⌘[/] — which no shell will ever consume, and the
+      // rail is a click away.
+      const canNavigate = focusFree && !anyPanelOpenRef.current && !wsOpenRef.current;
       if (!canNavigate) return;
 
-      // A workspace letter either opens the workspace on that view or, if it's
-      // already open, switches to it. Same five keys as before, except they no
-      // longer stop working the moment you're actually using one of them.
-      const view = LETTER_TO_VIEW[e.key];
-      if (view) {
+      // Which action owns this letter, according to the user's bindings —
+      // which default to the shipped ones, so nothing changes until they say
+      // so. Read per keystroke rather than captured in this effect's closure:
+      // the effect has an empty dep array on purpose (it must not re-subscribe
+      // on every render), and a rebind has to take effect immediately, not
+      // after the next remount.
+      const action = actionFor(e.key);
+
+      // A workspace letter opens the workspace on that view. Only from the
+      // dashboard now — the guard above has already established that — so it
+      // opens rather than toggles: there is no open workspace to close from
+      // here, and ⌘\ is the key that puts it away from inside.
+      if (action?.startsWith("view.")) {
+        const view = action.slice(5) as ViewId;
         e.preventDefault();
-        // Pressing the current view's own letter closes the workspace, so a
-        // key that opened something can also put it away.
-        if (wsOpenRef.current && view === wsViewRef.current) setWsOpen(false);
-        else { setWsView(view); setWsOpen(true); }
+        setWsView(view);
+        setWsOpen(true);
         return;
       }
 
-      // The remaining globals still open something *over* whatever you're in,
-      // so they keep the original strict guard: dashboard only.
-      if (!focusFree || anyPanelOpenRef.current || wsOpenRef.current) return;
-      switch (e.key) {
-        case "?": setHelpOpen((o) => !o); break;
-        case "s": e.preventDefault(); setStatsOpen((o) => !o); break;
-        case "k": e.preventDefault(); setSkillsOpen((o) => !o); break;
-        case "/": e.preventDefault(); setSearchOpen((o) => !o); break;
+      switch (action) {
+        case "open.help": setHelpOpen((o) => !o); break;
+        case "open.stats": e.preventDefault(); setStatsOpen((o) => !o); break;
+        case "open.skills": e.preventDefault(); setSkillsOpen((o) => !o); break;
+        case "open.search": e.preventDefault(); setSearchOpen((o) => !o); break;
       }
     };
     window.addEventListener("keydown", onKey);
@@ -381,6 +423,10 @@ export default function App() {
     <div className="h-screen overflow-hidden flex flex-col relative">
       <div className="aurora" />
       <div className="aurora-grid" />
+
+      {/* Above everything, because when it shows, nothing below it is real. */}
+      <ServerBanner />
+      <GitMissingBanner />
 
       <Header
         conn={conn}
@@ -453,8 +499,12 @@ export default function App() {
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
-      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={() => setWsOpen(false)} chatFocusId={chatFocus} />
+      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} onSkills={() => setSkillsOpen(true)} chatFocusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
+      {/* Shows once when the app first runs a version it has not run before —
+          the update button restarts into a new build and otherwise says nothing
+          about what changed. */}
+      <WhatsNew />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

@@ -9,8 +9,11 @@ export const Latency = memo(function Latency({ stats }: { stats: StatsSummary | 
   const max = Math.max(1, ...tools.map((t) => t.p95_ms));
 
   return (
-    <Panel eyebrow="Performance" title="Which tools are slow" right={<span className="text-[10px] t-dim2">p50 · p95</span>}>
+    <Panel eyebrow="Performance" title="Tool wall-clock duration" right={<span className="text-[10px] t-dim2">p50 · p95</span>}>
       <div className="overflow-auto h-full pr-1">
+        <p className="t-dim2 text-[10.5px] leading-snug mb-2">
+          End-to-end tool duration from PreToolUse to PostToolUse, not model/API round-trip latency.
+        </p>
         {tools.length === 0 && <div className="t-dim2 text-[11px] text-center py-6">no tool calls measured yet</div>}
         <div className="space-y-2">
           {tools.map((t, i) => (

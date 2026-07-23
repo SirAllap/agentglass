@@ -12,9 +12,18 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
+import { ingestUpdate } from "../lib/updateStore.ts";
+import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
+import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
+import type { UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
+import { sysNotifyMode, setSysNotifyMode, notifyCapability, notifyQuiet, setNotifyQuiet, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
+import { clock24, setClock24 } from "../lib/clockPref.ts";
+import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
+         chordFor, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
+import { loadViewOrder, type ViewId } from "./workspace/views.ts";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
   return (
@@ -37,6 +46,36 @@ function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void
         }} />
       </span>
     </button>
+  );
+}
+
+/** A row of mutually exclusive choices, for a preference with three answers
+ *  rather than two. A toggle would have forced "show me their message" and
+ *  "just tell me someone wrote" to be the same decision. */
+function Choice<T extends string>({ label, hint, value, options, onPick, disabled, disabledHint }: {
+  label: string; hint: string; value: T; options: { v: T; label: string }[];
+  onPick: (v: T) => void; disabled?: boolean; disabledHint?: string;
+}) {
+  return (
+    <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left" style={{ opacity: disabled ? 0.55 : 1 }}>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="block text-[10.5px] t-dim2 mt-0.5">{disabled ? disabledHint ?? hint : hint}</span>
+      </span>
+      <span className="shrink-0 flex items-center gap-1 rounded-lg p-0.5"
+        style={{ background: "color-mix(in srgb, var(--border) 28%, transparent)" }}>
+        {options.map((o) => (
+          <button key={o.v} onClick={() => onPick(o.v)} disabled={disabled}
+            aria-pressed={value === o.v}
+            className="text-[10.5px] px-2 py-1 rounded-md transition-colors disabled:cursor-not-allowed"
+            style={value === o.v
+              ? { background: "color-mix(in srgb, var(--primary) 55%, transparent)", color: "var(--text)" }
+              : { color: "var(--text3)" }}>
+            {o.label}
+          </button>
+        ))}
+      </span>
+    </div>
   );
 }
 
@@ -80,12 +119,248 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
+type Pane = "prefs" | "keys" | "open" | "export" | "about";
+const TABS: { id: Pane; label: string }[] = [
+  { id: "prefs", label: "Preferences" },
+  { id: "keys", label: "Shortcuts" },
+  { id: "open", label: "Open" },
+  { id: "export", label: "Export" },
+  { id: "about", label: "About" },
+];
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="px-2 py-2">
       <div className="panel-eyebrow px-3 pb-1">{title}</div>
       {children}
     </div>
+  );
+}
+
+/**
+ * One rebindable shortcut.
+ *
+ * Capturing is a mode rather than a text field: you press the key you want,
+ * which is the only input method that cannot disagree with what will actually
+ * fire. `keydown` on the window during capture, so the key never reaches the
+ * app's own handler and rebinding `t` does not also open the terminal.
+ */
+function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
+  id: ActionId; keyName: string; capturing: boolean; onCapture: () => void; error: string | null;
+  /** Present only for workspace views, which are the ones reachable from
+   *  inside the workspace and so the ones that need a modified key too. */
+  chord?: { key: string; custom: boolean; capturing: boolean; onCapture: () => void; onClear: () => void };
+}) {
+  const { label, hint } = LABELS[id];
+  return (
+    <div className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-white/5">
+      <button onClick={onCapture} className="min-w-0 flex-1 text-left">
+        <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
+        <span className="block text-[10.5px] mt-0.5" style={{ color: error ? "var(--error)" : undefined }}>
+          <span className={error ? "" : "t-dim2"}>{error ?? hint}</span>
+        </span>
+      </button>
+      {/* Two keys, labelled, because they answer different questions and the
+          unlabelled pair read as one shortcut written twice. */}
+      {chord && (
+        <span className="shrink-0 flex items-center gap-1.5">
+          <span className="text-[9px] t-dim2 w-[52px] text-right">anywhere</span>
+          <button onClick={chord.onCapture}
+            title={chord.custom
+              ? `${chordLabel(chord.key)} opens this — click to record another, ✕ to go back to its rail position`
+              : `${chordLabel(chord.key)} opens this, from its position in the rail — click to record your own`}
+            className="chip text-[10px] tabular-nums min-w-[74px] text-center"
+            style={chord.capturing
+              ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
+              : chord.custom
+                ? { color: "var(--primary-hover)" }
+                : { color: "var(--text2)", opacity: 0.6 }}>
+            {chord.capturing ? "hold a combo…" : chordLabel(chord.key)}
+          </button>
+          <span className="w-3 shrink-0">
+            {chord.custom && !chord.capturing && (
+              <button onClick={chord.onClear} title="back to its position in the rail"
+                className="text-[11px] px-0.5 t-dim2 hover:opacity-70" aria-label="reset this shortcut">✕</button>
+            )}
+          </span>
+        </span>
+      )}
+      <span className="shrink-0 flex items-center gap-1.5">
+        <span className="text-[9px] t-dim2 w-[62px] text-right">{chord ? "dashboard" : "press"}</span>
+        <button onClick={onCapture} className="chip text-[10px] tabular-nums min-w-[74px] text-center"
+          style={capturing
+            ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
+            : { color: "var(--text2)" }}>
+          {capturing ? "press a key…" : keyName === " " ? "space" : keyName}
+        </button>
+      </span>
+    </div>
+  );
+}
+
+
+/**
+ * Version, and the update that goes with it.
+ *
+ * Deliberately shows what would arrive before offering to take it: this button
+ * builds and runs whatever is on the branch, and "3 commits behind" with the
+ * subjects listed is the difference between an informed click and a leap. When
+ * it cannot run — a dirty checkout, a diverged branch — it says which, because
+ * "update unavailable" sends people looking in the wrong place.
+ */
+function AboutPane({ open }: { open: boolean }) {
+  const [st, setSt] = useState<UpdateStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
+  // Which release's notes are being read, and what came back. Fetched here
+  // because the modal is presentational — the automatic caller has to see the
+  // answer before it can decide whether to open at all, so neither of them can
+  // let the dialog do its own loading. The server holds these for an hour, so
+  // reopening the same release is not a round trip that reaches github twice.
+  const [want, setWant] = useState<NotesTarget | null>(null);
+  const [notes, setNotes] = useState<ReleaseNotes | null>(null);
+
+  useEffect(() => {
+    if (!want) return;
+    let live = true;
+    setNotes(null);
+    api.updateNotes(want.tag)
+      .then((r) => { if (live) setNotes(r); })
+      .catch(() => { if (live) setNotes({ ok: false, tag: want.tag, notes: "", source: "", error: "could not reach the server" }); });
+    return () => { live = false; };
+  }, [want]);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    // Straight through the store, so the badge on the settings button and this
+    // pane can never disagree about whether an update exists — and so opening
+    // the pane refreshes what the background check knows rather than keeping a
+    // second, private answer.
+    api.updateStatus()
+      .then((r) => { ingestUpdate(r); if (live) setSt(r); })
+      .catch(() => { if (live) setSt(null); });
+    return () => { live = false; };
+  }, [open]);
+
+  const run = async () => {
+    setBusy(true); setErr(null);
+    const r = await api.updateRun().catch(() => ({ ok: false, error: "could not reach the server" }));
+    setBusy(false);
+    if (!r.ok) { setErr(r.error || "update failed to start"); return; }
+    setStarted(true);
+  };
+
+  if (!st) return <Section title="About"><div className="px-3 py-2 text-[11px] t-dim2">reading version…</div></Section>;
+
+  const short = st.info.commit ? st.info.commit.slice(0, 7) : "unknown";
+  const mine = installedNotes(st.info.baseTag, st.info.distance, st.branch);
+  return (
+    <Section title="About">
+      <div className="px-3 py-2 flex flex-col gap-3">
+        <div className="flex items-baseline gap-3">
+          <span className="text-[12.5px]" style={{ color: "var(--text)" }}>agentglass {st.info.version}</span>
+          <span className="text-[10.5px] t-dim2 tabular-nums" title={st.info.commit}>{short}</span>
+          {st.info.builtAt && <span className="text-[10px] t-dim2">built {new Date(st.info.builtAt).toLocaleString()}</span>}
+          {/* The notes used to appear once, on the launch after an update, and
+              were unreachable ever after — dismiss it, or update before it
+              existed, and the only copy was on the release page. */}
+          {mine && (
+            <button onClick={() => setWant(mine)}
+              className="ml-auto text-[10.5px] px-2 py-0.5 rounded-md hover:opacity-80"
+              style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>
+              release notes
+            </button>
+          )}
+        </div>
+
+        {/* The outcome of the previous run, which finished after the app it was
+            updating had already been stopped — so this is the only place it can
+            be reported at all. */}
+        {st.last && (
+          <div className="text-[10.5px] px-2.5 py-2 rounded-lg"
+            style={st.last.ok
+              ? { color: "var(--text2)", background: "color-mix(in srgb, var(--success) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }
+              : { color: "var(--text2)", background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>
+            last update {st.last.ok ? "succeeded" : "failed"} — {new Date(st.last.at).toLocaleString()}
+            {!st.last.ok && st.last.tail && (
+              <pre className="mt-1 text-[9.5px] whitespace-pre-wrap break-all m-0" style={{ color: "var(--text3)" }}>
+                {st.last.tail.split("~").filter(Boolean).slice(-6).join("\n")}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {started ? (
+          <div className="text-[11px] px-2.5 py-2 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+            Updating. The app will close and reopen on its own — this window going away is the update working, not crashing.
+          </div>
+        ) : st.blocked ? (
+          <div className="text-[11px] px-2.5 py-2 rounded-lg" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+            {st.blocked}
+          </div>
+        ) : st.behind === 0 ? (
+          <div className="text-[11px] t-dim2">
+            {st.branch ? `Up to date — ${st.branch} is the newest release.` : "Up to date."}
+          </div>
+        ) : (
+          <>
+            <div className="text-[11px]" style={{ color: "var(--text)" }}>
+              {st.branch} is available{st.behind > 1 ? ` — ${st.behind} releases newer than yours` : ""}
+            </div>
+            <div className="flex flex-col gap-0.5 max-h-[220px] overflow-y-auto agx-scroll">
+              {st.incoming.map((c) => (
+                <div key={c.sha} className="flex gap-2 text-[10.5px] min-w-0">
+                  <span className="tabular-nums shrink-0" style={{ color: "var(--primary-hover)" }}>{c.sha}</span>
+                  {c.subject && <span className="truncate t-dim2" title={c.subject}>{c.subject}</span>}
+                </div>
+              ))}
+            </div>
+            {err && <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>}
+            {/* The install compiles the release on this machine, so the
+                toolchain has to be here before it starts — said up front
+                rather than left to fail the build and report it in the panel
+                above, after the app has already gone down to restart. */}
+            <div className="text-[10.5px] px-2.5 py-1.5 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+              Built on your machine from source — needs <span style={{ color: "var(--warning)" }}>git</span> and <span style={{ color: "var(--warning)" }}>bun</span> installed, and is Linux-only for now.
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={run} disabled={busy}
+                className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
+                style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                {busy ? "starting…" : `install ${st.branch} & restart`}
+              </button>
+              {/* Read before you install, rather than after the app has
+                  restarted into it. The tag list above says which releases are
+                  coming; this says what is in them. */}
+              <button onClick={() => setWant({ tag: st.branch, title: "What's in this update" })}
+                className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
+                style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>
+                what's in {st.branch}
+              </button>
+            </div>
+            <span className="text-[9.5px] t-dim2">
+              Compiles the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.
+            </span>
+          </>
+        )}
+      </div>
+
+      <ReleaseNotesModal
+        open={!!want}
+        tag={want?.tag ?? ""}
+        title={want?.title}
+        footnote={want?.footnote}
+        loading={!!want && !notes}
+        // A release with no annotation, an origin github knows nothing about,
+        // a laptop on a train: all of them end here. Saying which is the whole
+        // point of a button you pressed on purpose.
+        error={notes && !notes.ok ? (notes.error || "no notes for that release") : undefined}
+        notes={notes?.notes ?? ""}
+        onClose={() => setWant(null)}
+      />
+    </Section>
   );
 }
 
@@ -106,6 +381,68 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   useEffect(() => { if (open) autostartEnabled().then(setAutostartState); }, [open]);
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
+  const [h24, setH24] = useState<boolean>(() => clock24());
+  const [keys, setKeys] = useState(() => bindings());
+  const [capturing, setCapturing] = useState<ActionId | null>(null);
+  const [pane, setPane] = useState<Pane>("prefs");
+  const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
+  useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
+
+  // While capturing, this window handler runs first and swallows the key, so
+  // rebinding "t" cannot also trigger whatever "t" is currently bound to.
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setCapturing(null); setKeyError(null); return; }
+      // Modifiers alone are not a binding; wait for the real key.
+      if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+      const r = rebind(capturing, e.key);
+      if (r.ok) { setCapturing(null); setKeyError(null); }
+      else setKeyError({ id: capturing, msg: r.error });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturing]);
+
+  // The same capture, for the modified key. Held apart from `capturing` so the
+  // two chips on one row cannot both be listening at once.
+  const [capturingChord, setCapturingChord] = useState<ViewId | null>(null);
+  useEffect(() => {
+    if (!capturingChord) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") { setCapturingChord(null); setKeyError(null); return; }
+      // The whole combination, exactly as held: Ctrl+Alt+J binds Ctrl+Alt+J.
+      // Recording only the letter and implying the modifier meant Alt could
+      // never be part of a binding at all.
+      const chord = chordFromEvent(e);
+      if (!chord) return; // modifiers alone, or a bare key — keep listening
+      const r = rebindChord(capturingChord, chord, loadViewOrder().map((v) => v.id));
+      if (r.ok) { setCapturingChord(null); setKeyError(null); }
+      else setKeyError({ id: `view.${capturingChord}`, msg: r.error });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturingChord]);
+
+  // Closing the modal mid-capture has to drop the capture. This component stays
+  // mounted with `open` merely toggled (Portal/AnimatePresence own the exit), so
+  // neither capture effect above unmounts on close, and while `capturing` /
+  // `capturingChord` stay set their window-level, capture-phase keydown listener
+  // stays attached to a dialog that is no longer on screen — swallowing the next
+  // keystroke anywhere in the app into a rebind nobody is doing. Clearing the
+  // capture state re-runs those effects, and their cleanup is where the listener
+  // actually comes off.
+  useEffect(() => { if (!open) { setCapturing(null); setCapturingChord(null); setKeyError(null); } }, [open]);
+
+  const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
+  const [quiet, setQuietState] = useState(() => notifyQuiet());
+  const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
+  useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -124,15 +461,36 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
               <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[460px] max-w-[95vw] max-h-[85vh] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+                className="w-[820px] max-w-[95vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
+                // Fixed, not max: with tabs the pane's height would otherwise
+                // change with whichever section you picked, and a dialog that
+                // resizes under the cursor is disorienting in a way a little
+                // empty space never is.
+                                style={{ height: "min(78vh, 620px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Settings</span>
                   <button onClick={onClose} className="ml-auto text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                 </div>
 
-                <div className="overflow-y-auto flex-1 divide-y" style={{ borderColor: "color-mix(in srgb, var(--border) 20%, transparent)" }}>
+                <div className="flex-1 min-h-0 flex">
+                  {/* One page per concern instead of one long scroll: four
+                      sections stacked vertically meant the shortcuts, the part
+                      you come here to change, were always below the fold. */}
+                  <div className="shrink-0 w-[168px] py-2 px-2 flex flex-col gap-0.5 border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+                    {TABS.map((t) => (
+                      <button key={t.id} onClick={() => setPane(t.id)}
+                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-[12px] flex items-center gap-2"
+                        style={pane === t.id
+                          ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
+                          : { color: "var(--text3)" }}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+                  {pane === "prefs" && (
                   <Section title="Preferences">
                     {/* Desktop only, like launch-at-login: in a browser tab the
                         browser's own zoom already does this, and better. */}
@@ -158,8 +516,79 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         label="Start at login"
                         hint="Open agentglass automatically when you log in" />
                     )}
+                    {/* Off is the default and off means nothing is watching:
+                        with no client subscribed the server never starts the
+                        D-Bus monitor at all. On a machine that cannot do this
+                        the row stays but says why, rather than vanishing and
+                        leaving you wondering whether you imagined it. */}
+                    <Choice<"12" | "24">
+                      label="Clock"
+                      hint="How the workspace strip shows the time"
+                      value={h24 ? "24" : "12"}
+                      onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
+                      options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
+                    <Choice<SysNotifyMode>
+                      label="Desktop notifications on the notch"
+                      hint="Slack and the rest, mirrored onto the strip you can still see in fullscreen"
+                      disabled={notifyCap ? !notifyCap.supported : true}
+                      disabledHint={notifyCap ? `Unavailable — ${notifyCap.reason}` : "Checking…"}
+                      value={sysNotify}
+                      onPick={(m) => { setSysNotifyMode(m); setSysNotifyState(m); }}
+                      options={[
+                        { v: "off", label: "Off" },
+                        { v: "titles", label: "Who" },
+                        { v: "full", label: "Full" },
+                      ]} />
+                    {/* agentglass reads the bus rather than being the daemon,
+                        so the desktop's own Do Not Disturb cannot reach what
+                        lands here. This is the switch that can. It silences
+                        other people's messages only: a gate hold never travels
+                        this path, so quiet can't mean an agent blocked and
+                        nobody said. */}
+                    {sysNotify !== "off" && (
+                      <Toggle on={quiet} onClick={() => { setNotifyQuiet(!quiet); setQuietState(!quiet); }}
+                        label="Quiet mirrored notifications"
+                        hint="Keep collecting them, stop letting them interrupt — agentglass's own alerts still come through" />
+                    )}
                   </Section>
+                  )}
 
+                  {pane === "keys" && (
+                  <Section title="Shortcuts">
+                    {(Object.keys(DEFAULTS) as ActionId[]).map((id) => {
+                      const view = id.startsWith("view.") ? (id.slice(5) as ViewId) : null;
+                      const order = loadViewOrder().map((v) => v.id);
+                      return (
+                        <KeyRow key={id} id={id} keyName={keys[id]}
+                          capturing={capturing === id}
+                          error={keyError?.id === id ? keyError.msg : null}
+                          onCapture={() => { setKeyError(null); setCapturingChord(null); setCapturing((c) => (c === id ? null : id)); }}
+                          chord={view ? {
+                            key: chordFor(view, order),
+                            custom: chordFor(view, order) !== `mod+${order.indexOf(view) + 1}`,
+                            capturing: capturingChord === view,
+                            onCapture: () => { setKeyError(null); setCapturing(null); setCapturingChord((c) => (c === view ? null : view)); },
+                            onClear: () => { clearChord(view); setKeys({ ...bindings() }); },
+                          } : undefined} />
+                      );
+                    })}
+                    <div className="px-3 pt-1 pb-1 flex items-center gap-3">
+                      <span className="text-[10px] t-dim2 flex-1">
+                        {/* Says why the rest of the keyboard is not on this list. */}
+                        <b style={{ color: "var(--text2)" }}>anywhere</b> — hold any combination you like ({MOD_KEY}J, {MOD_KEY}Alt+J, Alt+Shift+J) and it is recorded as held. Left alone it follows the view's position in the rail, so reordering keeps it true. <b style={{ color: "var(--text2)" }}>dashboard</b> — a single key, and only on the dashboard: inside the workspace every keystroke belongs to whatever has focus, usually a shell. {MOD_KEY}\\, {MOD_KEY}K and {MOD_KEY}[ / {MOD_KEY}] stay put.
+                      </span>
+                      {(isCustomised() || chordsCustomised()) && (
+                        <button onClick={() => { resetBindings(); resetChords(); setKeyError(null); setCapturing(null); setCapturingChord(null); }}
+                          className="text-[10.5px] px-2 py-1 rounded-lg shrink-0"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                          reset to defaults
+                        </button>
+                      )}
+                    </div>
+                  </Section>
+                  )}
+
+                  {pane === "open" && (
                   <Section title="Open">
                     <Row label="Statistics" hint="Totals, tool latency and cost breakdowns" kbd="s"
                       onClick={() => { onOpenStats(); onClose(); }} />
@@ -168,7 +597,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Row label="Command palette" hint="Jump to any panel, filter or session" kbd={`${MOD_KEY}K`}
                       onClick={onClose} />
                   </Section>
+                  )}
 
+                  {pane === "export" && (
                   <Section title="Export">
                     {/* Scoped like everything else: with a project open these
                         carry that project's rows, not the whole machine's. */}
@@ -179,6 +610,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Row label="Skills catalog — Markdown" hint="Every skill the fleet has available"
                       href={api.skillsExportUrl()} download="agentglass-skills.md" />
                   </Section>
+                  )}
+
+                  {pane === "about" && <AboutPane open={open} />}
+                  </div>
                 </div>
               </motion.div>
             </div>

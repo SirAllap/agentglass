@@ -1,4 +1,5 @@
 import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
@@ -10,6 +11,8 @@ import { fmtTime, agentKey } from "../lib/format.ts";
 import { THEMES } from "../lib/highlight.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import type { Hilite } from "../lib/diffHighlight.ts";
+import { useSidebarWidth } from "../lib/sidebarWidth.ts";
+import { SidebarGrip } from "./SidebarGrip.tsx";
 
 const HATCH = "repeating-linear-gradient(45deg, transparent, transparent 5px, color-mix(in srgb, var(--border) 10%, transparent) 5px, color-mix(in srgb, var(--border) 10%, transparent) 6px)";
 // Typical diff/coding font stack (honors an app --font-mono override if set).
@@ -132,10 +135,16 @@ const Code = memo(function Code({ text, segs, kind }: { text: string; segs?: Seg
 
 // --- unified diff, with old|new gutters, uncapped -----------------------------
 type URow = { oldN: number | null; newN: number | null; text: string; kind: "ctx" | "del" | "add"; segs?: Seg[] | null };
-function unifiedRows(h: DiffHunk): URow[] {
+export function unifiedRows(h: DiffHunk): URow[] {
   const rows: URow[] = [];
   let oldN = h.oldStart, newN = h.newStart;
   for (const line of h.lines) {
+    // "\ No newline at end of file" is metadata about the file, not a line in
+    // it. Every other diff parser here drops it (prBody.parseUnifiedDiff,
+    // server gitwork.parseDiff); a hunk carrying it — the DiffHunk contract
+    // admits `\`, and apply-hunk validates it as a legal line — must not paint
+    // it as a phantom context row that also nudges every gutter number below.
+    if (line.startsWith("\\")) continue;
     const kind = kindOf(line[0]);
     const text = line.slice(1);
     if (kind === "add") rows.push({ oldN: null, newN: newN++, text, kind });
@@ -181,7 +190,7 @@ type Cell = { num: number; text: string; kind: "ctx" | "del" | "add"; segs?: Seg
 
 /** Turn a unified hunk into paired old|new rows: removals sit left, additions
  *  right, and a change block zips its −/+ lines together row by row. */
-function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
+export function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
   const rows: { l: Cell | null; r: Cell | null }[] = [];
   let oldN = h.oldStart, newN = h.newStart;
   let dels: Cell[] = [], adds: Cell[] = [];
@@ -194,6 +203,7 @@ function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
     dels = []; adds = [];
   };
   for (const line of h.lines) {
+    if (line.startsWith("\\")) continue; // no-newline marker, not a line — see unifiedRows
     const tag = line[0], text = line.slice(1);
     if (tag === "-") dels.push({ num: oldN++, text, kind: "del" });
     else if (tag === "+") adds.push({ num: newN++, text, kind: "add" });
@@ -320,7 +330,7 @@ const GROUP_DIMS: { id: GroupBy; label: string }[] = [
   { id: "folder", label: "Folder" },
   { id: "tool", label: "Tool" },
 ];
-type FileGroup = { key: string; label: string; sub?: string; items: FileChange[]; add: number; del: number };
+type FileGroup = { key: string; label: string; sub?: string; /** Set when split by day, so the list can head each run of groups. */ day?: string; items: FileChange[]; add: number; del: number };
 
 const dirOf = (path: string) => {
   const base = path.split("/").pop() ?? "";
@@ -334,7 +344,28 @@ const shortDir = (dir: string) => {
 
 /** Bucket the (already path-filtered) changes into groups, preserving first-seen
  *  order — the API returns newest-first, so recent activity floats to the top. */
-function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>): FileGroup[] {
+/** "Today" / "Yesterday" / "Tuesday" for the last week, then a plain date.
+ *  A weekday is how you actually remember recent work; past that it stops
+ *  being unambiguous and the date is the only honest label. */
+function dayLabel(d: Date): string {
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOf(new Date()) - startOf(d)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
+  return d.toLocaleDateString([], { day: "numeric", month: "short" });
+}
+
+/**
+ * Group by a dimension, optionally split by day first.
+ *
+ * Date was one of the mutually exclusive dimensions, which made it useless in
+ * practice: choosing it told you *when* and took away *who* — a day's worth of
+ * edits with no session, agent or folder to make sense of them. It is a second
+ * axis, not a fifth option, so it layers: sections stay Session (or Agent, or
+ * Folder), and each one is scoped to a day when the split is on.
+ */
+function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>, byDate = false): FileGroup[] {
   const map = new Map<string, FileGroup>();
   const order: string[] = [];
   for (const c of list) {
@@ -351,10 +382,25 @@ function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<stri
     else if (by === "agent") { key = c.source_app || "—"; label = c.source_app || "unknown"; }
     else if (by === "tool") { key = c.tool || "—"; label = c.tool || "unknown"; }
     else { const d = dirOf(c.file_path); key = d; label = shortDir(d); }
+    // The day, when the split is on, is part of the identity — so one session
+    // spanning midnight becomes two sections rather than one that lies about
+    // which day it belongs to. `day` also rides along so the list can draw a
+    // heading when it changes.
+    let day: string | undefined;
+    if (byDate) {
+      const d = new Date(c.timestamp);
+      day = dayLabel(d);
+      key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}|${key}`;
+    }
     let g = map.get(key);
-    if (!g) { g = { key, label, sub, items: [], add: 0, del: 0 }; map.set(key, g); order.push(key); }
+    if (!g) { g = { key, label, sub, day, items: [], add: 0, del: 0 }; map.set(key, g); order.push(key); }
     g.items.push(c); g.add += c.additions; g.del += c.deletions;
   }
+  // Newest first *within* a group, stated rather than inherited. The rows
+  // arrive in timestamp order today, so this changes nothing — until something
+  // upstream reorders them and a day's work silently stops reading
+  // chronologically, which is the one thing a date grouping is for.
+  for (const g of map.values()) g.items.sort((a, b) => b.timestamp - a.timestamp);
   return order.map((k) => map.get(k)!);
 }
 
@@ -403,7 +449,12 @@ function FileItem({ c, active, reviewed, info, onSelect, onToggleReviewed }: { c
         </span>
       </div>
       {info?.description ? (
-        <div className="mt-0.5 text-[10px] pl-[22px] truncate" style={{ color: "var(--text3)" }} title={info.description}>{info.description}</div>
+        // The clock stays even when a description takes the line: with the list
+        // grouped by day, "when" is half of what you are reading it for.
+        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] pl-[22px]" style={{ color: "var(--text3)" }}>
+          <span className="truncate min-w-0" title={info.description}>{info.description}</span>
+          <span className="ml-auto shrink-0 tabular-nums opacity-80">{fmtTime(c.timestamp)}</span>
+        </div>
       ) : (
         <div className="flex items-center gap-1.5 mt-0.5 text-[9.5px] t-dim2 pl-[22px]">
           <span className="truncate min-w-0" title={c.file_path}>{dirOf(c.file_path)}</span>
@@ -589,10 +640,15 @@ type DiffViewProps = {
  *  it as a modal to drill into one commit. Hence `DiffView` plus the
  *  `ChangesModal` wrapper at the bottom of this file. */
 export function DiffView({ active, onClose, onBack, backLabel, presetChanges, presetTitle, presetPath }: DiffViewProps) {
+  const sidebarW = useSidebarWidth();
   const open = active;
   const [changes, setChanges] = useState<FileChange[] | null>(null);
   const [titles, setTitles] = useState<ReadonlyMap<string, string>>(new Map());
   const [q, setQ] = useState("");
+  /** Ignored files start folded away — see `visible` below. */
+  const [showIgnored, setShowIgnored] = useState(false);
+  /** Split whichever grouping is chosen by day as well. */
+  const [byDate, setByDate] = useState(false);
   const [selId, setSelId] = useState<number | null>(null);
   const [wrap, setWrap] = useState(false);
   const [split, setSplit] = useState(true);
@@ -670,8 +726,19 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   useEffect(() => { try { localStorage.setItem(GROUPBY_KEY, groupBy); } catch { /* ignore */ } }, [groupBy]);
 
   const all = changes ?? [];
-  const filtered = useMemo(() => (q ? all.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : all), [all, q]);
-  const groups = useMemo(() => groupChanges(filtered, groupBy, titles), [filtered, groupBy, titles]);
+  /**
+   * Files git ignores are folded away by default.
+   *
+   * An agent's edit is recorded whether or not the repo tracks the result, so
+   * build output, caches and scratch files sit in the list beside the code you
+   * came to review — and on a busy session they outnumber it. Hidden, never
+   * silently: the count is shown and one click brings them back, because a list
+   * that quietly drops entries is worse than a long one.
+   */
+  const ignoredCount = useMemo(() => all.reduce((n, c) => n + (c.ignored ? 1 : 0), 0), [all]);
+  const visible = useMemo(() => (showIgnored ? all : all.filter((c) => !c.ignored)), [all, showIgnored]);
+  const filtered = useMemo(() => (q ? visible.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : visible), [visible, q]);
+  const groups = useMemo(() => groupChanges(filtered, groupBy, titles, byDate), [filtered, groupBy, titles, byDate]);
   const shown = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const totals = useMemo(() => all.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }), [all]);
   const revCount = useMemo(() => all.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0), [all, reviewed]);
@@ -792,16 +859,20 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
       className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
-                <div className="flex items-center justify-between px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                  <div className="flex items-baseline gap-2.5 flex-wrap">
-                    <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>File changes</span>
+                <div className={viewHeaderClass} style={viewHeaderStyle}>
+                  {/* No wrapping: the bar is a fixed height now, so a second
+                      line does not make it taller — it gets clipped. The meta
+                      truncates instead, which loses the tail of a preset name
+                      rather than half the row. */}
+                  <div className="flex items-baseline gap-2.5 min-w-0">
+                    <span className={viewTitleClass} style={{ color: "var(--text)" }}>File changes</span>
                     {changes && (
-                      <span className="text-[10px] t-dim2 tabular-nums">
+                      <span className="text-[10px] t-dim2 tabular-nums truncate">
                         {all.length} edits · <span style={{ color: "var(--success)" }}>+{totals.add}</span> <span style={{ color: "var(--error)" }}>−{totals.del}</span> · {presetTitle || "what the fleet changed"}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="ml-auto flex items-center gap-2">
                     {onBack && (
                       <button
                         onClick={onBack}
@@ -845,7 +916,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
 
                 <div className="flex-1 min-h-0 flex">
                   {/* master — grouped file list */}
-                  <div className="w-[300px] shrink-0 flex flex-col border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                  <div className="shrink-0 flex flex-col" style={{ width: sidebarW }}>
                     <div className="p-2.5 pb-1.5 shrink-0 space-y-2">
                       <input
                         value={q} onChange={(e) => setQ(e.target.value)}
@@ -853,12 +924,16 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         className="w-full px-3 py-1.5 rounded-lg text-[11px] outline-none"
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
                       />
-                      <div className="flex items-center gap-1">
+                      {/* One row, one height. `flex-wrap` rather than letting a
+                          chip grow: on a narrow panel the row wraps as a row,
+                          which is legible, instead of one button becoming two
+                          lines tall and dragging its neighbours' baseline. */}
+                      <div className="flex items-center flex-wrap gap-1">
                         {GROUP_DIMS.map((d) => (
                           <button
                             key={d.id}
                             onClick={() => setGroupBy(d.id)}
-                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors"
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
                             style={{
                               background: groupBy === d.id ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
                               color: groupBy === d.id ? "var(--text)" : "var(--text3)",
@@ -866,15 +941,56 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             }}
                           >{d.label}</button>
                         ))}
+                        {/* A modifier, not a fifth dimension — it sits after a
+                            separator because it changes what the four to its
+                            left do rather than replacing them. */}
+                        <span className="w-px h-4 mx-0.5 shrink-0" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
+                        <button
+                          onClick={() => setByDate((v) => !v)}
+                          className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
+                          title={byDate ? "one section per group" : "split each group by day"}
+                          style={{
+                            background: byDate ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                            color: byDate ? "var(--text)" : "var(--text3)",
+                            border: `1px solid color-mix(in srgb, var(--border) ${byDate ? 45 : 18}%, transparent)`,
+                          }}
+                        >by date</button>
+                        {/* Says what it is hiding, and offers it back. A
+                            filter that silently drops rows makes the list lie
+                            about what the session touched. */}
+                        {ignoredCount > 0 && (
+                          <button
+                            onClick={() => setShowIgnored((v) => !v)}
+                            // nowrap: "+ 23 ignored" broke across two lines and
+                            // made this chip taller than the four beside it.
+                            // A button that changes height with its own label
+                            // is never worth the width it saves.
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
+                            title={showIgnored
+                              ? "hide files git ignores"
+                              : `${ignoredCount} file${ignoredCount === 1 ? "" : "s"} git ignores ${ignoredCount === 1 ? "is" : "are"} hidden — build output, caches, scratch files`}
+                            style={{
+                              background: showIgnored ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                              color: showIgnored ? "var(--text)" : "var(--text3)",
+                              border: `1px solid color-mix(in srgb, var(--border) ${showIgnored ? 45 : 18}%, transparent)`,
+                            }}
+                          >{showIgnored ? `✕ ${ignoredCount} ignored` : `+ ${ignoredCount} ignored`}</button>
+                        )}
                         {changes && all.length > 0 && (
-                          <span className="ml-auto text-[9.5px] t-dim2 tabular-nums" title="files reviewed">{revCount}/{all.length}</span>
+                          <span className="ml-auto text-[9.5px] t-dim2 tabular-nums" title="files reviewed">{revCount}/{visible.length}</span>
                         )}
                       </div>
                     </div>
                     <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-2">
                       {!changes && <div className="t-dim2 text-center py-10 text-[12px]">loading changes…</div>}
                       {changes && shown.length === 0 && <div className="t-dim2 text-center py-10 text-[12px]">{q ? "no files match your filter" : "no file changes captured yet"}</div>}
-                      {groups.map((g) => (
+                      {groups.map((g, gi) => (
+                        <div key={`w:${g.key}`}>
+                          {/* Only when it changes: repeating "Today" above every
+                              session turns a heading into wallpaper. */}
+                          {g.day && g.day !== groups[gi - 1]?.day && (
+                            <div className="px-1 pt-2 pb-1 text-[10px] uppercase tracking-wider" style={{ color: "var(--primary-hover)" }}>{g.day}</div>
+                          )}
                         <GroupBlock
                           key={g.key}
                           g={g}
@@ -887,9 +1003,11 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           onToggleReviewed={toggleReviewed}
                           onToggleGroup={toggleGroup}
                         />
+                        </div>
                       ))}
                     </div>
                   </div>
+                  <SidebarGrip />
 
                   {/* detail — full diff */}
                   <div className="flex-1 min-w-0 min-h-0 flex flex-col">

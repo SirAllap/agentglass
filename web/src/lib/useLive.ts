@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts";
 import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
+import { gitChanged } from "./gitBus.ts";
+import { recordNote } from "./sysNotify.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -122,6 +124,26 @@ export function useLive(): LiveData {
       } catch {
         return;
       }
+      if (frame.type === "git") {
+        // Not our data — a nudge for whoever is showing git state.
+        gitChanged();
+        return;
+      }
+      if (frame.type === "ci") {
+        // The server holds the latch, so this arrives once per verdict for a
+        // whole suite. Naming the failures is the point: "1 failing" without a
+        // name is what sends you to the browser.
+        const v = frame.data;
+        recordNote({
+          app: "agentglass",
+          summary: `${v.repo}#${v.number} — checks ${v.verdict}`,
+          body: v.verdict === "red" && v.failing.length
+            ? `${v.failing.slice(0, 3).join(", ")}${v.failing.length > 3 ? ` +${v.failing.length - 3} more` : ""}\n${v.title}`
+            : v.title,
+          urgency: v.verdict === "red" ? 2 : 1,
+        });
+        return;
+      }
       if (frame.type === "initial") {
         const initial = frame.data.slice(-MAX_EVENTS);
         seen.current = new Set(initial.map((e) => e.id));
@@ -129,6 +151,11 @@ export function useLive(): LiveData {
         setEvents(initial);
         setLastEvent(initial[initial.length - 1] ?? null);
         setOpenTools(frame.openTools ?? []);
+      } else if (frame.type === "openTools") {
+        // The whole list, re-read with fresh evidence. Replaces rather than
+        // merges: the server's answer is authoritative about what is open, and
+        // a call missing from it has closed.
+        setOpenTools(frame.data);
       } else if (frame.type === "event") {
         if (seen.current.has(frame.data.id)) return; // duplicate delivery
         seen.current.add(frame.data.id);
@@ -154,12 +181,11 @@ export function useLive(): LiveData {
   // sweep/pulse/float/shimmer.
   //
   // `document.hidden` alone was the whole test, and in the desktop app it is
-  // never true: a Tauri window has no tab to background, so the flag sat at "0"
-  // for the entire life of the process and none of these rules ever applied.
-  // The saving was real but only a browser ever collected it. That matters more
-  // here than in a tab, because WebKitGTK composites in software — every frame
-  // of every ambient loop is paid for on the CPU, and the dashboard idles hot
-  // with the radar sweep and a ping-ring per live session running forever.
+  // never true: a desktop window has no tab to background, so the flag sat at
+  // "0" for the entire life of the process and none of these rules ever
+  // applied. The saving was real but only a browser ever collected it — every
+  // frame of every ambient loop keeps the radar sweep and a ping-ring per live
+  // session running forever, and the dashboard idles hot for no one watching.
   //
   // Focus is the signal that survives both environments: the dashboard's normal
   // place is a second monitor or behind the terminal the agent is running in,

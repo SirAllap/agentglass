@@ -22,6 +22,25 @@ const STATUS: Record<string, { color: string; label: string }> = {
 const RANK: Record<string, number> = { working: 0, waiting: 1, errored: 2, idle: 3 };
 // Within the idle pile, surface what still wants something from you.
 const OUTCOME_RANK: Record<AgentOutcome, number> = { unanswered: 0, faulted: 1, unclear: 2, settled: 3 };
+
+/**
+ * What the server last saw this session actually do, for a card whose tool call
+ * is still open.
+ *
+ * A tooltip and nothing more, on purpose. "Running Bash · 8m" cannot tell a
+ * long build from a hang, and neither can any threshold on that number — but
+ * "the transcript grew 3s ago" and "nothing readable in 8m" are different
+ * situations, and this is the cheapest way to find out how well the signal
+ * holds before any status depends on it.
+ */
+function evidenceNote(a: AgentCard): string | undefined {
+  if (!a.runningTool || !a.evidenceKind) return undefined;
+  if (a.evidenceKind === "none" || !a.evidenceAt) {
+    return `${a.runningTool} open ${fmtAgo(a.runningSince)} · no evidence source readable (not the same as nothing happening)`;
+  }
+  const what = a.evidenceKind === "transcript" ? "transcript last grew" : "the file it named last changed";
+  return `${a.runningTool} open ${fmtAgo(a.runningSince)} · ${what} ${fmtAgo(a.evidenceAt)}`;
+}
 /**
  * The outcome mark: a small glyph beside the metrics, never the status rail.
  *
@@ -126,7 +145,7 @@ function SessionCard({ a, selected, onSelect }: { a: AgentCard; selected: boolea
         <span className="chip shrink-0" style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>{model}</span>
       </div>
       <div className="mt-1 flex items-center justify-between">
-        <span className="text-[11px] t-dim2 truncate">{a.lastAction || st.label}</span>
+        <span className="text-[11px] t-dim2 truncate" title={evidenceNote(a)}>{a.lastAction || st.label}</span>
         <Spark data={a.spark} color={st.color} />
       </div>
       {/* subagents this session spawned — the real parent→child structure */}

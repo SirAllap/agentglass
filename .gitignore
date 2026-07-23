@@ -1,3 +1,7 @@
+# Both forms: a trailing slash matches a directory only, and a `node_modules`
+# that is a *symlink* (a worktree pointed at the main checkout's copy, say) is a
+# file — so `node_modules/` alone let one be committed.
+node_modules
 node_modules/
 dist/
 *.db
@@ -13,10 +17,7 @@ web/dist/
 __pycache__/
 *.pyc
 
-# desktop app build output — the sidecar is a ~100MB compiled server binary
-src-tauri/target/
-src-tauri/bin/
-src-tauri/icon-*.png
-src-tauri/gen/schemas/
+# desktop app build output (electron-builder) lives in electron/ and is
+# ignored there — the sidecar is a ~100MB compiled server binary.
 .claude/
 *.bun-build

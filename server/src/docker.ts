@@ -7,37 +7,63 @@
 import { basename } from "node:path";
 import type {
   DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork,
-  DockerOverview, DockerScope, DockerActionResult,
+  DockerOverview, DockerScope, DockerActionResult, DockerCapability,
 } from "../../shared/types.ts";
 import { workspaceRoot, scopeRoots } from "./config.ts";
+import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
+import { withSpawnSlot } from "./spawnpool.ts";
 
 export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED !== "1";
 // Container id (hex) or name (compose names: letters/digits . _ -).
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
-type Res = { code: number; stdout: string; stderr: string };
-function docker(args: string[], timeoutMs = 8000): Res {
-  try {
-    const proc = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
-    return { code: proc.exitCode ?? 1, stdout: proc.stdout?.toString() ?? "", stderr: proc.stderr?.toString() ?? "" };
-  } catch (e) {
-    return { code: 1, stdout: "", stderr: String(e) };
-  }
+type Res = { code: number; stdout: string; stderr: string; killed?: boolean };
+
+/**
+ * Every docker call, awaited. There is no synchronous variant on purpose.
+ *
+ * There was one, and four callers used it — logs, inspect, top and the
+ * start/stop/restart actions. `Bun.spawnSync` stops the server's only thread
+ * until the CLI exits, and that thread is also pumping the terminal's PTY
+ * socket, the chat stream and every HTTP request. Since the log tab refetches
+ * on a three-second timer, the UI froze on a three-second beat for as long as
+ * `docker logs` took — which is what "I type and the text appears half a
+ * second later" turned out to be.
+ *
+ * Awaiting also lets independent queries overlap: each invocation pays the
+ * CLI's own startup before it reaches the daemon, and the overview needs five.
+ */
+async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
+  // Shares the one process cap with git: the resources being protected are the
+  // machine's, and the docker CLI is heavier than git per invocation.
+  return withSpawnSlot(() => runDocker(args, timeoutMs));
 }
 
-/** Awaited variant, so independent queries can run at once. Each `docker`
- *  invocation pays the CLI's own startup before it talks to the daemon, and
- *  the overview needs five of them — serially that cost is paid five times
- *  over, on a poll. */
-async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
+async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
+  const owner = currentLabel();
   try {
-    const proc = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
+    // Spawn the exact binary dockerBin() vouched for, not a bare "docker": bare
+    // spawn resolves against a PATH snapshotted at process start (the same trap
+    // dockerBin() documents), so the two could disagree about which docker is
+    // even being run. Falls back to the bare name only when nothing was resolved.
+    const proc = Bun.spawn([dockerBin() ?? "docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
       proc.exited,
     ]);
-    return { code: code ?? 1, stdout, stderr };
+    // A timeout kill and a refusal are both "non-zero", and they mean opposite
+    // things: the CLI answering "cannot connect to the daemon" is a fact, while
+    // a SIGTERM at the deadline says only that we ran out of patience. Callers
+    // that cache a verdict need to be able to tell those apart.
+    //
+    // `proc.killed` cannot make that distinction: with the `timeout` option set,
+    // Bun reports it true for a process that exited entirely on its own (seen on
+    // 1.3.9), so keying on it marks every refusal "inconclusive" and a dead
+    // daemon reads as "still trying" forever. The signal is the honest witness —
+    // a timeout kill lands as SIGTERM (signalCode set, exitCode null); a normal
+    // exit, zero or not, has no signal.
+    return { code: code ?? 1, stdout, stderr, killed: proc.signalCode != null };
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e) };
   }
@@ -53,29 +79,182 @@ function jsonLines(out: string): Record<string, string>[] {
   return rows;
 }
 
-let cachedVersion: string | null = null;
-let versionCheckedAt = 0;
-const VERSION_RETRY_MS = 15_000;
-/** The daemon version doesn't change while we run, so a success is cached for
- *  good. A *failure* is cached too, briefly: re-probing on every poll meant a
- *  stopped daemon cost a blocking spawn — up to the 4s timeout — several times
- *  a minute, freezing the single-threaded server each time. */
-export async function dockerVersion(): Promise<string | null> {
-  if (cachedVersion) return cachedVersion;
-  if (versionCheckedAt && Date.now() - versionCheckedAt < VERSION_RETRY_MS) return null;
-  versionCheckedAt = Date.now();
-  const r = await dockerAsync(["version", "--format", "{{.Server.Version}}"], 4000);
-  cachedVersion = r.code === 0 ? r.stdout.trim() || null : null;
-  return cachedVersion;
+/**
+ * Is the `docker` CLI even here?
+ *
+ * Everything below assumes it is, and `Bun.spawn` THROWS on a missing binary
+ * rather than exiting 127 — so on a machine with no docker, runDocker() catches
+ * that throw and hands back `{ code:1, stderr:"…Executable not found…" }`. That
+ * non-empty stderr then reads to probeDaemon() as a *conclusive* answer from the
+ * CLI, and the panel says "docker not available (is the daemon running?)" over a
+ * daemon that was never even asked. Telling "not installed" apart from "daemon
+ * down" is the whole point of dockerCapability(); this is the primitive it and
+ * overview() both key on. Mirrors gitBin().
+ *
+ * PATH passed explicitly for the reason gitBin() documents: bare
+ * `Bun.which("docker")` resolves against a PATH snapshotted at process start,
+ * which both ignores a genuinely stripped environment and makes this untestable.
+ * Cached for the process — a binary doesn't appear mid-session, and the panel
+ * polls the overview every few seconds.
+ */
+let dockerBinCache: string | null | undefined;
+export function dockerBin(): string | null {
+  if (dockerBinCache === undefined) dockerBinCache = Bun.which("docker", { PATH: process.env.PATH ?? "" });
+  return dockerBinCache;
 }
 
-function parseLabels(s: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const kv of (s || "").split(",")) {
-    const i = kv.indexOf("=");
-    if (i > 0) out[kv.slice(0, i)] = kv.slice(i + 1);
+let cachedVersion: string | null = null;
+let versionCheckedAt = 0;
+/** How long a *conclusive* "no daemon" is trusted before probing again. */
+const VERSION_RETRY_MS = 15_000;
+/** …and how long an inconclusive one is, which is barely at all: a probe that
+ *  timed out proves nothing, and the panel should not spend fifteen seconds
+ *  telling the user their daemon is down on the strength of it. */
+const VERSION_UNSURE_RETRY_MS = 2_000;
+/** How long a *success* is trusted before we re-confirm the daemon is still
+ *  there. The version does not change under a running server, but the server
+ *  can stop — so a cached success is a liveness claim with a shelf life, not a
+ *  fact for the whole session. Re-probing past this window is what lets a daemon
+ *  that died mid-session surface as down instead of a phantom empty daemon. */
+const VERSION_OK_TTL_MS = 15_000;
+let versionInflight: Promise<DaemonProbe> | null = null;
+/** Whether the last failure was the CLI answering, or us giving up on it. */
+let lastProbeInconclusive = false;
+
+interface DaemonProbe {
+  /** The daemon's version, or null when we could not get one. */
+  version: string | null;
+  /** True when we genuinely do not know — a timeout, not a refusal. */
+  inconclusive: boolean;
+}
+
+/**
+ * Is the daemon there, and which version.
+ *
+ * A success is cached for good: the version does not change under a running
+ * server, and re-probing on every poll costs a process for an answer we have.
+ *
+ * A *failure* needs more care than it was getting, because two things were
+ * wrong and both put "docker not available (is the daemon running?)" on screen
+ * over a perfectly healthy daemon:
+ *
+ *   * Concurrent callers raced. `versionCheckedAt` was stamped before the
+ *     await, so a second overview request arriving while the first probe was
+ *     still running fell into the "asked recently, don't ask again" branch and
+ *     got `null` — a definitive "no daemon" derived from a probe that had not
+ *     finished yet. The panel polls every five seconds and the strip asks too,
+ *     so this needed no unusual timing at all. Now everyone awaits the same
+ *     probe.
+ *   * A timeout was treated as an answer. `docker version` against a busy
+ *     daemon on a machine with a dozen containers can exceed a short deadline;
+ *     that verdict was then held for fifteen seconds, which is exactly long
+ *     enough to open the panel, see the error, and go looking for a daemon that
+ *     was running the whole time.
+ */
+async function probeDaemon(): Promise<DaemonProbe> {
+  // A cached success is trusted for a liveness window, not forever. Within it we
+  // answer from cache and spend no process; past it we re-probe, because the
+  // daemon may have stopped since — the one case the old "cache for good" branch
+  // could never report.
+  if (cachedVersion && Date.now() - versionCheckedAt < VERSION_OK_TTL_MS) {
+    return { version: cachedVersion, inconclusive: false };
   }
-  return out;
+  // No CLI to ask: spawning would throw ENOENT and burn a pool slot on every
+  // poll, and its caught stderr is what used to masquerade as the daemon saying
+  // "no". A missing binary is a *conclusive* no-daemon we know without asking —
+  // returning it here is what lets overview() say "not installed" instead of
+  // blaming a daemon that was never contacted.
+  if (!dockerBin()) { cachedVersion = null; return { version: null, inconclusive: false }; }
+  if (versionInflight) return versionInflight;
+  // Failure-retry cadence only applies when we have no trusted version to serve:
+  // with a (now expired) cached version we always want the confirming re-probe.
+  if (!cachedVersion) {
+    const wait = lastProbeInconclusive ? VERSION_UNSURE_RETRY_MS : VERSION_RETRY_MS;
+    if (versionCheckedAt && Date.now() - versionCheckedAt < wait) {
+      return { version: null, inconclusive: lastProbeInconclusive };
+    }
+  }
+  versionInflight = (async () => {
+    try {
+      // Six seconds, not the eight everything else here gets, and deliberately
+      // under Bun.serve's own 10s request deadline: a probe that outlives the
+      // request it belongs to hands the panel a network error instead of the
+      // honest "still trying" below. The deadline is not a hard stop either —
+      // Bun SIGTERMs the child, but if `docker` is a wrapper script (rootless,
+      // snap, Desktop's shim) its pipes stay open until the grandchild exits —
+      // so leaving room under the request timeout is what actually bounds this.
+      const r = await dockerAsync(["version", "--format", "{{.Server.Version}}"], 6_000);
+      versionCheckedAt = Date.now();
+      if (r.code === 0) {
+        cachedVersion = r.stdout.trim() || null;
+        lastProbeInconclusive = !cachedVersion; // exit 0 with no version is not an answer either
+        return { version: cachedVersion, inconclusive: lastProbeInconclusive };
+      }
+      // The probe failed. A timeout (killed) or an empty stderr tells us nothing,
+      // so a version we already trusted is kept and the daemon stays "up" — a
+      // busy daemon must not flap to "down" on one slow probe. But a conclusive
+      // failure (the CLI answered with an error) means the daemon is genuinely
+      // gone, so we drop the stale version and report it down.
+      lastProbeInconclusive = !!r.killed || !r.stderr.trim();
+      if (!lastProbeInconclusive) cachedVersion = null;
+      return { version: cachedVersion, inconclusive: !cachedVersion && lastProbeInconclusive };
+    } finally {
+      versionInflight = null;
+    }
+  })();
+  return versionInflight;
+}
+
+export async function dockerVersion(): Promise<string | null> {
+  return (await probeDaemon()).version;
+}
+
+/**
+ * The three-state answer the panel needs: not installed / daemon down / OK.
+ *
+ * Mirrors gitCapability(), but with docker's extra failure mode folded in.
+ * `available` means the same thing it does for git — the CLI is on PATH — while
+ * the daemon nuance rides on `version`/`reason`:
+ *
+ *   (a) no binary      → { available:false, reason }   (install guidance)
+ *   (b) binary, no daemon → { available:true,  reason } (start the daemon)
+ *   (c) binary + daemon   → { available:true,  version }
+ *
+ * No 60s memo of its own, unlike gitCapability(): git has no daemon so its
+ * verdict is stable for the whole session, but docker's is not — and both halves
+ * are already cached at the right granularity underneath (dockerBin() for the
+ * life of the process, probeDaemon() with its own success-forever / failure-
+ * briefly policy). A capability that pinned "daemon down" for a full minute is
+ * exactly the staleness the rest of this file is written to avoid.
+ */
+export async function dockerCapability(): Promise<DockerCapability> {
+  if (!dockerBin()) {
+    return { available: false, reason: "Docker isn't installed — the docker CLI isn't on your PATH" };
+  }
+  const { version, inconclusive } = await probeDaemon();
+  if (version) return { available: true, version };
+  return {
+    available: true,
+    reason: inconclusive
+      ? "no answer from docker yet — still trying to reach the daemon"
+      : "the docker daemon isn't responding — is it running?",
+  };
+}
+
+/** Test seam: forget the binary probe (and the daemon memo it feeds) so a test
+ *  can flip PATH and re-ask, the way git-capability's own test does. */
+export function __resetDockerCapForTest(): void {
+  dockerBinCache = undefined;
+  cachedVersion = null;
+  versionCheckedAt = 0;
+  lastProbeInconclusive = false;
+  versionInflight = null;
+}
+
+/** Test seam: pretend the liveness window elapsed, keeping any cached version so
+ *  a test can drive the re-probe (and its cache-clearing) without a real wait. */
+export function __expireDockerVersionForTest(): void {
+  versionCheckedAt = 0;
 }
 
 // Every field is named explicitly instead of using `{{json .}}`, which looks
@@ -83,13 +262,6 @@ function parseLabels(s: string): Record<string, string> {
 // makes the daemon walk its filesystem layers. That one field took this call
 // from 19ms to 4.9s here, on a poll, blocking every other request behind it.
 // The panel doesn't show per-container size, so it isn't requested.
-const PS_FIELDS = ["ID", "Names", "Image", "State", "Status", "Ports", "Labels", "RunningFor"] as const;
-// Tab-separated, not hand-built JSON. Interpolating values straight into a JSON
-// template looked equivalent but isn't: a container whose name, image or labels
-// contain a quote or a backslash produces invalid JSON, and jsonLines() drops
-// the row silently — the container vanishes from the panel with no error. Real
-// labels do this (a cloudflared image here embeds a JSON blob in one).
-const PS_FORMAT = PS_FIELDS.map((f) => `{{.${f}}}`).join("\t");
 
 // --- project scope ----------------------------------------------------------
 // The rest of the cockpit (events, sessions, git, diffs) narrows to the open
@@ -169,33 +341,61 @@ export function applyScope(all: ScopedContainer[], keyIn: DockerScopeKey | Docke
   return { containers: (mine.length ? mine : all).map(strip), scope };
 }
 
+// One column per field, tab-separated, and every label asked for **by name**.
+//
+// Not hand-built JSON: a container whose name, image or labels contain a quote
+// or a backslash produces invalid JSON, jsonLines() drops the row silently, and
+// the container vanishes from the panel with no error. Real labels do this (a
+// cloudflared image here embeds a JSON blob in one).
+//
+// And not `{{.Labels}}` either, which is where the labels used to come from.
+// That field is every label joined with commas and no escaping, so a value
+// containing a comma cannot be read back: `desc=a,b` splits into `desc=a` and a
+// stray `b`, and a value containing both a comma and an `=` invents a key that
+// was never on the container. Harmless-looking until you remember scoping now
+// *depends* on reading these labels correctly — a working_dir label sitting
+// next to a comma-bearing one is a container that quietly stops matching its
+// own project. `{{.Label "x"}}` asks the daemon for one label and gets its value
+// verbatim, which sidesteps the ambiguity rather than trying to parse it.
+const PS_COLUMNS = [
+  ["id", "{{.ID}}"],
+  ["name", "{{.Names}}"],
+  ["image", "{{.Image}}"],
+  ["state", "{{.State}}"],
+  ["status", "{{.Status}}"],
+  ["ports", "{{.Ports}}"],
+  ["runningFor", "{{.RunningFor}}"],
+  ["project", `{{.Label "com.docker.compose.project"}}`],
+  ["service", `{{.Label "com.docker.compose.service"}}`],
+  ["workingDir", `{{.Label "${WORKING_DIR_LABEL}"}}`],
+] as const;
+const PS_FORMAT = PS_COLUMNS.map(([, tmpl]) => tmpl).join("\t");
+
+/** One `docker ps` line to a container. Exported for the tests: the interesting
+ *  failures here are label values that a joined-and-split format destroys. */
+export function parsePsLine(line: string): ScopedContainer | null {
+  if (!line.trim()) return null;
+  const parts = line.split("\t");
+  const col = (name: string) => parts[PS_COLUMNS.findIndex(([n]) => n === name)] ?? "";
+  return {
+    id: col("id").slice(0, 12),
+    name: col("name"),
+    image: col("image"),
+    state: col("state").toLowerCase(),
+    status: col("status"),
+    ports: col("ports"),
+    project: col("project") || null,
+    service: col("service") || null,
+    workingDir: col("workingDir") || null,
+    runningFor: col("runningFor"),
+    size: "",
+  };
+}
+
 async function containers(): Promise<ScopedContainer[]> {
   const r = await dockerAsync(["ps", "--all", "--no-trunc", "--format", PS_FORMAT]);
   if (r.code !== 0) return [];
-  const rows: Record<string, string>[] = [];
-  for (const line of r.stdout.split("\n")) {
-    if (!line.trim()) continue;
-    const parts = line.split("\t");
-    const row: Record<string, string> = {};
-    PS_FIELDS.forEach((f, i) => { row[f] = parts[i] ?? ""; });
-    rows.push(row);
-  }
-  return rows.map((c) => {
-    const labels = parseLabels(c.Labels || "");
-    return {
-      id: (c.ID || "").slice(0, 12),
-      name: c.Names || "",
-      image: c.Image || "",
-      state: (c.State || "").toLowerCase(),
-      status: c.Status || "",
-      ports: c.Ports || "",
-      project: labels["com.docker.compose.project"] || null,
-      service: labels["com.docker.compose.service"] || null,
-      workingDir: labels[WORKING_DIR_LABEL] || null,
-      runningFor: c.RunningFor || "",
-      size: c.Size || "",
-    };
-  });
+  return r.stdout.split("\n").map(parsePsLine).filter((c): c is ScopedContainer => !!c);
 }
 
 async function images(): Promise<DockerImage[]> {
@@ -236,11 +436,28 @@ let overviewCache: { at: number; root: string | null; data: DockerOverview } | n
 
 export async function overview(): Promise<DockerOverview> {
   const root = workspaceRoot();
-  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS) return overviewCache.data;
-  const version = await dockerVersion();
+  if (overviewCache && overviewCache.root === root && Date.now() - overviewCache.at < OVERVIEW_CACHE_MS * backoff()) return overviewCache.data;
+  const { version, inconclusive } = await probeDaemon();
   if (!version) {
-    const down: DockerOverview = { available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null, containers: [], images: [], volumes: [], networks: [], error: "docker not available (is the daemon running?)" };
-    overviewCache = { at: Date.now(), root, data: down };
+    const down: DockerOverview = {
+      available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null,
+      containers: [], images: [], volumes: [], networks: [],
+      // Say which of the THREE it is. The daemon message must not be shown for a
+      // machine that has no docker at all — that binary-absent case is checked
+      // first, so "is the daemon running?" only ever names a daemon we actually
+      // tried to reach. Then the old split: a refusal is a fact, a timeout is
+      // only us running out of patience (which used to send the user to
+      // `systemctl status` for nothing, on a machine where docker was fine).
+      error: !dockerBin()
+        ? "Docker isn't installed — the docker CLI isn't on your PATH"
+        : inconclusive
+          ? "no answer from docker yet — still trying"
+          : "docker not available (is the daemon running?)",
+    };
+    // A guess is not worth caching for as long as a fact. Holding an
+    // inconclusive verdict for the full window is what kept the error on screen
+    // long after the daemon answered.
+    if (!inconclusive) overviewCache = { at: Date.now(), root, data: down };
     return down;
   }
   const [c, i, v, n] = await Promise.all([containers(), images(), volumes(), networks()]);
@@ -258,7 +475,7 @@ export async function overview(): Promise<DockerOverview> {
 
 const pct = (s?: string) => { const n = parseFloat((s || "").replace("%", "")); return Number.isFinite(n) ? n : 0; };
 
-let statsCache: { at: number; data: DockerStat[] } | null = null;
+let statsCache: { at: number; key: string; data: DockerStat[] } | null = null;
 /** Long enough that a 5s poll never lands on a cold cache twice in a row. */
 const STATS_TTL_MS = 4000;
 
@@ -275,10 +492,29 @@ const STATS_TTL_MS = 4000;
  * close enough to continuous that two clients would otherwise keep one running
  * permanently.
  */
-export async function stats(): Promise<DockerStat[]> {
-  if (statsCache && Date.now() - statsCache.at < STATS_TTL_MS) return statsCache.data;
-  const r = await dockerAsync(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"], 12000);
-  if (r.code !== 0) return [];
+export async function stats(ids?: string[]): Promise<DockerStat[]> {
+  // Sample the containers the panel is showing, not the machine.
+  //
+  // `docker stats` with no arguments samples every running container on the
+  // host, and the panel then threw away the ones it had already decided not to
+  // show. That is work the daemon does on a five-second poll, growing with
+  // everything else running on the machine and having nothing to do with this
+  // project — and a panel that has scoped itself is still touching containers
+  // it scoped out, which is the part that shouldn't be true.
+  //
+  // An explicitly empty list means "nothing in scope is running", and the right
+  // number of daemon round-trips for that is zero. `undefined` still means the
+  // whole host, so a caller with no scope to offer keeps the old behaviour.
+  const targets = ids ? [...new Set(ids)].filter((id) => ID_RE.test(id)) : null;
+  if (targets && !targets.length) return [];
+  const key = targets ? targets.join(",") : "*";
+  if (statsCache && statsCache.key === key && Date.now() - statsCache.at < STATS_TTL_MS * backoff()) return statsCache.data;
+  const r = await dockerAsync(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}", ...(targets ?? [])], 12000);
+  // A container removed between the overview and this call takes the whole
+  // command down with it ("No such container"). Falling back to the host sample
+  // costs one extra round-trip on a rare race and keeps the panel populated,
+  // which beats blanking every gauge until the next poll.
+  if (r.code !== 0) return targets ? stats() : [];
   const data = jsonLines(r.stdout).map((s) => ({
     id: (s.ID || "").slice(0, 12),
     cpu: pct(s.CPUPerc),
@@ -288,15 +524,24 @@ export async function stats(): Promise<DockerStat[]> {
     blockIO: s.BlockIO || "",
     pids: parseInt(s.PIDs || "0", 10) || 0,
   }));
-  statsCache = { at: Date.now(), data };
+  statsCache = { at: Date.now(), key, data };
   return data;
 }
 
-/** Last `tail` log lines for a container (bounded). Docker writes logs to stderr. */
-export function logs(id: string, tail = 400): { ok: boolean; text: string; error?: string } {
+/**
+ * Last `tail` log lines for a container (bounded). Docker writes logs to stderr.
+ *
+ * Awaited, like everything else here. The panel refetches these every three
+ * seconds while a log tab is open, and a blocking spawn on that cadence stops
+ * the server's only thread — which is also the thread pumping the terminal's
+ * PTY socket and the chat stream. Measured on a chatty container it is
+ * hundreds of milliseconds, which is exactly long enough to read as the app
+ * freezing while you type.
+ */
+export async function logs(id: string, tail = 400): Promise<{ ok: boolean; text: string; error?: string }> {
   if (!ID_RE.test(id)) return { ok: false, text: "", error: "invalid container id" };
   const n = Math.max(1, Math.min(5000, tail | 0));
-  const r = docker(["logs", "--tail", String(n), "--timestamps", id], 10000);
+  const r = await dockerAsync(["logs", "--tail", String(n), "--timestamps", id], 10000);
   // A container writes its own logs to stderr with exit 0; a non-zero exit is a
   // real failure (e.g. "No such container") — surface it as an error, not logs.
   if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "docker logs failed" };
@@ -309,9 +554,11 @@ function guard(id: string): DockerActionResult | null {
   if (!ID_RE.test(id)) return { ok: false, error: "invalid container id" };
   return null;
 }
-function action(verb: string, id: string, extra: string[] = []): DockerActionResult {
+/** `stop` and `restart` wait out the container's grace period — ten seconds of
+ *  a frozen UI if this blocks, on a button the user pressed and is watching. */
+async function action(verb: string, id: string, extra: string[] = []): Promise<DockerActionResult> {
   const g = guard(id); if (g) return g;
-  const r = docker([verb, ...extra, id], 20000);
+  const r = await dockerAsync([verb, ...extra, id], 20000);
   // The panel refetches right after acting; without dropping the cache it gets
   // the pre-action snapshot back and the container looks unchanged, as though
   // the button did nothing.
@@ -324,3 +571,36 @@ export const startContainer = (id: string) => action("start", id);
 export const stopContainer = (id: string) => action("stop", id);
 export const restartContainer = (id: string) => action("restart", id);
 export const removeContainer = (id: string) => action("rm", id); // non-force: fails if running (stop first)
+
+/**
+ * The three things lazydocker shows that we did not.
+ *
+ * `env` and `config` come from one `inspect` — asking twice for the same JSON
+ * to render two tabs would double the latency of switching between them for no
+ * gain. `top` is a live process list, so it is its own call.
+ */
+export async function inspect(id: string): Promise<{ ok: boolean; env: string[]; config: string; error?: string }> {
+  if (!ID_RE.test(id)) return { ok: false, env: [], config: "", error: "invalid container id" };
+  const r = await dockerAsync(["inspect", id], 10000);
+  if (r.code !== 0) return { ok: false, env: [], config: "", error: r.stderr.trim() || "docker inspect failed" };
+  let env: string[] = [];
+  let config = r.stdout;
+  try {
+    const parsed = JSON.parse(r.stdout);
+    const one = Array.isArray(parsed) ? parsed[0] : parsed;
+    env = Array.isArray(one?.Config?.Env) ? one.Config.Env : [];
+    // Re-serialised at a readable indent: docker's own output is already
+    // pretty, but only sometimes, depending on version.
+    config = JSON.stringify(one, null, 2);
+  } catch { /* keep the raw text — unparseable is still readable */ }
+  return { ok: true, env, config };
+}
+
+export async function top(id: string): Promise<{ ok: boolean; text: string; error?: string }> {
+  if (!ID_RE.test(id)) return { ok: false, text: "", error: "invalid container id" };
+  const r = await dockerAsync(["top", id], 10000);
+  // A stopped container cannot be topped, and saying that is better than an
+  // empty table that looks like "no processes".
+  if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "the container is not running" };
+  return { ok: true, text: r.stdout };
+}

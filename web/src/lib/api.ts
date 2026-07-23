@@ -1,11 +1,90 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, GitRemote, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, TerminalCommands, ChatImage } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
 
+/** Set when the agentglass server itself served this page (single-port mode) —
+ *  it plants the marker into index.html on the way out (server/src/webui.ts).
+ *  Serve-time, not build-time, so the same bundle still resolves :4000 under
+ *  vite dev/preview and the desktop shell's static server. */
+const SERVED_BY_API: boolean =
+  typeof window !== "undefined" &&
+  (window as unknown as { __AGENTGLASS_SAME_ORIGIN__?: boolean }).__AGENTGLASS_SAME_ORIGIN__ === true;
+
+/** The desktop shell's API origin. Needed because the packaged renderer is
+ *  served from `agentglass://app`, whose hostname says nothing about where the
+ *  sidecar listens — `http://${location.hostname}:4000` would resolve to the
+ *  nonsense `http://app:4000`. */
+const DESKTOP_API: string | undefined =
+  typeof window !== "undefined"
+    ? (window as unknown as { agentglass?: { apiOrigin?: string } }).agentglass?.apiOrigin
+    : undefined;
+
 export const SERVER: string =
   (import.meta.env.VITE_CW_SERVER as string | undefined)?.replace(/\/$/, "") ||
-  `http://${location.hostname}:4000`;
+  DESKTOP_API?.replace(/\/$/, "") ||
+  (SERVED_BY_API ? location.origin : `http://${location.hostname}:4000`);
+
+/**
+ * Whether the line above *guessed* the origin rather than being told it.
+ *
+ * The three configured paths are known-good: `VITE_CW_SERVER` was typed by
+ * someone, the desktop shell probes and hands over the origin it verified, and
+ * a page the server itself served is the server by definition. Only the last
+ * fallback is a guess, and it is the one worth checking.
+ */
+export const SERVER_GUESSED: boolean =
+  !(import.meta.env.VITE_CW_SERVER as string | undefined) && !DESKTOP_API && !SERVED_BY_API;
+
+/** What is answering at `SERVER`. `foreign` is the interesting one: something
+ *  is there, it is not us, and every panel is about to ask it for data. */
+export type ServerIdentity = "ours" | "foreign" | "down";
+
+/**
+ * Ask the origin who it is.
+ *
+ * A 200 is not proof of identity, and treating it as proof is a bug with teeth:
+ * `:4000` is a common default (Phoenix ships on it, and any number of local
+ * observability servers pick it), so a machine with one of those running hands
+ * the dashboard a stranger. Every request then gets a 404 or a shape we do not
+ * understand, and the cockpit renders exactly as it would with no agents at
+ * all. The conclusion a reasonable person draws is "this project is broken".
+ *
+ * The desktop shell has checked this since #126 — it walks eight ports and
+ * reads the body of `/health` rather than its status. This is the same check on
+ * the side that never had it: run from source, which is contributors.
+ *
+ * The `ok`/`clients` shape is accepted alongside the name so that a server
+ * built before `service` existed still identifies as ours rather than as an
+ * impostor.
+ */
+export async function probeServer(timeoutMs = 2500): Promise<ServerIdentity> {
+  const ctl = new AbortController();
+  const bail = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${SERVER}/health`, { headers: authHeaders(), signal: ctl.signal });
+    // A server that needs a token is still ours, and the header we just sent
+    // may simply be missing — that is the auth banner's problem, not this one.
+    if (r.status === 401 || r.status === 403) return "ours";
+    if (!r.ok) return "foreign";
+    // A body we cannot read is still a body: something is listening and it is
+    // not us. Letting the parse failure fall through to the catch below would
+    // report "nothing is there" about a server that just answered, which is the
+    // exact confusion this function exists to end — a Phoenix app on :4000
+    // serves HTML from every path, including this one.
+    let j: { service?: unknown; ok?: unknown; clients?: unknown };
+    try { j = await r.json(); } catch { return "foreign"; }
+    return j.service === "agentglass" || (j.ok === true && typeof j.clients === "number") ? "ours" : "foreign";
+  } catch (e) {
+    // Refused, DNS, CORS, or the abort above: nothing usable is there. Told
+    // apart from `foreign` deliberately — "start the server" and "something
+    // else owns this port" are different problems with different fixes, and
+    // today they look identical.
+    return (e as Error)?.name === "AbortError" ? "foreign" : "down";
+  } finally {
+    clearTimeout(bail);
+  }
+}
 
 /** Auth token for a server that requires one (exposed / multi-user box). Read
  *  once from `?token=` — then stripped from the URL bar so it isn't shoulder-
@@ -26,12 +105,12 @@ const TOKEN: string = (() => {
 })();
 
 /** Attach the bearer token to fetch headers when one is configured. */
-const authHeaders = (h: Record<string, string> = {}): Record<string, string> =>
+export const authHeaders = (h: Record<string, string> = {}): Record<string, string> =>
   TOKEN ? { ...h, authorization: `Bearer ${TOKEN}` } : h;
 
 /** Append ?token= to URLs a browser can't put a header on: WS upgrades and the
  *  download navigations (export links). */
-const withToken = (url: string): string =>
+export const withToken = (url: string): string =>
   TOKEN ? url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : url;
 
 /** Whether this client has a shared-secret token configured. */
@@ -107,6 +186,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 const D = <T,>(v: T) => Promise.resolve(v); // demo helper
+const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is read-only" });
 
 const realApi = {
   recent: (limit = 300) => get<WatchEvent[]>(`/events/recent?limit=${limit}`),
@@ -130,6 +210,7 @@ const realApi = {
   insights: () => get<{ insights: Insight[] }>(`/insights`),
   search: (q: string) => get<{ hits: SearchHit[] }>(`/search?q=${encodeURIComponent(q)}`),
   gatePending: () => get<{ gates: PendingGate[] }>(`/gate/pending`),
+  gateHistory: (limit = 25) => get<{ gates: GateRecord[] }>(`/gate/history?limit=${limit}`),
   gateDecide: (id: string, decision: "allow" | "deny", reason = "") =>
     fetch(SERVER + "/gate/decide", {
       method: "POST",
@@ -159,6 +240,7 @@ const realApi = {
   /** Subdirectories matching a half-typed path — the picker's completion. */
   fsComplete: (prefix: string) => get<FsCompletion>(`/fs/complete?prefix=${encodeURIComponent(prefix)}`),
   // --- live git panel (lazygit-style) ---
+  gitCapability: () => get<GitCapability>("/git/capability"),
   gitRepos: () => get<{ repos: GitRepoRef[] }>("/git/repos"),
   /** Every repo on the machine — for the project picker, even when scoped. */
   gitReposAll: () => get<{ repos: GitRepoRef[] }>("/git/repos?all=1"),
@@ -177,6 +259,12 @@ const realApi = {
   gitCommitDiff: (root: string, hash: string) => get<{ changes: FileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
   gitStashes: (root: string) => get<{ stashes: GitStash[] }>(`/git/stashes?root=${encodeURIComponent(root)}`),
   gitRemotes: (root: string) => get<{ remotes: GitRemote[] }>(`/git/remotes?root=${encodeURIComponent(root)}`),
+  /** Every branch on one remote, as the last fetch left them — the whole list,
+   *  filtered and rendered progressively on this side. */
+  gitRemoteBranches: (root: string, remote: string) => get<{ ok: boolean; remote: string; branches: GitRemoteBranch[]; error?: string }>(`/git/remote-branches?root=${encodeURIComponent(root)}&remote=${encodeURIComponent(remote)}`),
+  /** Create a local branch tracking `ref` ("origin/WEB-1042"). `switch` also
+   *  moves this checkout onto it. */
+  gitTrackRemote: (root: string, ref: string, switchTo: boolean) => post<GitActionResult>("/git/track-remote", { root, ref, switch: switchTo }),
   gitTags: (root: string) => get<{ tags: GitTag[] }>(`/git/tags?root=${encodeURIComponent(root)}`),
   gitReflog: (root: string) => get<{ entries: GitReflogEntry[] }>(`/git/reflog?root=${encodeURIComponent(root)}`),
   gitCommandLog: (since = 0) => get<{ entries: GitLogEntry[] }>(`/git/commandlog?since=${since}`),
@@ -185,7 +273,10 @@ const realApi = {
   editorCapability: () => get<{ hasNvim: boolean; editor: string | null }>("/editor/capability"),
   editorTarget: (path: string) => get<{ running: boolean; hasNvim: boolean }>(`/editor/target?path=${encodeURIComponent(path)}`),
   editorOpen: (path: string, line: number) =>
-    post<{ ok: boolean; how?: "remote" | "spawn"; command?: string; otherCwds?: string[]; stuck?: number; error?: string }>("/editor/open", { path, line }),
+    post<{ ok: boolean; how?: "remote" | "spawn"; command?: string; otherCwds?: string[]; stuck?: number; error?: string;
+      /** Set when the file went to an nvim rooted in a *sibling* checkout of the
+       *  same project — a worktree of the repo you are looking at. */
+      viaFamily?: string }>("/editor/open", { path, line }),
   gitCheckout: (root: string, name: string) => post<GitActionResult>("/git/checkout", { root, name }),
   gitBranchCreate: (root: string, name: string) => post<GitActionResult>("/git/branch-create", { root, name }),
   gitBranchDelete: (root: string, name: string, force: boolean) => post<GitActionResult>("/git/branch-delete", { root, name, force }),
@@ -194,18 +285,106 @@ const realApi = {
   gitStashPop: (root: string, index: number) => post<GitActionResult>("/git/stash-pop", { root, index }),
   gitStashDrop: (root: string, index: number) => post<GitActionResult>("/git/stash-drop", { root, index }),
   gitApplyHunk: (root: string, path: string, staged: boolean, action: "stage" | "unstage" | "discard", hunk: DiffHunk) => post<GitActionResult>("/git/apply-hunk", { root, path, staged, action, hunk }),
-  gitGraph: (root: string, limit = 400) => get<{ lines: GitGraphLine[] }>(`/git/graph?root=${encodeURIComponent(root)}&limit=${limit}`),
+  gitConflictBlocks: (root: string, path: string) => get<{ ok: boolean; blocks: ConflictBlock[]; error?: string }>(`/git/conflict-blocks?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+  gitResolveBlocks: (root: string, path: string, choices: BlockChoice[]) => post<GitActionResult>("/git/resolve-blocks", { root, path, choices }),
+  /** `scope` is whose history: this checkout's own by default, the whole repo
+   *  on request. See logGraph() — the default used to be everything, which put
+   *  other people's branches at the top of your own log. */
+  gitGraph: (root: string, limit = 400, scope: "head" | "all" = "head") => get<{ lines: GitGraphLine[]; scope: "head" | "all"; branch: string }>(`/git/graph?root=${encodeURIComponent(root)}&limit=${limit}&scope=${scope}`),
   gitWorktrees: (root: string) => get<{ worktrees: GitWorktree[] }>(`/git/worktrees?root=${encodeURIComponent(root)}`),
   gitMerge: (root: string, name: string) => post<GitActionResult>("/git/merge", { root, name }),
   gitRebase: (root: string, name: string) => post<GitActionResult>("/git/rebase", { root, name }),
   gitBranchRename: (root: string, name: string, to: string) => post<GitActionResult>("/git/branch-rename", { root, name, to }),
   gitReset: (root: string, ref: string, mode: "soft" | "mixed" | "hard") => post<GitActionResult>("/git/reset", { root, ref, mode }),
-  gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch }),
+  /** `startPoint` is what the new branch is cut from — a remote branch when the
+   *  Remotes tab asks; HEAD when omitted. */
+  gitWorktreeAdd: (root: string, path: string, branch: string, newBranch: boolean, startPoint?: string) => post<GitActionResult>("/git/worktree-add", { root, path, branch, newBranch, startPoint }),
   gitWorktreeRemove: (root: string, path: string, force: boolean) => post<GitActionResult>("/git/worktree-remove", { root, path, force }),
+  /** What removing these worktrees would delete that git wouldn't warn about —
+   *  ask before offering the removal. One request for the whole batch. */
+  /** Copy chosen leftovers into the main checkout. Never overwrites — anything
+   *  already there comes back in `skipped` with the reason. */
+  gitWorktreeRescue: (root: string, path: string, paths: string[]) =>
+    post<GitActionResult & { copied?: string[]; skipped?: { path: string; why: string }[] }>("/git/worktree-rescue", { root, path, paths }),
+  /** Hand a worktree's root-owned files back, via the desktop's own auth
+   *  dialog. chown only — the removal still runs as you. */
+  gitWorktreeChown: (root: string, path: string) => post<GitActionResult>("/git/worktree-chown", { root, path }),
+  gitWorktreeLeftovers: (root: string, paths: string[]) =>
+    get<{ leftovers: WorktreeLeftovers[] }>(`/git/worktree-leftovers?root=${encodeURIComponent(root)}${paths.map((p) => `&path=${encodeURIComponent(p)}`).join("")}`),
+  /** Merge a checkout's base branch into it — "update from base". `root` is the
+   *  checkout doing the updating, since the merge runs where the branch is. */
+  gitSyncBase: (root: string, base?: string) => post<GitActionResult>("/git/sync-base", { root, base }),
+  /** Remember which branch this one was cut from. Written to the repo's own
+   *  config, so it survives restarts and is readable with plain `git config`. */
+  gitSetBase: (root: string, branch: string, base: string | null) => post<GitActionResult>("/git/set-base", { root, branch, base }),
+  gitBaseCandidates: (root: string) => get<{ ok: boolean; refs: { name: string; remote: boolean }[] }>(`/git/base-candidates?root=${encodeURIComponent(root)}`),
+  gitConflicts: (root: string) => get<{ ok: boolean; state: string; files: string[]; error?: string }>(`/git/conflicts?root=${encodeURIComponent(root)}`),
+  gitResolve: (root: string, paths: string[], side: "ours" | "theirs") => post<GitActionResult>("/git/resolve", { root, paths, side }),
+  gitMergeAbort: (root: string) => post<GitActionResult>("/git/merge-abort", { root }),
+  gitUndoMerge: (root: string) => post<GitActionResult>("/git/undo-merge", { root }),
+  gitMergeContinue: (root: string) => post<GitActionResult>("/git/merge-continue", { root }),
   // --- live docker panel (lazydocker-style) ---
+  /** Installed / daemon-down / OK — so the panel can show install guidance for a
+   *  missing binary instead of the overview's daemon message. Mirrors gitCapability. */
+  dockerCapability: () => get<DockerCapability>("/docker/capability"),
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
+  updateStatus: () => get<UpdateStatus>("/update/status"),
+  // The tag is optional because the automatic modal wants "whatever this build
+  // came from", while About asks for a named release — the update it is about
+  // to install, say, which is not the one running.
+  updateNotes: (tag?: string) => get<ReleaseNotes>(`/update/notes${tag ? `?tag=${encodeURIComponent(tag)}` : ""}`),
+  updateRun: () => post<{ ok: boolean; error?: string }>("/update/run", {}),
+  updateLog: () => get<{ ok: boolean; text: string }>("/update/log"),
+  dockerInspect: (id: string) => get<{ ok: boolean; env: string[]; config: string; error?: string }>(`/docker/inspect?id=${encodeURIComponent(id)}`),
+  dockerTop: (id: string) => get<{ ok: boolean; text: string; error?: string }>(`/docker/top?id=${encodeURIComponent(id)}`),
+  // --- pull requests (gh-backed) ---
+  prCapability: (force = false) => get<{ available: boolean; authed: boolean; login?: string; reason?: string }>(`/prs/capability${force ? "?force=1" : ""}`),
+  prList: (root: string, filter: "mine" | "review" | "all", force = false) =>
+    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}${force ? "&force=1" : ""}`),
+  prDetail: (root: string, number: number, force = false) =>
+    get<{ ok: boolean; detail?: PrDetail; error?: string }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
+  prDiff: (root: string, number: number) =>
+    get<{ ok: boolean; text?: string; error?: string }>(`/prs/diff?root=${encodeURIComponent(root)}&number=${number}`),
+  /** Images in a PR body go through the server, which attaches the gh token —
+   *  GitHub's own attachment URLs 404 without it. This is an `<img src>`, a
+   *  navigation the browser can't put an auth header on, so the shared secret
+   *  rides as ?token= (see withToken) — omit it and every avatar 401s when a
+   *  token is configured. */
+  prAssetUrl: (raw: string) => withToken(`${SERVER}/prs/asset?url=${encodeURIComponent(raw)}`),
+  prReview: (root: string, number: number, verb: "approve" | "request_changes" | "comment", body: string) =>
+    post<PrActionResult>("/prs/review", { root, number, verb, body }),
+  /** A verdict plus every line comment queued while reading the diff, in one
+   *  request — GitHub's "pending review", which arrives as one notification
+   *  instead of a scatter. */
+  prReviewWith: (root: string, number: number, verb: "approve" | "request_changes" | "comment", body: string,
+    comments: { path: string; line: number; side?: "LEFT" | "RIGHT"; body: string }[]) =>
+    post<PrActionResult>("/prs/review-with", { root, number, verb, body, comments }),
+  prComment: (root: string, number: number, body: string) => post<PrActionResult>("/prs/comment", { root, number, body }),
+  prReply: (root: string, number: number, commentId: number, body: string) => post<PrActionResult>("/prs/reply", { root, number, commentId, body }),
+  prSetThreadResolved: (root: string, threadId: string, resolved: boolean) => post<PrActionResult>("/prs/thread-resolved", { root, threadId, resolved }),
+  prReact: (root: string, commentId: number, content = "+1") => post<PrActionResult>("/prs/react", { root, commentId, content }),
+  prEdit: (root: string, number: number, patch: { title?: string; body?: string; base?: string }) => post<PrActionResult>("/prs/edit", { root, number, ...patch }),
+  prLabels: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/labels", { root, number, add, remove }),
+  prReviewers: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/reviewers", { root, number, add, remove }),
+  prDraft: (root: string, number: number, draft: boolean) => post<PrActionResult>("/prs/draft", { root, number, draft }),
+  prUpdateBranch: (root: string, number: number) => post<PrActionResult>("/prs/update-branch", { root, number }),
+  prRerun: (root: string, number: number) => post<PrActionResult>("/prs/rerun", { root, number }),
+  prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string }) =>
+    post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
+  prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
+  prLocalReview: (root: string, number: number) =>
+    post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/local-review", { root, number }),
+  prLocalReviewDiscard: (root: string, number: number) => post<PrActionResult>("/prs/local-review-discard", { root, number }),
+  /** Where a local branch lives on the web. A live branch resolves to its tree
+   *  with no network at all; a gone one resolves to the PR it came from. */
+  prCommitDiff: (root: string, sha: string) =>
+    get<{ ok: boolean; text?: string; error?: string }>(`/prs/commit-diff?root=${encodeURIComponent(root)}&sha=${encodeURIComponent(sha)}`),
+  prBranchUrl: (root: string, branch: string, gone: boolean) =>
+    get<{ ok: boolean; url?: string; kind?: "tree" | "pr"; error?: string }>(
+      `/prs/branch-url?root=${encodeURIComponent(root)}&branch=${encodeURIComponent(branch)}&gone=${gone ? "true" : "false"}`),
+
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
@@ -234,10 +413,10 @@ const realApi = {
     try {
       for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let nl; while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); } }
     } catch (e) {
-      // The turn was accepted and then the connection died under it. WebKitGTK
-      // (the Tauri shell) reports every such failure as "TypeError: Load
-      // failed", so the raw error says nothing about what happened — the cause
-      // is named here instead, where it is known.
+      // The turn was accepted and then the connection died under it. The raw
+      // error is opaque (a bare "TypeError: Load failed" or similar, depending
+      // on the engine) and says nothing about what happened — the cause is
+      // named here instead, where it is known.
       if (e instanceof DOMException && e.name === "AbortError") throw e;
       throw new ChatStreamError("dropped", "");
     }
@@ -266,6 +445,7 @@ const demoApi: typeof realApi = {
   insights: () => D(demo.insights()),
   search: (q: string) => D(demo.search(q)),
   gatePending: () => D(demo.gatePending()),
+  gateHistory: () => D({ gates: [] as GateRecord[] }),
   gateDecide: (id: string) => D(demo.gateDecide(id)),
   gitStatus: (_paths: string[]) => D(demo.gitStatus()),
   gitCommit: (_payload: { root: string; files: string[]; title: string; body: string }) => D(demo.gitCommit()),
@@ -273,6 +453,7 @@ const demoApi: typeof realApi = {
   setWorkspace: (_root: string | null) => D({ ok: false, workspace: null, persisted: false, error: "unavailable in the demo" }),
   // The demo has no filesystem to browse, so completion is simply always empty.
   fsComplete: (_prefix: string) => D({ base: "", entries: [], truncated: false }),
+  gitCapability: () => D({ available: true } as GitCapability),
   gitRepos: () => D(demo.gitRepos()),
   gitReposAll: () => D(demo.gitRepos()),
   gitTree: (root: string) => D(demo.gitTree(root)),
@@ -289,6 +470,8 @@ const demoApi: typeof realApi = {
   // The demo has no real repo behind it; empty lists render as "none yet"
   // rather than as an error, which is the right shape for a showcase.
   gitRemotes: (_root: string) => D({ remotes: [] as GitRemote[] }),
+  gitRemoteBranches: (_root: string, _remote: string) => D({ ok: true, remote: "", branches: [] as GitRemoteBranch[] }),
+  gitTrackRemote: (_root: string, _ref: string, _switchTo: boolean) => D(demo.gitActionUnavailable()),
   gitTags: (_root: string) => D({ tags: [] as GitTag[] }),
   gitReflog: (_root: string) => D({ entries: [] as GitReflogEntry[] }),
   gitCommandLog: (_since?: number) => D({ entries: [] as GitLogEntry[] }),
@@ -306,17 +489,37 @@ const demoApi: typeof realApi = {
   gitStashPop: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
   gitStashDrop: (_root: string, _index: number) => D(demo.gitActionUnavailable()),
   gitApplyHunk: (_root: string, _path: string, _staged: boolean, _action: "stage" | "unstage" | "discard", _hunk: DiffHunk) => D(demo.gitActionUnavailable()),
-  gitGraph: (_root: string, _limit?: number) => D(demo.gitGraph()),
+  gitConflictBlocks: (_root: string, _path: string) => D({ ok: false, blocks: [] as ConflictBlock[], error: "not available in the demo" }),
+  gitResolveBlocks: (_root: string, _path: string, _choices: BlockChoice[]) => D(demo.gitActionUnavailable()),
+  gitGraph: (_root: string, _limit?: number, _scope?: "head" | "all") => D({ ...demo.gitGraph(), scope: "head" as const, branch: "main" }),
   gitWorktrees: (_root: string) => D(demo.gitWorktrees()),
   gitMerge: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitRebase: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitBranchRename: (_root: string, _name: string, _to: string) => D(demo.gitActionUnavailable()),
   gitReset: (_root: string, _ref: string, _mode: "soft" | "mixed" | "hard") => D(demo.gitActionUnavailable()),
-  gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean) => D(demo.gitActionUnavailable()),
+  gitWorktreeAdd: (_root: string, _path: string, _branch: string, _newBranch: boolean, _startPoint?: string) => D(demo.gitActionUnavailable()),
+  gitSyncBase: (_root: string, _base?: string) => D(demo.gitActionUnavailable()),
+  gitSetBase: (_root: string, _branch: string, _base: string | null) => D(demo.gitActionUnavailable()),
+  gitBaseCandidates: (_root: string) => D({ ok: true, refs: [] }),
+  gitConflicts: (_root: string) => D({ ok: true, state: "clean", files: [] }),
+  gitResolve: (_root: string, _paths: string[], _side: "ours" | "theirs") => D(demo.gitActionUnavailable()),
+  gitMergeAbort: (_root: string) => D(demo.gitActionUnavailable()),
+  gitUndoMerge: (_root: string) => D(demo.gitActionUnavailable()),
+  gitMergeContinue: (_root: string) => D(demo.gitActionUnavailable()),
   gitWorktreeRemove: (_root: string, _path: string, _force: boolean) => D(demo.gitActionUnavailable()),
+  gitWorktreeLeftovers: (_root: string, _paths: string[]) => D({ leftovers: [] as WorktreeLeftovers[] }),
+  gitWorktreeRescue: (_root: string, _path: string, _paths: string[]) => D(demo.gitActionUnavailable()),
+  gitWorktreeChown: (_root: string, _path: string) => D(demo.gitActionUnavailable()),
+  dockerCapability: () => D({ available: true, version: "27.0.3" } as DockerCapability),
   dockerOverview: () => D(demo.dockerOverview()),
   dockerStats: () => D(demo.dockerStats()),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
+  updateNotes: (_tag?: string) => D({ ok: false, tag: "", notes: "", source: "", error: "not available in the demo" } as ReleaseNotes),
+  updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0 }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
+  updateRun: () => D({ ok: false, error: "not available in the demo" }),
+  updateLog: () => D({ ok: true, text: "" }),
+  dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
+  dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
   chatEnabled: () => D({ enabled: false }),
   chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[] }, onEvent: (o: Record<string, unknown>) => void) => {
@@ -328,6 +531,35 @@ const demoApi: typeof realApi = {
   dockerStop: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRestart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRm: (_id: string) => D(demo.dockerActionUnavailable()),
+
+  // The demo has no GitHub behind it, and pretending otherwise would put a
+  // fake PR list in front of someone evaluating the app. It reports the same
+  // "gh isn't set up" state a real machine without gh would, which is honest
+  // and is a screen worth showing anyway.
+  prCapability: (_force?: boolean) => D({ available: false, authed: false, reason: "pull requests need the GitHub CLI — not available in the demo" }),
+  prList: (_root: string, _filter: "mine" | "review" | "all", _force?: boolean) =>
+    D<PrListResponse>({ ok: true, repo: null, prs: [], fetchedAt: 0, stale: false, loading: false, needsAuth: true, error: "not available in the demo" }),
+  prDetail: (_root: string, _number: number, _force?: boolean) => D({ ok: false, error: "not available in the demo" }),
+  prDiff: (_root: string, _number: number) => D({ ok: false, error: "not available in the demo" }),
+  prAssetUrl: (raw: string) => raw,
+  prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),
+  prReviewWith: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string, _c: unknown[]) => D(demoPrAction()),
+  prComment: (_r: string, _n: number, _b: string) => D(demoPrAction()),
+  prReply: (_r: string, _n: number, _c: number, _b: string) => D(demoPrAction()),
+  prSetThreadResolved: (_r: string, _t: string, _v: boolean) => D(demoPrAction()),
+  prReact: (_r: string, _c: number, _content?: string) => D(demoPrAction()),
+  prEdit: (_r: string, _n: number, _p: { title?: string; body?: string; base?: string }) => D(demoPrAction()),
+  prLabels: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
+  prReviewers: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
+  prDraft: (_r: string, _n: number, _d: boolean) => D(demoPrAction()),
+  prUpdateBranch: (_r: string, _n: number) => D(demoPrAction()),
+  prRerun: (_r: string, _n: number) => D(demoPrAction()),
+  prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string }) => D(demoPrAction()),
+  prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
+  prLocalReview: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  prLocalReviewDiscard: (_r: string, _n: number) => D(demoPrAction()),
+  prCommitDiff: (_r: string, _s: string) => D({ ok: false, error: "not available in the demo" }),
+  prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
 };
 
 export const api = IS_DEMO ? demoApi : realApi;
