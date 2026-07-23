@@ -745,14 +745,28 @@ const openToolSql = (scoped: string) =>
      FROM events p
     WHERE p.hook_event_type = 'PreToolUse'
       AND p.timestamp >= ?
+      -- "Has this call been closed by a Post?" — split into two NOT EXISTS
+      -- rather than one with an OR inside. The OR mixed q.tool_use_id with
+      -- q.session_id/tool_name, and SQLite cannot use an index across it: the
+      -- subquery fell back to scanning EVERY PostToolUse for each open Pre
+      -- (306 Pres x thousands of Posts = ~2.5s on a real DB, on the thread the
+      -- terminal rides). Split, the id path uses idx on tool_use_id (the case
+      -- for essentially every modern event) and the query drops to ~1ms.
+      -- Equivalent by De Morgan: the two branches are mutually exclusive
+      -- (tool_use_id present XOR absent), and a NULL id never equals any q's id,
+      -- so the first clause is a no-op exactly when the second one applies.
       AND NOT EXISTS (
         SELECT 1 FROM events q
          WHERE q.hook_event_type IN ('PostToolUse','PostToolUseFailure')
-           AND (
-             (p.tool_use_id IS NOT NULL AND q.tool_use_id = p.tool_use_id)
-             OR (p.tool_use_id IS NULL AND q.session_id = p.session_id
-                 AND q.tool_name = p.tool_name AND q.timestamp >= p.timestamp)
-           )
+           AND q.tool_use_id = p.tool_use_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM events q2
+         WHERE p.tool_use_id IS NULL
+           AND q2.hook_event_type IN ('PostToolUse','PostToolUseFailure')
+           AND q2.session_id = p.session_id
+           AND q2.tool_name = p.tool_name
+           AND q2.timestamp >= p.timestamp
       )
       AND NOT EXISTS (
         SELECT 1 FROM events s
