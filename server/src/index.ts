@@ -26,7 +26,7 @@ import { getUsage } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, git, gitCapability } from "./git.ts";
+import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability } from "./git.ts";
 import {
   workingTree, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
@@ -245,33 +245,26 @@ const trustedHost = (url: URL) => isPrivate(url.hostname) || ALLOWED_HOSTS.has(u
 // left of the cost once the git call was skipped.
 const refsCache = new Map<string, { refs: number; body: string }>();
 
-function refsFingerprint(root: string): number {
-  const r = git(root, ["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]);
+// Awaited: even at ~2ms this is one for-each-ref on the loop for every poll of
+// /git/branches, /git/graph and /git/tags — three endpoints, several tabs — and
+// the whole point is that the terminal's thread runs none of them. It queues
+// behind the shared pool now; the answer it gates is cached, so a slightly later
+// fingerprint only defers a recompute, never a keystroke.
+async function refsFingerprint(root: string): Promise<number> {
+  const r = await gitAsync(root, ["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]);
   // A failure fingerprints as "different every time", so a broken repo falls
   // back to recomputing rather than serving one wrong answer forever.
   return r.code === 0 ? Number(Bun.hash(r.stdout + ":" + r.stdout.length)) : Math.random();
 }
 
-/** Awaited variant, for the reads that no longer block the loop. */
+/** Recompute only when a ref moved, off the loop. `key` separates answers that
+ *  come from the same repo but different questions (the log's scope, a limit). */
 async function whileRefsHoldAsync(key: string, root: string, compute: () => Promise<unknown>): Promise<string> {
   if (!root) return JSON.stringify(await compute());
-  const refs = refsFingerprint(root);
+  const refs = await refsFingerprint(root);
   const hit = refsCache.get(key);
   if (hit && hit.refs === refs) return hit.body;
   const body = JSON.stringify(await compute());
-  if (refsCache.size > 40) refsCache.clear();
-  refsCache.set(key, { refs, body });
-  return body;
-}
-
-/** Recompute only when a ref moved. `key` separates answers that come from the
- *  same repo but different questions (the log's scope, a limit). */
-function whileRefsHold(key: string, root: string, compute: () => unknown): string {
-  if (!root) return JSON.stringify(compute());
-  const refs = refsFingerprint(root);
-  const hit = refsCache.get(key);
-  if (hit && hit.refs === refs) return hit.body;
-  const body = JSON.stringify(compute());
   if (refsCache.size > 40) refsCache.clear();
   refsCache.set(key, { refs, body });
   return body;
@@ -623,7 +616,7 @@ const server = Bun.serve<WsData>({
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       const paths = Array.isArray(b.paths) ? b.paths.filter((p: unknown) => typeof p === "string").slice(0, 500) : [];
-      return json({ repos: statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
+      return json({ repos: await statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
     }
     if (pathname === "/git/commit" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
@@ -738,9 +731,10 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/remote-branches") return json(gitRemoteBranches(url.searchParams.get("root") || "", url.searchParams.get("remote") || ""));
     if (pathname === "/git/tags") {
       // 125 tags is one `for-each-ref` and cheap, but it is on the same 10s poll
-      // and answers from the same refs — free to include.
+      // and answers from the same refs — free to include. Awaited like the other
+      // refs-held reads so its for-each-ref stays off the terminal's thread.
       const root = url.searchParams.get("root") || "";
-      return body(whileRefsHold(`tags:${root}`, root, () => ({ tags: gitTags(root) })));
+      return body(await whileRefsHoldAsync(`tags:${root}`, root, async () => ({ tags: await gitTags(root) })));
     }
     if (pathname === "/git/reflog") return json({ entries: gitReflog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 200)) });
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
