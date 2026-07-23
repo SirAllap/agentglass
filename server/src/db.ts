@@ -614,6 +614,12 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
   const event = parseEventRow(rowToEvent.get(id));
   try { ftsInsert.run({ $id: id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
   const session = upsertSession(n, dIn, dOut, dCw, dCr);
+  // A Pre opens a call and a Post closes one, so the open-tool memo the fleet
+  // draws from just went stale. Drop it here, the single write chokepoint, so
+  // the next read — the push that fires right after this returns — is fresh,
+  // while an idle machine with no tool traffic never invalidates and so never
+  // re-runs that scoped scan on the tick.
+  if (n.hook_event_type === "PreToolUse" || isToolPost(n.hook_event_type)) invalidateOpenTools();
   return { event, session };
 }
 
@@ -758,16 +764,51 @@ const openToolSql = (scoped: string) =>
     ORDER BY p.timestamp ASC
     LIMIT 200`;
 
+/**
+ * Short memo for the open-tool list, with write-driven invalidation.
+ *
+ * This scoped query — correlated subqueries over the whole worktree family — is
+ * one of the ~250 ms event-loop blocks the loop watchdog caught firing on every
+ * 4 s fleet tick on a real cockpit, and the loop it blocks is the one the PTY
+ * rides. The list only changes when a tool opens or closes, i.e. on a
+ * PreToolUse / PostToolUse write, so insertEvent() calls invalidateOpenTools()
+ * on exactly those. Two properties make the memo safe:
+ *   - an *empty* result stays valid until a write — an idle machine with
+ *     nothing running recomputes never, so the tick stops costing anything;
+ *   - a *non-empty* result ages out after a short TTL, so a tool whose process
+ *     died without a PostToolUse still drops off as its 30 min age-out passes,
+ *     within the TTL rather than only on the next unrelated write.
+ * Keyed on scope so switching project can never serve another project's list.
+ */
+const OPEN_TOOL_TTL_MS = 2000;
+let openToolCache: { at: number; scope: string | null; data: OpenToolCall[] } | null = null;
+
+/** Drop the open-tool memo. insertEvent() calls this on a Pre/PostToolUse write
+ *  so a tool that just opened or closed shows on the very next read. */
+export function invalidateOpenTools(): void {
+  openToolCache = null;
+}
+
 /** Currently-running tool calls across the fleet (open Pre, unpaired, session
  *  still alive) — the seed for the client's per-agent "running" state. */
 export function openToolCalls(): OpenToolCall[] {
+  const scope = workspaceRoot();
+  if (openToolCache && openToolCache.scope === scope) {
+    // Empty is valid until a write invalidates it; non-empty honours the TTL so
+    // an age-out cannot hide behind a quiet period.
+    if (openToolCache.data.length === 0 || Date.now() - openToolCache.at < OPEN_TOOL_TTL_MS) {
+      return openToolCache.data;
+    }
+  }
   // Aliased to `p`, so the shared clause needs qualifying to stay unambiguous
   // against the correlated subqueries above.
-  const s = scopeClause();
+  const s = scopeClause(scope);
   const scoped = s.clause.replace(/\b(project_path|cwd_path)\b/g, "p.$1");
-  return db
+  const data = db
     .query<OpenToolCall, any[]>(openToolSql(scoped))
     .all(Date.now() - OPEN_TOOL_MAX_MS, ...s.args);
+  openToolCache = { at: Date.now(), scope, data };
+  return data;
 }
 
 /**
@@ -815,14 +856,37 @@ function computeFilterOptions() {
   };
 }
 
+/**
+ * Short-TTL memo for /sessions, same shape and rationale as statsCache below.
+ * The fleet polls this list on the same 4 s timer and from more than one
+ * surface at once — desktop app plus a browser tab, a StrictMode double-mount —
+ * so the identical (limit, provider, scope) list gets asked for several times
+ * inside a second. The query is scoped to the whole worktree family and was
+ * another ~250 ms block the loop watchdog caught; one second keeps the list
+ * live to the eye while stopping the loop that also drives the PTY from running
+ * the same scan back to back. Keyed with scope, so switching project can never
+ * serve another project's sessions.
+ */
+const SESSIONS_TTL_MS = 1000;
+const sessionsCache = new Map<string, { at: number; data: SessionRollup[] }>();
+
 export function getSessions(limit = 100, provider?: string): SessionRollup[] {
+  const key = `${limit}|${provider ?? ""}|${workspaceRoot() ?? ""}`;
+  const hit = sessionsCache.get(key);
+  if (hit && Date.now() - hit.at < SESSIONS_TTL_MS) return hit.data;
   const s = sessionScopeClause();
   const prov = provider ? { clause: " AND provider = ?", args: [provider] } : { clause: "", args: [] };
-  return db
+  const data = db
     .query<SessionRollup, any[]>(
       `SELECT * FROM sessions WHERE 1=1${prov.clause}${s.clause} ORDER BY last_seen DESC LIMIT ?`
     )
     .all(...prov.args, ...s.args, limit);
+  sessionsCache.set(key, { at: Date.now(), data });
+  // One entry per (limit, provider, scope); the limit set is tiny and scope
+  // rarely changes, so prune stale entries anyway so a long-lived server cannot
+  // leak.
+  if (sessionsCache.size > 64) for (const [k, v] of sessionsCache) if (Date.now() - v.at >= SESSIONS_TTL_MS) sessionsCache.delete(k);
+  return data;
 }
 
 function percentile(sorted: number[], p: number): number {
