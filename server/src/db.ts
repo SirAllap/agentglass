@@ -434,13 +434,13 @@ export function scopeClause(scope: string | null = workspaceRoot()): { clause: s
 
 /** Same restriction for the `sessions` table, which carries its own columns. */
 function sessionScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
-  if (!scope) return { clause: "", args: [] };
-  const args: string[] = [];
-  const groups = scopeRoots(scope).map((r) => {
-    args.push(r, r + "/%", r, r + "/%");
-    return "project_path = ? OR project_path LIKE ? OR cwd_path = ? OR cwd_path LIKE ?";
-  });
-  return { clause: ` AND (${groups.join(" OR ")})`, args };
+  // Delegate to scopeClause rather than keep a second copy: this used its own
+  // `LIKE 'root/%'` pattern — the very thing scopeClause was rewritten to drop,
+  // because an underscore in a scope root is a single-char wildcard in LIKE and
+  // over-matches sibling projects (root_backup as well as root). The sessions
+  // table carries the same project_path/cwd_path columns, so the resolved-path
+  // IN clause applies unchanged, and correctly.
+  return scopeClause(scope);
 }
 
 /** The searchable text blob for an event — the fleet's collective memory. */

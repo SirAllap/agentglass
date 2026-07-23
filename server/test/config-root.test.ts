@@ -51,4 +51,18 @@ describe("config load tolerates a corrupt config.json", () => {
     const cfg = await load();
     expect(cfg.workspaceRoot()).not.toBeNull();
   });
+
+  it("a non-array repoDirs degrades to none instead of throwing (kept /git/repos alive)", async () => {
+    delete process.env.AGENTGLASS_REPO_DIRS; // the env would shadow the file
+    const cfg = await loadWith('{"repoDirs": "not-an-array"}').load();
+    expect(() => cfg.configuredRepoDirs()).not.toThrow();
+    expect(cfg.configuredRepoDirs()).toEqual([]);
+  });
+
+  it("a repoDirs array with a non-string entry drops only the bad entry", async () => {
+    delete process.env.AGENTGLASS_REPO_DIRS;
+    const cfg = await loadWith('{"repoDirs": ["/tmp/agx-ok", 123, null]}').load();
+    expect(() => cfg.configuredRepoDirs()).not.toThrow();
+    expect(cfg.configuredRepoDirs()).toEqual(["/tmp/agx-ok"]);
+  });
 });

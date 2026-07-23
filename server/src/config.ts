@@ -232,6 +232,11 @@ export function chatBypassAllowed(): boolean {
 
 export function configuredRepoDirs(): string[] {
   const fromEnv = (process.env.AGENTGLASS_REPO_DIRS || "").split(":").filter(Boolean);
-  const dirs = fromEnv.length ? fromEnv : config.repoDirs ?? [];
+  // config.repoDirs comes from a hand-editable JSON file, so it may be a non-array
+  // or hold non-string entries. Guard before mapping: an unguarded `.map(expand)`
+  // threw a TypeError that broke GET /git/repos in the default whole-machine mode
+  // — a single typo in config.json taking out the repo picker for the machine.
+  const raw = fromEnv.length ? fromEnv : config.repoDirs ?? [];
+  const dirs = Array.isArray(raw) ? raw.filter((d): d is string => typeof d === "string") : [];
   return dirs.map(expand);
 }
