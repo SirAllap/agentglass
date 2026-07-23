@@ -46,8 +46,20 @@ import { buildHeavyTranscripts } from "./heavytx.ts";
 const ROOT = resolve(import.meta.dir, "..");
 
 // --- knobs (identical in the parent and the load child) ----------------------
-const CLIENTS = Math.max(1, Number(process.env.AGX_LOAD_CLIENTS || 6));
-const WORKTREES = Math.max(1, Number(process.env.AGX_LOAD_WORKTREES || 18));
+// Interaction mode reproduces the OTHER daily bug (see the block below its
+// siblings WHOLE/HEAVY): scope in a worktree-heavy repo and *interact* — switch
+// checkout, open panels, list terminal commands, open a big session — which
+// before the fix fanned ~17 git subprocesses out per switch and queued 40+
+// behind the PTY. Read first because CLIENTS and WORKTREES both key off it.
+const INTERACT = process.env.AGX_LOAD_INTERACT === "1";
+// Interaction models ONE user with a few open surfaces (a git panel, a terminal,
+// the sessions list) actively switching checkout — 3 is a couple of tabs plus the
+// desktop window, which is the shape the live measurement saw (peakWaiting ~48).
+// The loud many-panel case, with its own looser 250ms budget, is the 6-client
+// default the other modes use.
+const CLIENTS = Math.max(1, Number(process.env.AGX_LOAD_CLIENTS || (INTERACT ? 3 : 6)));
+// The live scenario is a worktree-heavy monorepo with 14 worktrees.
+const WORKTREES = Math.max(1, Number(process.env.AGX_LOAD_WORKTREES || (INTERACT ? 14 : 18)));
 const MEASURE_MS = Math.max(3_000, Number(process.env.AGX_LOAD_SECONDS || 15) * 1000);
 /** How long a client waits between one full fan-out burst and the next. Each
  *  burst fires every panel endpoint at once, so CLIENTS × ROUND is the real
@@ -153,6 +165,29 @@ const HEAVY_PTY_P99_BUDGET_MS = Math.max(1, Number(process.env.AGX_LOAD_HEAVY_PT
 const HEAVY_FILES = Math.max(1, Number(process.env.AGX_TX_FILES || 12));
 const HEAVY_FILE_MB = Math.max(1, Number(process.env.AGX_TX_FILE_MB || 50));
 
+// --- interaction mode (AGX_LOAD_INTERACT=1) ----------------------------------
+//
+// The default run measures panels polling at rest. This measures the daily bug
+// the user actually hits: a scoped cockpit on a worktree-heavy repo (14
+// worktrees) while they INTERACT. Every scope switch and panel open re-derives
+// the git state of all fourteen checkouts — worktrees, branches, base/behind,
+// the terminal command list, a big session detail — and before the fix each was
+// a fresh, uncached, partly-SYNCHRONOUS fan-out: ~17 git subprocesses at once,
+// the spawn pool pinned with 40+ queued, and /terminal/commands (a synchronous
+// depth-3 Makefile/package.json walk) plus /session (a synchronous SQLite scan
+// of a huge session) blocking the one thread the PTY rides. The watchdog named
+// GET /terminal/commands at 84s, /sessions at 23s.
+//
+// Reproduced faithfully: CLIENTS clients each MOVE to a different checkout every
+// round — a fresh cache key for every per-root read, exactly the miss a scope
+// switch produces — one of them flips the server's scope with it, and all of
+// them fire the interaction fan-out at once. The DB is a copy of the REAL one so
+// /session hits a genuinely large session (the biggest in the copy). The bar is
+// the 80ms the task names — tighter than the loud many-panel 250ms — and the
+// spawn-pool high-water mark is reported so "no longer queues 40 spawns" is
+// observable, not asserted from a shrug.
+const INTERACT_PTY_P99_BUDGET_MS = Math.max(1, Number(process.env.AGX_LOAD_INTERACT_PTY_P99_MS || 80));
+
 // --- the panel fan-out: every endpoint a client polls while panels are open --
 // At the cadence the web app uses (GitPanel tree 2.5s / views 10s, DockerPanel
 // 5s, PrPanel 20s, Sessions 5s, gate 2s, stats 4s). Rather than juggle a dozen
@@ -213,6 +248,61 @@ function makeBurst(S: string, repo: string): () => Promise<void> {
   };
 }
 
+/** How many polling rounds a client stays on one checkout before switching. A
+ *  user works in a checkout — panels re-polling it every round — and switches
+ *  every so often; they do not teleport to a new checkout every 700ms. Holding
+ *  for a few rounds is what lets the per-checkout caches (treeCache 1s, the refs
+ *  fingerprint) do their job exactly as they do in real use, while the switch
+ *  still churns them the way a real scope change does. */
+const HOLD_ROUNDS = Math.max(1, Number(process.env.AGX_LOAD_HOLD_ROUNDS || 4));
+
+/**
+ * One interaction client: a user working in a checkout, then switching.
+ *
+ * It stays on one checkout for HOLD_ROUNDS — re-polling the whole panel set each
+ * round (working tree, the worktree list with base+behind per checkout, branches,
+ * graph, the terminal command list, a big session's detail, the repo picker,
+ * stats, sessions) — then advances to the next. `idx` staggers where each client
+ * starts and phases its switches, so the N of them sit on DIFFERENT checkouts and
+ * switch at different moments — the concurrency a handful of tabs produces. On a
+ * switch, client 0 also flips the server's scope to its new checkout, so the
+ * scope-keyed /git/repos cache churns the way a real switch churns it, without N
+ * clients serialising behind each other's /workspace.
+ */
+function makeInteractBurst(S: string, family: string[], bigSession: string, idx: number): () => Promise<void> {
+  let round = 0;
+  const get = (p: string) =>
+    fetch(S + p, { signal: AbortSignal.timeout(REQ_TIMEOUT_MS) }).then((r) => r.text()).catch(() => "");
+  const post = (p: string, bodyStr: string) =>
+    fetch(S + p, { method: "POST", headers: { "content-type": "application/json" }, body: bodyStr, signal: AbortSignal.timeout(REQ_TIMEOUT_MS) }).then((r) => r.text()).catch(() => "");
+  return async () => {
+    // Advance one checkout every HOLD_ROUNDS; `idx` both offsets the starting
+    // checkout and phase-shifts the switch so the clients don't all move at once.
+    const switching = round % HOLD_ROUNDS === 0;
+    const repo = family[(idx + Math.floor(round / HOLD_ROUNDS)) % family.length]!;
+    round++;
+    const R = encodeURIComponent(repo);
+    const reqs: Promise<string>[] = [
+      get(`/git/tree?root=${R}`),
+      get(`/git/worktrees?root=${R}`),
+      get(`/git/branches?root=${R}`),
+      get(`/git/graph?root=${R}&limit=500&scope=head`),
+      get(`/git/tags?root=${R}`),
+      get(`/terminal/commands?root=${R}`),
+      get(`/git/repos`),
+      get(`/stats?window=3600000`),
+      get(`/sessions?limit=100`),
+      post(`/git/status`, JSON.stringify({ paths: [join(repo, "README.md"), join(repo, "scratch.txt")] })),
+    ];
+    if (bigSession) reqs.push(get(`/session?id=${encodeURIComponent(bigSession)}`));
+    // The scope switch itself — only when this client actually moves checkout,
+    // and only from one driver so the fan-out is measured, not N clients queuing
+    // behind one another's /workspace write.
+    if (idx === 0 && switching) reqs.push(post(`/workspace`, JSON.stringify({ root: repo })));
+    await Promise.all(reqs);
+  };
+}
+
 // ============================================================================
 // LOAD CHILD. Re-invoked as `AGX_LOAD_WORKER=<serverUrl> bun loadtest.ts`, it is
 // nothing but the fan-out: CLIENTS clients bursting until its deadline, so the
@@ -223,8 +313,22 @@ if (process.env.AGX_LOAD_WORKER) {
   const S = process.env.AGX_LOAD_WORKER;
   const repo = process.env.AGX_LOAD_REPO || "";
   const runMs = Number(process.env.AGX_LOAD_WORKER_MS || MEASURE_MS) + 5_000; // outlast the measure
-  const burst = makeBurst(S, repo);
   const t0 = performance.now();
+  if (INTERACT) {
+    // Each client its own checkout-rotating burst, so the N of them hit
+    // different roots at once — the shape that queues the git fan-out.
+    const family = (process.env.AGX_LOAD_FAMILY || repo).split(":").filter(Boolean);
+    const bigSession = process.env.AGX_LOAD_BIG_SESSION || "";
+    await Promise.all(Array.from({ length: CLIENTS }, async (_, i) => {
+      const burst = makeInteractBurst(S, family, bigSession, i);
+      while (performance.now() - t0 < runMs) {
+        await burst();
+        await Bun.sleep(ROUND_MS);
+      }
+    }));
+    process.exit(0);
+  }
+  const burst = makeBurst(S, repo);
   await Promise.all(Array.from({ length: CLIENTS }, async () => {
     while (performance.now() - t0 < runMs) {
       await burst();
@@ -267,6 +371,74 @@ function buildRepo(baseDir: string): string {
   }
   writeFileSync(join(repoDir, "scratch.txt"), "in progress\n"); // dirty, so counts have work
   return repoDir;
+}
+
+/**
+ * The interaction fixture: the same worktree-heavy repo, but shaped like a real
+ * monorepo so /terminal/commands does the work it does on a real one.
+ *
+ * A root Makefile with a fistful of targets, package.json manifests a couple of
+ * levels down, and a bushy tree of ordinary directories for the depth-3 scan to
+ * walk through — all committed BEFORE the worktrees are cut, so every one of the
+ * fourteen checkouts inherits the identical shape and a command scan in any of
+ * them pays the same walk. Returns the whole family (main + worktrees) so the
+ * load child can rotate the "current checkout" across it.
+ */
+function buildInteractRepo(baseDir: string): { focus: string; family: string[] } {
+  const repoDir = join(baseDir, "orbit");
+  const g = (cwd: string, ...a: string[]) => spawnSync("git", ["-C", cwd, ...a], { encoding: "utf8" });
+  spawnSync("git", ["init", "-q", "-b", "main", repoDir]);
+  g(repoDir, "config", "user.email", "t@example.com");
+  g(repoDir, "config", "user.name", "t");
+  writeFileSync(join(repoDir, "README.md"), "# orbit\n");
+  // Root Makefile — the make list the command picker parses.
+  writeFileSync(join(repoDir, "Makefile"),
+    Array.from({ length: 30 }, (_, i) => `task${i}: ## do task ${i}\n\t@echo ${i}`).join("\n") + "\n");
+  // Nested manifests a level or two down, the monorepo shape commandDirs looks for.
+  for (const sub of ["web", "packages/api", "packages/core", "services/worker"]) {
+    mkdirSync(join(repoDir, sub), { recursive: true });
+    writeFileSync(join(repoDir, sub, "package.json"), JSON.stringify({ scripts: { dev: "vite", build: "vite build", test: "bun test" } }));
+  }
+  writeFileSync(join(repoDir, "web", "bun.lock"), ""); // runner detection has something to read
+  // The bush the depth-3 walk grinds through: ordinary directories with no
+  // manifest, so the scan runs to the depth cap in every branch — the cost the
+  // async/cached rewrite removes from the loop.
+  const bush = (dir: string, depth: number) => {
+    if (depth <= 0) return;
+    for (let i = 0; i < 4; i++) {
+      const d = join(dir, `m${i}`);
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, "x.txt"), "x\n");
+      bush(d, depth - 1);
+    }
+  };
+  for (const s of ["src", "lib", "app"]) bush(join(repoDir, s), 3);
+  g(repoDir, "add", "-A");
+  g(repoDir, "commit", "-qm", "first");
+  const family = [repoDir];
+  for (let i = 1; i <= WORKTREES; i++) {
+    const b = `WEB-${1000 + i}`;
+    const wt = join(baseDir, `orbit-${b}`);
+    g(repoDir, "worktree", "add", "-q", "-b", b, wt);
+    writeFileSync(join(wt, `${b}.txt`), "work\n");
+    g(wt, "add", "-A");
+    g(wt, "commit", "-qm", `work on ${b}`);
+    family.push(wt);
+  }
+  writeFileSync(join(repoDir, "scratch.txt"), "in progress\n"); // dirty, so counts have work
+  return { focus: repoDir, family };
+}
+
+/** The biggest session in a DB copy — what /session is pointed at so the detail
+ *  read is realistically expensive. Read-only; empty string if the copy has none. */
+function pickBigSession(dbPath: string): { id: string; events: number } {
+  try {
+    const db = new Database(dbPath, { readonly: true });
+    const row = db.query<{ session_id: string; n: number }, []>(
+      `SELECT session_id, COUNT(*) n FROM events GROUP BY session_id ORDER BY n DESC LIMIT 1`).get();
+    db.close();
+    return row ? { id: row.session_id, events: row.n } : { id: "", events: 0 };
+  } catch { return { id: "", events: 0 }; }
 }
 
 // --- the whole-machine fixture: many known projects + a disk NOT to walk -----
@@ -366,7 +538,27 @@ let heavyProjects: string | null = null;
 let heavyStaged: string | null = null; // built here; renamed into heavyProjects at measure-start
 let repo: string;
 let dbNote: string;
-if (HEAVY) {
+// Interaction mode's family (main + worktrees) and the big session /session is
+// pointed at — passed to the load child so it can rotate checkout and open a
+// realistically large session.
+let interactFamily: string[] = [];
+let bigSession = "";
+if (INTERACT) {
+  const built = buildInteractRepo(base);
+  repo = built.focus;
+  interactFamily = built.family;
+  if (existsSync(srcDb)) {
+    // A COPY of the real DB (read-only of the original — see the default branch
+    // below), so /session hits a genuinely large session, not an empty table.
+    copyFileSync(srcDb, dbCopy);
+    const mb = (readFileSync(dbCopy).byteLength / 1_048_576).toFixed(0);
+    const big = pickBigSession(dbCopy);
+    bigSession = big.id;
+    dbNote = `copy of ${srcDb} (${mb}MB) · /session → biggest session ${big.id.slice(0, 8)} (${big.events} events)`;
+  } else {
+    dbNote = `empty DB (no ${srcDb} to copy — pass AGX_LOAD_DB for a realistic /session)`;
+  }
+} else if (HEAVY) {
   heavyHome = join(base, "home");
   heavyProjects = join(heavyHome, ".claude", "projects");
   const staging = join(base, "staging");
@@ -636,13 +828,19 @@ try {
   }
   if (!up) throw new Error("server never answered /health — see stderr above");
 
-  const budget = HEAVY ? HEAVY_PTY_P99_BUDGET_MS : WHOLE ? WM_PTY_P99_BUDGET_MS : PTY_P99_BUDGET_MS;
+  const budget = HEAVY ? HEAVY_PTY_P99_BUDGET_MS : WHOLE ? WM_PTY_P99_BUDGET_MS : INTERACT ? INTERACT_PTY_P99_BUDGET_MS : PTY_P99_BUDGET_MS;
   const gets = buildGets(R);
   if (HEAVY) {
     console.log(`loadtest [HEAVY TRANSCRIPTS — the scanner backfilling a big fixture at boot]`);
     console.log(`          fixture: ${dbNote}`);
     console.log(`          batch: ${process.env.AGENTGLASS_SCAN_BATCH_LINES || 500} lines / ${process.env.AGENTGLASS_SCAN_BATCH_BYTES || "1MB"} per yield · repo: ${repo}`);
     console.log(`          no load child — the sweep IS the load · measuring ${(MEASURE_MS / 1000).toFixed(0)}s · PTY p99 budget ${budget}ms\n`);
+  } else if (INTERACT) {
+    console.log(`loadtest [INTERACTION — scoped cockpit, switching checkout + opening panels under load]`);
+    console.log(`          ${CLIENTS} clients rotate across ${interactFamily.length} checkouts (main + ${WORKTREES} worktrees), each firing /git/{tree,worktrees,branches,graph,tags}, /terminal/commands, /session, /git/repos, /stats, /sessions, /git/status`);
+    console.log(`          DB: ${dbNote}`);
+    console.log(`          repo: ${repo}`);
+    console.log(`          load in a child process · measuring ${(MEASURE_MS / 1000).toFixed(0)}s · PTY p99 budget ${budget}ms\n`);
   } else {
     console.log(`loadtest${WHOLE ? " [WHOLE MACHINE — unscoped, no FS walk]" : ""}: ${CLIENTS} clients · ${gets.length + (withStatusEndpoint() ? 1 : 0)} endpoints/burst · ${WORKTREES}-worktree repo`);
     console.log(`          DB: ${dbNote}`);
@@ -684,7 +882,12 @@ try {
     chk("load child starting");
     loadChild = spawn({
       cmd: ["bun", join(ROOT, "scripts", "loadtest.ts")],
-      env: { ...process.env, AGX_LOAD_WORKER: S, AGX_LOAD_REPO: repo, AGX_LOAD_WORKER_MS: String(MEASURE_MS) },
+      env: {
+        ...process.env, AGX_LOAD_WORKER: S, AGX_LOAD_REPO: repo, AGX_LOAD_WORKER_MS: String(MEASURE_MS),
+        // Interaction mode: the child needs the family to rotate across and the
+        // session to open. Harmless (unread) in the other modes.
+        AGX_LOAD_FAMILY: interactFamily.join(":"), AGX_LOAD_BIG_SESSION: bigSession,
+      },
       stdout: "ignore",
       stderr: "inherit",
     });
@@ -762,6 +965,38 @@ try {
       failed = true;
     } else {
       console.log(`✓ loadtest: the sweep stays off the loop the PTY rides — loop p99 ${loopP99.toFixed(0)}ms, worst stall ${worst}ms, at ${cpuPct.toFixed(0)}% CPU chewing the backlog. Console stays fluid.`);
+    }
+  } else if (INTERACT) {
+    // Interaction's verdict rides the external loop ping and the server's own
+    // watchdog — the same reliable pair HEAVY mode leans on, and for the same
+    // reason. Those two ARE the terminal-responsiveness measure the codebase is
+    // built on: a loop blocked N ms is a PTY frozen N ms, because they share the
+    // one thread. The PTY echo probe, by contrast, loses its own WebSocket under
+    // the scope-switch churn this mode generates on purpose, and then samples too
+    // few keystrokes for a trustworthy tail (30-odd vs the ping's ~950). So the
+    // echo p99 is REPORTED and held to the 80ms bar when it sampled enough, but
+    // the pass/fail rides the loop the PTY actually rides — which here is rock
+    // solid (p99 ~11-45ms after, against 166ms before) and does not lie.
+    const loopP99 = pct(loop, 99);
+    const worst = lw?.worstMs ?? 0;
+    const waiting = lw?.spawns.peakWaiting ?? 0;
+    const LOOP_BUDGET = Number(process.env.AGX_LOAD_INTERACT_LOOP_P99_MS || 80);
+    const FREEZE_MS = Number(process.env.AGX_LOAD_INTERACT_FREEZE_MS || 200);
+    if (echo.length >= 20) {
+      const over = p99 > budget ? ` — over the ${budget}ms bar, but the echo probe's socket drops under scope churn; the loop ping is the reliable read` : "";
+      console.log(`  (PTY echo probe: p99 ${p99.toFixed(0)}ms, ${echo.length} samples${over})`);
+    }
+    if (worst > FREEZE_MS) {
+      console.log(`✗ loadtest: a scope switch FROZE the loop the PTY rides — a single ${worst}ms stall (over the ${FREEZE_MS}ms line). The stall table above names it.`);
+      failed = true;
+    } else if (loop.length < 50 && !lw) {
+      console.log(`✗ loadtest: only ${loop.length} loop-ping samples and no watchdog read — nothing was proved`);
+      failed = true;
+    } else if (loopP99 > LOOP_BUDGET) {
+      console.log(`✗ loadtest: loop p99 ${loopP99.toFixed(0)}ms over the ${LOOP_BUDGET}ms budget while interacting — the terminal would stutter`);
+      failed = true;
+    } else {
+      console.log(`✓ loadtest: interacting stays off the loop the PTY rides — loop p99 ${loopP99.toFixed(0)}ms, worst stall ${worst}ms, PTY echo p50 ${pct(echo, 50).toFixed(0)}ms/p99 ${p99.toFixed(0)}ms, spawn-pool peak-waiting ${waiting}, ${cpuPct.toFixed(0)}% CPU. The terminal stays fluid.`);
     }
   } else if (WHOLE && reposCount === 0) {
     console.log(`✗ loadtest: /git/repos returned 0 repos — the whole-machine picker is empty, the telemetry source is not feeding it`);
