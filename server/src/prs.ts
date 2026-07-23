@@ -350,7 +350,13 @@ async function fetchList(repo: PrRepoId, filter: PrFilter): Promise<PrSummary[] 
   // a network blip holds the last good list while a genuine empty is allowed to
   // empty the panel. Collapsing both to [] is what made a merged PR linger.
   if (rows === null) return null;
-  return rows.map((r) => mapSummary(r, false));
+  // Newest-first, so the panel reads recent → old and the per-PR check probe in
+  // refreshChecks (which walks this order) fills the rows you actually watch
+  // first. `gh pr list` has no reliable `--sort`, and updatedAt is an ISO string
+  // that sorts lexically, so order it here — same idiom as branchMergeState below.
+  return rows
+    .map((r) => mapSummary(r, false))
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
 
 /**
