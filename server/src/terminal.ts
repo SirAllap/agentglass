@@ -15,14 +15,15 @@
 // socket close reaches the whole job tree, not just the shell. Gated by
 // AGENTGLASS_TERMINAL_DISABLED; cwd must be a real git dir; the CSRF/origin
 // guard is applied at the upgrade route.
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, renameSync, rmSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, mkdtempSync, writeFileSync, renameSync, rmSync, readdirSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
 import type { ProjectCommand, TerminalCommands } from "../../shared/types.ts";
-import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
+import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
-import { inScope } from "./config.ts";
+import { inScope, workspaceRoot } from "./config.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 export const TERMINAL_ENABLED = process.env.AGENTGLASS_TERMINAL_DISABLED !== "1";
@@ -168,24 +169,38 @@ function tmuxRunning(pid: number, depth = 0): boolean {
   return false;
 }
 
+/**
+ * Where a shell opens when the requested directory can't be used.
+ *
+ * Always inside scope: the scope root itself when the cockpit is scoped to one
+ * project (it is in scope by definition), otherwise the user's HOME, otherwise
+ * "/". So a scoped instance never lands a shell outside its project even on the
+ * fallback — it gives you the project's own root instead of refusing outright,
+ * and inScope keeps confining WHERE the shell may be, just not WHETHER you get one.
+ */
+function fallbackCwd(): string {
+  const scope = workspaceRoot();
+  for (const c of [scope, process.env.HOME, "/"]) {
+    if (!c || !inScope(c)) continue; // HOME is out of a scoped instance — skip to "/"
+    try { if (statSync(c).isDirectory()) return c; } catch { /* gone; try the next */ }
+  }
+  return "/";
+}
+
 /** WebSocket opened at /terminal/pty — spawn the shell and start pumping. */
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
   if (!TERMINAL_ENABLED) { ctl(ws, { t: "fatal", error: "terminal is disabled (AGENTGLASS_TERMINAL_DISABLED=1)" }); ws.close(1008, "disabled"); return; }
-  const cwd = safeAbs(d.root);
-  if (!cwd || !repoRootOf(cwd)) {
-    // repoRootOf runs `git rev-parse`, so with no git it fails for every path.
-    // Say which — "invalid directory" for a real bad root, but "git is not
-    // installed" when that is the actual cause, or the fix looks unrelated.
-    const cap = gitCapability();
-    ctl(ws, { t: "fatal", error: cap.available ? "invalid or non-repo directory" : (cap.reason || "git is not installed") });
-    ws.close(1008, "bad root"); return;
-  }
-  // A shell is the widest capability here — anything it can reach, it can
-  // change. An instance opened for one project must not hand one out anywhere
-  // else, or "open a project" narrows the view while leaving the blast radius
-  // machine-wide.
-  if (!inScope(cwd)) { ctl(ws, { t: "fatal", error: "outside the open project — open the parent folder to work across repos" }); ws.close(1008, "out of scope"); return; }
+  // A shell is the widest thing this app hands out, and a terminal that refuses
+  // to give you one is not a terminal — so it ALWAYS opens. The requested
+  // directory is used only when it is genuinely usable: a real repo, in scope.
+  // Anything else — not a repo, git not installed, a path that has since gone,
+  // out of scope — is not an error but a fallback to a directory that is in
+  // scope by construction (see fallbackCwd). The blast radius stays confined —
+  // an out-of-scope request lands in the scope root, never where it asked — it
+  // just no longer costs the user their shell.
+  const requested = safeAbs(d.root);
+  const cwd = requested && repoRootOf(requested) && inScope(requested) ? requested : fallbackCwd();
   if (sessions.size >= MAX_SESSIONS) { ctl(ws, { t: "fatal", error: `too many open terminals (max ${MAX_SESSIONS})` }); ws.close(1013, "busy"); return; }
 
   const cols = clampCols(d.cols) || 80;
@@ -670,10 +685,68 @@ export function scriptCommands(root: string, dirs: CommandDir[] = commandDirs(ro
   return out.slice(0, CMD_MAX_TOTAL);
 }
 
-/** Everything runnable in a repo, for the terminal's command list. */
-export function projectCommands(root: unknown): TerminalCommands {
+/**
+ * Awaited twin of {@link commandDirs}.
+ *
+ * The walk is the expensive half — a monorepo with no manifest in a subtree
+ * makes it descend to the depth cap in every branch — and left synchronous it
+ * was a readdirSync-per-directory burst holding the one thread the PTY rides.
+ * Under interaction load the watchdog named GET /terminal/commands at 84s: it
+ * was queued behind the git fan-out and then blocked the loop when it ran. Each
+ * `await readdir` yields, so a keystroke lands between directories rather than
+ * after the whole walk.
+ */
+async function commandDirsAsync(root: string): Promise<CommandDir[]> {
+  const found: CommandDir[] = [];
+  const visit = async (dir: string, rel: string, left: number): Promise<void> => {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    const names = new Set(entries.map((e) => e.name));
+    if (rel && names.has(".git")) return; // a nested checkout is its own project
+    const makefile = ["GNUmakefile", "makefile", "Makefile"].find((n) => names.has(n)) ?? null;
+    const pkg = names.has("package.json");
+    if (makefile || pkg) found.push({ rel, makefile, pkg });
+    if (found.length >= CMD_MAX_DIRS || left <= 0) return;
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue; // real dirs only — symlinks loop or escape
+      if (ent.name.startsWith(".") || CMD_SKIP.has(ent.name)) continue;
+      const childRel = rel ? `${rel}/${ent.name}` : ent.name;
+      if (!shellSafeRel(childRel)) continue;
+      await visit(join(dir, ent.name), childRel, left - 1);
+      if (found.length >= CMD_MAX_DIRS) return;
+    }
+  };
+  await visit(root, "", CMD_SCAN_DEPTH);
+  return found;
+}
+
+/**
+ * The command list per repo root, held briefly.
+ *
+ * A Makefile or package.json is edited far less often than the picker asks for
+ * it — a scope switch, every new terminal, the ⚙ menu — and the answer is a
+ * depth-3 walk plus a handful of file reads. So it is computed once and reused:
+ * under the interaction load the same root was asked on every burst, and without
+ * this each one re-walked the tree on the loop the PTY rides. Short enough that
+ * an edited Makefile shows up almost at once. (The web layer has its own 30s
+ * cache; this is the server-side half the fan-out was missing.)
+ */
+const CMD_CACHE_TTL_MS = 30_000;
+const cmdCache = new Map<string, { at: number; data: TerminalCommands }>();
+
+/** Everything runnable in a repo, for the terminal's command list. Awaited and
+ *  cached — see commandDirsAsync and cmdCache for why. */
+export async function projectCommands(root: unknown): Promise<TerminalCommands> {
   const cwd = safeAbs(root);
-  if (!cwd || !repoRootOf(cwd)) return { enabled: TERMINAL_ENABLED, make: [], scripts: [] };
-  const dirs = commandDirs(cwd); // one walk, shared by both lists
-  return { enabled: TERMINAL_ENABLED, make: makeCommands(cwd, dirs), scripts: scriptCommands(cwd, dirs) };
+  // repoRootOfAsync, not repoRootOf: polled on every scope switch and new
+  // terminal, so its `git rev-parse` queues through the shared pool rather than
+  // blocking the loop between keystrokes.
+  if (!cwd || !(await repoRootOfAsync(cwd))) return { enabled: TERMINAL_ENABLED, make: [], scripts: [] };
+  const hit = cmdCache.get(cwd);
+  if (hit && Date.now() - hit.at < CMD_CACHE_TTL_MS) return hit.data;
+  const dirs = await commandDirsAsync(cwd); // one walk, shared by both lists, yielding between dirs
+  const data: TerminalCommands = { enabled: TERMINAL_ENABLED, make: makeCommands(cwd, dirs), scripts: scriptCommands(cwd, dirs) };
+  if (cmdCache.size > 40) cmdCache.clear();
+  cmdCache.set(cwd, { at: Date.now(), data });
+  return data;
 }
