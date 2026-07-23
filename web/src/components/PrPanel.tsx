@@ -337,6 +337,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const [root, setRoot] = useState("");
   const [repo, setRepo] = useState<PrRepoId | null>(null);
   const [filter, setFilter] = useState<Filter>("mine");
+  // A per-tab search box. Cleared when the scope changes so each tab (mine /
+  // review / all) starts fresh — "all" can be hundreds of rows, and finding one
+  // by number, title or author beats scrolling.
+  const [query, setQuery] = useState("");
   const [prs, setPrs] = useState<PrSummary[]>([]);
   const [counts, setCounts] = useState<Partial<Record<Filter, number>>>({});
   const [listState, setListState] = useState<{ fetchedAt: number; loading: boolean; checksPending?: boolean; error?: string; needsAuth?: boolean }>({ fetchedAt: 0, loading: false });
@@ -489,6 +493,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (!root || selected == null) { setDetail(null); loadedFor.current = null; return; }
     if (loadedFor.current === selected) return; // same pull request, already here
     loadedFor.current = selected;
+    // Clear the previous PR's detail so the pane shows "loading #N" instead of
+    // the last PR's data while the new one is in flight. Without this a PR→PR
+    // jump silently keeps the old content on screen and reads as a dead click.
+    // (The poll-refresh path in loadDetail deliberately keeps the current detail
+    // on a failed refresh; that path does not run this effect.)
+    setDetail(null); setDetailErr("");
     setDiff(""); setSelFile(null); setSelCommit(null); setCommitText("");
     loadDetail(selected);
   }, [root, selected, loadDetail]);
@@ -498,6 +508,18 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     const req = ++diffReq.current; // a later selection's diff must win over a slow earlier one
     api.prDiff(root, detail.number).then((r) => { if (req === diffReq.current) setDiff(r.ok ? (r.text || "") : ""); }).catch(() => {});
   }, [tab, detail, diff, root]);
+
+  // Filter the current scope's rows by the search box: PR number (with or
+  // without a leading #), title, or author login. Memoized so a 400-row "all"
+  // list does not re-scan on every keystroke or re-render.
+  const visiblePrs = useMemo(() => {
+    const q = query.trim().toLowerCase().replace(/^#/, "");
+    if (!q) return prs;
+    return prs.filter((p) =>
+      String(p.number).includes(q) ||
+      p.title.toLowerCase().includes(q) ||
+      p.author.toLowerCase().includes(q));
+  }, [prs, query]);
 
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const byPath = useMemo(() => {
@@ -672,7 +694,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             {FILTERS.map((f) => {
               const n = counts[f.id];
               return (
-                <button key={f.id} onClick={() => setFilter(f.id)} title={f.hint}
+                <button key={f.id} onClick={() => { setFilter(f.id); setQuery(""); }} title={f.hint}
                   className="text-[10px] px-2 py-0.5 rounded-full"
                   style={{
                     color: filter === f.id ? "var(--bg)" : "var(--text2)",
@@ -685,6 +707,19 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
               );
             })}
           </div>
+          {repo && prs.length > 0 && (
+            <div className="px-2 py-1.5 border-b shrink-0 flex items-center gap-2" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="filter by #, title or author…"
+                className="flex-1 text-[10px] px-2 py-1 rounded bg-transparent min-w-0"
+                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }} />
+              {query.trim() && (
+                <span className="text-[9px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{visiblePrs.length} of {prs.length}</span>
+              )}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto min-h-0 agx-scroll">
             {listState.needsAuth ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
@@ -699,7 +734,9 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                   {filter === "mine" ? "no open pull requests of yours" : filter === "review" ? "nothing waiting on your review" : "no open pull requests"}
                 </div>
               )
-            ) : prs.map((p) => (
+            ) : visiblePrs.length === 0 ? (
+              <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>no pull requests match “{query.trim()}”</div>
+            ) : visiblePrs.map((p) => (
               <PrRow key={p.number} p={p} active={p.number === selected} onSelect={() => { setSelected(p.number); setTab("overview"); }} />
             ))}
           </div>
