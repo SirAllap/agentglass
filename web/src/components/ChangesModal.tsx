@@ -135,10 +135,16 @@ const Code = memo(function Code({ text, segs, kind }: { text: string; segs?: Seg
 
 // --- unified diff, with old|new gutters, uncapped -----------------------------
 type URow = { oldN: number | null; newN: number | null; text: string; kind: "ctx" | "del" | "add"; segs?: Seg[] | null };
-function unifiedRows(h: DiffHunk): URow[] {
+export function unifiedRows(h: DiffHunk): URow[] {
   const rows: URow[] = [];
   let oldN = h.oldStart, newN = h.newStart;
   for (const line of h.lines) {
+    // "\ No newline at end of file" is metadata about the file, not a line in
+    // it. Every other diff parser here drops it (prBody.parseUnifiedDiff,
+    // server gitwork.parseDiff); a hunk carrying it — the DiffHunk contract
+    // admits `\`, and apply-hunk validates it as a legal line — must not paint
+    // it as a phantom context row that also nudges every gutter number below.
+    if (line.startsWith("\\")) continue;
     const kind = kindOf(line[0]);
     const text = line.slice(1);
     if (kind === "add") rows.push({ oldN: null, newN: newN++, text, kind });
@@ -184,7 +190,7 @@ type Cell = { num: number; text: string; kind: "ctx" | "del" | "add"; segs?: Seg
 
 /** Turn a unified hunk into paired old|new rows: removals sit left, additions
  *  right, and a change block zips its −/+ lines together row by row. */
-function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
+export function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
   const rows: { l: Cell | null; r: Cell | null }[] = [];
   let oldN = h.oldStart, newN = h.newStart;
   let dels: Cell[] = [], adds: Cell[] = [];
@@ -197,6 +203,7 @@ function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
     dels = []; adds = [];
   };
   for (const line of h.lines) {
+    if (line.startsWith("\\")) continue; // no-newline marker, not a line — see unifiedRows
     const tag = line[0], text = line.slice(1);
     if (tag === "-") dels.push({ num: oldN++, text, kind: "del" });
     else if (tag === "+") adds.push({ num: newN++, text, kind: "add" });

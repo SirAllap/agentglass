@@ -79,6 +79,19 @@ const announced = new Set<string>();
 let seeded = false;
 
 /**
+ * Gates the user has just decided on, dropped from the snapshot optimistically,
+ * whose removal the server has not yet confirmed.
+ *
+ * The poll is ~2s behind the click, so the reply already in flight when Approve
+ * was pressed still lists the gate. Republishing that list verbatim would flick
+ * the card the user just answered straight back onto the screen — a decision
+ * that reads as not having registered. An id stays here until the server also
+ * stops listing it; that absence is the confirmation, and it is what keeps a
+ * genuinely re-issued hold from being suppressed forever.
+ */
+const forgotten = new Set<string>();
+
+/**
  * Raise a new hold on the notch, and tell anyone watching for arrivals.
  *
  * The note is written here rather than by the notch so that it happens whether
@@ -123,8 +136,17 @@ export function ingestGates(gates: PendingGate[]) {
   const live = new Set(gates.map((g) => g.id));
   for (const id of announced) if (!live.has(id)) announced.delete(id);
 
-  if (sameIds(snapshot, gates)) return;
-  snapshot = gates;
+  // Reconcile the optimistic forgets: an id the server has finally stopped
+  // listing is confirmed gone and stops being suppressed; one it still lists
+  // (the reply overlapped the decision) is filtered out of the published list
+  // so a resolved card cannot reappear. Announce logic above still runs off the
+  // raw `gates` — a forgotten gate is already in `announced`, so it is never
+  // re-announced either way.
+  for (const id of forgotten) if (!live.has(id)) forgotten.delete(id);
+  const next = forgotten.size ? gates.filter((g) => !forgotten.has(g.id)) : gates;
+
+  if (sameIds(snapshot, next)) return;
+  snapshot = next;
   changed();
 }
 
@@ -137,6 +159,10 @@ export function ingestGates(gates: PendingGate[]) {
  * cannot be re-announced by a poll that overlaps it.
  */
 export function forgetGate(id: string) {
+  // Suppress it from the next ingest too, not just this snapshot: the poll that
+  // overlaps the decision still lists it, and ingestGates would otherwise
+  // republish it. Cleared once the server confirms it gone — see `forgotten`.
+  forgotten.add(id);
   const next = snapshot.filter((g) => g.id !== id);
   if (next.length === snapshot.length) return;
   snapshot = next;
@@ -155,6 +181,7 @@ export function forgetGate(id: string) {
 export function __resetGateStore(): void {
   snapshot = [];
   announced.clear();
+  forgotten.clear();
   seeded = false;
 }
 
