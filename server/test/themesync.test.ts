@@ -97,3 +97,38 @@ test("the opt-in snippets point at the files we actually write", () => {
   // missing file.
   expect(SNIPPETS.tmux).toContain("-q");
 });
+
+// themeName arrives from the /theme/sync request body and is written into two
+// files that then get executed — a Lua module and a tmux conf. It lands in a
+// comment, so the one thing that can turn it into code is a newline ending that
+// comment; a quote or a `$()` sitting on the comment line is inert text. The
+// property that matters is therefore that nothing the name carries can reach a
+// *second* line, and that the name never contributes anything outside the
+// allowlist.
+const INJECT = 'Evil"\n:!rm -rf ~\nvim.fn.system("id")\n#{ run-shell "id" }';
+const HEADER_OK = /^[A-Za-z0-9 _-]*$/;
+
+test("a themeName cannot break out of the nvim comment into Lua", () => {
+  const out = nvimTheme(normalizeVars(VARS), INJECT);
+  const headers = out.split("\n").filter((l) => l.startsWith("-- Theme:"));
+  expect(headers).toHaveLength(1); // no extra lines forged from the payload
+  expect(HEADER_OK.test(headers[0]!.slice("-- Theme:".length).trim())).toBe(true);
+  // The sequences that need a stripped char to be dangerous never appear intact.
+  expect(out).not.toContain(":!rm");
+  expect(out).not.toContain("vim.fn.system");
+});
+
+test("a themeName cannot break out of the tmux comment into a command", () => {
+  const out = tmuxTheme(normalizeVars(VARS), INJECT);
+  const headers = out.split("\n").filter((l) => l.startsWith("# Theme:"));
+  expect(headers).toHaveLength(1);
+  expect(HEADER_OK.test(headers[0]!.slice("# Theme:".length).trim())).toBe(true);
+  expect(out).not.toContain(":!rm");
+  expect(out).not.toContain("#{ run-shell");
+});
+
+test("an ordinary theme name with spaces is preserved", () => {
+  // The allowlist must not be so tight that real names get mangled.
+  expect(nvimTheme(normalizeVars(VARS), "Midnight Purple")).toContain("-- Theme: Midnight Purple");
+  expect(tmuxTheme(normalizeVars(VARS), "Rosé Pine")).toContain("# Theme: Ros Pine");
+});

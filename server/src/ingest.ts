@@ -62,6 +62,15 @@ function num(v: unknown): number {
   return Math.min(n, MAX_TOKENS);
 }
 
+// The per-turn clamp above bounds one entry, but a transcript carries as many
+// entries as the sender cares to include — a forged one with thousands of turns
+// each at the per-turn max sums to a multi-billion-token, six-figure-dollar row
+// that skews every cost chart the clamp exists to protect. A whole session has a
+// real ceiling too, just a larger one: even a marathon run is on the order of a
+// few hundred million cache-read tokens, so a billion is comfortably above any
+// genuine session and still finite. Anything past it is corrupt or forged.
+const MAX_SESSION_TOKENS = 1_000_000_000;
+
 // Strong shell-failure markers — chosen to rarely appear in successful output
 // (so a command that merely greps for "error" isn't flagged).
 const FAIL_MARKERS = [
@@ -131,22 +140,57 @@ export function sumTranscriptTokens(chat: unknown[] | undefined): TokenUsage {
       acc.cache_read_tokens += u.cache_read_tokens ?? 0;
     }
   }
+  // A ceiling on the accumulated total, not just on each entry: without it the
+  // per-entry clamp is trivially defeated by sending more entries.
+  acc.input_tokens = Math.min(acc.input_tokens, MAX_SESSION_TOKENS);
+  acc.output_tokens = Math.min(acc.output_tokens, MAX_SESSION_TOKENS);
+  acc.cache_creation_tokens = Math.min(acc.cache_creation_tokens, MAX_SESSION_TOKENS);
+  acc.cache_read_tokens = Math.min(acc.cache_read_tokens, MAX_SESSION_TOKENS);
   return acc;
 }
 
 const MAX_FIELD = 64 * 1024;
+// Deep enough for the nested shapes hooks actually send (tool_input.content,
+// tool_response.stdout, a chat turn's content blocks) without letting a
+// pathological payload recurse without end.
+const MAX_CAP_DEPTH = 8;
 function cap(v: unknown): unknown {
   return typeof v === "string" && v.length > MAX_FIELD ? v.slice(0, MAX_FIELD) + "…[truncated]" : v;
 }
-/** Bound the large free-text fields in a payload in place. */
-function capPayload(p: Record<string, unknown>): void {
-  for (const k of ["prompt", "message", "last_assistant_message", "error", "error_text", "stderr", "stdout"]) {
-    if (k in p) p[k] = cap(p[k]);
+/** Same bound, typed, for the top-level string columns that never pass through
+ *  capPayload — a 32MB source_app or summary is a 32MB row and frame too. */
+function capField<T extends string | null>(v: T): T {
+  return cap(v) as T;
+}
+/**
+ * Bound EVERY string anywhere in the payload, in place — not just a known
+ * allowlist of keys.
+ *
+ * A single field arriving over the unauthenticated /ingest is untrusted and
+ * unbounded, and the old allowlist only truncated the handful of keys we
+ * happened to name: a 32MB blob under any *other* key (or nested one level
+ * deeper than the two hand-unwrapped objects) sailed through and became a 32MB
+ * DB row, a 32MB FTS entry and a 32MB frame to every dashboard. The bound has to
+ * be structural — every string, wherever it sits — rather than a list of the
+ * fields we thought of.
+ */
+function capPayload(p: Record<string, unknown>, depth = 0): void {
+  for (const k in p) {
+    const v = p[k];
+    if (typeof v === "string") p[k] = cap(v);
+    else if (depth < MAX_CAP_DEPTH && v && typeof v === "object") capDeep(v, depth + 1);
   }
-  const ti = p.tool_input as Record<string, unknown> | undefined;
-  if (ti && typeof ti === "object") for (const k of ["content", "old_string", "new_string", "command"]) if (k in ti) ti[k] = cap(ti[k]);
-  const tr = p.tool_response as Record<string, unknown> | undefined;
-  if (tr && typeof tr === "object") for (const k of ["content", "stdout", "stderr"]) if (k in tr) tr[k] = cap(tr[k]);
+}
+function capDeep(v: object, depth: number): void {
+  if (Array.isArray(v)) {
+    for (let i = 0; i < v.length; i++) {
+      const el = v[i];
+      if (typeof el === "string") v[i] = cap(el);
+      else if (depth < MAX_CAP_DEPTH && el && typeof el === "object") capDeep(el, depth + 1);
+    }
+  } else {
+    capPayload(v as Record<string, unknown>, depth);
+  }
 }
 
 export function normalize(body: IngestBody): NormalizedEvent {
@@ -181,20 +225,25 @@ export function normalize(body: IngestBody): NormalizedEvent {
   // can inflate before any of that happens.
   capPayload(payload);
 
+  // Every string that becomes its own column is bounded too: these do NOT pass
+  // through capPayload, so an unbounded top-level `summary` (the field this most
+  // obviously affected) — or source_app, session_id, a tool name — was a full
+  // uncapped row and websocket frame, sidestepping the very bound the payload
+  // fields get. error_text is already clipped to 2000 in detectError.
   return {
-    source_app: String(body.source_app ?? "unknown"),
-    session_id: String(body.session_id ?? "unknown"),
-    hook_event_type: type,
-    tool_name,
-    tool_use_id,
-    agent_id,
-    agent_type,
-    model_name,
+    source_app: capField(String(body.source_app ?? "unknown")),
+    session_id: capField(String(body.session_id ?? "unknown")),
+    hook_event_type: capField(type),
+    tool_name: capField(tool_name),
+    tool_use_id: capField(tool_use_id),
+    agent_id: capField(agent_id),
+    agent_type: capField(agent_type),
+    model_name: capField(model_name),
     is_error,
     error_text,
     usage,
     usage_is_cumulative: !hasPayloadUsage,
-    summary: str(body.summary),
+    summary: capField(str(body.summary)),
     timestamp: typeof body.timestamp === "number" ? body.timestamp : Date.now(),
     payload,
     chat,

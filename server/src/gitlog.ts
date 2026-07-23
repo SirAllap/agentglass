@@ -55,7 +55,13 @@ export function isWrite(args: string[]): boolean {
   return WRITE_COMMANDS.has(sub);
 }
 
-const CAP = Number(process.env.AGENTGLASS_GITLOG_SIZE ?? 400);
+// A non-numeric AGENTGLASS_GITLOG_SIZE (a typo, an empty string) makes
+// Number(...) NaN, and NaN is poison here: `NaN <= 0` is false so the disable
+// guard never fires, and `ring.length > NaN` is false so the trim never fires —
+// the activity log then grows without any bound at all, the opposite of what the
+// variable is for. Fall back to the default when it isn't a finite number.
+const rawCap = Number(process.env.AGENTGLASS_GITLOG_SIZE ?? 400);
+const CAP = Number.isFinite(rawCap) ? rawCap : 400;
 const ring: GitLogEntry[] = [];
 let seq = 0;
 
@@ -72,9 +78,21 @@ export function record(cwd: string, args: string[], exitCode: number, ms: number
   if (ring.length > CAP) ring.splice(0, ring.length - CAP);
 }
 
-/** Entries newer than `since` (an id), oldest first. The client passes back the
- *  last id it saw, so a poll returns only what it hasn't rendered. */
+/** Entries newer than `since` (an id). The client passes back the last id it
+ *  saw and appends what comes back, so a poll returns only what it hasn't
+ *  rendered. */
 export function recent(since = 0, limit = 200): GitLogEntry[] {
-  const out = since > 0 ? ring.filter((e) => e.id > since) : ring;
-  return out.slice(-Math.max(1, Math.min(1000, limit | 0)));
+  const n = Math.max(1, Math.min(1000, limit | 0));
+  if (since > 0) {
+    // The NEXT entries after `since`, oldest first — not the newest page. The
+    // client advances `since` to the last id it receives, so returning the
+    // newest `limit` would skip everything between `since` and that page and
+    // lose it for good the moment `since` jumps past it (a burst that records
+    // more than `limit` lines between two 1s polls does exactly that). Oldest
+    // first with no gap: each poll picks up precisely where the last left off.
+    return ring.filter((e) => e.id > since).slice(0, n);
+  }
+  // First load (no cursor yet): the most recent activity, newest page of the
+  // ring — nobody opening the panel wants to start at the oldest line still held.
+  return ring.slice(-n);
 }

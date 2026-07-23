@@ -427,6 +427,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [capturingChord]);
+
+  // Closing the modal mid-capture has to drop the capture. This component stays
+  // mounted with `open` merely toggled (Portal/AnimatePresence own the exit), so
+  // neither capture effect above unmounts on close, and while `capturing` /
+  // `capturingChord` stay set their window-level, capture-phase keydown listener
+  // stays attached to a dialog that is no longer on screen — swallowing the next
+  // keystroke anywhere in the app into a rebind nobody is doing. Clearing the
+  // capture state re-runs those effects, and their cleanup is where the listener
+  // actually comes off.
+  useEffect(() => { if (!open) { setCapturing(null); setCapturingChord(null); setKeyError(null); } }, [open]);
+
   const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
   const [quiet, setQuietState] = useState(() => notifyQuiet());
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);

@@ -216,6 +216,22 @@ export async function startUpdate(): Promise<{ ok: boolean; error?: string; log?
       AGENTGLASS_UPDATE_SRC: SRC,
     },
   });
+  // The lock stops a second update racing the first. But the script is detached
+  // and can fail — a compile error, a dropped network, a bad tag — without ever
+  // replacing this process, and then `running` stayed true for the life of the
+  // session and the update button was dead with nothing behind it. Clear it
+  // whenever the child ends (on success the script has already relaunched us, so
+  // this only matters when it didn't) or fails to start, with a timeout as a
+  // backstop for the double-fork case where no exit event ever reaches us.
+  const clearLock = () => { running = false; };
+  // bun-types' node:child_process ChildProcess omits the EventEmitter surface,
+  // but the runtime object has it (Bun emits 'exit'/'error' like Node) — reach
+  // the listeners through a narrow cast rather than drop the recovery.
+  const ev = child as unknown as { once(event: string, cb: () => void): void };
+  ev.once("exit", clearLock);
+  ev.once("error", clearLock);
+  const backstop = setTimeout(clearLock, 15 * 60_000);
+  backstop.unref?.();
   child.unref();
   return { ok: true, log: LOG };
 }

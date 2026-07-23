@@ -403,26 +403,34 @@ export function DockerView({ active }: { active: boolean }) {
   // Cleared on selection change so a tab never shows the previous container's
   // environment for the moment before the new one arrives — with two similar
   // stacks that is indistinguishable from the real thing.
-  useEffect(() => { setEnv(null); setConfig(null); setTop(null); setDetailErr(null); }, [selId]);
+  //
+  // Keyed on the container actually on screen (`selected`, which falls back to
+  // the first row when nothing is clicked), NOT the raw click state `selId`:
+  // the detail pane renders off `selected`, so keying the fetch on `selId` left
+  // the first container's header showing with an empty env — nothing was ever
+  // requested for it because no id had been clicked — and, once a selection
+  // vanished from the list, fetched one container's env under another's name.
+  useEffect(() => { setEnv(null); setConfig(null); setTop(null); setDetailErr(null); }, [selected?.id]);
   useEffect(() => {
-    if (!selId) return;
+    const id = selected?.id;
+    if (!id) return;
     let live = true;
     if (tab === "env" || tab === "config") {
       if (env && config) return;
-      void api.dockerInspect(selId).then((r) => {
+      void api.dockerInspect(id).then((r) => {
         if (!live) return;
         if (!r.ok) { setDetailErr(r.error || "docker inspect failed"); return; }
         setEnv(r.env); setConfig(r.config); setDetailErr(null);
       });
     } else if (tab === "top") {
-      void api.dockerTop(selId).then((r) => {
+      void api.dockerTop(id).then((r) => {
         if (!live) return;
         if (!r.ok) { setDetailErr(r.error || "not running"); setTop(null); return; }
         setTop(r.text); setDetailErr(null);
       });
     }
     return () => { live = false; };
-  }, [selId, tab, env, config]);
+  }, [selected?.id, tab, env, config]);
 
   /**
    * The same verb across a whole compose project.

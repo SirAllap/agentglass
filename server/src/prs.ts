@@ -337,7 +337,7 @@ function mapSummary(p: any, withChecks: boolean): PrSummary {
   };
 }
 
-async function fetchList(repo: PrRepoId, filter: PrFilter): Promise<PrSummary[]> {
+async function fetchList(repo: PrRepoId, filter: PrFilter): Promise<PrSummary[] | null> {
   const args = ["pr", "list", "-R", repo.nameWithOwner, "--state", "open", "--limit", "50", "--json", LIST_FIELDS_FAST];
   // `gh pr list --search` rather than `gh search prs`: the latter is a global
   // search that would need its own repo filter anyway, and it rate-limits
@@ -345,7 +345,12 @@ async function fetchList(repo: PrRepoId, filter: PrFilter): Promise<PrSummary[]>
   if (filter === "review") args.push("--search", "review-requested:@me");
   if (filter === "mine") args.push("--author", "@me");
   const rows = await ghJson<any[]>(args);
-  return (rows || []).map((r) => mapSummary(r, false));
+  // null (gh failed / unparsable) and [] (gh answered, no matching PRs) are
+  // different facts and the caller has to tell them apart: keep null distinct so
+  // a network blip holds the last good list while a genuine empty is allowed to
+  // empty the panel. Collapsing both to [] is what made a merged PR linger.
+  if (rows === null) return null;
+  return rows.map((r) => mapSummary(r, false));
 }
 
 /**
@@ -434,10 +439,14 @@ function refreshList(repo: PrRepoId, filter: PrFilter): void {
       // decisions. Enough to choose a pull request, and it is what the panel
       // is blocked on.
       const rows = await fetchList(repo, filter);
-      if (!rows.length && prev?.prs.length) {
-        // An empty answer after a good one is far more likely to be a hiccup
-        // than a repository that lost every pull request. Keep what we had.
-        listCache.set(key, keep({ loading: false, checksPending: false }));
+      if (rows === null) {
+        // gh itself failed (a network blip, a rate-limit) — far more likely than
+        // a repository that lost every pull request, so keep whatever we had. But
+        // DO advance `at`: leaving it stale re-runs gh on every single poll and
+        // lets the "updated N ago" age climb without bound. A genuinely empty
+        // answer is NOT this branch — `rows` is [] there, not null — so a PR that
+        // merged or closed outside actually clears instead of lingering for ever.
+        listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false }));
         return;
       }
       // Carry over any check states already known, so switching back to a tab
