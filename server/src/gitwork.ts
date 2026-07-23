@@ -480,14 +480,13 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     // worktrees, because they ARE the project on other branches; a container
     // folder brings every repo found from that folder inward, and nothing else.
     const found = self
-      // `worktreeList`, not `worktrees`: this needs the paths and nothing else,
-      // and the richer call computes a base branch and a `rev-list --count`
-      // per checkout — synchronously, on the server's only thread. On a repo
-      // with 17 worktrees that is 34 blocking subprocesses, ~200ms each, on
-      // the most frequently requested endpoint in the app. Measured: it froze
-      // the whole UI — the terminal's PTY socket included — for up to 2.8s at
-      // a time, several times a minute, while the user was typing.
-      ? [self, ...worktreeList(self).map((w) => w.path).filter((p) => p && p !== self)]
+      // `worktreeListAsync`, not `worktrees`: this needs the paths and nothing
+      // else, and the richer call computes a base branch and a `rev-list --count`
+      // per checkout — which on a repo with 17 worktrees is 34 subprocesses, on
+      // the most frequently requested endpoint in the app. Async, so even the one
+      // `worktree list` it does need is off the thread the terminal rides rather
+      // than a synchronous spawn between keystrokes.
+      ? [self, ...(await worktreeListAsync(self)).map((w) => w.path).filter((p) => p && p !== self)]
       : reposUnder(only1);
     const refs = await Promise.all(found.map((r) => repoRef(r)));
     const scoped = refs.filter((r): r is GitRepoRef => !!r);
@@ -857,18 +856,56 @@ const validHash = (h: string) => typeof h === "string" && /^[0-9a-fA-F]{4,40}$/.
  * neither `main` nor `master`. It's only a local symref though, so it can be
  * missing on a clone made with `--single-branch`; the fallbacks cover that.
  */
-// Awaited: reached from branchInfo (/git/tree) and from baseOf, and baseOf is
-// asked once per checkout by the worktrees sweep — so left synchronous this was
-// up to five spawns × seventeen worktrees blocking the loop on a single poll.
-// The lookups are sequential by nature (first match wins), but none holds the
-// thread now.
-export async function defaultBranch(root: string): Promise<string | null> {
+/**
+ * The repo's trunk, cached hard AND single-flighted.
+ *
+ * The lookup is up to five sequential spawns (first match wins), and it moves
+ * only when `origin/HEAD` is repointed or `main`/`master` is created — never on
+ * a poll. Yet baseOf asks it once per checkout, so `worktreesWithState` on a
+ * seventeen-worktree repo re-resolved the SAME trunk seventeen times a poll: the
+ * fan-out that pinned the spawn pool with dozens queued behind the PTY.
+ *
+ * A plain TTL cache alone would not have helped the first poll, because those
+ * seventeen calls are launched together (one `Promise.all`) and every one of
+ * them misses an empty cache before any has filled it. So this is single-flighted
+ * too: the first caller for a root does the lookup and the other sixteen share
+ * its promise — one resolution, seventeen readers — and every caller for the next
+ * minute reads the cache. Cleared by invalidateMerged (every write) and by a
+ * fetch that actually moved refs, so a genuine trunk change still surfaces.
+ */
+const DEFAULT_BRANCH_TTL_MS = 60_000;
+const defaultBranchCache = new Map<string, { at: number; branch: string | null }>();
+const defaultBranchInflight = new Map<string, Promise<string | null>>();
+
+async function computeDefaultBranch(root: string): Promise<string | null> {
   const sym = (await gitAsync(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])).stdout.trim();
   if (sym) return sym;
   for (const ref of ["origin/main", "origin/master", "main", "master"]) {
     if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", ref])).code === 0) return ref;
   }
   return null;
+}
+
+// Awaited: reached from branchInfo (/git/tree) and from baseOf, and baseOf is
+// asked once per checkout by the worktrees sweep — so left uncached this was up
+// to five spawns × seventeen worktrees on a single poll.
+export async function defaultBranch(root: string): Promise<string | null> {
+  const hit = defaultBranchCache.get(root);
+  if (hit && Date.now() - hit.at < DEFAULT_BRANCH_TTL_MS) return hit.branch;
+  const flying = defaultBranchInflight.get(root);
+  if (flying) return flying;
+  const p = (async () => {
+    try {
+      const branch = await computeDefaultBranch(root);
+      if (defaultBranchCache.size > 200) defaultBranchCache.clear();
+      defaultBranchCache.set(root, { at: Date.now(), branch });
+      return branch;
+    } finally {
+      defaultBranchInflight.delete(root);
+    }
+  })();
+  defaultBranchInflight.set(root, p);
+  return p;
 }
 
 /**
@@ -1120,11 +1157,21 @@ export function invalidateMerged(root?: string): void {
   // after a merge, when the answer has just changed. The memo goes with them,
   // or a verdict recorded before the merge is re-applied to the rebuilt set and
   // outlives the very event that invalidated it.
-  if (!root) { mergedCache.clear(); probedAt.clear(); probeMemo.clear(); return; }
+  // The trunk and per-branch base go with them: both are keyed off refs, which
+  // is exactly what a write or a ref-moving fetch changed, and this is the one
+  // path both of those reach.
+  if (!root) {
+    mergedCache.clear(); probedAt.clear(); probeMemo.clear();
+    defaultBranchCache.clear(); baseCache.clear();
+    return;
+  }
   const mine = `${root}\u0000`;
   for (const m of [mergedCache, probedAt, probeMemo] as Map<string, unknown>[]) {
     for (const k of m.keys()) if (k.startsWith(mine)) m.delete(k);
   }
+  // `mine` (root + separator) is the prefix of the per-branch base keys too.
+  defaultBranchCache.delete(root);
+  for (const k of baseCache.keys()) if (k.startsWith(mine)) baseCache.delete(k);
 }
 
 
@@ -1242,17 +1289,33 @@ export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "al
  * that is one subprocess per branch for a guess that is wrong exactly when
  * branches are stacked — the case where being wrong costs you a bad merge.
  */
+/** The base branch per checkout, cached. `worktrees()` asks it once per checkout
+ *  — seventeen on a worktree-heavy repo, twice over (worktrees + branchInfo) —
+ *  and the answer is a config lookup plus the (now-cached) trunk, none of which
+ *  moves on a poll. Cleared by invalidateMerged/invalidateRepos, which every
+ *  write (including setBase, the only thing that changes an override) passes
+ *  through. Same TTL as the trunk it mostly returns. */
+const baseCache = new Map<string, { at: number; base: string | null }>();
 export async function baseOf(root: string, branch: string): Promise<string | null> {
   if (!branch || branch === "(detached)") return null;
+  const key = `${root}\u0000${branch}`;
+  const hit = baseCache.get(key);
+  if (hit && Date.now() - hit.at < DEFAULT_BRANCH_TTL_MS) return hit.base;
   // Two subprocesses, and `worktrees()` asks once per checkout — 34 of them on
   // a repo with seventeen. Left synchronous they were the 806ms this endpoint
   // still cost after everything around them had been awaited.
   const cfg = (await gitAsync(root, ["config", "--get", `branch.${branch}.agentglassbase`])).stdout.trim();
-  if (cfg && validRef(cfg) && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", cfg])).code === 0) return cfg;
-  const trunk = await defaultBranch(root);
-  // A branch is not its own base; the trunk checkout simply has none.
-  if (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch) return null;
-  return trunk;
+  let base: string | null;
+  if (cfg && validRef(cfg) && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", cfg])).code === 0) {
+    base = cfg;
+  } else {
+    const trunk = await defaultBranch(root);
+    // A branch is not its own base; the trunk checkout simply has none.
+    base = !trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch ? null : trunk;
+  }
+  if (baseCache.size > 400) baseCache.clear();
+  baseCache.set(key, { at: Date.now(), base });
+  return base;
 }
 
 /**
@@ -1462,18 +1525,17 @@ export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
   return run(root, ["reset", "--hard", "HEAD^1"]);
 }
 
-/** `git worktree list --porcelain`, parsed and nothing more — no base branch,
- *  no rev-list, no per-checkout status. The cheap half, for callers that only
- *  need to know which paths exist and what is checked out in them. */
-function worktreeList(root: string): GitWorktree[] {
-  const r = git(root, ["worktree", "list", "--porcelain"]);
+/** Parse `git worktree list --porcelain` — no base branch, no rev-list, no
+ *  per-checkout status. The cheap half, for callers that only need to know which
+ *  paths exist and what is checked out in them. */
+function parseWorktreeList(stdout: string, root: string): GitWorktree[] {
   const out: GitWorktree[] = [];
   let cur: Partial<GitWorktree> | null = null;
   const flush = () => {
     if (cur && cur.path) out.push({ path: cur.path, branch: cur.branch || "(detached)", head: cur.head || "", current: cur.path === root, bare: !!cur.bare, locked: !!cur.locked });
     cur = null;
   };
-  for (const line of r.stdout.split("\n")) {
+  for (const line of stdout.split("\n")) {
     if (line.startsWith("worktree ")) { flush(); cur = { path: line.slice(9) }; }
     else if (!line) flush();
     else if (!cur) continue;
@@ -1487,19 +1549,46 @@ function worktreeList(root: string): GitWorktree[] {
   return out;
 }
 
+/** Synchronous — for the mutating guards that already run off any poll (a
+ *  worktree add/remove, a rescue), where one spawn on the loop is not the cost
+ *  and the caller is a one-shot. */
+function worktreeList(root: string): GitWorktree[] {
+  return parseWorktreeList(git(root, ["worktree", "list", "--porcelain"]).stdout, root);
+}
+
+/** Awaited twin — for the poll paths (`worktrees()`, the scoped repo picker).
+ *  One `git worktree list` per poll is small, but on a worktree-heavy repo it
+ *  is one more synchronous spawn on the thread the PTY rides, several times a
+ *  poll; routed through the pool it queues off the loop like everything else. */
+async function worktreeListAsync(root: string): Promise<GitWorktree[]> {
+  return parseWorktreeList((await gitAsync(root, ["worktree", "list", "--porcelain"])).stdout, root);
+}
+
 export async function worktrees(rootIn: unknown): Promise<GitWorktree[]> {
   const root = repoRoot(rootIn);
   if (!root) return [];
-  const out = worktreeList(root);
+  const out = await worktreeListAsync(root);
+  // The trunk, a branch's base and its behind-count are shared by the whole
+  // worktree family: one object store, one set of refs, one config. So they are
+  // resolved against the family's MAIN checkout — which `git worktree list`
+  // always names first — rather than against whichever sibling was queried.
+  //
+  // This is what makes switching between the fourteen worktrees cheap. Keyed off
+  // the queried checkout, `/git/worktrees?root=orbit-WEB-1001` and
+  // `…?root=orbit-WEB-1002` computed the identical fourteen bases and trunk from
+  // scratch — a fresh fan-out per sibling, which under interaction load pinned
+  // the spawn pool with dozens queued behind the PTY. Keyed off the shared main
+  // checkout they hit one another's caches, so the family is priced once.
+  const refRoot = out[0]?.path ?? root;
   // How far each checkout has drifted from what it was branched off. One
   // rev-list per worktree, cached, and only for the ones on a real branch —
   // and all of them at once rather than one after another: seventeen serial
   // 200ms calls is the 1955ms this endpoint used to cost, all of it on the
   // thread carrying the terminal.
   await Promise.all(out.map(async (w) => {
-    const base = w.branch === "(detached)" ? null : await baseOf(root, w.branch);
+    const base = w.branch === "(detached)" ? null : await baseOf(refRoot, w.branch);
     w.base = base;
-    w.behindBase = base ? await behindBase(root, w.branch, base) : 0;
+    w.behindBase = base ? await behindBase(refRoot, w.branch, base) : 0;
   }));
   return out;
 }
