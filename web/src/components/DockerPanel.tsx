@@ -3,7 +3,7 @@
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
-import type { DockerOverview, DockerContainer, DockerStat } from "../../../shared/types.ts";
+import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
@@ -246,6 +246,32 @@ function DetailPane({ tab, env, config, top, error }: {
   );
 }
 
+/**
+ * The binary-missing empty state: install guidance, not the daemon message.
+ *
+ * The overview reports `available:false` for BOTH a downed daemon and a docker
+ * that was never installed, and those two need different words because they need
+ * different fixes — "start Docker" versus "install it". When dockerCapability()
+ * says the CLI is absent we render this in place of the daemon error; it is the
+ * docker sibling of GitMissingBanner.
+ */
+function DockerMissing({ reason }: { reason?: string }) {
+  return (
+    <div className="flex-1 grid place-items-center px-6 text-center">
+      <div className="max-w-md flex flex-col items-center gap-2">
+        <span className="text-[13px] font-semibold" style={{ color: "var(--warning)" }}>Docker isn't installed</span>
+        <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>
+          {reason || "the docker CLI isn't on your PATH"}. Containers, images, volumes and logs stay empty until it is.
+        </span>
+        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
+          Get it from <code>docker.com/get-started</code> (Docker Desktop), or your package manager:{" "}
+          <code>apt install docker.io</code>, <code>brew install docker</code> — then reopen.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function DockerView({ active }: { active: boolean }) {
   // A shell docked under the logs, for the `make migrate` you always end up
   // needing while watching a container. Its height is remembered and it is
@@ -259,6 +285,11 @@ export function DockerView({ active }: { active: boolean }) {
   });
   useEffect(() => { try { localStorage.setItem(CONSOLE_KEY, String(consoleH)); } catch { /* non-fatal */ } }, [consoleH]);
   const [ov, setOv] = useState<DockerOverview | null>(null);
+  // Installed vs daemon-down. Only consulted for the missing-binary case, which
+  // is stable for the session — the daemon's own up/down still rides on the
+  // overview's error. Lets the empty state offer install guidance instead of
+  // sending someone to check a daemon they never had.
+  const [cap, setCap] = useState<DockerCapability | null>(null);
   const [stats, setStats] = useState<Record<string, DockerStat>>({});
   const [view, setView] = useState<View>("containers");
   const [openSections, setOpenSections] = useState<Record<View, boolean>>(() => {
@@ -337,6 +368,16 @@ export function DockerView({ active }: { active: boolean }) {
     requestAnimationFrame(() => frameRef.current?.focus());
     return () => clearInterval(t);
   }, [active, loadOverview]);
+
+  // Is docker even installed? Asked once per activation, not on the 5s poll —
+  // a binary doesn't come and go mid-session, and all we take from it is the
+  // absent-CLI verdict that swaps the daemon message for install guidance.
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    api.dockerCapability().then((c) => { if (live) setCap(c); }).catch(() => { /* origin gate / offline — the overview's error still shows */ });
+    return () => { live = false; };
+  }, [active]);
 
   // stats: only poll the (slow) `docker stats` sample while viewing containers.
   useEffect(() => {
@@ -490,7 +531,14 @@ export function DockerView({ active }: { active: boolean }) {
                 </div>
 
                 {!ov?.available ? (
-                  <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{ov?.error || "connecting to docker…"}</div>
+                  // A missing binary and a downed daemon both land here; the
+                  // capability tells them apart so the former gets install
+                  // guidance rather than "is the daemon running?".
+                  cap && !cap.available ? (
+                    <DockerMissing reason={cap.reason} />
+                  ) : (
+                    <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{ov?.error || "connecting to docker…"}</div>
+                  )
                 ) : (
                   <div className="flex-1 min-h-0 flex">
                     {/* Everything at once down the left, the way lazydocker

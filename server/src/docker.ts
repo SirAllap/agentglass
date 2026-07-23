@@ -7,7 +7,7 @@
 import { basename } from "node:path";
 import type {
   DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork,
-  DockerOverview, DockerScope, DockerActionResult,
+  DockerOverview, DockerScope, DockerActionResult, DockerCapability,
 } from "../../shared/types.ts";
 import { workspaceRoot, scopeRoots } from "./config.ts";
 import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
@@ -68,6 +68,30 @@ function jsonLines(out: string): Record<string, string>[] {
   return rows;
 }
 
+/**
+ * Is the `docker` CLI even here?
+ *
+ * Everything below assumes it is, and `Bun.spawn` THROWS on a missing binary
+ * rather than exiting 127 — so on a machine with no docker, runDocker() catches
+ * that throw and hands back `{ code:1, stderr:"…Executable not found…" }`. That
+ * non-empty stderr then reads to probeDaemon() as a *conclusive* answer from the
+ * CLI, and the panel says "docker not available (is the daemon running?)" over a
+ * daemon that was never even asked. Telling "not installed" apart from "daemon
+ * down" is the whole point of dockerCapability(); this is the primitive it and
+ * overview() both key on. Mirrors gitBin().
+ *
+ * PATH passed explicitly for the reason gitBin() documents: bare
+ * `Bun.which("docker")` resolves against a PATH snapshotted at process start,
+ * which both ignores a genuinely stripped environment and makes this untestable.
+ * Cached for the process — a binary doesn't appear mid-session, and the panel
+ * polls the overview every few seconds.
+ */
+let dockerBinCache: string | null | undefined;
+export function dockerBin(): string | null {
+  if (dockerBinCache === undefined) dockerBinCache = Bun.which("docker", { PATH: process.env.PATH ?? "" });
+  return dockerBinCache;
+}
+
 let cachedVersion: string | null = null;
 let versionCheckedAt = 0;
 /** How long a *conclusive* "no daemon" is trusted before probing again. */
@@ -112,6 +136,12 @@ interface DaemonProbe {
  */
 async function probeDaemon(): Promise<DaemonProbe> {
   if (cachedVersion) return { version: cachedVersion, inconclusive: false };
+  // No CLI to ask: spawning would throw ENOENT and burn a pool slot on every
+  // poll, and its caught stderr is what used to masquerade as the daemon saying
+  // "no". A missing binary is a *conclusive* no-daemon we know without asking —
+  // returning it here is what lets overview() say "not installed" instead of
+  // blaming a daemon that was never contacted.
+  if (!dockerBin()) return { version: null, inconclusive: false };
   if (versionInflight) return versionInflight;
   const wait = lastProbeInconclusive ? VERSION_UNSURE_RETRY_MS : VERSION_RETRY_MS;
   if (versionCheckedAt && Date.now() - versionCheckedAt < wait) {
@@ -146,6 +176,48 @@ async function probeDaemon(): Promise<DaemonProbe> {
 
 export async function dockerVersion(): Promise<string | null> {
   return (await probeDaemon()).version;
+}
+
+/**
+ * The three-state answer the panel needs: not installed / daemon down / OK.
+ *
+ * Mirrors gitCapability(), but with docker's extra failure mode folded in.
+ * `available` means the same thing it does for git — the CLI is on PATH — while
+ * the daemon nuance rides on `version`/`reason`:
+ *
+ *   (a) no binary      → { available:false, reason }   (install guidance)
+ *   (b) binary, no daemon → { available:true,  reason } (start the daemon)
+ *   (c) binary + daemon   → { available:true,  version }
+ *
+ * No 60s memo of its own, unlike gitCapability(): git has no daemon so its
+ * verdict is stable for the whole session, but docker's is not — and both halves
+ * are already cached at the right granularity underneath (dockerBin() for the
+ * life of the process, probeDaemon() with its own success-forever / failure-
+ * briefly policy). A capability that pinned "daemon down" for a full minute is
+ * exactly the staleness the rest of this file is written to avoid.
+ */
+export async function dockerCapability(): Promise<DockerCapability> {
+  if (!dockerBin()) {
+    return { available: false, reason: "Docker isn't installed — the docker CLI isn't on your PATH" };
+  }
+  const { version, inconclusive } = await probeDaemon();
+  if (version) return { available: true, version };
+  return {
+    available: true,
+    reason: inconclusive
+      ? "no answer from docker yet — still trying to reach the daemon"
+      : "the docker daemon isn't responding — is it running?",
+  };
+}
+
+/** Test seam: forget the binary probe (and the daemon memo it feeds) so a test
+ *  can flip PATH and re-ask, the way git-capability's own test does. */
+export function __resetDockerCapForTest(): void {
+  dockerBinCache = undefined;
+  cachedVersion = null;
+  versionCheckedAt = 0;
+  lastProbeInconclusive = false;
+  versionInflight = null;
 }
 
 // Every field is named explicitly instead of using `{{json .}}`, which looks
@@ -333,12 +405,17 @@ export async function overview(): Promise<DockerOverview> {
     const down: DockerOverview = {
       available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null,
       containers: [], images: [], volumes: [], networks: [],
-      // Say which of the two it is. Claiming the daemon is down when all we did
-      // was run out of patience sends the user to `systemctl status` for
-      // nothing — and it was, on a machine where docker was fine.
-      error: inconclusive
-        ? "no answer from docker yet — still trying"
-        : "docker not available (is the daemon running?)",
+      // Say which of the THREE it is. The daemon message must not be shown for a
+      // machine that has no docker at all — that binary-absent case is checked
+      // first, so "is the daemon running?" only ever names a daemon we actually
+      // tried to reach. Then the old split: a refusal is a fact, a timeout is
+      // only us running out of patience (which used to send the user to
+      // `systemctl status` for nothing, on a machine where docker was fine).
+      error: !dockerBin()
+        ? "Docker isn't installed — the docker CLI isn't on your PATH"
+        : inconclusive
+          ? "no answer from docker yet — still trying"
+          : "docker not available (is the daemon running?)",
     };
     // A guess is not worth caching for as long as a fact. Holding an
     // inconclusive verdict for the full window is what kept the error on screen
