@@ -84,10 +84,21 @@ const server = spawn({
     // The transcript sweep reads whatever is in the operator's ~/.claude, which
     // is neither this app's doing nor reproducible on a CI runner.
     AGENTGLASS_SCAN_DISABLED: "1",
+    // Arm the server's parent-death watchdog. The finally below kills it on a
+    // clean exit, but if this script is SIGKILLed the server is reparented to
+    // init and would otherwise linger holding the port — the watchdog reaps it.
+    AGENTGLASS_DIE_WITH_PARENT: "1",
   },
   stdout: "ignore",
   stderr: "inherit",
 });
+
+// SIGTERM/SIGINT skip the finally below, so a Ctrl-C or a `kill` on this script
+// would leave the server it spawned running. Kill it on the way out ourselves;
+// the watchdog is the backstop for the harder SIGKILL case only.
+for (const s of ["SIGINT", "SIGTERM"] as const) {
+  process.on(s, () => { try { server.kill(); } catch { /* already gone */ } process.exit(1); });
+}
 
 const lat: number[] = [];
 let stop = false;

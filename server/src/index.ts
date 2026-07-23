@@ -1151,6 +1151,42 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => { shutdownTerminals(); process.exit(0); });
 }
 
+// Parent-death watchdog: a server must never outlive whoever launched it.
+//
+// The signal handlers above only cover a clean SIGINT/SIGTERM. They do nothing
+// when the launcher is SIGKILLed or crashes, and there is no launcher-side
+// cleanup at all for `make dev`, the perf/soak scripts, or a server an agent
+// left running inside a worktree that was later deleted (cwd `(deleted)`). The
+// only other thing that stops a sidecar is Electron's in-process stopSidecar
+// handler, which likewise cannot survive its own SIGKILL. The observed result:
+// a dozen servers reparented to init, each holding a port and a fistful of
+// shells, still running ~18h later and saturating the box. This gives the
+// server its own defence — it remembers the pid it was born under and, every
+// few seconds, checks that pid is still both its parent and alive. Reparented
+// to init (ppid 1), handed to a different parent, or the original gone → hang
+// up the shells and exit under its own power, within ~3s of losing its parent.
+//
+// Gated behind a flag the launcher opts into, so a deliberately daemonized
+// `make start` is never self-terminated. Every launcher that expects the
+// server to die with it sets the flag (the electron spawn, the dev script, the
+// perf/soak spawns); the 432-test suite never sets it, so the watchdog stays
+// dormant under `make test` — which is why the interval is not even registered
+// unless the flag is present. `process.ppid === 1` is the robust signal: a
+// crash of an intermediate wrapper (`bun --watch`, `concurrently`) reparents
+// the whole subtree to init, which a bare `!== bornUnder` on a still-live
+// wrapper would miss; `!== bornUnder` in turn catches the immediate parent
+// alone going away and the pid being recycled under a new owner.
+if (process.env.AGENTGLASS_DIE_WITH_PARENT === "1") {
+  const bornUnder = process.ppid;
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  setInterval(() => {
+    if (process.ppid === 1 || process.ppid !== bornUnder || !alive(bornUnder)) {
+      shutdownTerminals();
+      process.exit(0);
+    }
+  }, 3000).unref?.();
+}
+
 console.log(`🛰  agentglass server on http://${LOOPBACK_ONLY ? "localhost" : BIND}:${server.port}`);
 if (!LOOPBACK_ONLY) {
   const posture = AUTH_TOKEN ? "token-protected" : "UNAUTHENTICATED";
