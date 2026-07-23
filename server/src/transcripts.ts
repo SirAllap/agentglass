@@ -17,7 +17,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import type { IngestBody } from "../../shared/types.ts";
 import { normalize } from "./ingest.ts";
-import { entered, backoff } from "./loopwatch.ts";
+import { entered, backoff, terminalHot } from "./loopwatch.ts";
 import { db, insertEvent, setSessionTitles, RETENTION_DAYS, type InsertResult } from "./db.ts";
 // safeAbs: translates Windows drive paths, so a WSL-side transcript groups
 // under its own folder rather than collapsing onto the server's cwd.
@@ -46,6 +46,74 @@ function projectsDirs(): string[] {
 }
 const POLL_MS = Math.max(500, Number(process.env.AGENTGLASS_SCAN_INTERVAL_MS || 3000));
 export const SCAN_ENABLED = process.env.AGENTGLASS_SCAN_DISABLED !== "1";
+
+// --- keeping the sweep off the loop the PTY rides ----------------------------
+//
+// The scanner runs on the one thread that also pumps the terminal's PTY, so any
+// stretch it spends parsing a transcript and inserting its events is a stretch
+// the console is frozen. That cost is per line — a JSON.parse, then an
+// insertEvent with its FTS write and its pre→post pairing query — so a cold
+// backfill of a real machine's ~700MB of transcripts is minutes of it: measured
+// at ~2s of dead loop PER 50MB file with the whole file in one transaction.
+//
+// So the per-file loop below runs in bounded BATCHES, each its own transaction,
+// and yields the thread between them: the loop breathes, serves the PTY, and
+// comes back for the next batch. Progress commits WITH each batch — lines_done
+// advances atomically with that batch's inserts — so a crash or a failing later
+// batch resumes exactly where it left off, never re-ingesting a committed batch
+// (no double counts) and never dropping an uncommitted one. This replaces the
+// old all-or-nothing single transaction, whose atomicity we reproduce across the
+// batch boundary by only ever ADVANCING lines_done past what committed.
+//
+// Bounded by BOTH a line count and a byte budget: 500 ordinary lines measured at
+// ~40ms of parse+insert on a real machine, comfortably under both the 80ms the
+// PTY echo aims for and the 120ms at which the terminal starts to feel laggy;
+// the byte budget makes a batch that lands on a cluster of multi-MB image lines
+// yield just as promptly instead of parsing megabytes in one shot.
+//
+// Read per sweep, not pinned at import, for the same reason projectsDirs() is:
+// `bun test` runs every file in one process, so a module-level constant would be
+// fixed by whichever test imported this module first, defeating any test that
+// overrides them. It is a handful of env reads per file — nothing measurable.
+const batchLines = () => Math.max(1, Number(process.env.AGENTGLASS_SCAN_BATCH_LINES || 500));
+const batchBytes = () => Math.max(64 * 1024, Number(process.env.AGENTGLASS_SCAN_BATCH_BYTES || 1024 * 1024));
+/**
+ * A single line larger than this is not parsed on the loop.
+ *
+ * Measured: Bun parses even a multi-MB base64 string fast — it is one big string
+ * value, not nested structure — so the several-MB image lines a browser tool or
+ * a pasted screenshot writes are NOT the bottleneck, and they are ingested
+ * normally (their tool_result carries no displayed text either way). This is a
+ * safety valve for the genuinely abnormal line: a whole file written as one
+ * record, or a corrupt multi-hundred-MB blob, whose JSON.parse would be a single
+ * uninterruptible block no batching can subdivide. Such a line is skipped with a
+ * log rather than left to freeze the console. 16MB sits far above any legitimate
+ * transcript record, so real data never trips it — it only ever fires on the
+ * pathological case, which is exactly the deliberate payload cap the perf work
+ * allows. The 64KB floor keeps a misconfigured value from skipping ordinary
+ * records.
+ */
+const maxLineBytes = () => Math.max(64 * 1024, Number(process.env.AGENTGLASS_SCAN_MAX_LINE_BYTES || 16 * 1024 * 1024));
+/** When a human is typing, step a few ms further back between batches — clear
+ *  air for the PTY on top of the macrotask yield every batch already takes. */
+const YIELD_HOT_MS = 4;
+/** Hand the loop back so the PTY (and every other socket and timer) runs before
+ *  the next batch. setTimeout(0) is a macrotask: pending I/O callbacks fire
+ *  first, which is precisely the terminal's bytes getting served. */
+function yieldLoop(hot: boolean): Promise<void> {
+  return new Promise((r) => setTimeout(r, hot ? YIELD_HOT_MS : 0));
+}
+let oversizeLogged = 0;
+function noteOversize(path: string, bytes: number): void {
+  // Log the first few, then stay quiet: a machine full of these would otherwise
+  // flood the console on a cold-start backfill.
+  if (oversizeLogged++ < 5) {
+    const size = bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)}MB` : `${Math.round(bytes / 1024)}KB`;
+    console.warn(
+      `[scan] skipped a ${size} line in ${basename(path)} — too large to parse on the loop (base64 media, no telemetry to extract)`
+    );
+  }
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS transcript_files (
@@ -445,6 +513,10 @@ async function ingestFile(
   scope: string | null,
   allowTail = true
 ): Promise<{ lines: number; ingested: number; source_app: string; project_path: string; session_id: string; skipped?: boolean }> {
+  // Read the sweep's tuning once for this file: batch shape and the oversize cap.
+  const BATCH_LINES = batchLines();
+  const BATCH_BYTES = batchBytes();
+  const MAX_LINE = maxLineBytes();
   const file = Bun.file(path);
   const cached = allowTail ? tails.get(path) : undefined;
   // Only tail when the cache still agrees with the durable progress marker. If
@@ -485,10 +557,14 @@ async function ingestFile(
   // skips the first line appended after it — which is *every* live line, since
   // sessions grow one record at a time.
   if (lines.length && lines[lines.length - 1] === "") lines.pop();
-  // byteLength, not string length: a transcript is full of non-ASCII (paths,
-  // prose, emoji) and a character offset would land mid-codepoint, so the next
-  // tail read would start on a broken line.
-  const nextByte = baseByte + Buffer.byteLength(complete, "utf8");
+  // Whether the processed content ends on a newline decides the byte width of
+  // the last record: every line here is newline-terminated except, in the
+  // no-trailing-newline case, the final one. The batch loop below accounts for
+  // this per line so its running byte offset stays exact — byteLength, not
+  // string length, because a transcript is full of non-ASCII (paths, prose,
+  // emoji) and a character offset would land mid-codepoint, so the next tail
+  // read would start on a broken line.
+  const endsWithNewline = complete.endsWith("\n");
 
   const toolCalls = tail?.toolCalls ?? new Map<string, { name: string; input: unknown }>();
   // Claude Code splits one API response across several transcript lines (one
@@ -514,6 +590,10 @@ async function ingestFile(
     for (const line of lines) {
       if (!line) continue;
       if (!line.includes('"cwd"') && !line.includes('"sessionId"')) continue;
+      // A pathological multi-hundred-MB first line must not block the loop here
+      // either; cwd/sessionId live on ordinary small lines, so skipping it costs
+      // nothing (the next line carries them).
+      if (Buffer.byteLength(line, "utf8") > MAX_LINE) continue;
       try {
         const o = JSON.parse(line) as Record<string, unknown>;
         sniffedCwd ||= str(o.cwd) ?? "";
@@ -553,10 +633,6 @@ async function ingestFile(
 
   const ctx = { source_app, project_path, cwd, session_id, toolCalls, seenUsage };
   let ingested = 0;
-  // Collected inside the transaction, delivered after it commits: broadcasting
-  // mid-transaction would push events to clients that a later failure rolls
-  // back, leaving them showing rows the database never kept.
-  const emitted: InsertResult[] = [];
   const fileMtime = statSync(path).mtimeMs;
   // What the session is called. Both kinds are appended as their own lines and
   // rewritten on every change, so the *last* one in the file is the current
@@ -565,59 +641,134 @@ async function ingestFile(
   let customTitle: string | null = tail?.customTitle ?? null;
   let aiTitle: string | null = tail?.aiTitle ?? null;
 
-  const run = db.transaction(() => {
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]!.trim();
-      if (!line) continue;
-      let o: Record<string, unknown>;
-      try {
-        o = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        continue;
-      }
-      // Not events, so lineToBodies drops them — but they're the only place the
-      // session's human name exists.
-      if (o.type === "custom-title") customTitle = str(o.customTitle) ?? customTitle;
-      else if (o.type === "ai-title") aiTitle = str(o.aiTitle) ?? aiTitle;
-      const bodies = lineToBodies(o, ctx, fileMtime);
-      // Absolute position in the file: on the tail path the chunk starts at
-      // baseLine, so `from` still means "lines already ingested".
-      if (baseLine + i < from) continue; // already ingested — parsed only for tool names
-      for (const body of bodies) {
-        emitted.push(insertEvent(normalize(body)));
-        ingested++;
-      }
-    }
-  });
-  try {
-    run();
-  } catch (e) {
-    // The rollback undoes the inserts but not the in-memory maps, which
-    // lineToBodies already mutated — seenUsage in particular would suppress the
-    // usage of every message in this chunk on the retry, losing those tokens for
-    // good. Drop the entry so the retry rebuilds it from the file.
-    tails.delete(path);
-    throw e;
-  }
-  // After the transaction: the session row is created by the inserts above, and
-  // a title for a session with no events yet has nothing to attach to.
-  if (customTitle || aiTitle) setSessionTitles(session_id, customTitle, aiTitle);
-  for (const r of emitted) onLive?.(r);
+  // The tail row we hand the next sweep, updated to match each committed batch.
+  const saveTail = (bytes: number, doneLines: number): void => {
+    tails.set(path, {
+      bytes,
+      lines: doneLines,
+      toolCalls,
+      seenUsage,
+      customTitle,
+      aiTitle,
+      cwd,
+      source_app,
+      project_path,
+      session_id,
+      touched: Date.now(),
+    });
+  };
 
-  const doneLines = baseLine + lines.length;
-  tails.set(path, {
-    bytes: nextByte,
-    lines: doneLines,
-    toolCalls,
-    seenUsage,
-    customTitle,
-    aiTitle,
-    cwd,
-    source_app,
-    project_path,
-    session_id,
-    touched: Date.now(),
-  });
+  // Byte offset just past the last processed line, and the count of leading
+  // lines processed — both advance one line at a time inside the batch so a
+  // commit can persist an exact resume point. Start where the tail (or the
+  // from-zero read) began.
+  let consumed = baseByte;
+  let doneLines = baseLine;
+  let i = 0;
+
+  // The per-file loop, in bounded batches that each commit and then yield. See
+  // the BATCH_LINES/BATCH_BYTES note up top for why this is not one transaction.
+  while (i < lines.length) {
+    // Collected inside the transaction, delivered after it commits: broadcasting
+    // mid-transaction would push events to clients a rollback would take back,
+    // leaving them showing rows the database never kept.
+    const emitted: InsertResult[] = [];
+    // Snapshot the cursor so a thrown batch leaves consumed/doneLines describing
+    // only what actually committed (the transaction rolls back, and so must our
+    // idea of progress).
+    let bi = i;
+    let bConsumed = consumed;
+    let bDone = doneLines;
+    const run = db.transaction(() => {
+      let nInBatch = 0;
+      let bytesInBatch = 0;
+      while (bi < lines.length && nInBatch < BATCH_LINES && bytesInBatch < BATCH_BYTES) {
+        const raw = lines[bi]!;
+        const lineBytes = Buffer.byteLength(raw, "utf8");
+        // Every line here is newline-terminated except possibly the very last.
+        const hasNl = bi < lines.length - 1 || endsWithNewline;
+        bConsumed += lineBytes + (hasNl ? 1 : 0);
+        bDone = baseLine + bi + 1;
+        bytesInBatch += lineBytes;
+        nInBatch++;
+        const idx = bi;
+        bi++;
+
+        const line = raw.trim();
+        if (!line) continue;
+        // A single abnormally large line is not parsed on the loop — one
+        // uninterruptible JSON.parse no batching can subdivide. Its bytes still
+        // counted toward the offset above, so the record is stepped over cleanly.
+        if (lineBytes > MAX_LINE) { noteOversize(path, lineBytes); continue; }
+        let o: Record<string, unknown>;
+        try {
+          o = JSON.parse(line) as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        // Not events, so lineToBodies drops them — but they're the only place the
+        // session's human name exists.
+        if (o.type === "custom-title") customTitle = str(o.customTitle) ?? customTitle;
+        else if (o.type === "ai-title") aiTitle = str(o.aiTitle) ?? aiTitle;
+        const bodies = lineToBodies(o, ctx, fileMtime);
+        // Absolute position in the file: on the tail path the chunk starts at
+        // baseLine, so `from` still means "lines already ingested".
+        if (baseLine + idx < from) continue; // already ingested — parsed only for tool names/state
+        for (const body of bodies) {
+          emitted.push(insertEvent(normalize(body)));
+          ingested++;
+        }
+      }
+      // Advance the durable progress marker WITH this batch's inserts, in the
+      // same transaction, so lines_done can never name a line whose events did
+      // not commit. Only ever forward (bDone > from): a from-zero re-read of an
+      // already-ingested prefix parses those lines to rebuild toolCalls/seenUsage
+      // but must not walk lines_done backwards. A partial `size` marker (bytes
+      // consumed, mtime 0) is deliberately unequal to the real file size until
+      // scanOnce writes the final row, so an interrupted file is re-examined —
+      // never skipped as done — on the next sweep, and resumed from exactly here.
+      if (bDone > from) {
+        putFile.run({
+          $path: path,
+          $sid: session_id,
+          $src: source_app,
+          $proj: project_path,
+          $lines: bDone,
+          $size: bConsumed,
+          $mtime: 0,
+        });
+      }
+    });
+    try {
+      run();
+    } catch (e) {
+      // The rollback undoes this batch's inserts and its progress row, but not
+      // the in-memory maps lineToBodies already mutated — seenUsage in
+      // particular would suppress the usage of every message in this batch on the
+      // retry, losing those tokens for good. Drop the tail so the retry rebuilds
+      // it from the file; earlier batches stay committed and their lines_done
+      // stands, so the retry resumes past them without re-ingesting them.
+      tails.delete(path);
+      throw e;
+    }
+    // Committed: adopt the batch's cursor, refresh the tail to match, and only
+    // now push the events — they are durable, so a later batch failing can't
+    // un-say them.
+    i = bi;
+    consumed = bConsumed;
+    doneLines = bDone;
+    saveTail(consumed, doneLines);
+    for (const r of emitted) onLive?.(r);
+    // Hand the loop back between batches so the PTY runs. Not after the last
+    // batch — nothing waits on this file, and the sweep moves to the next one.
+    if (i < lines.length) await yieldLoop(terminalHot());
+  }
+
+  // The session row exists now (created by the inserts), so a title has
+  // something to attach to. A file with no complete new lines skipped the loop
+  // entirely; still refresh the tail so its byte/line offset is recorded.
+  if (customTitle || aiTitle) setSessionTitles(session_id, customTitle, aiTitle);
+  saveTail(consumed, doneLines);
   return { lines: doneLines, ingested, source_app, project_path, session_id };
 }
 
@@ -780,6 +931,10 @@ async function backfillTitles(): Promise<number> {
     let custom: string | null = null, ai: string | null = null;
     for (const line of text.split("\n")) {
       if (!line.includes("-title")) continue;
+      // A title line is tiny; a multi-hundred-MB line that happens to contain the
+      // substring "-title" in some base64 payload is not one, and must not be
+      // parsed on the loop.
+      if (line.length > maxLineBytes()) continue;
       try {
         const o = JSON.parse(line) as Record<string, unknown>;
         if (o.type === "custom-title") custom = str(o.customTitle) ?? custom;
@@ -787,6 +942,10 @@ async function backfillTitles(): Promise<number> {
       } catch { /* skip malformed line */ }
     }
     if (custom || ai) { setSessionTitles(session_id, custom, ai); named++; }
+    // Yield between files: this runs right after the cold-start backfill, over
+    // as many files as the machine has titleless sessions, and each one's read
+    // and scan is loop time the PTY would otherwise wait on.
+    await yieldLoop(terminalHot());
   }
   return named;
 }
