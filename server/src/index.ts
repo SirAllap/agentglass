@@ -24,6 +24,7 @@ import { getSkills, catalogMarkdown, catalogCsv } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getUsage } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
+import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
 import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, git } from "./git.ts";
@@ -601,6 +602,21 @@ const server = Bun.serve<WsData>({
       try { b = await req.json(); } catch { return json({ ok: false }); }
       const ok = decideGate(String(b.id), b.decision === "deny" ? "deny" : "allow", String(b.reason || ""));
       return json({ ok });
+    }
+    // Drive the dashboard's own UI from outside — a Stream Deck, a phone. Unlike
+    // every other route this one changes only what is *shown*: it validates a
+    // navigation command and rebroadcasts it to every client, which run it
+    // through the same setters the keyboard uses. It grants no capability the
+    // keyboard doesn't already, so it needs no gate beyond the localOrigin +
+    // token checks the whole surface already carries.
+    if (pathname === "/control" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: unknown = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const cmd = parseControlCmd(b);
+      if (!cmd) return json({ ok: false, error: "unknown control command" }, 400);
+      broadcast({ type: "control", data: cmd });
+      return json({ ok: true });
     }
     if (pathname === "/search") {
       const q = url.searchParams.get("q") || "";

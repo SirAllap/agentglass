@@ -1,7 +1,10 @@
 import type { ComponentType } from "react";
+import type { ViewId } from "../../../../shared/types.ts";
 import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon } from "./icons.tsx";
 
-export type ViewId = "git" | "diff" | "pr" | "docker" | "term" | "chat";
+/** Re-exported from shared so the server (POST /control validation) and the UI
+ *  name one set of views. */
+export type { ViewId };
 
 export type ViewDef = {
   id: ViewId;
