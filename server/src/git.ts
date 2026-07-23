@@ -343,6 +343,35 @@ function summarize(out: string): string {
   return `${m[1]} file${m[1] === "1" ? "" : "s"}${m[2] ? `, +${m[2]}` : ""}${m[3] ? `, −${m[3]}` : ""}`;
 }
 
+/**
+ * The source paths of any staged renames whose target is being committed.
+ *
+ * A staged rename is a deletion of the old path plus an addition of the new one.
+ * `git status` reports it as one `R old -> new` entry and the composer only ever
+ * surfaces the new path, so a pathspec-limited `git commit -- new` records the
+ * addition but leaves the old path's deletion behind — HEAD then carries both
+ * files and an orphaned staged deletion. Pulling in the source path lets the
+ * whole rename land in one commit. Copies (`C`) keep their source, so they are
+ * left out.
+ */
+function renameSources(root: string, targets: Set<string>): string[] {
+  const r = git(root, ["status", "--porcelain=v1", "-z"]);
+  if (r.code !== 0) return [];
+  const parts = r.stdout.split("\0");
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const tok = parts[i];
+    if (!tok || tok.length < 3) continue;
+    const x = tok[0];
+    const newPath = tok.slice(3);
+    if (x === "R" || x === "C") {
+      const oldPath = parts[++i]; // porcelain -z puts the source in the next \0 token
+      if (x === "R" && oldPath && targets.has(newPath)) out.push(oldPath);
+    }
+  }
+  return out;
+}
+
 /** Stage the selected paths and commit exactly them (ignoring anything else the
  *  user may have staged), scoped to a validated repo root. */
 export function commit(root: string, files: string[], title: string, body: string): CommitResult {
@@ -360,7 +389,15 @@ export function commit(root: string, files: string[], title: string, body: strin
 
   const rels = (Array.isArray(files) ? files : []).map((f) => String(f)).filter(Boolean);
   if (!rels.length) return { ok: false, error: "no files selected" };
-  for (const rel of rels) {
+  // A selected rename target drags its source path into the *commit* pathspec,
+  // or the deletion half of the rename never lands and HEAD keeps both files.
+  // The source is not re-added: a staged rename already holds the deletion in
+  // the index, and `git add` of a path that no longer exists in the tree would
+  // fail. git reports the source, so it is repo-relative, but it goes through
+  // the same escape check as the selected paths.
+  const sources = renameSources(absRoot, new Set(rels));
+  const commitPaths = [...new Set([...rels, ...sources])];
+  for (const rel of commitPaths) {
     if (rel.includes("\0")) return { ok: false, error: "invalid file path" };
     const abs = resolve(absRoot, rel);
     if (abs !== absRoot && !abs.startsWith(absRoot + sep)) return { ok: false, error: `path escapes repo: ${rel}` };
@@ -371,7 +408,7 @@ export function commit(root: string, files: string[], title: string, body: strin
 
   const args = ["commit", "-m", title.trim()];
   if (body && body.trim()) args.push("-m", body.trim());
-  args.push("--", ...rels);
+  args.push("--", ...commitPaths);
   const c = git(absRoot, args);
   if (c.code !== 0) return { ok: false, error: c.stderr.trim() || c.stdout.trim() || "git commit failed" };
 
