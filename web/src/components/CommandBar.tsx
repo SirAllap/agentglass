@@ -32,10 +32,10 @@ import { keepTermFocus } from "../lib/keepFocus.ts";
  * anything else, and costing nothing when you don't want them.
  */
 export const GIT_COMMANDS: ProjectCommand[] = [
-  { name: "status", cmd: "git status", desc: "what is changed, staged and untracked", dir: "" },
-  { name: "log", cmd: "git log --oneline -15", desc: "the last 15 commits, one line each", dir: "" },
-  { name: "diff", cmd: "git diff --stat", desc: "which files changed, and by how much", dir: "" },
-  { name: "branches", cmd: "git branch -vv", desc: "local branches with their upstreams", dir: "" },
+  { name: "status", cmd: "git status", desc: "What is changed, staged and untracked", dir: "" },
+  { name: "log", cmd: "git log --oneline -15", desc: "The last 15 commits, one line each", dir: "" },
+  { name: "diff", cmd: "git diff --stat", desc: "Which files changed, and by how much", dir: "" },
+  { name: "branches", cmd: "git branch -vv", desc: "Local branches with their upstreams", dir: "" },
 ];
 
 // --- pins --------------------------------------------------------------------
@@ -194,7 +194,7 @@ function CommandRow({ c, font, on, full, onRun, onPin }: {
         disabled={!on && full}
         className={`shrink-0 text-[11px] leading-none px-1 ${on ? "" : "opacity-0 group-hover:opacity-100"}`}
         style={{ color: on ? "var(--warning)" : "var(--text3)", opacity: !on && full ? 0.3 : undefined }}
-        title={on ? "unpin" : full ? `${MAX_PINS} pinned already — unpin one first` : `pin ${c.cmd} to the bar`}
+        title={on ? "Unpin" : full ? `${MAX_PINS} pinned already — unpin one first` : `Pin ${c.cmd} to the bar`}
       >{on ? "★" : "☆"}</button>
     </div>
   );
@@ -256,7 +256,7 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
           title="Ready-to-run project commands: Makefile targets & package scripts, with what each one does. Pin the ones you use."
           className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg font-medium whitespace-nowrap"
           style={{ color: n ? "var(--primary-hover)" : "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", opacity: root && !IS_DEMO ? 1 : 0.5 }}>
-          ⚙ commands{n ? ` (${n})` : cmds ? " (none)" : " …"}<span className="t-dim2">▼</span>
+          ⚙ Commands{n ? ` (${n})` : cmds ? " (none)" : " …"}<span className="t-dim2">▼</span>
         </button>
         {open && (
           // keepTermFocus on the whole popover: a click on its padding, a
@@ -288,11 +288,11 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
                 </div>
               ))}
               {!gitMatches.length && !groups.length && (
-                <div className="px-3 py-2 t-dim2">{cmds ? `no command matches “${query.trim()}”` : "reading the project…"}</div>
+                <div className="px-3 py-2 t-dim2">{cmds ? `No command matches “${query.trim()}”` : "Reading the project…"}</div>
               )}
             </div>
             <div className="shrink-0 px-3 py-1.5 t-dim2 text-[9.5px] border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
-              ☆ pins a command to the bar — {pins.length} of {MAX_PINS} used, per repo
+              ☆ Pins a command to the bar — {pins.length} of {MAX_PINS} used, per repo
             </div>
           </div>
         )}
@@ -309,13 +309,13 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
             <button onMouseDown={keepTermFocus} onClick={() => onRun(cmd)} disabled={disabled || !root || IS_DEMO}
               className="text-[10px] pl-2 pr-2 py-1 rounded-md whitespace-nowrap"
               style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", fontFamily: font }}
-              title={`run ${cmd}`}>{cmd}</button>
+              title={`Run ${cmd}`}>{cmd}</button>
             {/* Unpin from the chip itself: going back to the dropdown to find
                 the row you pinned is the long way round. */}
             <button onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)}
               className="absolute -top-1 -right-1 text-[9px] leading-none rounded-full px-[3px] py-[1px] opacity-0 group-hover:opacity-100"
               style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}
-              title={`unpin ${cmd}`}>✕</button>
+              title={`Unpin ${cmd}`}>✕</button>
           </span>
         ))}
         {!pins.length && !!root && (
@@ -323,7 +323,7 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
           // steal the shell's cursor on the way there — see the trigger above.
           <button onMouseDown={keepTermFocus} onClick={() => setOpen(true)} className="text-[10px] px-2 py-1 rounded-md whitespace-nowrap shrink-0"
             style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--border) 30%, transparent)" }}
-            title={`Pin up to ${MAX_PINS} commands here — they stay one click away, per repo`}>☆ pin a command</button>
+            title={`Pin up to ${MAX_PINS} commands here — they stay one click away, per repo`}>☆ Pin a command</button>
         )}
       </div>
     </>

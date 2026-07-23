@@ -68,7 +68,7 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
 
                 <div className="px-5 py-4 overflow-y-auto agx-scroll text-[12.5px]" style={{ color: "var(--text2)" }}>
                   {loading
-                    ? <div className="text-[11px] t-dim2">reading the notes…</div>
+                    ? <div className="text-[11px] t-dim2">Reading the notes…</div>
                     : error
                       ? <div className="text-[11px]" style={{ color: "var(--warning)" }}>{error}</div>
                       : <Markdown text={notes} />}
@@ -83,7 +83,7 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
                   <button onClick={onClose} autoFocus
                     className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
                     style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)" }}>
-                    got it
+                    Got it
                   </button>
                 </div>
               </motion.div>

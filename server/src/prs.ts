@@ -350,7 +350,13 @@ async function fetchList(repo: PrRepoId, filter: PrFilter): Promise<PrSummary[] 
   // a network blip holds the last good list while a genuine empty is allowed to
   // empty the panel. Collapsing both to [] is what made a merged PR linger.
   if (rows === null) return null;
-  return rows.map((r) => mapSummary(r, false));
+  // Newest-first, so the panel reads recent → old and the per-PR check probe in
+  // refreshChecks (which walks this order) fills the rows you actually watch
+  // first. `gh pr list` has no reliable `--sort`, and updatedAt is an ISO string
+  // that sorts lexically, so order it here — same idiom as branchMergeState below.
+  return rows
+    .map((r) => mapSummary(r, false))
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
 
 /**
@@ -1015,7 +1021,16 @@ export async function setDraft(rootIn: unknown, number: unknown, draft: unknown)
 /** Merge the base into the PR branch — the button whose absence is why half a
  *  branch list carries hand-made "Merge origin/master into …" commits. */
 export async function updateBranch(rootIn: unknown, number: unknown): Promise<PrActionResult> {
-  return runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
+  const r = await runPr(rootIn, Number(number), ["pr", "update-branch", String(Number(number))]);
+  // The merge runs on GitHub's side, so there is never a half-merged local tree
+  // to clean up — but when base and head conflict the API refuses, and gh's raw
+  // error ("failed to update branch: …") is a dead end. Turn it into an
+  // actionable one. (A future "resolve in terminal" flow can drop the user into
+  // the merge in a worktree; for now, tell them what to do.)
+  if (!r.ok && /conflict|mergeable/i.test(r.error || "")) {
+    return { ok: false, error: "can't update automatically — this branch conflicts with its base. pull the base branch and resolve the merge locally, then push." };
+  }
+  return r;
 }
 
 /** Re-run the failed jobs on the PR's head — the usual answer to a red run,

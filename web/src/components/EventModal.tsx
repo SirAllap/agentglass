@@ -46,14 +46,14 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
 
               <div className="p-5 overflow-auto">
                 <div className="grid grid-cols-2 gap-x-6 mb-4">
-                  <Row k="time" v={fmtTime(event.timestamp)} />
-                  <Row k="tool" v={event.tool_name ?? "—"} />
-                  <Row k="model" v={event.model_name ?? "—"} />
-                  <Row k="duration" v={event.duration_ms != null ? fmtMs(event.duration_ms) : "—"} />
-                  <Row k="cost" v={event.cost_usd > 0 ? fmtUsd(event.cost_usd) : "—"} />
-                  <Row k="tokens" v={event.input_tokens + event.output_tokens > 0 ? `${fmtTokens(event.input_tokens)} in · ${fmtTokens(event.output_tokens)} out` : "—"} />
-                  <Row k="session" v={event.session_id} />
-                  <Row k="error" v={event.is_error ? <span style={{ color: "var(--error)" }}>{event.error_text ?? "yes"}</span> : "no"} />
+                  <Row k="Time" v={fmtTime(event.timestamp)} />
+                  <Row k="Tool" v={event.tool_name ?? "—"} />
+                  <Row k="Model" v={event.model_name ?? "—"} />
+                  <Row k="Duration" v={event.duration_ms != null ? fmtMs(event.duration_ms) : "—"} />
+                  <Row k="Cost" v={event.cost_usd > 0 ? fmtUsd(event.cost_usd) : "—"} />
+                  <Row k="Tokens" v={event.input_tokens + event.output_tokens > 0 ? `${fmtTokens(event.input_tokens)} in · ${fmtTokens(event.output_tokens)} out` : "—"} />
+                  <Row k="Session" v={event.session_id} />
+                  <Row k="Error" v={event.is_error ? <span style={{ color: "var(--error)" }}>{event.error_text ?? "Yes"}</span> : "No"} />
                 </div>
                 <div className="text-[10px] uppercase tracking-wider t-dim2 mb-1">payload</div>
                 <pre className="text-[10.5px] leading-relaxed rounded-lg p-3 overflow-auto max-h-[38vh]"

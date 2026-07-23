@@ -84,7 +84,7 @@ export function Kpis({
   const cached = t?.cache_read_tokens ?? 0;
   const health = tools > 0 ? Math.max(0, Math.round((1 - failed / Math.max(tools, 1)) * 100)) : 100;
   const spark = (stats?.timeline ?? []).slice(-24).map((b) => b.cost_usd);
-  const healthLabel = health >= 80 ? "all nominal" : health >= 50 ? "degraded" : "critical";
+  const healthLabel = health >= 80 ? "All nominal" : health >= 50 ? "Degraded" : "Critical";
   const healthColor = health >= 80 ? "var(--success)" : health >= 50 ? "var(--warning)" : "var(--error)";
 
   return (
@@ -107,7 +107,7 @@ export function Kpis({
         <div className="flex items-center gap-2.5 shrink-0">
           <HealthRing value={health} />
           <div className="text-[10px] t-dim2 leading-tight">
-            health
+            Health
             <br />
             <b className="font-semibold" style={{ color: healthColor }}>{healthLabel}</b>
           </div>
@@ -117,8 +117,8 @@ export function Kpis({
       {/* pulse — the live tempo, grouped */}
       <motion.div {...enter} transition={{ delay: 0.05, type: "spring", stiffness: 300, damping: 26 }} className="panel">
         <div className="grid grid-cols-3 h-full" style={{ background: "color-mix(in srgb, var(--primary) 9%, transparent)", gap: "1px" }}>
-          <div style={{ background: CELL_BG }}><PulseCell k="Working" v={working} u="live agents" accent="var(--success)" /></div>
-          <div style={{ background: CELL_BG }}><PulseCell k="Events / min" v={epm} u="throughput" accent="var(--info)" /></div>
+          <div style={{ background: CELL_BG }}><PulseCell k="Working" v={working} u="Live agents" accent="var(--success)" /></div>
+          <div style={{ background: CELL_BG }}><PulseCell k="Events / min" v={epm} u="Throughput" accent="var(--info)" /></div>
           <div style={{ background: CELL_BG }}><PulseCell k="Tools run" v={tools} u={`${(t?.events ?? 0).toLocaleString()} events`} /></div>
         </div>
       </motion.div>
@@ -133,7 +133,7 @@ export function Kpis({
           className="px-4 py-2 text-[10px] t-dim2 text-right tabular-nums"
           style={{ borderTop: "1px solid color-mix(in srgb, var(--primary) 10%, transparent)" }}
         >
-          uptime <b className="font-semibold" style={{ color: "var(--text3)" }}>{fmtClock(elapsed)}</b> · {agents.length} sessions tracked
+          Uptime <b className="font-semibold" style={{ color: "var(--text3)" }}>{fmtClock(elapsed)}</b> · {agents.length} sessions tracked
         </div>
       </motion.div>
     </div>

@@ -123,7 +123,7 @@ export function ViewRail({
         <button
           onClick={onSkills}
           aria-label="Skills catalog"
-          data-tip="skills catalog · what this fleet can do"
+          data-tip="Skills catalog · what this fleet can do"
           className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >
@@ -132,7 +132,7 @@ export function ViewRail({
         <button
           onClick={onClose}
           aria-label="Close workspace"
-          data-tip="close · esc"
+          data-tip="Close · esc"
           className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
           style={{ color: "var(--text4)" }}
         >

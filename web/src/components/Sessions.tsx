@@ -22,7 +22,7 @@ export const Sessions = memo(function Sessions({ provider = "" }: { provider?: s
   return (
     <Panel eyebrow="Timeline" title="Sessions over time" right={<span className="text-[10px] t-dim2">{sessions.length} sessions</span>}>
       <div className="overflow-auto h-full space-y-1.5 pr-1">
-        {sessions.length === 0 && <div className="t-dim2 text-[11px] text-center py-6">no sessions yet</div>}
+        {sessions.length === 0 && <div className="t-dim2 text-[11px] text-center py-6">No sessions yet</div>}
         {sessions.map((s, i) => {
           const start = ((s.started_at - min) / span) * 100;
           const end = (((s.ended_at ?? s.last_seen) - min) / span) * 100;

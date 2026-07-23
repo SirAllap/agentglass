@@ -53,7 +53,7 @@ export function Workspace({
    */
   const openChatWith = useCallback((cwd: string, prompt: string) => {
     const chat = newChat(cwd);
-    updateChat(chat.id, (c) => { c.draft = prompt; c.title = "pr review"; });
+    updateChat(chat.id, (c) => { c.draft = prompt; c.title = "PR review"; });
     setActiveChatId(chat.id);
     onView("chat");
   }, [onView]);

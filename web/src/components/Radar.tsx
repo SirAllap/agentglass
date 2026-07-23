@@ -207,7 +207,7 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
           </div>
 
           {agents.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center text-[11px] t-dim2">no agents tracked yet</div>
+            <div className="absolute inset-0 flex items-center justify-center text-[11px] t-dim2">No agents tracked yet</div>
           )}
         </div>
 

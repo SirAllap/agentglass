@@ -10,11 +10,11 @@ type Usage = "all" | "used" | "never";
 type Sort = "grouped" | "used" | "recent" | "newest" | "oldest" | "az";
 
 const SORTS: { key: Sort; label: string }[] = [
-  { key: "grouped", label: "by category" },
-  { key: "used", label: "most used" },
-  { key: "recent", label: "recently used" },
-  { key: "newest", label: "newest" },
-  { key: "oldest", label: "oldest" },
+  { key: "grouped", label: "By category" },
+  { key: "used", label: "Most used" },
+  { key: "recent", label: "Recently used" },
+  { key: "newest", label: "Newest" },
+  { key: "oldest", label: "Oldest" },
   { key: "az", label: "a–z" },
 ];
 
@@ -61,15 +61,15 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
           className="chip shrink-0 cursor-pointer"
           style={copied ? { color: "var(--success)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" } : { color: "var(--text4)" }}
         >
-          {copied ? "copied ✓" : "copy"}
+          {copied ? "Copied ✓" : "Copy"}
         </button>
-        {isTop && <Badge text="top" color="var(--warning)" />}
-        {isNew && <Badge text="new" color="var(--success)" />}
+        {isTop && <Badge text="Top" color="var(--warning)" />}
+        {isNew && <Badge text="New" color="var(--success)" />}
         <span className="ml-auto flex items-center gap-2 shrink-0 text-[10px] t-dim2">
           {s.calls > 0 ? (
             <span className="tabular-nums" style={{ color: "var(--text3)" }}>{s.calls}× {s.last_used ? `· ${fmtAgo(s.last_used)}` : ""}</span>
           ) : (
-            <span>never used</span>
+            <span>Never used</span>
           )}
         </span>
       </div>
@@ -77,7 +77,7 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
         <span className="chip">{s.kind}</span>
         <span className="chip">{s.category}</span>
         <span className="chip">{s.source}</span>
-        <span>added {fmtAgo(s.added)} ago</span>
+        <span>Added {fmtAgo(s.added)} ago</span>
         {s.copies > 1 && <span>· ×{s.copies} copies</span>}
         {perRun > 0 && <span className="tabular-nums" style={{ color: "var(--success)" }}>· ~{fmtUsd(perRun)}/run</span>}
       </div>
@@ -101,17 +101,17 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
             : { display: "-webkit-box", WebkitLineClamp: s.when_to_use ? 1 : 2, WebkitBoxOrient: "vertical", overflow: "hidden" }
         }
       >
-        {s.description || <span className="t-dim2 italic">no description — add one to its frontmatter</span>}
+        {s.description || <span className="t-dim2 italic">No description — add one to its frontmatter</span>}
       </div>
       {expanded && (
         <div className="mt-2 pt-2 border-t flex flex-col gap-1 text-[10.5px]" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
           <div className="flex items-center gap-2">
-            <span className="t-dim2">invoke: </span>
+            <span className="t-dim2">Invoke: </span>
             <code style={{ color: "var(--text2)" }}>{invoke}{s.argument_hint ? ` ${s.argument_hint}` : ""}</code>
           </div>
           {s.cost_usd > 0 && (
             <div className="t-dim2">
-              attributed cost: <span className="tabular-nums" style={{ color: "var(--success)" }}>{fmtUsd(s.cost_usd)}</span> total · ~{fmtUsd(perRun)}/run
+              Attributed cost: <span className="tabular-nums" style={{ color: "var(--success)" }}>{fmtUsd(s.cost_usd)}</span> total · ~{fmtUsd(perRun)}/run
             </div>
           )}
           <div className="t-dim2 truncate" title={s.path}>{s.path}</div>
@@ -246,7 +246,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                 <div className="flex gap-1">
                   {(["used", "never"] as Usage[]).map((u) => (
                     <button key={u} onClick={() => setUsage((cur) => (cur === u ? "all" : u))} className="chip cursor-pointer" style={chipStyle(usage === u, "var(--warning)")}>
-                      {u === "never" ? "never used" : "used"}
+                      {u === "never" ? "Never used" : "Used"}
                     </button>
                   ))}
                 </div>
@@ -262,7 +262,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
               {/* category chips — the discovery rail */}
               <div className="flex items-center gap-1 px-5 pb-2 shrink-0 flex-wrap">
                 <button onClick={() => setCategory("all")} className="chip cursor-pointer" style={chipStyle(category === "all")}>
-                  all categories
+                  All categories
                 </button>
                 {categories.map(([c, n]) => (
                   <button key={c} onClick={() => setCategory((cur) => (cur === c ? "all" : c))} className="chip cursor-pointer" style={chipStyle(category === c)}>
@@ -272,8 +272,8 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
               </div>
 
               <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-4">
-                {!skills && <div className="t-dim2 text-center py-10 text-[12px]">loading catalog…</div>}
-                {skills && shown.length === 0 && <div className="t-dim2 text-center py-10 text-[12px]">nothing matches</div>}
+                {!skills && <div className="t-dim2 text-center py-10 text-[12px]">Loading catalog…</div>}
+                {skills && shown.length === 0 && <div className="t-dim2 text-center py-10 text-[12px]">Nothing matches</div>}
                 {sections ? (
                   sections.map(({ category: c, items }) => (
                     <div key={c} className="mb-4">

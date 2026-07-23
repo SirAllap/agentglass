@@ -129,7 +129,7 @@ export function Select({
                 transition={{ type: "spring", stiffness: 420, damping: 32 }}
                 ref={listRef}
                 role="listbox"
-                aria-label={title ?? "options"}
+                aria-label={title ?? "Options"}
                 className="fixed p-1.5 rounded-xl flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar"
                 style={{
                   top: pos.top,

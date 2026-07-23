@@ -11,10 +11,10 @@ const ago = (ts: number) => {
 };
 
 const STATUS: Record<string, { color: string; label: string }> = {
-  working: { color: "var(--success)", label: "working" },
-  waiting: { color: "var(--warning)", label: "waiting" },
-  errored: { color: "var(--error)", label: "errored" },
-  idle: { color: "var(--text4)", label: "idle" },
+  working: { color: "var(--success)", label: "Working" },
+  waiting: { color: "var(--warning)", label: "Waiting" },
+  errored: { color: "var(--error)", label: "Errored" },
+  idle: { color: "var(--text4)", label: "Idle" },
 };
 // `waiting` above `errored`: an agent stopped on a question needs a person, and
 // a person is the only thing that will move it. One that hit an error may well
@@ -53,9 +53,9 @@ function evidenceNote(a: AgentCard): string | undefined {
  * without colour.
  */
 const OUTCOME: Record<AgentOutcome, { glyph: string; color: string; title: string } | null> = {
-  settled: { glyph: "✓", color: "var(--success)", title: "finished with nothing left trailing" },
-  faulted: { glyph: "✕", color: "var(--error)", title: "ended on an error, or stopped mid-tool" },
-  unanswered: { glyph: "◷", color: "var(--warning)", title: "stopped on a question nobody answered" },
+  settled: { glyph: "✓", color: "var(--success)", title: "Finished with nothing left trailing" },
+  faulted: { glyph: "✕", color: "var(--error)", title: "Ended on an error, or stopped mid-tool" },
+  unanswered: { glyph: "◷", color: "var(--warning)", title: "Stopped on a question nobody answered" },
   // Nothing. No terminal event ever arrived, and the absence of a mark is the
   // accurate report — inventing a glyph here would be a guess wearing a badge.
   unclear: null,
@@ -209,7 +209,7 @@ export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; ac
       right={
         activeApp ? (
           <span className="chip" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 20%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 55%, transparent)" }}>
-            filtering: {activeApp}
+            Filtering: {activeApp}
           </span>
         ) : (
           <span className="text-[10px] t-dim2">{agents.length} live · {groups.length} projects</span>
@@ -217,7 +217,7 @@ export function Fleet({ agents, activeApp, onSelect }: { agents: AgentCard[]; ac
       }
     >
       <div className="overflow-auto h-full space-y-2.5 pr-1">
-        {agents.length === 0 && <div className="t-dim2 text-[12px] text-center py-8 shimmer rounded-lg">waiting for agents…</div>}
+        {agents.length === 0 && <div className="t-dim2 text-[12px] text-center py-8 shimmer rounded-lg">Waiting for agents…</div>}
         {groups.map(({ app, list, live, subs }) => {
           const collapsed = isCollapsed(app, live, list.length);
           const def = live === 0 && list.length > 2;

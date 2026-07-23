@@ -21,7 +21,7 @@ const WINDOWS = [
   { label: "24h", ms: 24 * 3_600_000 },
   { label: "7d", ms: 7 * 86_400_000 },
   { label: "30d", ms: 30 * 86_400_000 },
-  { label: "all", ms: 3650 * 86_400_000 },
+  { label: "All", ms: 3650 * 86_400_000 },
 ];
 
 // Shared by the header's pill-shaped controls (filters, search button).
@@ -141,14 +141,14 @@ export function Header({
             settable, let alone what it was set to. */}
         <button onClick={onOpenProject}
           className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium shrink-0 transition-opacity hover:opacity-80"
-          title={workspace ? `${workspace}\nclick to switch project` : "click to open a project — the cockpit scopes itself to its folder"}
+          title={workspace ? `${workspace}\nClick to switch project` : "Click to open a project — the cockpit scopes itself to its folder"}
           style={{
             color: workspace ? "var(--primary-hover)" : "var(--text2)",
             background: `color-mix(in srgb, var(--primary) ${workspace ? 14 : 7}%, transparent)`,
             border: `1px solid color-mix(in srgb, var(--primary) ${workspace ? 40 : 20}%, transparent)`,
           }}>
           <span>⌂</span>
-          <span className="truncate" style={{ maxWidth: 200 }}>{workspace ? workspace.split("/").pop() : "every project"}</span>
+          <span className="truncate" style={{ maxWidth: 200 }}>{workspace ? workspace.split("/").pop() : "All repos/projects"}</span>
           <span className="opacity-60">▾</span>
         </button>
         <span onClick={unauth ? reauthPrompt : undefined}
@@ -195,19 +195,19 @@ export function Header({
           control that already applies, offering a list of one. It earns its
           place only in the whole-machine view. */}
       {!workspace && (
-        <Select value={filter.app} style={selStyle} options={[{ value: "", label: "all apps" }, ...apps.map((a) => ({ value: a, label: a }))]} onChange={(v) => onFilter({ ...filter, app: v })} />
+        <Select value={filter.app} style={selStyle} options={[{ value: "", label: "All apps" }, ...apps.map((a) => ({ value: a, label: a }))]} onChange={(v) => onFilter({ ...filter, app: v })} />
       )}
-      <Select value={filter.type} style={selStyle} options={[{ value: "", label: "all events" }, ...types.map((t) => ({ value: t, label: t }))]} onChange={(v) => onFilter({ ...filter, type: v })} />
+      <Select value={filter.type} style={selStyle} options={[{ value: "", label: "All events" }, ...types.map((t) => ({ value: t, label: t }))]} onChange={(v) => onFilter({ ...filter, type: v })} />
       {/* Provider is auto-detected from each session's model. With one provider
           it's shown but disabled (just so you can see it); a mixed fleet
           (Anthropic + OpenAI + …) turns it into a real filter. */}
       {providers.length === 1 && (
-        <Select value={providers[0]} style={selStyle} options={[{ value: providers[0], label: providers[0] }]} onChange={() => {}} disabled title={`only provider seen: ${providers[0]}`} />
+        <Select value={providers[0]} style={selStyle} options={[{ value: providers[0], label: providers[0] }]} onChange={() => {}} disabled title={`Only provider seen: ${providers[0]}`} />
       )}
       {providers.length > 1 && (
-        <Select value={filter.provider} style={selStyle} options={[{ value: "", label: "all providers" }, ...providers.map((p) => ({ value: p, label: p }))]} onChange={(v) => onFilter({ ...filter, provider: v })} />
+        <Select value={filter.provider} style={selStyle} options={[{ value: "", label: "All providers" }, ...providers.map((p) => ({ value: p, label: p }))]} onChange={(v) => onFilter({ ...filter, provider: v })} />
       )}
-      {hasFilter && <button onClick={onClear} className="text-[11px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>clear ✕</button>}
+      {hasFilter && <button onClick={onClear} className="text-[11px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>Clear ✕</button>}
       </div>{/* middle scroll zone */}
 
       <div className="shrink-0 flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-0 max-w-full overflow-x-auto agw-noscrollbar">
@@ -216,7 +216,7 @@ export function Header({
         {showUsage && <div className="hidden 2xl:block"><UsageWidget /></div>}
         {/* A keyboard-palette chip is dead weight on touch — hide it there. */}
         <button onClick={onOpenPalette} className="h-8 hidden sm:flex items-center gap-1.5 px-2.5 rounded-lg text-[11px]" style={selStyle}>
-          <span>{MOD_KEY}K</span><span className="hidden sm:inline t-dim2">search</span>
+          <span>{MOD_KEY}K</span><span className="hidden sm:inline t-dim2">Search</span>
         </button>
         {/* One button where there were five (git/diff/docker/term/chat).
             They were the app's whole purpose and yet each one opened its own
@@ -241,7 +241,7 @@ export function Header({
           }}
         >
           <WorkspaceIcon />
-          <span className="hidden sm:inline">workspace</span>
+          <span className="hidden sm:inline">Workspace</span>
           {waiting > 0 && (
             <span className="tabular-nums px-1 rounded-full text-[9.5px]"
               style={{ background: "color-mix(in srgb, var(--success) 30%, transparent)" }}>{waiting}</span>

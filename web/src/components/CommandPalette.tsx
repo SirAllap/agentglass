@@ -144,7 +144,7 @@ export function CommandPalette({
                     <span className="text-[10px] t-dim2">{c.group}</span>
                   </button>
                 ))}
-                {filtered.length === 0 && <div className="px-4 py-6 text-center t-dim2 text-[12px]">no commands</div>}
+                {filtered.length === 0 && <div className="px-4 py-6 text-center t-dim2 text-[12px]">No commands</div>}
               </div>
             </motion.div>
             </div>

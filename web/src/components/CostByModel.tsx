@@ -15,7 +15,7 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
   const active = hi != null ? models[hi] : null;
 
   return (
-    <Panel eyebrow="Cost" title="Where the money goes" right={<span className="text-[10px] t-dim2">by model</span>}>
+    <Panel eyebrow="Cost" title="Where the money goes" right={<span className="text-[10px] t-dim2">By model</span>}>
       <div className="flex gap-4 h-full items-center">
         <div className="relative h-36 w-36 shrink-0">
           <ResponsiveContainer width="100%" height="100%">
@@ -51,13 +51,13 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
             ) : (
               <>
                 <span className="text-[17px] font-semibold tabular-nums" style={{ color: "var(--success)" }}>{fmtUsd(total)}</span>
-                <span className="text-[10px] t-dim2">total spend</span>
+                <span className="text-[10px] t-dim2">Total spend</span>
               </>
             )}
           </div>
         </div>
         <div className="flex-1 min-w-0 space-y-1.5">
-          {models.length === 0 && <div className="t-dim2 text-[11px]">no token usage yet</div>}
+          {models.length === 0 && <div className="t-dim2 text-[11px]">No token usage yet</div>}
           {models.map((m, i) => (
             <motion.div
               key={m.model_name}
