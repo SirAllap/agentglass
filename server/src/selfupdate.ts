@@ -116,13 +116,16 @@ export function cmpTag(a: string, b: string): number {
  */
 const TAGS_TTL_MS = 10 * 60_000;
 const TAGS_FAIL_TTL_MS = 60_000;
-let tagCache: { at: number; url: string; tags: string[] } | null = null;
+let tagCache: { at: number; url: string; tags: string[] | null } | null = null;
 
-export async function remoteTags(originUrl: string): Promise<string[]> {
+export async function remoteTags(originUrl: string): Promise<string[] | null> {
   if (!originUrl) return [];
   const hit = tagCache;
   if (hit && hit.url === originUrl) {
-    const ttl = hit.tags.length ? TAGS_TTL_MS : TAGS_FAIL_TTL_MS;
+    // A short TTL for both a fetch failure (null) and a reachable-but-tagless
+    // remote ([]), so neither sticks: the connection or the first release could
+    // arrive any moment. A real tag list is cached for longer.
+    const ttl = hit.tags?.length ? TAGS_TTL_MS : TAGS_FAIL_TTL_MS;
     if (Date.now() - hit.at < ttl) return hit.tags;
   }
   const tags = await readRemoteTags(originUrl);
@@ -130,7 +133,7 @@ export async function remoteTags(originUrl: string): Promise<string[]> {
   return tags;
 }
 
-async function readRemoteTags(originUrl: string): Promise<string[]> {
+async function readRemoteTags(originUrl: string): Promise<string[] | null> {
   // Awaited: a network round trip on the thread that carries the terminal was
   // 469ms of the app's startup, and the timeout below allows forty-five
   // seconds of it on a bad connection.
@@ -139,7 +142,11 @@ async function readRemoteTags(originUrl: string): Promise<string[]> {
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
   });
   const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-  if (code !== 0) return [];
+  // null, not []: a non-zero exit is a fetch failure (offline, auth, a bad
+  // origin), which is a different thing from a reachable remote that simply has
+  // no tags yet. Collapsing both to [] made updateStatus tell an offline user to
+  // go push a tag — advice for a problem they do not have.
+  if (code !== 0) return null;
   return (out ?? "").split("\n")
     .map((l) => l.split("refs/tags/")[1]?.trim() ?? "")
     .filter((t) => TAG_RE.test(t))
@@ -156,6 +163,11 @@ export async function updateStatus(): Promise<UpdateStatus> {
   }
 
   const tags = await remoteTags(info.origin);
+  if (tags === null) {
+    // A fetch failure, not an empty remote: don't claim an update is available
+    // and don't send them to publish a tag they may already have.
+    return { ...base, available: false, blocked: "couldn't reach the remote to check for releases — check your connection and try again" };
+  }
   if (!tags.length) {
     return { ...base, available: true, blocked: "no releases published yet — tag one with `git tag v0.3.0 && git push --tags`" };
   }
@@ -216,6 +228,22 @@ export async function startUpdate(): Promise<{ ok: boolean; error?: string; log?
       AGENTGLASS_UPDATE_SRC: SRC,
     },
   });
+  // The lock stops a second update racing the first. But the script is detached
+  // and can fail — a compile error, a dropped network, a bad tag — without ever
+  // replacing this process, and then `running` stayed true for the life of the
+  // session and the update button was dead with nothing behind it. Clear it
+  // whenever the child ends (on success the script has already relaunched us, so
+  // this only matters when it didn't) or fails to start, with a timeout as a
+  // backstop for the double-fork case where no exit event ever reaches us.
+  const clearLock = () => { running = false; };
+  // bun-types' node:child_process ChildProcess omits the EventEmitter surface,
+  // but the runtime object has it (Bun emits 'exit'/'error' like Node) — reach
+  // the listeners through a narrow cast rather than drop the recovery.
+  const ev = child as unknown as { once(event: string, cb: () => void): void };
+  ev.once("exit", clearLock);
+  ev.once("error", clearLock);
+  const backstop = setTimeout(clearLock, 15 * 60_000);
+  backstop.unref?.();
   child.unref();
   return { ok: true, log: LOG };
 }

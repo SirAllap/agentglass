@@ -35,9 +35,9 @@ type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
 
 const FILTERS: { id: Filter; label: string; hint: string }[] = [
-  { id: "mine", label: "mine", hint: "pull requests you opened" },
-  { id: "review", label: "review", hint: "waiting on your review" },
-  { id: "all", label: "all", hint: "every open pull request" },
+  { id: "mine", label: "Mine", hint: "Pull requests you opened" },
+  { id: "review", label: "Review", hint: "Waiting on your review" },
+  { id: "all", label: "All", hint: "Every open pull request" },
 ];
 
 const POLL_MS = 20_000;
@@ -113,20 +113,24 @@ function Avatar({ login, size = 18 }: { login: string; size?: number }) {
   );
 }
 
-function Btn({ children, onClick, disabled, danger, primary, ok, title, small }: {
+function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;
-  danger?: boolean; primary?: boolean; ok?: boolean; title?: string; small?: boolean;
+  danger?: boolean; primary?: boolean; ok?: boolean; warn?: boolean; title?: string; small?: boolean;
 }) {
-  const edge = danger ? "var(--error)" : ok ? "var(--success)" : primary ? "var(--primary)" : "var(--border)";
+  // `warn` is the amber "this mutates the branch" accent, matching the Source
+  // Control bar's sync/behind colour (--warning). Used for update-branch, which
+  // merges the base into this branch — a consequential action that should not
+  // read the same as its plain neighbours.
+  const edge = danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : primary ? "var(--primary)" : "var(--border)";
   return (
     <button onClick={onClick} disabled={disabled} title={title}
       className={`rounded disabled:opacity-40 ${small ? "text-[10px] px-2 py-0.5" : "text-[10.5px] px-2.5 py-1"}`}
       style={{
-        color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : "var(--text2)",
-        background: primary ? "var(--primary)" : "transparent",
-        border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : 50}%, transparent)`,
+        color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : "var(--text2)",
+        background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
+        border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : warn ? 55 : 50}%, transparent)`,
         cursor: disabled ? "not-allowed" : "pointer",
-        fontWeight: primary ? 500 : 400,
+        fontWeight: primary || warn ? 500 : 400,
       }}>{children}</button>
   );
 }
@@ -257,7 +261,7 @@ function DiffPane({ file, split, wrap, onComment }: {
         if (!target) return null;
         return <button onClick={() => onComment(target)} className="text-[10px] px-1.5 rounded"
           style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
-          title={`comment on line ${target}`}>+ comment</button>;
+          title={`Comment on line ${target}`}>+ Comment</button>;
       }
     : undefined;
   return split ? <SplitDiff c={file} wrap={wrap} /> : <UnifiedDiff c={file} wrap={wrap} hunkAction={action} />;
@@ -305,18 +309,18 @@ function PrRow({ p, active, onSelect }: { p: PrSummary; active: boolean; onSelec
       <div className="flex items-center gap-1.5">
         <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>#{p.number}</span>
         <span className="text-[11.5px] truncate" style={{ color: "var(--text)" }}>{p.title}</span>
-        {p.isCurrentBranch && <Chip text="here" tint="var(--primary)" title="this checkout is on that branch" />}
+        {p.isCurrentBranch && <Chip text="here" tint="var(--primary)" title="This checkout is on that branch" />}
       </div>
       <div className="flex items-center gap-1.5 mt-0.5 text-[10px]" style={{ color: "var(--text3)" }}>
         <Dot tint={p.checksLoaded === false ? "var(--text3)" : stateTint(p)}
-          title={p.checksLoaded === false ? "check states are still loading" : `${c.success} passed · ${c.failure} failed · ${c.skipped} skipped · ${c.pending} running`} />
+          title={p.checksLoaded === false ? "Check states are still loading" : `${c.success} passed · ${c.failure} failed · ${c.skipped} skipped · ${c.pending} running`} />
         <span className="tabular-nums">
           {/* Not yet fetched is not the same as none. Saying "no checks" here
               would be a claim about the repository rather than about us. */}
-          {p.checksLoaded === false ? "checks…"
-            : c.total === 0 ? "no checks"
+          {p.checksLoaded === false ? "Checks…"
+            : c.total === 0 ? "No checks"
             : c.pending > 0 ? `${c.total - c.pending}/${c.total}`
-            : c.failure > 0 ? `${c.failure} failing` : "green"}
+            : c.failure > 0 ? `${c.failure} failing` : "Green"}
         </span>
         {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip d={p.reviewDecision} />}
         <span className="ml-auto shrink-0">{ago(p.updatedAt)}</span>
@@ -337,6 +341,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const [root, setRoot] = useState("");
   const [repo, setRepo] = useState<PrRepoId | null>(null);
   const [filter, setFilter] = useState<Filter>("mine");
+  // A per-tab search box. Cleared when the scope changes so each tab (mine /
+  // review / all) starts fresh — "all" can be hundreds of rows, and finding one
+  // by number, title or author beats scrolling.
+  const [query, setQuery] = useState("");
   const [prs, setPrs] = useState<PrSummary[]>([]);
   const [counts, setCounts] = useState<Partial<Record<Filter, number>>>({});
   const [listState, setListState] = useState<{ fetchedAt: number; loading: boolean; checksPending?: boolean; error?: string; needsAuth?: boolean }>({ fetchedAt: 0, loading: false });
@@ -361,6 +369,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
    *  without this the slower reply from the filter you just left overwrites the
    *  one you switched to — the old selection reappearing under the new tab. */
   const listReq = useRef(0);
+  /** Which whole-PR diff / commit diff is current. Same shape as listReq: the
+   *  diff of a pull request (or commit) you have since left can take seconds to
+   *  arrive, and without this its late reply overwrites the one you switched to. */
+  const diffReq = useRef(0);
+  const commitReq = useRef(0);
 
   const flash = useCallback((ok: boolean, msg: string) => {
     setToast({ ok, msg });
@@ -447,7 +460,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       // A refresh that fails leaves what is on screen alone: the pull request
       // you are reading is better than an error where it used to be.
       else if (!force) setDetailErr(r.error || "");
-      else { setDetail(null); setDetailErr(r.error || "could not load this pull request"); }
+      else { setDetail(null); setDetailErr(r.error || "Could not load this pull request"); }
     }).catch((e) => { if (req === detailReq.current) setDetailErr(String(e)); });
   }, [root]);
 
@@ -484,14 +497,33 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (!root || selected == null) { setDetail(null); loadedFor.current = null; return; }
     if (loadedFor.current === selected) return; // same pull request, already here
     loadedFor.current = selected;
+    // Clear the previous PR's detail so the pane shows "loading #N" instead of
+    // the last PR's data while the new one is in flight. Without this a PR→PR
+    // jump silently keeps the old content on screen and reads as a dead click.
+    // (The poll-refresh path in loadDetail deliberately keeps the current detail
+    // on a failed refresh; that path does not run this effect.)
+    setDetail(null); setDetailErr("");
     setDiff(""); setSelFile(null); setSelCommit(null); setCommitText("");
     loadDetail(selected);
   }, [root, selected, loadDetail]);
 
   useEffect(() => {
     if ((tab !== "files" && tab !== "review") || !detail || diff || !root) return;
-    api.prDiff(root, detail.number).then((r) => setDiff(r.ok ? (r.text || "") : "")).catch(() => {});
+    const req = ++diffReq.current; // a later selection's diff must win over a slow earlier one
+    api.prDiff(root, detail.number).then((r) => { if (req === diffReq.current) setDiff(r.ok ? (r.text || "") : ""); }).catch(() => {});
   }, [tab, detail, diff, root]);
+
+  // Filter the current scope's rows by the search box: PR number (with or
+  // without a leading #), title, or author login. Memoized so a 400-row "all"
+  // list does not re-scan on every keystroke or re-render.
+  const visiblePrs = useMemo(() => {
+    const q = query.trim().toLowerCase().replace(/^#/, "");
+    if (!q) return prs;
+    return prs.filter((p) =>
+      String(p.number).includes(q) ||
+      p.title.toLowerCase().includes(q) ||
+      p.author.toLowerCase().includes(q));
+  }, [prs, query]);
 
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const byPath = useMemo(() => {
@@ -501,12 +533,13 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   }, [parsed]);
 
   const openCommit = useCallback((sha: string) => {
+    const req = ++commitReq.current; // invalidates any in-flight commit diff, whether opening another or closing
     if (!root || !sha) { setSelCommit(null); return; }
     setSelCommit(sha); setCommitText(""); setCommitBusy(true);
     api.prCommitDiff(root, sha)
-      .then((r) => setCommitText(r.ok ? (r.text || "") : ""))
-      .catch(() => setCommitText(""))
-      .finally(() => setCommitBusy(false));
+      .then((r) => { if (req === commitReq.current) setCommitText(r.ok ? (r.text || "") : ""); })
+      .catch(() => { if (req === commitReq.current) setCommitText(""); })
+      .finally(() => { if (req === commitReq.current) setCommitBusy(false); });
   }, [root]);
 
   const commitFiles = useMemo(() => parseUnifiedDiff(commitText).map(toFileChange), [commitText]);
@@ -543,7 +576,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       title: `Comment on ${path.split("/").pop()}:${line}`,
       body: "Queued with the rest of your review — nothing is sent until you submit.",
       confirmLabel: "Add to review",
-      input: { label: "Comment", placeholder: "what needs to change here…" },
+      input: { label: "Comment", placeholder: "What needs to change here…" },
     });
     if (!body?.trim() || !key) return;
     setDrafts((cur) => {
@@ -551,7 +584,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       saveMap(DRAFT_KEY, next);
       return next;
     });
-    flash(true, `queued — ${(myDrafts.length + 1)} pending comment${myDrafts.length ? "s" : ""}`);
+    flash(true, `Queued — ${(myDrafts.length + 1)} pending comment${myDrafts.length ? "s" : ""}`);
   };
 
   const dropDraft = (i: number) => {
@@ -565,7 +598,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
   const submitReview = async (verb: "approve" | "request_changes" | "comment", body: string) => {
     if (!detail) return;
-    const ok = await act("review", () => api.prReviewWith(root, detail.number, verb, body, myDrafts));
+    const ok = await act("Review", () => api.prReviewWith(root, detail.number, verb, body, myDrafts));
     if (ok && key) {
       setDrafts((cur) => { const next = { ...cur, [key]: [] }; saveMap(DRAFT_KEY, next); return next; });
       setTab("conversation");
@@ -582,7 +615,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       confirmLabel: "Squash & merge", danger: true,
     });
     if (!ok) return;
-    await act("merge", () => api.prMerge(root, detail.number, "squash", { deleteBranch: true, headSha: head }));
+    await act("Merge", () => api.prMerge(root, detail.number, "squash", { deleteBranch: true, headSha: head }));
   };
 
   const doClose = async () => {
@@ -593,7 +626,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       confirmLabel: "Close pull request", danger: true,
     });
     if (!ok) return;
-    await act("close", () => api.prClose(root, detail.number));
+    await act("Close", () => api.prClose(root, detail.number));
   };
 
   const doLocalReview = async () => {
@@ -601,9 +634,9 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     setBusy(true);
     try {
       const r = await api.prLocalReview(root, detail.number);
-      if (!r.ok || !r.cwd || !r.prompt) { flash(false, r.error || "could not prepare the review"); return; }
-      if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt); flash(true, `checked out #${detail.number} — review waiting in chat`); }
-      else flash(true, `checked out at ${r.cwd}`);
+      if (!r.ok || !r.cwd || !r.prompt) { flash(false, r.error || "Could not prepare the review"); return; }
+      if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt); flash(true, `Checked out #${detail.number} — review waiting in chat`); }
+      else flash(true, `Checked out at ${r.cwd}`);
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
   };
@@ -626,12 +659,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const canReview = !!d && !d.viewerDidAuthor;
 
   const TABS: { id: Tab; label: string; n?: number; warn?: boolean }[] = d ? [
-    { id: "overview", label: "overview" },
-    { id: "conversation", label: "conversation", n: lanes.humans.length + lanes.humanComments.length + d.threads.length + lanes.bots.length },
-    { id: "commits", label: "commits", n: d.commits.length },
-    { id: "files", label: "files", n: d.files.length },
-    { id: "checks", label: "checks", n: d.checks.total, warn: d.checks.failure > 0 },
-    ...(canReview ? [{ id: "review" as Tab, label: "review", n: myDrafts.length || undefined, warn: d.viewerRequested }] : []),
+    { id: "overview", label: "Overview" },
+    { id: "conversation", label: "Conversation", n: lanes.humans.length + lanes.humanComments.length + d.threads.length + lanes.bots.length },
+    { id: "commits", label: "Commits", n: d.commits.length },
+    { id: "files", label: "Files", n: d.files.length },
+    { id: "checks", label: "Checks", n: d.checks.total, warn: d.checks.failure > 0 },
+    ...(canReview ? [{ id: "review" as Tab, label: "Review", n: myDrafts.length || undefined, warn: d.viewerRequested }] : []),
   ] : [];
 
   return (
@@ -651,11 +684,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {toast && <span className="text-[10px] max-w-[380px] truncate" style={{ color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</span>}
           <span className="text-[10px] tabular-nums" style={{ color: listState.loading || listState.checksPending ? "var(--warning)" : "var(--text3)" }}>
-            {listState.loading ? "loading pull requests…"
-              : listState.checksPending ? "loading check states…"
+            {listState.loading ? "Loading pull requests…"
+              : listState.checksPending ? "Loading check states…"
               : listState.fetchedAt ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}` : ""}
           </span>
-          <Btn onClick={() => loadList(true)} disabled={busy} small>refresh</Btn>
+          <Btn onClick={() => loadList(true)} disabled={busy} small>Refresh</Btn>
         </div>
       </div>
 
@@ -665,7 +698,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             {FILTERS.map((f) => {
               const n = counts[f.id];
               return (
-                <button key={f.id} onClick={() => setFilter(f.id)} title={f.hint}
+                <button key={f.id} onClick={() => { setFilter(f.id); setQuery(""); }} title={f.hint}
                   className="text-[10px] px-2 py-0.5 rounded-full"
                   style={{
                     color: filter === f.id ? "var(--bg)" : "var(--text2)",
@@ -678,21 +711,36 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
               );
             })}
           </div>
+          {repo && prs.length > 0 && (
+            <div className="px-2 py-1.5 border-b shrink-0 flex items-center gap-2" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Filter by #, title or author…"
+                className="flex-1 text-[10px] px-2 py-1 rounded bg-transparent min-w-0"
+                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }} />
+              {query.trim() && (
+                <span className="text-[9px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{visiblePrs.length} of {prs.length}</span>
+              )}
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto min-h-0 agx-scroll">
             {listState.needsAuth ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
-                <div style={{ color: "var(--warning)" }}>{listState.error || "the GitHub CLI is not set up"}</div>
+                <div style={{ color: "var(--warning)" }}>{listState.error || "The GitHub CLI is not set up"}</div>
                 <div className="mt-2">Pull requests come from <code>gh</code>. Install it, run <code>gh auth login</code>, then refresh.</div>
               </div>
             ) : !repo ? (
-              <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>{listState.error || "no GitHub remote on this repository"}</div>
+              <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>{listState.error || "No GitHub remote on this repository"}</div>
             ) : prs.length === 0 ? (
               listState.loading ? <Skeletons /> : (
                 <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
-                  {filter === "mine" ? "no open pull requests of yours" : filter === "review" ? "nothing waiting on your review" : "no open pull requests"}
+                  {filter === "mine" ? "No open pull requests of yours" : filter === "review" ? "Nothing waiting on your review" : "No open pull requests"}
                 </div>
               )
-            ) : prs.map((p) => (
+            ) : visiblePrs.length === 0 ? (
+              <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>No pull requests match “{query.trim()}”</div>
+            ) : visiblePrs.map((p) => (
               <PrRow key={p.number} p={p} active={p.number === selected} onSelect={() => { setSelected(p.number); setTab("overview"); }} />
             ))}
           </div>
@@ -704,8 +752,8 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
           {!d ? (
             <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>
               {detailErr ? detailErr
-                : selected == null ? (listState.loading ? "loading pull requests…" : "select a pull request")
-                : `loading #${selected}…`}
+                : selected == null ? (listState.loading ? "Loading pull requests…" : "Select a pull request")
+                : `Loading #${selected}…`}
             </div>
           ) : (
             <>
@@ -723,9 +771,9 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                   </button>
                 ))}
                 <div className="ml-auto flex items-center gap-1.5 px-2 shrink-0">
-                  {myDrafts.length > 0 && <Chip text={`${myDrafts.length} pending`} tint="var(--warning)" title="line comments queued but not sent" />}
+                  {myDrafts.length > 0 && <Chip text={`${myDrafts.length} pending`} tint="var(--warning)" title="Line comments queued but not sent" />}
                   {d.viewerRequested && tab !== "review" && (
-                    <Btn onClick={() => setTab("review")} primary small>add your review</Btn>
+                    <Btn onClick={() => setTab("review")} primary small>Add your review</Btn>
                   )}
                 </div>
               </div>
@@ -735,10 +783,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                   <Overview
                     d={d} busy={busy} openThreads={openThreads.length}
                     onLocalReview={doLocalReview} onMerge={doMerge} onClose={doClose}
-                    onUpdateBranch={() => act("update branch", () => api.prUpdateBranch(root, d.number))}
-                    onRerun={() => act("re-run checks", () => api.prRerun(root, d.number))}
-                    onAutoMerge={() => act("auto-merge", () => api.prMerge(root, d.number, "squash", { auto: true, deleteBranch: true }))}
-                    onDraft={() => act(d.isDraft ? "mark ready" : "convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
+                    onUpdateBranch={() => act("Update branch", () => api.prUpdateBranch(root, d.number))}
+                    onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
+                    onAutoMerge={() => act("Auto-merge", () => api.prMerge(root, d.number, "squash", { auto: true, deleteBranch: true }))}
+                    onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
                     onGoThreads={() => setTab("conversation")}
                   />
                 )}
@@ -746,13 +794,13 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                 {tab === "conversation" && (
                   <Conversation
                     d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy}
-                    onResolve={(t) => act(t.isResolved ? "unresolve" : "resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
+                    onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
                     onReply={async (t) => {
                       const first = t.comments[0];
                       if (typeof first?.databaseId !== "number") return;
                       const body = await askText({ title: `Reply on ${t.path}${t.line ? `:${t.line}` : ""}`, confirmLabel: "Reply", input: { label: "Reply" } });
                       if (!body?.trim()) return;
-                      await act("reply", () => api.prReply(root, d.number, first.databaseId as number, body));
+                      await act("Reply", () => api.prReply(root, d.number, first.databaseId as number, body));
                     }}
                   />
                 )}
@@ -771,15 +819,15 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                           <span className="shrink-0" style={{ color: "var(--text3)" }}>{selCommit === c.oid ? "▾" : "▸"}</span>
                           <span className="tabular-nums shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.short}</span>
                           <span className="truncate" style={{ color: "var(--text2)" }}>{c.message}</span>
-                          {c.isMerge && <Chip text="merge" tint="var(--text3)" title="trunk catch-up, not work to review" />}
+                          {c.isMerge && <Chip text="merge" tint="var(--text3)" title="Trunk catch-up, not work to review" />}
                           <span className="ml-auto shrink-0 flex items-center gap-1.5 text-[10px]" style={{ color: "var(--text3)" }}>
                             <Avatar login={c.author} size={14} />{c.author}
                           </span>
                         </button>
                         {selCommit === c.oid && (
                           <div className="my-2">
-                            {commitBusy ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>loading the diff…</div>
-                              : commitFiles.length === 0 ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>this commit changed nothing textual</div>
+                            {commitBusy ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>Loading the diff…</div>
+                              : commitFiles.length === 0 ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>This commit changed nothing textual</div>
                               : <FileStack files={commitFiles} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap} />}
                           </div>
                         )}
@@ -796,7 +844,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                   />
                 )}
 
-                {tab === "checks" && <Checks d={d} busy={busy} onRerun={() => act("re-run checks", () => api.prRerun(root, d.number))} />}
+                {tab === "checks" && <Checks d={d} busy={busy} onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))} />}
 
                 {tab === "review" && canReview && (
                   <ReviewTab
@@ -820,12 +868,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 // ---------------------------------------------------------------------------
 
 const MERGE_WHY: Record<string, string> = {
-  BLOCKED: "a required review or check has not passed",
-  BEHIND: "the base branch has moved — update the branch first",
-  DIRTY: "there are conflicts with the base branch",
-  UNSTABLE: "a check is failing",
-  DRAFT: "this is a draft",
-  HAS_HOOKS: "a repository hook is blocking the merge",
+  BLOCKED: "A required review or check has not passed",
+  BEHIND: "The base branch has moved — update the branch first",
+  DIRTY: "There are conflicts with the base branch",
+  UNSTABLE: "A check is failing",
+  DRAFT: "This is a draft",
+  HAS_HOOKS: "A repository hook is blocking the merge",
   UNKNOWN: "GitHub has not finished working it out",
 };
 
@@ -871,7 +919,7 @@ function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpd
               {canMerge ? "Ready to merge" : "Merging is blocked"}
             </span>
             <span className="block text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>
-              {canMerge ? "nothing is standing in the way" : (MERGE_WHY[d.mergeState] ?? "not mergeable")}
+              {canMerge ? "Nothing is standing in the way" : (MERGE_WHY[d.mergeState] ?? "Not mergeable")}
             </span>
           </span>
         </div>
@@ -881,7 +929,7 @@ function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpd
             <Reason tint="var(--error)" glyph="✕"><b style={{ color: "var(--text)", fontWeight: 500 }}>Changes requested</b> by a reviewer with write access</Reason>
           )}
           {openThreads > 0 && (
-            <Reason tint="var(--warning)" glyph="◯" action={<button onClick={onGoThreads} style={{ color: "var(--primary)" }}>go to thread</button>}>
+            <Reason tint="var(--warning)" glyph="◯" action={<button onClick={onGoThreads} style={{ color: "var(--primary)" }}>Go to thread</button>}>
               {openThreads} review thread{openThreads === 1 ? "" : "s"} still open — <span style={{ color: "var(--text3)" }}>a reply is not a resolve</span>
             </Reason>
           )}
@@ -895,13 +943,13 @@ function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpd
 
         <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
           style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-          <Btn onClick={onMerge} disabled={busy || !canMerge} primary title={canMerge ? "squash, merge and delete the branch" : MERGE_WHY[d.mergeState]}>squash &amp; merge</Btn>
-          <Btn onClick={onAutoMerge} disabled={busy} title="merge automatically once everything passes">merge when green</Btn>
-          <Btn onClick={onUpdateBranch} disabled={busy} title="merge the base branch into this one">update branch</Btn>
-          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy}>re-run failed</Btn>}
+          <Btn onClick={onMerge} disabled={busy || !canMerge} primary title={canMerge ? "Squash, merge and delete the branch" : MERGE_WHY[d.mergeState]}>Squash &amp; merge</Btn>
+          <Btn onClick={onAutoMerge} disabled={busy} title="Merge automatically once everything passes">Merge when green</Btn>
+          <Btn onClick={onUpdateBranch} disabled={busy} warn title="Merge the base branch into this one — this updates the branch on GitHub">↻ Update branch</Btn>
+          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy}>Re-run failed</Btn>}
           <span className="ml-auto flex gap-1.5">
-            <Btn onClick={onDraft} disabled={busy} small>{d.isDraft ? "mark ready" : "to draft"}</Btn>
-            <Btn onClick={onClose} disabled={busy} danger small>close</Btn>
+            <Btn onClick={onDraft} disabled={busy} small>{d.isDraft ? "Mark ready" : "To draft"}</Btn>
+            <Btn onClick={onClose} disabled={busy} danger small>Close</Btn>
           </span>
         </div>
       </section>
@@ -912,9 +960,9 @@ function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpd
       </section>
 
       <div className="flex gap-1.5 flex-wrap">
-        <Btn onClick={onLocalReview} disabled={busy} primary title="check the PR out into a throwaway worktree and review it with the whole repo in context">review locally with Claude</Btn>
+        <Btn onClick={onLocalReview} disabled={busy} primary title="Check the PR out into a throwaway worktree and review it with the whole repo in context">Review locally with Claude</Btn>
         <a href={d.url} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>open on GitHub ↗</a>
+          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open on GitHub ↗</a>
       </div>
     </div>
   );
@@ -947,8 +995,8 @@ function DiffToolbar({ path, add, del, split, wrap, onSplit, onWrap, right }: {
       {del != null && <span className="tabular-nums shrink-0" style={{ color: "var(--error)" }}>−{del}</span>}
       <span className="ml-auto flex items-center gap-1 shrink-0">
         {right}
-        <Toggle on={split} onClick={() => onSplit(!split)} title="Split / unified">{split ? "split" : "unified"}</Toggle>
-        <Toggle on={wrap} onClick={() => onWrap(!wrap)} title="Toggle line wrap">wrap</Toggle>
+        <Toggle on={split} onClick={() => onSplit(!split)} title="Split / unified">{split ? "Split" : "Unified"}</Toggle>
+        <Toggle on={wrap} onClick={() => onWrap(!wrap)} title="Toggle line wrap">Wrap</Toggle>
       </span>
     </div>
   );
@@ -1006,12 +1054,12 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
               {/* The tick means "I have read this" — a different intent from
                   "show me this", so it is a different target. */}
               <input type="checkbox" checked={done} onChange={() => onSeen(f.path)}
-                style={{ accentColor: "var(--primary)" }} title="mark reviewed" aria-label={`mark ${f.path} reviewed`} />
+                style={{ accentColor: "var(--primary)" }} title="Mark reviewed" aria-label={`Mark ${f.path} reviewed`} />
               <button onClick={() => onSel(open ? null : f.path)} className="flex-1 min-w-0 text-left flex items-center gap-2">
                 <span className="shrink-0" style={{ color: "var(--text3)" }}>{open ? "▾" : "▸"}</span>
                 <span className="truncate" style={{ color: done ? "var(--text3)" : "var(--text2)", textDecoration: done ? "line-through" : undefined }}>{f.path}</span>
                 {f.comments > 0 && <Chip text={`${f.comments} open`} tint="var(--warning)" />}
-                {nd > 0 && <Chip text={`${nd} pending`} tint="var(--primary)" title="queued in your review" />}
+                {nd > 0 && <Chip text={`${nd} pending`} tint="var(--primary)" title="Queued in your review" />}
                 <span className="ml-auto shrink-0 tabular-nums" style={{ color: "var(--success)" }}>+{f.additions}</span>
                 <span className="shrink-0 tabular-nums" style={{ color: "var(--error)" }}>−{f.deletions}</span>
               </button>
@@ -1023,11 +1071,11 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
       {sel && (
         <div className="rounded overflow-hidden flex flex-col" style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", height: 560 }}>
           <DiffToolbar path={sel} add={current?.additions} del={current?.deletions} split={split} wrap={wrap} onSplit={onSplit} onWrap={onWrap}
-            right={<span className="text-[10px] mr-1" style={{ color: "var(--text3)" }}>unified shows “+ comment”</span>} />
+            right={<span className="text-[10px] mr-1" style={{ color: "var(--text3)" }}>Unified shows “+ Comment”</span>} />
           <div className="flex-1 min-h-0 flex">
-            {!loaded ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>loading the diff…</div>
+            {!loaded ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the diff…</div>
               : current ? <DiffPane file={current} split={split} wrap={wrap} onComment={(line) => onAddDraft(sel, line)} />
-              : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>no textual diff — binary, renamed, or too large to show</div>}
+              : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
           </div>
         </div>
       )}
@@ -1072,7 +1120,7 @@ function Card({ who, chip, when, tone, url, children }: {
         {chip}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {when && <span className="text-[10px]" style={{ color: "var(--text3)" }}>{when}</span>}
-          {url && <GhLink href={url} title="open on GitHub" />}
+          {url && <GhLink href={url} title="Open on GitHub" />}
         </span>
       </div>
       <div className="px-3 py-2.5">{children}</div>
@@ -1138,10 +1186,10 @@ function Thread({ t, onResolve, onReply, busy }: {
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
         style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
         <span className="truncate" style={{ color: "var(--primary)" }}>{t.path}{t.line ? `:${t.line}` : ""}</span>
-        {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="the code under this comment has changed since" />}
+        {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="The code under this comment has changed since" />}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {t.isResolved ? <Chip text="resolved" tint="var(--success)" /> : <Chip text="open" tint="var(--warning)" />}
-          {t.url && <GhLink href={t.url} title="open this thread on GitHub" />}
+          {t.url && <GhLink href={t.url} title="Open this thread on GitHub" />}
         </span>
       </div>
       <ThreadSnippet hunk={t.diffHunk} line={t.originalLine ?? t.line} />
@@ -1154,7 +1202,7 @@ function Thread({ t, onResolve, onReply, busy }: {
             {c.isBot && <Chip text="automation" tint="var(--info)" />}
             <span className="ml-auto flex items-center gap-1.5" style={{ color: "var(--text3)" }}>
               {ago(c.createdAt)}
-              {c.url && <GhLink href={c.url} title="open this comment on GitHub" />}
+              {c.url && <GhLink href={c.url} title="Open this comment on GitHub" />}
             </span>
           </div>
           <Md body={c.body} />
@@ -1162,8 +1210,8 @@ function Thread({ t, onResolve, onReply, busy }: {
       ))}
       <div className="flex gap-1.5 px-3 py-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
         <Btn onClick={() => onReply(t)} disabled={busy || !canReply} small
-          title={canReply ? undefined : "this thread has no comment to reply to"}>reply</Btn>
-        <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "unresolve" : "resolve conversation"}</Btn>
+          title={canReply ? undefined : "This thread has no comment to reply to"}>Reply</Btn>
+        <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
       </div>
     </div>
   );
@@ -1237,7 +1285,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy }: {
           {lanes.bots.map((c) => (
             <Card key={c.id} who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}>
               {raw ? <pre className="overflow-x-auto text-[10px] max-h-72 agx-scroll" style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.body}</pre>
-                : <span style={{ color: "var(--text2)" }}>{c.digest || "(nothing worth pulling out)"}</span>}
+                : <span style={{ color: "var(--text2)" }}>{c.digest || "(Nothing worth pulling out)"}</span>}
             </Card>
           ))}
         </>
@@ -1263,7 +1311,7 @@ const CHECK_GLYPH: Record<PrCheck["state"], string> = {
 function groupOf(k: PrCheck): string {
   if (k.workflow) return k.workflow;
   const parts = k.name.split(" / ");
-  return parts.length > 1 ? parts.slice(0, -1).join(" / ") : "checks";
+  return parts.length > 1 ? parts.slice(0, -1).join(" / ") : "Checks";
 }
 
 function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: boolean }) {
@@ -1302,8 +1350,8 @@ function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: 
           </span>
         </span>
         <span className="ml-auto shrink-0 flex items-center gap-2">
-          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy} small>re-run failed</Btn>}
-          <span className="text-[10px]" style={{ color: "var(--text3)" }}>{c.allDone ? "notified once, not " + c.total : "you will be told once, at the end"}</span>
+          {c.failure > 0 && <Btn onClick={onRerun} disabled={busy} small>Re-run failed</Btn>}
+          <span className="text-[10px]" style={{ color: "var(--text3)" }}>{c.allDone ? "Notified once, not " + c.total : "You will be told once, at the end"}</span>
         </span>
       </div>
       <Bar parts={[
@@ -1336,7 +1384,7 @@ function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: 
                   {k.name.startsWith(name) ? k.name.slice(name.length).replace(/^\s*\/\s*/, "") || k.name : k.name}
                 </span>
                 <span className="ml-auto shrink-0 text-[9.5px] uppercase tracking-wide" style={{ color: CHECK_TINT[k.state] }}>{k.state}</span>
-                {k.url && <a href={k.url} target="_blank" rel="noreferrer noopener" className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>log ↗</a>}
+                {k.url && <a href={k.url} target="_blank" rel="noreferrer noopener" className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>Log ↗</a>}
               </div>
             ))}
           </div>
@@ -1346,7 +1394,7 @@ function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: 
       {skippedCount > 0 && (
         <button onClick={() => setShowSkipped((v) => !v)} className="text-[10px] px-2.5 py-1.5 rounded self-start"
           style={{ color: "var(--text2)", border: "1px dashed color-mix(in srgb, var(--border) 50%, transparent)" }}>
-          {showSkipped ? "hide" : "show"} {skippedCount} skipped
+          {showSkipped ? "Hide" : "Show"} {skippedCount} skipped
         </button>
       )}
     </div>
@@ -1411,14 +1459,14 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
                   style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}>
                   <span className="shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.path.split("/").pop()}:{c.line}</span>
                   <span className="min-w-0 flex-1" style={{ color: "var(--text2)" }}>{c.body}</span>
-                  <button onClick={() => onDrop(i)} className="shrink-0 text-[10px]" style={{ color: "var(--error)" }}>drop</button>
+                  <button onClick={() => onDrop(i)} className="shrink-0 text-[10px]" style={{ color: "var(--error)" }}>Drop</button>
                 </div>
               ))}
             </div>
           ) : (
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
               No line comments queued. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
-              use “+ comment” on a hunk to attach one to a line.
+              use “+ Comment” on a hunk to attach one to a line.
             </div>
           )}
 
@@ -1428,7 +1476,7 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
                 style={{
                   color: (m === "preview") === preview ? "var(--text)" : "var(--text3)",
                   borderBottom: `2px solid ${(m === "preview") === preview ? "var(--primary)" : "transparent"}`,
-                }}>{m}</button>
+                }}>{m === "preview" ? "Preview" : "Write"}</button>
             ))}
           </div>
 
@@ -1466,7 +1514,7 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
             </span>
             <span className="ml-auto">
               <Btn onClick={() => onSubmit(verb, body)} disabled={busy || (verb !== "approve" && nothing)} primary
-                title={verb !== "approve" && nothing ? "say something, or queue a line comment" : undefined}>submit review</Btn>
+                title={verb !== "approve" && nothing ? "Say something, or queue a line comment" : undefined}>Submit review</Btn>
             </span>
           </div>
         </div>

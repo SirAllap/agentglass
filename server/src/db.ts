@@ -159,6 +159,54 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd ON events(cwd_path)");
 // index, and the covering scan it enables is what the other two already had.
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_model ON events(model_name)");
 
+// Covering indexes for /stats — the endpoint that freezes the terminal.
+//
+// statsSummary() runs six aggregations over a time window, and every one of
+// them used to land on the `events` table itself: the single-column indexes it
+// had (idx_events_ts / _model / _source / _type) satisfy the WHERE or the
+// GROUP BY, but not the columns being SUMmed, so SQLite seeks each matching
+// rowid back into the table to read them. That table is the problem — its rows
+// carry a `payload` TEXT up to 68 KB (a full prompt, a file's contents, command
+// output), so a "scan and sum a few integers" is really a walk over 190 MB of
+// pages that are 98% payload the query never looks at. Warm it is tens of ms;
+// with those historical pages evicted (nothing else keeps eight-day-old rows
+// hot) each probe is a disk seek, and the six of them together are the 2–4 s
+// `/stats` stalls the loop watchdog caught — on the one thread that also pumps
+// the PTY WebSocket, so the terminal stops echoing for the duration.
+//
+// Worse, the GROUP BY queries drove off idx_events_{model,source,type}, which
+// carry no timestamp, so they scanned *every* row and probed the table to
+// re-check the window — the default 1 h view paid a full 50 k-row table walk
+// three times over, five-second poll after five-second poll.
+//
+// The columns each aggregation reads are few and small, so fold them into the
+// index and the query never touches the table at all — SQLite answers straight
+// from index leaves (EXPLAIN: "USING COVERING INDEX"). Leading with the GROUP
+// BY / range column keeps the grouping and the `timestamp >= ?` cutoff working
+// off the same b-tree. Measured on the 50 k-row production copy: the whole
+// /stats dropped 69 ms → 3.7 ms at 1 h and 125 ms → 35 ms at "all" *warm*, and
+// far more cold, because a covering scan reads a few MB of compact index rather
+// than seeking all over a 190 MB table. The indexes reused free pages left by
+// retention pruning (net file growth ~0), and a fatter write path costs about
+// 1 µs per inserted event — nothing next to the read it saves.
+//
+// One index per grouping, because the leading column has to match the GROUP BY
+// for the scan to stay ordered *and* covering; a single timestamp-leading index
+// covers the columns but the planner won't take it for a GROUP BY (it would owe
+// a sort), so it falls back to the table probe. Kept alongside the narrow
+// indexes, which still win the plain `col = ?` point lookups elsewhere.
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_stats ON events(
+  timestamp, hook_event_type, is_error, session_id,
+  input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd)`); // totals + timeline
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_model_cov ON events(
+  model_name, timestamp, session_id,
+  input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd)`); // by_model
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_app_cov ON events(
+  source_app, timestamp, session_id, hook_event_type,
+  cost_usd, input_tokens, output_tokens)`); // by_app (hook_event_type for the tool_calls CASE)
+db.exec(`CREATE INDEX IF NOT EXISTS idx_events_type_cov ON events(
+  hook_event_type, timestamp, tool_name, duration_ms, is_error)`); // by_type + tool-latency durations
+
 // Sessions have no payload of their own, so these are real columns, written at
 // upsert and backfilled from the session's events for rows that predate them.
 //
@@ -386,13 +434,13 @@ export function scopeClause(scope: string | null = workspaceRoot()): { clause: s
 
 /** Same restriction for the `sessions` table, which carries its own columns. */
 function sessionScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
-  if (!scope) return { clause: "", args: [] };
-  const args: string[] = [];
-  const groups = scopeRoots(scope).map((r) => {
-    args.push(r, r + "/%", r, r + "/%");
-    return "project_path = ? OR project_path LIKE ? OR cwd_path = ? OR cwd_path LIKE ?";
-  });
-  return { clause: ` AND (${groups.join(" OR ")})`, args };
+  // Delegate to scopeClause rather than keep a second copy: this used its own
+  // `LIKE 'root/%'` pattern — the very thing scopeClause was rewritten to drop,
+  // because an underscore in a scope root is a single-char wildcard in LIKE and
+  // over-matches sibling projects (root_backup as well as root). The sessions
+  // table carries the same project_path/cwd_path columns, so the resolved-path
+  // IN clause applies unchanged, and correctly.
+  return scopeClause(scope);
 }
 
 /** The searchable text blob for an event — the fleet's collective memory. */
@@ -566,6 +614,12 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
   const event = parseEventRow(rowToEvent.get(id));
   try { ftsInsert.run({ $id: id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
   const session = upsertSession(n, dIn, dOut, dCw, dCr);
+  // A Pre opens a call and a Post closes one, so the open-tool memo the fleet
+  // draws from just went stale. Drop it here, the single write chokepoint, so
+  // the next read — the push that fires right after this returns — is fresh,
+  // while an idle machine with no tool traffic never invalidates and so never
+  // re-runs that scoped scan on the tick.
+  if (n.hook_event_type === "PreToolUse" || isToolPost(n.hook_event_type)) invalidateOpenTools();
   return { event, session };
 }
 
@@ -691,14 +745,28 @@ const openToolSql = (scoped: string) =>
      FROM events p
     WHERE p.hook_event_type = 'PreToolUse'
       AND p.timestamp >= ?
+      -- "Has this call been closed by a Post?" — split into two NOT EXISTS
+      -- rather than one with an OR inside. The OR mixed q.tool_use_id with
+      -- q.session_id/tool_name, and SQLite cannot use an index across it: the
+      -- subquery fell back to scanning EVERY PostToolUse for each open Pre
+      -- (306 Pres x thousands of Posts = ~2.5s on a real DB, on the thread the
+      -- terminal rides). Split, the id path uses idx on tool_use_id (the case
+      -- for essentially every modern event) and the query drops to ~1ms.
+      -- Equivalent by De Morgan: the two branches are mutually exclusive
+      -- (tool_use_id present XOR absent), and a NULL id never equals any q's id,
+      -- so the first clause is a no-op exactly when the second one applies.
       AND NOT EXISTS (
         SELECT 1 FROM events q
          WHERE q.hook_event_type IN ('PostToolUse','PostToolUseFailure')
-           AND (
-             (p.tool_use_id IS NOT NULL AND q.tool_use_id = p.tool_use_id)
-             OR (p.tool_use_id IS NULL AND q.session_id = p.session_id
-                 AND q.tool_name = p.tool_name AND q.timestamp >= p.timestamp)
-           )
+           AND q.tool_use_id = p.tool_use_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM events q2
+         WHERE p.tool_use_id IS NULL
+           AND q2.hook_event_type IN ('PostToolUse','PostToolUseFailure')
+           AND q2.session_id = p.session_id
+           AND q2.tool_name = p.tool_name
+           AND q2.timestamp >= p.timestamp
       )
       AND NOT EXISTS (
         SELECT 1 FROM events s
@@ -710,16 +778,51 @@ const openToolSql = (scoped: string) =>
     ORDER BY p.timestamp ASC
     LIMIT 200`;
 
+/**
+ * Short memo for the open-tool list, with write-driven invalidation.
+ *
+ * This scoped query — correlated subqueries over the whole worktree family — is
+ * one of the ~250 ms event-loop blocks the loop watchdog caught firing on every
+ * 4 s fleet tick on a real cockpit, and the loop it blocks is the one the PTY
+ * rides. The list only changes when a tool opens or closes, i.e. on a
+ * PreToolUse / PostToolUse write, so insertEvent() calls invalidateOpenTools()
+ * on exactly those. Two properties make the memo safe:
+ *   - an *empty* result stays valid until a write — an idle machine with
+ *     nothing running recomputes never, so the tick stops costing anything;
+ *   - a *non-empty* result ages out after a short TTL, so a tool whose process
+ *     died without a PostToolUse still drops off as its 30 min age-out passes,
+ *     within the TTL rather than only on the next unrelated write.
+ * Keyed on scope so switching project can never serve another project's list.
+ */
+const OPEN_TOOL_TTL_MS = 2000;
+let openToolCache: { at: number; scope: string | null; data: OpenToolCall[] } | null = null;
+
+/** Drop the open-tool memo. insertEvent() calls this on a Pre/PostToolUse write
+ *  so a tool that just opened or closed shows on the very next read. */
+export function invalidateOpenTools(): void {
+  openToolCache = null;
+}
+
 /** Currently-running tool calls across the fleet (open Pre, unpaired, session
  *  still alive) — the seed for the client's per-agent "running" state. */
 export function openToolCalls(): OpenToolCall[] {
+  const scope = workspaceRoot();
+  if (openToolCache && openToolCache.scope === scope) {
+    // Empty is valid until a write invalidates it; non-empty honours the TTL so
+    // an age-out cannot hide behind a quiet period.
+    if (openToolCache.data.length === 0 || Date.now() - openToolCache.at < OPEN_TOOL_TTL_MS) {
+      return openToolCache.data;
+    }
+  }
   // Aliased to `p`, so the shared clause needs qualifying to stay unambiguous
   // against the correlated subqueries above.
-  const s = scopeClause();
+  const s = scopeClause(scope);
   const scoped = s.clause.replace(/\b(project_path|cwd_path)\b/g, "p.$1");
-  return db
+  const data = db
     .query<OpenToolCall, any[]>(openToolSql(scoped))
     .all(Date.now() - OPEN_TOOL_MAX_MS, ...s.args);
+  openToolCache = { at: Date.now(), scope, data };
+  return data;
 }
 
 /**
@@ -767,14 +870,37 @@ function computeFilterOptions() {
   };
 }
 
+/**
+ * Short-TTL memo for /sessions, same shape and rationale as statsCache below.
+ * The fleet polls this list on the same 4 s timer and from more than one
+ * surface at once — desktop app plus a browser tab, a StrictMode double-mount —
+ * so the identical (limit, provider, scope) list gets asked for several times
+ * inside a second. The query is scoped to the whole worktree family and was
+ * another ~250 ms block the loop watchdog caught; one second keeps the list
+ * live to the eye while stopping the loop that also drives the PTY from running
+ * the same scan back to back. Keyed with scope, so switching project can never
+ * serve another project's sessions.
+ */
+const SESSIONS_TTL_MS = 1000;
+const sessionsCache = new Map<string, { at: number; data: SessionRollup[] }>();
+
 export function getSessions(limit = 100, provider?: string): SessionRollup[] {
+  const key = `${limit}|${provider ?? ""}|${workspaceRoot() ?? ""}`;
+  const hit = sessionsCache.get(key);
+  if (hit && Date.now() - hit.at < SESSIONS_TTL_MS) return hit.data;
   const s = sessionScopeClause();
   const prov = provider ? { clause: " AND provider = ?", args: [provider] } : { clause: "", args: [] };
-  return db
+  const data = db
     .query<SessionRollup, any[]>(
       `SELECT * FROM sessions WHERE 1=1${prov.clause}${s.clause} ORDER BY last_seen DESC LIMIT ?`
     )
     .all(...prov.args, ...s.args, limit);
+  sessionsCache.set(key, { at: Date.now(), data });
+  // One entry per (limit, provider, scope); the limit set is tiny and scope
+  // rarely changes, so prune stale entries anyway so a long-lived server cannot
+  // leak.
+  if (sessionsCache.size > 64) for (const [k, v] of sessionsCache) if (Date.now() - v.at >= SESSIONS_TTL_MS) sessionsCache.delete(k);
+  return data;
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -783,10 +909,45 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
+/**
+ * Short-TTL memo for /stats, on top of the covering-index fix above.
+ *
+ * The dashboard polls /stats on a timer (every 4 s for the live 1 h view) and
+ * usually from more than one surface at once — the desktop app and a browser
+ * tab, a StrictMode double-mount, a modal opened over the header — so the same
+ * (window, provider, project) summary gets asked for several times inside a
+ * second. The indexes made one computation cheap; this stops the loop from
+ * doing three or four identical ones back to back, which matters precisely
+ * because that loop also drives the PTY. A one-second life keeps it live: the
+ * numbers are a rolling summary the eye reads for shape, not a counter anyone
+ * watches tick, and the poll cadence is slower than the TTL anyway. Same idea
+ * as filterCache above, keyed the same way (scope in the key, so switching
+ * project can never serve another project's totals).
+ *
+ * Deliberately not applied to /gate/pending: that queue is what a human is
+ * waiting on to approve a tool call, and a held-back gate is worse than a slow
+ * one — it already answers from memory, not the DB, so it needs no cache.
+ */
+const STATS_TTL_MS = 1000;
+const statsCache = new Map<string, { at: number; data: StatsSummary }>();
+
 /** Full analytics summary over a rolling window (default 24h), optionally scoped
  *  to a single provider (Anthropic / OpenAI / Google / …). Always scoped to the
  *  open project, so spend, tool mix and the radar describe that project alone. */
 export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): StatsSummary {
+  const key = `${windowMs}|${provider ?? ""}|${workspaceRoot() ?? ""}`;
+  const hit = statsCache.get(key);
+  if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
+  const data = computeStatsSummary(windowMs, provider);
+  // One entry per (window, provider, scope). The window set is fixed and small
+  // (the header's chips) and scope rarely changes, so this never grows unbounded
+  // in practice; prune stale entries anyway so a long-lived server can't leak.
+  statsCache.set(key, { at: Date.now(), data });
+  if (statsCache.size > 64) for (const [k, v] of statsCache) if (Date.now() - v.at >= STATS_TTL_MS) statsCache.delete(k);
+  return data;
+}
+
+function computeStatsSummary(windowMs: number, provider?: string): StatsSummary {
   const since = Date.now() - windowMs;
   const { clause: prov, args: pa } = providerScope(provider);
   const { clause: sc, args: sa } = scopeClause();
@@ -959,15 +1120,19 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
  */
 export function skillUsageDetail(since = 0, bucketCount = 12, provider?: string): SkillUsage[] {
   const { clause: pf, args: pa } = providerScope(provider);
+  // Project scope, same as every other aggregation in computeStatsSummary. Its
+  // absence here leaked top_skills — and the cost charged to them — from every
+  // other project on the machine into a cockpit opened for one.
+  const { clause: sc, args: sa } = scopeClause();
   const invocations = db
     .query<{ session_id: string; timestamp: number; skill: string }, any[]>(
       `SELECT session_id, timestamp, json_extract(payload, '$.tool_input.skill') AS skill
        FROM events
        WHERE hook_event_type = 'PreToolUse' AND tool_name = 'Skill'
-         AND json_extract(payload, '$.tool_input.skill') IS NOT NULL AND timestamp >= ?${pf}
+         AND json_extract(payload, '$.tool_input.skill') IS NOT NULL AND timestamp >= ?${pf}${sc}
        ORDER BY session_id, timestamp`
     )
-    .all(since, ...pa);
+    .all(since, ...pa, ...sa);
   if (!invocations.length) return [];
 
   const bySession = new Map<string, { timestamp: number; skill: string }[]>();
@@ -997,12 +1162,14 @@ export function skillUsageDetail(since = 0, bucketCount = 12, provider?: string)
     a.buckets[idx]++;
   }
 
-  // Charge each cost-bearing event to the running skill at that moment.
+  // Charge each cost-bearing event to the running skill at that moment — scoped
+  // too, or an out-of-project session's spend is attributed to an in-project
+  // skill it never ran.
   const costRows = db
-    .query<{ session_id: string; timestamp: number; cost_usd: number }, [number]>(
-      `SELECT session_id, timestamp, cost_usd FROM events WHERE cost_usd > 0 AND timestamp >= ?`
+    .query<{ session_id: string; timestamp: number; cost_usd: number }, any[]>(
+      `SELECT session_id, timestamp, cost_usd FROM events WHERE cost_usd > 0 AND timestamp >= ?${sc}`
     )
-    .all(since);
+    .all(since, ...sa);
   for (const c of costRows) {
     const invs = bySession.get(c.session_id);
     if (!invs) continue;

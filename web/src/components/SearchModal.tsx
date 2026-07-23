@@ -72,12 +72,12 @@ export function SearchModal({ open, onClose, onSelectApp }: { open: boolean; onC
                     placeholder="Search everything — prompts, commands, outputs, errors…"
                     className="flex-1 bg-transparent outline-none text-[13px]" style={{ color: "var(--text)" }}
                   />
-                  <span className="text-[10px] t-dim2 shrink-0">{loading ? "…" : hits ? `${hits.length} hits` : "your fleet's memory"}</span>
+                  <span className="text-[10px] t-dim2 shrink-0">{loading ? "…" : hits ? `${hits.length} hits` : "Your fleet's memory"}</span>
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto">
                   {hits === null && <div className="t-dim2 text-center py-14 text-[12px]">Search every event ever captured — 12k+ prompts, commands and outputs.</div>}
-                  {hits && hits.length === 0 && !loading && <div className="t-dim2 text-center py-14 text-[12px]">nothing matches “{q}”</div>}
+                  {hits && hits.length === 0 && !loading && <div className="t-dim2 text-center py-14 text-[12px]">Nothing matches “{q}”</div>}
                   {hits && hits.map((h) => {
                     const f = friendly({ hook_event_type: h.hook_event_type } as any);
                     const who = agentKey({ source_app: h.source_app, session_id: h.session_id });

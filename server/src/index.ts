@@ -27,7 +27,7 @@ import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX
 import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
-import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, git } from "./git.ts";
+import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability } from "./git.ts";
 import {
   workingTree, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
@@ -39,14 +39,16 @@ import {
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
+import { worktreeParent } from "./worktree.ts";
 import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { spawnPoolStats } from "./spawnpool.ts";
+import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
 import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
-  startContainer, stopContainer, restartContainer, removeContainer,
+  startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
 } from "./docker.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
@@ -89,7 +91,13 @@ const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
 // Optional shared-secret auth. Null on a loopback-only box with no token set
 // (unchanged zero-config UX); required otherwise. Exposing without a token
 // mints and prints one rather than running unauthenticated.
-const AUTH = resolveToken(LOOPBACK_ONLY);
+// TRUST_LAN widens the CSRF origin gate to trust any private-IP page, so it must
+// bring a token with it — otherwise a loopback instance (token skipped because
+// the bind is local) would let a LAN-origin page drive token-less destructive
+// writes through the victim's own loopback. Treating TRUST_LAN as "not loopback
+// only" for the token decision forces a token exactly when one is needed; net.ts
+// already documents TRUST_LAN as something used on top of a token.
+const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
 /** One socket, three roles: the live event stream, PTY terminal shells, and
  *  the desktop-notification mirror. */
@@ -245,17 +253,43 @@ const trustedHost = (url: URL) => isPrivate(url.hostname) || ALLOWED_HOSTS.has(u
 // left of the cost once the git call was skipped.
 const refsCache = new Map<string, { refs: number; body: string }>();
 
-function refsFingerprint(root: string): number {
-  const r = git(root, ["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]);
+// Awaited: even at ~2ms this is one for-each-ref on the loop for every poll of
+// /git/branches, /git/graph and /git/tags — three endpoints, several tabs — and
+// the whole point is that the terminal's thread runs none of them. It queues
+// behind the shared pool now; the answer it gates is cached, so a slightly later
+// fingerprint only defers a recompute, never a keystroke.
+//
+// Keyed off the family, and cached for a beat. `refs/heads` and `refs/remotes`
+// live in the shared object store, so every worktree of a repo has the identical
+// fingerprint — yet `/git/branches`, `/git/graph` and `/git/tags` each read it
+// per QUERY ROOT on every poll, which on a repo with fourteen worktrees is
+// dozens of identical for-each-refs a second the moment you start switching
+// between checkouts. `worktreeParent` finds the family's main checkout with a
+// file read and no subprocess; a 250ms hold then collapses that storm to one
+// read per family. Short by design: it only gates recomputes that are themselves
+// cached far longer (whileRefsHoldAsync), so a fingerprint 250ms late defers a
+// panel refresh by a frame, never a keystroke — and every write clears the caches
+// behind it directly anyway.
+const REFS_FP_TTL_MS = 250;
+const refsFpCache = new Map<string, { at: number; fp: number }>();
+async function refsFingerprint(root: string): Promise<number> {
+  const famRoot = worktreeParent(root) ?? root;
+  const hit = refsFpCache.get(famRoot);
+  if (hit && Date.now() - hit.at < REFS_FP_TTL_MS) return hit.fp;
+  const r = await gitAsync(famRoot, ["for-each-ref", "--format=%(objectname)", "refs/heads", "refs/remotes"]);
   // A failure fingerprints as "different every time", so a broken repo falls
   // back to recomputing rather than serving one wrong answer forever.
-  return r.code === 0 ? Number(Bun.hash(r.stdout + ":" + r.stdout.length)) : Math.random();
+  const fp = r.code === 0 ? Number(Bun.hash(r.stdout + ":" + r.stdout.length)) : Math.random();
+  if (refsFpCache.size > 200) refsFpCache.clear();
+  refsFpCache.set(famRoot, { at: Date.now(), fp });
+  return fp;
 }
 
-/** Awaited variant, for the reads that no longer block the loop. */
+/** Recompute only when a ref moved, off the loop. `key` separates answers that
+ *  come from the same repo but different questions (the log's scope, a limit). */
 async function whileRefsHoldAsync(key: string, root: string, compute: () => Promise<unknown>): Promise<string> {
   if (!root) return JSON.stringify(await compute());
-  const refs = refsFingerprint(root);
+  const refs = await refsFingerprint(root);
   const hit = refsCache.get(key);
   if (hit && hit.refs === refs) return hit.body;
   const body = JSON.stringify(await compute());
@@ -264,22 +298,40 @@ async function whileRefsHoldAsync(key: string, root: string, compute: () => Prom
   return body;
 }
 
-/** Recompute only when a ref moved. `key` separates answers that come from the
- *  same repo but different questions (the log's scope, a limit). */
-function whileRefsHold(key: string, root: string, compute: () => unknown): string {
-  if (!root) return JSON.stringify(compute());
-  const refs = refsFingerprint(root);
-  const hit = refsCache.get(key);
-  if (hit && hit.refs === refs) return hit.body;
-  const body = JSON.stringify(compute());
-  if (refsCache.size > 40) refsCache.clear();
-  refsCache.set(key, { refs, body });
-  return body;
-}
-
 const TREE_TTL_MS = 1_000;
 const treeCache = new Map<string, { at: number; data: WorkingTree }>();
-setGitChangeHook(() => { treeCache.clear(); broadcast({ type: "git" }); });
+// The worktree panel is the heaviest git poll (a list plus base/behind/dirty per
+// checkout). Its inner reads are cached and family-shared now, but the assembled
+// answer had no cache of its own — so every poll of every open tab still rebuilt
+// it. A short TTL (scaled by backoff while a shell is hot) holds it across the
+// 10s panel poll and the burst a scope switch fires, and every write clears it
+// through the same git-change hook the tree cache uses.
+const WORKTREES_TTL_MS = 2_500;
+const worktreesCache = new Map<string, { at: number; body: string }>();
+setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); broadcast({ type: "git" }); });
+
+/**
+ * Session detail, held briefly, and invalidated when the session gets an event.
+ *
+ * `getSession` is a synchronous SQLite scan of the whole session, and a big one
+ * (8000+ events) measured ~50ms warm and several times that under load — 50ms+
+ * of the loop the PTY rides, per call. The detail modal polls it, and the
+ * interaction load hammered it: the watchdog showed GET /session as the single
+ * worst loop-blocker, six recomputations of the same static session queued back
+ * to back. The body is cached per id so a re-open or a poll is free, and cleared
+ * the instant an event lands for that session (ingestBody) so a LIVE session
+ * still updates at once — a historical one, which is what you actually sit and
+ * read, never recomputes. Combined with the single-flight on the endpoint, N
+ * concurrent opens of the same session cost one scan, not N.
+ *
+ * The TTL is only a backstop: correctness comes from the two invalidation points
+ * (HTTP ingest and the scanner tail), which fire on the exact events that change
+ * the answer. So it is long — a short one would just spend ~50ms of the PTY's
+ * thread re-deriving output that has not changed, which is the very spike this
+ * removes — and scaled by backoff() so it holds even longer while a shell is hot.
+ */
+const SESSION_TTL_MS = 15_000;
+const sessionCache = new Map<string, { at: number; body: string | null }>();
 
 function broadcast(frame: WsFrame) {
   // Serialising an event and writing it to every open client. Small per client,
@@ -331,6 +383,10 @@ setInterval(pushOpenTools, OPEN_TOOL_TICK_MS).unref?.();
 function ingestBody(body: IngestBody) {
   const n = normalize(body);
   const { event, session } = insertEvent(n);
+  // The session just grew, so its cached detail is stale — drop it so a live
+  // session refreshes on the next open, while static sessions keep serving from
+  // cache. Cheap: one Map delete on a path already doing a DB write.
+  sessionCache.delete(event.session_id);
   broadcast({ type: "event", data: event });
   broadcast({ type: "session", data: session });
   // A Pre opens a call and a Post closes one, so the list the fleet is drawing
@@ -638,7 +694,7 @@ const server = Bun.serve<WsData>({
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       const paths = Array.isArray(b.paths) ? b.paths.filter((p: unknown) => typeof p === "string").slice(0, 500) : [];
-      return json({ repos: statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
+      return json({ repos: await statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
     }
     if (pathname === "/git/commit" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
@@ -649,12 +705,21 @@ const server = Bun.serve<WsData>({
     }
 
     // --- live git panel (lazygit-style working tree) ---
+    // Is git even installed? A plain read like the rest of /git/*, so the
+    // surface-wide origin/rebinding gate is the whole authorisation story.
+    if (pathname === "/git/capability") return json(gitCapability());
     if (pathname === "/git/repos") {
-      const paths = getChanges(300).map((c) => c.file_path);
       // `all=1` is the project picker: it needs the whole machine even when the
       // cockpit is currently scoped to one project, or there'd be no way out.
       const ignoreScope = url.searchParams.get("all") === "1";
-      return json({ repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }) });
+      // Single-flighted: this sweep is a `git status` per repo across every
+      // checkout, and several open tabs asking at the same instant would each
+      // launch the whole fan-out. They share one now. (The 15s repoCache behind
+      // it still handles reuse across time; this handles reuse across callers.)
+      return body(await singleFlight(`repos:${ignoreScope}`, async () => {
+        const paths = getChanges(300).map((c) => c.file_path);
+        return JSON.stringify({ repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }) });
+      }));
     }
     // Directory completion for the project picker's free-text path input. A
     // plain read, so the surface-wide origin/rebinding/token gate above is the
@@ -668,16 +733,21 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/git/tree") {
       const root = url.searchParams.get("root") || "";
-      const hit = treeCache.get(root);
-      if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return json(hit.data);
-      const data = await workingTree(root);
-      if (treeCache.size > 40) treeCache.clear();
-      treeCache.set(root, { at: Date.now(), data });
-      return json(data);
+      // The 1s cache handles the 2.5s re-poll; single-flight handles the tabs
+      // that miss it together. workingTree is four git reads on the loop, so
+      // one caller doing them for all is the difference under a fan-out.
+      return body(await singleFlight(`tree:${root}`, async () => {
+        const hit = treeCache.get(root);
+        if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return JSON.stringify(hit.data);
+        const data = await workingTree(root);
+        if (treeCache.size > 40) treeCache.clear();
+        treeCache.set(root, { at: Date.now(), data });
+        return JSON.stringify(data);
+      }));
     }
     if (pathname === "/git/branches") {
       const root = url.searchParams.get("root") || "";
-      return body(await whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root)));
+      return body(await singleFlight(`branches:${root}`, () => whileRefsHoldAsync(`branches:${root}`, root, () => gitBranches(root))));
     }
     // `scope=all` is the whole graph; anything else is this checkout's own
     // history, which is what the pane defaults to.
@@ -685,9 +755,25 @@ const server = Bun.serve<WsData>({
       const root = url.searchParams.get("root") || "";
       const limit = Number(url.searchParams.get("limit") || 400);
       const scope = url.searchParams.get("scope") === "all" ? "all" : "head";
-      return body(await whileRefsHoldAsync(`graph:${root}:${limit}:${scope}`, root, () => logGraph(root, limit, scope)));
+      const key = `graph:${root}:${limit}:${scope}`;
+      return body(await singleFlight(key, () => whileRefsHoldAsync(key, root, () => logGraph(root, limit, scope))));
     }
-    if (pathname === "/git/worktrees") return json({ worktrees: await gitWorktrees(url.searchParams.get("root") || "") });
+    if (pathname === "/git/worktrees") {
+      const root = url.searchParams.get("root") || "";
+      // The heaviest git read the panel polls: a worktree list plus a status,
+      // base and rev-list per checkout — a dozen-plus subprocesses on a
+      // worktree-heavy repo. Concurrent identical polls collapse via single-flight;
+      // a short TTL cache (× backoff) holds the assembled answer across the poll
+      // and the burst a scope switch fires, cleared on any write by the git hook.
+      return body(await singleFlight(`worktrees:${root}`, async () => {
+        const hit = worktreesCache.get(root);
+        if (hit && Date.now() - hit.at < WORKTREES_TTL_MS * backoff()) return hit.body;
+        const b = JSON.stringify({ worktrees: await gitWorktrees(root) });
+        if (worktreesCache.size > 40) worktreesCache.clear();
+        worktreesCache.set(root, { at: Date.now(), body: b });
+        return b;
+      }));
+    }
     // What a worktree removal would destroy, per path — asked before offering
     // the removal, never after. Repeatable `path=` so the bulk delete can price
     // every worktree it is about to touch in one round trip; concurrent because
@@ -723,7 +809,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
     // Every moment this process stopped answering, and what was running. The
     // terminal rides this loop, so these ARE the freezes the user feels.
-    if (pathname === "/api/loopwatch") return json({ ...stalls(Number(url.searchParams.get("since") || 0)), spawns: spawnPoolStats() });
+    if (pathname === "/api/loopwatch") return json({ ...stalls(Number(url.searchParams.get("since") || 0)), spawns: spawnPoolStats(), coalescing: inflightCount() });
     // Open a file at a line in the editor the user already has running.
     if (pathname === "/editor/target") return json({ ...(await editorTarget(url.searchParams.get("path") || "")), hasNvim: HAS_NVIM });
     if (pathname === "/git/remotes") return json({ remotes: gitRemotes(url.searchParams.get("root") || "") });
@@ -732,9 +818,10 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/remote-branches") return json(gitRemoteBranches(url.searchParams.get("root") || "", url.searchParams.get("remote") || ""));
     if (pathname === "/git/tags") {
       // 125 tags is one `for-each-ref` and cheap, but it is on the same 10s poll
-      // and answers from the same refs — free to include.
+      // and answers from the same refs — free to include. Awaited like the other
+      // refs-held reads so its for-each-ref stays off the terminal's thread.
       const root = url.searchParams.get("root") || "";
-      return body(whileRefsHold(`tags:${root}`, root, () => ({ tags: gitTags(root) })));
+      return body(await whileRefsHoldAsync(`tags:${root}`, root, async () => ({ tags: await gitTags(root) })));
     }
     if (pathname === "/git/reflog") return json({ entries: gitReflog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 200)) });
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
@@ -809,7 +896,16 @@ const server = Bun.serve<WsData>({
     }
 
     // --- live docker panel (lazydocker-style) ---
-    if (pathname === "/docker/overview") return json(await dockerOverview());
+    // Is docker even installed, as opposed to the daemon being down? A plain
+    // read like the rest of /docker/*, so the surface-wide origin/rebinding gate
+    // is the whole authorisation story. Lets the panel show install guidance for
+    // a missing binary instead of the overview's daemon message. Mirrors
+    // /git/capability.
+    if (pathname === "/docker/capability") return json(await dockerCapability());
+    // Single-flighted alongside the git reads: `docker ps`/`docker stats` are
+    // slow spawns (seconds each) behind a short cache, and several tabs missing
+    // that cache together would each launch one. One sample now serves them all.
+    if (pathname === "/docker/overview") return body(await singleFlight("docker:overview", async () => JSON.stringify(await dockerOverview())));
     if (pathname === "/docker/stats") {
       // Sample what the panel is showing. The overview is cached and scoped, so
       // this costs nothing extra and keeps the two answers about the same set of
@@ -819,9 +915,11 @@ const server = Bun.serve<WsData>({
       // A restarting container is deliberately left out — it is between processes
       // often enough that naming it can take the whole sample down with a "no such
       // container", and it has nothing to report either way.
-      const shown = await dockerOverview();
-      const sampleable = shown.containers.filter((c) => c.state === "running" || c.state === "paused").map((c) => c.id);
-      return json({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
+      return body(await singleFlight("docker:stats", async () => {
+        const shown = await dockerOverview();
+        const sampleable = shown.containers.filter((c) => c.state === "running" || c.state === "paused").map((c) => c.id);
+        return JSON.stringify({ stats: await dockerStats(shown.scope ? sampleable : undefined) });
+      }));
     }
     if (pathname === "/docker/inspect") return json(await dockerInspect(url.searchParams.get("id") || ""));
     if (pathname === "/docker/top") return json(await dockerTop(url.searchParams.get("id") || ""));
@@ -916,7 +1014,15 @@ const server = Bun.serve<WsData>({
     }
 
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
-    if (pathname === "/terminal/commands") return json(projectCommands(url.searchParams.get("root") || ""));
+    // Async + cached in terminal.ts (the depth-3 Makefile/package.json walk used
+    // to run synchronously on the loop the PTY rides — the watchdog named it at
+    // 84s under load); single-flighted here so the several tabs / the
+    // new-terminal + ⚙-menu that ask at the same instant share one walk rather
+    // than each launching the whole thing.
+    if (pathname === "/terminal/commands") {
+      const root = url.searchParams.get("root") || "";
+      return body(await singleFlight(`cmds:${root}`, async () => JSON.stringify(await projectCommands(root))));
+    }
 
     // --- multi-chat: drive claude sessions from the browser ---
     // `bypass` rides along so the mode picker can stop offering a mode the
@@ -944,8 +1050,20 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/session") {
       const id = url.searchParams.get("id") || "";
-      const detail = id ? getSession(id) : null;
-      return detail ? json(detail) : json({ error: "not found" }, 404);
+      if (!id) return json({ error: "not found" }, 404);
+      // Cached per id (cleared on a new event for the session — see ingestBody)
+      // and single-flighted, so a huge session's synchronous scan runs at most
+      // once per change instead of once per poll per open tab.
+      const out = await singleFlight(`session:${id}`, async () => {
+        const hit = sessionCache.get(id);
+        if (hit && Date.now() - hit.at < SESSION_TTL_MS * backoff()) return hit.body;
+        const detail = getSession(id);
+        const b = detail ? JSON.stringify(detail) : null;
+        if (sessionCache.size > 40) sessionCache.clear();
+        sessionCache.set(id, { at: Date.now(), body: b });
+        return b;
+      });
+      return out ? body(out) : json({ error: "not found" }, 404);
     }
     if (pathname === "/skills") return json({ skills: await getSkills(), generated_at: Date.now() });
     if (pathname === "/skills/export") {
@@ -1135,6 +1253,11 @@ setInterval(prune, 3_600_000);
 // keep watching. This is what makes the dashboard cover all projects at once
 // instead of only the directory agentglass happens to run from.
 startScanner(({ event, session }) => {
+  // Same as ingestBody: the scanner tails live transcripts straight through
+  // insertEvent (not ingestBody), so this is the other path a session grows on
+  // — drop its cached detail here too, or a session being watched live would
+  // read stale until the TTL backstop.
+  sessionCache.delete(event.session_id);
   broadcast({ type: "event", data: event });
   broadcast({ type: "session", data: session });
   // A Pre opens a call and a Post closes one, so the list the fleet is drawing
@@ -1156,6 +1279,42 @@ if (gates.restored || gates.expired) {
 // orphaned. Re-raise so the default disposition still terminates the process.
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => { shutdownTerminals(); process.exit(0); });
+}
+
+// Parent-death watchdog: a server must never outlive whoever launched it.
+//
+// The signal handlers above only cover a clean SIGINT/SIGTERM. They do nothing
+// when the launcher is SIGKILLed or crashes, and there is no launcher-side
+// cleanup at all for `make dev`, the perf/soak scripts, or a server an agent
+// left running inside a worktree that was later deleted (cwd `(deleted)`). The
+// only other thing that stops a sidecar is Electron's in-process stopSidecar
+// handler, which likewise cannot survive its own SIGKILL. The observed result:
+// a dozen servers reparented to init, each holding a port and a fistful of
+// shells, still running ~18h later and saturating the box. This gives the
+// server its own defence — it remembers the pid it was born under and, every
+// few seconds, checks that pid is still both its parent and alive. Reparented
+// to init (ppid 1), handed to a different parent, or the original gone → hang
+// up the shells and exit under its own power, within ~3s of losing its parent.
+//
+// Gated behind a flag the launcher opts into, so a deliberately daemonized
+// `make start` is never self-terminated. Every launcher that expects the
+// server to die with it sets the flag (the electron spawn, the dev script, the
+// perf/soak spawns); the 432-test suite never sets it, so the watchdog stays
+// dormant under `make test` — which is why the interval is not even registered
+// unless the flag is present. `process.ppid === 1` is the robust signal: a
+// crash of an intermediate wrapper (`bun --watch`, `concurrently`) reparents
+// the whole subtree to init, which a bare `!== bornUnder` on a still-live
+// wrapper would miss; `!== bornUnder` in turn catches the immediate parent
+// alone going away and the pid being recycled under a new owner.
+if (process.env.AGENTGLASS_DIE_WITH_PARENT === "1") {
+  const bornUnder = process.ppid;
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  setInterval(() => {
+    if (process.ppid === 1 || process.ppid !== bornUnder || !alive(bornUnder)) {
+      shutdownTerminals();
+      process.exit(0);
+    }
+  }, 3000).unref?.();
 }
 
 console.log(`🛰  agentglass server on http://${LOOPBACK_ONLY ? "localhost" : BIND}:${server.port}`);
@@ -1191,3 +1350,12 @@ subscribeCi((v) => broadcast({ type: "ci", data: v }));
 // Watch our own event loop. Cheap (one timer, one subtraction) and the only
 // thing that turns "the terminal feels laggy" into a name and a number.
 watchLoop();
+
+// Say it once at boot if git is missing. Every git/diff/PR panel and the
+// terminal need it, and without this the only symptom is empty panels that
+// blame the repo — the log line is where an installer user finds the real
+// cause without opening devtools.
+{
+  const gc = gitCapability();
+  if (!gc.available) console.warn(`⚠  git not found on PATH — the git, diff, pull-request and terminal panels will not work. Install git to enable them.`);
+}

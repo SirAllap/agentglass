@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --watch run src/index.ts",
+    "dev": "AGENTGLASS_DIE_WITH_PARENT=1 bun --watch run src/index.ts",
     "start": "bun run src/index.ts"
   },
   "devDependencies": {

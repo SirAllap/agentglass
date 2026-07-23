@@ -103,7 +103,7 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
     setError("");
     api.setWorkspace(root)
       .then((res) => {
-        if (!res.ok) { setBusy(false); setError(res.error || "could not switch project"); return; }
+        if (!res.ok) { setBusy(false); setError(res.error || "Could not switch project"); return; }
         // A failed persist or an env override only affects the *next* launch —
         // the switch itself worked — so say so without blocking the reload.
         if (res.note) console.warn(`[agentglass] ${res.note}`);
@@ -148,12 +148,12 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>⌂ Open a project</span>
-                  <span className="text-[11px] t-dim2">a project — or a folder your projects live in</span>
+                  <span className="text-[11px] t-dim2">A project — or a folder your projects live in</span>
                   <button onClick={close} className="ml-auto text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                 </div>
 
                 <div className="px-4 pt-3 shrink-0">
-                  <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="filter projects…"
+                  <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter projects…"
                     className="w-full px-3 py-2 rounded-lg text-[12px] outline-none"
                     style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                 </div>
@@ -165,13 +165,13 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                     style={{ background: !workspace ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                     <span className="text-[13px]">🖥</span>
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[12px] font-medium" style={{ color: "var(--text)" }}>Whole machine</span>
-                      <span className="block text-[10px] t-dim2">every project at once — no scope</span>
+                      <span className="block text-[12px] font-medium" style={{ color: "var(--text)" }}>All repos/projects</span>
+                      <span className="block text-[10px] t-dim2">Every repo/project — no scope</span>
                     </span>
-                    {!workspace && <span className="text-[9.5px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>current</span>}
+                    {!workspace && <span className="text-[9.5px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>Current</span>}
                   </button>
 
-                  {repos === null && <div className="px-3 py-3 text-[11px] t-dim2">looking for repos…</div>}
+                  {repos === null && <div className="px-3 py-3 text-[11px] t-dim2">Looking for repos…</div>}
                   {/* Two different empty states. A filter that matches nothing
                       is about the filter; an empty list with no filter is about
                       configuration, and saying "no repos found" there states a
@@ -180,10 +180,10 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                       look in"). The first reads as a bug in discovery, which is
                       how it was reported. */}
                   {repos !== null && !shown.length && (terms.length ? (
-                    <div className="px-3 py-3 text-[11px] t-dim2">no repos match that filter</div>
+                    <div className="px-3 py-3 text-[11px] t-dim2">No repos match that filter</div>
                   ) : (
                     <div className="px-3 py-3 text-[11px] t-dim2 leading-relaxed">
-                      <div style={{ color: "var(--text2)" }}>nothing to look in yet</div>
+                      <div style={{ color: "var(--text2)" }}>Nothing to look in yet</div>
                       <div className="mt-1">
                         agentglass sweeps the folders your projects already live in, and the usual ones
                         (<code>~/code</code>, <code>~/src</code>, <code>~/projects</code>…). If yours are somewhere else,
@@ -210,7 +210,7 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                         <span className="block text-[10px] t-dim2 truncate" title={r.root}>{r.root}</span>
                       </span>
                       <span className="shrink-0 text-[9.5px] t-dim2 truncate" style={{ maxWidth: 120 }}>{r.branch}</span>
-                      {r.root === workspace && <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>current</span>}
+                      {r.root === workspace && <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>Current</span>}
                     </button>
                   ))}
                 </div>
@@ -235,7 +235,7 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                           {e.repo && <span className="ml-auto shrink-0 text-[9px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 15%, transparent)" }}>git</span>}
                         </div>
                       ))}
-                      {more && <div className="px-3 py-1 text-[10px] t-dim2">more matches — keep typing</div>}
+                      {more && <div className="px-3 py-1 text-[10px] t-dim2">More matches — keep typing</div>}
                     </div>
                   )}
                   <input ref={pathRef} value={path} onChange={(e) => setPath(e.target.value)} placeholder="…or type a folder: ~/code/my-project, or ~/code for everything in it"
@@ -245,12 +245,12 @@ export function ProjectPicker({ open, workspace, onClose }: { open: boolean; wor
                   <button onClick={() => path.trim() && choose(path.trim())} disabled={busy || !path.trim()}
                     className="text-[11px] px-3 py-1.5 rounded-lg font-medium"
                     style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", opacity: path.trim() ? 1 : 0.5 }}>
-                    open
+                    Open
                   </button>
                 </div>
                 {(error || busy || IS_DEMO) && (
                   <div className="px-4 pb-3 text-[10.5px] shrink-0" style={{ color: error ? "var(--error)" : "var(--text2)" }}>
-                    {IS_DEMO ? "the demo is never scoped — run agentglass locally to open a project" : error || "switching project…"}
+                    {IS_DEMO ? "The demo is never scoped — run agentglass locally to open a project" : error || "Switching project…"}
                   </div>
                 )}
               </motion.div>

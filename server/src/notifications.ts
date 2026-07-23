@@ -231,9 +231,23 @@ const MATCHES = [
  *  without the marker. */
 const DEDUP_MS = 1500;
 
+/** How long a still-incomplete block may sit before the stream going quiet is
+ *  taken to mean the block is complete and it is flushed. dbus delivers a
+ *  message atomically enough that a short gap means it is done — long enough not
+ *  to split one across reads, short enough that a single notification with
+ *  nothing after it is not held hostage to the next one arriving. */
+const IDLE_FLUSH_MS = 250;
+
+/** Backoff for respawning the monitor after it dies on its own. */
+const RESTART_MIN_MS = 500;
+const RESTART_MAX_MS = 30_000;
+const RESTART_HEALTHY_MS = 10_000; // ran at least this long → healthy, reset backoff
+
 const subs = new Set<(n: SystemNote) => void>();
 let proc: Subprocess<"ignore", "pipe", "pipe"> | null = null;
 let seq = 0;
+let restartDelay = 0;
+let restartTimer: ReturnType<typeof setTimeout> | null = null;
 const recent = new Map<string, number>();
 /** noteId -> url, for the notes we ourselves emitted. Bounded; insertion
  *  ordered, so the oldest falls off first. */
@@ -301,6 +315,27 @@ function stop() {
   proc?.kill();
   proc = null;
   recent.clear();
+  // A death we caused is not a death to back off from: cancel any pending
+  // respawn so turning the feature off actually leaves it off.
+  if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
+  restartDelay = 0;
+}
+
+/**
+ * Bring the monitor back after it exited unexpectedly, with backoff.
+ *
+ * A dbus-monitor that dies the instant it spawns — no bus, a rejected match
+ * rule — would otherwise be respawned in a tight loop that pins a core doing
+ * nothing. Each quick death grows the delay; a monitor that ran long enough to
+ * be healthy resets it, so a genuine one-off crash still comes back promptly.
+ */
+function scheduleRestart(startedAt: number): void {
+  if (!subs.size) return; // nobody listening — leave it stopped
+  const ranMs = Date.now() - startedAt;
+  restartDelay = ranMs >= RESTART_HEALTHY_MS ? 0 : Math.min(RESTART_MAX_MS, Math.max(RESTART_MIN_MS, restartDelay * 2));
+  if (restartTimer) clearTimeout(restartTimer);
+  restartTimer = setTimeout(() => { restartTimer = null; if (subs.size && !proc) start(); }, restartDelay);
+  restartTimer.unref?.();
 }
 
 /**
@@ -311,42 +346,63 @@ function stop() {
  * complete block and leave the tail for the next chunk.
  */
 async function pump(p: Subprocess<"ignore", "pipe", "pipe">) {
+  const startedAt = Date.now();
   const dec = new TextDecoder();
   let buf = "";
+  let idle: ReturnType<typeof setTimeout> | null = null;
+  const clearIdle = () => { if (idle) { clearTimeout(idle); idle = null; } };
+
+  // Turn a run of completed block text into emitted notes. Factored out so the
+  // per-chunk parse, the idle flush and the end-of-stream flush all share one
+  // dedup/emit path.
+  const drain = (text: string) => {
+    for (const block of parseBlocks(text)) {
+      const n = noteFrom(block);
+      if (!n) continue;
+      const key = `${n.app}\u0000${n.summary}\u0000${n.body}`;
+      const now = Date.now();
+      const prev = recent.get(key);
+      if (prev && now - prev < DEDUP_MS) continue;
+      recent.set(key, now);
+      if (recent.size > 200) for (const [k, t] of recent) if (now - t > DEDUP_MS) recent.delete(k);
+      const note: SystemNote = {
+        ...n,
+        id: `sys-${++seq}`,
+        at: now,
+        url: urlIn(`${n.summary}\n${n.body}`),
+      };
+      // Remembered so "open" can name a note instead of passing a URL: the
+      // UI never gets to say *what* to open, only *which of ours*. A page
+      // that got hold of the port still cannot turn this into a launcher.
+      if (note.url) {
+        openable.set(note.id, note.url);
+        if (openable.size > 100) openable.delete(openable.keys().next().value!);
+      }
+      emit(note);
+    }
+  };
+
   try {
     for await (const chunk of p.stdout as ReadableStream<Uint8Array>) {
+      clearIdle();
       buf += dec.decode(chunk, { stream: true });
-      // Keep the last (possibly incomplete) block in the buffer.
+      // Everything up to the last block header is complete and safe to parse now.
       const lastHeader = buf.lastIndexOf("\nmethod call ");
-      if (lastHeader < 0) { if (buf.length > 1_000_000) buf = ""; continue; }
-      const done = buf.slice(0, lastHeader + 1);
-      buf = buf.slice(lastHeader + 1);
-
-      for (const block of parseBlocks(done)) {
-        const n = noteFrom(block);
-        if (!n) continue;
-        const key = `${n.app}\u0000${n.summary}\u0000${n.body}`;
-        const now = Date.now();
-        const prev = recent.get(key);
-        if (prev && now - prev < DEDUP_MS) continue;
-        recent.set(key, now);
-        if (recent.size > 200) for (const [k, t] of recent) if (now - t > DEDUP_MS) recent.delete(k);
-        const note: SystemNote = {
-          ...n,
-          id: `sys-${++seq}`,
-          at: now,
-          url: urlIn(`${n.summary}\n${n.body}`),
-        };
-        // Remembered so "open" can name a note instead of passing a URL: the
-        // UI never gets to say *what* to open, only *which of ours*. A page
-        // that got hold of the port still cannot turn this into a launcher.
-        if (note.url) {
-          openable.set(note.id, note.url);
-          if (openable.size > 100) openable.delete(openable.keys().next().value!);
-        }
-        emit(note);
+      if (lastHeader >= 0) {
+        drain(buf.slice(0, lastHeader + 1));
+        buf = buf.slice(lastHeader + 1);
+      } else if (buf.length > 1_000_000) {
+        buf = ""; // a header we never recognised — don't grow without bound
       }
+      // Whatever remains is the last block, held because its text can span reads.
+      // A single-dispatch notification is the whole one there is, so no next
+      // header ever comes to push it out — it used to sit here forever. Flush it
+      // once the stream goes quiet, which for a lone ping is immediately.
+      if (buf) { idle = setTimeout(() => { idle = null; const t = buf; buf = ""; drain(t); }, IDLE_FLUSH_MS); idle.unref?.(); }
     }
   } catch { /* the process was killed, which is how we stop it */ }
-  if (proc === p) { proc = null; if (subs.size) start(); } // died on its own: retry
+  clearIdle();
+  if (buf) drain(buf); // clean end of stream: flush the tail we were holding
+
+  if (proc === p) { proc = null; scheduleRestart(startedAt); } // died on its own: retry, with backoff
 }

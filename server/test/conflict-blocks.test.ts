@@ -133,6 +133,30 @@ describe("conflict blocks", () => {
     expect(r.error).toContain("binary");
   });
 
+  // The reassembly bug: an empty plain run at a file boundary or between two
+  // adjacent conflicts used to be joined with "\n" and inject a blank line into
+  // the staged file — a silent drift from what the user resolved.
+  it("does not add a blank line for a conflict at the very start of the file", () => {
+    write(["<<<<<<< HEAD", "mine", "=======", "yours", ">>>>>>> feature", "after"].join("\n"));
+    expect(resolveBlocks(dir, "a.txt", ["ours"]).ok).toBe(true);
+    expect(read()).toBe(["mine", "after"].join("\n")); // no leading blank
+  });
+
+  it("does not add a blank line for a conflict at the very end of the file", () => {
+    write(["before", "<<<<<<< HEAD", "mine", "=======", "yours", ">>>>>>> feature"].join("\n"));
+    expect(resolveBlocks(dir, "a.txt", ["theirs"]).ok).toBe(true);
+    expect(read()).toBe(["before", "yours"].join("\n")); // no trailing blank
+  });
+
+  it("does not add a blank line between two adjacent conflicts", () => {
+    write([
+      "<<<<<<< HEAD", "a1", "=======", "b1", ">>>>>>> feature",
+      "<<<<<<< HEAD", "a2", "=======", "b2", ">>>>>>> feature",
+    ].join("\n"));
+    expect(resolveBlocks(dir, "a.txt", ["ours", "theirs"]).ok).toBe(true);
+    expect(read()).toBe(["a1", "b2"].join("\n")); // no blank at start or between
+  });
+
   it("survives a real merge conflict end to end", () => {
     writeFileSync(join(dir, "a.txt"), "one\ntwo\nthree\n");
     git("add", "-A"); git("commit", "-qm", "base");

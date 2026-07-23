@@ -167,8 +167,8 @@ function PaneEmpty({ busy, what }: { busy: boolean; what: string }) {
   return (
     <div className="grid place-items-center py-10 t-dim2 text-[12px]">
       {busy
-        ? <span className="flex items-center gap-2"><span className="agx-spin" aria-hidden="true" />loading {what}…</span>
-        : <>no {what}</>}
+        ? <span className="flex items-center gap-2"><span className="agx-spin" aria-hidden="true" />Loading {what}…</span>
+        : <>No {what}</>}
     </div>
   );
 }
@@ -381,8 +381,8 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
   busy: boolean;
 }) {
   if (error) return <div className="text-[10.5px] px-2 py-1.5 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>{error}</div>;
-  if (!blocks) return <div className="text-[10.5px] t-dim2 flex items-center gap-2 px-2 py-1.5"><span className="agx-spin" aria-hidden="true" />reading the file…</div>;
-  if (!blocks.length) return <div className="text-[10.5px] t-dim2 px-2 py-1.5">no conflict markers left in this file</div>;
+  if (!blocks) return <div className="text-[10.5px] t-dim2 flex items-center gap-2 px-2 py-1.5"><span className="agx-spin" aria-hidden="true" />Reading the file…</div>;
+  if (!blocks.length) return <div className="text-[10.5px] t-dim2 px-2 py-1.5">No conflict markers left in this file</div>;
 
   const left = blocks.filter((b) => !picks[b.index]).length;
   const Side = ({ label, lines, tone }: { label: string; lines: string[]; tone: string }) => (
@@ -390,7 +390,7 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
       <div className="text-[9px] mb-0.5 truncate" style={{ color: tone }}>{label}</div>
       <pre className="text-[10px] leading-[1.5] px-1.5 py-1 rounded overflow-x-auto agx-scroll m-0"
         style={{ background: "color-mix(in srgb, var(--bg) 60%, transparent)", color: "var(--text2)", maxHeight: 160 }}>
-        {lines.length ? lines.join("\n") : "(nothing — this side removes these lines)"}
+        {lines.length ? lines.join("\n") : "(Nothing — this side removes these lines)"}
       </pre>
     </div>
   );
@@ -413,10 +413,10 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
             <div className="flex items-center gap-1.5">
               <span className="text-[9.5px] t-dim2 tabular-nums shrink-0">line {b.line}</span>
               <div className="flex items-center gap-1 ml-auto">
-                <Opt id="ours" label="ours" />
-                <Opt id="theirs" label="theirs" />
-                <Opt id="both" label="both" />
-                <Opt id="theirs-first" label="both \u21c5" />
+                <Opt id="ours" label="Ours" />
+                <Opt id="theirs" label="Theirs" />
+                <Opt id="both" label="Both" />
+                <Opt id="theirs-first" label="Both \u21c5" />
               </div>
             </div>
             <div className="flex gap-2">
@@ -424,19 +424,19 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
               {/* Only when git recorded one: with the default conflict style
                   there is no ancestor, and an empty column would read as "the
                   base was empty" rather than "not recorded". */}
-              {b.base && <Side label="base" lines={b.base} tone="var(--text3)" />}
+              {b.base && <Side label="Base" lines={b.base} tone="var(--text3)" />}
               <Side label={b.theirLabel} lines={b.theirs} tone="var(--info)" />
             </div>
           </div>
         );
       })}
       <div className="flex items-center gap-2">
-        <span className="text-[9.5px] t-dim2">{left ? `${left} still to choose` : "every conflict answered"}</span>
+        <span className="text-[9.5px] t-dim2">{left ? `${left} still to choose` : "Every conflict answered"}</span>
         <button onClick={onApply} disabled={busy || left > 0}
           className="ml-auto px-2 py-0.5 rounded text-[10px] font-medium"
           style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: left ? 0.4 : 1 }}
-          title={left ? "choose a side for every conflict first" : "write these choices and stage the file"}>
-          apply and stage
+          title={left ? "Choose a side for every conflict first" : "Write these choices and stage the file"}>
+          Apply and stage
         </button>
       </div>
     </div>
@@ -539,7 +539,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const rels = conflicts.map((p) => p.startsWith(root) ? p.slice(root.length + 1) : p);
     const c = newChat(root);
     update(c.id, (ch) => {
-      ch.title = "resolve merge conflicts";
+      ch.title = "Resolve merge conflicts";
       // Read from `tree`/`repos` rather than the `branch`/`repoRef` consts
       // declared further down: same values, no dependence on where in this
       // component the declarations happen to sit.
@@ -583,6 +583,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [walkLoading, setWalkLoading] = useState(false);
   const walkReqSig = useRef<string | null>(null);
   const treeSeq = useRef(0); // guards stale working-tree responses (repo switches)
+  const viewSeq = useRef(0); // same, for the non-Changes list views (repo/remote/view switches)
   const frameRef = useRef<HTMLDivElement>(null);
 
   const all = useMemo(() => [...(tree?.staged ?? []), ...(tree?.unstaged ?? [])], [tree]);
@@ -605,7 +606,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const line = c.hunks[hunkIdx]?.newStart ?? c.hunks[0]?.newStart ?? 1;
     try {
       const r = await api.editorOpen(c.file_path, line);
-      if (!r.ok) return flash(false, r.error || "could not open the editor");
+      if (!r.ok) return flash(false, r.error || "Could not open the editor");
       if (r.how === "remote") {
         // It landed in a window that may be behind this one, so say so —
         // otherwise pressing `e` looks like it did nothing at all. And when it
@@ -613,8 +614,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         // name it: the file opens in the nvim you have, which is the point, but
         // you should not have to work out which window it appeared in.
         flash(true, r.viaFamily
-          ? `sent to your nvim in ${r.viaFamily.split("/").pop()} · ${baseName(c.file_path)}:${line}`
-          : `sent to your open nvim · ${baseName(c.file_path)}:${line}`);
+          ? `Sent to your nvim in ${r.viaFamily.split("/").pop()} · ${baseName(c.file_path)}:${line}`
+          : `Sent to your open nvim · ${baseName(c.file_path)}:${line}`);
       } else if (r.command) {
         // Nothing reachable for *this* file. Saying "no nvim running" when one
         // is open two panes away sends you looking for a bug; naming the repo
@@ -623,8 +624,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         const elsewhere = r.otherCwds?.length
           ? `nvim is open in ${r.otherCwds.map((p) => p.split("/").pop()).join(", ")}, not this repo — copied: ${r.command}`
           : r.stuck
-          ? `an nvim is running but not answering (${r.stuck} stale socket${r.stuck === 1 ? "" : "s"}) — copied: ${r.command}`
-          : `no nvim running — copied: ${r.command}`;
+          ? `An nvim is running but not answering (${r.stuck} stale socket${r.stuck === 1 ? "" : "s"}) — copied: ${r.command}`
+          : `No nvim running — copied: ${r.command}`;
         flash(true, elsewhere);
         navigator.clipboard?.writeText(r.command).catch(() => { /* no clipboard permission */ });
       }
@@ -681,9 +682,16 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // empty states need to tell the two apart.
   const loadView = useCallback(() => {
     if (!open || !root) return;
+    // Like treeSeq for the working tree: each run claims a sequence number, and a
+    // reply from a repo/remote/view you have since switched away from is dropped
+    // rather than painted under the current selection. The busyView guard below
+    // owns only the spinner — and keys on `view`, so it cannot tell two answers
+    // for the *same* view apart (a remote switch stays on "remotes"), which is
+    // exactly the stale-write this closes.
+    const seq = ++viewSeq.current;
     const track = <T,>(p: Promise<T>, use: (v: T) => void) => {
       setBusyView(view);
-      p.then(use).catch(() => {}).finally(() => {
+      p.then((v) => { if (seq === viewSeq.current) use(v); }).catch(() => {}).finally(() => {
         // Only clear if this is still the view being looked at: switching tabs
         // mid-flight would otherwise have the old request turn off the new
         // one's spinner.
@@ -698,7 +706,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       // Two answers, because the pane asks two questions: which remotes there
       // are (the picker) and what is on the selected one (the list). Asked
       // together rather than chained, so the list doesn't wait on the picker.
-      api.gitRemotes(root).then((r) => setRemotes(r.remotes)).catch(() => {});
+      api.gitRemotes(root).then((r) => { if (seq === viewSeq.current) setRemotes(r.remotes); }).catch(() => {});
       track(api.gitRemoteBranches(root, remoteSel), (r) => {
         setRemoteRows(r.branches);
         // Which remote the server actually read — how the picker gets its
@@ -778,16 +786,16 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const stage = async (c: GitFileChange) => { if (await act(() => api.gitStage(root, [rel(c)]))) setSelKey("s:" + c.file_path); };
   const unstage = async (c: GitFileChange) => { if (await act(() => api.gitUnstage(root, [rel(c)]))) setSelKey("u:" + c.file_path); };
   const discard = async (c: GitFileChange) => {
-    if (await ask({ title: `Discard changes to ${baseName(c.file_path)}?`, body: "This cannot be undone.", danger: true, confirmLabel: "Discard" })) act(() => api.gitDiscard(root, [rel(c)]), "discarded");
+    if (await ask({ title: `Discard changes to ${baseName(c.file_path)}?`, body: "This cannot be undone.", danger: true, confirmLabel: "Discard" })) act(() => api.gitDiscard(root, [rel(c)]), "Discarded");
   };
   const doCommit = async () => {
-    if (!title.trim()) { flash(false, "commit title required"); return; }
-    if (await act(() => api.gitCommitStaged(root, title, body), "committed")) { setTitle(""); setBody(""); api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)).catch(() => {}); }
+    if (!title.trim()) { flash(false, "Commit title required"); return; }
+    if (await act(() => api.gitCommitStaged(root, title, body), "Committed")) { setTitle(""); setBody(""); api.gitGraph(root, 500, logScope).then((r) => setGraph(r.lines)).catch(() => {}); }
   };
   // branches
   const reloadBranches = () => api.gitBranches(root).then(setBranchData).catch(() => {});
-  const checkout = async (name: string) => { if (await act(() => api.gitCheckout(root, name), `on ${name}`)) { reloadBranches(); setView("changes"); } };
-  const createBranch = async () => { const n = newBranch.trim(); if (!n) return; if (await act(() => api.gitBranchCreate(root, n), `created ${n}`)) { setNewBranch(""); reloadBranches(); setView("changes"); } };
+  const checkout = async (name: string) => { if (await act(() => api.gitCheckout(root, name), `On ${name}`)) { reloadBranches(); setView("changes"); } };
+  const createBranch = async () => { const n = newBranch.trim(); if (!n) return; if (await act(() => api.gitBranchCreate(root, n), `Created ${n}`)) { setNewBranch(""); reloadBranches(); setView("changes"); } };
   /**
    * Delete a branch, and offer the repair when git refuses.
    *
@@ -814,21 +822,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const deleteBranch = async (b: GitBranch) => {
     if (busy || !(await ask({ title: `Delete branch ${b.name}?`, danger: true }))) return;
     setBusy(true);
-    setPending(`delete ${b.name}`);
+    setPending(`Delete ${b.name}`);
     try {
       let r = await api.gitBranchDelete(root, b.name, false);
       const wt = r.ok ? null : /worktree at '([^']+)'/.exec(r.error || "")?.[1];
       if (wt) {
-        if (!(await ask({ title: `${b.name} is checked out in a worktree`, body: `It lives in ${wtName(wt)}. Remove that worktree and delete the branch?`, danger: true, confirmLabel: "Remove & delete" }))) { flash(false, "kept"); return; }
+        if (!(await ask({ title: `${b.name} is checked out in a worktree`, body: `It lives in ${wtName(wt)}. Remove that worktree and delete the branch?`, danger: true, confirmLabel: "Remove & delete" }))) { flash(false, "Kept"); return; }
         let rm = await api.gitWorktreeRemove(root, wt, false);
         // git refuses to drop a worktree holding work — modified tracked files
         // or, as often, a stray untracked scratch file. Name the cost, then let
         // them take it.
         if (!rm.ok && /modified|untracked|not clean/i.test(rm.error || "")) {
-          if (!(await ask({ title: `${wtName(wt)} still has uncommitted or untracked files`, body: "Remove it anyway? That work is gone.", danger: true, confirmLabel: "Remove anyway" }))) { flash(false, rm.error || "kept"); return; }
+          if (!(await ask({ title: `${wtName(wt)} still has uncommitted or untracked files`, body: "Remove it anyway? That work is gone.", danger: true, confirmLabel: "Remove anyway" }))) { flash(false, rm.error || "Kept"); return; }
           rm = await api.gitWorktreeRemove(root, wt, true);
         }
-        if (!rm.ok) { flash(false, rm.error || "worktree remove failed"); return; }
+        if (!rm.ok) { flash(false, rm.error || "Worktree remove failed"); return; }
         reloadWorktrees();
         r = await api.gitBranchDelete(root, b.name, false);
       }
@@ -838,7 +846,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
           r = await api.gitBranchDelete(root, b.name, true);
         }
       }
-      flash(r.ok, r.ok ? `deleted ${b.name}` : r.error || "failed");
+      flash(r.ok, r.ok ? `Deleted ${b.name}` : r.error || "Failed");
       if (r.ok) reloadBranches();
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); setPending(null); }
@@ -858,7 +866,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     setBusy(true);
     try {
       const r = await api.prBranchUrl(root, b.name, trackChip(b.track).gone);
-      if (!r.ok || !r.url) { flash(false, r.error || "could not work out where that branch lives"); return; }
+      if (!r.ok || !r.url) { flash(false, r.error || "Could not work out where that branch lives"); return; }
       window.open(r.url, "_blank", "noopener,noreferrer");
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
@@ -926,12 +934,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     // first thing to appear was a dialog. A control that has been pressed has
     // to say so on the same frame.
     setBusy(true);
-    setPending("checking worktrees");
+    setPending("Checking worktrees");
     let heldByWorktree: Map<string, string>;
     // Without the map every branch looks free to delete, which is the wrong
     // half of the fork to guess at — so a failure here stops the whole thing.
     try { heldByWorktree = await heldByWorktreeNow(); }
-    catch (e) { flash(false, `couldn't list this repo's worktrees: ${String(e)}`); setBusy(false); setPending(null); return; }
+    catch (e) { flash(false, `Couldn't list this repo's worktrees: ${String(e)}`); setBusy(false); setPending(null); return; }
     const { free, held } = partitionByWorktree(goneMerged, heldByWorktree);
     setPending(null);
     setBusy(false); // the question is theirs to answer; nothing is running
@@ -941,15 +949,15 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     let done = 0;
     try {
       for (const b of free) {
-        setPending(`deleting ${b.name}`);
+        setPending(`Deleting ${b.name}`);
         const r = await api.gitBranchDelete(root, b.name, true).catch(() => ({ ok: false, error: "" }));
         if (r.ok) done++; else failed.push(`${b.name}${r.error ? ` (${r.error})` : ""}`);
       }
       if (held.length) done += await deleteHeldByWorktrees(held, heldByWorktree, failed);
       flash(failed.length === 0,
         failed.length === 0
-          ? `deleted ${done} merged branch${done === 1 ? "" : "es"}`
-          : `deleted ${done}, ${failed.length} kept: ${failed.slice(0, 2).join("; ")}${failed.length > 2 ? "…" : ""}`);
+          ? `Deleted ${done} merged branch${done === 1 ? "" : "es"}`
+          : `Deleted ${done}, ${failed.length} kept: ${failed.slice(0, 2).join("; ")}${failed.length > 2 ? "…" : ""}`);
     } finally {
       setBusy(false);
       setPending(null);
@@ -989,7 +997,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       confirmLabel: "Hand them back",
     })) {
       for (const r of blocked) {
-        setPending(`restoring ownership of ${wtName(r.path)}`);
+        setPending(`Restoring ownership of ${wtName(r.path)}`);
         const fix = await api.gitWorktreeChown(root, r.path).catch((e) => ({ ok: false, error: String(e) }));
         if (!fix.ok) { flash(false, `${wtName(r.path)}: ${fix.error || "chown failed"}`); continue; }
         r.blocked = undefined; // re-read below now that it can succeed
@@ -1022,7 +1030,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     let rescued = 0;
     for (const [path, rels] of picked) {
       if (!rels.length) continue;
-      step(`keeping ${rels.length} file${rels.length === 1 ? "" : "s"} from ${wtName(path)}`);
+      step(`Keeping ${rels.length} file${rels.length === 1 ? "" : "s"} from ${wtName(path)}`);
       const res = await api.gitWorktreeRescue(root, path, rels).catch((e) => ({ ok: false, error: String(e), copied: [] as string[], skipped: [] as { path: string; why: string }[] }));
       // Every path asked for has to come back accounted for. Counting only
       // `skipped` trusts the server to have reported its own omissions, and a
@@ -1041,14 +1049,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       if (res.copied?.length) rescued += res.copied.length;
     }
 
-    if (rescued) flash(true, `kept ${rescued} file${rescued === 1 ? "" : "s"} in the main checkout`);
+    if (rescued) flash(true, `Kept ${rescued} file${rescued === 1 ? "" : "s"} in the main checkout`);
 
     let done = 0;
     // `report.path` rather than another lookup: it is the path the server just
     // confirmed it inspected, so the thing removed is the thing priced.
     for (const { branch, report } of removable) {
       if (keptBack.has(report.path)) continue; // its rescue failed; already reported
-      step(`removing ${wtName(report.path)}`);
+      step(`Removing ${wtName(report.path)}`);
       const rm = await api.gitWorktreeRemove(root, report.path, true).catch((e) => ({ ok: false, error: String(e) }));
       if (!rm.ok) { failed.push(`${branch.name} (${rm.error || "worktree remove failed"})`); continue; }
       const r = await api.gitBranchDelete(root, branch.name, true).catch((e) => ({ ok: false, error: String(e) }));
@@ -1057,11 +1065,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     setRescue(null);
     return done;
   };
-  const mergeBranch = async (name: string) => { if (await ask({ title: `Merge ${name} into the current branch?`, confirmLabel: "Merge" })) act(() => api.gitMerge(root, name), `merged ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
-  const rebaseBranch = async (name: string) => { if (await ask({ title: `Rebase the current branch onto ${name}?`, confirmLabel: "Rebase" })) act(() => api.gitRebase(root, name), `rebased onto ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
+  const mergeBranch = async (name: string) => { if (await ask({ title: `Merge ${name} into the current branch?`, confirmLabel: "Merge" })) act(() => api.gitMerge(root, name), `Merged ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
+  const rebaseBranch = async (name: string) => { if (await ask({ title: `Rebase the current branch onto ${name}?`, confirmLabel: "Rebase" })) act(() => api.gitRebase(root, name), `Rebased onto ${name}`).then((ok) => { if (ok) reloadBranches(); }); };
   const renameBranch = async (name: string) => {
     const to = await askText({ title: `Rename ${name}`, input: { label: "New name", initial: name }, confirmLabel: "Rename" });
-    if (to && to !== name) act(() => api.gitBranchRename(root, name, to), `renamed → ${to}`).then((ok) => { if (ok) reloadBranches(); });
+    if (to && to !== name) act(() => api.gitBranchRename(root, name, to), `Renamed → ${to}`).then((ok) => { if (ok) reloadBranches(); });
   };
   // log
   const openCommit = async (hash: string, subject: string) => {
@@ -1077,21 +1085,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const addWorktree = async () => {
     const br = newWtBranch.trim(); if (!br) return;
     const path = `${root}-${br.replace(/[\/\s]+/g, "-")}`; // sibling dir named repo-branch
-    if (await act(() => api.gitWorktreeAdd(root, path, br, true), `worktree ${wtName(path)}`)) { setNewWtBranch(""); reloadWorktrees(); }
+    if (await act(() => api.gitWorktreeAdd(root, path, br, true), `Worktree ${wtName(path)}`)) { setNewWtBranch(""); reloadWorktrees(); }
   };
   // Same shape as the worktree step inside deleteBranch: a dirty worktree is a
   // question ("that work is gone — still?"), not a dead end.
   const removeWorktree = async (w: GitWorktree) => {
     if (busy || !(await ask({ title: `Remove worktree ${wtName(w.path)}?`, danger: true, confirmLabel: "Remove" }))) return;
     setBusy(true);
-    setPending(`remove ${wtName(w.path)}`);
+    setPending(`Remove ${wtName(w.path)}`);
     try {
       let r = await api.gitWorktreeRemove(root, w.path, false);
       if (!r.ok && /modified|untracked|not clean/i.test(r.error || "")) {
-        if (!(await ask({ title: `${wtName(w.path)} still has uncommitted or untracked files`, body: "Remove it anyway? That work is gone.", danger: true, confirmLabel: "Remove anyway" }))) { flash(false, r.error || "kept"); return; }
+        if (!(await ask({ title: `${wtName(w.path)} still has uncommitted or untracked files`, body: "Remove it anyway? That work is gone.", danger: true, confirmLabel: "Remove anyway" }))) { flash(false, r.error || "Kept"); return; }
         r = await api.gitWorktreeRemove(root, w.path, true);
       }
-      flash(r.ok, r.ok ? "removed worktree" : r.error || "failed");
+      flash(r.ok, r.ok ? "Removed worktree" : r.error || "Failed");
       if (r.ok) { reloadWorktrees(); reloadBranches(); }
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); setPending(null); }
@@ -1110,13 +1118,13 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const takeRemote = async (b: GitRemoteBranch, how: "local" | "checkout" | "worktree") => {
     if (how === "worktree") {
       const path = `${root}-${b.name.replace(/[\/\s]+/g, "-")}`; // sibling dir, same shape as the Worktrees tab uses
-      if (await act(() => api.gitWorktreeAdd(root, path, b.name, true, b.ref), `worktree ${wtName(path)}`, `take:${b.ref}`)) {
+      if (await act(() => api.gitWorktreeAdd(root, path, b.name, true, b.ref), `Worktree ${wtName(path)}`, `take:${b.ref}`)) {
         reloadRemoteBranches(); reloadWorktrees(); reloadBranches();
       }
       return;
     }
     const ok = await act(() => api.gitTrackRemote(root, b.ref, how === "checkout"),
-      how === "checkout" ? `on ${b.name}` : `${b.name} is local now`, `take:${b.ref}`);
+      how === "checkout" ? `On ${b.name}` : `${b.name} is local now`, `take:${b.ref}`);
     if (!ok) return;
     reloadRemoteBranches(); reloadBranches();
     // Checking out moved the working tree — the Changes view is now the thing
@@ -1132,7 +1140,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const openWorktree = (w: GitWorktree) => { setRoot(w.path); setRepoOpen(false); setSelKey(null); setView("changes"); };
   // stashes
   const reloadStashes = () => api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
-  const stashPush = async () => { if (await act(() => api.gitStashPush(root, ""), "stashed")) reloadStashes(); };
+  const stashPush = async () => { if (await act(() => api.gitStashPush(root, ""), "Stashed")) reloadStashes(); };
   const stashOp = async (op: "apply" | "pop" | "drop", index: number) => {
     if (op === "drop" && !(await ask({ title: "Drop this stash?", body: "The stashed changes are gone.", danger: true, confirmLabel: "Drop" }))) return;
     const fn = op === "apply" ? api.gitStashApply : op === "pop" ? api.gitStashPop : api.gitStashDrop;
@@ -1277,8 +1285,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     ? (i: number) => (
         <span className="inline-flex items-center gap-1">
           {selected.staged
-            ? hunkBtn("－ unstage hunk", "var(--text)", () => applyHunk("unstage", i))
-            : <>{hunkBtn("＋ stage hunk", "var(--text)", () => applyHunk("stage", i))}{hunkBtn("↺ discard", "var(--error)", () => applyHunk("discard", i))}</>}
+            ? hunkBtn("－ Unstage hunk", "var(--text)", () => applyHunk("unstage", i))
+            : <>{hunkBtn("＋ Stage hunk", "var(--text)", () => applyHunk("stage", i))}{hunkBtn("↺ Discard", "var(--error)", () => applyHunk("discard", i))}</>}
         </span>
       )
     : undefined;
@@ -1503,11 +1511,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         tall and shoved the tab strip down with it. */}
                     <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[240px] shrink-0 whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
                       title={repoRef ? `${repoRef.name}\n${repoRef.root}` : undefined}>
-                      <span className="font-medium truncate min-w-0">{repoRef?.name ?? "repo"}</span><span className="t-dim2 shrink-0">▼</span>
+                      <span className="font-medium truncate min-w-0">{repoRef?.name ?? "Repo"}</span><span className="t-dim2 shrink-0">▼</span>
                     </button>
                     {repoOpen && (
                       <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 420, overflow: "hidden" }}>
-                        <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="filter repos…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                        <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="Filter repos…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                         <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
                           {/* Path included: a worktree is found by its card id
                               ("20343"), which lives in the directory name. */}

@@ -52,7 +52,7 @@ function FileRow({ f, on, onToggle }: { f: GitFileStatus; on: boolean; onToggle:
       <span className="text-[11.5px] truncate" style={{ color: on ? "var(--text)" : "var(--text3)" }}>
         <span className="t-dim2">{dirName(f.path)}</span><span className="font-medium">{baseName(f.path)}</span>
       </span>
-      {!on && f.unstaged && f.staged && <span className="ml-auto text-[9px] t-dim2 shrink-0">partly staged</span>}
+      {!on && f.unstaged && f.staged && <span className="ml-auto text-[9px] t-dim2 shrink-0">Partly staged</span>}
     </button>
   );
 }
@@ -132,9 +132,9 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3">
-                  {!repos && <div className="t-dim2 text-center py-12 text-[12px]">reading working tree…</div>}
+                  {!repos && <div className="t-dim2 text-center py-12 text-[12px]">Reading working tree…</div>}
                   {repos && repos.length === 0 && (
-                    <div className="t-dim2 text-center py-12 text-[12px]">no git repository found for these changes</div>
+                    <div className="t-dim2 text-center py-12 text-[12px]">No git repository found for these changes</div>
                   )}
 
                   {result?.ok ? (
@@ -168,10 +168,10 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                       <div>
                         <div className="flex items-center justify-between mb-1 px-1">
                           <span className="text-[10px] t-dim2 uppercase tracking-wide">Files in this commit</span>
-                          <button onClick={toggleAll} className="text-[10px] t-dim2 hover:opacity-80">{allOn ? "select none" : "select all"} · {selPaths.length}/{repo.files.length}</button>
+                          <button onClick={toggleAll} className="text-[10px] t-dim2 hover:opacity-80">{allOn ? "Select none" : "Select all"} · {selPaths.length}/{repo.files.length}</button>
                         </div>
                         <div className="rounded-lg p-1 space-y-0.5 max-h-[220px] overflow-y-auto" style={{ background: "color-mix(in srgb, var(--bg3) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
-                          {repo.files.length === 0 && <div className="t-dim2 text-center py-6 text-[11px]">working tree clean — nothing to commit</div>}
+                          {repo.files.length === 0 && <div className="t-dim2 text-center py-6 text-[11px]">Working tree clean — nothing to commit</div>}
                           {repo.files.map((f) => <FileRow key={f.path} f={f} on={sel.has(f.path)} onToggle={() => toggle(f.path)} />)}
                         </div>
                       </div>
@@ -221,7 +221,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                         <>
                           <button onClick={() => setConfirming(false)} className="px-3 py-1.5 rounded-lg text-[11px]" style={{ background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text3)" }}>Cancel</button>
                           <button onClick={doCommit} disabled={busy} className="px-3 py-1.5 rounded-lg text-[11px] font-medium" style={{ background: "var(--error)", color: "#fff", opacity: busy ? 0.6 : 1 }}>
-                            {busy ? "committing…" : `Yes, commit ${selPaths.length}`}
+                            {busy ? "Committing…" : `Yes, commit ${selPaths.length}`}
                           </button>
                         </>
                       ) : (

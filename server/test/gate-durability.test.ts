@@ -163,7 +163,11 @@ describe("restart", () => {
     const gone = db.getGate(stale)!;
     expect(gone.decision).toBe("allow"); // fail-open default
     expect(gone.resolution).toBe("restart");
-    expect(gone.reason).toContain("while the server was down");
+    // Reason stays EMPTY on a fail-open allow, exactly like the live-timeout
+    // path: a non-empty reason makes the re-attaching hook force-allow and skip
+    // Claude Code's own permission prompt. A restart must not quietly turn a
+    // pending gate into a prompt-skipping auto-allow.
+    expect(gone.reason).toBe("");
     expect(db.gateHistory(50).map((g) => g.id)).toContain(stale);
   });
 });

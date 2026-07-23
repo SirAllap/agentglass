@@ -10,8 +10,13 @@ help: ## List every make command with what it does
 install: ## Install all workspace dependencies (bun)
 	bun install
 
+# `trap 'kill 0'` tears the whole process group (concurrently, bun --watch, the
+# server, vite) down on Ctrl-C or a SIGTERM to make, so an abandoned `make dev`
+# leaves nothing behind. The server also carries its own parent-death watchdog
+# (AGENTGLASS_DIE_WITH_PARENT, set in server/package.json's dev script) as the
+# backstop for the SIGKILL case this trap cannot catch.
 dev: ## Run server (:4000) + web dashboard (:6180) together, live-reload
-	bun run dev
+	trap 'kill 0' INT TERM; bun run dev
 
 server: ## Run only the Bun + SQLite server on :4000
 	bun run dev:server
@@ -25,14 +30,19 @@ build: ## Production build of the web dashboard (web/dist)
 test: ## Run the server test suite (what CI runs)
 	cd server && bun test
 
+# The scripts kill the server/Chrome they spawn on their own SIGINT/SIGTERM;
+# `trap 'kill 0'` here is the group-wide backstop for a SIGTERM aimed at make.
 smoke: build ## Boot the production bundle in headless Chrome — fails on a blank screen or any console error
-	bun scripts/smoke.ts
+	trap 'kill 0' INT TERM; bun scripts/smoke.ts
 
 perf: ## Check the server still answers while it works — fails if the event loop (and so the terminal) stalls
-	bun scripts/perfbudget.ts
+	trap 'kill 0' INT TERM; bun scripts/perfbudget.ts
 
 soak: ## Run the server hard for a few minutes and fail if its memory keeps climbing (AGX_SOAK_MINUTES=30 for a real one)
-	bun scripts/soak.ts
+	trap 'kill 0' INT TERM; bun scripts/soak.ts
+
+loadtest: ## Hammer the server (many clients × every panel) against a copy of the REAL DB and fail if the PTY stutters (AGX_LOAD_CLIENTS=10 for heavier)
+	trap 'kill 0' INT TERM; bun scripts/loadtest.ts
 
 typecheck: ## Type-check both halves (vite build and bun both strip types without checking)
 	cd web && bunx tsc --noEmit

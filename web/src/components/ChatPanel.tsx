@@ -139,12 +139,12 @@ function Inspector({ chat }: { chat: Chat }) {
         <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(1, pct)}%`, background: tone }} />
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-0.5">
-        <Row k="in" v={fmtTokens(u.input)} />
-        <Row k="out" v={fmtTokens(u.output)} />
+        <Row k="In" v={fmtTokens(u.input)} />
+        <Row k="Out" v={fmtTokens(u.output)} />
         {/* Cache read is the cheap part and usually the biggest — worth its own
             line so a large total doesn't read as a large bill. */}
-        <Row k="cache read" v={fmtTokens(u.cacheRead)} c="var(--success)" />
-        <Row k="cache write" v={fmtTokens(u.cacheWrite)} c="var(--warning)" />
+        <Row k="Cache read" v={fmtTokens(u.cacheRead)} c="var(--success)" />
+        <Row k="Cache write" v={fmtTokens(u.cacheWrite)} c="var(--warning)" />
       </div>
       {u.costUsd > 0 && (
         <div className="flex items-baseline gap-2 pt-1 mt-0.5 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 20%, transparent)" }}>
@@ -200,7 +200,7 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
             style={{ background: "color-mix(in srgb, var(--bg) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}
           />
         ) : (
-          <div className="truncate text-[11.5px]" title="double-click to rename"
+          <div className="truncate text-[11.5px]" title="Double-click to rename"
             onDoubleClick={(e) => { e.stopPropagation(); setDraft(chat.title); setEditing(true); }}
             style={{ color: active ? "var(--text)" : "var(--text2)" }}>{chat.title}</div>
         )}
@@ -208,13 +208,13 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
             "finished" and "stuck, needs you" are the same glance otherwise and
             they want opposite reactions from you. */}
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="truncate text-[9.5px] t-dim2">{repoName(chat.cwd) || "no repo"}</span>
+          <span className="truncate text-[9.5px] t-dim2">{repoName(chat.cwd) || "No repo"}</span>
           {chat.sending
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>· running</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>· Running</span>
             : chat.attention === "blocked"
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--warning)" }}>· needs you</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--warning)" }}>· Needs you</span>
             : chat.attention === "done"
-            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--primary)" }}>· done</span>
+            ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--primary)" }}>· Done</span>
             : null}
           {/* How full this chat's context is, per row. With several open it's
               the number that decides which one you go back to first — the one
@@ -234,8 +234,8 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
       <button
         onClick={(e) => { e.stopPropagation(); onClose(); }}
         className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 text-[13px] leading-none px-1 t-dim2 hover:opacity-70 shrink-0"
-        title="close chat"
-        aria-label={`close chat: ${chat.title}`}
+        title="Close chat"
+        aria-label={`Close chat: ${chat.title}`}
       >✕</button>
     </div>
   );
@@ -288,11 +288,11 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
         </div>
       </div>
       {why === "live"
-        ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>● running</span>
+        ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>● Running</span>
         : why === "no-dir"
-        ? <span className="text-[9.5px] shrink-0 t-dim2">no dir</span>
+        ? <span className="text-[9.5px] shrink-0 t-dim2">No dir</span>
         : openChatId
-        ? <span className="text-[9.5px] shrink-0 t-dim2">open ↗</span>
+        ? <span className="text-[9.5px] shrink-0 t-dim2">Open ↗</span>
         : <span className="text-[10px] shrink-0" style={{ color: "var(--primary-hover)" }}>↩</span>}
     </button>
   );
@@ -361,18 +361,18 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
           boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)",
         }}
       >
-        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter sessions…"
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter sessions…"
           className="mx-1 mt-0.5 mb-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
           style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
         <div role="listbox" aria-label="sessions to resume" className="agx-scroll flex-1 min-h-0 overflow-y-auto flex flex-col gap-0.5">
-          {rows === null && <div className="px-2.5 py-3 text-[11px] t-dim2">loading sessions…</div>}
-          {rows !== null && !shown.length && <div className="px-2.5 py-3 text-[11px] t-dim2">no sessions to resume</div>}
+          {rows === null && <div className="px-2.5 py-3 text-[11px] t-dim2">Loading sessions…</div>}
+          {rows !== null && !shown.length && <div className="px-2.5 py-3 text-[11px] t-dim2">No sessions to resume</div>}
           {shown.map((s) => (
             <ResumeRow key={s.session_id} s={s} openChatId={chatResuming(s.session_id)?.id} onPick={() => onPick(s)} />
           ))}
         </div>
         <div className="px-2.5 pt-1.5 pb-0.5 text-[9px] t-dim2 shrink-0">
-          resuming keeps claude's full context · running sessions can't be resumed
+          Resuming keeps claude's full context · running sessions can't be resumed
         </div>
       </motion.div>
     </>
@@ -738,15 +738,15 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                 <ViewHeader title="Chats" count={chats.length} actions={<>
                   <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
                     className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
-                    title="continue a session that already exists — e.g. one you started in a terminal">↩ resume</button>
-                  <button onClick={add} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="new chat">+ new</button>
+                    title="Continue a session that already exists — e.g. one you started in a terminal">↩ Resume</button>
+                  <button onClick={add} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="New chat">+ New</button>
                 </>} />
 
                 <div className="flex-1 min-h-0 flex overflow-hidden">
                 {/* ---- sidebar: every open chat ---- */}
                 <div className="shrink-0 flex flex-col" style={{ width: sidebarW, background: "color-mix(in srgb, var(--bg) 40%, transparent)" }}>
                   {chats.length > 6 && (
-                    <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="filter chats…"
+                    <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter chats…"
                       className="mx-2.5 mt-2.5 mb-2 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                       style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", color: "var(--text)" }} />
                   )}
@@ -760,15 +760,15 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         one in. Only the first is about matching. */}
                     {!shown.length && (
                       <div className="px-2.5 py-3 text-[11px] t-dim2">
-                        {query.trim() ? "no chats match"
-                          : !reposKnown || !scopeKnown ? "finding your projects…"
-                          : !repos.length ? "no git repository found to run a chat in"
-                          : "no chats yet — press + new"}
+                        {query.trim() ? "No chats match"
+                          : !reposKnown || !scopeKnown ? "Finding your projects…"
+                          : !repos.length ? "No git repository found to run a chat in"
+                          : "No chats yet — press + new"}
                       </div>
                     )}
                     {noRepo && (
                       <div className="px-2.5 py-2 text-[11px]" style={{ color: "var(--warning)" }}>
-                        nowhere to run a chat: no git repository was found
+                        Nowhere to run a chat: no git repository was found
                       </div>
                     )}
                   </div>
@@ -784,7 +784,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                     {active ? (
                       <>
                         <Select value={active.cwd} onChange={(v) => { update(active.id, (c) => { c.cwd = v; }); setDefaultCwd(v); }}
-                          className={selCls} style={selStyle} options={repoOptions} placeholder="pick a repo" />
+                          className={selCls} style={selStyle} options={repoOptions} placeholder="Pick a repo" />
                         <Select value={active.model} onChange={(v) => update(active.id, (c) => { c.model = v; })}
                           className={selCls} style={selStyle} options={MODELS.map((m) => ({ value: m.id, label: m.label }))} />
                         <Select value={active.mode} onChange={(v) => update(active.id, (c) => { c.mode = v; })}
@@ -794,15 +794,15 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           <input
                             value={allowed}
                             onChange={(e) => setAllowed(e.target.value)}
-                            placeholder="allowed tools…"
+                            placeholder="Allowed tools…"
                             title={"Tools that may run without asking — space-separated.\n\nExamples: Read  Edit  Bash(git status)  Bash(gh pr view:*)\n\nWithout this, `claude -p` refuses anything that would normally prompt, because there is no terminal to prompt from."}
                             className="text-[10px] px-2 py-1 rounded-md outline-none min-w-0 flex-1 max-w-[280px]"
                             style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
                           />
                         )}
-                        {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
+                        {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="Resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                       </>
-                    ) : <span className="text-[12px] t-dim2">no chat selected</span>}
+                    ) : <span className="text-[12px] t-dim2">No chat selected</span>}
                   </div>
 
                   {/* Bottom-anchored: a short conversation sits above the input
@@ -838,7 +838,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                           <div className="max-w-[86%] min-w-0 rounded-xl px-3.5 py-2.5 text-[12px] leading-relaxed break-words"
                             style={{
-                              ...CODE_FONT_STYLE, fontFamily: undefined, opacity: m.historical ? 0.72 : 1,
+                              // Resumed history reads at full strength, same as
+                              // live: the "resumed here" divider already marks the
+                              // seam, so dimming the bubbles on top of it only made
+                              // a restored conversation look degraded next to the
+                              // console it mirrors.
+                              ...CODE_FONT_STYLE, fontFamily: undefined,
                               // Stronger than the old 16%/45% wash: at that
                               // strength every bubble was the same violet as the
                               // panel behind it, and on some themes the two roles
@@ -878,7 +883,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             {!!m.images?.length && (
                               <div className="flex flex-wrap gap-1.5 mb-1.5">
                                 {m.images.map((img, j) => (
-                                  <img key={j} src={`data:${img.mediaType};base64,${img.data}`} alt="attached image"
+                                  <img key={j} src={`data:${img.mediaType};base64,${img.data}`} alt="Attached image"
                                     className="block max-h-40 max-w-full rounded-lg"
                                     style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} />
                                 ))}
@@ -909,7 +914,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         title="Jump to the newest message and follow again"
                         className="pointer-events-auto mb-2 text-[10px] px-2.5 py-1 rounded-full font-medium shadow-lg"
                         style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 18%, var(--bg2))", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
-                        ↓ jump to latest
+                        ↓ Jump to latest
                       </button>
                     </div>
                   )}
@@ -922,7 +927,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       // swap reflows the textarea under the cursor mid-drag.
                       <div className="absolute inset-0 z-10 grid place-items-center rounded-lg pointer-events-none text-[11px] font-semibold"
                         style={{ background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px dashed color-mix(in srgb, var(--primary) 60%, transparent)", color: "var(--text)" }}>
-                        drop to attach
+                        Drop to attach
                       </div>
                     )}
                     {!!active?.attachments.length && (
@@ -932,7 +937,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
                             title={`${a.name} · ${(a.bytes / 1024).toFixed(0)}KB`}>
                             <img src={a.url} alt={a.name} className="block h-14 w-14 object-cover" />
-                            <button onClick={() => dropAttachment(active.id, a.id)} aria-label={`remove ${a.name}`}
+                            <button onClick={() => dropAttachment(active.id, a.id)} aria-label={`Remove ${a.name}`}
                               className="absolute top-0.5 right-0.5 w-4 h-4 grid place-items-center rounded text-[10px] leading-none"
                               style={{ color: "var(--text)", background: "rgba(0,0,0,0.65)" }}>✕</button>
                           </div>
@@ -951,9 +956,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             {active.setupNeeded.command}
                           </code>
                           <button onClick={() => { navigator.clipboard?.writeText(active.setupNeeded!.command); }}
-                            className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>copy</button>
+                            className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>Copy</button>
                           <button onClick={() => update(active.id, (c) => { c.setupNeeded = undefined; c.attention = "none"; })}
-                            className="ml-auto text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)" }}>dismiss</button>
+                            className="ml-auto text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)" }}>Dismiss</button>
                         </div>
                       </div>
                     )}
@@ -974,10 +979,10 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           }}
                           className="shrink-0 px-2 py-1 rounded-md text-[10.5px] font-medium"
                           style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
-                          allow {active.blockedTool}
+                          Allow {active.blockedTool}
                         </button>
                         <button onClick={() => update(active.id, (c) => { c.blockedTool = undefined; })}
-                          className="shrink-0 px-1 t-dim2 hover:opacity-70" aria-label="dismiss">✕</button>
+                          className="shrink-0 px-1 t-dim2 hover:opacity-70" aria-label="Dismiss">✕</button>
                       </div>
                     )}
                     {slashMatches.length > 0 && (
@@ -996,7 +1001,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           </div>
                         ))}
                         <div className="px-2.5 py-1 text-[9.5px] t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                          ↑↓ move · Tab or Enter to pick · keep typing to filter
+                          ↑↓ Move · Tab or Enter to pick · keep typing to filter
                         </div>
                       </div>
                     )}
@@ -1008,7 +1013,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         {active.queued.map((q, i) => (
                           <div key={q.id} className="flex items-baseline gap-2 px-2.5 py-1.5 rounded-lg"
                             style={{ background: "color-mix(in srgb, var(--primary) 10%, transparent)", border: "1px dashed color-mix(in srgb, var(--primary) 35%, transparent)" }}>
-                            <span className="shrink-0 text-[9.5px] t-dim2">queued {i + 1}</span>
+                            <span className="shrink-0 text-[9.5px] t-dim2">Queued {i + 1}</span>
                             <span className="flex-1 truncate text-[11.5px]" style={{ color: "var(--text3)" }}>
                               {q.text || `${q.images.length} image${q.images.length > 1 ? "s" : ""}`}
                             </span>
@@ -1018,7 +1023,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                                 is only offered where nothing is lost. */}
                             {!q.images.length && (
                               <button onClick={() => unqueue(active.id, q.id, true)} title="Put this back in the composer"
-                                className="shrink-0 text-[9.5px] t-dim2 hover:opacity-70">edit</button>
+                                className="shrink-0 text-[9.5px] t-dim2 hover:opacity-70">Edit</button>
                             )}
                             <button onClick={() => unqueue(active.id, q.id)} aria-label="Remove queued message"
                               className="shrink-0 px-1 t-dim2 hover:opacity-70">✕</button>
@@ -1044,11 +1049,11 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
                         <ClipIcon />
                       </button>
-                      <textarea ref={inputRef} aria-label="chat composer" value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
+                      <textarea ref={inputRef} aria-label="Chat composer" value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
                         onChange={(e) => active && update(active.id, (c) => { c.draft = e.target.value; })}
                         onKeyDown={onKey}
                         onPaste={onPaste}
-                        placeholder={!enabled ? "chat unavailable" : active?.sending ? "still replying — type anyway, Enter queues it for the next turn" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline)" : "message a new session… (Enter to send)"}
+                        placeholder={!enabled ? "Chat unavailable" : active?.sending ? "Still replying — type anyway, Enter queues it for the next turn" : active?.sessionId ? "Reply… (Enter to send, Shift+Enter newline)" : "Message a new session… (Enter to send)"}
                         className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
                       {/* Stop stays reachable while a turn is queueing: the
                           two are different intents — "answer this next" and
@@ -1057,16 +1062,16 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           keep. */}
                       {active?.sending && (
                         <button onClick={() => stop(active.id)} title="Interrupt the turn and clear anything queued"
-                          className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ stop</button>
+                          className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ Stop</button>
                       )}
                       <button onClick={submit} disabled={!hasTurn || !active?.cwd || !enabled} className="shrink-0 px-4 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>
-                        {active?.sending ? "queue ↵" : "send ↵"}
+                        {active?.sending ? "Queue ↵" : "Send ↵"}
                       </button>
                     </div>
                     <div className="mt-1.5 text-[9.5px] t-dim2">
                       {hint
                         ? <span style={{ color: "var(--warning)" }}>{hint}</span>
-                        : <>runs claude in {active ? repoName(active.cwd) || "the repo" : "the repo"} · {MODES.find((x) => x.id === active?.mode)?.label} · tools appear as ⚙ chips</>}
+                        : <>Runs claude in {active ? repoName(active.cwd) || "the repo" : "the repo"} · {MODES.find((x) => x.id === active?.mode)?.label} · tools appear as ⚙ chips</>}
                       {active?.mode === "bypassPermissions" && <span style={{ color: "var(--warning)" }}> · ⚡ runs tools unattended</span>}
                     </div>
                   </div>

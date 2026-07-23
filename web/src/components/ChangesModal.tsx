@@ -135,10 +135,16 @@ const Code = memo(function Code({ text, segs, kind }: { text: string; segs?: Seg
 
 // --- unified diff, with old|new gutters, uncapped -----------------------------
 type URow = { oldN: number | null; newN: number | null; text: string; kind: "ctx" | "del" | "add"; segs?: Seg[] | null };
-function unifiedRows(h: DiffHunk): URow[] {
+export function unifiedRows(h: DiffHunk): URow[] {
   const rows: URow[] = [];
   let oldN = h.oldStart, newN = h.newStart;
   for (const line of h.lines) {
+    // "\ No newline at end of file" is metadata about the file, not a line in
+    // it. Every other diff parser here drops it (prBody.parseUnifiedDiff,
+    // server gitwork.parseDiff); a hunk carrying it — the DiffHunk contract
+    // admits `\`, and apply-hunk validates it as a legal line — must not paint
+    // it as a phantom context row that also nudges every gutter number below.
+    if (line.startsWith("\\")) continue;
     const kind = kindOf(line[0]);
     const text = line.slice(1);
     if (kind === "add") rows.push({ oldN: null, newN: newN++, text, kind });
@@ -184,7 +190,7 @@ type Cell = { num: number; text: string; kind: "ctx" | "del" | "add"; segs?: Seg
 
 /** Turn a unified hunk into paired old|new rows: removals sit left, additions
  *  right, and a change block zips its −/+ lines together row by row. */
-function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
+export function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
   const rows: { l: Cell | null; r: Cell | null }[] = [];
   let oldN = h.oldStart, newN = h.newStart;
   let dels: Cell[] = [], adds: Cell[] = [];
@@ -197,6 +203,7 @@ function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
     dels = []; adds = [];
   };
   for (const line of h.lines) {
+    if (line.startsWith("\\")) continue; // no-newline marker, not a line — see unifiedRows
     const tag = line[0], text = line.slice(1);
     if (tag === "-") dels.push({ num: oldN++, text, kind: "del" });
     else if (tag === "+") adds.push({ num: newN++, text, kind: "add" });
@@ -372,8 +379,8 @@ function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<stri
       label = titles?.get(c.session_id) ?? agentKey({ source_app: c.source_app, session_id: c.session_id });
       sub = c.source_app;
     }
-    else if (by === "agent") { key = c.source_app || "—"; label = c.source_app || "unknown"; }
-    else if (by === "tool") { key = c.tool || "—"; label = c.tool || "unknown"; }
+    else if (by === "agent") { key = c.source_app || "—"; label = c.source_app || "Unknown"; }
+    else if (by === "tool") { key = c.tool || "—"; label = c.tool || "Unknown"; }
     else { const d = dirOf(c.file_path); key = d; label = shortDir(d); }
     // The day, when the split is on, is part of the identity — so one session
     // spanning midnight becomes two sections rather than one that lies about
@@ -861,7 +868,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                     <span className={viewTitleClass} style={{ color: "var(--text)" }}>File changes</span>
                     {changes && (
                       <span className="text-[10px] t-dim2 tabular-nums truncate">
-                        {all.length} edits · <span style={{ color: "var(--success)" }}>+{totals.add}</span> <span style={{ color: "var(--error)" }}>−{totals.del}</span> · {presetTitle || "what the fleet changed"}
+                        {all.length} edits · <span style={{ color: "var(--success)" }}>+{totals.add}</span> <span style={{ color: "var(--error)" }}>−{totals.del}</span> · {presetTitle || "What the fleet changed"}
                       </span>
                     )}
                   </div>
@@ -881,7 +888,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         title={walk ? "Re-run the AI walkthrough (overwrites the cached one)" : "AI walkthrough — one line per file + a review focus (cached per changeset)"}
                         className="text-[11px] px-2.5 py-1 rounded-lg transition-colors"
                         style={{ color: "var(--text)", background: "color-mix(in srgb, var(--info) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 28%, transparent)", opacity: walkLoading ? 0.6 : 1 }}
-                      >{walkLoading ? "✨ explaining…" : walk ? "✨ re-explain" : "✨ Explain"}</button>
+                      >{walkLoading ? "✨ Explaining…" : walk ? "✨ Re-explain" : "✨ Explain"}</button>
                     )}
                     {changes && all.length > 0 && (
                       <button
@@ -941,13 +948,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         <button
                           onClick={() => setByDate((v) => !v)}
                           className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
-                          title={byDate ? "one section per group" : "split each group by day"}
+                          title={byDate ? "One section per group" : "Split each group by day"}
                           style={{
                             background: byDate ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
                             color: byDate ? "var(--text)" : "var(--text3)",
                             border: `1px solid color-mix(in srgb, var(--border) ${byDate ? 45 : 18}%, transparent)`,
                           }}
-                        >by date</button>
+                        >By date</button>
                         {/* Says what it is hiding, and offers it back. A
                             filter that silently drops rows makes the list lie
                             about what the session touched. */}
@@ -960,7 +967,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             // is never worth the width it saves.
                             className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
                             title={showIgnored
-                              ? "hide files git ignores"
+                              ? "Hide files git ignores"
                               : `${ignoredCount} file${ignoredCount === 1 ? "" : "s"} git ignores ${ignoredCount === 1 ? "is" : "are"} hidden — build output, caches, scratch files`}
                             style={{
                               background: showIgnored ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
@@ -970,13 +977,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           >{showIgnored ? `✕ ${ignoredCount} ignored` : `+ ${ignoredCount} ignored`}</button>
                         )}
                         {changes && all.length > 0 && (
-                          <span className="ml-auto text-[9.5px] t-dim2 tabular-nums" title="files reviewed">{revCount}/{visible.length}</span>
+                          <span className="ml-auto text-[9.5px] t-dim2 tabular-nums" title="Files reviewed">{revCount}/{visible.length}</span>
                         )}
                       </div>
                     </div>
                     <div className="agx-scroll flex-1 min-h-0 overflow-y-auto px-2 pb-2">
-                      {!changes && <div className="t-dim2 text-center py-10 text-[12px]">loading changes…</div>}
-                      {changes && shown.length === 0 && <div className="t-dim2 text-center py-10 text-[12px]">{q ? "no files match your filter" : "no file changes captured yet"}</div>}
+                      {!changes && <div className="t-dim2 text-center py-10 text-[12px]">Loading changes…</div>}
+                      {changes && shown.length === 0 && <div className="t-dim2 text-center py-10 text-[12px]">{q ? "No files match your filter" : "No file changes captured yet"}</div>}
                       {groups.map((g, gi) => (
                         <div key={`w:${g.key}`}>
                           {/* Only when it changes: repeating "Today" above every
@@ -1013,13 +1020,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             {selected.deletions > 0 && <span style={{ color: "var(--error)" }}>−{selected.deletions}</span>}
                           </span>
                           <div className="ml-auto flex items-center gap-1.5 shrink-0">
-                            <Toggle on={reviewed.has(selected.id)} onClick={() => toggleReviewed(selected.id)} title="Mark this file reviewed (x)">{reviewed.has(selected.id) ? "reviewed ✓" : "review"}</Toggle>
-                            <Toggle on={split} onClick={() => setSplit((s) => !s)} title="Split / unified">{split ? "split" : "unified"}</Toggle>
-                            <Toggle on={wrap} onClick={() => setWrap((w) => !w)} title="Toggle line wrap (w)">wrap</Toggle>
+                            <Toggle on={reviewed.has(selected.id)} onClick={() => toggleReviewed(selected.id)} title="Mark this file reviewed (x)">{reviewed.has(selected.id) ? "Reviewed ✓" : "Review"}</Toggle>
+                            <Toggle on={split} onClick={() => setSplit((s) => !s)} title="Split / unified">{split ? "Split" : "Unified"}</Toggle>
+                            <Toggle on={wrap} onClick={() => setWrap((w) => !w)} title="Toggle line wrap (w)">Wrap</Toggle>
                             <ThemePicker value={themePref} onChange={setThemePref} error={hiliteError} />
-                            <Toggle on={bold} onClick={() => setBold((b) => !b)} title="Bold keywords, functions & types (Neovim-style)">bold</Toggle>
-                            <Toggle onClick={() => copy("path")} title="Copy file path (c)">{copied === "path" ? "copied ✓" : "path"}</Toggle>
-                            <Toggle onClick={() => copy("diff")} title="Copy unified diff">{copied === "diff" ? "copied ✓" : "diff"}</Toggle>
+                            <Toggle on={bold} onClick={() => setBold((b) => !b)} title="Bold keywords, functions & types (Neovim-style)">Bold</Toggle>
+                            <Toggle onClick={() => copy("path")} title="Copy file path (c)">{copied === "path" ? "Copied ✓" : "Path"}</Toggle>
+                            <Toggle onClick={() => copy("diff")} title="Copy unified diff">{copied === "diff" ? "Copied ✓" : "Diff"}</Toggle>
                           </div>
                         </div>
                         <div ref={paneRef} className="flex-1 min-h-0 flex relative" style={{ background: "var(--bg)" }}>
@@ -1036,7 +1043,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                       </>
                     ) : (
                       <div className="flex-1 flex items-center justify-center t-dim2 text-[12px]">
-                        {changes ? "select a file to view its diff" : "loading changes…"}
+                        {changes ? "Select a file to view its diff" : "Loading changes…"}
                       </div>
                     )}
                   </div>

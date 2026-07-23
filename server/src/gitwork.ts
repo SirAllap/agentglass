@@ -6,8 +6,7 @@
 
 import { resolve, basename, relative, dirname, sep, join } from "node:path";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
+import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
 import { worktreeParent, gitDir } from "./worktree.ts";
 import { entered, backoff } from "./loopwatch.ts";
@@ -179,12 +178,19 @@ function treeState(root: string): GitTreeState {
 }
 
 async function branchInfo(root: string): Promise<GitBranchInfo> {
-  const name = currentBranch(root);
+  // The two independent opening reads — the branch name and its upstream —
+  // fired together and awaited, so neither is a synchronous spawn holding the
+  // loop the terminal rides. This whole function was a chain of blocking git()
+  // calls on the /git/tree poll; it is the one the load harness pinned as the
+  // last stall once /git/status was moved off.
+  const [name, upstream] = await Promise.all([
+    currentBranch(root),
+    gitAsync(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).then((r) => r.stdout.trim() || null),
+  ]);
   const detached = name === "(detached)";
-  const upstream = git(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]).stdout.trim() || null;
   let ahead = 0, behind = 0;
   if (upstream) {
-    const c = git(root, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`]).stdout.trim().split(/\s+/);
+    const c = (await gitAsync(root, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`])).stdout.trim().split(/\s+/);
     behind = Number(c[0]) || 0;
     ahead = Number(c[1]) || 0;
   }
@@ -198,8 +204,8 @@ async function branchInfo(root: string): Promise<GitBranchInfo> {
     // Two rev-parses, so only when the answer can change a decision: the
     // panel asks it to decide whether being behind upstream is a reason to
     // refuse a base merge, and that question only exists while behind.
-    upstreamIsBase: upstream && base && behind > 0 ? sameBranch(root, upstream, base) : undefined,
-    canUndoMerge: undoableMerge(root, ahead, upstream),
+    upstreamIsBase: upstream && base && behind > 0 ? await sameBranch(root, upstream, base) : undefined,
+    canUndoMerge: await undoableMerge(root, ahead, upstream),
   };
 }
 
@@ -296,66 +302,17 @@ function reposUnder(baseDir: string, depth = REPO_SCAN_DEPTH): string[] {
   return out;
 }
 
-/**
- * The directories a user keeps code in, inferred from where their projects
- * already live.
- *
- * Only the parent of a known project counts, and only when it's specific
- * enough to be somebody's code folder: sweeping `/`, `/home` or `/mnt` would
- * walk other users and whole mounted disks for no benefit. A project sitting
- * directly in one of those (a home directory that is itself a repo) still gets
- * listed on its own — it just doesn't drag its neighbours in.
- */
-/**
- * Where code tends to live, for an install that has nothing else to go on.
- *
- * Every other source of roots describes a machine that has already been used:
- * the cwd the app was launched from (a shortcut, so not a repo), projects the
- * transcript scan found (no sessions yet), the parents of those projects, repos
- * seen in telemetry (no events yet), and configured directories (unset). On a
- * fresh install all five are empty, so the picker offered "Whole machine" and
- * nothing else — which reads as discovery being broken, when it is discovery
- * working exactly as written.
- *
- * The list is short and conventional on purpose. This is a guess, and a guess
- * that walks somewhere surprising is worse than no guess at all: each of these
- * is a directory whose name says "my code is in here", and one `readdir` is the
- * whole cost of trying. Anything more exotic is what `repoDirs` is for, which
- * the empty state now names.
- */
-const CODE_HOMES = ["code", "src", "projects", "dev", "repos", "workspace", "Developer", "Documents/GitHub"];
+// firstRunRoots() and codeRootsOf() lived here: a conventional-homes guess
+// (~/code, ~/src, …) and the parents-of-known-projects inference that together
+// drove the speculative filesystem walk. Both are gone — discoverRepos no longer
+// crawls the disk on the whole-machine path, so there is nothing for them to
+// feed. See the note in discoverRepos for what replaced them (telemetry +
+// configured dirs + own repo) and why.
 
-export function firstRunRoots(): string[] {
-  // `$HOME` first, `homedir()` behind it. On POSIX the variable is the user's
-  // own statement about where their home is, and honouring it is also what
-  // makes this testable against a fixture rather than against the machine the
-  // test happens to run on.
-  const home = process.env.HOME || homedir();
-  const out: string[] = [];
-  for (const name of CODE_HOMES) {
-    const dir = resolve(home, name);
-    try { if (statSync(dir).isDirectory()) out.push(dir); } catch { /* not on this machine */ }
-  }
-  return out;
-}
-
-function codeRootsOf(knownRoots: string[]): string[] {
-  const TOO_BROAD = new Set(["/", "/home", "/mnt", "/media", "/run", "/usr", "/opt", "/var", "/tmp", "/etc", "/srv"]);
-  const out = new Set<string>();
-  for (const r of knownRoots) {
-    const abs = safeAbs(r);
-    if (!abs) continue;
-    const parent = dirname(abs);
-    if (TOO_BROAD.has(parent) || parent === abs) continue;
-    out.add(parent);
-  }
-  return [...out];
-}
-
-/** Repos agentglass offers in the panel: the server's own repo, its sibling
- *  repos (e.g. everything under ~/code), every project the transcript scan
- *  found, any repo seen in recent telemetry, and env-configured extras
- *  (AGENTGLASS_REPOS=path1:path2, AGENTGLASS_REPO_DIRS=dir1:dir2).
+/** Repos agentglass offers in the panel: the server's own repo, every project
+ *  the transcript scan found, any repo seen in recent telemetry, and
+ *  env-configured extras (AGENTGLASS_REPOS=path1:path2,
+ *  AGENTGLASS_REPO_DIRS=dir1:dir2). No blind directory sweep — see discoverRepos.
  *
  *  `knownRoots` are already-resolved project roots, so they're added directly.
  *  They matter because the panel would otherwise only reach repos that sit next
@@ -470,8 +427,15 @@ function touchedAt(root: string, tipMs: number): number {
  * working tree has its own 2.5s poll through `/git/tree`, and a dot beside a
  * checkout you are not looking at can be a few seconds old. Every write still
  * clears this immediately, so anything you do shows up at once.
+ *
+ * Read per call, not fixed at import, for the reason spawnpool's limit() gives:
+ * a module constant is decided by whichever file imports this first, which in a
+ * test run is never the file doing the overriding. The load harness leans on it
+ * to shrink the window so the pathological shape — a sweep that outlasts its own
+ * TTL, which is what pins a whole-machine install at 99.9% — reproduces in
+ * seconds instead of needing a filesystem large enough to walk for fifteen.
  */
-const REPO_CACHE_MS = 15_000;
+const repoCacheMs = () => Number(process.env.AGENTGLASS_REPO_CACHE_MS ?? 15_000);
 // A small map rather than one slot: the scoped panels and the machine-wide
 // project picker ask with different keys, and alternating between them must
 // not evict each other's still-fresh answer (each miss re-runs a directory
@@ -498,7 +462,7 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // Held longer while a shell is in use or the loop is stalling: this sweep is
   // eighteen `git status` calls on a worktree-heavy repo, and none of them is
   // worth a late keystroke. See backoff().
-  if (hit && Date.now() - hit.at < REPO_CACHE_MS * backoff()) return hit.repos;
+  if (hit && Date.now() - hit.at < repoCacheMs() * backoff()) return hit.repos;
   if (repoCache.size > 8) repoCache.clear(); // scope churn — don't hoard stale lists
   const roots = new Set<string>();
 
@@ -516,14 +480,13 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     // worktrees, because they ARE the project on other branches; a container
     // folder brings every repo found from that folder inward, and nothing else.
     const found = self
-      // `worktreeList`, not `worktrees`: this needs the paths and nothing else,
-      // and the richer call computes a base branch and a `rev-list --count`
-      // per checkout — synchronously, on the server's only thread. On a repo
-      // with 17 worktrees that is 34 blocking subprocesses, ~200ms each, on
-      // the most frequently requested endpoint in the app. Measured: it froze
-      // the whole UI — the terminal's PTY socket included — for up to 2.8s at
-      // a time, several times a minute, while the user was typing.
-      ? [self, ...worktreeList(self).map((w) => w.path).filter((p) => p && p !== self)]
+      // `worktreeListAsync`, not `worktrees`: this needs the paths and nothing
+      // else, and the richer call computes a base branch and a `rev-list --count`
+      // per checkout — which on a repo with 17 worktrees is 34 subprocesses, on
+      // the most frequently requested endpoint in the app. Async, so even the one
+      // `worktree list` it does need is off the thread the terminal rides rather
+      // than a synchronous spawn between keystrokes.
+      ? [self, ...(await worktreeListAsync(self)).map((w) => w.path).filter((p) => p && p !== self)]
       : reposUnder(only1);
     const refs = await Promise.all(found.map((r) => repoRef(r)));
     const scoped = refs.filter((r): r is GitRepoRef => !!r);
@@ -543,40 +506,62 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     return scoped;
   }
 
-  // Naming directories has to mean *only* these. The other sources below —
-  // agentglass's own neighbours, projects with history, repos seen in
-  // telemetry — are how an unconfigured install finds anything at all, but
-  // left additive they quietly put back everything the setting was meant to
-  // exclude. So they still run (a configured directory is about scope, not
-  // about disabling discovery within it) and the result is filtered at the
-  // end.
-  const only = configuredRepoDirs();
-  const selfRoot = repoRootOf(process.cwd());
-  if (selfRoot) { roots.add(selfRoot); for (const r of reposUnder(dirname(selfRoot))) roots.add(r); }
-  for (const r of knownRoots) { const a = safeAbs(r); if (a && repoRoot(a)) roots.add(a); }
-  // Where to sweep for repos no agent has touched yet — without this the panel
-  // only offers projects that already have history, which is the wrong way
-  // round for a picker you use to *start* working somewhere.
+  // "Whole machine" does not mean "walk the machine". agentglass discovers
+  // projects from what it already knows — where agents have actually run — not by
+  // speculatively crawling the disk. The old path did the latter: firstRunRoots()
+  // guessed at ~/code, ~/src and six more conventional homes, codeRootsOf() added
+  // the parent directory of every known project, and reposUnder() then recursed
+  // each of those to REPO_SCAN_DEPTH with readdirSync. On an unconfigured
+  // whole-machine install that is a blind sweep of the user's home — pure
+  // JS/native with zero git subprocesses — and on a real ~/code it outran its own
+  // cache and pinned a core at 99.9% while the terminal sharing this one thread
+  // froze. Measured in the load harness (AGX_LOAD_WHOLE_MACHINE=1): the walk was
+  // the loop stall the watchdog named GET /git/repos.
   //
-  // Configured directories win outright: naming them is faster than inferring
-  // them and, more to the point, predictable. Inference is only the fallback
-  // for an unconfigured install, and it can do no better than guess from the
-  // directories that happen to hold existing projects.
-  // Inferred parents first, then the conventional homes — and the homes only
-  // when inference came back with nothing, which is exactly the fresh-install
-  // case. A machine that has been used has better information about itself than
-  // this list does, and adding `~/code` to it would put back projects the user
-  // has never opened here alongside the ones they work in daily.
-  const inferred = codeRootsOf(knownRoots);
-  const bases = only.length ? only : (inferred.length ? inferred : firstRunRoots());
-  for (const base of bases) for (const r of reposUnder(base)) roots.add(r);
-  // env overrides for repos that live elsewhere
-  for (const p of (process.env.AGENTGLASS_REPOS || "").split(":").filter(Boolean)) { const r = repoRootOf(p); if (r) roots.add(r); }
-  // repos seen in recent telemetry — dedupe by parent dir first so this is one
-  // `rev-parse` per unique directory, not one per file path.
+  // So the walk is gone. Each source that remains describes a project the app has
+  // a concrete reason to know about:
+  //
+  //   * telemetry — the project/cwd paths of turns agents have actually run (the
+  //     PRIMARY source; already in hand as `paths`, one indexed query upstream in
+  //     getChanges, ~0 cost here);
+  //   * transcript-scanned project roots (`knownRoots`);
+  //   * directories the user explicitly configured (repoDirs / AGENTGLASS_REPOS);
+  //   * agentglass's own repo.
+  //
+  // A project with none of those — no history, never configured — no longer
+  // appears on its own. That is the deliberate trade: the user names it once with
+  // `repoDirs` and it is back for good, and in exchange the picker reflects the
+  // fleet's activity rather than the filesystem's contents. The empty state names
+  // `repoDirs` precisely so this is discoverable.
+  const only = configuredRepoDirs();
+  // The one place a directory *walk* is still invited — and only because the user
+  // named the directory. `~/code` in repoDirs is an explicit "my repos live
+  // here", which is bounded and predictable in a way that crawling $HOME never
+  // was; a configured directory is about scope, not about disabling discovery
+  // within it, so the result is still filtered to `only` at the end.
+  for (const base of only) for (const r of reposUnder(base)) roots.add(r);
+  // Every git rev-parse below is awaited through the spawn pool, not spawnSync:
+  // on this path they blocked the loop one subprocess at a time — the server's
+  // own repo, each env repo, and each telemetry directory — on the endpoint the
+  // terminal shares a thread with. Resolve them together, off the loop.
+  //
+  //   * agentglass's own repo, and only it — not its neighbours, which was
+  //     another speculative reposUnder(dirname(selfRoot)) sweep;
+  //   * env-configured repos that live elsewhere (AGENTGLASS_REPOS);
+  //   * telemetry directories, deduped by parent dir first so this is one
+  //     rev-parse per directory rather than one per file path.
   const dirs = new Set<string>();
   for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
-  for (const d of dirs) { const r = repoRootOf(d); if (r) roots.add(r); }
+  const resolved = await Promise.all([
+    repoRootOfAsync(process.cwd()),
+    ...(process.env.AGENTGLASS_REPOS || "").split(":").filter(Boolean).map((p) => repoRootOfAsync(p)),
+    ...[...dirs].map((d) => repoRootOfAsync(d)),
+  ]);
+  for (const r of resolved) if (r) roots.add(r);
+  // Transcript-scanned roots are already resolved project tops; add them straight
+  // in and let repoRef below drop any that is no longer a repo. The old per-root
+  // repoRoot() re-validation here was one more synchronous spawn apiece.
+  for (const r of knownRoots) { const a = safeAbs(r); if (a) roots.add(a); }
   // Fold linked worktrees into the project they belong to — for the PICKER only.
   //
   // A user working the way worktrees are meant to be used has a dozen sibling
@@ -871,13 +856,56 @@ const validHash = (h: string) => typeof h === "string" && /^[0-9a-fA-F]{4,40}$/.
  * neither `main` nor `master`. It's only a local symref though, so it can be
  * missing on a clone made with `--single-branch`; the fallbacks cover that.
  */
-export function defaultBranch(root: string): string | null {
-  const sym = git(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]).stdout.trim();
+/**
+ * The repo's trunk, cached hard AND single-flighted.
+ *
+ * The lookup is up to five sequential spawns (first match wins), and it moves
+ * only when `origin/HEAD` is repointed or `main`/`master` is created — never on
+ * a poll. Yet baseOf asks it once per checkout, so `worktreesWithState` on a
+ * seventeen-worktree repo re-resolved the SAME trunk seventeen times a poll: the
+ * fan-out that pinned the spawn pool with dozens queued behind the PTY.
+ *
+ * A plain TTL cache alone would not have helped the first poll, because those
+ * seventeen calls are launched together (one `Promise.all`) and every one of
+ * them misses an empty cache before any has filled it. So this is single-flighted
+ * too: the first caller for a root does the lookup and the other sixteen share
+ * its promise — one resolution, seventeen readers — and every caller for the next
+ * minute reads the cache. Cleared by invalidateMerged (every write) and by a
+ * fetch that actually moved refs, so a genuine trunk change still surfaces.
+ */
+const DEFAULT_BRANCH_TTL_MS = 60_000;
+const defaultBranchCache = new Map<string, { at: number; branch: string | null }>();
+const defaultBranchInflight = new Map<string, Promise<string | null>>();
+
+async function computeDefaultBranch(root: string): Promise<string | null> {
+  const sym = (await gitAsync(root, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])).stdout.trim();
   if (sym) return sym;
   for (const ref of ["origin/main", "origin/master", "main", "master"]) {
-    if (git(root, ["rev-parse", "--verify", "--quiet", ref]).code === 0) return ref;
+    if ((await gitAsync(root, ["rev-parse", "--verify", "--quiet", ref])).code === 0) return ref;
   }
   return null;
+}
+
+// Awaited: reached from branchInfo (/git/tree) and from baseOf, and baseOf is
+// asked once per checkout by the worktrees sweep — so left uncached this was up
+// to five spawns × seventeen worktrees on a single poll.
+export async function defaultBranch(root: string): Promise<string | null> {
+  const hit = defaultBranchCache.get(root);
+  if (hit && Date.now() - hit.at < DEFAULT_BRANCH_TTL_MS) return hit.branch;
+  const flying = defaultBranchInflight.get(root);
+  if (flying) return flying;
+  const p = (async () => {
+    try {
+      const branch = await computeDefaultBranch(root);
+      if (defaultBranchCache.size > 200) defaultBranchCache.clear();
+      defaultBranchCache.set(root, { at: Date.now(), branch });
+      return branch;
+    } finally {
+      defaultBranchInflight.delete(root);
+    }
+  })();
+  defaultBranchInflight.set(root, p);
+  return p;
 }
 
 /**
@@ -1129,11 +1157,21 @@ export function invalidateMerged(root?: string): void {
   // after a merge, when the answer has just changed. The memo goes with them,
   // or a verdict recorded before the merge is re-applied to the rebuilt set and
   // outlives the very event that invalidated it.
-  if (!root) { mergedCache.clear(); probedAt.clear(); probeMemo.clear(); return; }
+  // The trunk and per-branch base go with them: both are keyed off refs, which
+  // is exactly what a write or a ref-moving fetch changed, and this is the one
+  // path both of those reach.
+  if (!root) {
+    mergedCache.clear(); probedAt.clear(); probeMemo.clear();
+    defaultBranchCache.clear(); baseCache.clear();
+    return;
+  }
   const mine = `${root}\u0000`;
   for (const m of [mergedCache, probedAt, probeMemo] as Map<string, unknown>[]) {
     for (const k of m.keys()) if (k.startsWith(mine)) m.delete(k);
   }
+  // `mine` (root + separator) is the prefix of the per-branch base keys too.
+  defaultBranchCache.delete(root);
+  for (const k of baseCache.keys()) if (k.startsWith(mine)) baseCache.delete(k);
 }
 
 
@@ -1141,7 +1179,12 @@ export async function branches(rootIn: unknown): Promise<{ current: string; bran
   const root = repoRoot(rootIn);
   if (!root) return { current: "", branches: [], trunk: null };
   const fmt = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)`;
-  const [r, trunk] = [git(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]), defaultBranch(root)];
+  // The ref list and the trunk lookup are independent; run them together and
+  // off the loop (this recomputes on /git/branches whenever a ref moves).
+  const [r, trunk] = await Promise.all([
+    gitAsync(root, ["for-each-ref", "--sort=-committerdate", "refs/heads", `--format=${fmt}`]),
+    defaultBranch(root),
+  ]);
   const merged = trunk ? await mergedInto(root, trunk) : null;
   const list: GitBranch[] = [];
   for (const line of r.stdout.split("\n")) {
@@ -1161,7 +1204,7 @@ export async function branches(rootIn: unknown): Promise<{ current: string; bran
   // flag was a question asked immediately after switching it on. The count
   // settling a beat later is the honest behaviour, and a permanent label
   // explaining it was worse than the thing it explained.
-  return { current: currentBranch(root), branches: list, trunk };
+  return { current: await currentBranch(root), branches: list, trunk };
 }
 
 // lazygit-style branch ops
@@ -1226,7 +1269,7 @@ export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "al
   }
   // Named so the pane can say whose history it is showing rather than leaving
   // the user to infer it from the commits.
-  return { lines, scope, branch: currentBranch(root) };
+  return { lines, scope, branch: await currentBranch(root) };
 }
 
 // --- worktrees (the user's per-card unit of work) ----------------------------
@@ -1246,17 +1289,33 @@ export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "al
  * that is one subprocess per branch for a guess that is wrong exactly when
  * branches are stacked — the case where being wrong costs you a bad merge.
  */
+/** The base branch per checkout, cached. `worktrees()` asks it once per checkout
+ *  — seventeen on a worktree-heavy repo, twice over (worktrees + branchInfo) —
+ *  and the answer is a config lookup plus the (now-cached) trunk, none of which
+ *  moves on a poll. Cleared by invalidateMerged/invalidateRepos, which every
+ *  write (including setBase, the only thing that changes an override) passes
+ *  through. Same TTL as the trunk it mostly returns. */
+const baseCache = new Map<string, { at: number; base: string | null }>();
 export async function baseOf(root: string, branch: string): Promise<string | null> {
   if (!branch || branch === "(detached)") return null;
+  const key = `${root}\u0000${branch}`;
+  const hit = baseCache.get(key);
+  if (hit && Date.now() - hit.at < DEFAULT_BRANCH_TTL_MS) return hit.base;
   // Two subprocesses, and `worktrees()` asks once per checkout — 34 of them on
   // a repo with seventeen. Left synchronous they were the 806ms this endpoint
   // still cost after everything around them had been awaited.
   const cfg = (await gitAsync(root, ["config", "--get", `branch.${branch}.agentglassbase`])).stdout.trim();
-  if (cfg && validRef(cfg) && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", cfg])).code === 0) return cfg;
-  const trunk = defaultBranch(root);
-  // A branch is not its own base; the trunk checkout simply has none.
-  if (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch) return null;
-  return trunk;
+  let base: string | null;
+  if (cfg && validRef(cfg) && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", cfg])).code === 0) {
+    base = cfg;
+  } else {
+    const trunk = await defaultBranch(root);
+    // A branch is not its own base; the trunk checkout simply has none.
+    base = !trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch ? null : trunk;
+  }
+  if (baseCache.size > 400) baseCache.clear();
+  baseCache.set(key, { at: Date.now(), base });
+  return base;
 }
 
 /**
@@ -1273,15 +1332,16 @@ export async function baseOf(root: string, branch: string): Promise<string | nul
  * names contain slashes too: chopping the first segment off `native/egui-shell`
  * leaves `egui-shell`, which is not a branch anyone has.
  */
-function sameBranch(root: string, a: string, b: string): boolean {
-  const short = (ref: string): string => {
-    const full = git(root, ["rev-parse", "--symbolic-full-name", ref]).stdout.trim();
+// Awaited: two rev-parses on the branchInfo (/git/tree) path, off the loop.
+async function sameBranch(root: string, a: string, b: string): Promise<boolean> {
+  const short = async (ref: string): Promise<string> => {
+    const full = (await gitAsync(root, ["rev-parse", "--symbolic-full-name", ref])).stdout.trim();
     return full
       .replace(/^refs\/heads\//, "")
       .replace(/^refs\/remotes\/[^/]+\//, "");
   };
-  const x = short(a);
-  return !!x && x === short(b);
+  const x = await short(a);
+  return !!x && x === await short(b);
 }
 
 export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitActionResult {
@@ -1324,7 +1384,7 @@ export async function behindBase(root: string, branch: string, base: string): Pr
 export async function syncFromBase(dirIn: unknown, baseIn?: unknown): Promise<GitActionResult> {
   const dir = repoRoot(dirIn); if (!dir) return { ok: false, error: "not a git repository root" };
   const g = guard(dir); if (g) return g;
-  const branch = currentBranch(dir);
+  const branch = await currentBranch(dir);
   if (!branch || branch === "(detached)") return { ok: false, error: "this checkout is not on a branch" };
   const base = typeof baseIn === "string" && baseIn ? baseIn : await baseOf(dir, branch);
   if (!base) return { ok: false, error: "no base branch is known for this checkout" };
@@ -1435,7 +1495,10 @@ export function baseCandidates(rootIn: unknown): { ok: boolean; refs: { name: st
  * A dirty tree disqualifies it too: the undo is a hard reset, and there is no
  * version of "discard your uncommitted work as a side effect" worth offering.
  */
-export function undoableMerge(root: string, ahead: number, upstream: string | null): boolean {
+// Awaited: reached from branchInfo (/git/tree) on every poll, and its two reads
+// were among the synchronous spawns holding the loop there. The write path
+// (undoMerge) awaits it too.
+export async function undoableMerge(root: string, ahead: number, upstream: string | null): Promise<boolean> {
   // Pushed work is never undone this way. `ahead` is already computed for the
   // header, so this costs nothing for a branch level with its remote.
   //
@@ -1444,9 +1507,9 @@ export function undoableMerge(root: string, ahead: number, upstream: string | nu
   // ahead===0 as "already pushed" got that exactly backwards and refused the
   // one situation where the undo is unambiguously free.
   if (upstream && ahead < 1) return false;
-  const parents = git(root, ["rev-list", "--parents", "-n", "1", "HEAD"]).stdout.trim().split(/\s+/);
+  const parents = (await gitAsync(root, ["rev-list", "--parents", "-n", "1", "HEAD"])).stdout.trim().split(/\s+/);
   if (parents.length < 3) return false; // sha + two parents = a merge
-  return !git(root, ["status", "--porcelain"]).stdout.trim();
+  return !(await gitAsync(root, ["status", "--porcelain"])).stdout.trim();
 }
 
 /** Put the branch back exactly as it stood before its last merge. */
@@ -1456,24 +1519,23 @@ export async function undoMerge(rootIn: unknown): Promise<GitActionResult> {
   // Re-checked here, never trusted from the client: this is a hard reset, and
   // these conditions are the only thing making it safe.
   const info = await branchInfo(root);
-  if (!undoableMerge(root, info.ahead, info.upstream)) {
+  if (!await undoableMerge(root, info.ahead, info.upstream)) {
     return { ok: false, error: "nothing to undo — the tip is not an unpushed merge, or the tree is dirty" };
   }
   return run(root, ["reset", "--hard", "HEAD^1"]);
 }
 
-/** `git worktree list --porcelain`, parsed and nothing more — no base branch,
- *  no rev-list, no per-checkout status. The cheap half, for callers that only
- *  need to know which paths exist and what is checked out in them. */
-function worktreeList(root: string): GitWorktree[] {
-  const r = git(root, ["worktree", "list", "--porcelain"]);
+/** Parse `git worktree list --porcelain` — no base branch, no rev-list, no
+ *  per-checkout status. The cheap half, for callers that only need to know which
+ *  paths exist and what is checked out in them. */
+function parseWorktreeList(stdout: string, root: string): GitWorktree[] {
   const out: GitWorktree[] = [];
   let cur: Partial<GitWorktree> | null = null;
   const flush = () => {
-    if (cur && cur.path) out.push({ path: cur.path, branch: cur.branch || "(detached)", head: cur.head || "", current: cur.path === root, bare: !!cur.bare, locked: !!cur.locked });
+    if (cur && cur.path) out.push({ path: cur.path, branch: cur.branch || "(detached)", head: cur.head || "", current: cur.path === root, bare: !!cur.bare, locked: !!cur.locked, prunable: !!cur.prunable });
     cur = null;
   };
-  for (const line of r.stdout.split("\n")) {
+  for (const line of stdout.split("\n")) {
     if (line.startsWith("worktree ")) { flush(); cur = { path: line.slice(9) }; }
     else if (!line) flush();
     else if (!cur) continue;
@@ -1482,24 +1544,54 @@ function worktreeList(root: string): GitWorktree[] {
     else if (line === "bare") cur.bare = true;
     else if (line === "detached") cur.branch = "(detached)";
     else if (line.startsWith("locked")) cur.locked = true;
+    // A gitdir that points nowhere valid — including one an attacker fabricated
+    // to name an arbitrary path. Captured so privileged callers can refuse it.
+    else if (line.startsWith("prunable")) cur.prunable = true;
   }
   flush();
   return out;
 }
 
+/** Synchronous — for the mutating guards that already run off any poll (a
+ *  worktree add/remove, a rescue), where one spawn on the loop is not the cost
+ *  and the caller is a one-shot. */
+function worktreeList(root: string): GitWorktree[] {
+  return parseWorktreeList(git(root, ["worktree", "list", "--porcelain"]).stdout, root);
+}
+
+/** Awaited twin — for the poll paths (`worktrees()`, the scoped repo picker).
+ *  One `git worktree list` per poll is small, but on a worktree-heavy repo it
+ *  is one more synchronous spawn on the thread the PTY rides, several times a
+ *  poll; routed through the pool it queues off the loop like everything else. */
+async function worktreeListAsync(root: string): Promise<GitWorktree[]> {
+  return parseWorktreeList((await gitAsync(root, ["worktree", "list", "--porcelain"])).stdout, root);
+}
+
 export async function worktrees(rootIn: unknown): Promise<GitWorktree[]> {
   const root = repoRoot(rootIn);
   if (!root) return [];
-  const out = worktreeList(root);
+  const out = await worktreeListAsync(root);
+  // The trunk, a branch's base and its behind-count are shared by the whole
+  // worktree family: one object store, one set of refs, one config. So they are
+  // resolved against the family's MAIN checkout — which `git worktree list`
+  // always names first — rather than against whichever sibling was queried.
+  //
+  // This is what makes switching between the fourteen worktrees cheap. Keyed off
+  // the queried checkout, `/git/worktrees?root=orbit-WEB-1001` and
+  // `…?root=orbit-WEB-1002` computed the identical fourteen bases and trunk from
+  // scratch — a fresh fan-out per sibling, which under interaction load pinned
+  // the spawn pool with dozens queued behind the PTY. Keyed off the shared main
+  // checkout they hit one another's caches, so the family is priced once.
+  const refRoot = out[0]?.path ?? root;
   // How far each checkout has drifted from what it was branched off. One
   // rev-list per worktree, cached, and only for the ones on a real branch —
   // and all of them at once rather than one after another: seventeen serial
   // 200ms calls is the 1955ms this endpoint used to cost, all of it on the
   // thread carrying the terminal.
   await Promise.all(out.map(async (w) => {
-    const base = w.branch === "(detached)" ? null : await baseOf(root, w.branch);
+    const base = w.branch === "(detached)" ? null : await baseOf(refRoot, w.branch);
     w.base = base;
-    w.behindBase = base ? await behindBase(root, w.branch, base) : 0;
+    w.behindBase = base ? await behindBase(refRoot, w.branch, base) : 0;
   }));
   return out;
 }
@@ -2028,7 +2120,13 @@ export function fixWorktreeOwnership(rootIn: string, pathIn: unknown): GitAction
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
   // Only a path git itself vouches for, and never the checkout we are in.
   if (abs === root) return { ok: false, error: "that is the main checkout" };
-  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
+  // Must be a *live* worktree, not a prunable one: a prunable entry is a broken
+  // registration whose gitdir points nowhere valid, and an attacker with write
+  // access to the repo can fabricate one aimed at an arbitrary root-owned path.
+  // Trusting it here would point `pkexec chown -R` at that path — a privilege
+  // escalation. `git worktree list` flags such entries prunable, so we require a
+  // non-prunable match before handing the path to root.
+  if (!worktreeList(root).some((w) => w.path === abs && !w.prunable)) return { ok: false, error: "not a worktree of this repository" };
   if (!foreignOwned(abs)) return { ok: true, output: "already yours" };
 
   const uid = typeof process.getuid === "function" ? process.getuid() : -1;
@@ -2051,6 +2149,12 @@ export function removeWorktree(rootIn: string, pathIn: unknown, force: boolean):
   const g = guard(root); if (g) return g;
   const abs = safeAbs(pathIn); if (!abs) return { ok: false, error: "invalid path" };
   if (abs === root) return { ok: false, error: "can't remove the current worktree" };
+  // Must be a worktree git reports for THIS root — the same check its siblings
+  // (worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership) all make. Without
+  // it, a linked worktree of a *different* repo makes `git worktree remove` fail
+  // and the restoreRegistration fallback below fabricates a phantom registration
+  // inside this repo's .git, corrupting its metadata.
+  if (!worktreeList(root).some((w) => w.path === abs)) return { ok: false, error: "not a worktree of this repository" };
 
   // Refuse rather than start something that cannot finish. Git deletes the
   // registration before the files, so "try it and see" is not free: the failure
@@ -2246,11 +2350,11 @@ export function trackRemoteBranch(rootIn: unknown, refIn: unknown, opts: { switc
 
 /** Tags, newest first. `creatordate` rather than `taggerdate` so lightweight
  *  tags — which have no tagger — sort by their commit instead of sorting last. */
-export function tags(rootIn: unknown, limit = 300): GitTag[] {
+export async function tags(rootIn: unknown, limit = 300): Promise<GitTag[]> {
   const root = repoRoot(rootIn);
   if (!root) return [];
   const fmt = `%(refname:short)${US}%(objecttype)${US}%(contents:subject)${US}%(creatordate:relative)${US}%(objectname:short)`;
-  const r = git(root, ["for-each-ref", "--sort=-creatordate", `--count=${Math.max(1, Math.min(1000, limit | 0))}`, "refs/tags", `--format=${fmt}`]);
+  const r = await gitAsync(root, ["for-each-ref", "--sort=-creatordate", `--count=${Math.max(1, Math.min(1000, limit | 0))}`, "refs/tags", `--format=${fmt}`]);
   const out: GitTag[] = [];
   for (const line of r.stdout.split("\n")) {
     if (!line) continue;
@@ -2389,9 +2493,13 @@ const C_END = /^>>>>>>> ?(.*)$/;
  * shown, whereas patching the original by line number can if anything touched
  * the file in between.
  */
-function splitConflicts(text: string): { segments: (string | ConflictBlock)[]; blocks: ConflictBlock[] } {
+function splitConflicts(text: string): { segments: (string[] | ConflictBlock)[]; blocks: ConflictBlock[] } {
   const lines = text.split("\n");
-  const segments: (string | ConflictBlock)[] = [];
+  // Plain runs are kept as line arrays, not joined strings: an empty run (a
+  // conflict at the very start or end of the file, or two adjacent conflicts)
+  // must contribute zero lines on reassembly. Joining "" with "\n" instead
+  // injected a spurious blank line and silently corrupted the staged file.
+  const segments: (string[] | ConflictBlock)[] = [];
   const blocks: ConflictBlock[] = [];
   let plain: string[] = [];
 
@@ -2433,12 +2541,12 @@ function splitConflicts(text: string): { segments: (string | ConflictBlock)[]; b
       ...(base ? { base } : {}),
       ourLabel: m[1] || "ours", theirLabel: theirLabel || "theirs",
     };
-    segments.push(plain.join("\n"));
+    segments.push(plain);
     plain = [];
     segments.push(block);
     blocks.push(block);
   }
-  segments.push(plain.join("\n"));
+  segments.push(plain);
   return { segments, blocks };
 }
 
@@ -2485,15 +2593,22 @@ export function resolveBlocks(rootIn: unknown, relIn: unknown, choicesIn: unknow
   }
   if (!blocks.length) return { ok: false, error: "no conflicts left in that file" };
 
-  const out = segments.map((seg) => {
-    if (typeof seg === "string") return seg;
+  // Reassemble by flattening line arrays, not by joining segment strings: the
+  // markers occupied whole lines, so a resolved block simply substitutes its
+  // chosen lines for the marker region. An empty plain run adds no line and so
+  // no newline — which is exactly what a boundary conflict needs.
+  const outLines: string[] = [];
+  for (const seg of segments) {
+    if (Array.isArray(seg)) { outLines.push(...seg); continue; }
     const c = choices[seg.index]!;
-    const lines = c === "ours" ? seg.ours
+    outLines.push(...(
+      c === "ours" ? seg.ours
       : c === "theirs" ? seg.theirs
       : c === "both" ? [...seg.ours, ...seg.theirs]
-      : [...seg.theirs, ...seg.ours];
-    return lines.join("\n");
-  }).join("\n");
+      : [...seg.theirs, ...seg.ours]
+    ));
+  }
+  const out = outLines.join("\n");
 
   try { writeFileSync(abs, out); } catch { return { ok: false, error: "cannot write that file" }; }
   return run(root, ["add", "--", rels[0]!]);

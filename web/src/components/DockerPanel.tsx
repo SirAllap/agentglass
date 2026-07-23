@@ -3,7 +3,7 @@
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
-import type { DockerOverview, DockerContainer, DockerStat } from "../../../shared/types.ts";
+import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
@@ -223,7 +223,7 @@ function DetailPane({ tab, env, config, top, error }: {
   if (tab !== "env" && text == null) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
   if (tab === "env") {
     if (!env) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]"><span className="agx-spin" aria-hidden="true" /></div>;
-    if (!env.length) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]">this container has no environment set</div>;
+    if (!env.length) return <div className="flex-1 grid place-items-center t-dim2 text-[12px]">This container has no environment set</div>;
     return (
       <div className="agx-scroll flex-1 min-h-0 overflow-auto p-4 text-[11px] flex flex-col gap-1" style={{ color: "var(--text2)" }}>
         {env.map((line, i) => {
@@ -246,6 +246,32 @@ function DetailPane({ tab, env, config, top, error }: {
   );
 }
 
+/**
+ * The binary-missing empty state: install guidance, not the daemon message.
+ *
+ * The overview reports `available:false` for BOTH a downed daemon and a docker
+ * that was never installed, and those two need different words because they need
+ * different fixes — "start Docker" versus "install it". When dockerCapability()
+ * says the CLI is absent we render this in place of the daemon error; it is the
+ * docker sibling of GitMissingBanner.
+ */
+function DockerMissing({ reason }: { reason?: string }) {
+  return (
+    <div className="flex-1 grid place-items-center px-6 text-center">
+      <div className="max-w-md flex flex-col items-center gap-2">
+        <span className="text-[13px] font-semibold" style={{ color: "var(--warning)" }}>Docker isn't installed</span>
+        <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>
+          {reason || "The docker CLI isn't on your PATH"}. Containers, images, volumes and logs stay empty until it is.
+        </span>
+        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
+          Get it from <code>docker.com/get-started</code> (Docker Desktop), or your package manager:{" "}
+          <code>apt install docker.io</code>, <code>brew install docker</code> — then reopen.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function DockerView({ active }: { active: boolean }) {
   // A shell docked under the logs, for the `make migrate` you always end up
   // needing while watching a container. Its height is remembered and it is
@@ -259,6 +285,11 @@ export function DockerView({ active }: { active: boolean }) {
   });
   useEffect(() => { try { localStorage.setItem(CONSOLE_KEY, String(consoleH)); } catch { /* non-fatal */ } }, [consoleH]);
   const [ov, setOv] = useState<DockerOverview | null>(null);
+  // Installed vs daemon-down. Only consulted for the missing-binary case, which
+  // is stable for the session — the daemon's own up/down still rides on the
+  // overview's error. Lets the empty state offer install guidance instead of
+  // sending someone to check a daemon they never had.
+  const [cap, setCap] = useState<DockerCapability | null>(null);
   const [stats, setStats] = useState<Record<string, DockerStat>>({});
   const [view, setView] = useState<View>("containers");
   const [openSections, setOpenSections] = useState<Record<View, boolean>>(() => {
@@ -323,7 +354,7 @@ export function DockerView({ active }: { active: boolean }) {
   }, []);
   const loadLogs = useCallback(async (id: string, n: number) => {
     const seq = ++logSeq.current; // drop a slow response if the container changed
-    try { const r = await api.dockerLogs(id, n); if (seq !== logSeq.current) return; setLogs(r.ok ? stripAnsi(r.text) : (r.error || "no logs")); }
+    try { const r = await api.dockerLogs(id, n); if (seq !== logSeq.current) return; setLogs(r.ok ? stripAnsi(r.text) : (r.error || "No logs")); }
     catch (e) { if (seq === logSeq.current) setLogs(String(e)); }
   }, []);
 
@@ -337,6 +368,16 @@ export function DockerView({ active }: { active: boolean }) {
     requestAnimationFrame(() => frameRef.current?.focus());
     return () => clearInterval(t);
   }, [active, loadOverview]);
+
+  // Is docker even installed? Asked once per activation, not on the 5s poll —
+  // a binary doesn't come and go mid-session, and all we take from it is the
+  // absent-CLI verdict that swaps the daemon message for install guidance.
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    api.dockerCapability().then((c) => { if (live) setCap(c); }).catch(() => { /* origin gate / offline — the overview's error still shows */ });
+    return () => { live = false; };
+  }, [active]);
 
   // stats: only poll the (slow) `docker stats` sample while viewing containers.
   useEffect(() => {
@@ -362,26 +403,34 @@ export function DockerView({ active }: { active: boolean }) {
   // Cleared on selection change so a tab never shows the previous container's
   // environment for the moment before the new one arrives — with two similar
   // stacks that is indistinguishable from the real thing.
-  useEffect(() => { setEnv(null); setConfig(null); setTop(null); setDetailErr(null); }, [selId]);
+  //
+  // Keyed on the container actually on screen (`selected`, which falls back to
+  // the first row when nothing is clicked), NOT the raw click state `selId`:
+  // the detail pane renders off `selected`, so keying the fetch on `selId` left
+  // the first container's header showing with an empty env — nothing was ever
+  // requested for it because no id had been clicked — and, once a selection
+  // vanished from the list, fetched one container's env under another's name.
+  useEffect(() => { setEnv(null); setConfig(null); setTop(null); setDetailErr(null); }, [selected?.id]);
   useEffect(() => {
-    if (!selId) return;
+    const id = selected?.id;
+    if (!id) return;
     let live = true;
     if (tab === "env" || tab === "config") {
       if (env && config) return;
-      void api.dockerInspect(selId).then((r) => {
+      void api.dockerInspect(id).then((r) => {
         if (!live) return;
         if (!r.ok) { setDetailErr(r.error || "docker inspect failed"); return; }
         setEnv(r.env); setConfig(r.config); setDetailErr(null);
       });
     } else if (tab === "top") {
-      void api.dockerTop(selId).then((r) => {
+      void api.dockerTop(id).then((r) => {
         if (!live) return;
-        if (!r.ok) { setDetailErr(r.error || "not running"); setTop(null); return; }
+        if (!r.ok) { setDetailErr(r.error || "Not running"); setTop(null); return; }
         setTop(r.text); setDetailErr(null);
       });
     }
     return () => { live = false; };
-  }, [selId, tab, env, config]);
+  }, [selected?.id, tab, env, config]);
 
   /**
    * The same verb across a whole compose project.
@@ -421,7 +470,7 @@ export function DockerView({ active }: { active: boolean }) {
     try {
       const fn = verb === "start" ? api.dockerStart : verb === "stop" ? api.dockerStop : verb === "restart" ? api.dockerRestart : api.dockerRm;
       const r = await fn(id);
-      flash(r.ok, r.ok ? (r.output || `${verb}ed`) : (r.error || "failed"));
+      flash(r.ok, r.ok ? (r.output || `${verb}ed`) : (r.error || "Failed"));
       await loadOverview(); await loadStats();
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
@@ -459,38 +508,45 @@ export function DockerView({ active }: { active: boolean }) {
                 <style>{SCROLLBAR_CSS}</style>
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
                   <span className={viewTitleClass} style={{ color: "var(--text)" }}>Docker</span>
-                  {ov?.version && <span className="text-[10px] t-dim2">engine {ov.version}</span>}
+                  {ov?.version && <span className="text-[10px] t-dim2">Engine {ov.version}</span>}
                   {/* Scoped to the open project. The fallback case is spelled out
                       rather than shown as an empty list, so an unlabelled stack
                       doesn't read as "docker is broken". */}
                   {ov?.scope && (
                     <span className="text-[9.5px] px-1.5 py-0.5 rounded shrink-0" title={ov.scope.showingAll
-                      ? `no container is labelled for ${ov.scope.project} (${ov.scope.workspace}) — showing every container on this host`
-                      : `showing containers for ${ov.scope.workspace}`}
+                      ? `No container is labelled for ${ov.scope.project} (${ov.scope.workspace}) — showing every container on this host`
+                      : `Showing containers for ${ov.scope.workspace}`}
                       style={ov.scope.showingAll
                         ? { background: "color-mix(in srgb, var(--warning) 16%, transparent)", color: "var(--warning)" }
                         : { background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--text2)" }}>
-                      {ov.scope.showingAll ? `no ${ov.scope.project} containers · showing all` : ov.scope.project}
+                      {ov.scope.showingAll ? `No ${ov.scope.project} containers · showing all` : ov.scope.project}
                     </span>
                   )}
                   {/* The tabs used to live here and are now the stacked
                       column's headers — two ways to switch the same thing, one
                       of which hid three quarters of what docker was doing. */}
                   <div className="ml-auto flex items-center gap-1.5">
-                    {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">read-only</span>}
+                    {!writeEnabled && ov?.available && <span className="text-[9.5px] t-dim2">Read-only</span>}
                     <button onClick={() => setDense((v) => !v)} title={dense ? "Show each container's image" : "Fit more containers on screen"}
                       className="text-[10px] px-2 py-0.5 rounded-lg"
                       style={dense
                         ? { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
                         : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
-                      dense
+                      Dense
                     </button>
                     <button onClick={() => { loadOverview(); loadStats(); }} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
                   </div>
                 </div>
 
                 {!ov?.available ? (
-                  <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{ov?.error || "connecting to docker…"}</div>
+                  // A missing binary and a downed daemon both land here; the
+                  // capability tells them apart so the former gets install
+                  // guidance rather than "is the daemon running?".
+                  cap && !cap.available ? (
+                    <DockerMissing reason={cap.reason} />
+                  ) : (
+                    <div className="flex-1 grid place-items-center t-dim2 text-[12px] px-6 text-center">{ov?.error || "Connecting to Docker…"}</div>
+                  )
                 ) : (
                   <div className="flex-1 min-h-0 flex">
                     {/* Everything at once down the left, the way lazydocker
@@ -595,10 +651,10 @@ export function DockerView({ active }: { active: boolean }) {
                                 <button onClick={() => { setConsoleOpen(true); runInConsole(consoleRoot(), `docker exec -it ${selected.id.slice(0, 12)} sh -c 'command -v bash >/dev/null && exec bash || exec sh'`); }}
                                   className="text-[10px] px-2 py-0.5 rounded mr-1"
                                   style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
-                                  title={`Open a shell inside ${selected.name}`}>exec</button>
+                                  title={`Open a shell inside ${selected.name}`}>Exec</button>
                               )}
                               {DETAIL_TABS.map((t) => (
-                                <button key={t} onClick={() => setTab(t)} className="text-[10px] px-2 py-0.5 rounded" style={{ background: tab === t ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: tab === t ? "var(--text)" : "var(--text3)" }}>{t}</button>
+                                <button key={t} onClick={() => setTab(t)} className="text-[10px] px-2 py-0.5 rounded" style={{ background: tab === t ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: tab === t ? "var(--text)" : "var(--text3)" }}>{t[0].toUpperCase() + t.slice(1)}</button>
                               ))}
                               {tab === "logs" && (
                                 <Select value={String(tail)} onChange={(v) => setTail(Number(v))} align="right"
@@ -623,7 +679,7 @@ export function DockerView({ active }: { active: boolean }) {
                             </div>
                           )}
                         </>
-                    ) : <div className="flex-1 grid place-items-center t-dim2 text-[12px]">no containers</div>}
+                    ) : <div className="flex-1 grid place-items-center t-dim2 text-[12px]">No containers</div>}
                     </div>
                   </div>
                 )}
@@ -659,10 +715,10 @@ export function DockerView({ active }: { active: boolean }) {
                       }}
                     >
                       <span style={{ fontSize: 11 }}>{consoleOpen ? "▾" : "▸"}</span>
-                      <span>console</span>
+                      <span>Console</span>
                       <kbd className="text-[8.5px] px-1 py-[1px] rounded" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", opacity: 0.85 }}>shell</kbd>
                     </button>
-                    <span className="ml-auto">logs auto-refresh · stats every 5s</span>
+                    <span className="ml-auto">Logs auto-refresh · stats every 5s</span>
                   </div>
                 )}
                 {toast && (

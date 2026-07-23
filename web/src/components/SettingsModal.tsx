@@ -175,12 +175,12 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
               : chord.custom
                 ? { color: "var(--primary-hover)" }
                 : { color: "var(--text2)", opacity: 0.6 }}>
-            {chord.capturing ? "hold a combo…" : chordLabel(chord.key)}
+            {chord.capturing ? "Hold a combo…" : chordLabel(chord.key)}
           </button>
           <span className="w-3 shrink-0">
             {chord.custom && !chord.capturing && (
-              <button onClick={chord.onClear} title="back to its position in the rail"
-                className="text-[11px] px-0.5 t-dim2 hover:opacity-70" aria-label="reset this shortcut">✕</button>
+              <button onClick={chord.onClear} title="Back to its position in the rail"
+                className="text-[11px] px-0.5 t-dim2 hover:opacity-70" aria-label="Reset this shortcut">✕</button>
             )}
           </span>
         </span>
@@ -191,7 +191,7 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
           style={capturing
             ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
             : { color: "var(--text2)" }}>
-          {capturing ? "press a key…" : keyName === " " ? "space" : keyName}
+          {capturing ? "Press a key…" : keyName === " " ? "space" : keyName}
         </button>
       </span>
     </div>
@@ -227,7 +227,7 @@ function AboutPane({ open }: { open: boolean }) {
     setNotes(null);
     api.updateNotes(want.tag)
       .then((r) => { if (live) setNotes(r); })
-      .catch(() => { if (live) setNotes({ ok: false, tag: want.tag, notes: "", source: "", error: "could not reach the server" }); });
+      .catch(() => { if (live) setNotes({ ok: false, tag: want.tag, notes: "", source: "", error: "Could not reach the server" }); });
     return () => { live = false; };
   }, [want]);
 
@@ -246,13 +246,13 @@ function AboutPane({ open }: { open: boolean }) {
 
   const run = async () => {
     setBusy(true); setErr(null);
-    const r = await api.updateRun().catch(() => ({ ok: false, error: "could not reach the server" }));
+    const r = await api.updateRun().catch(() => ({ ok: false, error: "Could not reach the server" }));
     setBusy(false);
-    if (!r.ok) { setErr(r.error || "update failed to start"); return; }
+    if (!r.ok) { setErr(r.error || "Update failed to start"); return; }
     setStarted(true);
   };
 
-  if (!st) return <Section title="About"><div className="px-3 py-2 text-[11px] t-dim2">reading version…</div></Section>;
+  if (!st) return <Section title="About"><div className="px-3 py-2 text-[11px] t-dim2">Reading version…</div></Section>;
 
   const short = st.info.commit ? st.info.commit.slice(0, 7) : "unknown";
   const mine = installedNotes(st.info.baseTag, st.info.distance, st.branch);
@@ -262,7 +262,7 @@ function AboutPane({ open }: { open: boolean }) {
         <div className="flex items-baseline gap-3">
           <span className="text-[12.5px]" style={{ color: "var(--text)" }}>agentglass {st.info.version}</span>
           <span className="text-[10.5px] t-dim2 tabular-nums" title={st.info.commit}>{short}</span>
-          {st.info.builtAt && <span className="text-[10px] t-dim2">built {new Date(st.info.builtAt).toLocaleString()}</span>}
+          {st.info.builtAt && <span className="text-[10px] t-dim2">Built {new Date(st.info.builtAt).toLocaleString()}</span>}
           {/* The notes used to appear once, on the launch after an update, and
               were unreachable ever after — dismiss it, or update before it
               existed, and the only copy was on the release page. */}
@@ -270,7 +270,7 @@ function AboutPane({ open }: { open: boolean }) {
             <button onClick={() => setWant(mine)}
               className="ml-auto text-[10.5px] px-2 py-0.5 rounded-md hover:opacity-80"
               style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>
-              release notes
+              Release notes
             </button>
           )}
         </div>
@@ -283,7 +283,7 @@ function AboutPane({ open }: { open: boolean }) {
             style={st.last.ok
               ? { color: "var(--text2)", background: "color-mix(in srgb, var(--success) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }
               : { color: "var(--text2)", background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)" }}>
-            last update {st.last.ok ? "succeeded" : "failed"} — {new Date(st.last.at).toLocaleString()}
+            Last update {st.last.ok ? "succeeded" : "failed"} — {new Date(st.last.at).toLocaleString()}
             {!st.last.ok && st.last.tail && (
               <pre className="mt-1 text-[9.5px] whitespace-pre-wrap break-all m-0" style={{ color: "var(--text3)" }}>
                 {st.last.tail.split("~").filter(Boolean).slice(-6).join("\n")}
@@ -318,11 +318,18 @@ function AboutPane({ open }: { open: boolean }) {
               ))}
             </div>
             {err && <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>}
+            {/* The install compiles the release on this machine, so the
+                toolchain has to be here before it starts — said up front
+                rather than left to fail the build and report it in the panel
+                above, after the app has already gone down to restart. */}
+            <div className="text-[10.5px] px-2.5 py-1.5 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+              Built on your machine from source — needs <span style={{ color: "var(--warning)" }}>git</span> and <span style={{ color: "var(--warning)" }}>bun</span> installed, and is Linux-only for now.
+            </div>
             <div className="flex items-center gap-2">
               <button onClick={run} disabled={busy}
                 className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
                 style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
-                {busy ? "starting…" : `install ${st.branch} & restart`}
+                {busy ? "Starting…" : `Install ${st.branch} & restart`}
               </button>
               {/* Read before you install, rather than after the app has
                   restarted into it. The tag list above says which releases are
@@ -330,11 +337,11 @@ function AboutPane({ open }: { open: boolean }) {
               <button onClick={() => setWant({ tag: st.branch, title: "What's in this update" })}
                 className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
                 style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}>
-                what's in {st.branch}
+                What's in {st.branch}
               </button>
             </div>
             <span className="text-[9.5px] t-dim2">
-              Builds the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.
+              Compiles the tagged release in its own clone under ~/.cache, then reinstalls and restarts. Your working checkout is never touched, and only published tags are ever offered — commits pushed after a tag stay out until you tag them.
             </span>
           </>
         )}
@@ -349,7 +356,7 @@ function AboutPane({ open }: { open: boolean }) {
         // A release with no annotation, an origin github knows nothing about,
         // a laptop on a train: all of them end here. Saying which is the whole
         // point of a button you pressed on purpose.
-        error={notes && !notes.ok ? (notes.error || "no notes for that release") : undefined}
+        error={notes && !notes.ok ? (notes.error || "No notes for that release") : undefined}
         notes={notes?.notes ?? ""}
         onClose={() => setWant(null)}
       />
@@ -420,6 +427,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, [capturingChord]);
+
+  // Closing the modal mid-capture has to drop the capture. This component stays
+  // mounted with `open` merely toggled (Portal/AnimatePresence own the exit), so
+  // neither capture effect above unmounts on close, and while `capturing` /
+  // `capturingChord` stay set their window-level, capture-phase keydown listener
+  // stays attached to a dialog that is no longer on screen — swallowing the next
+  // keystroke anywhere in the app into a rebind nobody is doing. Clearing the
+  // capture state re-runs those effects, and their cleanup is where the listener
+  // actually comes off.
+  useEffect(() => { if (!open) { setCapturing(null); setCapturingChord(null); setKeyError(null); } }, [open]);
+
   const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
   const [quiet, setQuietState] = useState(() => notifyQuiet());
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
@@ -563,7 +581,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         <button onClick={() => { resetBindings(); resetChords(); setKeyError(null); setCapturing(null); setCapturingChord(null); }}
                           className="text-[10.5px] px-2 py-1 rounded-lg shrink-0"
                           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                          reset to defaults
+                          Reset to defaults
                         </button>
                       )}
                     </div>

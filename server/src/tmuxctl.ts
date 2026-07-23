@@ -329,7 +329,13 @@ export function runAction(t: TmuxTarget, action: TmuxAction, window?: string, na
 
 /** The options the panel borrows when it takes the status line over. Restored
  *  together, in the same breath, so a half-restored bar cannot outlive us. */
-const BORROWED = ["status", "status-format[0]", "status-style"];
+// Restored by unsetting. `status-format[0]` is the one we blank when borrowing,
+// but `set-option -u status-format[0]` does NOT clear an array element on tmux
+// 3.7 — the override lingers as "" and the bar stays invisible even after a
+// restore ran. Unsetting the whole `status-format` array is what actually
+// returns it to the user's config default; we only ever set index 0, so nothing
+// else of theirs is lost.
+const BORROWED = ["status", "status-format", "status-style"];
 
 /**
  * Whether this user's tmux normally has a status line at all, read from the

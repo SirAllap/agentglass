@@ -111,7 +111,7 @@ export function UsageWidget() {
   // First fetch in flight — show a spinner so it's clearly loading, not missing.
   if (loading && !u) {
     return (
-      <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl" title="loading Anthropic plan usage…"
+      <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl" title="Loading Anthropic plan usage…"
         style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
         <span className="h-3 w-3 rounded-full animate-spin" style={{ border: "2px solid color-mix(in srgb, var(--primary) 25%, transparent)", borderTopColor: "var(--primary)" }} />
         <span className="text-[10px] t-dim2">Anthropic usage…</span>

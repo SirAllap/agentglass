@@ -133,31 +133,31 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                         // transcript, so say why rather than offer a button
                         // that corrupts the history.
                         <span className="chip t-dim2" title="This session is still running — resume it once it stops, or watch it live below.">
-                          ● running
+                          ● Running
                         </span>
                       ) : sessionCwd(d) ? (
                         <button onClick={() => { onResume(d); onClose(); }} className="chip cursor-pointer"
                           title={`Continue this conversation in ${sessionCwd(d)} — claude keeps the full context`}
                           style={{ color: "var(--ok, #34d399)", background: "color-mix(in srgb, #34d399 15%, transparent)", borderColor: "color-mix(in srgb, #34d399 45%, transparent)" }}>
-                          ↩ resume in chat
+                          ↩ Resume in chat
                         </button>
                       ) : (
                         <span className="chip t-dim2" title="No directory recorded for this session, so there's nowhere to resume it.">
-                          ↩ resume unavailable
+                          ↩ Resume unavailable
                         </span>
                       )
                     )}
                     {d && onFilter && (
                       <button onClick={() => { onFilter(d.source_app); onClose(); }} className="chip cursor-pointer" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 45%, transparent)" }}>
-                        ⧉ watch in live feed
+                        ⧉ Watch in live feed
                       </button>
                     )}
                     <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
                 </div>
 
-                {loading && <div className="flex-1 grid place-items-center t-dim2 text-[12px]">loading session…</div>}
-                {!loading && !d && <div className="flex-1 grid place-items-center t-dim2 text-[12px]">session not found</div>}
+                {loading && <div className="flex-1 grid place-items-center t-dim2 text-[12px]">Loading session…</div>}
+                {!loading && !d && <div className="flex-1 grid place-items-center t-dim2 text-[12px]">Session not found</div>}
 
                 {d && (
                   <div className="flex-1 min-h-0 flex flex-col">
@@ -168,7 +168,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                           conversation — the full text is in the thread below.
                           Scrolls rather than truncating, so nothing is lost. */}
                       <div className="text-[12.5px] leading-relaxed max-h-[150px] overflow-y-auto agx-scroll" style={{ color: "var(--text2)" }}>
-                        {d.summary ? <Markdown text={d.summary} /> : <span className="t-dim2 italic">no assistant summary captured for this session</span>}
+                        {d.summary ? <Markdown text={d.summary} /> : <span className="t-dim2 italic">No assistant summary captured for this session</span>}
                       </div>
                       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 mt-4">
                         <Stat k="Events" v={d.events.toLocaleString()} />
@@ -195,7 +195,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                                 </div>
                               </div>
                             ))}
-                            {d.tool_mix.length === 0 && <div className="t-dim2 text-[11px]">no tool calls</div>}
+                            {d.tool_mix.length === 0 && <div className="t-dim2 text-[11px]">No tool calls</div>}
                           </div>
                         </div>
                         <div>
@@ -220,11 +220,11 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                                 </button>
                               );
                             })}
-                            {d.subagents.length === 0 && <div className="t-dim2 text-[11px]">none</div>}
+                            {d.subagents.length === 0 && <div className="t-dim2 text-[11px]">None</div>}
                           </div>
                           {focusAgent && (
                             <button onClick={() => setFocusAgent(null)} className="mt-2 text-[10px] t-dim2 hover:opacity-70">
-                              ← showing one subagent · back to the whole session
+                              ← Showing one subagent · back to the whole session
                             </button>
                           )}
                         </div>
@@ -232,7 +232,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                           <div className="panel-eyebrow mb-2 flex items-center gap-2">
                             <span>Files changed · {d.changes.length}</span>
                             {d.changes.length > 0 && (
-                              <button onClick={() => { setDiffPath(undefined); setDiffOpen(true); }} className="ml-auto normal-case tracking-normal text-[10px] px-1.5 py-0.5 rounded transition-colors" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}>view diffs →</button>
+                              <button onClick={() => { setDiffPath(undefined); setDiffOpen(true); }} className="ml-auto normal-case tracking-normal text-[10px] px-1.5 py-0.5 rounded transition-colors" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}>View diffs →</button>
                             )}
                           </div>
                           <div className="space-y-1">
@@ -245,7 +245,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                                 </span>
                               </button>
                             ))}
-                            {d.changes.length === 0 && <div className="t-dim2 text-[11px]">no file changes</div>}
+                            {d.changes.length === 0 && <div className="t-dim2 text-[11px]">No file changes</div>}
                           </div>
                         </div>
                       </div>
@@ -272,7 +272,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                               className="text-[9.5px] px-1.5 py-0.5 rounded-full"
                               title="Jump to the newest turn and follow again"
                               style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)" }}>
-                              ↓ resume live
+                              ↓ Resume live
                             </button>
                           )}
                           <button onClick={() => setShowTools((s) => !s)}
@@ -283,7 +283,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                               background: `color-mix(in srgb, var(--primary) ${showTools ? 15 : 6}%, transparent)`,
                               border: `1px solid color-mix(in srgb, var(--primary) ${showTools ? 40 : 18}%, transparent)`,
                             }}>
-                            ⚙ tools {toolCount > 0 && <span className="tabular-nums">{toolCount}</span>}
+                            ⚙ Tools {toolCount > 0 && <span className="tabular-nums">{toolCount}</span>}
                           </button>
                         </div>
                         {/* Watched for height changes — the eyebrow row above is
@@ -291,7 +291,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                             new turns, and tool output whose syntax highlighting
                             lands a moment after the row itself. */}
                         <div ref={convoContentRef} className="space-y-2.5">
-                          {rows.length === 0 && <div className="t-dim2 text-[11px]">no prompts or messages captured</div>}
+                          {rows.length === 0 && <div className="t-dim2 text-[11px]">No prompts or messages captured</div>}
                           {rows.map((r) => r.kind === "tool" ? (
                             <ToolRow key={r.key} e={r.e} sub={r.children} />
                           ) : (

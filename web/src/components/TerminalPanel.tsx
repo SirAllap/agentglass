@@ -6,6 +6,7 @@
 // running job — reopening reattaches to the live session, scrollback intact.
 import { Fragment, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { keepTermFocus } from "../lib/keepFocus.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -44,12 +45,12 @@ export function consoleRoot(): string {
 /** Status dot, for anywhere that shows a shell's state. TermView builds a
  *  richer one that names the shell; this is the shared minimum. */
 const SESS_DOT: Record<SessStatus, { color: string; label: string }> = {
-  idle: { color: "var(--text2)", label: "idle" },
-  connecting: { color: "var(--warning)", label: "connecting…" },
-  live: { color: "var(--success, #98c379)", label: "live" },
-  exited: { color: "var(--text2)", label: "exited" },
-  error: { color: "var(--error)", label: "disconnected" },
-  unauthorized: { color: "var(--error)", label: "unauthorized ⚿" },
+  idle: { color: "var(--text2)", label: "Idle" },
+  connecting: { color: "var(--warning)", label: "Connecting…" },
+  live: { color: "var(--success, #98c379)", label: "Live" },
+  exited: { color: "var(--text2)", label: "Exited" },
+  error: { color: "var(--error)", label: "Disconnected" },
+  unauthorized: { color: "var(--error)", label: "Unauthorized ⚿" },
 };
 const repoName = (p: string) => p.split("/").pop() || p;
 
@@ -147,6 +148,12 @@ const sessions = new Map<string, Sess>();
 let seq = 0;
 /** Shells for one repo, in creation order. */
 const sessionsFor = (root: string) => [...sessions.values()].filter((s) => s.root === root).sort((a, b) => a.createdAt - b.createdAt);
+/** Shells the Terminal *view* owns: every one for a repo except the shell tagged
+ *  for the docked console strip. That shell's xterm holder lives in the strip;
+ *  a single holder can only be in one slot, so listing it here too would have the
+ *  view mount it as a tab/pane and steal it — the console going blank the moment
+ *  you open the terminal. The console strip keeps using sessionsFor to find it. */
+const termSessionsFor = (root: string) => sessionsFor(root).filter((s) => s.title !== CONSOLE_TITLE);
 const notify = (s: Sess) => { s.subs.forEach((fn) => fn()); rosterChanged(); };
 
 // --- roster: "is any shell alive?", for the workspace rail ---------------------
@@ -551,7 +558,15 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement>(null);
-  useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); });
+  /** Put the cursor back in the console after a menu that had to borrow the
+   *  focus (the repo filter, the commands filter) closes again. Deferred a
+   *  frame so it lands after the menu's own input has finished unmounting —
+   *  otherwise the browser moves focus to <body> right after we set it. */
+  const focusConsole = useCallback(() => {
+    const s = sessions.get(sid);
+    if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
+  }, [sid]);
+  useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); focusConsole(); });
   // On demand: the Docker panel mounts this strip on every open, and most opens
   // never touch the picker.
   useEffect(() => {
@@ -562,6 +577,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     setPicked(next);
     try { localStorage.setItem(CONSOLE_ROOT_KEY, next); } catch { /* private mode — lasts the session */ }
     setRepoOpen(false); setRepoQuery("");
+    focusConsole();
   };
   const runHere = useCallback((cmd: string) => {
     const s = sessions.get(sid);
@@ -649,16 +665,19 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
             the one the terminal view happens to be sitting in — so it picks its
             own, and remembers it. */}
         <div className="relative shrink-0" ref={pickerRef} onMouseDown={(e) => e.stopPropagation()}>
-          <button onClick={() => setRepoOpen((o) => !o)} disabled={IS_DEMO}
+          {/* keepTermFocus so opening the picker does not blur the console; the
+              filter input inside autofocuses on its own, and closing hands the
+              cursor back (see chooseRepo / the useDismiss above). */}
+          <button onMouseDown={keepTermFocus} onClick={() => setRepoOpen((o) => !o)} disabled={IS_DEMO}
             className="flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-md max-w-[200px]"
             style={{ background: "color-mix(in srgb, var(--bg3) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
-            title={root || "no repo"}>
-            <span className="truncate">{root ? repoName(root) : "no repo"}</span><span className="t-dim2">▼</span>
+            title={root || "No repo"}>
+            <span className="truncate">{root ? repoName(root) : "No repo"}</span><span className="t-dim2">▼</span>
           </button>
           {repoOpen && (
             <div className="absolute left-0 rounded-lg text-[11px] shadow-2xl flex flex-col"
               style={{ zIndex: 40, bottom: "calc(100% + 4px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 360, overflow: "hidden" }}>
-              <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="filter repos…"
+              <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="Filter repos…"
                 className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0"
                 style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
               <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
@@ -675,7 +694,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
                     {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
                   </button>
                 ))}
-                {!repos.length && <div className="px-3 py-2 t-dim2">reading repos…</div>}
+                {!repos.length && <div className="px-3 py-2 t-dim2">Reading repos…</div>}
               </div>
             </div>
           )}
@@ -687,11 +706,11 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
             component, so the two shells cannot drift apart again. Opens upward:
             there is nothing below this strip to open into. */}
         <div className="flex items-center gap-2 min-w-0" onMouseDown={(e) => e.stopPropagation()}>
-          <CommandBar root={root} disabled={!sid} font={TERM_FONT} onRun={runHere} dropUp />
+          <CommandBar root={root} disabled={!sid} font={TERM_FONT} onRun={runHere} onClose={focusConsole} dropUp />
         </div>
 
-        <span className="ml-auto text-[9px] t-dim2 shrink-0">drag to resize</span>
-        <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="hide the console (the shell keeps running)">✕</button>
+        <span className="ml-auto text-[9px] t-dim2 shrink-0">Drag to resize</span>
+        <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="Hide the console (the shell keeps running)">✕</button>
       </div>
       <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--bg)" }} onClick={() => sess?.term.focus()} />
     </div>
@@ -712,8 +731,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const pickersRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
-
-  useDismiss(repoOpen, pickersRef, () => setRepoOpen(false));
 
   useEffect(() => {
     if (!open) return;
@@ -740,13 +757,27 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [focusIdx, setFocusIdx] = useState(0);
   const paneRefs = useRef<(HTMLDivElement | null)[]>([]);
 
-  const tabs = !IS_DEMO && root ? sessionsFor(root) : [];
+  /** Put the cursor back in the pane you were in. Called when a menu that had
+   *  to borrow the focus for its own input — the repo filter, the commands
+   *  filter, a window rename — closes again: the terminal is where typing
+   *  should resume. Deferred a frame so it lands after the menu's input has
+   *  unmounted, or the browser moves focus to <body> straight after we set it. */
+  const focusTerm = useCallback(() => {
+    const s = sessions.get(paneIds[focusIdx] ?? "");
+    if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
+  }, [paneIds, focusIdx]);
+  // The repo picker's filter takes focus off the shell while it is open, so
+  // dismissing it (Escape, an outside click) has to give the shell its cursor
+  // back — see focusTerm.
+  useDismiss(repoOpen, pickersRef, () => { setRepoOpen(false); focusTerm(); });
+
+  const tabs = !IS_DEMO && root ? termSessionsFor(root) : [];
 
   // Every repo opens with a shell, and the panes always name shells that still
   // exist — closing one must not leave an empty frame behind.
   useEffect(() => {
     if (!open || !root || IS_DEMO) return;
-    const live = sessionsFor(root);
+    const live = termSessionsFor(root);
     const first = live[0] ?? createSession(root);
     setPaneIds((prev) => {
       const kept = prev.filter((id) => sessions.get(id)?.root === root);
@@ -805,6 +836,22 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // callback identity detaches a live terminal, which loses the selection you
     // were dragging and cycles focus mid-keystroke.
   }, [open, paneIds, focusIdx]);
+
+  // Return the keyboard focus to the shell when the terminal view becomes
+  // visible again — e.g. after clicking the left sidebar to another view and
+  // coming back, or dismissing the app header. The mount effect above
+  // deliberately omits `active` so returning does not detach/reload the
+  // terminal, so it never refocuses on return; this does, and only that. Guard
+  // on the rising edge (hidden → visible) so an already-focused shell is not
+  // re-grabbed on every unrelated re-render.
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current && open) {
+      const s = sessions.get(paneIds[focusIdx] ?? "");
+      if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
+    }
+    wasActive.current = active;
+  }, [active, open, paneIds, focusIdx]);
 
   const sess = sessions.get(paneIds[focusIdx] ?? "");
   // tmux is running in the shell you're looking at, so it owns the tabs and the
@@ -902,7 +949,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (!root || IS_DEMO) return;
     setPaneIds((prev) => {
       if (prev.length >= 4) return prev; // beyond four a pane is too small to use
-      const spare = sessionsFor(root).find((s) => !prev.includes(s.id)) ?? createSession(root);
+      const spare = termSessionsFor(root).find((s) => !prev.includes(s.id)) ?? createSession(root);
       return [...prev, spare.id];
     });
   }, [root]);
@@ -917,7 +964,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     setPaneIds((prev) => {
       const kept = prev.filter((x) => x !== id);
       if (kept.length) return kept;
-      const next = sessionsFor(r)[0] ?? createSession(r);
+      const next = termSessionsFor(r)[0] ?? createSession(r);
       return [next.id];
     });
     setFocusIdx(0);
@@ -942,12 +989,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const disabled = cmds ? !cmds.enabled : false;
 
   const statusDot: Record<SessStatus, { color: string; label: string }> = {
-    idle: { color: "var(--text2)", label: "idle" },
-    connecting: { color: "var(--warning)", label: "connecting…" },
+    idle: { color: "var(--text2)", label: "Idle" },
+    connecting: { color: "var(--warning)", label: "Connecting…" },
     live: { color: "var(--success, #98c379)", label: sess ? `${sess.shell} · ${sess.mode === "pipe" ? "pipe" : "pty"}${sess.mode !== "pipe" && !sess.canResize ? " · fixed size" : ""}` : "live" },
-    exited: { color: "var(--text2)", label: "exited" },
-    error: { color: "var(--error)", label: "disconnected" },
-    unauthorized: { color: "var(--error)", label: "unauthorized ⚿" },
+    exited: { color: "var(--text2)", label: "Exited" },
+    error: { color: "var(--error)", label: "Disconnected" },
+    unauthorized: { color: "var(--error)", label: "Unauthorized ⚿" },
   };
 
   return (
@@ -974,10 +1021,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 {/* header: repo picker + command launcher + actions */}
                 <div className={viewHeaderClass} style={viewHeaderStyle}>
                   <span className={viewTitleClass} style={{ color: "var(--text)" }}>Terminal</span>
-                  <div ref={pickersRef} className="flex items-center gap-3">
+                  {/* keepTermFocus on the picker group so pressing the trigger
+                      or a repo row never blurs the shell; the filter input is
+                      excluded by the handler and still takes focus, and every
+                      way out of the menu below hands the cursor back. */}
+                  <div ref={pickersRef} className="flex items-center gap-3" onMouseDown={keepTermFocus}>
                   <div className="relative">
-                    <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
-                      <span className="font-medium">{repoRef ? repoName(repoRef.root) : "pick a repo"}</span><span className="t-dim2">▼</span>
+                    <button onClick={() => { if (repoOpen) { setRepoOpen(false); focusTerm(); } else setRepoOpen(true); }} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}>
+                      <span className="font-medium">{repoRef ? repoName(repoRef.root) : "Pick a repo"}</span><span className="t-dim2">▼</span>
                     </button>
                     {repoOpen && (
                       /* Wide enough for the whole worktree name and its branch.
@@ -987,7 +1038,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                          apart, both cut off. Source control shows them in full;
                          this now matches it. */
                       <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 460, maxWidth: "min(86vw, 760px)", maxHeight: 420, overflow: "hidden" }}>
-                        <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="filter repos…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                        <input autoFocus value={repoQuery} onChange={(e) => setRepoQuery(e.target.value)} placeholder="Filter repos…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                         <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
                           {/* The path is searchable too: with a worktree per card,
                               "20343" is how you find one — it's in the directory
@@ -995,7 +1046,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           {repos.filter((r) => { const q = repoQuery.trim().toLowerCase(); return !q || (r.name + " " + r.branch + " " + r.root).toLowerCase().includes(q); }).map((r) => {
                             const live = sessionsFor(r.root).some((s) => s.status === "live");
                             return (
-                              <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
+                              <button key={r.root} onClick={() => { setRoot(r.root); setRepoOpen(false); setRepoQuery(""); focusTerm(); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                                 {/* Indented under its project — a shell in a
                                     worktree is a shell in that branch, not in
                                     some unrelated repo that looks similar. */}
@@ -1007,7 +1058,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                     as a kind of thing. */}
                                 <span
                                   className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
-                                  title={r.worktreeOf ? `worktree of ${r.worktreeOf}` : "main checkout"}
+                                  title={r.worktreeOf ? `Worktree of ${r.worktreeOf}` : "Main checkout"}
                                   style={r.worktreeOf
                                     ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
                                     : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
@@ -1026,7 +1077,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                     collided with the branch beside it. */}
                                 <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.worktreeOf ? `${r.branch}\n${r.root}` : r.root}>
                                   {r.worktreeOf ? r.branch : r.name}
-                                  {live && <span title="live shell" style={{ color: "var(--success, #98c379)" }}> ●</span>}
+                                  {live && <span title="Live shell" style={{ color: "var(--success, #98c379)" }}> ●</span>}
                                 </span>
                                 {!r.worktreeOf && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>}
                                 {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
@@ -1035,7 +1086,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               </button>
                             );
                           })}
-                          {!repos.length && <div className="px-3 py-2 t-dim2">no repos seen yet</div>}
+                          {!repos.length && <div className="px-3 py-2 t-dim2">No repos seen yet</div>}
                         </div>
                       </div>
                     )}
@@ -1047,23 +1098,28 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       mounts, so the two shells offer the same thing. Its own
                       dropdown state lives inside it, which is why it sits
                       outside the pickers group above. */}
-                  <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} />
+                  <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} onClose={focusTerm} />
 
-                  <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                  {/* keepTermFocus so none of these buttons — split, restart,
+                      clear, the status pill — steals the shell's cursor on
+                      press; they act and the terminal keeps the keyboard. */}
+                  <div className="ml-auto flex items-center gap-1.5 shrink-0" onMouseDown={keepTermFocus}>
                     <span onClick={status === "unauthorized" ? reauthPrompt : undefined}
                       className={`flex items-center gap-1.5 text-[10px] t-dim2 mr-1 ${status === "unauthorized" ? "cursor-pointer" : ""}`}
-                      title={status === "unauthorized" ? "this server needs an access token — click to enter it" : "shell status"}>
+                      title={status === "unauthorized" ? "This server needs an access token — click to enter it" : "Shell status"}>
                       <span style={{ color: statusDot[status].color }}>●</span>{statusDot[status].label}
                     </span>
-                    {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ split</button>}
-                    <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ restart</button>
-                    <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>clear</button>
+                    {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ Split</button>}
+                    <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="Kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ Restart</button>
+                    <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>Clear</button>
                   </div>
                 </div>
 
-                {/* shells open in this repo — scrolls, so the count can grow */}
+                {/* shells open in this repo — scrolls, so the count can grow.
+                    keepTermFocus on the strip so switching, closing or adding a
+                    shell by click doesn't blur the terminal underneath. */}
                 {!IS_DEMO && !disabled && !tmuxActive && (
-                  <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
                     {tabs.map((t) => {
                       const shown = paneIds.includes(t.id);
                       const focused = t.id === paneIds[focusIdx];
@@ -1077,11 +1133,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               : { color: "var(--text3)" }}>
                           <span className="w-1.5 h-1.5 rounded-full" style={{ background: t.status === "live" ? "var(--success, #98c379)" : t.status === "error" ? "var(--error)" : "color-mix(in srgb, var(--text4) 60%, transparent)" }} />
                           <span>{t.title}</span>
-                          <button onClick={(e) => { e.stopPropagation(); closeShell(t.id); }} className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="close shell">✕</button>
+                          <button onClick={(e) => { e.stopPropagation(); closeShell(t.id); }} className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="Close shell">✕</button>
                         </div>
                       );
                     })}
-                    <button onClick={addShell} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title="new shell in this repo">+</button>
+                    <button onClick={addShell} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title="New shell in this repo">+</button>
                   </div>
                 )}
 
@@ -1090,7 +1146,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     user's side this is the same control, and which program is
                     behind it should not change how the workspace looks. */}
                 {tmuxActive && tmuxWindows.length > 0 && (
-                  <div className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                  // keepTermFocus so switching tmux windows by click (and the +,
+                  // kill, hide-bar buttons) never blurs the pane — tmux keeps
+                  // owning the keyboard the instant the tab changes. The rename
+                  // input is excluded by the handler, so it can still be typed
+                  // in; it hands focus back on close (see below).
+                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
                     <span
                       title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
                       className="shrink-0 px-1.5 py-1 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
@@ -1128,7 +1189,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         <div key={w.id}
                           onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd("select", { window: w.id }); } }}
                           onDoubleClick={() => setRenaming(w.id)}
-                          title={`window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
+                          title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
                           className="group flex items-center gap-1.5 px-2 py-1 rounded-md text-[10.5px] cursor-pointer shrink-0"
                           style={w.id === activeWindow
                             ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
@@ -1141,11 +1202,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               onClick={(e) => e.stopPropagation()}
                               onBlur={() => setRenaming(null)}
                               onKeyDown={(e) => {
-                                if (e.key === "Escape") { setRenaming(null); return; }
+                                // Escape and Enter close the rename box on
+                                // purpose, so both hand the keyboard back to the
+                                // pane rather than leaving it on the vanishing
+                                // input.
+                                if (e.key === "Escape") { setRenaming(null); focusTerm(); return; }
                                 if (e.key !== "Enter") return;
                                 const name = (e.target as HTMLInputElement).value.trim();
                                 if (name && name !== w.name) tmuxCmd("rename", { window: w.id, name });
                                 setRenaming(null);
+                                focusTerm();
                               }}
                               className="bg-transparent outline-none w-20 text-[10.5px]"
                               style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" }}
@@ -1153,20 +1219,20 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           ) : (
                             <span>{w.name || "shell"}</span>
                           )}
-                          {zoomed && <span className="text-[9px] font-semibold leading-none" style={{ color: "var(--text4)" }} title="a pane in this window is zoomed">⤢</span>}
-                          {bell && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} title="bell" />}
-                          {!bell && activity && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="activity" />}
+                          {zoomed && <span className="text-[9px] font-semibold leading-none" style={{ color: "var(--text4)" }} title="A pane in this window is zoomed">⤢</span>}
+                          {bell && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} title="Bell" />}
+                          {!bell && activity && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="Activity" />}
                           <button onClick={(e) => { e.stopPropagation(); tmuxCmd("kill", { window: w.id }); }}
-                            className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="close window (kill-window)">✕</button>
+                            className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="Close window (kill-window)">✕</button>
                         </div>
                       );
                     })}
-                    <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title={`new tmux window (${px} c puts it next to this one)`}>+</button>
+                    <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
                     <button onClick={() => setTmuxBar((v) => !v)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
                       title={tmuxBar
-                        ? "blank tmux's own status line for this session — it keeps the row, so its prompts and messages still have somewhere to draw"
-                        : "give tmux's own status line back"}>
-                      {tmuxBar ? "hide tmux bar" : "show tmux bar"}
+                        ? "Blank tmux's own status line for this session — it keeps the row, so its prompts and messages still have somewhere to draw"
+                        : "Give tmux's own status line back"}>
+                      {tmuxBar ? "Hide tmux bar" : "Show tmux bar"}
                     </button>
                   </div>
                 )}
@@ -1214,7 +1280,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   </div>
                   {(IS_DEMO || disabled) && (
                     <div className="absolute inset-0 flex items-center justify-center text-[12px] t-dim2" style={{ background: "color-mix(in srgb, var(--bg) 80%, transparent)" }}>
-                      {IS_DEMO ? "the terminal is disabled in the demo — run agentglass locally for a real shell" : "terminal disabled (AGENTGLASS_TERMINAL_DISABLED=1)"}
+                      {IS_DEMO
+                        ? "The terminal is disabled in the demo — run agentglass locally for a real shell"
+                        : cmds?.reason === "windows"
+                        ? "The terminal is not available on Windows yet (the PTY backend needs POSIX; ConPTY support is planned)"
+                        : "Terminal disabled (AGENTGLASS_TERMINAL_DISABLED=1)"}
                     </div>
                   )}
                 </div>
@@ -1228,16 +1298,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   {tmuxActive ? (
                     <span className="flex items-center gap-2 flex-wrap">
                       <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>tmux</span>
-                      <span>panel chrome hidden — tmux owns the panes</span>
+                      <span>Panel chrome hidden — tmux owns the panes</span>
                       <span className="t-dim2">·</span>
-                      {[["c", "window"], ['"', "split ↓"], ["%", "split →"], ["o", "next pane"], ["z", "zoom"], ["d", "detach"], ["?", "all keys"]].map(([key, what]) => (
+                      {[["c", "Window"], ['"', "Split ↓"], ["%", "Split →"], ["o", "Next pane"], ["z", "Zoom"], ["d", "Detach"], ["?", "All keys"]].map(([key, what]) => (
                         <Fragment key={key}>
                           <b style={{ color: "var(--text2)" }}>{px} {key}</b><span>{what}</span>
                         </Fragment>
                       ))}
                     </span>
                   ) : (
-                    <span>real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
+                    <span>Real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
                   )}
                   <span className="ml-auto">{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
                 </div>

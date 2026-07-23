@@ -14,7 +14,7 @@ export const Latency = memo(function Latency({ stats }: { stats: StatsSummary | 
         <p className="t-dim2 text-[10.5px] leading-snug mb-2">
           End-to-end tool duration from PreToolUse to PostToolUse, not model/API round-trip latency.
         </p>
-        {tools.length === 0 && <div className="t-dim2 text-[11px] text-center py-6">no tool calls measured yet</div>}
+        {tools.length === 0 && <div className="t-dim2 text-[11px] text-center py-6">No tool calls measured yet</div>}
         <div className="space-y-2">
           {tools.map((t, i) => (
             <motion.div key={t.tool_name} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }}>

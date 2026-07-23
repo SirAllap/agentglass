@@ -53,6 +53,21 @@ const limit = () => Math.max(
   Math.min(16, Number(process.env.AGENTGLASS_SPAWN_LIMIT) || navigator.hardwareConcurrency - 2 || 4),
 );
 
+// A backstop far above any legitimate spawn (the git spawns cap themselves at
+// 120s, docker at a few seconds), not a substitute for those. Each spawn already
+// kills itself on its own timeout — but a killed child whose stdout pipe never
+// reaches EOF leaves the awaiting `Response(...).text()` pending, and with it the
+// slot fn() is holding. Over a long session enough of those drain the pool to
+// zero and the app quietly stops being able to run git at all — the exact freeze
+// this pool exists to prevent, reached from the other side. So the slot is handed
+// back after this ceiling even if fn() itself never settles. Read per call, and
+// overridable, for the same reason the limit is: a module constant is fixed by
+// whichever file imports this first, which in a test run is never the overrider.
+const guardMs = () => {
+  const n = Number(process.env.AGENTGLASS_SPAWN_GUARD_MS);
+  return Number.isFinite(n) && n > 0 ? n : 5 * 60_000;
+};
+
 let inflight = 0;
 const waiting: (() => void)[] = [];
 /** High-water marks, so `/api/loopwatch` can say whether the cap is biting. */
@@ -75,11 +90,24 @@ export async function withSpawnSlot<T>(fn: () => Promise<T>): Promise<T> {
   }
   inflight++;
   if (inflight > peakInflight) peakInflight = inflight;
+  // Give the slot back exactly once — either when fn() settles (the normal
+  // path) or when the guard timeout fires because fn() never will. Double
+  // release would corrupt the counter and, through the waiter it wakes, hand
+  // out one more slot than the limit permits.
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    inflight--;
+    waiting.shift()?.();
+  };
+  const guard = setTimeout(release, guardMs());
+  guard.unref?.();
   try {
     return await fn();
   } finally {
-    inflight--;
-    waiting.shift()?.();
+    clearTimeout(guard);
+    release();
   }
 }
 

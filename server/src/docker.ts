@@ -7,7 +7,7 @@
 import { basename } from "node:path";
 import type {
   DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork,
-  DockerOverview, DockerScope, DockerActionResult,
+  DockerOverview, DockerScope, DockerActionResult, DockerCapability,
 } from "../../shared/types.ts";
 import { workspaceRoot, scopeRoots } from "./config.ts";
 import { backoff, currentLabel, resumedAs } from "./loopwatch.ts";
@@ -42,7 +42,11 @@ async function dockerAsync(args: string[], timeoutMs = 8000): Promise<Res> {
 async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
   const owner = currentLabel();
   try {
-    const proc = Bun.spawn(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
+    // Spawn the exact binary dockerBin() vouched for, not a bare "docker": bare
+    // spawn resolves against a PATH snapshotted at process start (the same trap
+    // dockerBin() documents), so the two could disagree about which docker is
+    // even being run. Falls back to the bare name only when nothing was resolved.
+    const proc = Bun.spawn([dockerBin() ?? "docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -52,7 +56,14 @@ async function runDocker(args: string[], timeoutMs: number): Promise<Res> {
     // things: the CLI answering "cannot connect to the daemon" is a fact, while
     // a SIGTERM at the deadline says only that we ran out of patience. Callers
     // that cache a verdict need to be able to tell those apart.
-    return { code: code ?? 1, stdout, stderr, killed: proc.killed || !!proc.signalCode };
+    //
+    // `proc.killed` cannot make that distinction: with the `timeout` option set,
+    // Bun reports it true for a process that exited entirely on its own (seen on
+    // 1.3.9), so keying on it marks every refusal "inconclusive" and a dead
+    // daemon reads as "still trying" forever. The signal is the honest witness —
+    // a timeout kill lands as SIGTERM (signalCode set, exitCode null); a normal
+    // exit, zero or not, has no signal.
+    return { code: code ?? 1, stdout, stderr, killed: proc.signalCode != null };
   } catch (e) {
     return { code: 1, stdout: "", stderr: String(e) };
   }
@@ -68,6 +79,30 @@ function jsonLines(out: string): Record<string, string>[] {
   return rows;
 }
 
+/**
+ * Is the `docker` CLI even here?
+ *
+ * Everything below assumes it is, and `Bun.spawn` THROWS on a missing binary
+ * rather than exiting 127 — so on a machine with no docker, runDocker() catches
+ * that throw and hands back `{ code:1, stderr:"…Executable not found…" }`. That
+ * non-empty stderr then reads to probeDaemon() as a *conclusive* answer from the
+ * CLI, and the panel says "docker not available (is the daemon running?)" over a
+ * daemon that was never even asked. Telling "not installed" apart from "daemon
+ * down" is the whole point of dockerCapability(); this is the primitive it and
+ * overview() both key on. Mirrors gitBin().
+ *
+ * PATH passed explicitly for the reason gitBin() documents: bare
+ * `Bun.which("docker")` resolves against a PATH snapshotted at process start,
+ * which both ignores a genuinely stripped environment and makes this untestable.
+ * Cached for the process — a binary doesn't appear mid-session, and the panel
+ * polls the overview every few seconds.
+ */
+let dockerBinCache: string | null | undefined;
+export function dockerBin(): string | null {
+  if (dockerBinCache === undefined) dockerBinCache = Bun.which("docker", { PATH: process.env.PATH ?? "" });
+  return dockerBinCache;
+}
+
 let cachedVersion: string | null = null;
 let versionCheckedAt = 0;
 /** How long a *conclusive* "no daemon" is trusted before probing again. */
@@ -76,6 +111,12 @@ const VERSION_RETRY_MS = 15_000;
  *  timed out proves nothing, and the panel should not spend fifteen seconds
  *  telling the user their daemon is down on the strength of it. */
 const VERSION_UNSURE_RETRY_MS = 2_000;
+/** How long a *success* is trusted before we re-confirm the daemon is still
+ *  there. The version does not change under a running server, but the server
+ *  can stop — so a cached success is a liveness claim with a shelf life, not a
+ *  fact for the whole session. Re-probing past this window is what lets a daemon
+ *  that died mid-session surface as down instead of a phantom empty daemon. */
+const VERSION_OK_TTL_MS = 15_000;
 let versionInflight: Promise<DaemonProbe> | null = null;
 /** Whether the last failure was the CLI answering, or us giving up on it. */
 let lastProbeInconclusive = false;
@@ -111,11 +152,27 @@ interface DaemonProbe {
  *     was running the whole time.
  */
 async function probeDaemon(): Promise<DaemonProbe> {
-  if (cachedVersion) return { version: cachedVersion, inconclusive: false };
+  // A cached success is trusted for a liveness window, not forever. Within it we
+  // answer from cache and spend no process; past it we re-probe, because the
+  // daemon may have stopped since — the one case the old "cache for good" branch
+  // could never report.
+  if (cachedVersion && Date.now() - versionCheckedAt < VERSION_OK_TTL_MS) {
+    return { version: cachedVersion, inconclusive: false };
+  }
+  // No CLI to ask: spawning would throw ENOENT and burn a pool slot on every
+  // poll, and its caught stderr is what used to masquerade as the daemon saying
+  // "no". A missing binary is a *conclusive* no-daemon we know without asking —
+  // returning it here is what lets overview() say "not installed" instead of
+  // blaming a daemon that was never contacted.
+  if (!dockerBin()) { cachedVersion = null; return { version: null, inconclusive: false }; }
   if (versionInflight) return versionInflight;
-  const wait = lastProbeInconclusive ? VERSION_UNSURE_RETRY_MS : VERSION_RETRY_MS;
-  if (versionCheckedAt && Date.now() - versionCheckedAt < wait) {
-    return { version: null, inconclusive: lastProbeInconclusive };
+  // Failure-retry cadence only applies when we have no trusted version to serve:
+  // with a (now expired) cached version we always want the confirming re-probe.
+  if (!cachedVersion) {
+    const wait = lastProbeInconclusive ? VERSION_UNSURE_RETRY_MS : VERSION_RETRY_MS;
+    if (versionCheckedAt && Date.now() - versionCheckedAt < wait) {
+      return { version: null, inconclusive: lastProbeInconclusive };
+    }
   }
   versionInflight = (async () => {
     try {
@@ -133,10 +190,14 @@ async function probeDaemon(): Promise<DaemonProbe> {
         lastProbeInconclusive = !cachedVersion; // exit 0 with no version is not an answer either
         return { version: cachedVersion, inconclusive: lastProbeInconclusive };
       }
-      // Killed at the deadline, or dead with nothing to say — either way the
-      // daemon has not told us anything.
+      // The probe failed. A timeout (killed) or an empty stderr tells us nothing,
+      // so a version we already trusted is kept and the daemon stays "up" — a
+      // busy daemon must not flap to "down" on one slow probe. But a conclusive
+      // failure (the CLI answered with an error) means the daemon is genuinely
+      // gone, so we drop the stale version and report it down.
       lastProbeInconclusive = !!r.killed || !r.stderr.trim();
-      return { version: null, inconclusive: lastProbeInconclusive };
+      if (!lastProbeInconclusive) cachedVersion = null;
+      return { version: cachedVersion, inconclusive: !cachedVersion && lastProbeInconclusive };
     } finally {
       versionInflight = null;
     }
@@ -146,6 +207,54 @@ async function probeDaemon(): Promise<DaemonProbe> {
 
 export async function dockerVersion(): Promise<string | null> {
   return (await probeDaemon()).version;
+}
+
+/**
+ * The three-state answer the panel needs: not installed / daemon down / OK.
+ *
+ * Mirrors gitCapability(), but with docker's extra failure mode folded in.
+ * `available` means the same thing it does for git — the CLI is on PATH — while
+ * the daemon nuance rides on `version`/`reason`:
+ *
+ *   (a) no binary      → { available:false, reason }   (install guidance)
+ *   (b) binary, no daemon → { available:true,  reason } (start the daemon)
+ *   (c) binary + daemon   → { available:true,  version }
+ *
+ * No 60s memo of its own, unlike gitCapability(): git has no daemon so its
+ * verdict is stable for the whole session, but docker's is not — and both halves
+ * are already cached at the right granularity underneath (dockerBin() for the
+ * life of the process, probeDaemon() with its own success-forever / failure-
+ * briefly policy). A capability that pinned "daemon down" for a full minute is
+ * exactly the staleness the rest of this file is written to avoid.
+ */
+export async function dockerCapability(): Promise<DockerCapability> {
+  if (!dockerBin()) {
+    return { available: false, reason: "Docker isn't installed — the docker CLI isn't on your PATH" };
+  }
+  const { version, inconclusive } = await probeDaemon();
+  if (version) return { available: true, version };
+  return {
+    available: true,
+    reason: inconclusive
+      ? "no answer from docker yet — still trying to reach the daemon"
+      : "the docker daemon isn't responding — is it running?",
+  };
+}
+
+/** Test seam: forget the binary probe (and the daemon memo it feeds) so a test
+ *  can flip PATH and re-ask, the way git-capability's own test does. */
+export function __resetDockerCapForTest(): void {
+  dockerBinCache = undefined;
+  cachedVersion = null;
+  versionCheckedAt = 0;
+  lastProbeInconclusive = false;
+  versionInflight = null;
+}
+
+/** Test seam: pretend the liveness window elapsed, keeping any cached version so
+ *  a test can drive the re-probe (and its cache-clearing) without a real wait. */
+export function __expireDockerVersionForTest(): void {
+  versionCheckedAt = 0;
 }
 
 // Every field is named explicitly instead of using `{{json .}}`, which looks
@@ -333,12 +442,17 @@ export async function overview(): Promise<DockerOverview> {
     const down: DockerOverview = {
       available: false, writeEnabled: DOCKER_WRITE_ENABLED, version: null,
       containers: [], images: [], volumes: [], networks: [],
-      // Say which of the two it is. Claiming the daemon is down when all we did
-      // was run out of patience sends the user to `systemctl status` for
-      // nothing — and it was, on a machine where docker was fine.
-      error: inconclusive
-        ? "no answer from docker yet — still trying"
-        : "docker not available (is the daemon running?)",
+      // Say which of the THREE it is. The daemon message must not be shown for a
+      // machine that has no docker at all — that binary-absent case is checked
+      // first, so "is the daemon running?" only ever names a daemon we actually
+      // tried to reach. Then the old split: a refusal is a fact, a timeout is
+      // only us running out of patience (which used to send the user to
+      // `systemctl status` for nothing, on a machine where docker was fine).
+      error: !dockerBin()
+        ? "Docker isn't installed — the docker CLI isn't on your PATH"
+        : inconclusive
+          ? "no answer from docker yet — still trying"
+          : "docker not available (is the daemon running?)",
     };
     // A guess is not worth caching for as long as a fact. Holding an
     // inconclusive verdict for the full window is what kept the error on screen
