@@ -343,12 +343,24 @@ export function providerOf(model: string | null | undefined): string | null {
   return null;
 }
 
+/**
+ * The sentinel a client sends to scope to sessions whose provider never
+ * resolved (a session that only ever carried un-modelled events). It is stored
+ * as NULL, so `provider = 'unknown'` would match nothing and the rows would
+ * vanish from every provider-scoped view — the sum of the per-provider numbers
+ * then came out below the unfiltered total. Matches the web's providerOf(null),
+ * which returns this same string, so the "Unknown" filter option round-trips.
+ */
+export const UNKNOWN_PROVIDER = "unknown";
+
 /** SQL fragment + args to scope an events query to one provider (via its
- *  sessions). Empty when no provider is selected. */
+ *  sessions). Empty when no provider is selected. The Unknown bucket selects
+ *  the NULL-provider sessions so per-provider views reconcile with the total. */
 function providerScope(provider?: string | null): { clause: string; args: string[] } {
-  return provider
-    ? { clause: " AND session_id IN (SELECT session_id FROM sessions WHERE provider = ?)", args: [provider] }
-    : { clause: "", args: [] };
+  if (!provider) return { clause: "", args: [] };
+  if (provider === UNKNOWN_PROVIDER)
+    return { clause: " AND session_id IN (SELECT session_id FROM sessions WHERE provider IS NULL)", args: [] };
+  return { clause: " AND session_id IN (SELECT session_id FROM sessions WHERE provider = ?)", args: [provider] };
 }
 
 /**
@@ -889,7 +901,11 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
   const hit = sessionsCache.get(key);
   if (hit && Date.now() - hit.at < SESSIONS_TTL_MS) return hit.data;
   const s = sessionScopeClause();
-  const prov = provider ? { clause: " AND provider = ?", args: [provider] } : { clause: "", args: [] };
+  const prov = !provider
+    ? { clause: "", args: [] as string[] }
+    : provider === UNKNOWN_PROVIDER
+      ? { clause: " AND provider IS NULL", args: [] as string[] }
+      : { clause: " AND provider = ?", args: [provider] };
   const data = db
     .query<SessionRollup, any[]>(
       `SELECT * FROM sessions WHERE 1=1${prov.clause}${s.clause} ORDER BY last_seen DESC LIMIT ?`
