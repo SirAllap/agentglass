@@ -66,6 +66,18 @@ function expandHome(p: string): string {
  * the desktop app happened to be launched from — completions that shift
  * depending on how you started the process are worse than none.
  */
+// `resolve()`/`dirname()`/`basename()` below are OS-native, so on a real
+// Windows install they already understand `C:\Users\x` correctly; the bug is
+// entirely in these two guards rejecting it before that code ever runs.
+const DRIVE_LETTER_ROOT = /^[a-zA-Z]:[\\/]/;
+
+/** Absolute by POSIX convention (`/...`) or by Windows drive-letter
+ *  convention (`C:\...` / `C:/...`). Pure string check, no OS dependency, so
+ *  it behaves the same regardless of which platform runs it. */
+export function isAbsoluteLike(p: string): boolean {
+  return p.startsWith("/") || DRIVE_LETTER_ROOT.test(p);
+}
+
 export function splitPrefix(input: unknown): { dir: string; partial: string } | null {
   if (typeof input !== "string") return null;
   // A NUL truncates the path at the syscall boundary, so `/safe\0/../../etc`
@@ -74,13 +86,13 @@ export function splitPrefix(input: unknown): { dir: string; partial: string } | 
   if (input.includes("\0")) return null;
   const raw = input.trim();
   if (!raw) return null;
-  if (!raw.startsWith("/") && !raw.startsWith("~")) return null;
+  if (!isAbsoluteLike(raw) && !raw.startsWith("~")) return null;
   const expanded = expandHome(raw);
-  if (!expanded.startsWith("/")) return null; // `~foo` — another user's home, not ours to guess
+  if (!isAbsoluteLike(expanded)) return null; // `~foo` — another user's home, not ours to guess
   // Ask the *raw* input about the trailing separator: join() drops it while
   // expanding `~/`, which would turn "list my home" into "filter /home by my
   // username". Bare `~` counts as committed for the same reason.
-  const committed = raw.endsWith("/") || raw === "~";
+  const committed = raw.endsWith("/") || raw.endsWith("\\") || raw === "~";
   // resolve() collapses `.`, `..` and doubled separators, so what we list is
   // always the real target rather than a path that merely spells it.
   if (committed) return { dir: resolve(expanded), partial: "" };
