@@ -16,6 +16,7 @@ import { ingestUpdate } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
+import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import type { UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
@@ -382,6 +383,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
   const [h24, setH24] = useState<boolean>(() => clock24());
+  const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
   const [keys, setKeys] = useState(() => bindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
   const [pane, setPane] = useState<Pane>("prefs");
@@ -527,6 +529,21 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       value={h24 ? "24" : "12"}
                       onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
                       options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
+                    {/* GPU (WebGL) is faster on heavy output, but on some Linux
+                        GPU/compositor stacks it can leave the terminal blank
+                        white — so Auto uses it everywhere except Linux, where it
+                        picks Compatibility. Switch to Compatibility by hand if a
+                        shell ever goes blank; it applies to newly opened shells. */}
+                    <Choice<RendererPref>
+                      label="Terminal renderer"
+                      hint="GPU is faster; Compatibility is the safe choice if the terminal ever goes blank. Applies to newly opened shells."
+                      value={renderer}
+                      onPick={(v) => { setRenderer(v); setRendererPref(v); }}
+                      options={[
+                        { v: "auto", label: "Auto" },
+                        { v: "gpu", label: "GPU" },
+                        { v: "dom", label: "Compatibility" },
+                      ]} />
                     <Choice<SysNotifyMode>
                       label="Desktop notifications on the notch"
                       hint="Slack and the rest, mirrored onto the strip you can still see in fullscreen"

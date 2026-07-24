@@ -16,6 +16,7 @@ import type { GitRepoRef, TerminalCommands, TmuxWindow } from "../../../shared/t
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
+import { wantsWebgl, fallBackToDom } from "../lib/termRenderer.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -75,21 +76,6 @@ function themeFromCss() {
 }
 const TERM_FONT = '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", Menlo, Monaco, "Roboto Mono", Consolas, "Liberation Mono", monospace';
 
-// GPU renderer gate.
-//
-// The WebGL renderer is fast, but on an unstable driver/compositor the browser
-// can lose its WebGL context — sometimes repeatedly — and each loss flashes the
-// terminal white for a frame before falling back. Once we have seen a single
-// context loss on this machine, stop offering WebGL for the rest of the session
-// and remember it, so every new shell opens straight on the stable DOM renderer
-// and never flashes again. Set localStorage `agentglass.term.webgl` to "off"
-// by hand to force the DOM renderer from the start.
-const WEBGL_KEY = "agentglass.term.webgl";
-let webglBlocked = (() => { try { return localStorage.getItem(WEBGL_KEY) === "off"; } catch { return false; } })();
-function blockWebgl() {
-  webglBlocked = true;
-  try { localStorage.setItem(WEBGL_KEY, "off"); } catch { /* private mode — session flag still holds */ }
-}
 
 // --- persistent per-repo shell sessions (outlive the panel) ------------------
 type SessStatus = "idle" | "connecting" | "live" | "exited" | "error" | "unauthorized";
@@ -405,13 +391,12 @@ function createSession(root: string): Sess {
    * bug report. Neither case is worth a message: the shell keeps running and
    * the user has nothing to decide.
    */
-  if (!webglBlocked) {
+  if (wantsWebgl()) {
     try {
       const gl = new WebglAddon();
-      // A lost context flashes the terminal white before the DOM renderer takes
-      // over. Fall back for this shell AND block WebGL app-wide, so a machine
-      // whose GPU keeps dropping the context stops flashing on every new shell.
-      gl.onContextLoss(() => { blockWebgl(); try { gl.dispose(); } catch { /* already gone */ } });
+      // A lost context can leave the terminal blank-white with no repaint. Drop
+      // to the DOM renderer app-wide and remember it, so no new shell hits it.
+      gl.onContextLoss(() => { fallBackToDom(); try { gl.dispose(); } catch { /* already gone */ } });
       term.loadAddon(gl);
     } catch { /* no WebGL2 here — the DOM renderer stays */ }
   }
