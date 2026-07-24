@@ -494,7 +494,7 @@ const server = Bun.serve<WsData>({
     // --- in-browser terminal: a real PTY shell over a WebSocket ---
     if (pathname === "/terminal/pty") {
       if (!trustedCaller(req)) return csrfBlocked();
-      if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled (AGENTGLASS_TERMINAL_DISABLED=1)" }, 403);
+      if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
       const data: PtyWsData = {
         kind: "pty",
         root: url.searchParams.get("root") || "",

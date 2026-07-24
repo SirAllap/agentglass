@@ -890,7 +890,7 @@ export interface ProjectCommand {
 /** Why the terminal is off, when it is. "env" = the AGENTGLASS_TERMINAL_DISABLED
  *  kill switch; "windows" = no POSIX PTY backend on this host. Lets the panel
  *  print the server's actual answer instead of guessing from the browser. */
-export type TerminalDisabledReason = "env" | "windows";
+export type TerminalDisabledReason = "env" | "config" | "windows";
 export interface TerminalCommands {
   enabled: boolean; // false when the shell backend is unavailable
   reason?: TerminalDisabledReason; // set only when enabled is false — why it's off

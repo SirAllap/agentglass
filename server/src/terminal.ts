@@ -23,7 +23,7 @@ import type { ServerWebSocket } from "bun";
 import type { ProjectCommand, TerminalCommands, TerminalDisabledReason } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
-import { inScope, workspaceRoot } from "./config.ts";
+import { inScope, workspaceRoot, terminalDisabledSource } from "./config.ts";
 import { SKIP_DIRS } from "./gitwork.ts";
 
 // The PTY backend is POSIX-only: every strategy below needs a real
@@ -37,8 +37,12 @@ import { SKIP_DIRS } from "./gitwork.ts";
 // that matters, not the browser's navigator (a Windows laptop can open a
 // dashboard served by a Linux box, and that terminal works fine).
 const IS_WINDOWS = process.platform === "win32";
+// Windows first — the PTY backend needs POSIX, so no env or config toggle can
+// turn it on there. Otherwise the env/config layer decides, resolved the same
+// way chatBypass is (env overrides the file) so a desktop launcher, which
+// inherits no shell env, can still turn the shell off from config.json.
 export const TERMINAL_DISABLED_REASON: TerminalDisabledReason | null =
-  IS_WINDOWS ? "windows" : process.env.AGENTGLASS_TERMINAL_DISABLED === "1" ? "env" : null;
+  IS_WINDOWS ? "windows" : terminalDisabledSource();
 export const TERMINAL_ENABLED = TERMINAL_DISABLED_REASON === null;
 
 const HAS_SETSID = !!Bun.which("setsid");
@@ -206,6 +210,8 @@ export function ptyOpen(ws: PtyWs) {
   if (!TERMINAL_ENABLED) {
     const why = TERMINAL_DISABLED_REASON === "windows"
       ? "terminal is not available on Windows yet (no POSIX PTY backend)"
+      : TERMINAL_DISABLED_REASON === "config"
+      ? "terminal is disabled (terminalDisabled in config.json)"
       : "terminal is disabled (AGENTGLASS_TERMINAL_DISABLED=1)";
     ctl(ws, { t: "fatal", error: why }); ws.close(1008, "disabled"); return;
   }
