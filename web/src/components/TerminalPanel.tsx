@@ -1284,6 +1284,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         ? "The terminal is disabled in the demo — run agentglass locally for a real shell"
                         : cmds?.reason === "windows"
                         ? "The terminal is not available on Windows yet (the PTY backend needs POSIX; ConPTY support is planned)"
+                        : cmds?.reason === "config"
+                        ? "Terminal disabled (terminalDisabled in config.json)"
                         : "Terminal disabled (AGENTGLASS_TERMINAL_DISABLED=1)"}
                     </div>
                   )}

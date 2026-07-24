@@ -27,6 +27,12 @@ interface Config {
    *  environment: a desktop launcher passes no env, so AGENTGLASS_CHAT_BYPASS
    *  alone made the mode unreachable for the surface that wants it most. */
   chatBypass?: boolean;
+  /** Turn the terminal panel off. Stated *here* and not only in the environment
+   *  for the same reason as chatBypass: an app launched from a desktop icon
+   *  inherits no shell env, so AGENTGLASS_TERMINAL_DISABLED alone is unreachable
+   *  for a packaged install or a shell-less deployment — exactly the people who
+   *  want it off. The env var still wins when set. */
+  terminalDisabled?: boolean;
 }
 
 function load(): Config {
@@ -228,6 +234,19 @@ export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspac
 export function chatBypassAllowed(): boolean {
   if (process.env.AGENTGLASS_CHAT_BYPASS !== undefined) return process.env.AGENTGLASS_CHAT_BYPASS === "1";
   return config.chatBypass === true;
+}
+
+/**
+ * Whether the terminal is turned off, and by which layer — so the panel can say
+ * why rather than open a socket that immediately closes. The env var overrides
+ * the file (a one-off `AGENTGLASS_TERMINAL_DISABLED=0 bun run` can force it back
+ * on), and the file makes it reachable from a desktop launcher. `null` means on.
+ */
+export function terminalDisabledSource(): "env" | "config" | null {
+  if (process.env.AGENTGLASS_TERMINAL_DISABLED !== undefined) {
+    return process.env.AGENTGLASS_TERMINAL_DISABLED === "1" ? "env" : null;
+  }
+  return config.terminalDisabled === true ? "config" : null;
 }
 
 export function configuredRepoDirs(): string[] {
