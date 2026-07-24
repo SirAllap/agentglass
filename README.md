@@ -363,6 +363,26 @@ Installers for every release are published on
 `.AppImage` and `.deb` for Linux, `.dmg` for macOS (Apple Silicon and Intel).
 That is the way to install it.
 
+### macOS: "agentglass is damaged and can't be opened"
+
+On Apple Silicon, macOS may refuse to launch the app with a misleading
+**"agentglass.app is damaged and can't be opened"** message. The download is
+**not** actually damaged. The `.dmg` is not yet code-signed and notarized with
+an Apple Developer ID, so Gatekeeper blocks the quarantined app your browser
+downloaded and shows that wording instead of the softer "unidentified developer"
+prompt. Clear the quarantine flag with the built-in `xattr` tool, then open it
+normally:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/agentglass.app
+```
+
+Right-click → Open does **not** clear this specific "damaged" variant on Apple
+Silicon; only the command above does. Signing and notarization are on the
+roadmap (they can run in CI on a macOS runner, so no Mac hardware is needed).
+For background, see Apple's [Safely open apps on your
+Mac](https://support.apple.com/en-us/102445).
+
 Building it yourself, from a clone:
 
 ```bash
