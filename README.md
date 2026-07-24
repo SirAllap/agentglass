@@ -434,7 +434,8 @@ are:
   shared machine or a network bind safe, and it stops *other local processes*
   from opening the shell. Binding a non-loopback address **without** a token
   refuses to run unauthenticated: it mints one, prints it, and saves it
-  `0600` under your config dir.
+  `0600` under your config dir on POSIX (Linux/macOS). Windows has no POSIX
+  mode bits, so there the file falls back to your account's default ACL.
 - **Websites you visit can't touch it.** Every request is origin-checked, the
   shell and the live stream require a verified local origin, and a Host-header
   guard blocks DNS-rebinding tricks (browsers can't forge `Host`). Running it
@@ -453,8 +454,9 @@ are:
 - **⚠️ Browser-driven autonomy is opt-in.** The Chat panel's `bypassPermissions`
   mode (`claude --dangerously-skip-permissions`) is honored only when
   `AGENTGLASS_CHAT_BYPASS=1`; otherwise it's downgraded to a prompting default.
-- **Your data stays local.** Events live in a local SQLite file (owner-only
-  permissions). The only outbound call is the optional Anthropic plan-usage
+- **Your data stays local.** Events live in a local SQLite file, written
+  owner-only (`0700` dir, `0600` file) on POSIX; on Windows, which has no POSIX
+  mode bits, it falls back to your account's default ACL. The only outbound call is the optional Anthropic plan-usage
   meter (`api.anthropic.com`, using your own credentials) and anything *you*
   configure (webhook alerts).
 
@@ -558,7 +560,7 @@ inference, prompt) to an event the same way.
 |---|---|---|
 | `AGENTGLASS_PORT` | `4000` | Server HTTP/WS port. |
 | `AGENTGLASS_BIND` | `127.0.0.1` | Address the server binds to. Loopback-only by default. Exposing (`0.0.0.0`) requires `AGENTGLASS_TOKEN` **and** `AGENTGLASS_TRUST_LAN=1`, and only on a trusted network. See [Security model](#security-model--read-this-before-installing). |
-| `AGENTGLASS_TOKEN` | — | Shared secret required on every route but the telemetry intake sinks. Pass as `Authorization: Bearer <t>` or `?token=<t>`. Locks the server to you on a shared machine and makes a network bind safe. Exposing without one auto-mints + prints a token (saved `0600` in the config dir). |
+| `AGENTGLASS_TOKEN` | — | Shared secret required on every route but the telemetry intake sinks. Pass as `Authorization: Bearer <t>` or `?token=<t>`. Locks the server to you on a shared machine and makes a network bind safe. Exposing without one auto-mints + prints a token (saved `0600` in the config dir on POSIX; the default ACL on Windows). |
 | `AGENTGLASS_TRUST_LAN` | — | `1` → also trust RFC1918 (private-LAN) addresses as origins/hosts, not just loopback. Required for LAN browsers to reach an exposed instance. Off by default: a shell-granting server trusts only `localhost` unless told otherwise. |
 | `AGENTGLASS_ALLOWED_HOSTS` | — | Comma-separated extra hostnames accepted by the DNS-rebinding guard (requests must arrive under a localhost/private `Host`). Only needed behind a reverse proxy. |
 | `AGENTGLASS_DB` | `agentglass.db` | SQLite file path. |

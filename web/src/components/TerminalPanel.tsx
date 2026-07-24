@@ -1306,6 +1306,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         </Fragment>
                       ))}
                     </span>
+                  ) : IS_DEMO || disabled ? (
+                    // The shell isn't running here (demo, Windows, or disabled by
+                    // env), so promising a real shell with working TUIs would be
+                    // the lie the overlay above just corrected. Say nothing.
+                    <span className="t-dim2">{cmds?.reason === "windows" ? "Terminal not available on Windows yet" : "Terminal unavailable"}</span>
                   ) : (
                     <span>Real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
                   )}
