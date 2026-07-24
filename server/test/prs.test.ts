@@ -104,6 +104,86 @@ describe("check rollup", () => {
   });
 });
 
+// The list now fetches aggregate state counts (one batched GraphQL query for
+// the whole page, #249) instead of one `gh` subprocess per PR. `rollupFromCounts`
+// turns those counts + GitHub's own rollup `state` into the same PrCheckRollup
+// the row already knew how to render. Parity with rollupChecks is the point.
+describe("rollup from aggregate counts (#249)", () => {
+  const cr = (state: string, count: number) => ({ state, count });
+
+  test("43 green + 18 skipped is a green PR, same as the per-check path", () => {
+    // GitHub's authoritative rollup state is SUCCESS; counts fill the numbers.
+    const r = prs.rollupFromCounts([cr("SUCCESS", 43), cr("SKIPPED", 18)], [], "SUCCESS");
+    expect(r.total).toBe(61);
+    expect(r.success).toBe(43);
+    expect(r.skipped).toBe(18);
+    expect(r.failure).toBe(0);
+    expect(r.allDone).toBe(true);
+    expect(r.verdict).toBe("green");
+  });
+
+  test("the authoritative state decides the verdict, not the counts", () => {
+    // Even if a count looks all-passed, a PENDING rollup state means no verdict.
+    const r = prs.rollupFromCounts([cr("SUCCESS", 5)], [], "PENDING");
+    expect(r.allDone).toBe(false);
+    expect(r.verdict).toBeNull();
+  });
+
+  test("FAILURE state is red however the counts fall", () => {
+    const r = prs.rollupFromCounts([cr("SUCCESS", 6), cr("FAILURE", 1)], [], "FAILURE");
+    expect(r.failure).toBe(1);
+    expect(r.verdict).toBe("red");
+    expect(r.allDone).toBe(true);
+    expect(r.failing).toEqual([]); // names are never in the aggregate; detail fetches them
+  });
+
+  test("ERROR state (a failed status context) is red and done", () => {
+    const r = prs.rollupFromCounts([], [cr("ERROR", 1)], "ERROR");
+    expect(r.verdict).toBe("red");
+    expect(r.allDone).toBe(true);
+  });
+
+  test("no rollup state falls back to the counts, and empty is not green", () => {
+    expect(prs.rollupFromCounts([], []).verdict).toBeNull();
+    expect(prs.rollupFromCounts([], []).allDone).toBe(false);
+    expect(prs.rollupFromCounts(undefined, undefined).total).toBe(0);
+    // fallback: all terminal, no pending -> derive green
+    expect(prs.rollupFromCounts([cr("SUCCESS", 3)], []).verdict).toBe("green");
+    // fallback: a pending count blocks the verdict
+    expect(prs.rollupFromCounts([cr("SUCCESS", 3), cr("QUEUED", 1)], []).verdict).toBeNull();
+  });
+
+  test("bucketing: failure-ish and skip-ish states land in the right pile", () => {
+    const r = prs.rollupFromCounts(
+      [cr("SUCCESS", 1), cr("CANCELLED", 1), cr("TIMED_OUT", 1), cr("NEUTRAL", 1), cr("STALE", 1), cr("IN_PROGRESS", 1)],
+      [],
+    );
+    expect(r.success).toBe(1);
+    expect(r.failure).toBe(2); // CANCELLED + TIMED_OUT
+    expect(r.skipped).toBe(2); // NEUTRAL + STALE
+    expect(r.pending).toBe(1); // IN_PROGRESS
+  });
+
+  test("GitHub returns the whole enum with zeros; zeros and junk counts are ignored", () => {
+    const r = prs.rollupFromCounts(
+      [cr("SUCCESS", 6), cr("FAILURE", 0), cr("PENDING", 0), cr("SKIPPED", 0)],
+      [{ state: "ERROR", count: -3 } as any, { state: "unknown-state", count: 2 }],
+      "SUCCESS",
+    );
+    expect(r.total).toBe(8); // 6 success + 2 unknown(->pending); the 0s and the -3 drop
+    expect(r.success).toBe(6);
+    expect(r.failure).toBe(0);
+    expect(r.pending).toBe(2); // unknown state buckets to pending, never a false green
+    expect(r.verdict).toBe("green"); // authoritative state still wins
+  });
+
+  test("lowercase state from the wire is still understood", () => {
+    const r = prs.rollupFromCounts([cr("success", 4)], [], "success");
+    expect(r.success).toBe(4);
+    expect(r.verdict).toBe("green");
+  });
+});
+
 describe("bot digest", () => {
   /** The real one is 46,551 characters. Three numbers is what gets read. */
   test("pulls the figures out of a coverage table", () => {

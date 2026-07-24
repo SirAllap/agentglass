@@ -376,25 +376,114 @@ async function fetchList(repo: PrRepoId, filter: PrFilter): Promise<PrSummary[] 
 }
 
 /**
- * Check states, one pull request at a time.
+ * Check states for the whole list in ONE GraphQL request.
  *
- * Asking for fifty rollups in one query does not work: GitHub answers
- * `HTTP 504 — we couldn't respond to your request in time`. Measured on a real
- * repo — 15 rollups in a batch take 3.2s, 50 in a batch time out on GitHub's
- * side however long we are willing to wait. So they are fetched per pull
- * request, ~0.8s each, newest first, and each one updates its own row as it
- * lands. The list fills in visibly instead of arriving all at once or not at
- * all.
+ * The old shape was one `gh pr view --json statusCheckRollup` per PR — fifty
+ * subprocesses, ~0.8s each, ~40s of background network to fill a busy list, on
+ * the single thread the PTY rides. Batching the FULL contexts was what forced
+ * that: fifty full rollups in one query answered `HTTP 504`. The aggregate
+ * counts field does not (cli/cli#7421), and the panel rows only read the counts,
+ * so the whole set is now one process and ~1 rate-limit point (measured ~0.8s
+ * for the list this repo has). fetchCheckRollups above does the fetch; here we
+ * decide which PRs still need it.
  *
  * Keyed by `updatedAt`, so a poll that finds nothing changed costs nothing.
  */
 /** Matched to the list's own limit on purpose. A lower cap leaves the rows past
  *  it saying "checks…" for ever, which is a lie the UI has no way to correct.
- *  Fifty probes is ~40s of background network — no CPU, nothing blocked — and
- *  the per-PR cache keyed by `updatedAt` makes every later visit free. */
+ *  One batched request for all fifty now, and the cache keyed by `updatedAt`
+ *  makes every later visit free. */
 const CHECK_PROBE_MAX = 50;
-const checkCache = new Map<string, { updatedAt: string; rollup: PrCheckRollup; all: PrCheck[] }>();
+const checkCache = new Map<string, { updatedAt: string; rollup: PrCheckRollup }>();
 const checkRunning = new Set<string>();
+
+// The GraphQL rollup states, bucketed exactly as checkState() buckets the
+// per-check shapes — the aggregate-counts path and the full per-check path must
+// agree on what counts as failing, or a PR would read red in the list and green
+// in its detail. Unknown states fall to `pending` so an unrecognised one never
+// makes a PR look falsely done/green.
+const COUNT_BUCKET: Record<string, "success" | "failure" | "skipped" | "pending"> = {
+  SUCCESS: "success",
+  FAILURE: "failure", ERROR: "failure", CANCELLED: "failure", TIMED_OUT: "failure",
+  ACTION_REQUIRED: "failure", STARTUP_FAILURE: "failure",
+  SKIPPED: "skipped", STALE: "skipped", NEUTRAL: "skipped",
+  IN_PROGRESS: "pending", PENDING: "pending", QUEUED: "pending", REQUESTED: "pending",
+  WAITING: "pending", EXPECTED: "pending", COMPLETED: "pending",
+};
+
+type StateCount = { state: string; count: number };
+
+/**
+ * A check rollup from the cheap aggregate counts (checkRunCountsByState +
+ * statusContextCountsByState) rather than the full per-check list. The counts
+ * are "dramatically faster" and batch without the 504 that full contexts hit
+ * (cli/cli#7421), and the panel rows read only the counts and the verdict.
+ * `failing` is empty — the names are not in the aggregate; the expanded PR
+ * detail (prDetail) still fetches them on open. Aggregation matches
+ * rollupChecks: allDone iff there are checks and none pending; skipped/neutral
+ * never count as failure. Exported for testing.
+ */
+// `rollupState` is GitHub's own `statusCheckRollup.state` (SUCCESS/FAILURE/
+// ERROR/PENDING/EXPECTED). When present it decides the verdict authoritatively;
+// the counts only fill the numbers the row shows. Absent (no CI on the commit),
+// we fall back to deriving the verdict from the counts.
+export function rollupFromCounts(checkRun: StateCount[] | undefined, statusCtx: StateCount[] | undefined, rollupState?: string | null): PrCheckRollup {
+  let success = 0, failure = 0, skipped = 0, pending = 0;
+  for (const c of [...(checkRun ?? []), ...(statusCtx ?? [])]) {
+    const n = typeof c?.count === "number" && c.count > 0 ? c.count : 0;
+    if (!n) continue;
+    switch (COUNT_BUCKET[String(c.state ?? "").toUpperCase()] ?? "pending") {
+      case "success": success += n; break;
+      case "failure": failure += n; break;
+      case "skipped": skipped += n; break;
+      default: pending += n;
+    }
+  }
+  const total = success + failure + skipped + pending;
+  const st = String(rollupState ?? "").toUpperCase();
+  const authoritative = st === "SUCCESS" || st === "FAILURE" || st === "ERROR" || st === "PENDING" || st === "EXPECTED";
+  const allDone = authoritative ? (st === "SUCCESS" || st === "FAILURE" || st === "ERROR") : (total > 0 && pending === 0);
+  const verdict = !allDone ? null : authoritative ? (st === "SUCCESS" ? "green" : "red") : (failure > 0 ? "red" : "green");
+  return { total, success, failure, skipped, pending, allDone, verdict, failing: [] };
+}
+
+/**
+ * Check rollups for a set of PRs in ONE GraphQL request — the aggregate counts,
+ * not the full per-check list. This replaces the per-PR `gh pr view` fan-out
+ * (one subprocess and ~0.8s each, ~40s for fifty); the same set is one process
+ * and ~1 rate-limit point. Batching the FULL contexts is what 504'd, so the
+ * counts field is exactly what makes batching viable. Keyed by number; a PR
+ * absent from the answer (or a failed call) is simply left out, and its row
+ * keeps saying "checks…" rather than claiming "no checks".
+ */
+async function fetchCheckRollups(repo: PrRepoId, numbers: number[]): Promise<Map<number, PrCheckRollup>> {
+  const out = new Map<number, PrCheckRollup>();
+  if (!numbers.length) return out;
+  const [owner, name] = repo.nameWithOwner.split("/");
+  // Numbers are integers straight off the list, and owner/name come from a
+  // parsed remote (no quotes possible), so interpolating them as GraphQL
+  // aliases/args is safe — there is no string a caller controls here.
+  const field = `commits(last: 1) { nodes { commit { statusCheckRollup {
+    state
+    contexts(first: 0) {
+      checkRunCountsByState { state count }
+      statusContextCountsByState { state count }
+    }
+  } } } } }`;
+  const body = numbers.map((n) => `p${n}: pullRequest(number: ${n}) { ${field} }`).join("\n");
+  const query = `query { repository(owner: "${owner}", name: "${name}") { ${body} } }`;
+  const res = await ghJson<{ data?: { repository?: Record<string, any> } }>(["api", "graphql", "-f", `query=${query}`]);
+  const repoData = res?.data?.repository;
+  if (!repoData) return out;
+  for (const n of numbers) {
+    const pr = repoData[`p${n}`];
+    if (!pr) continue;
+    const rollup = pr.commits?.nodes?.[0]?.commit?.statusCheckRollup;
+    const ctx = rollup?.contexts;
+    out.set(n, rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, rollup?.state));
+  }
+  return out;
+}
 
 function refreshChecks(repo: PrRepoId, filter: PrFilter, rows: PrSummary[], notify: boolean): void {
   const key = cacheKey(repo, filter);
@@ -403,35 +492,34 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, rows: PrSummary[], noti
 
   void (async () => {
     try {
-      let i = 0;
-      for (const pr of rows.slice(0, CHECK_PROBE_MAX)) {
-        const ck = `${repo.key}\u0000${pr.number}`;
-        const hit = checkCache.get(ck);
-        let rollup: PrCheckRollup, all: PrCheck[];
-        if (hit && hit.updatedAt === pr.updatedAt) {
-          ({ rollup, all } = hit);
-        } else {
-          const one = await ghJson<any>(["pr", "view", String(pr.number), "-R", repo.nameWithOwner, "--json", "statusCheckRollup"]);
-          if (!one) { i++; continue; }
-          ({ rollup, all } = rollupChecks(one.statusCheckRollup));
-          checkCache.set(ck, { updatedAt: pr.updatedAt, rollup, all });
-        }
-        i++;
-
-        // Update this row in place. Re-read the entry each time: a newer list
-        // may have replaced it while this walk was running, and overwriting it
-        // wholesale would undo that.
-        const cur = listCache.get(key);
-        if (!cur) return;
-        const next = cur.prs.map((p) => (p.number === pr.number ? { ...p, checks: rollup, checksLoaded: true } : p));
-        listCache.set(key, { ...cur, prs: next, checksPending: i < Math.min(rows.length, CHECK_PROBE_MAX) });
-        // Render the check state for every filter, but only push a notification
-        // for the ones the user has a stake in — never for the passively-warmed
-        // `all` list on a busy repo.
-        if (notify) noteCi(repo, { ...pr, checks: rollup });
+      const visible = rows.slice(0, CHECK_PROBE_MAX);
+      // Cache hits (same `updatedAt`) cost nothing; only the misses are fetched.
+      const rollups = new Map<number, PrCheckRollup>();
+      const misses: number[] = [];
+      for (const pr of visible) {
+        const hit = checkCache.get(`${repo.key}\u0000${pr.number}`);
+        if (hit && hit.updatedAt === pr.updatedAt) rollups.set(pr.number, hit.rollup);
+        else misses.push(pr.number);
       }
+      // One request for every miss, versus one subprocess per PR before.
+      const fetched = await fetchCheckRollups(repo, misses);
+      for (const pr of visible) {
+        const roll = fetched.get(pr.number);
+        if (!roll) continue; // absent from the answer - leave the row saying "checks..."
+        checkCache.set(`${repo.key}\u0000${pr.number}`, { updatedAt: pr.updatedAt, rollup: roll });
+        rollups.set(pr.number, roll);
+      }
+
+      // Fill every row that now has a rollup, in one pass. Re-read the entry: a
+      // newer list may have replaced it while the fetch was in flight.
       const cur = listCache.get(key);
-      if (cur) listCache.set(key, { ...cur, checksPending: false });
+      if (!cur) return;
+      const next = cur.prs.map((p) => (rollups.has(p.number) ? { ...p, checks: rollups.get(p.number)!, checksLoaded: true } : p));
+      listCache.set(key, { ...cur, prs: next, checksPending: false });
+      // Notify only for the filters the user has a stake in (never the
+      // passively-warmed `all`, see #244). The latch dedupes, so a cache hit with
+      // an unchanged verdict re-notifies nobody.
+      if (notify) for (const pr of visible) { const r = rollups.get(pr.number); if (r) noteCi(repo, { ...pr, checks: r }); }
     } catch {
       const cur = listCache.get(key);
       if (cur) listCache.set(key, { ...cur, checksPending: false });
