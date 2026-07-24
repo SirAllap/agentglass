@@ -37,7 +37,7 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history + tags, so `git describe --tags` in build.mjs can name
           # the release this build descends from. A shallow checkout has no tag
@@ -116,7 +116,7 @@ jobs:
 
       - name: Keep the build even when there is no tag
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agentglass-${{ matrix.bunTarget }}
           path: |
