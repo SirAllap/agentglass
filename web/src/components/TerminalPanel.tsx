@@ -75,6 +75,22 @@ function themeFromCss() {
 }
 const TERM_FONT = '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", Menlo, Monaco, "Roboto Mono", Consolas, "Liberation Mono", monospace';
 
+// GPU renderer gate.
+//
+// The WebGL renderer is fast, but on an unstable driver/compositor the browser
+// can lose its WebGL context — sometimes repeatedly — and each loss flashes the
+// terminal white for a frame before falling back. Once we have seen a single
+// context loss on this machine, stop offering WebGL for the rest of the session
+// and remember it, so every new shell opens straight on the stable DOM renderer
+// and never flashes again. Set localStorage `agentglass.term.webgl` to "off"
+// by hand to force the DOM renderer from the start.
+const WEBGL_KEY = "agentglass.term.webgl";
+let webglBlocked = (() => { try { return localStorage.getItem(WEBGL_KEY) === "off"; } catch { return false; } })();
+function blockWebgl() {
+  webglBlocked = true;
+  try { localStorage.setItem(WEBGL_KEY, "off"); } catch { /* private mode — session flag still holds */ }
+}
+
 // --- persistent per-repo shell sessions (outlive the panel) ------------------
 type SessStatus = "idle" | "connecting" | "live" | "exited" | "error" | "unauthorized";
 type Sess = {
@@ -389,18 +405,26 @@ function createSession(root: string): Sess {
    * bug report. Neither case is worth a message: the shell keeps running and
    * the user has nothing to decide.
    */
-  try {
-    const gl = new WebglAddon();
-    gl.onContextLoss(() => { try { gl.dispose(); } catch { /* already gone */ } });
-    term.loadAddon(gl);
-  } catch { /* no WebGL2 here — the DOM renderer stays */ }
+  if (!webglBlocked) {
+    try {
+      const gl = new WebglAddon();
+      // A lost context flashes the terminal white before the DOM renderer takes
+      // over. Fall back for this shell AND block WebGL app-wide, so a machine
+      // whose GPU keeps dropping the context stops flashing on every new shell.
+      gl.onContextLoss(() => { blockWebgl(); try { gl.dispose(); } catch { /* already gone */ } });
+      term.loadAddon(gl);
+    } catch { /* no WebGL2 here — the DOM renderer stays */ }
+  }
   // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === "keydown" && e.key === "Escape" && e.shiftKey) { panelClose(); return false; }
     return true;
   });
   const holder = document.createElement("div");
-  holder.style.cssText = "width:100%;height:100%";
+  // Opaque themed backing, so any frame where the renderer paints nothing (a
+  // WebGL context loss, a swap to the DOM renderer) shows the terminal's own
+  // background colour instead of a white flash.
+  holder.style.cssText = "width:100%;height:100%;background:var(--bg)";
   const id = `t${++seq}-${Date.now().toString(36)}`;
   const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxSession: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
