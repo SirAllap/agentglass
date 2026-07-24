@@ -69,9 +69,9 @@ const readVersion = (p) => {
 const rank = (v) => (v.match(/\d+/g) ?? []).map(Number).reduce((n, part) => n * 1000 + part, 0);
 const shellVersion = readVersion(resolve(HERE, "package.json"));
 const rootVersion = readVersion(resolve(REPO, "package.json"));
-const version = (rank(rootVersion) > rank(shellVersion) ? rootVersion : shellVersion) || "0.0.0";
+const manifestVersion = (rank(rootVersion) > rank(shellVersion) ? rootVersion : shellVersion) || "0.0.0";
 if (shellVersion && rootVersion && shellVersion !== rootVersion) {
-  console.warn(`warn: package.json versions disagree (root ${rootVersion}, electron ${shellVersion}) — using ${version}`);
+  console.warn(`warn: package.json versions disagree (root ${rootVersion}, electron ${shellVersion}) — using ${manifestVersion}`);
 }
 // The remote, so the updater can clone it without ever needing this checkout.
 const origin = spawnSync("git", ["-C", REPO, "remote", "get-url", "origin"], { encoding: "utf8" }).stdout?.trim() ?? "";
@@ -83,6 +83,14 @@ const described = spawnSync("git", ["-C", REPO, "describe", "--tags", "--long", 
 const m = /^(v\d+\.\d+\.\d+)-(\d+)-g[0-9a-f]+$/.exec(described);
 const baseTag = m ? m[1] : "";
 const distance = m ? Number(m[2]) : 0;
+// Let the tag win when the build is exactly on one. A self-update compiles from
+// source on the user's machine with no CI in the path to sync the manifest, so
+// after tagging v0.4.1 an "install & restart" would otherwise stamp the previous
+// release. distance === 0 means this build IS the tagged release, whoever built
+// it; distance > 0 is an in-between build (v0.4.0+4), where the manifest is the
+// honest name. Retires the whole class of "manifest bump was half-done", making
+// CI's sync step belt-and-braces rather than the only thing holding it up.
+const version = distance === 0 && baseTag ? baseTag.replace(/^v/, "") : manifestVersion;
 writeFileSync(resolve(HERE, "staging/build-info.json"), JSON.stringify({
   version, commit, builtAt: new Date().toISOString(), source: REPO, origin, baseTag, distance,
 }, null, 2));
