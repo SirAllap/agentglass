@@ -42,6 +42,25 @@ python3 hooks/seed_demo.py   # populate with demo data
   rather than leaving it buried in `payload` JSON.
 - Pricing changes: edit `server/src/pricing.ts` defaults *and* mention the
   source of the numbers in the PR.
+- **Don't swallow a rejection a feature depends on.** A bare
+  `.catch(() => {})` / `catch {}` is fine for genuinely best-effort work that
+  degrades *visibly* (a failed `localStorage` write in private mode, a slow
+  poll that just retries next tick, a `URL.revokeObjectURL`). It is a bug when
+  the thing that failed is a load the feature needs: the failure becomes
+  invisible, the feature is simply absent, and the only symptom is "it doesn't
+  work and says nothing." When a catch guards a dependency, surface it — set an
+  error state the UI can show, or at least log with enough context to name what
+  failed. If a silent catch is deliberately best-effort, say so in a one-line
+  comment, so the next reader (and reviewer) can tell the two apart. This has
+  already cost multiple wrong diagnoses; see #85.
+- **The packaged desktop app is a different environment from `bun run dev`.**
+  Under Electron the UI runs with its own CSP, GPU compositing, and resource
+  paths — so a dependency that fails to load (a WASM/asset fetch the CSP blocks,
+  an engine that needs a capability the packaged app lacks) fails *only in the
+  built app* and never in dev. If you touch a load path a feature depends on,
+  don't trust `bun run dev` alone: build it (`make desktop`) and check there
+  too. A monochrome diff viewer that took three debugging rounds to trace to
+  Shiki's highlighter silently failing to initialise is exactly this shape.
 
 ## Reporting bugs / ideas
 
