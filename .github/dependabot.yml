@@ -1,15 +1,18 @@
 # Watch the supply chain the repo otherwise never looks at (#169).
 #
-# Grouped and weekly on purpose: the dependency surface here is tiny (a handful
-# of direct deps across the workspaces, zero in electron), so a quiet week is one
-# PR rather than six, and the signal stays high.
+# Actions-only, deliberately. The npm half was tried (the first cut of this file)
+# and it does not fit a bun repo: Dependabot cannot update bun.lock, so it bumped
+# package.json and left the lockfile stale on every PR, and the grouped npm PRs
+# also carried breaking major bumps (a recharts Tooltip type change, the React 19
+# @types drop of the global JSX namespace) that fail typecheck and need a real
+# migration, not a routine bump. That is noise, not signal, so it is dropped —
+# exactly the fallback #169 anticipated. Dependency bumps for the workspaces are
+# better done by hand (bun outdated) or by a tool with real bun support (Renovate)
+# if that is ever wanted.
 #
-# The github-actions half is the point. Every workflow pins third-party actions,
-# and a moved or compromised tag in one of those runs with the repo's token — the
-# supply chain most people forget they have. The npm half is best-effort: this
-# repo uses bun.lock, and Dependabot's bun support is newer than its npm/yarn
-# support, so if it produces noise or can't update a lockfile the npm entries can
-# be narrowed or dropped without losing the higher-value Actions coverage.
+# The github-actions half is the point and works cleanly: a moved or compromised
+# tag on a pinned third-party action runs with the repo's token, and that is the
+# supply chain most people forget they have.
 version: 2
 updates:
   - package-ecosystem: "github-actions"
@@ -18,36 +21,4 @@ updates:
       interval: "weekly"
     groups:
       actions:
-        patterns: ["*"]
-
-  - package-ecosystem: "npm"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      root:
-        patterns: ["*"]
-
-  - package-ecosystem: "npm"
-    directory: "/web"
-    schedule:
-      interval: "weekly"
-    groups:
-      web:
-        patterns: ["*"]
-
-  - package-ecosystem: "npm"
-    directory: "/server"
-    schedule:
-      interval: "weekly"
-    groups:
-      server:
-        patterns: ["*"]
-
-  - package-ecosystem: "npm"
-    directory: "/electron"
-    schedule:
-      interval: "weekly"
-    groups:
-      electron:
         patterns: ["*"]
