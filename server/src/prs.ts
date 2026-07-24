@@ -289,6 +289,22 @@ export function noteCi(repo: PrRepoId, pr: PrSummary): void {
 export type PrFilter = "mine" | "review" | "all";
 
 /**
+ * Whether probing a filter's PRs should also raise CI notifications.
+ *
+ * The panel warms all three filters to fill the tab counts, so `all` is fetched
+ * passively the moment the panel opens — on a busy repo that is hundreds of PRs
+ * the user never authored and was not asked to review. A notification is meant
+ * to be about YOUR stake in a PR, so only the filters that encode a stake —
+ * authored (`mine`) and review-requested (`review`) — notify. Browsing `all`
+ * still renders check states; it just does not push. A PR that is both yours and
+ * in `all` still notifies exactly once, because the `mine`/`review` probe runs
+ * too and the per-PR latch dedupes across filters.
+ */
+export function ciNotifiesFor(filter: PrFilter): boolean {
+  return filter !== "all";
+}
+
+/**
  * Two field sets, because one of them costs four times the other.
  *
  * Measured on a real repo, 50 open pull requests: 1.5s without
@@ -380,7 +396,7 @@ const CHECK_PROBE_MAX = 50;
 const checkCache = new Map<string, { updatedAt: string; rollup: PrCheckRollup; all: PrCheck[] }>();
 const checkRunning = new Set<string>();
 
-function refreshChecks(repo: PrRepoId, filter: PrFilter, rows: PrSummary[]): void {
+function refreshChecks(repo: PrRepoId, filter: PrFilter, rows: PrSummary[], notify: boolean): void {
   const key = cacheKey(repo, filter);
   if (checkRunning.has(key)) return;
   checkRunning.add(key);
@@ -409,7 +425,10 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, rows: PrSummary[]): voi
         if (!cur) return;
         const next = cur.prs.map((p) => (p.number === pr.number ? { ...p, checks: rollup, checksLoaded: true } : p));
         listCache.set(key, { ...cur, prs: next, checksPending: i < Math.min(rows.length, CHECK_PROBE_MAX) });
-        noteCi(repo, { ...pr, checks: rollup });
+        // Render the check state for every filter, but only push a notification
+        // for the ones the user has a stake in — never for the passively-warmed
+        // `all` list on a busy repo.
+        if (notify) noteCi(repo, { ...pr, checks: rollup });
       }
       const cur = listCache.get(key);
       if (cur) listCache.set(key, { ...cur, checksPending: false });
@@ -462,7 +481,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter): void {
         return hit && hit.updatedAt === r.updatedAt ? { ...r, checks: hit.rollup, checksLoaded: true } : r;
       });
       listCache.set(key, { at: Date.now(), prs: merged, loading: false, checksPending: merged.some((p) => !p.checksLoaded) });
-      refreshChecks(repo, filter, merged);
+      refreshChecks(repo, filter, merged, ciNotifiesFor(filter));
     } catch (e) {
       listCache.set(key, keep({ loading: false, checksPending: false, error: String(e) }));
     } finally {
