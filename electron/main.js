@@ -1,9 +1,11 @@
 // agentglass Electron shell.
 //
-// Runs the EXACT web UI (web/dist) in Chromium, which GPU-composites on Linux
-// where the previous WebKitGTK-based shell fell back to software — the live
-// radar and streaming dashboard paint on the GPU instead of pinning a CPU core.
-// Same pixels as the web app.
+// Runs the EXACT web UI (web/dist) in Chromium. GPU raster and WebGL keep the
+// live radar and streaming dashboard off the CPU, where the previous
+// WebKitGTK-based shell fell back to software. On Linux the *final* frame is
+// CPU-composited (see disable-gpu-compositing below) to dodge a Wayland/GPU
+// white-out, but the accelerated painting still runs on the GPU. Same pixels
+// as the web app.
 //
 // It serves web/dist from the app's own `agentglass://` scheme and brings the
 // Bun server up with it unless one is already running.
@@ -28,6 +30,20 @@ const os = require("os");
 // GPU compositing on Wayland.
 app.commandLine.appendSwitch("ozone-platform-hint", "auto");
 app.commandLine.appendSwitch("enable-features", "UseOzonePlatform");
+
+// Software-composite the final frame on Linux.
+//
+// On some Linux GPU/compositor stacks Chromium's GPU compositor hands the
+// window stale or empty tiles — the whole UI reads as solid white until a
+// repaint (switching theme) forces the tiles to redraw. Compositing the final
+// frame on the CPU sidesteps it; GPU raster and WebGL still run, so charts and
+// the radar keep their acceleration and only the last composite is on the CPU.
+// The window being unreadable beats a hair of compositor latency. Linux only,
+// and AGENTGLASS_GPU=1 opts back into full GPU compositing for a machine whose
+// stack is fine.
+if (process.platform === "linux" && !process.env.AGENTGLASS_GPU) {
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+}
 
 // One instance, one window.
 //
