@@ -1013,10 +1013,14 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
   const pf = prov + sc;
   const A = [since, ...pa, ...sa]; // bind order: timestamp, provider (if any), project (if any)
 
-  // Totals come from the authoritative sessions table for cost/tokens,
-  // and from events for counts/errors within the window.
-  // One pass, not two: both sets of totals cover exactly the same rows, and
-  // over a wide window each separate pass is a full scan of the table.
+  // Every total here is from events within the window — cost and tokens
+  // included — because /stats is a windowed view (last 15m / 1h / …), not a
+  // lifetime one: cost_usd summed over the window's events is the spend in that
+  // window, which is what the dashboard asks for. (The sessions table holds the
+  // authoritative lifetime totals; those are what getSessions serves per row,
+  // not what a window summary wants.) One pass, not several: counts, errors,
+  // sessions, tokens and cost all cover exactly these rows, and over a wide
+  // window each separate pass would be another full scan.
   const totals = db
     .query<any, any[]>(
       `SELECT COUNT(*) AS events,
