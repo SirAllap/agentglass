@@ -60,6 +60,7 @@ import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERM
 import { chatStream, CHAT_ENABLED, CHAT_BYPASS_ALLOWED } from "./chat.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope, CONFIG_PATH } from "./config.ts";
+import { hookStatus, applyHooks } from "./hooksetup.ts";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
@@ -627,6 +628,16 @@ const server = Bun.serve<WsData>({
       if (res.ok) await resyncScope();
       return json(res, res.ok ? 200 : 400);
     }
+    // Claude Code hook wiring (#187): a packaged install can turn on live
+    // streaming + gating from Settings instead of cloning the repo to run a
+    // Python script. GET reports state; POST writes ~/.claude/settings.json with
+    // the same idempotent, backup-first merge the CLI installer uses.
+    if (pathname === "/hooks/status") return json(hookStatus());
+    if ((pathname === "/hooks/install" || pathname === "/hooks/uninstall") && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      return json(applyHooks(pathname === "/hooks/install" ? "install" : "uninstall"));
+    }
+
     if (pathname === "/insights") return json({ insights: getInsights() });
     if (pathname === "/usage") return json(await getUsage()); // Anthropic plan-limit windows (only meaningful for Claude)
 

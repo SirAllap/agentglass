@@ -26,7 +26,8 @@
     "files": ["main.js", "preload.js", "icons/**"],
     "extraResources": [
       { "from": "../web/dist", "to": "web" },
-      { "from": "staging", "to": "." }
+      { "from": "staging", "to": "." },
+      { "from": "../hooks", "to": "hooks", "filter": ["**/*", "!__pycache__", "!__pycache__/**", "!*.pyc"] }
     ],
     "publish": [
       { "provider": "github", "owner": "SirAllap", "repo": "agentglass" }

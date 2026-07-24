@@ -1160,3 +1160,29 @@ export interface PrListResponse {
 }
 
 export interface PrActionResult { ok: boolean; error?: string; detail?: string }
+
+/** State of the Claude Code hook wiring (#187), read from ~/.claude/settings.json. */
+export interface HookSetupStatus {
+  /** Our forwarder is present in settings.json right now. */
+  installed: boolean;
+  /** The hook scripts are shipped with this build (a source checkout, or a
+   *  packaged install that carries hooks/). False = install is unavailable. */
+  bundled: boolean;
+  /** Where the change is written, shown so the user knows what they are editing. */
+  settingsPath: string;
+  /** The interpreter the wired command uses (python3, or py on Windows). The
+   *  hooks run under it; the install itself does not. */
+  python: string;
+}
+
+export interface HookSetupResult {
+  ok: boolean;
+  /** The wiring state after this call. */
+  installed: boolean;
+  /** Whether settings.json actually changed (false = it was already so). */
+  changed: boolean;
+  /** The backup written before the change, when there was one. */
+  backup?: string;
+  settingsPath: string;
+  error?: string;
+}

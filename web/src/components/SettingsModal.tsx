@@ -19,7 +19,7 @@ import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESK
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
-import type { UpdateStatus, ReleaseNotes } from "../../../shared/types.ts";
+import type { UpdateStatus, ReleaseNotes, HookSetupStatus } from "../../../shared/types.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, notifyQuiet, setNotifyQuiet, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
@@ -120,12 +120,13 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "prefs" | "keys" | "open" | "export" | "about";
+type Pane = "prefs" | "keys" | "open" | "export" | "hooks" | "about";
 const TABS: { id: Pane; label: string }[] = [
   { id: "prefs", label: "Preferences" },
   { id: "keys", label: "Shortcuts" },
   { id: "open", label: "Open" },
   { id: "export", label: "Export" },
+  { id: "hooks", label: "Hooks" },
   { id: "about", label: "About" },
 ];
 
@@ -361,6 +362,99 @@ function AboutPane({ open }: { open: boolean }) {
         notes={notes?.notes ?? ""}
         onClose={() => setWant(null)}
       />
+    </Section>
+  );
+}
+
+/**
+ * Turn Claude Code's event forwarder on or off from inside the app (#187).
+ *
+ * Someone who installed the binary (the README's advised path) can now enable
+ * live streaming and PreToolUse gating without cloning the repo to run a Python
+ * script. The write is server-side, idempotent, and backs up settings.json
+ * first, so this is a safe thing to offer from a button. Two things it has to
+ * say plainly: the hooks load at Claude Code startup, so a running session
+ * won't pick them up, and the forwarder itself runs under python3, which the
+ * install does not check for.
+ */
+function HooksPane({ open }: { open: boolean }) {
+  const [st, setSt] = useState<HookSetupStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    api.hooksStatus()
+      .then((r) => { if (live) setSt(r); })
+      .catch(() => { if (live) setSt(null); });
+    return () => { live = false; };
+  }, [open]);
+
+  const act = async (kind: "install" | "uninstall") => {
+    setBusy(true); setErr(null); setNote(null);
+    const r = await (kind === "install" ? api.hooksInstall() : api.hooksUninstall())
+      .catch(() => ({ ok: false, installed: false, changed: false, settingsPath: "", error: "Could not reach the server" }));
+    setBusy(false);
+    if (!r.ok) { setErr(r.error || "Could not update the hooks"); return; }
+    setSt((s) => (s ? { ...s, installed: r.installed } : s));
+    setNote(
+      !r.changed
+        ? (r.installed ? "Already enabled — nothing to change." : "Already off — nothing to change.")
+        : r.installed
+          ? "Enabled. Start a new Claude Code session for it to take effect."
+          : "Disabled. Existing sessions keep the old hooks until they restart.",
+    );
+  };
+
+  if (!st) return <Section title="Claude Code hooks"><div className="px-3 py-2 text-[11px] t-dim2">Reading hook state…</div></Section>;
+
+  return (
+    <Section title="Claude Code hooks">
+      <div className="px-3 py-2 flex flex-col gap-2.5">
+        <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
+          Wire agentglass into Claude Code so every session streams here live, and gate approvals (<span className="tabular-nums">PreToolUse</span>) reach the app. Edits <span className="t-mono text-[10.5px]" style={{ color: "var(--text)" }}>{st.settingsPath}</span>, backing it up first, and leaves your other hooks untouched.
+        </div>
+
+        {!st.bundled ? (
+          <div className="text-[11px] px-2.5 py-2 rounded-lg" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+            This build does not carry the hook scripts, so there is nothing to wire. Install from a Release, or run <span className="t-mono">bun run setup</span> in a checkout.
+          </div>
+        ) : (
+          <>
+            <div className="text-[11px]" style={{ color: st.installed ? "var(--success)" : "var(--text2)" }}>
+              {st.installed ? "Enabled — this Claude Code is streaming to agentglass." : "Not wired yet."}
+            </div>
+            {err && <div className="text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>}
+            {note && <div className="text-[10.5px]" style={{ color: "var(--text2)" }}>{note}</div>}
+            <div className="flex items-center gap-2">
+              {!st.installed ? (
+                <button onClick={() => act("install")} disabled={busy}
+                  className="text-[11.5px] px-3 py-1.5 rounded-lg font-medium"
+                  style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                  {busy ? "Enabling…" : "Enable hooks"}
+                </button>
+              ) : (
+                <button onClick={() => act("uninstall")} disabled={busy}
+                  className="text-[11.5px] px-3 py-1.5 rounded-lg hover:opacity-80"
+                  style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 34%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                  {busy ? "Disabling…" : "Disable hooks"}
+                </button>
+              )}
+            </div>
+            {/* The forwarder is a python script; the install writes the command
+                but cannot make an interpreter appear. Said up front rather than
+                left to a session that streams nothing and no error anywhere. */}
+            <div className="text-[10.5px] px-2.5 py-1.5 rounded-lg" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)" }}>
+              The hooks run under <span style={{ color: "var(--warning)" }}>{st.python}</span> — it has to be on your PATH for events to arrive. Takes effect on the next Claude Code session; hooks load at startup.
+            </div>
+            <span className="text-[9.5px] t-dim2">
+              Reversible any time from here, or with <span className="t-mono">python3 hooks/install_hooks.py --uninstall</span> in a checkout. Global (<span className="t-mono">~/.claude</span>), so it covers every project.
+            </span>
+          </>
+        )}
+      </div>
     </Section>
   );
 }
@@ -628,6 +722,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       href={api.skillsExportUrl()} download="agentglass-skills.md" />
                   </Section>
                   )}
+
+                  {pane === "hooks" && <HooksPane open={open} />}
 
                   {pane === "about" && <AboutPane open={open} />}
                   </div>
