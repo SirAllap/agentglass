@@ -8,7 +8,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, sep, delimiter } from "node:path";
 import { worktreeFamily } from "./worktree.ts";
 
 export const CONFIG_PATH = join(
@@ -125,14 +125,26 @@ export function workspaceRoot(): string | null {
  * beside `~/code/orbit`), which no prefix test can ever match; that is the whole
  * reason this consults git rather than the path alone.
  */
+/** child === parent, or child sits inside parent — compared with the OS's own
+ *  separator (injectable so this can be exercised against both `/` and `\`
+ *  from a single-OS test run). `resolve()` returns backslash-joined paths on
+ *  Windows, so a hardcoded `parent + "/"` prefix test matches the scope root
+ *  itself but never anything inside it there; every path in the project
+ *  reads as out-of-scope. */
+export function isWithin(child: string, parent: string, s: string = sep): boolean {
+  if (child === parent) return true;
+  const prefix = parent.endsWith(s) ? parent : parent + s;
+  return child.startsWith(prefix);
+}
+
 export function inScope(path: string | null | undefined, scope = workspaceRoot()): boolean {
   if (!scope) return true; // whole-machine: nothing to enforce
   if (!path) return false;
   const p = resolve(expand(path));
   // The plain prefix test first: it answers every non-worktree case without a
   // subprocess, including the container-folder scope where the family is moot.
-  if (p === scope || p.startsWith(scope + "/")) return true;
-  return worktreeFamily(scope).some((r) => p === r || p.startsWith(r + "/"));
+  if (isWithin(p, scope)) return true;
+  return worktreeFamily(scope).some((r) => isWithin(p, r));
 }
 
 /** The directories a scoped instance is about: the project plus its linked
@@ -231,7 +243,7 @@ export function chatBypassAllowed(): boolean {
 }
 
 export function configuredRepoDirs(): string[] {
-  const fromEnv = (process.env.AGENTGLASS_REPO_DIRS || "").split(":").filter(Boolean);
+  const fromEnv = (process.env.AGENTGLASS_REPO_DIRS || "").split(delimiter).filter(Boolean);
   // config.repoDirs comes from a hand-editable JSON file, so it may be a non-array
   // or hold non-string entries. Guard before mapping: an unguarded `.map(expand)`
   // threw a TypeError that broke GET /git/repos in the default whole-machine mode
