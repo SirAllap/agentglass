@@ -273,3 +273,15 @@ describe("CI notification latch", () => {
     expect(got).toEqual(["pytest \u00b7 vr/health"]);
   });
 });
+
+describe("CI notifications are scoped to your stake (#244)", () => {
+  // The panel warms all three filters for the tab counts, so `all` is fetched
+  // passively \u2014 hundreds of strangers' PRs on a busy repo. Only the filters that
+  // encode a stake may push a notification; `all` renders check states without
+  // notifying. Pinned so nobody flips `all` back on.
+  test("mine and review notify, all does not", () => {
+    expect(prs.ciNotifiesFor("mine")).toBe(true);
+    expect(prs.ciNotifiesFor("review")).toBe(true);
+    expect(prs.ciNotifiesFor("all")).toBe(false);
+  });
+});
