@@ -25,6 +25,7 @@ export function CommandPalette({
   onSkills,
   onChanges,
   onGit,
+  onPr,
   onDocker,
   onTerminal,
   onChat,
@@ -43,6 +44,7 @@ export function CommandPalette({
   onSkills: () => void;
   onChanges: () => void;
   onGit: () => void;
+  onPr: () => void;
   onDocker: () => void;
   onTerminal: () => void;
   onChat: () => void;
@@ -59,6 +61,7 @@ export function CommandPalette({
     list.push({ id: "skills", group: "View", label: "Browse skills — every available skill & command", run: () => onSkills() });
     list.push({ id: "changes", group: "View", label: "File changes — every diff the fleet made", run: () => onChanges() });
     list.push({ id: "git", group: "View", label: "Source control — stage, commit, push/pull the working tree", run: () => onGit() });
+    list.push({ id: "pr", group: "View", label: "Pull requests — review PRs without leaving for the browser", run: () => onPr() });
     list.push({ id: "docker", group: "View", label: "Docker — containers, logs, stats & actions", run: () => onDocker() });
     list.push({ id: "terminal", group: "View", label: "Terminal — a real shell in any repo/worktree", run: () => onTerminal() });
     list.push({ id: "chat", group: "View", label: "Chat — drive a Claude session in a repo/worktree", run: () => onChat() });
@@ -79,7 +82,7 @@ export function CommandPalette({
     list.push({ id: "csv", group: "Export", label: "Download CSV", run: () => window.open(api.exportUrl("csv")) });
     list.push({ id: "json", group: "Export", label: "Download JSON", run: () => window.open(api.exportUrl("json")) });
     return list;
-  }, [apps, types, onFilter, onWindow, onTheme, onStats, onSkills, onChanges, onGit, onDocker, onTerminal, onChat, onSearch, onClear, onZoom]);
+  }, [apps, types, onFilter, onWindow, onTheme, onStats, onSkills, onChanges, onGit, onPr, onDocker, onTerminal, onChat, onSearch, onClear, onZoom]);
 
   const filtered = useMemo(
     () => (q ? cmds.filter((c) => (c.group + " " + c.label).toLowerCase().includes(q.toLowerCase())) : cmds),

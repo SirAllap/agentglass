@@ -74,9 +74,10 @@ export function HelpLegend({ open, onClose }: { open: boolean; onClose: () => vo
                 <div className="panel-eyebrow mt-3 mb-2">workspace</div>
                 <div className="grid grid-cols-2 gap-y-1 text-[11px] t-dim">
                   <span><kbd className="chip">{MOD_KEY}\</kbd> Open / close</span>
-                  <span><kbd className="chip">{MOD_KEY}1</kbd>…<kbd className="chip">{MOD_KEY}5</kbd> Jump to a view</span>
+                  <span><kbd className="chip">{MOD_KEY}1</kbd>…<kbd className="chip">{MOD_KEY}6</kbd> Jump to a view</span>
                   <span><kbd className="chip">g</kbd> Git</span>
                   <span><kbd className="chip">d</kbd> Diff</span>
+                  <span><kbd className="chip">p</kbd> Pull requests</span>
                   <span><kbd className="chip">o</kbd> Docker</span>
                   <span><kbd className="chip">t</kbd> Terminal</span>
                   <span><kbd className="chip">c</kbd> Chat</span>

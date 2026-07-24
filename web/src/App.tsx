@@ -607,6 +607,7 @@ export default function App() {
         onSkills={() => setSkillsOpen(true)}
         onChanges={() => { setWsView("diff"); setWsOpen(true); }}
         onGit={() => { setWsView("git"); setWsOpen(true); }}
+        onPr={() => { setWsView("pr"); setWsOpen(true); }}
         onDocker={() => { setWsView("docker"); setWsOpen(true); }}
         onTerminal={() => { setWsView("term"); setWsOpen(true); }}
         onChat={() => { setWsView("chat"); setWsOpen(true); }}
