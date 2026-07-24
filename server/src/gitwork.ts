@@ -4,7 +4,7 @@
 // (never a shell string); paths are validated to stay inside the repo root; and
 // every mutating op is gated by AGENTGLASS_GIT_WRITE_DISABLED=1.
 
-import { resolve, basename, relative, dirname, sep, join } from "node:path";
+import { resolve, basename, relative, dirname, sep, delimiter, join } from "node:path";
 import { statSync, readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
 import { git, gitAsync, safeAbs, repoRootOfAsync, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
@@ -312,7 +312,8 @@ function reposUnder(baseDir: string, depth = REPO_SCAN_DEPTH): string[] {
 /** Repos agentglass offers in the panel: the server's own repo, every project
  *  the transcript scan found, any repo seen in recent telemetry, and
  *  env-configured extras (AGENTGLASS_REPOS=path1:path2,
- *  AGENTGLASS_REPO_DIRS=dir1:dir2). No blind directory sweep — see discoverRepos.
+ *  AGENTGLASS_REPO_DIRS=dir1:dir2 — path.delimiter-separated, so `;` on
+ *  Windows). No blind directory sweep — see discoverRepos.
  *
  *  `knownRoots` are already-resolved project roots, so they're added directly.
  *  They matter because the panel would otherwise only reach repos that sit next
@@ -554,7 +555,7 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   for (const p of paths) { const a = safeAbs(p); if (a) dirs.add(dirname(a)); }
   const resolved = await Promise.all([
     repoRootOfAsync(process.cwd()),
-    ...(process.env.AGENTGLASS_REPOS || "").split(":").filter(Boolean).map((p) => repoRootOfAsync(p)),
+    ...(process.env.AGENTGLASS_REPOS || "").split(delimiter).filter(Boolean).map((p) => repoRootOfAsync(p)),
     ...[...dirs].map((d) => repoRootOfAsync(d)),
   ]);
   for (const r of resolved) if (r) roots.add(r);
