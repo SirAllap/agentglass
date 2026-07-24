@@ -19,7 +19,7 @@ import {
   providerOf,
   gateHistory,
 } from "./db.ts";
-import { maybeAlert } from "./alerts.ts";
+import { maybeAlert, setAlertSink } from "./alerts.ts";
 import { getSkills, catalogMarkdown, catalogCsv } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getUsage } from "./usage.ts";
@@ -309,6 +309,9 @@ const treeCache = new Map<string, { at: number; data: WorkingTree }>();
 const WORKTREES_TTL_MS = 2_500;
 const worktreesCache = new Map<string, { at: number; body: string }>();
 setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); broadcast({ type: "git" }); });
+// Let the alert path reach a connected client, which raises a native OS
+// notification (cross-platform) instead of the Linux-only notify-send.
+setAlertSink({ broadcast: (a) => broadcast({ type: "alert", data: a }), hasClients: () => clients.size > 0 });
 
 /**
  * Session detail, held briefly, and invalidated when the session gets an event.

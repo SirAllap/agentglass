@@ -424,9 +424,21 @@ export type WsFrame =
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
   | { type: "ci"; data: CiVerdict }
+  /** One of agentglass's own push alerts (a gate hold, a permission wait, a tool
+   *  error) — the same thing the server would hand to notify-send. Broadcast so a
+   *  connected client can raise a NATIVE OS notification, which Electron routes to
+   *  the OS on macOS and Windows too, not just Linux. */
+  | { type: "alert"; data: AlertNote }
   /** A UI-navigation command from POST /control, rebroadcast to every client.
    *  It changes what is *shown*, never the fleet. */
   | { type: "control"; data: ControlCmd };
+
+export interface AlertNote {
+  title: string;
+  body: string;
+  /** freedesktop urgency: 0 low, 1 normal, 2 critical. */
+  urgency: 0 | 1 | 2;
+}
 
 /** The aggregate outcome of a PR's checks, once every one of them is terminal. */
 export interface CiVerdict {

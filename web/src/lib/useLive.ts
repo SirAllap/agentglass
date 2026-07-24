@@ -4,7 +4,7 @@ import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
 import { emitControl } from "./controlBus.ts";
-import { recordNote } from "./sysNotify.ts";
+import { recordNote, fireDesktopAlert } from "./sysNotify.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -135,6 +135,15 @@ export function useLive(): LiveData {
         // not data — hand it to App, which runs it through the same setters the
         // keyboard does.
         emitControl(frame.data);
+        return;
+      }
+      if (frame.type === "alert") {
+        // agentglass's own push alert (gate hold, permission wait, tool error),
+        // opted into on the server. Raise it as a native OS notification — the
+        // cross-platform replacement for notify-send. The notch already has the
+        // in-app copy through its own paths (gateStore et al.), so this does not
+        // also recordNote, which would double it there.
+        fireDesktopAlert(frame.data);
         return;
       }
       if (frame.type === "ci") {

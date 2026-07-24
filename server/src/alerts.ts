@@ -12,10 +12,22 @@
 // web/src/lib/gateStore.ts raises every new hold onto the notch, which no
 // desktop setting can suppress. Treat everything below as best-effort reach
 // for when nobody is looking at agentglass at all.
-import type { WatchEvent } from "../../shared/types.ts";
+import type { WatchEvent, AlertNote } from "../../shared/types.ts";
 
 const WEBHOOK = process.env.AGENTGLASS_WEBHOOK;
 const DESKTOP = process.env.AGENTGLASS_NOTIFY === "1";
+
+// A connected client can raise a NATIVE OS notification, which Electron routes
+// to macOS and Windows too — the cross-platform replacement for notify-send,
+// which only exists on Linux. The server still owns the opt-in (AGENTGLASS_
+// NOTIFY) and the triggers; the client just surfaces what it is handed.
+// notify-send stays as the fallback for a headless server with no client.
+export interface AlertSink {
+  broadcast: (a: AlertNote) => void;
+  hasClients: () => boolean;
+}
+let sink: AlertSink | null = null;
+export function setAlertSink(s: AlertSink | null) { sink = s; }
 
 // Debounce identical alerts so a burst doesn't spam channels.
 const lastSent = new Map<string, number>();
@@ -29,7 +41,7 @@ function shouldSend(key: string): boolean {
   return true;
 }
 
-async function deliver(title: string, body: string) {
+async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2) {
   if (WEBHOOK) {
     try {
       await fetch(WEBHOOK, {
@@ -42,6 +54,12 @@ async function deliver(title: string, body: string) {
     }
   }
   if (DESKTOP) {
+    // A connected client shows a native OS notification (cross-platform).
+    // notify-send is the fallback only when nothing is attached to show it.
+    if (sink?.hasClients()) {
+      sink.broadcast({ title, body, urgency });
+      return;
+    }
     try {
       Bun.spawn(["notify-send", "-a", "agentglass", "-u", "critical", "--", title, body], { stdout: "ignore" });
     } catch (e) {
@@ -76,7 +94,7 @@ export function maybeAlert(e: WatchEvent) {
   }
   if (e.hook_event_type === "Notification") {
     const msg = String((e.payload as any)?.message ?? "Agent notification");
-    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver("🔔 " + agent, msg);
+    if (shouldSend(`notify:${e.session_id}:${msg}`)) deliver("🔔 " + agent, msg, 1);
     return;
   }
   if (e.is_error) {

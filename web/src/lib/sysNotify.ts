@@ -152,6 +152,26 @@ function historyChanged() {
  * a toast holds "3755 commits to pull" for five seconds and is then gone, and
  * the number was the whole message. One inbox, whatever raised it.
  */
+/**
+ * Raise one of agentglass's OWN alerts as a native OS notification.
+ *
+ * The cross-platform half of #192: `notify-send` only exists on Linux, but the
+ * Notification API is routed to the OS by Electron on macOS and Windows too (and
+ * works in a browser tab that has been granted permission). The server owns the
+ * opt-in (AGENTGLASS_NOTIFY) and only broadcasts these while a client is
+ * attached, so this just surfaces what it is handed. Fires only when permission
+ * is already granted — which Electron does by default for the app — so it never
+ * pops a permission prompt off the back of an incoming socket frame.
+ */
+export function fireDesktopAlert(a: { title: string; body: string }) {
+  try {
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission === "granted") new Notification(a.title, { body: a.body });
+  } catch {
+    /* a host without Notification support — the notch still has it */
+  }
+}
+
 export function recordNote(n: { app: string; summary: string; body: string; urgency?: 0 | 1 | 2 }) {
   const note: SystemNote = {
     id: `app-${++localSeq}`,
