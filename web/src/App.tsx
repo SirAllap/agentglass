@@ -239,10 +239,15 @@ export default function App() {
     providerRef.current = map;
     return map;
   }, [agentsAll]);
-  const providers = useMemo(
-    () => [...new Set([...sessionProvider.values()].filter((p) => p !== "unknown"))].sort(),
-    [sessionProvider]
-  );
+  // "unknown" (sessions whose model never resolved) is kept as a real bucket so
+  // it can be filtered to and the per-provider views reconcile with the total,
+  // but sorted to the end so it never leads the list. Header renders it as
+  // "Unknown".
+  const providers = useMemo(() => {
+    const seen = new Set(sessionProvider.values());
+    const known = [...seen].filter((p) => p !== "unknown").sort();
+    return seen.has("unknown") ? [...known, "unknown"] : known;
+  }, [sessionProvider]);
   // The Anthropic plan meters only make sense when Anthropic is what you're
   // looking at (no filter + Anthropic present, or explicitly filtered to it).
   const showUsage = (!filter.provider && providers.includes("Anthropic")) || filter.provider === "Anthropic";

@@ -12,6 +12,11 @@ import { Select } from "./Select.tsx";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
 import { WorkspaceIcon } from "./workspace/icons.tsx";
 
+// Sessions whose model never resolved carry the "unknown" provider value; it
+// stays lowercase everywhere it is compared (server sentinel, providerOf), but
+// reads as a proper label in the dropdown.
+const providerLabel = (p: string) => (p === "unknown" ? "Unknown" : p);
+
 // The long windows matter once history isn't pruned: the transcript scan can
 // backfill months of sessions, and a 7d ceiling would hide most of the fleet.
 const WINDOWS = [
@@ -202,10 +207,10 @@ export function Header({
           it's shown but disabled (just so you can see it); a mixed fleet
           (Anthropic + OpenAI + …) turns it into a real filter. */}
       {providers.length === 1 && (
-        <Select value={providers[0]} style={selStyle} options={[{ value: providers[0], label: providers[0] }]} onChange={() => {}} disabled title={`Only provider seen: ${providers[0]}`} />
+        <Select value={providers[0]} style={selStyle} options={[{ value: providers[0], label: providerLabel(providers[0]) }]} onChange={() => {}} disabled title={`Only provider seen: ${providerLabel(providers[0])}`} />
       )}
       {providers.length > 1 && (
-        <Select value={filter.provider} style={selStyle} options={[{ value: "", label: "All providers" }, ...providers.map((p) => ({ value: p, label: p }))]} onChange={(v) => onFilter({ ...filter, provider: v })} />
+        <Select value={filter.provider} style={selStyle} options={[{ value: "", label: "All providers" }, ...providers.map((p) => ({ value: p, label: providerLabel(p) }))]} onChange={(v) => onFilter({ ...filter, provider: v })} />
       )}
       {hasFilter && <button onClick={onClear} className="text-[11px] px-2 py-1 rounded-lg shrink-0 whitespace-nowrap" style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }}>Clear ✕</button>}
       </div>{/* middle scroll zone */}
