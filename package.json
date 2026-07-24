@@ -23,6 +23,6 @@
     "postinstall": "node -e \"console.log('agentglass: run [bun run setup] to wire Claude Code hooks, [bun run connect] for OTel CLIs')\""
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "concurrently": "^10.0.3"
   }
 }
