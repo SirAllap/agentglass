@@ -1221,23 +1221,36 @@ backfillFts();
 // Backfill the sessions.provider column (added for the provider filter) from
 // each session's model_name — so the filter works over existing history too.
 function backfillProvider() {
-  const VER = 4;
+  const VER = 5; // 5: per-event events.provider (added alongside the multi-provider fix)
   const cur = (db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
   if (cur >= VER) return;
+
+  // sessions.provider — kept for the session badge (first-seen). No-op re-run
+  // once a DB has already been tagged.
   const rows = db.query<{ session_id: string; model_name: string | null }, []>(
     "SELECT session_id, model_name FROM sessions WHERE provider IS NULL AND model_name IS NOT NULL"
   ).all();
   const upd = db.query("UPDATE sessions SET provider = $p WHERE session_id = $sid");
-  let n = 0;
+  // events.provider — one UPDATE per distinct model rather than per row: the
+  // model set is tiny, the events table is not.
+  const models = db.query<{ model_name: string | null }, []>(
+    "SELECT DISTINCT model_name FROM events WHERE provider IS NULL AND model_name IS NOT NULL"
+  ).all();
+  const updEv = db.query("UPDATE events SET provider = $p WHERE model_name = $m AND provider IS NULL");
+  let n = 0, ev = 0;
   const tx = db.transaction(() => {
     for (const r of rows) {
       const p = providerOf(r.model_name);
       if (p) { upd.run({ $p: p, $sid: r.session_id }); n++; }
     }
+    for (const m of models) {
+      const p = providerOf(m.model_name);
+      if (p) ev += updEv.run({ $p: p, $m: m.model_name }).changes;
+    }
   });
   tx();
   db.exec(`PRAGMA user_version = ${VER}`);
-  if (n) console.log(`🏷  tagged ${n} sessions with a provider`);
+  if (n || ev) console.log(`🏷  tagged ${n} sessions and ${ev} events with a provider`);
 }
 backfillProvider();
 

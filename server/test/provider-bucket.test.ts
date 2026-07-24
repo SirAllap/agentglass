@@ -26,7 +26,7 @@ process.env.XDG_CONFIG_HOME = dir;
 
 let db: typeof import("../src/db.ts");
 
-const MINE = ["pb-anthropic", "pb-openai", "pb-null-1", "pb-null-2"];
+const MINE = ["pb-anthropic", "pb-openai", "pb-null-1", "pb-null-2", "pb-multi"];
 const mineOf = (rows: { session_id: string }[]) =>
   rows.map((s) => s.session_id).filter((id) => MINE.includes(id)).sort();
 
@@ -55,6 +55,11 @@ beforeAll(async () => {
   db.insertEvent(event("pb-openai", "gpt-4o") as any); // → OpenAI
   db.insertEvent(event("pb-null-1", null) as any); // → provider NULL (unknown)
   db.insertEvent(event("pb-null-2", null) as any); // → provider NULL (unknown)
+  // One session that ran under TWO providers — the case that used to be latched
+  // to whichever was seen first. Its Opus event belongs to Anthropic, its GPT
+  // event to OpenAI.
+  db.insertEvent(event("pb-multi", "claude-opus-4-8") as any);
+  db.insertEvent(event("pb-multi", "gpt-4o") as any);
 });
 
 describe("provider filtering keeps NULL-provider sessions reachable", () => {
@@ -62,24 +67,46 @@ describe("provider filtering keeps NULL-provider sessions reachable", () => {
     expect(mineOf(db.getSessions(100, "unknown"))).toEqual(["pb-null-1", "pb-null-2"]);
   });
 
-  test("a real provider filter still excludes the NULL sessions", () => {
-    expect(mineOf(db.getSessions(100, "Anthropic"))).toEqual(["pb-anthropic"]);
-  });
-
-  test("the per-provider session views sum to the unfiltered total (nothing lost)", () => {
-    const all = mineOf(db.getSessions(100));
+  test("a real provider filter excludes the NULL sessions", () => {
     const anthropic = mineOf(db.getSessions(100, "Anthropic"));
-    const openai = mineOf(db.getSessions(100, "OpenAI"));
-    const unknown = mineOf(db.getSessions(100, "unknown"));
-    expect(all.length).toBe(4);
-    expect(anthropic.length + openai.length + unknown.length).toBe(all.length);
+    expect(anthropic).not.toContain("pb-null-1");
+    expect(anthropic).not.toContain("pb-null-2");
   });
 
-  test("statsSummary reconciles: per-provider event counts sum to the total", () => {
+  test("every session appears in at least one provider view (nothing lost)", () => {
+    const all = new Set(mineOf(db.getSessions(100)));
+    const covered = new Set([
+      ...mineOf(db.getSessions(100, "Anthropic")),
+      ...mineOf(db.getSessions(100, "OpenAI")),
+      ...mineOf(db.getSessions(100, "unknown")),
+    ]);
+    expect(all.size).toBe(5);
+    expect(covered).toEqual(all); // union of the buckets == the whole set
+  });
+
+  test("statsSummary reconciles at the EVENT level: per-provider counts sum to the total", () => {
     const events = (p?: string) => (db.statsSummary(24 * 3600 * 1000, p) as any).totals.events;
-    // Scoped to this test's project, so these are exactly its four events.
-    expect(events()).toBe(4);
+    // Five sessions, six events (pb-multi ran two). Each event is counted under
+    // exactly its own model's provider, so the buckets partition the events even
+    // though pb-multi's session shows in two of them.
+    expect(events()).toBe(6);
     expect(events("Anthropic") + events("OpenAI") + events("unknown")).toBe(events());
-    expect(events("unknown")).toBe(2); // the two NULL-provider sessions are no longer lost
+    expect(events("unknown")).toBe(2);
+  });
+});
+
+describe("a multi-provider session is attributed per event, not latched to one", () => {
+  test("the session appears under BOTH providers it used", () => {
+    expect(mineOf(db.getSessions(100, "Anthropic"))).toContain("pb-multi");
+    expect(mineOf(db.getSessions(100, "OpenAI"))).toContain("pb-multi");
+  });
+
+  test("its events split across providers by their own model, not the first-seen one", () => {
+    const events = (p: string) => (db.statsSummary(24 * 3600 * 1000, p) as any).totals.events;
+    // pb-anthropic + pb-multi's Opus event = 2 under Anthropic;
+    // pb-openai + pb-multi's GPT event = 2 under OpenAI. The GPT event is NOT
+    // billed to Anthropic just because the session was seen as Anthropic first.
+    expect(events("Anthropic")).toBe(2);
+    expect(events("OpenAI")).toBe(2);
   });
 });
