@@ -30,6 +30,7 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle } from "./ChangesModal.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
+import { stepFileIndex } from "../lib/prNav.ts";
 
 type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
@@ -1031,11 +1032,52 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
 }) {
   const current = sel ? byPath.get(sel) : undefined;
   const draftsFor = (p: string) => drafts.filter((x) => x.path === p).length;
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  // The same keyboard model as the changes modal, so the two review surfaces
+  // don't diverge: j/k walk the file list, n/p walk the hunks of the open diff,
+  // x toggles reviewed. The diff itself is ChangesModal's UnifiedDiff/SplitDiff,
+  // so its [data-hunk] markers and [data-vscroll] container are reused verbatim.
+  const stepFile = (dir: 1 | -1) => {
+    const files = d.files;
+    if (!files.length) return;
+    const i = stepFileIndex(files.length, files.findIndex((f) => f.path === sel), dir);
+    onSel(files[i].path);
+    requestAnimationFrame(() => frameRef.current?.querySelector('[data-file="active"]')?.scrollIntoView({ block: "nearest" }));
+  };
+  const jumpHunk = (dir: 1 | -1) => {
+    const frame = frameRef.current;
+    if (!frame) return;
+    const sc = (frame.querySelector("[data-vscroll]") as HTMLElement | null) ?? frame;
+    const heads = Array.from(sc.querySelectorAll<HTMLElement>("[data-hunk]"));
+    if (!heads.length) return;
+    const scTop = sc.getBoundingClientRect().top;
+    const cur = sc.scrollTop;
+    const tops = heads.map((h) => h.getBoundingClientRect().top - scTop + cur);
+    const target = dir === 1 ? tops.find((t) => t > cur + 4) : [...tops].reverse().find((t) => t < cur - 4);
+    sc.scrollTo({ top: (target ?? (dir === 1 ? tops[tops.length - 1] : tops[0])) - 2, behavior: "smooth" });
+  };
+  const onKey = (e: React.KeyboardEvent) => {
+    // Never while a field owns the keys — the PR search box, a comment textarea,
+    // or a row's reviewed checkbox. Same guard App.tsx and ChangesModal use.
+    const inInput = /input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "");
+    if (inInput) return;
+    const k = e.key.toLowerCase();
+    if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); stepFile(1); }
+    else if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); stepFile(-1); }
+    else if (k === "n") { e.preventDefault(); e.stopPropagation(); jumpHunk(1); }
+    else if (k === "p") { e.preventDefault(); e.stopPropagation(); jumpHunk(-1); }
+    else if (k === "x") { e.preventDefault(); e.stopPropagation(); if (sel) onSeen(sel); }
+  };
+  // Focus the frame when the files tab mounts, so the keys work without a click
+  // first — the same first-frame focus the changes modal does.
+  useEffect(() => { requestAnimationFrame(() => frameRef.current?.focus()); }, []);
 
   return (
-    <div className="text-[11px] flex flex-col gap-2">
+    <div ref={frameRef} tabIndex={-1} onKeyDown={onKey} className="text-[11px] flex flex-col gap-2 outline-none">
       <div className="flex items-center gap-2 text-[10px]" style={{ color: "var(--text3)" }}>
         <span className="tabular-nums">{seenFiles.length}/{d.files.length} reviewed</span>
+        <span className="shrink-0 t-dim2 hidden sm:inline"><b>j/k</b> file · <b>n/p</b> hunk · <b>x</b> reviewed</span>
         <Bar parts={[{ pct: d.files.length ? (seenFiles.length / d.files.length) * 100 : 0, tint: "var(--primary)" }]} />
       </div>
 
@@ -1045,7 +1087,7 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
           const open = sel === f.path;
           const nd = draftsFor(f.path);
           return (
-            <div key={f.path} className="flex items-center gap-2 px-2 py-1"
+            <div key={f.path} data-file={open ? "active" : undefined} className="flex items-center gap-2 px-2 py-1"
               style={{
                 borderBottom: "1px solid color-mix(in srgb, var(--border) 18%, transparent)",
                 background: open ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
