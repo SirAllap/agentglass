@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import type { IngestBody, WsFrame, WorkingTree } from "../../shared/types.ts";
-import { normalize, detectError } from "./ingest.ts";
+import { normalize, detectError, clampIngestTimestamp } from "./ingest.ts";
 import { db } from "./db.ts";
 import {
   insertEvent,
@@ -382,6 +382,9 @@ setInterval(pushOpenTools, OPEN_TOOL_TICK_MS).unref?.();
 /** Normalize → persist → broadcast → alert. Shared by /ingest and /v1/traces. */
 function ingestBody(body: IngestBody) {
   const n = normalize(body);
+  // Live seam only: a skewed sender's clock must not decide which time window
+  // its events land in. Backfill inserts elsewhere and keeps its real times.
+  n.timestamp = clampIngestTimestamp(n.timestamp, Date.now());
   const { event, session } = insertEvent(n);
   // The session just grew, so its cached detail is stale — drop it so a live
   // session refreshes on the next open, while static sessions keep serving from

@@ -193,6 +193,29 @@ function capDeep(v: object, depth: number): void {
   }
 }
 
+// A live event's client timestamp drives every windowed number (last-15m burn,
+// insights, retention pruning, tool-latency deltas), all of which compare it
+// against the server's own Date.now(). A sender whose clock is off — the named
+// failure is a host running two hours fast — would place its events outside
+// every "last N minutes" window and have them pruned on the wrong schedule,
+// silently corrupting the per-source metrics with no signal that anything is
+// wrong. A live event arrives within seconds of happening, so its timestamp
+// belongs in a small band around the server clock; anything outside that band
+// is clock skew, not a real time, so pin it to now. In-band timestamps are kept
+// exactly, because tool-latency deltas depend on them.
+//
+// This is applied only at the live ingest seam (ingestBody). Transcript backfill
+// carries genuinely historical timestamps and inserts without passing through
+// here, so those are left untouched.
+const FUTURE_SKEW_MS = 60_000; // 1 min: nothing legitimate arrives from the future
+const PAST_SKEW_MS = 5 * 60_000; // 5 min: covers real send/queue delay, catches skew beyond
+export function clampIngestTimestamp(ts: number, now: number): number {
+  if (!Number.isFinite(ts)) return now;
+  if (ts > now + FUTURE_SKEW_MS) return now;
+  if (ts < now - PAST_SKEW_MS) return now;
+  return ts;
+}
+
 export function normalize(body: IngestBody): NormalizedEvent {
   const payload = (body.payload ?? {}) as Record<string, unknown>;
   const type = String(body.hook_event_type ?? "Unknown");

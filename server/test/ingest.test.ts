@@ -1,7 +1,7 @@
 // Ingest pure helpers from #10 wishlist: detectError on tool_response shapes
 // and transcript token summing (usage_is_cumulative path).
 import { describe, expect, test } from "bun:test";
-import { detectError, sumTranscriptTokens, normalize } from "../src/ingest.ts";
+import { detectError, sumTranscriptTokens, normalize, clampIngestTimestamp } from "../src/ingest.ts";
 import type { IngestBody } from "../../shared/types.ts";
 
 const MAX_FIELD = 64 * 1024; // must match ingest.ts
@@ -147,5 +147,33 @@ describe("normalize bounds every untrusted string", () => {
     expect(ev.summary).toBe("all good");
     expect(ev.payload.prompt).toBe("hi");
     expect(ev.payload.n).toBe(3);
+  });
+});
+
+describe("clampIngestTimestamp", () => {
+  const now = 1_700_000_000_000; // fixed server clock for the whole block
+
+  test("keeps an in-band timestamp exactly (tool-latency deltas rely on this)", () => {
+    expect(clampIngestTimestamp(now, now)).toBe(now);
+    expect(clampIngestTimestamp(now - 30_000, now)).toBe(now - 30_000); // 30s late: fine
+    expect(clampIngestTimestamp(now + 30_000, now)).toBe(now + 30_000); // 30s ahead: fine
+    expect(clampIngestTimestamp(now - 4 * 60_000, now)).toBe(now - 4 * 60_000); // 4m late: still in band
+  });
+
+  test("pins a future-skewed clock to now (the named 2h-fast host)", () => {
+    expect(clampIngestTimestamp(now + 2 * 3_600_000, now)).toBe(now);
+    expect(clampIngestTimestamp(now + 61_000, now)).toBe(now); // just past the 1m future bound
+  });
+
+  test("pins an absurdly-past clock to now", () => {
+    expect(clampIngestTimestamp(now - 2 * 3_600_000, now)).toBe(now); // 2h slow
+    expect(clampIngestTimestamp(0, now)).toBe(now); // epoch
+    expect(clampIngestTimestamp(now - 6 * 60_000, now)).toBe(now); // just past the 5m past bound
+  });
+
+  test("coerces non-finite input to now", () => {
+    expect(clampIngestTimestamp(NaN, now)).toBe(now);
+    expect(clampIngestTimestamp(Infinity, now)).toBe(now);
+    expect(clampIngestTimestamp(-Infinity, now)).toBe(now);
   });
 });
