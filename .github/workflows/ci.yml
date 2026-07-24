@@ -31,7 +31,7 @@ jobs:
       # Pinned rather than the runner's preinstalled Chrome: the ubuntu-latest
       # image has dropped and re-added browsers before, and this also keeps the
       # step working on container or self-hosted runners that ship none.
-      - uses: browser-actions/setup-chrome@v1
+      - uses: browser-actions/setup-chrome@v2
         id: chrome
         with:
           chrome-version: stable
