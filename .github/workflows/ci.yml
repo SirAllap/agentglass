@@ -20,7 +20,13 @@ jobs:
       - name: Typecheck server
         run: cd server && bunx tsc --noEmit
       - name: Tests (server)
-        run: cd server && bun test
+        # Generous per-test timeout, not bun's 5s default: several server tests
+        # do real git/spawn/settle work that finishes in ~seconds on a dev box
+        # but brushes the 5s ceiling on the runner's constrained 2 cores, so one
+        # would occasionally time out and redden main with no logic change behind
+        # it. This only raises the ceiling — it can't hide a real regression,
+        # which fails on its assertion, not the clock.
+        run: cd server && bun test --timeout 20000
       # web/test/ was never run by CI, so the dashboard's own tests — diff
       # themes, the session-live rule, the file tree — could break on a PR and
       # nothing would say so.
