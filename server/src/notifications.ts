@@ -77,7 +77,7 @@ function probe(): NotifyCapability {
     return { supported: false, reason: "no D-Bus session bus (headless, SSH or a container)" };
   }
   if (!Bun.which("dbus-monitor")) {
-    return { supported: false, reason: "dbus-monitor not found — install your distro's dbus package" };
+    return { supported: false, reason: "dbus-monitor not found — install the D-Bus tools for your system" };
   }
   return { supported: true };
 }
