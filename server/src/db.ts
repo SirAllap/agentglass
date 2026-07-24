@@ -147,13 +147,25 @@ for (const [col, path] of [["project_path", "$.project_path"], ["cwd_path", "$.c
     db.exec(`ALTER TABLE events ADD COLUMN ${col} TEXT GENERATED ALWAYS AS (json_extract(payload, '${path}')) VIRTUAL`);
   } catch { /* already present */ }
 }
-db.exec("CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_path)");
-// A scoped query now tests `cwd_path` once per checkout of the project, and a
-// virtual column is recomputed by json_extract for every row it touches. Without
-// this index, the user this change is for — a dozen worktrees open — is exactly
-// the one who pays a full table scan with a JSON parse per row on /events,
-// /stats and /changes. It also bounds the backfill below.
-db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd ON events(cwd_path)");
+// Timestamp folded in on purpose. Scope never filters project_path/cwd_path
+// alone — every /stats, /events and /changes query pairs it with a `timestamp >=
+// since` window. A bare project_path index made the MULTI-INDEX OR fetch *every*
+// row that project ever produced and then filter the window row by row: on a
+// project with months of history that is the ~400ms synchronous /stats stall the
+// idle PTY rides (#220). With timestamp in the index the same OR restricts to the
+// window inside the index — measured 60ms -> 0.1ms on a 200k-row DB. The
+// composite still serves the plain `project_path = ?` lookups the single-column
+// index did (leftmost prefix), so it replaces it outright; the old single-column
+// indexes are dropped so an existing DB rebuilds to the better shape.
+db.exec("DROP INDEX IF EXISTS idx_events_project");
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_project_ts ON events(project_path, timestamp)");
+// A scoped query tests `cwd_path` once per checkout of the project, and a virtual
+// column is recomputed by json_extract for every row it touches. Without this
+// index, the user this change is for — a dozen worktrees open — is exactly the
+// one who pays a full table scan with a JSON parse per row on /events, /stats and
+// /changes; and, as above, timestamp folded in keeps the scan inside the window.
+db.exec("DROP INDEX IF EXISTS idx_events_cwd");
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd_ts ON events(cwd_path, timestamp)");
 // `model_name` had none, so the filter dropdown's third query — SELECT DISTINCT
 // over it — was the one full scan with a temp B-tree in that endpoint. Cheap
 // index, and the covering scan it enables is what the other two already had.
