@@ -1,0 +1,53 @@
+# Watch the supply chain the repo otherwise never looks at (#169).
+#
+# Grouped and weekly on purpose: the dependency surface here is tiny (a handful
+# of direct deps across the workspaces, zero in electron), so a quiet week is one
+# PR rather than six, and the signal stays high.
+#
+# The github-actions half is the point. Every workflow pins third-party actions,
+# and a moved or compromised tag in one of those runs with the repo's token — the
+# supply chain most people forget they have. The npm half is best-effort: this
+# repo uses bun.lock, and Dependabot's bun support is newer than its npm/yarn
+# support, so if it produces noise or can't update a lockfile the npm entries can
+# be narrowed or dropped without losing the higher-value Actions coverage.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      root:
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    groups:
+      web:
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+    groups:
+      server:
+        patterns: ["*"]
+
+  - package-ecosystem: "npm"
+    directory: "/electron"
+    schedule:
+      interval: "weekly"
+    groups:
+      electron:
+        patterns: ["*"]

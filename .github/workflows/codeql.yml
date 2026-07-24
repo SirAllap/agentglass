@@ -1,0 +1,56 @@
+# Static analysis for the code itself (#169).
+#
+# This project hands out a shell, git write access and docker control over a
+# WebSocket, so the bug that matters most here — a path escaping its clamp, a
+# command built by string concatenation — is exactly what this class of tool is
+# for. Free on a public repo, no service or token.
+#
+# It reports to the Security tab and annotates PRs; it does NOT fail the build on
+# informational findings (the analyze step uploads results, it does not gate the
+# merge). Kept non-required on purpose: a new rule that blocks merges on day one
+# gets disabled by whoever it blocks first. Let it report for a few weeks first.
+#
+# Python is included for hooks/, where the PreToolUse forwarder and the PTY
+# bridge live. Both languages analyse from source (build-mode: none), so there is
+# no compile step to keep working.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "27 4 * * 1" # weekly, to catch advisories in queries themselves
+
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
