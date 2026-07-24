@@ -1,6 +1,6 @@
 // Normalize a raw hook POST body into structured, storable fields.
 import type { IngestBody } from "../../shared/types.ts";
-import type { TokenUsage } from "./pricing.ts";
+import { costUsd, type TokenUsage } from "./pricing.ts";
 
 export interface NormalizedEvent {
   source_app: string;
@@ -21,6 +21,13 @@ export interface NormalizedEvent {
    * usage into a per-event delta so timeline sums stay correct.
    */
   usage_is_cumulative: boolean;
+  /**
+   * When `usage_is_cumulative`, the cost of the whole transcript priced per
+   * message at its own model. The DB charges the difference of this against what
+   * the session already recorded, so a mid-session model switch is billed at the
+   * right rates rather than the whole delta at the current model. Null otherwise.
+   */
+  cost_cumulative: number | null;
   summary: string | null;
   timestamp: number;
   payload: Record<string, unknown>;
@@ -149,6 +156,33 @@ export function sumTranscriptTokens(chat: unknown[] | undefined): TokenUsage {
   return acc;
 }
 
+/**
+ * Cost of a whole cumulative transcript, priced per message at that message's
+ * OWN model.
+ *
+ * sumTranscriptTokens() collapses every turn into one token total, and the DB
+ * used to price the delta of that total at a single model — the current event's.
+ * A session that switched models mid-run (an Opus session that hands a turn to a
+ * Haiku subagent, or any change) then had the whole delta billed at the latest
+ * model's rate, so session and total cost were wrong. Each transcript line
+ * carries its own `message.model`, so the honest total is the per-model sum;
+ * pricing the difference of these totals across events attributes each turn's
+ * tokens at the rate that actually produced them. A line with usage but no model
+ * falls back to the event's own model.
+ */
+export function sumTranscriptCost(chat: unknown[] | undefined, fallbackModel: string | null): number {
+  if (!Array.isArray(chat)) return 0;
+  let cost = 0;
+  for (const line of chat) {
+    if (!line || typeof line !== "object") continue;
+    const o = line as Record<string, unknown>;
+    const msg = (o.message ?? o) as Record<string, unknown>;
+    const usage = (msg?.usage ?? o.usage) as Record<string, unknown> | undefined;
+    if (usage) cost += costUsd(usageFrom(usage), str(msg?.model) ?? fallbackModel);
+  }
+  return cost;
+}
+
 const MAX_FIELD = 64 * 1024;
 // Deep enough for the nested shapes hooks actually send (tool_input.content,
 // tool_response.stdout, a chat turn's content blocks) without letting a
@@ -271,6 +305,9 @@ export function normalize(body: IngestBody): NormalizedEvent {
     error_text,
     usage,
     usage_is_cumulative: !hasPayloadUsage,
+    // Only the cumulative (transcript-summed) path can span models; the per-turn
+    // payload path is already one turn at one model, so it prices as before.
+    cost_cumulative: hasPayloadUsage ? null : sumTranscriptCost(chat ?? undefined, model_name),
     summary: capField(str(body.summary)),
     timestamp: typeof body.timestamp === "number" ? body.timestamp : Date.now(),
     payload,

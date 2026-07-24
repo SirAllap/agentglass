@@ -508,10 +508,11 @@ interface SessionTokenRow {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  cost_usd: number;
   model_name: string | null;
 }
 const getSessionTokens = db.query<SessionTokenRow, [string]>(
-  `SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, model_name
+  `SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, model_name
    FROM sessions WHERE session_id = ?`
 );
 
@@ -587,10 +588,20 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
     dCw = Math.max(0, dCw - prior.cache_creation_tokens);
     dCr = Math.max(0, dCr - prior.cache_read_tokens);
   }
-  const eventCost = costUsd(
-    { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
-    model
-  );
+  // The token delta above still feeds the token counters, but its COST is priced
+  // from the transcript when we have one. cost_cumulative is the whole
+  // transcript priced per message at its own model, so charging its difference
+  // against the session's recorded cost bills a mid-run model switch at the
+  // right rates — the plain delta would put the whole thing on the current
+  // event's model. The per-turn (payload usage) path is already one model, so it
+  // keeps pricing the delta directly.
+  const eventCost =
+    n.usage_is_cumulative && n.cost_cumulative != null
+      ? Math.max(0, n.cost_cumulative - (prior?.cost_usd ?? 0))
+      : costUsd(
+          { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
+          model
+        );
 
   // --- latency pairing ----------------------------------------------------
   let duration_ms: number | null = null;
@@ -625,7 +636,7 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
 
   const event = parseEventRow(rowToEvent.get(id));
   try { ftsInsert.run({ $id: id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
-  const session = upsertSession(n, dIn, dOut, dCw, dCr);
+  const session = upsertSession(n, dIn, dOut, dCw, dCr, eventCost);
   // A Pre opens a call and a Post closes one, so the open-tool memo the fleet
   // draws from just went stale. Drop it here, the single write chokepoint, so
   // the next read — the push that fires right after this returns — is fresh,
@@ -669,12 +680,12 @@ function upsertSession(
   dIn: number,
   dOut: number,
   dCw: number,
-  dCr: number
+  dCr: number,
+  cost: number
 ): SessionRollup {
-  const cost = costUsd(
-    { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
-    n.model_name
-  );
+  // cost is the event's cost computed once in insertEvent (transcript-priced for
+  // the cumulative path); the session total must add exactly that, not a second,
+  // differently-computed number, or the rollup drifts from the event rows.
   const row = upsertStmt.get({
     $sid: n.session_id,
     $src: n.source_app,
