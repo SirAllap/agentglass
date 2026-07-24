@@ -1121,6 +1121,13 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
   const bucketCount = 60;
   const bucketMs = Math.max(1000, Math.floor(windowMs / bucketCount));
   const start = Math.floor(since / bucketMs) * bucketMs;
+  // The buckets are aligned DOWN from `since`, so they span [start, start +
+  // 60*bucketMs), whose upper edge is <= now — the most recent up-to-one-bucket
+  // of events (an event at `now` always) fell past the last bucket and vanished
+  // from the chart while still counting in the totals. Fold anything at or past
+  // the last bucket into it, so every event in the window lands somewhere and
+  // sum(bucket events) == totals.events.
+  const lastKey = start + (bucketCount - 1) * bucketMs;
   const buckets = new Map<number, TimeBucket>();
   for (let i = 0; i < bucketCount; i++) {
     const t = start + i * bucketMs;
@@ -1133,7 +1140,7 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
     .all(...A);
   const heatmap = new Array(168).fill(0);
   for (const r of tlRows) {
-    const t = Math.floor(r.timestamp / bucketMs) * bucketMs;
+    const t = Math.min(lastKey, Math.floor(r.timestamp / bucketMs) * bucketMs);
     const b = buckets.get(t);
     if (b) {
       b.events++;
