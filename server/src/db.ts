@@ -171,6 +171,18 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_cwd_ts ON events(cwd_path, timest
 // index, and the covering scan it enables is what the other two already had.
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_model ON events(model_name)");
 
+// Provider per EVENT, not per session. `sessions.provider` is one column set
+// first-non-null-wins, so a session that ran Opus then GPT reported all of it
+// under whichever provider was seen first. Deriving it per event (providerOf of
+// that event's model) lets a provider filter attribute each event to the model
+// that actually produced it, and lets a multi-provider session show up under
+// each provider it used. NULL when the event's model never resolved — the
+// Unknown bucket. Backfilled from model_name in backfillProvider(). Paired with
+// timestamp in the index, like the scope columns, because every provider-scoped
+// query also windows by time.
+try { db.exec("ALTER TABLE events ADD COLUMN provider TEXT"); } catch { /* already present */ }
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_provider_ts ON events(provider, timestamp)");
+
 // Covering indexes for /stats — the endpoint that freezes the terminal.
 //
 // statsSummary() runs six aggregations over a time window, and every one of
@@ -365,14 +377,16 @@ export function providerOf(model: string | null | undefined): string | null {
  */
 export const UNKNOWN_PROVIDER = "unknown";
 
-/** SQL fragment + args to scope an events query to one provider (via its
- *  sessions). Empty when no provider is selected. The Unknown bucket selects
- *  the NULL-provider sessions so per-provider views reconcile with the total. */
+/** SQL fragment + args to scope an events query to one provider, on each event's
+ *  OWN provider column rather than its session's single latched one — so a
+ *  session that used two providers counts under each for exactly the events it
+ *  ran there. Empty when no provider is selected. The Unknown bucket selects the
+ *  NULL-provider events (model never resolved) so per-provider views reconcile
+ *  with the total. Every call site queries `FROM events` unaliased. */
 function providerScope(provider?: string | null): { clause: string; args: string[] } {
   if (!provider) return { clause: "", args: [] };
-  if (provider === UNKNOWN_PROVIDER)
-    return { clause: " AND session_id IN (SELECT session_id FROM sessions WHERE provider IS NULL)", args: [] };
-  return { clause: " AND session_id IN (SELECT session_id FROM sessions WHERE provider = ?)", args: [provider] };
+  if (provider === UNKNOWN_PROVIDER) return { clause: " AND provider IS NULL", args: [] };
+  return { clause: " AND provider = ?", args: [provider] };
 }
 
 /**
@@ -490,12 +504,12 @@ const ftsInsert = db.query("INSERT INTO events_fts(rowid, text) VALUES ($id, $te
 const insertStmt = db.query(`
   INSERT INTO events (
     source_app, session_id, hook_event_type, tool_name, tool_use_id,
-    agent_id, agent_type, model_name, is_error, error_text, duration_ms,
+    agent_id, agent_type, model_name, provider, is_error, error_text, duration_ms,
     input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
     cost_usd, summary, payload, timestamp
   ) VALUES (
     $source_app, $session_id, $hook_event_type, $tool_name, $tool_use_id,
-    $agent_id, $agent_type, $model_name, $is_error, $error_text, $duration_ms,
+    $agent_id, $agent_type, $model_name, $provider, $is_error, $error_text, $duration_ms,
     $input_tokens, $output_tokens, $cache_creation_tokens, $cache_read_tokens,
     $cost_usd, $summary, $payload, $timestamp
   ) RETURNING id
@@ -633,6 +647,7 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
     $agent_id: n.agent_id,
     $agent_type: n.agent_type,
     $model_name: model,
+    $provider: providerOf(model),
     $is_error: n.is_error,
     $error_text: n.error_text,
     $duration_ms: duration_ms,
@@ -924,11 +939,14 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
   const hit = sessionsCache.get(key);
   if (hit && Date.now() - hit.at < SESSIONS_TTL_MS) return hit.data;
   const s = sessionScopeClause();
+  // A session belongs to a provider when it ran ANY event there, not by its one
+  // latched sessions.provider — so a multi-provider session appears under each
+  // provider it used instead of only the first one seen.
   const prov = !provider
     ? { clause: "", args: [] as string[] }
     : provider === UNKNOWN_PROVIDER
-      ? { clause: " AND provider IS NULL", args: [] as string[] }
-      : { clause: " AND provider = ?", args: [provider] };
+      ? { clause: " AND session_id IN (SELECT session_id FROM events WHERE provider IS NULL)", args: [] as string[] }
+      : { clause: " AND session_id IN (SELECT session_id FROM events WHERE provider = ?)", args: [provider] };
   const data = db
     .query<SessionRollup, any[]>(
       `SELECT * FROM sessions WHERE 1=1${prov.clause}${s.clause} ORDER BY last_seen DESC LIMIT ?`

@@ -39,6 +39,10 @@ export interface WatchEvent {
   agent_id: string | null;
   agent_type: string | null;
   model_name: string | null;
+  /** Coarse vendor for this event's model (providerOf), set at insert. NULL when
+   *  the model never resolved. Per-event so a session that switched providers is
+   *  attributed to the model that actually produced each event. */
+  provider: string | null;
   is_error: number; // 0 | 1
   error_text: string | null;
   duration_ms: number | null; // filled on PostToolUse via pre→post pairing
