@@ -153,11 +153,29 @@ async function readRemoteTags(originUrl: string): Promise<string[] | null> {
     .sort((a, b) => cmpTag(b, a));
 }
 
+/**
+ * Windows has no bash on a stock box and self-update.sh is POSIX throughout, so
+ * the updater simply cannot run there yet. Returns the honest block message on
+ * win32, null everywhere else. Gating here (rather than only refusing in
+ * startUpdate) means the About pane never offers an update button that would
+ * shell out to a bash that isn't there — the worst of the options.
+ */
+export function windowsUpdateBlock(platform: string = process.platform): string | null {
+  return platform === "win32"
+    ? "self-update is not available on Windows yet — download the latest release to update"
+    : null;
+}
+
 export async function updateStatus(): Promise<UpdateStatus> {
   const info = buildInfo();
   const base: UpdateStatus = {
     ok: true, available: false, info, branch: "", behind: 0, ahead: 0, incoming: [], last: readStamp(),
   };
+  // Before the origin check: on Windows this also replaces the misleading
+  // "reinstall from source" banner a provenance-less build would otherwise show
+  // with the real reason the button does nothing.
+  const winBlock = windowsUpdateBlock();
+  if (winBlock) return { ...base, blocked: winBlock };
   if (!info.origin) {
     return { ...base, blocked: "this build records no origin — reinstall from source once to enable updates" };
   }
