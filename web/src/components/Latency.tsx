@@ -5,7 +5,9 @@ import { Panel } from "./Panel.tsx";
 import { fmtMs } from "../lib/format.ts";
 
 export const Latency = memo(function Latency({ stats }: { stats: StatsSummary | null }) {
-  const tools = (stats?.tool_latency ?? []).slice(0, 10);
+  const tools = (stats?.tool_latency ?? [])
+    .filter((tool) => tool.tool_name.toLowerCase() !== "exitplanmode")
+    .slice(0, 10);
   const max = Math.max(1, ...tools.map((t) => t.p95_ms));
 
   return (

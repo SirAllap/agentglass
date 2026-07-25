@@ -7,6 +7,7 @@ import type {
   SessionRollup,
   StatsSummary,
   CostByModel,
+  CostByRepo,
   ToolLatencyStat,
   TimeBucket,
   SkillUsage,
@@ -647,6 +648,19 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
     )
     .all(...A);
 
+  // Per-repo rollup within the window (mirrors by_app, grouped by project root).
+  const by_repo: CostByRepo[] = db
+    .query<CostByRepo, any[]>(
+      `SELECT project_path,
+              SUM(input_tokens)  AS input_tokens,
+              SUM(output_tokens) AS output_tokens,
+              SUM(cost_usd)      AS cost_usd,
+              COUNT(DISTINCT session_id) AS sessions
+       FROM events WHERE timestamp >= ?${pf}
+       GROUP BY project_path ORDER BY cost_usd DESC`
+    )
+    .all(...A);
+
   // Event-type mix within the window.
   const by_type: TypeCount[] = db
     .query<TypeCount, any[]>(
@@ -697,6 +711,7 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
       cache_read_tokens: tokTotals.cache_read_tokens ?? 0,
     },
     by_model,
+    by_repo,
     tool_latency,
     timeline: [...buckets.values()].sort((a, b) => a.t - b.t),
     top_skills,

@@ -183,6 +183,7 @@ function scopeStats(s: StatsSummary, provider: string): StatsSummary {
       cache_read_tokens: i(s.totals.cache_read_tokens),
     },
     by_model,
+    by_repo: s.by_repo.map((rp) => ({ ...rp, input_tokens: i(rp.input_tokens), output_tokens: i(rp.output_tokens), cost_usd: c(rp.cost_usd), sessions: i(rp.sessions) })),
     tool_latency: s.tool_latency.map((t) => ({ ...t, calls: i(t.calls), errors: i(t.errors) })),
     timeline: s.timeline.map((b) => ({ ...b, events: i(b.events), errors: i(b.errors), cost_usd: Number((b.cost_usd * r).toFixed(3)), tokens: i(b.tokens) })),
     top_skills: provider === "Anthropic" ? s.top_skills : [],
@@ -214,6 +215,13 @@ export function stats(windowMs: number, provider?: string): StatsSummary {
       { model_name: "Sonnet", input_tokens: Math.round(900_000 * f), output_tokens: Math.round(80_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(430.2), sessions: si(6) },
       { model_name: "Gemini Flash", input_tokens: Math.round(2_400_000 * f), output_tokens: Math.round(180_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(320.44), sessions: si(7) },
       { model_name: "GPT-5 mini", input_tokens: Math.round(1_800_000 * f), output_tokens: Math.round(120_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(217.14), sessions: si(3) },
+    ],
+    by_repo: [
+      { project_path: "/home/dev/agentglass", input_tokens: Math.round(3_800_000 * f), output_tokens: Math.round(280_000 * f), cost_usd: sc(1980.4), sessions: si(12) },
+      { project_path: "/home/dev/bifrost", input_tokens: Math.round(2_600_000 * f), output_tokens: Math.round(190_000 * f), cost_usd: sc(1240.9), sessions: si(9) },
+      { project_path: "/home/dev/herdr", input_tokens: Math.round(1_500_000 * f), output_tokens: Math.round(110_000 * f), cost_usd: sc(720.3), sessions: si(7) },
+      { project_path: "/home/dev/portal", input_tokens: Math.round(900_000 * f), output_tokens: Math.round(60_000 * f), cost_usd: sc(410.2), sessions: si(5) },
+      { project_path: null, input_tokens: Math.round(400_000 * f), output_tokens: Math.round(30_000 * f), cost_usd: sc(146.28), sessions: si(3) },
     ],
     tool_latency: [
       { tool_name: "Bash", calls: si(2179), errors: Math.round(22 * f), p50_ms: 186, p95_ms: 8630, max_ms: 21620, avg_ms: 640, total_ms: Math.round(1_394_560 * f) },

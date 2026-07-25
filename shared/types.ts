@@ -84,6 +84,14 @@ export interface CostByModel {
   sessions: number;
 }
 
+export interface CostByRepo {
+  project_path: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  sessions: number;
+}
+
 export interface ToolLatencyStat {
   tool_name: string;
   calls: number;
@@ -166,6 +174,7 @@ export interface StatsSummary {
     cache_read_tokens: number;
   };
   by_model: CostByModel[];
+  by_repo: CostByRepo[];
   tool_latency: ToolLatencyStat[];
   timeline: TimeBucket[];
   top_skills: SkillUsage[];

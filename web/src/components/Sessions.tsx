@@ -1,12 +1,21 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import type { SessionRollup } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Panel } from "./Panel.tsx";
+import { Select } from "./Select.tsx";
 import { fmtUsd, fmtMs, fmtTokens, modelColor, modelLabelOf, agentLabel } from "../lib/format.ts";
+
+type Sort = "recent" | "cost-desc" | "cost-asc";
+const SORT_OPTIONS = [
+  { value: "recent", label: "Recent" },
+  { value: "cost-desc", label: "Cost ↓" },
+  { value: "cost-asc", label: "Cost ↑" },
+];
 
 export const Sessions = memo(function Sessions({ provider = "" }: { provider?: string }) {
   const [sessions, setSessions] = useState<SessionRollup[]>([]);
+  const [sort, setSort] = useState<Sort>("recent");
   useEffect(() => {
     const load = () => api.sessions(40, provider || undefined).then(setSessions).catch(() => {});
     load();
@@ -14,16 +23,31 @@ export const Sessions = memo(function Sessions({ provider = "" }: { provider?: s
     return () => clearInterval(id);
   }, [provider]);
 
+  // `recent` keeps the server order (last_seen DESC). Cost sorts reorder rows
+  // vertically only — the bar positions below stay keyed off timestamps.
+  const ordered = useMemo(() => {
+    if (sort === "recent") return sessions;
+    const dir = sort === "cost-desc" ? -1 : 1;
+    return [...sessions].sort((a, b) => (a.cost_usd - b.cost_usd) * dir);
+  }, [sessions, sort]);
+
   const now = Date.now();
   const min = sessions.length ? Math.min(...sessions.map((s) => s.started_at)) : now;
   const max = Math.max(now, ...sessions.map((s) => s.ended_at ?? s.last_seen));
   const span = Math.max(1, max - min);
 
+  const right = (
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] t-dim2">{sessions.length} sessions</span>
+      <Select value={sort} options={SORT_OPTIONS} onChange={(v) => setSort(v as Sort)} align="right" title="Sort sessions" />
+    </div>
+  );
+
   return (
-    <Panel eyebrow="Timeline" title="Sessions over time" right={<span className="text-[10px] t-dim2">{sessions.length} sessions</span>}>
+    <Panel eyebrow="Timeline" title="Sessions over time" right={right}>
       <div className="overflow-auto h-full space-y-1.5 pr-1">
         {sessions.length === 0 && <div className="t-dim2 text-[11px] text-center py-6">no sessions yet</div>}
-        {sessions.map((s, i) => {
+        {ordered.map((s, i) => {
           const start = ((s.started_at - min) / span) * 100;
           const end = (((s.ended_at ?? s.last_seen) - min) / span) * 100;
           const width = Math.max(2, end - start);
