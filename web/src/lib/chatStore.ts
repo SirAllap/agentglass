@@ -148,7 +148,7 @@ const chats = new Map<string, Chat>();
 const subs = new Set<() => void>();
 let seq = 0;
 
-export const DEFAULT_MODEL = "claude-opus-4-8";
+export const DEFAULT_MODEL = "claude-opus-5";
 export const DEFAULT_MODE = "default";
 
 // A cached snapshot, rebuilt only when something actually changes.

@@ -29,7 +29,7 @@ def _agentglass_local_only(url):
         sys.exit(0)
 
 APPS = ["api-refactor", "docs-agent", "test-writer", "migration"]
-MODELS = ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"]
+MODELS = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]
 TOOLS = ["Bash", "Read", "Edit", "Grep", "Write", "WebFetch", "Task"]
 _seed = random.Random(7)
 

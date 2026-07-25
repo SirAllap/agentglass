@@ -23,14 +23,14 @@ const uid = () => Array.from({ length: 8 }, () => "0123456789abcdef"[rint(0, 15)
 
 // A deliberately mixed fleet so the demo shows off multi-provider support:
 // Anthropic + OpenAI + Google, all auto-detected from the model name.
-const MODELS = ["claude-opus-4-8", "claude-sonnet-5", "gpt-5", "gpt-5-mini", "gemini-3-flash"];
+const MODELS = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "gpt-5", "gpt-5-mini", "gemini-3-flash"];
 interface Sess { app: string; sid: string; model: string }
 // Fictional app suite for a made-up online store.
 const SESSIONS: Sess[] = [
-  { app: "shop-web", sid: "7a3f21c9-demo", model: "claude-opus-4-8" },
+  { app: "shop-web", sid: "7a3f21c9-demo", model: "claude-opus-5" },
   { app: "shop-web", sid: "e2b8d640-demo", model: "gpt-5" },
   { app: "shop-api", sid: "3c9a1f52-demo", model: "claude-sonnet-5" },
-  { app: "agentglass", sid: "b7e40a18-demo", model: "claude-opus-4-8" },
+  { app: "agentglass", sid: "b7e40a18-demo", model: "claude-opus-5" },
   { app: "payments-svc", sid: "5f6d2e93-demo", model: "gemini-3-flash" },
   { app: "inventory-svc", sid: "8a1c7b04-demo", model: "gpt-5-mini" },
   { app: "sandbox", sid: "d4e903a7-demo", model: "gpt-5" },

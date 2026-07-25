@@ -36,8 +36,9 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 // list is its own job. The 1M entry is here because it is what this fix buys:
 // the suffix now survives the server, so the window is actually selectable.
 const MODELS = [
-  { id: "claude-opus-4-8", label: "Opus 4.8" },
-  { id: "claude-opus-4-8[1m]", label: "Opus 4.8 · 1M" },
+  { id: "claude-fable-5", label: "Fable 5" },
+  { id: "claude-opus-5", label: "Opus 5" },
+  { id: "claude-opus-5[1m]", label: "Opus 5 · 1M" },
   { id: "claude-sonnet-5", label: "Sonnet 5" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5" },
 ];

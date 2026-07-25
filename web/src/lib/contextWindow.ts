@@ -25,12 +25,31 @@ function suffixWindow(m: string): number | null {
   return hit[2] === "m" ? n * 1_000_000 : n * 1_000;
 }
 
+/**
+ * Claude ids whose default window is 1M: the 5 family (Fable, Mythos, Opus,
+ * Sonnet) and Opus/Sonnet 4.6 onward. Everything else Claude — Haiku, Opus 4.5
+ * and older, Sonnet 4.5 and older, the 3.x line — is 200k.
+ *
+ * Written as the *wide* list rather than the narrow one so an id nobody has
+ * taught this file about falls to 200k. That is the recoverable direction of
+ * error: under-reading a window draws the bar too full, which `ctxLimitOf`
+ * then corrects the moment an observation exceeds it. Over-reading has no such
+ * backstop — it would quietly draw a session that is genuinely about to
+ * compact as having plenty of room, which is the failure this file exists to
+ * prevent.
+ *
+ * `-4-[678]` rather than a general `4-\d` because the cut is mid-generation:
+ * Opus 4.5 is 200k and Opus 4.6 is 1M.
+ */
+const CLAUDE_1M = /fable|mythos|opus-5|sonnet-5|opus-4-[678]|sonnet-4-6/;
+
 /** Ceiling by model family. Only consulted when the id doesn't say outright. */
 function familyWindow(m: string): number {
   if (m.includes("gemini")) return 1_000_000;
   if (m.includes("gpt-5")) return 400_000;
   if (m.includes("gpt") || /\bo[134]\b/.test(m)) return 128_000;
-  return 200_000;  // every current Claude model, absent a suffix
+  if (CLAUDE_1M.test(m)) return 1_000_000;
+  return 200_000;  // Haiku, and Claude 4.5 and older
 }
 
 /**

@@ -212,7 +212,9 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   // An image on its own is a complete thought ("what's wrong with this?"), so a
   // turn only needs text when it carries nothing else.
   if (!message.trim() && !imgs.length) return err("invalid message");
-  const m = typeof model === "string" && MODEL_RE.test(model) ? model : "claude-opus-4-8";
+  // Keep in step with DEFAULT_MODEL in web/src/lib/chatStore.ts — this is the
+  // same default, reached when a caller sends no model or a malformed one.
+  const m = typeof model === "string" && MODEL_RE.test(model) ? model : "claude-opus-5";
   let pm = typeof mode === "string" && MODES.has(mode) ? mode : "default";
   if (pm === "bypassPermissions" && !BYPASS_ALLOWED) pm = "default"; // opt-in only
   const rid = typeof resumeId === "string" && SESSION_RE.test(resumeId) ? resumeId : "";
