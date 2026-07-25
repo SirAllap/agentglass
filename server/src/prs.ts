@@ -317,7 +317,7 @@ export function ciNotifiesFor(filter: PrFilter): boolean {
  * whose checks have not landed says so rather than claiming "no checks", which
  * is a different and wrong answer.
  */
-const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels";
+const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,assignees,milestone";
 
 type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string };
 const listCache = new Map<string, Entry>();
@@ -329,7 +329,9 @@ const LIST_TTL_MS = 90_000;
 // same keys, still searchable.
 const cacheKey = (repo: PrRepoId, filter: PrFilter) => `${repo.key}\u0000${filter}`;
 
-function mapSummary(p: any, withChecks: boolean): PrSummary {
+// Exported for the test that pins the gh-JSON field extraction (assignees,
+// milestone) — the shapes gh returns are an assumption worth guarding.
+export function mapSummary(p: any, withChecks: boolean): PrSummary {
   const { rollup } = rollupChecks(withChecks ? p.statusCheckRollup : []);
   return {
     number: p.number,
@@ -346,6 +348,8 @@ function mapSummary(p: any, withChecks: boolean): PrSummary {
     deletions: p.deletions ?? 0,
     changedFiles: p.changedFiles ?? 0,
     labels: (p.labels || []).map((l: any) => ({ name: l.name, color: l.color })),
+    assignees: (p.assignees || []).map((a: any) => a.login).filter(Boolean),
+    milestone: p.milestone?.title || null,
     checks: rollup,
     // Absent is not zero: a row without this must say "checks loading", never
     // "no checks", which is a claim about the repository rather than about us.
@@ -717,6 +721,7 @@ const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     mergeable mergeStateStatus reviewDecision viewerDidAuthor
     author{login}
     labels(first:20){nodes{name color}}
+    milestone{title}
     assignees(first:10){nodes{login}}
     reviewRequests(first:10){nodes{requestedReviewer{... on User{login} ... on Team{name}}}}
     reviews(first:50){nodes{author{login} state body submittedAt url}}
@@ -868,6 +873,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     deletions: p.deletions ?? 0,
     changedFiles: p.changedFiles ?? 0,
     labels: (p.labels?.nodes || []).map((l: any) => ({ name: l.name, color: l.color })),
+    milestone: p.milestone?.title || null,
     checks: rollup,
     checksAll: all,
     body: p.body || "",
