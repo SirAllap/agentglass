@@ -74,8 +74,8 @@ def _hook_python():
         return "python3"
     for candidate in ("py", "python"):
         if shutil.which(candidate):
-            return candidate
-    return "py"
+            return "py -3" if candidate == "py" else candidate
+    return "py -3"
 
 
 def do_install(cfg):
