@@ -56,11 +56,13 @@
   .rail a:hover,.rail a:focus-visible{color:var(--primary); outline:none; text-shadow:0 0 10px var(--primary);}
 
   .foot{margin-top:auto; padding:0 30px 24px; display:flex; align-items:flex-end; justify-content:space-between; gap:20px; flex-wrap:wrap;}
-  .cue{font-size:10.5px; letter-spacing:.19em; text-transform:uppercase; color:var(--text4); display:flex; align-items:center; gap:10px;}
+  /* only once there is a designator to move */
+  .cue{display:none;}
+  .hud.glass .cue{font-size:10.5px; letter-spacing:.19em; text-transform:uppercase; color:var(--text4); display:flex; align-items:center; gap:10px;}
   .cue b{color:var(--primary); font-weight:600;}
   /* after the base rule, not before it — display:flex above was winning on
      equal specificity and the cue kept showing on phones */
-  @media (max-width:700px){ .cue{display:none;} }
+  @media (max-width:700px){ .hud.glass .cue{display:none;} }
   .acts{display:flex; gap:8px; pointer-events:auto; flex-wrap:wrap;}
   .btn{
     font-family:var(--mono); font-size:11.5px; letter-spacing:.09em; text-transform:uppercase;
@@ -157,8 +159,13 @@
     .caution{right:10px; left:10px; bottom:10px; width:auto;}
   }
 
-  .noglmsg{display:none; margin:auto 0; padding:0 30px; max-width:700px;}
-  .hud.nogl .noglmsg{display:block;}
+  /* Shown by default, hidden once the glass is actually running.
+     The other way round — hidden until JS adds .nogl — meant that with
+     JavaScript off nothing was ever going to reveal it, and the hero was a
+     full viewport of black above the fold. A fallback that only appears when
+     the script that would have replaced it runs is not a fallback. */
+  .noglmsg{display:block; margin:auto 0; padding:0 30px; max-width:700px;}
+  .hud.glass .noglmsg{display:none;}
   .noglmsg h1{font-family:var(--sans); font-size:clamp(32px,5.6vw,62px); font-weight:800; letter-spacing:-.03em; line-height:1; margin-bottom:16px; text-transform:uppercase;}
   .noglmsg h1 em{font-style:normal; color:var(--primary); display:block;}
   .noglmsg p{font-size:12.5px; line-height:1.8; color:var(--text3);}
@@ -858,7 +865,7 @@
 
     <div class="noglmsg">
       <h1>Eight are flying.<br><em>You can see one.</em></h1>
-      <p>No WebGL, so the combiner is dark. The argument stands: a terminal shows one session. agentglass shows all of them — and holds a dangerous call until a human decides.</p>
+      <p>The combiner is dark — no WebGL here, or no JavaScript. The argument stands either way: a terminal shows you one session. agentglass shows all of them — and holds a dangerous call until a human decides. Everything below this line works without a line of script.</p>
     </div>
 
     <div class="foot">
@@ -1870,7 +1877,9 @@ sudo apt install ./agentglass_*.deb</code>
     uPh=gl.getUniformLocation(prog,"uPh");
     return true;
   }
-  const ok=boot(); if(!ok){ hud.classList.add("nogl"); hud.style.cursor="default"; }
+  const ok=boot();
+  if(ok) hud.classList.add("glass");            // the fallback copy stands down
+  else { hud.classList.add("nogl"); hud.style.cursor="default"; }
 
   const lens={x:0,y:0,tx:0,ty:0,free:true}; let lastMove=-1e9;
   // The opening gesture: the glass shows what it does before handing over.
