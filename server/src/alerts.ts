@@ -29,6 +29,25 @@ export interface AlertSink {
 let sink: AlertSink | null = null;
 export function setAlertSink(s: AlertSink | null) { sink = s; }
 
+// Both outbound channels leave the machine, so neither may fire from a test
+// run. The gate test used to reach the real `notify-send`: `bun test` popped
+// "✋ Approval needed — app:sess2 wants to run Bash: rm -rf something-unique-2"
+// onto the desktop of whoever ran the suite, indistinguishable from a live
+// agent asking to delete something. A webhook set in the environment would
+// have been posted to Slack the same way. `bun test` sets NODE_ENV=test.
+const IS_TEST = process.env.NODE_ENV === "test";
+
+/**
+ * The notify-send half of delivery, as a seam.
+ *
+ * Tests install one of these and assert on what the fallback WOULD have shown,
+ * which is both safe and a stronger check than the absence of a broadcast.
+ * Left unset in the app: `null` means the built-in `notify-send` below.
+ */
+export type DesktopNotifier = (a: AlertNote) => void;
+let notifier: DesktopNotifier | null = null;
+export function setDesktopNotifier(n: DesktopNotifier | null) { notifier = n; }
+
 // Debounce identical alerts so a burst doesn't spam channels.
 const lastSent = new Map<string, number>();
 const DEBOUNCE_MS = 30_000;
@@ -42,7 +61,7 @@ function shouldSend(key: string): boolean {
 }
 
 async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2) {
-  if (WEBHOOK) {
+  if (WEBHOOK && !IS_TEST) {
     try {
       await fetch(WEBHOOK, {
         method: "POST",
@@ -60,6 +79,11 @@ async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2) {
       sink.broadcast({ title, body, urgency });
       return;
     }
+    if (notifier) { notifier({ title, body, urgency }); return; }
+    // No seam installed and this is a test run: say nothing. A suite must never
+    // put an approval prompt on somebody's desktop for a hold that never
+    // happened, and a test that wants to check this path installs a notifier.
+    if (IS_TEST) return;
     try {
       Bun.spawn(["notify-send", "-a", "agentglass", "-u", "critical", "--", title, body], { stdout: "ignore" });
     } catch (e) {
