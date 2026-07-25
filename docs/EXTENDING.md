@@ -128,7 +128,7 @@ curl -sS http://localhost:4000/control \
 | `esc` | — | close panels / workspace, as Escape does |
 | `open` | `what`: `stats`\|`skills`\|`search`\|`help`\|`palette` | open that panel |
 | `theme` | `name?`: id, or `dir?`: `1`\|`-1` | pin a palette, or step the list |
-| `zoom` | `dir`: `1`\|`-1`\|`0` | zoom in / out / reset |
+| `zoom` | `dir`: `1`\|`-1`\|`0` | zoom in / out / reset — **desktop app only**; in a browser tab it is accepted and does nothing, because the browser's own zoom already covers it |
 
 Approve/deny and monitoring need no bridge — they are already `POST /gate/decide`
 and the `/stats`, `/insights`, `/gate/pending`, `/stream` reads. `/control` fills
@@ -157,16 +157,29 @@ Add a palette to `THEMES`, restart the UI, pick it in the theme switcher.
 ### A view in the workspace
 
 The six views are a list, and the rail, the shortcuts and the tooltips all read
-from it — so adding one is a single entry rather than five places to keep in
-step:
+from it — so most of a new view is one entry:
 
 ```ts
 // web/src/components/workspace/views.ts
 export const VIEWS: ViewDef[] = [
-  { id: "git", label: "git", key: "g", icon: GitIcon, hint: "stage, commit, push/pull" },
+  { id: "git", label: "Git", key: "g", icon: GitIcon, hint: "Stage, commit, push/pull the working tree" },
   // …add yours here
 ];
 ```
+
+That list is not quite the whole story. A view id is validated on the server too
+(`POST /control` accepts a closed set), so adding one means four files, not one:
+
+| File | What it needs |
+|---|---|
+| `shared/types.ts` | the id in the `ViewId` union |
+| `web/src/components/workspace/views.ts` | the `VIEWS` entry above — rail, hotkey and tooltip all read it |
+| `web/src/components/workspace/Workspace.tsx` | the body to render for that id |
+| `server/src/control.ts` | the id in `VIEW_IDS`, or `POST /control` rejects it with `400` |
+
+The list is deliberately duplicated at the trust boundary rather than imported
+from the UI: a `/control` body is untrusted input, and it is checked against a
+closed set before anything is broadcast.
 
 `key` is the bare letter that reaches it from the dashboard; the modified
 shortcut comes from its position in the rail, or from whatever the user has

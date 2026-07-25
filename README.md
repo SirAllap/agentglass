@@ -8,7 +8,7 @@
 
 [![▶ Live demo](https://img.shields.io/badge/▶%20Live%20demo-try%20it%20now-6366f1?style=for-the-badge)](https://sirallap.github.io/agentglass/demo/)
 
-![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Electron%20app-47848f) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
+![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20pr%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Electron%20app-47848f) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
 
 ![agentglass in action — the live cockpit, then the workspace: source control, diff review, Docker and chat, one keystroke away](.github/assets/hero.gif)
 
@@ -18,7 +18,7 @@
 
 Point any AI coding agent at agentglass — via Claude Code hooks or any OpenTelemetry GenAI exporter (OpenAI Codex, Gemini CLI, Bedrock, LangChain, LiteLLM…) — and watch every agent, tool call, token, and dollar move in real time. Cost tracking, tool-latency percentiles, error timelines, session lifecycles, a filter-the-whole-cockpit-by-provider switch, and 22 themes. It persists across reloads (unlike a pure in-browser stream).
 
-And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — all behind one keystroke, under a notch that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
+And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — all behind one keystroke, under a notch that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
 
 ### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/demo/)
 
@@ -61,7 +61,7 @@ this cockpit is about, and the **⌂ name in the header** switches it any time:
 - pick a **project** → that repo and its worktrees, nothing else;
 - pick a **folder your projects live in** (e.g. `~/code`) → every repo from
   that folder inward;
-- pick **Whole machine** → no scope at all.
+- pick **All repos/projects** → no scope at all.
 
 The choice is applied live and **persisted** (`root` in
 `~/.config/agentglass/config.json`), so the next launch opens straight into it.
@@ -69,7 +69,7 @@ It can also be set from outside:
 
 ```bash
 AGENTGLASS_ROOT=~/code/my-project bun run dev
-# desktop:  make desktop-open DIR=~/code/my-project
+# desktop:  AGENTGLASS_ROOT=~/code/my-project agentglass
 ```
 
 Leave everything unset and it covers the whole machine. You can also pin the
@@ -98,13 +98,13 @@ They live in one **workspace**: `Ctrl+\` (`⌘\`) opens it over the dashboard, a
 
 A strip across the top of the workspace, always visible, never themed: true black so it disappears into the bezel of an OLED display.
 
-It carries what you would otherwise go looking for — commits **to push** and **to pull**, live **shells**, sessions **waiting** on you, CPU and memory, a seven-segment clock — and it mirrors **desktop notifications**, so the Slack message that arrives while you are fullscreen is not lost. Click it and it opens downward into an inbox with the full text; click again and it closes. Capability-probed on the server, so a platform without a notification bus gets a notch with no inbox rather than a broken one.
+It carries what you would otherwise go looking for — commits **to push** and **to pull**, live **shells**, chats **waiting** on you, unread notifications, your Anthropic **5-hour and weekly plan meters**, a seven-segment clock — and it mirrors **desktop notifications**, so the Slack message that arrives while you are fullscreen is not lost. Click it and it opens downward into an inbox with the full text; click again and it closes. Capability-probed on the server, so a platform without a notification bus gets a notch with no inbox rather than a broken one.
 
 Notifications are off by default and opt-in per level in **Settings ▸ Preferences** — titles only, or the full body.
 
 ### 🔬 File changes — a syntax-highlighted diff & review workspace &nbsp;`d`
 
-Every Edit/Write the fleet makes, gathered into one reviewable, chaptered list. **Shiki** syntax highlighting composed with a **word-level** intra-line diff, split or unified, ligatures and a per-diff theme, "reviewed" check-offs — plus one-click **✦ Explain** (a local-Claude walkthrough of the whole change set) and **Commit…** to turn a review straight into a commit.
+Every Edit/Write the fleet makes, gathered into one reviewable, chaptered list. **Shiki** syntax highlighting composed with a **word-level** intra-line diff, split or unified, ligatures and a per-diff theme, "reviewed" check-offs — plus one-click **✨ Explain** (a local-Claude walkthrough of the whole change set) and **⎇ Commit…** to turn a review straight into a commit.
 
 ![diff viewer](.github/assets/diff.png)
 
@@ -116,7 +116,7 @@ It also does the three things you would otherwise drop to a terminal for:
 
 **Sync from base.** Pull `main` into the branch you are on, from the header, with the count of what is waiting. Disabled while the tree is dirty — merging over uncommitted work is how you lose it.
 
-**Resolve conflicts.** Conflicted files are listed as what they are — files git has stopped in the middle of, not ordinary edits — so you cannot commit one with `<<<<<<<` still in it. Take a whole file's `ours`/`theirs` for the lockfile case, or open it **one by one** and choose a side per conflict block, with both versions side by side and the common ancestor when git recorded one. Nothing is written until every block has an answer, because defaulting the ones you did not read is exactly how a merge quietly eats somebody's work.
+**Resolve conflicts.** Conflicted files are listed as what they are — files git has stopped in the middle of, not ordinary edits — so you cannot commit one with `<<<<<<<` still in it. Take a whole file's `ours`/`theirs` for the lockfile case, or open it **one by one** and choose a side per conflict block — or keep both, in either order — with both versions side by side and the common ancestor when git recorded one. Nothing is written until every block has an answer, because defaulting the ones you did not read is exactly how a merge quietly eats somebody's work.
 
 **Undo the merge**, while that is still exactly reversible — only when nothing is committed on top and nothing is pushed. If either is true the button explains why instead of offering you a lie.
 
@@ -124,7 +124,15 @@ It also does the three things you would otherwise drop to a terminal for:
 
 ### 🔀 Pull requests — review one without opening a browser &nbsp;`p`
 
-Every open pull request across the repos the fleet touches, filtered by **mine** / **waiting on your review** / **all**, each row carrying its checks rolled into one dot (hover for `passed · failed · skipped · running`) and a `here` chip when this checkout is on that branch.
+Every open pull request in **one repository at a time** — picked from a repo selector in the panel header, with the repo list discovered from the fleet's own file paths, like the git panel. Scope the list with the **mine** / **waiting on your review** / **all** tabs, each row carrying its checks rolled into one dot (hover for `passed · failed · skipped · running`) and a `here` chip when this checkout is on that branch. Check states arrive in a **second batched pass** after the list itself lands — until it returns the dot is grey and reads `Checks…`, the header says *Loading check states…*, and rows with unknown checks are deliberately kept by the filter rather than hidden. That is what keeps the list itself instant.
+
+**Filter it the way you filter GitHub.** Below the scope tabs is a query box plus eight multi-select facet menus — **Author, Label, Reviews, Checks, Draft, Base, Assignee, Milestone** — each showing a live count per option, a **Sort** pill, a removable chip per active filter and an "N of M" count. The query string is the single source of truth: `key:value` tokens plus bare words, keys case-insensitive, double quotes for values with spaces (`label:"needs review"`). Keys are `author`, `label`, `review`, `checks`, `is`, `base`, `assignee`, `milestone` and `sort`. Semantics are **OR within a facet, AND across facets** — two authors widens, adding a label then narrows. Bare words match the PR number, title or author, and `sort` takes `recently-updated` (default), `newest`, `oldest`, `most-changed`, `title` or `checks`. Unknown keys, half-typed tokens and unclosed quotes degrade to free text rather than emptying the list; switching scope tab clears the query.
+
+```
+author:sirallap label:bug is:draft sort:checks
+```
+
+Keyboard-driven both sides: in the list, `j`/`k` (or ↓/↑) move the selection and reset the detail to overview, `/` jumps into the query box, `Esc` clears it. In a PR's **files** tab, `j`/`k` walk the file list, `n`/`p` jump hunk to hunk in the open diff, and `x` checks a file off as reviewed — the same keys the File changes modal uses, with the legend on screen. None of them fire while a query or comment box has focus.
 
 Open one and it has **overview · conversation · commits · files · checks · review**. The diff is the app's own viewer — the same `SplitDiff` / `UnifiedDiff` the file-changes panel uses, keybindings and all, rather than a second implementation that drifts — and it reads **per file or per commit**, with merge commits marked as the trunk catch-ups they are so you do not review them as work.
 
@@ -132,13 +140,17 @@ Open one and it has **overview · conversation · commits · files · checks · 
 
 **Reviews work the way GitHub's do.** Line comments queue as drafts (a `pending` chip counts them) and go up together as one review — approve, request changes or comment — so a half-finished review never lands in someone's inbox a line at a time. Threads belong to the review that opened them, are anchored to the code they are about, link out when you do want the browser, and the app declines to let you approve your own pull request.
 
-Nothing blocks on the network: `gh` costs a second or more per call and the server has one thread, so every read is a cached answer that shows its own age.
+**A PR's overview is also where you act on it.** Squash-and-merge (pinned to the head SHA, so a push you have not seen makes GitHub refuse; optionally deleting the branch), enable auto-merge, close, update the branch from base, convert to or from draft, re-run failed checks — merges and closes behind a confirm dialog. And **Review locally with Claude**: it checks the PR out into a throwaway worktree and hands the review prompt to the chat panel.
+
+Check results notify you only for the pull requests you have a stake in — the ones you authored (**mine**) and the ones waiting on your review. Browsing **all** shows every PR's check state but never pushes a notification, and each PR notifies once per verdict however many checks it runs.
+
+Nothing blocks on the network: the server has one thread, so every read is a cached answer that shows its own age. Check states come back in **one batched GraphQL query** rather than a subprocess per pull request, which is what makes a fifty-row list affordable.
 
 ### 🐳 Docker — lazydocker, in the dashboard &nbsp;`o`
 
 Containers, images, volumes and networks in one **stacked column** whose headers never leave — so "is anything dangling?" is answerable without navigating away from the container you are watching. Containers group by compose project with live CPU / memory in aligned columns, and a **dense** toggle drops the image line when you would rather fit more on screen.
 
-Select one and the pane beside it carries **logs · info · env · config · top**, with the logs coloured by level and pinned to the bottom while they stream. **exec** drops you into a shell inside that container — in the console already docked below, so your history and any running job survive it. Start / stop / restart / rm per container, or across a whole compose project at once, with each bulk action hidden when it would do nothing. Same keyboard-first feel, same write-gate.
+Select one and the pane beside it carries **logs · info · env · config · top**, with the logs coloured by level and pinned to the bottom while they stream. **exec** drops you into a shell inside that container — in the console already docked below, so your history and any running job survive it. Start / stop / restart / rm per container, and start / stop / restart across a whole compose project at once (`rm` stays per-container), with each bulk action hidden when it would do nothing. Same keyboard-first feel, same write-gate.
 
 ![docker panel](.github/assets/docker.png)
 
@@ -150,6 +162,11 @@ repo/worktree the fleet has touched. Job control, `Ctrl+C` / `Ctrl+R`,
 tab-completion, colors, `vim` / `htop` / `lazygit` — everything a local terminal
 does. Sessions are **per-repo and persistent**: close the panel mid-build,
 reopen later, the job is still running with scrollback intact.
+
+The PTY backend is **POSIX-only**, so on a Windows *host* the Term view is
+present but disabled and says why — ConPTY is not implemented yet. The decision
+is made on the server, not in the browser, so a Windows *browser* pointed at a
+Linux or macOS server still gets a full shell.
 
 The **⚙ commands** menu makes every project command self-explanatory and one
 click away — and it covers the **whole selected project**, not just its root:
@@ -170,6 +187,15 @@ straight to tmux, and the tabs follow. The point is that the window list stops
 being the one strip of the workspace themed by whichever `.tmux.conf` the
 machine happens to carry.
 
+**If a shell ever renders solid white,** switch **Settings ▸ Preferences ▸
+Terminal renderer** to *Compatibility*. xterm's GPU renderer is fast, but on
+some Linux GPU/compositor stacks it paints the terminal blank with no catchable
+context-loss event — so the default (**Auto**) uses the GPU on macOS and Windows
+and the DOM renderer on Linux. *GPU* forces WebGL back on anywhere; a real
+context loss still drops that session to DOM permanently. The choice applies to
+newly opened shells, and is separate from `AGENTGLASS_GPU`, which is the
+Electron window compositor rather than xterm.
+
 ![terminal panel](.github/assets/terminal.png)
 
 ### 💬 Chat — drive Claude sessions from the browser &nbsp;`c`
@@ -187,8 +213,9 @@ second writer on the same transcript corrupts its history.
 **What a session shows:** the conversation is a **timeline**, not only a chat
 log. Tool runs interleave with messages, each tool card carries the head of its
 output (so a failing test is distinguishable from a passing one without leaving
-the panel), and **subagents** report the parent's session id — click one to
-filter the thread to it. Images are sent to the model as image blocks; other
+the panel), and **subagents** report the parent's session id, so their tool
+calls nest under the `Task` call that spawned them and fold away behind a
+`… +N tool uses` toggle. Images are sent to the model as image blocks; other
 files are quoted into the message. Type `/` in the composer to list and insert
 skills/commands (slash commands are enabled in `-p`, they just weren't
 discoverable).
@@ -210,7 +237,7 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 |---|---|
 | 🛰 **Mission-Control cockpit** | Mission clock, live throughput, tool-mix, a sweeping agent radar (distance from centre = context window used — a blip at the edge is about to compact), plain-English event stream, and a "what needs you" alert center. |
 | 🗂 **Every project, machine-wide** | A transcript scanner reads every Claude Code session on the machine — history is there on open, new sessions tail in live. Or scope the whole cockpit to one project (or one folder of projects) with the in-app picker. |
-| 🖥 **Native desktop app** | Own window + icon and a **self-contained bundled server** — nothing to run in a terminal. Launch-at-login toggle, attaches to a running server instead of duplicating it (Linux). |
+| 🖥 **Native desktop app** | Own window + icon and a **self-contained bundled server** — nothing to run in a terminal. Launch-at-login toggle, attaches to a running server instead of duplicating it. |
 | 🔬 **Diff & review** | A real diff viewer for everything the fleet changed — Shiki highlighting + word-level diff, split/unified, AI **Explain**, and commit-straight-from-review. |
 | 🌿 **Source control** | lazygit in the cockpit: stage, hunk-stage, commit, branch, stash, push/pull — live on any repo the fleet touched (write-gated). |
 | 🐳 **Docker** | lazydocker in the cockpit: containers by compose project, live stats, a log viewer, start/stop/restart (write-gated). |
@@ -219,11 +246,11 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 💰 **Cost & tokens** | Per-event, per-session, per-model USD from a tunable pricing table (input / output / cache-write / cache-read). |
 | ⏱️ **Tool latency** | `PreToolUse`→`PostToolUse` pairing → real p50 / p95 / max per tool. |
 | 📊 **Persistent analytics** | SQLite-backed. `/stats` over any time window survives reloads and restarts. |
-| 🌐 **Any provider** | Claude Code hooks **plus** an OpenTelemetry OTLP receiver (`gen_ai.*` spans). Provider is auto-detected from the model — then **filter the entire cockpit** (cost, tools, latency, sessions, radar…) by provider. |
+| 🌐 **Any provider** | Claude Code hooks **plus** an OpenTelemetry OTLP receiver (`gen_ai.*` spans). Provider is auto-detected from the model **per event**, so a session that switched models is counted under each provider it actually used — then **filter the entire cockpit** (cost, tools, latency, sessions, radar…) by provider. A model no rule recognises lands in a real **Unknown** bucket you can select, rather than disappearing from every filtered view. |
 | 🤖 **Per-model breakdown** | Cost & token split across every model — Claude, GPT, Gemini, and more — from a tunable pricing table. |
 | 🧵 **Session lifecycle** | Timeline of every session: start→end, duration, tokens, cost. |
 | 📈 **Anthropic plan usage** | 5-hour + weekly plan-limit meters — shown only when you're viewing Anthropic (the one provider with a usage API), on wide screens. |
-| ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `o` Docker · `t` terminal · `c` chat · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
+| ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `o` Docker · `t` terminal · `c` chat · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
 | 🎨 **22 themes** | 11 dark palettes (Midnight Purple, Forest, Ember, Nord, …), each with a light twin — instant switch, remembered. |
 | 🔔 **Push alerts** | Webhook (Slack/Discord) + desktop notify + optional in-app chime on approvals and errors. |
 | 📤 **Export** | One-click CSV / JSON of all events. |
@@ -258,9 +285,14 @@ reads `~/.claude/projects`, so every Claude Code session on the machine is
 there on first open, with no wiring at all.
 
 To also get live streaming and `PreToolUse` gating, wire the hooks once
-(opt-in, details [below](#wire-the-hooks-globally--one-command-opt-in)). The
-forwarder lives in the repo, so this step wants a clone and Python 3; it needs
-nothing else:
+(opt-in, details [below](#wire-the-hooks-globally--one-command-opt-in)).
+
+**In the desktop app there is nothing to clone**: the hooks ship inside the
+bundle, and **Settings ▸ Hooks** wires them into `~/.claude/settings.json` and
+takes them out again, showing whether they are currently installed.
+
+From a checkout, the forwarder lives in the repo, so this path wants a clone and
+Python 3; it needs nothing else:
 
 ```bash
 git clone https://github.com/SirAllap/agentglass.git && cd agentglass
@@ -401,7 +433,9 @@ reach, so an install never exposes a dashboard on a port.
   (e.g. a `bun run dev` you left running), the app attaches to it instead of
   racing a second one against the same database.
 - **Clean lifecycle** — the bundled server is a child process, killed when the
-  app exits (and reaped by the kernel via `PR_SET_PDEATHSIG` if the app dies hard).
+  app exits. If the app dies hard, the server's own watchdog notices it was
+  orphaned (`AGENTGLASS_DIE_WITH_PARENT`, armed by the shell) and exits rather
+  than lingering on the port.
 - **Launch at login** — an in-app toggle, no file editing.
 - **Keeps full history** — the desktop app defaults `AGENTGLASS_RETENTION_DAYS=0`.
 
@@ -422,6 +456,8 @@ make desktop-open DIR=~/code/my-project   # or: agentglass ~/code/my-project
 ## Updating
 
 **Settings ▸ About** shows the version you are running, the commit it was built from, and whether a newer **release** is published. One click builds it and restarts.
+
+**The in-app updater is POSIX-only.** It rebuilds from source, so it needs `git` and `bun` on the machine, and on **Windows** it is switched off rather than shelling out to a `bash` that may not exist — About still reports the version and the newest published tag, but updating means downloading the installer again. When the machine is offline the pane says it could not reach the release feed, instead of claiming you are up to date.
 
 ![settings — preferences, shortcuts, and the About pane that offers a newer release](.github/assets/settings.png)
 
@@ -476,9 +512,12 @@ are:
   `AGENTGLASS_CHAT_BYPASS=1`; otherwise it's downgraded to a prompting default.
 - **Your data stays local.** Events live in a local SQLite file, written
   owner-only (`0700` dir, `0600` file) on POSIX; on Windows, which has no POSIX
-  mode bits, it falls back to your account's default ACL. The only outbound call is the optional Anthropic plan-usage
-  meter (`api.anthropic.com`, using your own credentials) and anything *you*
-  configure (webhook alerts).
+  mode bits, it falls back to your account's default ACL. Outbound calls are few and all of them are yours to
+  switch off: the optional Anthropic plan-usage meter (`api.anthropic.com`,
+  using your own credentials), the update check against the GitHub releases API,
+  the **Pull requests** panel through your own authenticated `gh` CLI, the AI
+  **Explain** walkthrough through a local `claude` (or your `ANTHROPIC_API_KEY`),
+  and anything *you* configure (webhook alerts).
 
 ---
 
@@ -580,36 +619,29 @@ inference, prompt) to an event the same way.
 |---|---|---|
 | `AGENTGLASS_PORT` | `4000` | Server HTTP/WS port. |
 | `AGENTGLASS_BIND` | `127.0.0.1` | Address the server binds to. Loopback-only by default. Exposing (`0.0.0.0`) requires `AGENTGLASS_TOKEN` **and** `AGENTGLASS_TRUST_LAN=1`, and only on a trusted network. See [Security model](#security-model--read-this-before-installing). |
-| `AGENTGLASS_TOKEN` | — | Shared secret required on every route but the telemetry intake sinks. Pass as `Authorization: Bearer <t>` or `?token=<t>`. Locks the server to you on a shared machine and makes a network bind safe. Exposing without one auto-mints + prints a token (saved `0600` in the config dir on POSIX; the default ACL on Windows). |
-| `AGENTGLASS_TRUST_LAN` | — | `1` → also trust RFC1918 (private-LAN) addresses as origins/hosts, not just loopback. Required for LAN browsers to reach an exposed instance. Off by default: a shell-granting server trusts only `localhost` unless told otherwise. |
+| `AGENTGLASS_TOKEN` | — | Shared secret required on every route but the telemetry intake sinks. Pass as `Authorization: Bearer <t>` or `?token=<t>`. Locks the server to you on a shared machine and makes a network bind safe. Exposing — **or setting `AGENTGLASS_TRUST_LAN=1`** — auto-mints + prints a token (saved `0600` in the config dir on POSIX; the default ACL on Windows). `/health` is exempt alongside the intake sinks, so a shell can probe which server owns the port. |
+| `AGENTGLASS_TRUST_LAN` | — | `1` → also trust RFC1918 (private-LAN) addresses as origins/hosts, not just loopback. Required for LAN browsers to reach an exposed instance. Off by default: a shell-granting server trusts only `localhost` unless told otherwise. **Setting it makes a token mandatory** — even on the default loopback bind — because it widens the CSRF origin gate to any private-IP page; with no `AGENTGLASS_TOKEN` set the server mints, persists and prints one. |
 | `AGENTGLASS_ALLOWED_HOSTS` | — | Comma-separated extra hostnames accepted by the DNS-rebinding guard (requests must arrive under a localhost/private `Host`). Only needed behind a reverse proxy. |
-| `AGENTGLASS_DB` | `agentglass.db` | SQLite file path. |
+| `AGENTGLASS_DB` | `~/.local/share/agentglass/agentglass.db` | SQLite file path. The default lives under `$XDG_DATA_HOME` (or `~/.local/share`), created `0700`; a pre-existing `agentglass.db` in the working directory wins, which is what keeps a checkout's `bun run dev` on its own database. |
 | `AGENTGLASS_ROOT` | — | Scope the whole cockpit to one project (repo + worktrees) or a folder of projects. Unset = every project on the machine. Also set by passing a directory to the desktop app; the in-app **project picker** sets/clears the same scope at runtime and persists it as `root` in the config file (note: the env var, when set, wins again on the next launch). |
 | `AGENTGLASS_REPO_DIRS` | — | Colon-separated dirs to sweep for git repos (git / terminal / chat panels). Also settable as `repoDirs` in the config file. |
 | `AGENTGLASS_PROJECTS_DIR` | `~/.claude/projects` | Root the transcript scanner reads Claude Code session logs from. Several roots can be listed, separated by the platform's `PATH` delimiter (`:` on Linux/macOS, `;` on Windows). |
 | `AGENTGLASS_SCAN_INTERVAL_MS` | `3000` | Transcript scan poll interval (min 500). |
 | `AGENTGLASS_SCAN_DISABLED` | — | `1` → turn off the machine-wide transcript scanner (rely on hooks / OTel only). |
-| `AGENTGLASS_RETENTION_DAYS` | `8` | Days of history to keep (pruned hourly). Covers the full 7d stats window; `0` = keep forever (the desktop app's default). |
+| `AGENTGLASS_RETENTION_DAYS` | `8` | Days of history to keep (pruned hourly). Covers the full 7d stats window; `0` = keep forever. |
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` alerts here (Slack/Discord compatible). |
-| `AGENTGLASS_NOTIFY` | — | `1` → fire `notify-send` desktop alerts. |
+| `AGENTGLASS_NOTIFY` | — | `1` → fire desktop alerts. A connected client (browser or desktop app) raises a **native OS notification** on any platform; `notify-send` is the fallback for a headless server with nothing attached to show it. |
 | `AGENTGLASS_SERVER` | `http://localhost:4000` | Used by the hook/seed scripts. |
 | `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). Unset, the UI resolves same-origin when the server itself served it (single-port mode), `:4000` otherwise. |
-| `AGENTGLASS_GIT_WRITE_DISABLED` | — | `1` → make the **Source control** panel read-only (no stage / commit / push). |
+| `AGENTGLASS_GIT_WRITE_DISABLED` | — | `1` → make the **Source control** panel read-only (no stage / commit / push). Also makes the **Pull requests** panel read-only — no merge, close, review submit or branch update. |
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |
-| `AGENTGLASS_NOTIFY_DISABLED` | — | `1` → never watch the desktop notification bus, whatever the UI asks for. The notch keeps its counters and loses its inbox. |
-**Scope is a boundary, not just a filter.** With a project open, git writes, the
-terminal and chat are all refused outside it — the same rule that decides what the
-dashboard shows. This is a *behaviour* boundary, not cosmetic: with a project
-open, opening the app on `~/code` and then jumping to `/tmp` in the terminal is
-refused, and git writes outside the root are blocked — on their own, by the
-scope boundary. (The `AGENTGLASS_GIT_WRITE_DISABLED`/`AGENTGLASS_TERMINAL_DISABLED`
-knobs are a separate, global off-switch, not what enforces the root.)
-For genuinely multi-repo work, scope to the parent folder (`~/code`) rather
-than one repo: every repo beneath it is then in scope. An unscoped (whole-machine)
-instance is unaffected.
-
-| `AGENTGLASS_TERMINAL_DISABLED` | — | `1` → disable the in-browser **Terminal** entirely (no PTY shells are spawned). Also settable as `"terminalDisabled": true` in `config.json`, so it is reachable from a desktop-launched app that inherits no env; the env var overrides the file when set. |
+| `AGENTGLASS_TERMINAL_DISABLED` | — | `1` → disable the in-browser **Terminal** entirely (no PTY shells are spawned). Also settable as `"terminalDisabled": true` in `config.json`, so it is reachable from a desktop-launched app that inherits no env; the env var overrides the file when set. Moot on Windows, where the terminal is already off — the PTY backend is POSIX-only. |
+| `AGENTGLASS_EDITOR_DISABLED` | — | `1` → refuse **open in editor**, so the app cannot hand a path to a live nvim or `$EDITOR`. |
+| `AGENTGLASS_GPU` | — | `1` → opt an Electron window back into full GPU compositing. The desktop shell composites the final frame on the CPU on Linux by default, because some GPU/compositor stacks paint the window white. Unrelated to the terminal's own renderer setting. |
+| `AGENTGLASS_MAX_TERMINALS` | `200` | Ceiling on concurrent PTY sessions. |
+| `AGENTGLASS_AUTOFETCH_SECONDS` | `60` | How often the git panel fetches in the background. |
+| `AGENTGLASS_GIT_TIMEOUT_SECONDS` | `120` | Ceiling on a single git subprocess. |
 | `AGENTGLASS_FS_BROWSE_DISABLED` | — | `1` → disable directory completion in the project picker (`/fs/complete`). Separate from the terminal switch on purpose: disabling the shell should not leave the directory tree readable. |
 | `AGENTGLASS_CHAT_DISABLED` | — | `1` → disable the **Chat** panel (no `claude` sessions can be started from the browser). |
 | `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's `bypassPermissions` mode (`claude --dangerously-skip-permissions`). Off by default: the mode is downgraded to a prompting default unless you opt in. |
@@ -622,9 +654,22 @@ instance is unaffected.
 | `AGENTGLASS_WALKTHROUGH_MODEL` | `claude-haiku-4-5` | Model for the AI **Explain** walkthrough (uses a local `claude` CLI, else `ANTHROPIC_API_KEY`). |
 | `CLAUDE_CREDENTIALS` | `~/.claude/.credentials.json` | OAuth token for the Anthropic plan-usage meters (never leaves your machine except to `api.anthropic.com`). |
 
+**Scope is a boundary, not just a filter.** With a project open, git writes, the
+terminal and chat are all refused outside it — the same rule that decides what the
+dashboard shows. This is a *behaviour* boundary, not cosmetic: with a project
+open, opening the app on `~/code` and then jumping to `/tmp` in the terminal is
+refused, and git writes outside the root are blocked — on their own, by the
+scope boundary. (The `AGENTGLASS_GIT_WRITE_DISABLED`/`AGENTGLASS_TERMINAL_DISABLED`
+knobs are a separate, global off-switch, not what enforces the root.)
+For genuinely multi-repo work, scope to the parent folder (`~/code`) rather
+than one repo: every repo beneath it is then in scope. An unscoped instance
+covering every repo is unaffected.
+
 Prefer a file over env vars? Drop a `~/.config/agentglass/config.json` (or
-`$XDG_CONFIG_HOME/agentglass/config.json`) with `root` and/or `repoDirs`; env
-vars override it.
+`$XDG_CONFIG_HOME/agentglass/config.json`) with `root`, `repoDirs`,
+`terminalDisabled` and/or `chatBypass`; env vars override it. The last two
+matter for a desktop-launched app, which inherits no shell environment and so
+cannot be configured by `export` at all.
 
 > **Pricing is a user-editable default.** Numbers in `pricing.ts` are per 1M
 > tokens and matched against `model_name` by substring. Anthropic (Claude) rates
@@ -655,9 +700,13 @@ vars override it.
 | `POST /docker/{start,stop,restart,rm}` | Container actions — **gated** by `AGENTGLASS_DOCKER_WRITE_DISABLED`. |
 | `GET /git/conflicts · /conflict-blocks` · `POST /git/resolve · /resolve-blocks · /sync-base · /merge-abort · /merge-continue · /undo-merge` | Mid-merge state: which files are conflicted, the `<<<<<<<` blocks inside one, and taking a side per file or per block. Sync a branch from its base, and undo the last merge while that is still exactly reversible. Write-gated. |
 | `GET /update/status · /update/log` · `POST /update/run` | The running version, the newest published release tag, and building it. **Desktop-shell origin only** — refused (403) for a browser, another machine, or a caller with no `Origin` at all, because it is the one route that executes arbitrary code. |
-| `WS /terminal/pty?root=&cols=&rows=` | A **real PTY shell** in a repo/worktree — raw bytes out, `{t:"in"\|"resize"}` frames in. Gated by `AGENTGLASS_TERMINAL_DISABLED`. |
+| `WS /terminal/pty?root=&cols=&rows=` | A **real PTY shell** in a repo/worktree — raw bytes out, `{t:"in"\|"resize"}` frames in. Gated by host platform (**never available on Windows** — no POSIX PTY backend), by `"terminalDisabled"` in `config.json`, and by `AGENTGLASS_TERMINAL_DISABLED`; `GET /terminal/commands` carries the reason (`windows` \| `config` \| `env`) so the panel can say which. |
 | `GET /terminal/commands?root=` | Ready-to-run project commands: Makefile targets **with descriptions** + `package.json` scripts (runner-aware), from the repo root **and its subfolders** (`make -C …`), grouped by folder. |
 | `GET /chat/enabled` · `POST /chat/send` | Drive a local `claude` session in a repo (streamed JSONL) — gated by `AGENTGLASS_CHAT_DISABLED`. |
+| `GET /prs/capability · /prs/list · /prs/detail · /prs/diff · /prs/commit-diff · /prs/branch-url` | Pull requests through the `gh` CLI, per repository: capability probe, the list for a scope tab, one PR's full detail, its diff, a single commit's diff. Cached, with check states filled by a second batched GraphQL pass. |
+| `POST /prs/{review,review-with,comment,reply,thread-resolved,react,edit,labels,reviewers,draft,update-branch,rerun,merge,close,local-review,local-review-discard}` | Pull-request actions — **gated** by `AGENTGLASS_GIT_WRITE_DISABLED` and by the active scope. |
+| `GET /hooks/status` · `POST /hooks/install · /hooks/uninstall` | Whether the Claude Code hooks are wired into `~/.claude/settings.json`, and wiring or removing them — what **Settings ▸ Hooks** calls, so a packaged app needs no clone. |
+| `GET /health` | Liveness plus an identity marker (`service: "agentglass"`), so a client can tell our server from a stranger on the same port. Token-exempt. |
 | `GET /usage` | Anthropic plan-limit windows (5-hour / weekly) for the usage meters. |
 | `GET /session?id=` | Full detail for one session (events, files, totals). |
 | `GET /insights` | Derived warnings — loops, fast burn, high failure rate, spend velocity. |
@@ -665,7 +714,7 @@ vars override it.
 | `POST /gate` · `GET /gate/pending` · `POST /gate/decide` | Control-plane approve/deny for the opt-in `PreToolUse` gate. |
 | `POST /control` | Drive the dashboard's own UI (switch view, toggle workspace, theme, zoom) from an external controller — a Stream Deck, a phone. Validated then rebroadcast on `/stream`; changes only what's shown, grants no capability the keyboard doesn't. See [`docs/EXTENDING.md`](docs/EXTENDING.md). |
 | `GET /export?format=csv\|json` | Download all events. |
-| `WS /stream` | Live `{type: initial\|event\|session}` frames. |
+| `WS /stream` | Live frames — `initial` · `openTools` · `event` · `session` · `git` · `ci` · `alert` · `control`. Read-only: the socket never accepts commands. |
 
 ---
 
@@ -708,7 +757,7 @@ Where this is going — themes, not dates. The living version is the issue track
 
 **Now**
 - Lead with a verdict: what's running, what's stuck, what needs you now — [#42](https://github.com/SirAllap/agentglass/issues/42)
-- Windows: a usable terminal panel, or an honest disable — [#98](https://github.com/SirAllap/agentglass/issues/98)
+- Windows: a usable terminal panel (ConPTY) — the honest disable already ships — [#98](https://github.com/SirAllap/agentglass/issues/98)
 
 **Next**
 - Per-agent changes scoped to each session's worktree/branch — [#117](https://github.com/SirAllap/agentglass/issues/117)
@@ -724,7 +773,12 @@ Where this is going — themes, not dates. The living version is the issue track
 - Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
 
 **Recently shipped** — see the [releases](https://github.com/SirAllap/agentglass/releases) for the full record.
-- **unreleased** — a slow tool call is told from a hung one by evidence rather than by a timer, per tool class, with "can't tell" as a real answer ([#134](https://github.com/SirAllap/agentglass/issues/134)); the UI says so when something other than agentglass owns `:4000`; a fresh install has somewhere to look for repos
+- **unreleased** — a slow tool call is told from a hung one by evidence rather than by a timer, per tool class, with "can't tell" as a real answer ([#134](https://github.com/SirAllap/agentglass/issues/134)); the UI says so when something other than agentglass owns `:4000`.
+  - **The numbers got audited.** A client clock that disagrees with the server no longer skews every window ([#245](https://github.com/SirAllap/agentglass/issues/245)); provider is attributed **per event** rather than per session, and sessions whose model was never resolved get a real **Unknown** bucket instead of vanishing from every filter ([#246](https://github.com/SirAllap/agentglass/issues/246)); a token delta that spans a model switch is priced per its own model ([#247](https://github.com/SirAllap/agentglass/issues/247)); insights are scoped to the open project like every other metric, and the `/stats` timeline stopped dropping the newest events ([#248](https://github.com/SirAllap/agentglass/issues/248)).
+  - **Pull requests.** Check states load in **one batched GraphQL query** instead of a subprocess per PR ([#249](https://github.com/SirAllap/agentglass/issues/249)); GitHub-style facet filters and a query bar; keyboard navigation in the files tab; and CI results notify you only for the PRs you authored or were asked to review ([#244](https://github.com/SirAllap/agentglass/issues/244)).
+  - **Desktop.** The Claude Code hooks ship inside the app and wire from **Settings ▸ Hooks**, so a packaged install needs no clone ([#187](https://github.com/SirAllap/agentglass/issues/187)); self-update is gated off on Windows rather than shelling to `bash` ([#189](https://github.com/SirAllap/agentglass/issues/189)); push alerts are delivered cross-platform, not only through `notify-send` ([#192](https://github.com/SirAllap/agentglass/issues/192)); and two Linux rendering faults — a white-out on the final frame and a blank terminal from WebGL context loss — are fixed, with a **Terminal renderer** setting to override the default.
+  - **Supply chain.** CodeQL and Dependabot now watch the repo ([#169](https://github.com/SirAllap/agentglass/issues/169)), and a privacy-first diagnostic scrubber built from an allowlist landed for the reporting paths ([#207](https://github.com/SirAllap/agentglass/issues/207)).
+  - **From the community.** `POST /control`, so a Stream Deck or a phone can drive the cockpit's own UI ([#237](https://github.com/SirAllap/agentglass/issues/237), thanks [@Yoshiofthewire](https://github.com/Yoshiofthewire)); the terminal disabling itself honestly on Windows at the server seam ([#140](https://github.com/SirAllap/agentglass/issues/140), thanks [@emre155](https://github.com/emre155)); and every deprecated GitHub Action brought up to a current major ([#242](https://github.com/SirAllap/agentglass/issues/242), thanks [@mvanhorn](https://github.com/mvanhorn)).
 - **v0.5.0** — pull request review inside the cockpit, and the freeze is gone: the event loop is watched, and every expensive git, docker and database read left the thread that carries the terminal
 - **v0.4.0** — evidence-of-life signal for open tool calls; the shell no longer adopts a stranger's server on `:4000`
 - **v0.3.0** — in-app merge-conflict resolution, whole-project docker controls, a rearrangeable workspace, and an in-app updater

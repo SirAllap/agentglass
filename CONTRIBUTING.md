@@ -21,15 +21,20 @@ python3 hooks/seed_demo.py   # populate with demo data
   for machine-wide history + a live tail; `config.ts` handles project scoping
   (`AGENTGLASS_ROOT` / `repoDirs`). The server binds loopback-only by default
   (`AGENTGLASS_BIND`); keep new routes behind the existing origin/CSRF gate.
-- **`web/`** — React + Vite + Recharts + Shiki (diff highlighting) + xterm.js
-  (the terminal panel).
+- **`web/`** — React + Vite + Motion (animation) + Recharts + Shiki (diff
+  highlighting) + xterm.js (the terminal panel).
   `bunx tsc --noEmit` to typecheck, `bunx vite build` to verify the production
   bundle. `bun run build:demo` builds the fabricated-data showcase.
 - **`shared/types.ts`** — the event/analytics contract imported by both sides.
   Change it in one place.
-- **`hooks/`** — stdlib-only Python; keep it dependency-free.
+- **`hooks/`** — stdlib-only Python; keep it dependency-free. The desktop app
+  ships these and wires them from **Settings ▸ Hooks**, so `hooks/` and
+  `server/src/hooksetup.ts` must stay in lockstep: change the hook set in one
+  and the packaged installer goes stale.
 - **`electron/`** — the Electron desktop shell. It runs the `web/` UI in
-  Chromium (GPU-composited) and brings the Bun server up with it. `make desktop`
+  Chromium and brings the Bun server up with it. Note the final frame is
+  **composited on the CPU on Linux** by default (`AGENTGLASS_GPU=1` opts back
+  in), because some GPU/compositor stacks paint the window white. `make desktop`
   builds the UI and launches it; `make desktop-dist` packages installers with
   electron-builder (the sidecar is the Bun server compiled standalone, staged in
   via `extraResources`). Linux (AppImage/`.deb`), macOS (`.dmg`), Windows.
@@ -37,7 +42,23 @@ python3 hooks/seed_demo.py   # populate with demo data
 ## Ground rules
 
 - Match the surrounding style; keep the dependency footprint minimal.
-- Typecheck must pass (`bunx tsc --noEmit` in `web/`).
+- **Everything CI runs, run first.** It gates on all of it:
+
+  ```bash
+  cd server && bunx tsc --noEmit && bun test     # typecheck + suite (server)
+  cd ../web && bunx tsc --noEmit && bun test     # typecheck + suite (web)
+  bunx vite build                                # the production bundle must build
+  cd .. && bun scripts/smoke.ts                  # …and actually boot in a browser
+  bun scripts/perfbudget.ts                      # the event loop stays answerable
+  ```
+
+  `smoke.ts` exists because a runtime-only error once shipped a black screen
+  past typecheck, tests and build. `perfbudget.ts` exists because the terminal's
+  PTY rides the same single thread as every git, docker and SQLite call — run it
+  for anything touching `db.ts`, `git.ts`, `gitwork.ts` or a poll path.
+- **Tests must not fire real outbound side effects.** A suite that reaches the
+  network, or raises a real desktop notification, is a broken suite — seam the
+  delivery and assert against the seam.
 - If you add a stored field, promote it to an **indexed column** in `db.ts`
   rather than leaving it buried in `payload` JSON.
 - Pricing changes: edit `server/src/pricing.ts` defaults *and* mention the
