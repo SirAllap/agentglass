@@ -29,6 +29,7 @@ import {
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
   restoredActiveId, setActiveChatId,
 } from "../lib/chatStore.ts";
+import { peekChatIntent, subscribeChatIntent, takeChatIntent } from "../lib/chatIntent.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 
@@ -522,6 +523,14 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // the ones about to appear.
     if (!scopeKnown) return;
     if (!seeded.current && !chats.length && defaultCwd) {
+      // Stand aside for a controller that asked for a new chat: it is about to
+      // add one of its own, and seeding first would leave two empty tabs. Not a
+      // race — this effect is declared above the one that drains, so on the
+      // commit where both gates open it always runs first. A peek rather than a
+      // take because the drain is the one that acts on it, and it cannot see
+      // this tab to skip its own `add()`: `activeIdRef` is assigned during
+      // render and is still empty in the same effect pass.
+      if (peekChatIntent() === "new") return;
       seeded.current = true;
       setActiveId(newChat(defaultCwd).id);
       return;
@@ -609,6 +618,27 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     send(active.id, text, () => openRef.current && activeIdRef.current === active.id, allowed.split(/\s+/).filter(Boolean));
   };
   const [hint, setHint] = useState("");
+
+  // An external controller (a Stream Deck) asked for a new chat. Drained from
+  // the mailbox rather than subscribed to, because the command that opens this
+  // panel arrives before it is mounted — see lib/chatIntent.ts.
+  useEffect(() => {
+    // Not until the panel knows where a chat could run. `add()` resolves a cwd
+    // from the repo list and the workspace scope, and both of those arrive
+    // asynchronously after the panel opens — while the command that *opened*
+    // it landed before either. Draining at mount would therefore spend the
+    // intent on an `add()` with nothing to point at, refuse with "no repo",
+    // and — the mailbox holding one slot and no history — leave nothing to
+    // retry once the repos did arrive. On a browser that has chatted before
+    // the remembered cwd covers for this; on a fresh profile it is the whole
+    // first press. Waiting costs one render and removes the case entirely.
+    if (!reposKnown || !scopeKnown) return;
+    const run = () => {
+      if (takeChatIntent() === "new") add();
+    };
+    run();
+    return subscribeChatIntent(run);
+  }, [add, reposKnown, scopeKnown]);
   // A turn is sendable when there is text or at least one attachment.
   const hasTurn = !!(active?.draft.trim() || active?.attachments.length);
 

@@ -405,7 +405,10 @@ export type ControlCmd =
   | { cmd: "esc" }
   | { cmd: "open"; what: "stats" | "skills" | "search" | "help" | "palette" }
   | { cmd: "theme"; dir?: 1 | -1; name?: string }
-  | { cmd: "zoom"; dir: 1 | -1 | 0 };
+  | { cmd: "zoom"; dir: 1 | -1 | 0 }
+  /** Drive the chat view itself. Unlike the rest, this one needs the chat panel
+   *  mounted to run — see web/src/lib/chatIntent.ts. */
+  | { cmd: "chat"; do: "new" };
 
 /** WebSocket frames. */
 export type WsFrame =

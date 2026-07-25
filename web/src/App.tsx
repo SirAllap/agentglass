@@ -7,6 +7,7 @@ import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
 import { subscribeControl } from "./lib/controlBus.ts";
+import { latchChatIntent } from "./lib/chatIntent.ts";
 import type { ControlCmd } from "../../shared/types.ts";
 import { actionFor } from "./lib/keybindings.ts";
 import { currentScale, nudgeScale, resetScale } from "./lib/uiScale.ts";
@@ -463,6 +464,13 @@ export default function App() {
           break;
         case "zoom":
           setScale(cmd.dir === 0 ? resetScale() : nudgeScale(cmd.dir));
+          break;
+        case "chat":
+          // Latch before opening: the panel drains the mailbox on mount, so
+          // this works whether or not the chat view is already up.
+          latchChatIntent(cmd.do);
+          setWsView("chat");
+          setWsOpen(true);
           break;
       }
     });

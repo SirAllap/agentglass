@@ -85,6 +85,19 @@ describe("parseControlCmd — zoom", () => {
   });
 });
 
+describe("parseControlCmd — chat", () => {
+  test("accepts the one chat verb", () => {
+    expect(parseControlCmd({ cmd: "chat", do: "new" })).toEqual({ cmd: "chat", do: "new" });
+  });
+
+  test("rejects every verb outside the closed set", () => {
+    for (const d of ["", "compact", "send", "/compact", "delete", 1, null, undefined, {}]) {
+      expect(parseControlCmd({ cmd: "chat", do: d })).toBeNull();
+    }
+    expect(parseControlCmd({ cmd: "chat" })).toBeNull();
+  });
+});
+
 describe("parseControlCmd — junk", () => {
   test("rejects non-objects and unknown commands", () => {
     for (const b of [null, undefined, 42, "view", [], { cmd: "nope" }, {}]) {

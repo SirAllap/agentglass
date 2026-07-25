@@ -129,6 +129,13 @@ curl -sS http://localhost:4000/control \
 | `open` | `what`: `stats`\|`skills`\|`search`\|`help`\|`palette` | open that panel |
 | `theme` | `name?`: id, or `dir?`: `1`\|`-1` | pin a palette, or step the list |
 | `zoom` | `dir`: `1`\|`-1`\|`0` | zoom in / out / reset — **desktop app only**; in a browser tab it is accepted and does nothing, because the browser's own zoom already covers it |
+| `chat` | `do`: `new` | open the chat view on a fresh tab |
+
+`chat` is the one command the receiving client cannot run on arrival: the chat
+panel is mounted only while the workspace is open, and `new` is exactly what you
+press when it isn't. It is latched in a one-slot mailbox
+(`web/src/lib/chatIntent.ts`) that the panel drains once it is up, and that
+lapses after 30s so a tab which never opened doesn't act on it much later.
 
 Approve/deny and monitoring need no bridge — they are already `POST /gate/decide`
 and the `/stats`, `/insights`, `/gate/pending`, `/stream` reads. `/control` fills

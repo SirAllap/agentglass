@@ -712,7 +712,7 @@ cannot be configured by `export` at all.
 | `GET /insights` | Derived warnings — loops, fast burn, high failure rate, spend velocity. |
 | `GET /search?q=` | Full-text search across all captured prompts/commands/outputs. |
 | `POST /gate` · `GET /gate/pending` · `POST /gate/decide` | Control-plane approve/deny for the opt-in `PreToolUse` gate. |
-| `POST /control` | Drive the dashboard's own UI (switch view, toggle workspace, theme, zoom) from an external controller — a Stream Deck, a phone. Validated then rebroadcast on `/stream`; changes only what's shown, grants no capability the keyboard doesn't. See [`docs/EXTENDING.md`](docs/EXTENDING.md). |
+| `POST /control` | Drive the dashboard's own UI (switch view, toggle workspace, theme, zoom, new chat) from an external controller — a Stream Deck, a phone. Validated then rebroadcast on `/stream`; changes only what's shown, grants no capability the keyboard doesn't. See [`docs/EXTENDING.md`](docs/EXTENDING.md). |
 | `GET /export?format=csv\|json` | Download all events. |
 | `WS /stream` | Live frames — `initial` · `openTools` · `event` · `session` · `git` · `ci` · `alert` · `control`. Read-only: the socket never accepts commands. |
 

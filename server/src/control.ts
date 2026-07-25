@@ -8,6 +8,8 @@ import type { ControlCmd, ViewId } from "../../shared/types.ts";
 const VIEW_IDS: readonly ViewId[] = ["git", "diff", "pr", "docker", "term", "chat"];
 type OpenWhat = Extract<ControlCmd, { cmd: "open" }>["what"];
 const OPEN_WHAT: readonly OpenWhat[] = ["stats", "skills", "search", "help", "palette"];
+type ChatDo = Extract<ControlCmd, { cmd: "chat" }>["do"];
+const CHAT_DO: readonly ChatDo[] = ["new"];
 
 /**
  * Validate an untrusted POST /control body into a ControlCmd, or null.
@@ -40,6 +42,10 @@ export function parseControlCmd(body: unknown): ControlCmd | null {
       return null;
     case "zoom":
       return b.dir === 1 || b.dir === -1 || b.dir === 0 ? { cmd: "zoom", dir: b.dir } : null;
+    case "chat":
+      // A closed set of one rather than a free string, because the verbs that
+      // want to join it — compacting, sending — reach into a real conversation.
+      return CHAT_DO.includes(b.do as ChatDo) ? { cmd: "chat", do: b.do as ChatDo } : null;
     default:
       return null;
   }
