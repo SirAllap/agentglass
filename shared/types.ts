@@ -1037,6 +1037,10 @@ export interface PrSummary {
   deletions: number;
   changedFiles: number;
   labels: PrLabel[];
+  /** Assignee logins, for the Assignee facet. Empty when nobody is assigned. */
+  assignees: string[];
+  /** Milestone title, or null when the PR is on no milestone. */
+  milestone: string | null;
   checks: PrCheckRollup;
   /** This checkout is on the PR's head branch — "you are here". */
   isCurrentBranch?: boolean;

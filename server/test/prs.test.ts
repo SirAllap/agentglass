@@ -184,6 +184,25 @@ describe("rollup from aggregate counts (#249)", () => {
   });
 });
 
+describe("list row mapping (#assignee/milestone facets)", () => {
+  test("assignee logins and milestone title are pulled off the gh JSON shape", () => {
+    const row = prs.mapSummary({
+      number: 7, title: "t", author: { login: "octo" }, state: "OPEN",
+      assignees: [{ login: "a" }, { login: "b" }],
+      milestone: { title: "v1.0" },
+      labels: [{ name: "bug", color: "red" }],
+    }, false);
+    expect(row.assignees).toEqual(["a", "b"]);
+    expect(row.milestone).toBe("v1.0");
+  });
+
+  test("no assignees and no milestone map to [] and null, not undefined", () => {
+    const row = prs.mapSummary({ number: 8, title: "t", author: { login: "octo" }, state: "OPEN" }, false);
+    expect(row.assignees).toEqual([]);
+    expect(row.milestone).toBeNull();
+  });
+});
+
 describe("bot digest", () => {
   /** The real one is 46,551 characters. Three numbers is what gets read. */
   test("pulls the figures out of a coverage table", () => {

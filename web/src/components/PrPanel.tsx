@@ -31,6 +31,8 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle } from "./ChangesModal.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex } from "../lib/prNav.ts";
+import { PrFilterBar } from "./PrFilterBar.tsx";
+import { parseQuery, applyFilters, buildFacets, activeCount } from "../lib/prFilter.ts";
 
 type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
@@ -342,9 +344,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const [root, setRoot] = useState("");
   const [repo, setRepo] = useState<PrRepoId | null>(null);
   const [filter, setFilter] = useState<Filter>("mine");
-  // A per-tab search box. Cleared when the scope changes so each tab (mine /
-  // review / all) starts fresh — "all" can be hundreds of rows, and finding one
-  // by number, title or author beats scrolling.
+  // The filter query for the current scope tab — the single source of truth for
+  // both the search box and every facet dropdown (parsed in lib/prFilter.ts).
+  // Cleared when the scope changes so each tab (mine / review / all) starts
+  // fresh; "all" can be hundreds of rows and a facet beats scrolling.
   const [query, setQuery] = useState("");
   const [prs, setPrs] = useState<PrSummary[]>([]);
   const [counts, setCounts] = useState<Partial<Record<Filter, number>>>({});
@@ -517,14 +520,53 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   // Filter the current scope's rows by the search box: PR number (with or
   // without a leading #), title, or author login. Memoized so a 400-row "all"
   // list does not re-scan on every keystroke or re-render.
-  const visiblePrs = useMemo(() => {
-    const q = query.trim().toLowerCase().replace(/^#/, "");
-    if (!q) return prs;
-    return prs.filter((p) =>
-      String(p.number).includes(q) ||
-      p.title.toLowerCase().includes(q) ||
-      p.author.toLowerCase().includes(q));
-  }, [prs, query]);
+  // The query string is the single source of truth; the facet dropdowns are
+  // editors of it (see lib/prFilter.ts). `filters` is a pure derivation, never
+  // stored, so the bar and the menus can never disagree.
+  const filters = useMemo(() => parseQuery(query), [query]);
+  const visiblePrs = useMemo(() => applyFilters(prs, filters), [prs, filters]);
+  const facets = useMemo(() => buildFacets(prs, filters), [prs, filters]);
+
+  // If the selected row is filtered out, move the selection to the first row
+  // still visible rather than leaving a phantom highlight on a hidden PR — the
+  // same reconciliation loadList does when the list itself changes. Only when a
+  // selection existed; never auto-selects out of the empty initial state.
+  useEffect(() => {
+    if (selected != null && !visiblePrs.some((p) => p.number === selected)) {
+      setSelected(visiblePrs[0]?.number ?? null);
+    }
+  }, [visiblePrs, selected]);
+
+  // Keyboard nav over the list, keyboard-first like the files tab (which relies
+  // on the same thing: App.tsx ignores bare letters while the workspace is open,
+  // so j/k/n/p are free here). Selection is derived, not a second state.
+  const listRef = useRef<HTMLDivElement>(null);
+  const stepSel = (d: number) => {
+    if (!visiblePrs.length) return;
+    const i = visiblePrs.findIndex((p) => p.number === selected);
+    const ni = i < 0 ? (d > 0 ? 0 : visiblePrs.length - 1) : (i + d + visiblePrs.length) % visiblePrs.length;
+    setSelected(visiblePrs[ni].number);
+    setTab("overview");
+  };
+  const onListKey = (e: React.KeyboardEvent) => {
+    const inInput = /input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "");
+    if (e.key === "/" && !inInput) {
+      e.preventDefault();
+      (document.querySelector("[data-pr-filter-input]") as HTMLInputElement | null)?.focus();
+      return;
+    }
+    if (inInput) { if (e.key === "Escape") (e.target as HTMLElement).blur(); return; }
+    const k = e.key.toLowerCase();
+    if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); stepSel(1); }
+    else if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); stepSel(-1); }
+    else if (e.key === "Escape" && query) { e.preventDefault(); setQuery(""); }
+  };
+  // Make the list keyboard-ready the moment the panel opens, but never steal
+  // focus from a field the user is already in (only claim it off <body>).
+  useEffect(() => {
+    if (!active) return;
+    requestAnimationFrame(() => { if (document.activeElement === document.body) listRef.current?.focus(); });
+  }, [active]);
 
   const parsed = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const byPath = useMemo(() => {
@@ -713,19 +755,17 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             })}
           </div>
           {repo && prs.length > 0 && (
-            <div className="px-2 py-1.5 border-b shrink-0 flex items-center gap-2" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Filter by #, title or author…"
-                className="flex-1 text-[10px] px-2 py-1 rounded bg-transparent min-w-0"
-                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }} />
-              {query.trim() && (
-                <span className="text-[9px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{visiblePrs.length} of {prs.length}</span>
-              )}
-            </div>
+            <PrFilterBar
+              query={query}
+              filters={filters}
+              facets={facets}
+              onQuery={setQuery}
+              checksPending={listState.checksPending}
+              shown={visiblePrs.length}
+              total={prs.length}
+            />
           )}
-          <div className="flex-1 overflow-y-auto min-h-0 agx-scroll">
+          <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">
             {listState.needsAuth ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
                 <div style={{ color: "var(--warning)" }}>{listState.error || "The GitHub CLI is not set up"}</div>
@@ -740,7 +780,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                 </div>
               )
             ) : visiblePrs.length === 0 ? (
-              <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>No pull requests match “{query.trim()}”</div>
+              <div className="p-3 text-[11px] flex flex-col items-start gap-1.5" style={{ color: "var(--text3)" }}>
+                <span>No pull requests match {activeCount(filters) === 1 ? "this filter" : "these filters"}.</span>
+                <button onClick={() => setQuery("")} className="text-[10.5px] px-2 py-0.5 rounded hover:bg-white/5" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}>Clear filters</button>
+              </div>
             ) : visiblePrs.map((p) => (
               <PrRow key={p.number} p={p} active={p.number === selected} onSelect={() => { setSelected(p.number); setTab("overview"); }} />
             ))}
