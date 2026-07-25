@@ -5,15 +5,40 @@
 // Manual:   cp hooks/opencode-plugin.js ~/.config/opencode/plugins/agentglass.js
 //
 // Env:
-//   AGENTGLASS_URL       server base url (default http://localhost:4000)
-//   AGENTGLASS_INTERNAL  set to skip (prevents re-ingestion loops)
+//   AGENTGLASS_SERVER        server base url (default http://localhost:4000)
+//   AGENTGLASS_URL           deprecated alias for AGENTGLASS_SERVER
+//   AGENTGLASS_ALLOW_REMOTE  set to 1 to allow a non-local server
+//   AGENTGLASS_INTERNAL      set to skip (prevents re-ingestion loops)
 
-const DEFAULT_URL = process.env.AGENTGLASS_URL || "http://localhost:4000";
+export function normalizeServer(url) {
+  return url.replace(/\/+$/, "");
+}
+
+export function resolveServer(env = process.env) {
+  return normalizeServer(
+    env.AGENTGLASS_SERVER || env.AGENTGLASS_URL || "http://localhost:4000",
+  );
+}
+
+const SERVER = resolveServer();
 const INGEST_PATH = "/ingest";
 
 const childSessions = new Set();
 
 const DEFAULT_SESSION_RE = /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T/;
+
+export function isAllowedServer(url, allowRemote = false) {
+  if (allowRemote) return true;
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
 
 function sessionNameFromInfo(info) {
   if (!info?.title || DEFAULT_SESSION_RE.test(info.title)) return undefined;
@@ -21,8 +46,11 @@ function sessionNameFromInfo(info) {
 }
 
 async function postEvent(body) {
+  if (!isAllowedServer(SERVER, process.env.AGENTGLASS_ALLOW_REMOTE === "1")) {
+    return false;
+  }
   try {
-    const res = await fetch(`${DEFAULT_URL}${INGEST_PATH}`, {
+    const res = await fetch(`${SERVER}${INGEST_PATH}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

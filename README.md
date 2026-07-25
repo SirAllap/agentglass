@@ -190,7 +190,7 @@ Requires [Bun](https://bun.sh) ≥ 1.1 and Python 3 (for the hook forwarder).
 ```bash
 git clone https://github.com/SirAllap/agentglass.git && cd agentglass
 bun install
-bun run setup        # wire the global Claude Code hooks — opt-in, see below
+bun run setup        # wire Claude Code and OpenCode globally - opt-in, see below
 bun run dev          # server :4000  +  UI :6180
 ```
 
@@ -205,27 +205,30 @@ lists them all (`make dev`, `make setup`, `make demo-feed`, `make desktop`, …)
 and the in-app terminal (`t` → **⚙ commands**) surfaces the same list, ready to
 click-run.
 
-### Wire the hooks globally — one command, opt-in
+### Wire agents globally - one command, opt-in
 
 `bun run setup` appends the agentglass forwarder to your **global**
 `~/.claude/settings.json`, so **every** Claude Code session — in any project —
 starts streaming to the dashboard. No hand-copying, no per-project setup.
+When OpenCode is installed, setup also copies the dependency-free agentglass
+plugin to `~/.config/opencode/plugins/agentglass.js`; it does not alter
+OpenCode's `package.json` or install packages.
 (It's deliberately **not** run automatically on `bun install`: touching
-`~/.claude` is a decision, so `postinstall` only prints a reminder.) Safe to
-re-run:
+agent configuration is a decision, so `postinstall` only prints a reminder.)
+Safe to re-run:
 
 - **Idempotent & non-destructive** — your existing hooks are preserved; re-running
   only re-points agentglass's own entries (e.g. after moving the clone).
-- **Backed up** — the settings file is copied to `*.bak.agentglass.<timestamp>`
-  before any change.
+- **Backed up** — changed Claude settings and an existing OpenCode plugin are
+  copied to `*.bak.agentglass.<timestamp>` before replacement or removal.
 - **Auto-labeled** — `--source-app` is omitted so each session shows up under its
   own project's folder name in the dashboard.
-- **Takes effect on the next session** — Claude Code loads hooks at startup, so
-  open a new session after wiring.
+- **Takes effect on the next session** — Claude Code and OpenCode load their
+  integrations at startup, so open a new session after wiring.
 
 ```bash
-bun run setup            # wire the global hooks (also: make setup)
-bun run setup:undo       # remove the agentglass hooks again
+bun run setup            # wire Claude Code and detected OpenCode (also: make setup)
+bun run setup:undo       # remove both agentglass integrations again
 ```
 
 > Even without any hooks, the built-in **transcript scanner** already surfaces
@@ -432,7 +435,7 @@ inference, prompt) to an event the same way.
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` alerts here (Slack/Discord compatible). |
 | `AGENTGLASS_NOTIFY` | — | `1` → fire `notify-send` desktop alerts. |
-| `AGENTGLASS_SERVER` | `http://localhost:4000` | Used by the hook/seed scripts. |
+| `AGENTGLASS_SERVER` | `http://localhost:4000` | Used by the hook, seed, and OpenCode plugin integrations. |
 | `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). |
 | `AGENTGLASS_GIT_WRITE_DISABLED` | — | `1` → make the **Source control** panel read-only (no stage / commit / push). |
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |

@@ -13,11 +13,11 @@
     "start": "cd server && bun run start",
     "build": "cd web && bun run build",
     "install:all": "bun install",
-    "setup": "node hooks/run_py.mjs install_hooks.py",
-    "setup:undo": "node hooks/run_py.mjs install_hooks.py --uninstall",
-    "connect": "node hooks/run_py.mjs connect_otel.py",
-    "connect:undo": "node hooks/run_py.mjs connect_otel.py --undo",
-    "postinstall": "node -e \"console.log('agentglass: run [bun run setup] to wire Claude Code hooks, [bun run connect] for OTel CLIs')\""
+    "setup": "bun hooks/setup.mjs",
+    "setup:undo": "bun hooks/setup.mjs --undo",
+    "connect": "bun hooks/run_py.mjs connect_otel.py",
+    "connect:undo": "bun hooks/run_py.mjs connect_otel.py --undo",
+    "postinstall": "bun -e \"console.log('agentglass: run [bun run setup] to wire Claude Code and OpenCode, [bun run connect] for OTel CLIs')\""
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",

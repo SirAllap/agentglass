@@ -14,7 +14,8 @@ npx agentglass          # prints the quickstart
 
 ```bash
 git clone https://github.com/SirAllap/agentglass.git && cd agentglass
-bun install             # wires Claude Code hooks globally (opt-out available)
+bun install
+bun run setup           # opt in to global Claude Code and OpenCode integration
 bun run dev             # server :4000 + cockpit → http://localhost:6180
 ```
 

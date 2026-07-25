@@ -16,7 +16,8 @@ ${m}${b}  🛰  agentglass${r} ${d}— a loupe for your agents${r}
 
   ${b}Run it for real${r} ${d}(requires Bun ≥ 1.1 and Python 3)${r}
     ${g}git clone https://github.com/SirAllap/agentglass.git && cd agentglass${r}
-    ${g}bun install${r}   ${d}# wires Claude Code hooks globally (opt-out: AGENTGLASS_NO_HOOKS=1)${r}
+    ${g}bun install${r}
+    ${g}bun run setup${r} ${d}# opt in to global Claude Code and OpenCode integration${r}
     ${g}bun run dev${r}   ${d}# server :4000 + cockpit → http://localhost:6180${r}
 
   ${b}Docs & source${r}
