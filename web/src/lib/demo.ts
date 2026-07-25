@@ -13,6 +13,7 @@ import type {
   GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult,
 } from "../../../shared/types.ts";
 import { providerOf } from "./format.ts";
+import { ctxLimitOf } from "./contextWindow.ts";
 
 export const IS_DEMO = import.meta.env.VITE_DEMO === "1";
 
@@ -112,7 +113,14 @@ function nextEvent(): WatchEvent {
     // Each turn re-sends the growing conversation (mostly as cache reads), so
     // per-session context creeps up between turns and drops on "compaction" —
     // that drift toward the radar's edge and snap back is the point of it.
-    const limit = s.model.includes("gemini") ? 1_000_000 : s.model.includes("gpt-5") ? 400_000 : s.model.includes("gpt") ? 128_000 : 200_000;
+    //
+    // The ceiling has to be the one the radar measures against, not a second
+    // copy of it: this file used to carry its own model→window cascade, and
+    // when `contextWindow.ts` learned that the Claude 5 family is 1M this one
+    // stayed at 200k. The demo then generated up to 184k against a 1M ring, so
+    // every Claude blip sat in the inner third and never drifted anywhere —
+    // the one behaviour the demo exists to show.
+    const limit = ctxLimitOf(s.model);
     let ctx = demoCtx.get(s.sid) ?? rint(8_000, limit * 0.5);
     ctx += rint(3_000, 14_000);
     if (ctx > limit * 0.92) ctx = rint(limit * 0.2, limit * 0.35); // compacted

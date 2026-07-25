@@ -37,6 +37,7 @@ export const PRICE_TABLE: ModelPrice[] = [
   { match: ["sonnet"], label: "Sonnet", input: 3, output: 15, cache_write: 3.75, cache_read: 0.3 },
   { match: ["haiku"], label: "Haiku", input: 1, output: 5, cache_write: 1.25, cache_read: 0.1 },
   { match: ["fable"], label: "Fable", input: 10, output: 50, cache_write: 12.5, cache_read: 1.0 },
+  { match: ["mythos"], label: "Mythos", input: 10, output: 50, cache_write: 12.5, cache_read: 1.0 },
 
   // --- OpenAI (approx; verify at openai.com/pricing) ---
   { match: ["gpt-4o-mini", "4o-mini"], label: "GPT-4o mini", input: 0.15, output: 0.6, cache_write: 0, cache_read: 0.075 },

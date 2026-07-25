@@ -14,7 +14,7 @@ import type { WalkthroughResult, WalkthroughInputFile } from "../../shared/types
 
 // Haiku by default: the task is a one-liner per file, so a small fast model is
 // plenty and keeps latency + token cost low. Override with the env var to trade
-// speed for depth (e.g. claude-opus-4-8). Results are cached client-side, so the
+// speed for depth (e.g. claude-opus-5). Results are cached client-side, so the
 // model only runs on genuinely new changesets.
 const MODEL = process.env.AGENTGLASS_WALKTHROUGH_MODEL || "claude-haiku-4-5";
 const MAX_FILES = 40;
