@@ -2,10 +2,9 @@
 """Auto-connect opencode to agentglass via its plugin system.
 
 agentglass exposes an HTTP /ingest endpoint that accepts normalised events
-from any provider.  This script deploys the opencode plugin (a JS file that
-hooks into opencode's event bus and POSTs events to /ingest) into the user's
-opencode plugin directory, ensures the @opencode-ai/plugin dependency is
-present, and runs bun install.
+from any provider.  This script deploys the opencode plugin (a dependency-free
+JS file that hooks into opencode's event bus and POSTs events to /ingest) into
+the user's opencode plugin directory.
 
   python3 hooks/connect_opencode.py               # deploy the plugin
   python3 hooks/connect_opencode.py --undo        # remove it again
@@ -14,10 +13,8 @@ present, and runs bun install.
 Idempotent, backs up before overwriting, and never fails the install.
 """
 import argparse
-import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -26,17 +23,18 @@ SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/"
 
 PLUGIN_FILENAME = "agentglass.js"
 PLUGIN_SRC = Path(__file__).resolve().parent / "opencode-plugin.js"
+PLUGIN_MARKER = "// agentglass opencode plugin"
 
 
 def _agentglass_local_only(url):
-    import os
     from urllib.parse import urlparse
-    if os.environ.get("AGENTGLASS_ALLOW_REMOTE"):
-        return
+    if os.environ.get("AGENTGLASS_ALLOW_REMOTE") == "1":
+        return True
     u = urlparse(url or "")
     if u.scheme not in ("http", "https") or (u.hostname or "") not in ("localhost", "127.0.0.1", "::1"):
         sys.stderr.write("[agentglass] refusing non-local server %r\n" % url)
-        sys.exit(0)
+        return False
+    return True
 
 
 def _opencode_config_dir():
@@ -52,20 +50,8 @@ def _backup(path: Path) -> None:
         print(f"[agentglass] backup -> {bak}")
 
 
-def _load(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text()) if path.exists() else {}
-    except Exception:
-        return {}
-
-
-def _write(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
-
-
-def _has_bun():
-    return shutil.which("bun") is not None
+def _is_agentglass_plugin(path: Path) -> bool:
+    return path.read_text().startswith(PLUGIN_MARKER)
 
 
 def opencode_installed() -> bool:
@@ -79,11 +65,14 @@ def wire_plugin(undo: bool) -> bool:
 
     if undo:
         if dest.exists():
+            if not _is_agentglass_plugin(dest):
+                print(f"[agentglass] leaving unrelated opencode plugin at {dest}")
+                return True
             _backup(dest)
             dest.unlink()
             print(f"[agentglass] removed opencode plugin ({dest})")
         else:
-            print("[agentglass] opencode plugin not found — nothing to undo.")
+            print("[agentglass] opencode plugin not found - nothing to undo.")
         return True
 
     if not PLUGIN_SRC.exists():
@@ -94,40 +83,18 @@ def wire_plugin(undo: bool) -> bool:
     (cfg / "plugins").mkdir(parents=True, exist_ok=True)
 
     if dest.exists():
+        if not _is_agentglass_plugin(dest):
+            print(f"[agentglass] refusing to replace unrelated opencode plugin at {dest}")
+            return False
         existing = dest.read_text()
         new = PLUGIN_SRC.read_text()
         if existing == new:
-            print("[agentglass] opencode plugin already installed — nothing to do.")
+            print("[agentglass] opencode plugin already installed - nothing to do.")
             return True
         _backup(dest)
 
     shutil.copy2(PLUGIN_SRC, dest)
     print(f"[agentglass] deployed opencode plugin -> {dest}")
-
-    pkg_path = cfg / "package.json"
-    pkg = _load(pkg_path)
-    deps = pkg.get("dependencies", {})
-    if "@opencode-ai/plugin" not in deps:
-        deps["@opencode-ai/plugin"] = "1.17.18"
-        pkg["dependencies"] = deps
-        _write(pkg_path, pkg)
-        print(f"[agentglass] added @opencode-ai/plugin to {pkg_path}")
-
-    if _has_bun():
-        try:
-            subprocess.run(
-                ["bun", "install"],
-                cwd=str(cfg),
-                capture_output=True,
-                timeout=60,
-            )
-            print(f"[agentglass] ran bun install in {cfg}")
-        except Exception as e:
-            print(f"[agentglass] bun install failed ({e}) — you may need to run it manually.")
-    else:
-        print("[agentglass] bun not found — you may need to run `bun install` manually in "
-              f"{cfg} for the plugin dependency to resolve.")
-
     print("[agentglass]   start a new `opencode` session for the plugin to activate.")
     return True
 
@@ -142,34 +109,37 @@ def check_server() -> None:
             else:
                 print(f"[agentglass] server responded {resp.status} at {SERVER}")
     except Exception:
-        print(f"[agentglass] server not reachable at {SERVER} — is agentglass running?")
+        print(f"[agentglass] server not reachable at {SERVER} - is agentglass running?")
 
 
-def main() -> None:
+def main() -> int:
     ap = argparse.ArgumentParser(description="Connect opencode to agentglass via plugin.")
     ap.add_argument("--undo", action="store_true", help="remove the agentglass opencode plugin")
     ap.add_argument("--postinstall", action="store_true", help="lifecycle mode: honour AGENTGLASS_NO_OPENCODE, never fail")
     args = ap.parse_args()
-    _agentglass_local_only(SERVER)
+    if not args.undo and not _agentglass_local_only(SERVER):
+        return 0 if args.postinstall else 1
 
     if args.postinstall and os.environ.get("AGENTGLASS_NO_OPENCODE"):
-        print("[agentglass] AGENTGLASS_NO_OPENCODE set — skipping opencode auto-connect.")
-        return
+        print("[agentglass] AGENTGLASS_NO_OPENCODE set - skipping opencode auto-connect.")
+        return 0
 
     if not opencode_installed():
         if not args.postinstall:
             print("[agentglass] opencode not detected (looked for ~/.config/opencode/ or `opencode` in PATH).")
-        return
+        return 0
 
     try:
-        wire_plugin(args.undo)
+        if not wire_plugin(args.undo):
+            return 0 if args.postinstall else 1
     except Exception as e:
         print(f"[agentglass] opencode auto-connect skipped ({e}).")
-        return
+        return 0 if args.postinstall else 1
 
     if not args.undo:
         check_server()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

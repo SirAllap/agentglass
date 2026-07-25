@@ -8,7 +8,7 @@ deps (stdlib only).
     python3 hooks/install_hooks.py               # install into ~/.claude/settings.json (global)
     python3 hooks/install_hooks.py --uninstall   # remove the agentglass hooks
     python3 hooks/install_hooks.py --project .   # install into <project>/.claude/settings.json instead
-    python3 hooks/install_hooks.py --postinstall # lifecycle mode used by `bun install`
+    python3 hooks/install_hooks.py --postinstall # non-failing lifecycle mode
 
 Notes:
   * Idempotent — re-running re-points the send_event.py path in place and never
@@ -18,8 +18,8 @@ Notes:
   * `--source-app` is intentionally omitted so each project auto-labels in the
     dashboard by its own working-directory name (send_event.py defaults to the
     cwd basename).
-  * `--postinstall` respects `AGENTGLASS_NO_HOOKS=1` (skips) and never fails the
-    install, so `bun install` stays green even without Python or write access.
+  * `--postinstall` respects `AGENTGLASS_NO_HOOKS=1` and reports errors without
+    failing its caller.
 """
 import argparse
 import json
@@ -121,7 +121,7 @@ def main():
     args = ap.parse_args()
 
     if args.postinstall and os.environ.get("AGENTGLASS_NO_HOOKS"):
-        print("[agentglass] AGENTGLASS_NO_HOOKS set — skipping hook install. "
+        print("[agentglass] AGENTGLASS_NO_HOOKS set - skipping hook install. "
               "Run `bun run setup` later to enable.")
         return 0
 
@@ -144,7 +144,7 @@ def main():
     if os.path.exists(path):
         bak = path + ".bak.agentglass." + time.strftime("%Y%m%d-%H%M%S")
         shutil.copy2(path, bak)
-        print(f"[agentglass] backup → {bak}")
+        print(f"[agentglass] backup -> {bak}")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
         f.write("\n")
@@ -161,7 +161,7 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as e:  # noqa: BLE001 — postinstall must never break `bun install`
+    except Exception as e:  # noqa: BLE001 - lifecycle mode must not fail its caller
         if "--postinstall" in sys.argv:
             print(f"[agentglass] hook install skipped ({e}). Run `bun run setup` to retry.",
                   file=sys.stderr)

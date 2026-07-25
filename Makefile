@@ -25,11 +25,11 @@ build: ## Production build of the web dashboard (web/dist)
 start: ## Run the server in production mode
 	bun run start
 
-setup: ## Wire Claude Code hooks globally (~/.claude/settings.json)
-	python3 hooks/install_hooks.py
+setup: ## Wire Claude Code and OpenCode globally
+	bun hooks/setup.mjs
 
-setup-undo: ## Remove the Claude Code hooks again
-	python3 hooks/install_hooks.py --uninstall
+setup-undo: ## Remove the Claude Code and OpenCode integrations
+	bun hooks/setup.mjs --undo
 
 connect: ## Auto-connect OTel-capable CLIs (Codex, Gemini, …) to agentglass
 	python3 hooks/connect_otel.py

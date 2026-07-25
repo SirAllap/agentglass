@@ -21,6 +21,10 @@ jobs:
         run: cd server && bunx tsc --noEmit
       - name: Tests (server)
         run: cd server && bun test
+      - name: Tests (installers)
+        run: |
+          python3 -m unittest hooks.test_connect_opencode
+          bun test hooks
       - name: Build web
         run: cd web && bunx vite build
       - name: Server boots
