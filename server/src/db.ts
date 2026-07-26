@@ -189,20 +189,34 @@ function providerScope(provider?: string | null): { clause: string; args: string
  *  honestly narrow. Empty clause when unscoped — the whole-machine view. */
 export function scopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
   if (!scope) return { clause: "", args: [] };
-  // Native separator: stored paths and `scope` both come from resolve(), so on
-  // Windows they use "\" — a "/" pattern would match nothing under the root.
-  const under = scope + sep + "%";
+  const paths = windowsPathVariants(scope);
+  const match = (column: string) => paths.map(() => `(${column} = ? OR ${column} LIKE ?)`).join(" OR ");
+  const args = paths.flatMap((path) => [path, path + pathSeparator(path) + "%"]);
   return {
-    clause: " AND (project_path = ? OR project_path LIKE ? OR cwd_path = ? OR cwd_path LIKE ?)",
-    args: [scope, under, scope, under],
+    clause: ` AND ((${match("project_path")}) OR (${match("cwd_path")}))`,
+    args: [...args, ...args],
   };
+}
+
+function windowsPathVariants(path: string): string[] {
+  if (!/^[A-Za-z]:[\\/]/.test(path)) return [path];
+  return [...new Set([path.replaceAll("\\", "/"), path.replaceAll("/", "\\")])];
+}
+
+function pathSeparator(path: string): string {
+  if (/^[A-Za-z]:\//.test(path)) return "/";
+  if (/^[A-Za-z]:\\/.test(path)) return "\\";
+  return sep;
 }
 
 /** Same restriction for the `sessions` table, which carries its own column. */
 function sessionScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
-  return scope
-    ? { clause: " AND (project_path = ? OR project_path LIKE ?)", args: [scope, scope + sep + "%"] }
-    : { clause: "", args: [] };
+  if (!scope) return { clause: "", args: [] };
+  const paths = windowsPathVariants(scope);
+  return {
+    clause: ` AND (${paths.map(() => "(project_path = ? OR project_path LIKE ?)").join(" OR ")})`,
+    args: paths.flatMap((path) => [path, path + pathSeparator(path) + "%"]),
+  };
 }
 
 /** The searchable text blob for an event — the fleet's collective memory. */
@@ -648,16 +662,18 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
     )
     .all(...A);
 
-  // Per-repo rollup within the window (mirrors by_app, grouped by project root).
+  // Per-repo rollup within the window. Historical Windows events can contain
+  // either separator, so canonicalize drive paths before grouping them.
+  const repoPath = "CASE WHEN SUBSTR(project_path, 2, 1) = ':' THEN REPLACE(project_path, CHAR(92), '/') ELSE project_path END";
   const by_repo: CostByRepo[] = db
     .query<CostByRepo, any[]>(
-      `SELECT project_path,
+      `SELECT ${repoPath} AS project_path,
               SUM(input_tokens)  AS input_tokens,
               SUM(output_tokens) AS output_tokens,
               SUM(cost_usd)      AS cost_usd,
               COUNT(DISTINCT session_id) AS sessions
-       FROM events WHERE timestamp >= ?${pf}
-       GROUP BY project_path ORDER BY cost_usd DESC`
+        FROM events WHERE timestamp >= ?${pf}
+        GROUP BY ${repoPath} ORDER BY cost_usd DESC`
     )
     .all(...A);
 

@@ -58,6 +58,7 @@ beforeAll(async () => {
   db = await import("../src/db.ts");
   db.insertEvent(event(SCOPED, "s-in-1") as any);
   db.insertEvent(event(SCOPED, "s-in-2") as any);
+  db.insertEvent(event(SCOPED.replaceAll("\\", "/"), "s-in-slash") as any);
   db.insertEvent(event(OTHER, "s-out-1") as any);
   db.insertEvent(event(OTHER, "s-out-2") as any);
   // project_path is outside the scope, but the turn ran inside it — must count.
@@ -85,8 +86,15 @@ describe("scoped reads", () => {
 
   test("stats count the scoped project alone", () => {
     const s = db.statsSummary(24 * 3600 * 1000) as any;
-    // 2 scoped events + the worktree turn; the two out-of-scope ones are gone.
-    expect(s.totals.events).toBe(3);
+    // 3 scoped events + the worktree turn; the two out-of-scope ones are gone.
+    expect(s.totals.events).toBe(4);
+  });
+
+  test("stats merge Windows slash variants into one repo", () => {
+    const repos = db.statsSummary(24 * 3600 * 1000).by_repo;
+    const matches = repos.filter((r) => r.project_path?.replaceAll("\\", "/") === SCOPED.replaceAll("\\", "/"));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.sessions).toBe(3);
   });
 
   test("a worktree of the scoped repo is in scope via cwd", () => {
@@ -95,7 +103,7 @@ describe("scoped reads", () => {
 
   test("export carries the scope too", () => {
     const rows = db.exportRows(1000);
-    expect(rows.length).toBe(3);
+    expect(rows.length).toBe(4);
     expect(rows.every((r) => r.source_app !== "other")).toBe(true);
     expect(rows.some((r) => r.source_app === "mono")).toBe(true);
   });
