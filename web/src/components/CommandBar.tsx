@@ -299,22 +299,32 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
       </div>
 
       {/* The pinned row. Empty until something is pinned, and it says so once —
-          a bar with no affordance is a bar nobody discovers. */}
-      <div className="flex items-center gap-1 min-w-0 overflow-x-auto agx-scroll">
+          a bar with no affordance is a bar nobody discovers.
+
+          It does not scroll, deliberately. `overflow-x-auto` spent 7px of a
+          48px bar on a scrollbar and — being an overflow container — cropped
+          the unpin button, which used to hang outside its chip on a negative
+          offset. The row is capped at MAX_PINS, so a crowded bar is a
+          truncation problem rather than a scrolling one: chips shrink, the
+          label ellipses, and the full command stays in the tooltip. */}
+      <div className="flex items-center gap-1 min-w-0 overflow-hidden">
         {pins.map((cmd) => (
-          <span key={cmd} className="group relative flex items-center shrink-0">
+          <span key={cmd} className="group flex items-center min-w-0 rounded-md"
+            style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
             {/* onMouseDown keeps the shell focused; running the chip refocuses
                 it anyway through onRun, but unpinning does not, so both carry
                 the guard rather than only one. */}
             <button onMouseDown={keepTermFocus} onClick={() => onRun(cmd)} disabled={disabled || !root || IS_DEMO}
-              className="text-[10px] pl-2 pr-2 py-1 rounded-md whitespace-nowrap"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", fontFamily: font }}
+              className="text-[10px] pl-2 pr-1 py-1 min-w-0 truncate"
+              style={{ color: "var(--text2)", fontFamily: font, maxWidth: 180 }}
               title={`Run ${cmd}`}>{cmd}</button>
-            {/* Unpin from the chip itself: going back to the dropdown to find
+            {/* Unpin from inside the chip, in room the padding already holds:
+                hidden rather than absent, so revealing it cannot re-flow the
+                row and nothing can clip it. Going back to the dropdown to find
                 the row you pinned is the long way round. */}
             <button onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)}
-              className="absolute -top-1 -right-1 text-[9px] leading-none rounded-full px-[3px] py-[1px] opacity-0 group-hover:opacity-100"
-              style={{ background: "var(--bg3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}
+              className="shrink-0 w-[15px] pr-[4px] text-[9px] leading-none opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100"
+              style={{ color: "var(--text3)" }}
               title={`Unpin ${cmd}`}>✕</button>
           </span>
         ))}

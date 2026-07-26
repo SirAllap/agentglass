@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { Panel } from "./Panel.tsx";
 import { fmtUsd, fmtTokens } from "../lib/format.ts";
@@ -50,11 +50,34 @@ function bearingOf(key: string): number {
   return ((h % 360) + 360) % 360;
 }
 
+/** Wide enough for a dossier beside the dial rather than under it. Measured on
+ *  the panel body: this panel is three columns of a twelve-column grid on one
+ *  window and the full width on another, so a viewport media query would be
+ *  answering a different question. */
+const DOSSIER_SIDE_AT = 470;
+
+function useWide(ref: React.RefObject<HTMLElement | null>, at: number): boolean {
+  const [wide, setWide] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => setWide(entries[0].contentRect.width >= at));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref, at]);
+  return wide;
+}
+
 /** Live radar: distance from centre = context window used. A fresh session
  *  sits at the middle; a blip drifting to the outer ring is about to
  *  compact. Sessions with no turn data yet fall back to recency, dimmed. */
 export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a: AgentCard) => void }) {
+  /* The targeted blip, and it STAYS targeted after the pointer leaves. The
+     readout it fills is a fixed slot, not a floating label, so clearing on
+     mouse-out would blank the panel every time you moved to read it. */
   const [hover, setHover] = useState<string | null>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const wide = useWide(body, DOSSIER_SIDE_AT);
   const now = Date.now();
 
   const blips = agents.slice(0, 24).map((a) => {
@@ -87,7 +110,13 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
   });
   const [leadX, leadY] = P(0, R - 6);
 
-  const hovered = blips.find((b) => b.a.key === hover);
+  /* Nothing targeted yet shows the session closest to compacting, rather than
+     an empty column: that is the one the dial exists to warn you about. The
+     dossier labels it as such, so a readout you did not choose never reads as
+     one you did. */
+  let auto: (typeof blips)[number] | null = null;
+  for (const b of blips) if (b.frac != null && (auto == null || b.frac > (auto.frac ?? 0))) auto = b;
+  const target = blips.find((b) => b.a.key === hover) ?? auto ?? blips[0] ?? null;
 
   return (
     <Panel
@@ -95,7 +124,14 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
       title="Live radar"
       right={<span className="text-[10px] t-dim2">{agents.length} tracked · edge = about to compact</span>}
     >
-      <div className="flex flex-col h-full">
+      {/* Dial and dossier: side by side when the panel is wide enough for both,
+          stacked when it is not. The detail used to be a tooltip drawn inside
+          the SVG, which sized its box from an estimated glyph width and then
+          drew text that ignored the box — a 48-character session key painted
+          straight out of the card and off the panel. A dossier in normal flow
+          cannot overflow, and it does not cover the blips you are comparing. */}
+      <div ref={body} className={`flex h-full min-h-0 ${wide ? "gap-3" : "flex-col"}`}>
+        <div className="flex flex-col min-w-0 min-h-0 flex-1">
         <div className="relative flex-1 min-h-0 flex items-center justify-center">
           <svg
             viewBox={`0 0 ${VB} ${VB}`}
@@ -173,7 +209,6 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
                   transition={{ duration: 0.4 }}
                   style={{ cursor: onSelect ? "pointer" : "default" }}
                   onMouseEnter={() => setHover(b.a.key)}
-                  onMouseLeave={() => setHover((h) => (h === b.a.key ? null : h))}
                   onClick={() => onSelect?.(b.a)}
                 >
                   {/* generous invisible hit area */}
@@ -189,9 +224,6 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
 
             {/* centre marker */}
             <circle cx={C} cy={C} r={3.4} fill="var(--primary)" />
-
-            {/* hover tooltip (rendered last, on top) */}
-            {hovered && <Tooltip b={hovered} />}
           </svg>
 
           {/* Sweep as a separate <svg> ELEMENT rotated by CSS. Rotating a
@@ -211,9 +243,14 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
           )}
         </div>
 
-        <p className="text-center text-[10px] t-dim2 mt-1 px-2">
-          center = fresh context · <span style={{ color: "var(--warning)" }}>edge = about to compact</span>
-        </p>
+        {/* Dropped when the dossier is stacked under the dial: the panel header
+            already says "edge = about to compact", and a line of repeated help
+            text is worth less than the room the readout needs. */}
+        {(wide || !target) && (
+          <p className="text-center text-[10px] t-dim2 mt-1 px-2">
+            center = fresh context · <span style={{ color: "var(--warning)" }}>edge = about to compact</span>
+          </p>
+        )}
         <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-1 text-[10px] t-dim2">
           {counts.map(({ s, n }) => (
             <span key={s} className="flex items-center gap-1">
@@ -223,39 +260,103 @@ export function Radar({ agents, onSelect }: { agents: AgentCard[]; onSelect?: (a
             </span>
           ))}
         </div>
+        </div>
+
+        {target && <Dossier b={target} wide={wide} auto={target.a.key !== hover} />}
       </div>
     </Panel>
   );
 }
 
-function Tooltip({ b }: { b: { a: AgentCard; x: number; y: number; frac: number | null } }) {
-  const lines = [
-    b.a.key,
-    `${b.a.status} · ${b.a.lastType || "—"}`,
-    b.frac != null
-      ? `ctx ${fmtTokens(b.a.ctxTokens)} / ${fmtTokens(b.a.ctxLimit)} (${Math.round(b.frac * 100)}% · ${Math.round(Math.min(1, b.frac / COMPACT_FRAC) * 100)}%→compact)`
-      : "ctx unknown — placed by recency",
-    `${b.a.tools} tools · ${fmtUsd(b.a.cost)}`,
-  ];
-  const w = Math.min(150, Math.max(...lines.map((l) => l.length)) * 4.4 + 12);
-  const h = 12 + lines.length * 10;
-  const tx = Math.max(2, Math.min(VB - w - 2, b.x + 8));
-  const ty = Math.max(2, Math.min(VB - h - 2, b.y - h - 6));
+/**
+ * The targeted blip, read out in full.
+ *
+ * The key is one string doing two jobs — an app and a session id — so it is
+ * split: the name at full weight, the id underneath where it can wrap. That is
+ * what fixes the overflow. Nothing here measures text; the browser does.
+ */
+function Dossier({ b, wide, auto }: {
+  b: { a: AgentCard; frac: number | null; color: string };
+  /** Beside the dial (a column) or under it (a strip). */
+  wide: boolean;
+  /** True when this is the panel's own pick, not the one you pointed at. */
+  auto: boolean;
+}) {
+  const a = b.a;
+  const toCompact = b.frac == null ? null : Math.round(Math.min(1, b.frac / COMPACT_FRAC) * 100);
+  const name = a.title || a.source_app;
+  const hot = toCompact != null && toCompact >= 75;
+
+  const status = (
+    <span className="flex items-center gap-1 min-w-0">
+      <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ background: b.color }} />
+      <span className="truncate">{a.status} · {a.lastType || "—"}</span>
+    </span>
+  );
+  const meter = (
+    <span className="flex items-center gap-1.5 min-w-0 flex-1">
+      <span className="h-1 flex-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)", minWidth: 32 }}>
+        <span className="block h-full rounded-full" style={{
+          width: `${toCompact ?? 0}%`,
+          background: hot ? "var(--warning)" : "var(--primary)",
+        }} />
+      </span>
+      <span className="tabular-nums shrink-0" style={{ color: hot ? "var(--warning)" : "var(--text3)" }}>
+        {toCompact}%→compact
+      </span>
+    </span>
+  );
+
+  // Stacked: three lines, because the dial pays for every one of them in height.
+  if (!wide) {
+    return (
+      <div className="shrink-0 mt-1.5 pt-1.5 flex flex-col gap-1 text-[9.5px] t-dim2 min-w-0"
+        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        <div className="flex items-baseline gap-2 min-w-0">
+          <span className="text-[10.5px] font-medium truncate" style={{ color: "var(--text)" }}>{name}</span>
+          {status}
+          <span className="ml-auto tabular-nums shrink-0">{a.tools} tools · {fmtUsd(a.cost)}</span>
+        </div>
+        <div className="truncate" title={a.key}>{a.session_id}</div>
+        {toCompact != null
+          ? <div className="flex items-center gap-2 min-w-0">{meter}<span className="tabular-nums shrink-0">{fmtTokens(a.tokens)}</span></div>
+          : <div>ctx unknown — placed by recency</div>}
+      </div>
+    );
+  }
+
+  // Beside the dial: room for the id in full and for the numbers to line up.
   return (
-    <g pointerEvents="none">
-      <rect x={tx} y={ty} width={w} height={h} rx={4} fill="var(--bg2)" stroke="var(--border)" strokeWidth={1} opacity={0.97} />
-      {lines.map((l, i) => (
-        <text
-          key={i}
-          x={tx + 6}
-          y={ty + 11 + i * 10}
-          fontSize={i === 0 ? 8 : 7.5}
-          fontWeight={i === 0 ? 600 : 400}
-          fill={i === 0 ? "var(--text)" : "var(--text3)"}
-        >
-          {l}
-        </text>
-      ))}
-    </g>
+    <div className="shrink-0 w-[176px] pl-3 flex flex-col gap-2 text-[9.5px] t-dim2 min-w-0"
+      style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+      <div className="flex flex-col gap-0.5 min-w-0">
+        <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>
+          {auto ? "closest to compact" : "targeted"}
+        </span>
+        <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }} title={a.key}>{name}</span>
+        <span className="break-all leading-snug">{a.session_id}</span>
+      </div>
+      {status}
+      {toCompact != null ? (
+        <div className="flex flex-col gap-1.5">
+          {meter}
+          <Row k="context" v={`${fmtTokens(a.ctxTokens)} / ${fmtTokens(a.ctxLimit)}`} />
+        </div>
+      ) : (
+        <div className="leading-snug">ctx unknown — placed by recency</div>
+      )}
+      <Row k="tool calls" v={String(a.tools)} />
+      <Row k="cost" v={fmtUsd(a.cost)} />
+    </div>
   );
 }
+
+function Row({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 min-w-0">
+      <span className="shrink-0">{k}</span>
+      <span className="tabular-nums truncate" style={{ color: "var(--text3)" }}>{v}</span>
+    </div>
+  );
+}
+
