@@ -33,6 +33,7 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, type MdBlock, type ParsedF
 import { stepFileIndex } from "../lib/prNav.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { parseQuery, applyFilters, buildFacets, activeCount } from "../lib/prFilter.ts";
+import { getHighlighter, shikiTheme } from "../lib/highlight.ts";
 
 type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
@@ -127,7 +128,7 @@ function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, sm
   const edge = danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : primary ? "var(--primary)" : "var(--border)";
   return (
     <button onClick={onClick} disabled={disabled} title={title}
-      className={`rounded disabled:opacity-40 ${small ? "text-[10px] px-2 py-0.5" : "text-[10.5px] px-2.5 py-1"}`}
+      className={`agx-btn rounded disabled:opacity-40 ${small ? "text-[10px] px-2 py-0.5" : "text-[10.5px] px-2.5 py-1"}`}
       style={{
         color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : "var(--text2)",
         background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
@@ -150,7 +151,21 @@ function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, sm
  * inline styles cannot reach. `.agx-md` scopes every one of them.
  */
 export const MD_CSS = `
-.agx-md{max-width:78ch;margin:0 auto;line-height:1.7;font-size:12.5px;color:var(--text2)}
+/* Feedback, so a press is legible before the work behind it finishes.
+   :active answers within one frame; :focus-visible keeps the keyboard
+   visible; [data-busy] dims the label and blocks a second press without
+   resizing the button, so the row does not jump under the cursor. */
+.agx-btn{transition:background .13s,border-color .13s,color .13s,transform .07s}
+.agx-btn:active:not(:disabled){transform:translateY(1px) scale(.99)}
+.agx-btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.agx-btn[data-busy]{pointer-events:none;opacity:.6}
+/* margin:0, not "0 auto". The measure is still capped for reading, but a
+   centred column inside a card sets the body 380px away from the author name
+   above it, which reads as a layout fault rather than as typography. */
+.agx-hl pre{margin:0;padding:10px 12px;border-radius:8px;overflow-x:auto;background:color-mix(in srgb,#000 42%,transparent) !important;border:1px solid color-mix(in srgb,var(--border) 30%,transparent)}
+.agx-hl code{font-size:11.5px;line-height:1.65}
+.agx-md .agx-hl{margin:0 0 .85em}
+.agx-md{max-width:78ch;margin:0;line-height:1.7;font-size:12.5px;color:var(--text2)}
 .agx-md>*:first-child{margin-top:0}
 .agx-md>*:last-child{margin-bottom:0}
 .agx-md p{margin:0 0 .85em}
@@ -193,7 +208,7 @@ function Block({ b }: { b: MdBlock }) {
   }
   if (b.kind === "para") return <p dangerouslySetInnerHTML={{ __html: b.html }} />;
   if (b.kind === "rule") return <hr />;
-  if (b.kind === "code") return <pre><code>{b.text}</code></pre>;
+  if (b.kind === "code") return <CodeBlock text={b.text} lang={b.lang} />;
   if (b.kind === "quote") return <blockquote dangerouslySetInnerHTML={{ __html: b.html }} />;
   if (b.kind === "image") {
     return (
@@ -225,6 +240,35 @@ function Block({ b }: { b: MdBlock }) {
       ))}
     </List>
   );
+}
+
+/**
+ * A fenced code block, tokenised by the same shiki highlighter the diff
+ * surfaces already use. The parser has carried `lang` since it was written;
+ * the renderer dropped it and printed plain text, so a code reference from a
+ * person or a bot arrived as prose. Falls back to plain text while the
+ * highlighter loads and whenever the language is unknown — a block that
+ * renders unstyled is fine, one that renders late or blank is not.
+ */
+function CodeBlock({ text, lang }: { text: string; lang?: string }) {
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const id = (lang || "").toLowerCase();
+    if (!id) return;
+    (async () => {
+      try {
+        const hl = await getHighlighter();
+        await hl.loadLanguage(id as never).catch(() => {});
+        if (!hl.getLoadedLanguages().includes(id)) return;
+        const out = hl.codeToHtml(text, { lang: id as never, theme: shikiTheme() });
+        if (live) setHtml(out);
+      } catch { /* unstyled is a fine outcome */ }
+    })();
+    return () => { live = false; };
+  }, [text, lang]);
+  if (html) return <div className="agx-hl" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <pre><code>{text}</code></pre>;
 }
 
 export function Md({ body, className }: { body: string; className?: string }) {
@@ -686,11 +730,16 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
   const lanes = useMemo(() => {
     if (!detail) return { humans: [] as PrReview[], botReviews: [] as PrReview[], humanComments: [] as PrComment[], bots: [] as PrComment[] };
+    // Oldest first, the way a conversation is read — GitHub's order, and the
+    // one the replies were written in. The API hands these back newest-first,
+    // so a thread arrived answered before it was asked.
+    const byTime = <T,>(xs: T[], at: (x: T) => string) =>
+      [...xs].sort((p, q) => at(p).localeCompare(at(q)));
     return {
-      humans: detail.reviews.filter((r) => !r.isBot && (r.body.trim() || r.state !== "COMMENTED")),
-      botReviews: detail.reviews.filter((r) => r.isBot && r.body.trim()),
-      humanComments: detail.comments.filter((c) => !c.isBot),
-      bots: detail.comments.filter((c) => c.isBot),
+      humans: byTime(detail.reviews.filter((r) => !r.isBot && (r.body.trim() || r.state !== "COMMENTED")), (r) => r.submittedAt),
+      botReviews: byTime(detail.reviews.filter((r) => r.isBot && r.body.trim()), (r) => r.submittedAt),
+      humanComments: byTime(detail.comments.filter((c) => !c.isBot), (c) => c.createdAt),
+      bots: byTime(detail.comments.filter((c) => c.isBot), (c) => c.createdAt),
     };
   }, [detail]);
 
