@@ -7,6 +7,25 @@
     <meta name="description" content="Real-time observability for AI agent workflows — any provider." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!--
+      Installable on a phone.
+
+      The remote-access flow ends with someone scanning a QR code, and a link
+      opened from a camera lands in a browser tab that they will lose. With a
+      manifest the same page can be added to the home screen and opens
+      standalone, which is what makes it a companion rather than a bookmark —
+      and `theme_color` is what stops iOS drawing a white status bar over a
+      dark UI. `start_url` is relative on purpose: the token is stripped from
+      the URL on first load and kept in storage, so the installed copy must
+      resolve against whatever host it was installed from, not a baked-in one.
+    -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="theme-color" content="#0f0a1a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="agentglass" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <!--
       What fills the window before React does.
 
       The bundle is ~1.8 MB of JS and CSS that has to arrive, parse and execute

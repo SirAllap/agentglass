@@ -1,0 +1,14 @@
+{
+  "name": "agentglass",
+  "short_name": "agentglass",
+  "description": "Approve what your agents are blocked on, talk to them, and watch the fleet — from your phone.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f0a1a",
+  "theme_color": "#0f0a1a",
+  "icons": [
+    { "src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

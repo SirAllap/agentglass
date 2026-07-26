@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.ts";
 import { useStats } from "../lib/useStats.ts";
 import { fmtUsd, fmtTokens, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
-import { writeOverride } from "../lib/viewport.ts";
+import { MobileChats } from "./MobileChats.tsx";
 import type { PendingGate, SessionRollup } from "../../../shared/types.ts";
 
 /**
@@ -19,18 +19,22 @@ import type { PendingGate, SessionRollup } from "../../../shared/types.ts";
  *
  *   Needs you — approve or deny what an agent is blocked on. The one thing
  *               that is time-critical and takes one tap.
+ *   Chats     — read what an agent has been doing, reply to it, take over a
+ *               session started at the desk, or start a new one. Monitoring
+ *               without this is only half a companion: seeing that an agent
+ *               stopped and being unable to say "carry on" is the same as not
+ *               knowing.
  *   Fleet     — is it running, is it burning money, is anything failing.
- *   Sessions  — what each agent is doing, and what it has cost.
  *
- * Everything else is absent rather than broken. There is a way back to the
- * full dashboard at the bottom for someone on a tablet who wants it, and it is
- * remembered — but it is a choice made once, not the default.
+ * Everything else is absent rather than broken, and there is deliberately no
+ * way back to the desktop layout from here: it does not work on this screen,
+ * so offering it would only be a route to a worse version of the same thing.
  *
  * Nothing heavy mounts here: no xterm, no charts, no radar. On a phone that is
  * a battery decision as much as a layout one.
  */
 
-type Tab = "gates" | "fleet" | "sessions";
+type Tab = "gates" | "chats" | "fleet";
 
 const WINDOWS: { label: string; ms: number }[] = [
   { label: "1h", ms: 3_600_000 },
@@ -85,7 +89,7 @@ export function MobileApp() {
         </span>
       </header>
 
-      <main className="flex-1 px-4 pb-28 pt-3">
+      <main className="flex-1 px-4 pb-24 pt-3">
         {tab === "gates" && <GatesTab gates={gates} onDecided={(id) => setGates((g) => g.filter((x) => x.id !== id))} />}
         {tab === "fleet" && (
           <FleetTab
@@ -96,15 +100,15 @@ export function MobileApp() {
             sessions={live}
           />
         )}
-        {tab === "sessions" && <SessionsTab sessions={sessions} />}
+        {tab === "chats" && <MobileChats sessions={sessions} onRefresh={load} />}
       </main>
 
       {/* Fixed, thumb-height, and out of the way of the home indicator. */}
-      <nav className="fixed bottom-0 left-0 right-0 flex"
+      <nav className="fixed bottom-0 left-0 right-0 flex z-20"
         style={{ background: "color-mix(in srgb, var(--bg2) 94%, transparent)", backdropFilter: "blur(10px)", borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", paddingBottom: "env(safe-area-inset-bottom)" }}>
         <TabButton id="gates" tab={tab} onPick={setTab} label="Needs you" badge={gates.length} />
+        <TabButton id="chats" tab={tab} onPick={setTab} label="Chats" badge={live.length} subtle />
         <TabButton id="fleet" tab={tab} onPick={setTab} label="Fleet" />
-        <TabButton id="sessions" tab={tab} onPick={setTab} label="Sessions" badge={live.length} subtle />
       </nav>
     </div>
   );
@@ -251,21 +255,6 @@ function FleetTab({ stats, live, windowMs, onWindow, sessions }: {
         )}
       </div>
 
-      <BackToDesktop />
-    </div>
-  );
-}
-
-function SessionsTab({ sessions }: { sessions: SessionRollup[] }) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  if (!sessions.length) return <Empty title="No sessions yet" body="Start an agent and it appears here." />;
-  return (
-    <div className="flex flex-col gap-2">
-      {sessions.map((s) => (
-        <SessionRow key={s.session_id} s={s} open={openId === s.session_id}
-          onToggle={() => setOpenId((id) => (id === s.session_id ? null : s.session_id))} />
-      ))}
-      <BackToDesktop />
     </div>
   );
 }
@@ -326,17 +315,5 @@ function Empty({ title, body, compact }: { title: string; body: string; compact?
       <div className="text-[14px]" style={{ color: "var(--text)" }}>{title}</div>
       <div className="text-[12px] mt-1.5 leading-snug" style={{ color: "var(--text2)" }}>{body}</div>
     </div>
-  );
-}
-
-/** For a tablet, or for someone who really does want the whole cockpit here. */
-function BackToDesktop() {
-  return (
-    <button
-      onClick={() => { writeOverride("desktop"); location.reload(); }}
-      className="self-center mt-2 mb-1 text-[11.5px] underline underline-offset-4"
-      style={{ color: "var(--text3)", minHeight: 44 }}>
-      Open the full dashboard instead
-    </button>
   );
 }
