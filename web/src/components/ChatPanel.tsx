@@ -747,6 +747,11 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
 
   const submit = () => {
     if (!active) return;
+    // Sending ends the browse. Anything stashed has been superseded by the
+    // message going out, and the next Up should start from the newest again —
+    // which is what a shell does too.
+    setRecallAt(-1);
+    stashed.current = "";
     const text = active.draft;
     // Mid-turn, Enter queues instead of sending. The composer used to go dead
     // for the length of a reply, so a long tool-running turn meant watching it
@@ -861,6 +866,48 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     setHint(await addAttachments(active.id, files));
   };
 
+  /*
+   * Where recall currently sits, and what it interrupted.
+   *
+   * `-1` means not browsing. The stash is what was in the box when browsing
+   * started, so coming all the way forward returns it rather than leaving you
+   * staring at an empty composer wondering where your half-written message
+   * went. Both reset when the chat changes: history is per conversation, and
+   * an index into someone else's messages is meaningless.
+   */
+  const [recallAt, setRecallAt] = useState(-1);
+  const stashed = useRef("");
+  useEffect(() => { setRecallAt(-1); stashed.current = ""; }, [active?.id]);
+
+  /** This chat's own sent messages, newest first. Queued turns are deliberately
+   *  absent: they have not been said yet, and recalling one would put the same
+   *  text in the box twice over. */
+  const history = useMemo(
+    () => (active?.messages ?? []).filter((m) => m.role === "user" && m.text.trim()).map((m) => m.text).reverse(),
+    [active?.messages]
+  );
+
+  /** Step back one. Returns null when there is nothing older, so the caller can
+   *  let the keystroke through and the caret moves as it normally would. */
+  const recallOlder = (chat: Chat): string | null => {
+    const next = recallAt + 1;
+    if (next >= history.length) return null;
+    if (recallAt === -1) stashed.current = chat.draft;
+    setRecallAt(next);
+    update(chat.id, (c) => { c.draft = history[next]; });
+    return history[next];
+  };
+
+  /** Step forward one, landing back on the stashed draft past the newest. */
+  const recallNewer = (chat: Chat): string | null => {
+    if (recallAt < 0) return null;
+    const next = recallAt - 1;
+    setRecallAt(next);
+    const text = next < 0 ? stashed.current : history[next];
+    update(chat.id, (c) => { c.draft = text; });
+    return text;
+  };
+
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // The skill menu owns the arrows, Tab and Enter while it is showing, or
     // Enter would send `/rev` as a message instead of completing it.
@@ -874,6 +921,34 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // A focused textarea can swallow Escape before it reaches the global
     // handler, stranding the panel open. Close it here instead.
     if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
+    /*
+     * Shell-style recall: Up walks back through what you have sent in this
+     * chat, Down comes forward again and lands back on whatever you were part
+     * way through typing.
+     *
+     * Gated on the caret being on the first or last line, because a composer
+     * that ate the arrow keys would make a multi-line message impossible to
+     * edit. On the first line there is nothing above to move to, so Up is free
+     * to mean something else — which is the same rule a shell uses.
+     */
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && active) {
+      const el = e.currentTarget;
+      const before = el.value.slice(0, el.selectionStart ?? 0);
+      const after = el.value.slice(el.selectionEnd ?? 0);
+      const atFirstLine = !before.includes("\n");
+      const atLastLine = !after.includes("\n");
+      const moved = e.key === "ArrowUp"
+        ? (atFirstLine ? recallOlder(active) : null)
+        : (atLastLine ? recallNewer(active) : null);
+      if (moved !== null) {
+        e.preventDefault();
+        // Caret to the end, so the recalled text is ready to be added to
+        // rather than typed over from wherever the cursor happened to sit.
+        requestAnimationFrame(() => { const n = el.value.length; el.setSelectionRange(n, n); });
+        return;
+      }
+      return;
+    }
     if (e.key !== "Enter" || e.shiftKey) return;
     e.preventDefault();
     // send() returns early in both these cases; without saying so, Enter just
