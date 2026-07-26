@@ -36,10 +36,48 @@
   a{color:inherit; text-decoration:none;}
   ::selection{background:var(--primary); color:var(--bg);}
 
-  .hud{position:relative; height:100svh; min-height:680px; overflow:hidden; cursor:crosshair;}
-  .hud canvas{position:absolute; inset:0; width:100%; height:100%; display:block;}
+  .hud{position:relative; height:100svh; min-height:680px; overflow:hidden; cursor:crosshair;
+       background:#030407;}
+  .hud canvas{position:absolute; inset:0; width:100%; height:100%; display:block; z-index:2;}
   .hud.nogl canvas{display:none;}
   .chrome{position:absolute; inset:0; z-index:4; pointer-events:none; display:flex; flex-direction:column;}
+
+  /* ══════════════════════════════════════════════════════════════════
+     BEYOND THE GLASS.
+
+     A head-up display is transparent: the symbology is drawn on the
+     combiner, and what you are looking at is behind it. Behind this one
+     is the product — the live demo build, in an iframe, running the same
+     fabricated fleet the symbology flies. The glass does not magnify a
+     picture of a dashboard. It is a hole in the dark, and the dashboard
+     is what was always there.
+
+     Clipped to the lens, dimmed the way a tinted combiner dims the world,
+     and inert: no pointer, no tab stop, no scroll. Loaded late and only
+     where it is affordable — see the guard in the script.
+     ══════════════════════════════════════════════════════════════════ */
+  .beyond{position:absolute; inset:0; z-index:1; overflow:hidden; pointer-events:none;
+    opacity:0; transition:opacity .8s ease;}
+  .beyond.lit{opacity:1;}
+  .beyond iframe{position:absolute; inset:0; width:100%; height:100%; border:0; display:block;
+    /* The world seen through a tinted combiner. Level comes down so the
+       symbology stays the brightest thing on the glass, and chroma comes down
+       with it for a subtler reason: the app under here is wearing the same
+       phosphor the HUD is drawn in, and purple-on-purple was one texture.
+       Draining the world's colour puts the two layers back on separate
+       planes — which is what a combiner does to the view through it. */
+    filter:brightness(.54) saturate(.32) contrast(1.06);}
+
+  /* The combiner treatment — scanlines, phosphor haze, vignette — over
+     everything the glass carries, symbology and world alike. It used to be
+     the last few lines of the fragment shader, which could only reach the
+     canvas; the iframe behind it would have sat outside the effect and read
+     as a browser window sitting in a hole. */
+  .combiner{position:absolute; inset:0; z-index:3; pointer-events:none;
+    background:
+      repeating-linear-gradient(180deg, rgba(0,0,0,.30) 0 1px, rgba(0,0,0,0) 1px 3px),
+      radial-gradient(120% 100% at 50% 50%, rgba(0,0,0,0) 42%, rgba(0,0,0,.55) 100%);}
+  .hud.nogl .combiner{display:none;}
 
   /* line-height:1 — the default leading on the anonymous text box next to the
      19px mark made the lockup 28px tall against 10px links, so the wordmark
@@ -852,7 +890,9 @@
 
 <div class="stagewrap">
 <section class="hud" id="hud" aria-label="A head-up display. Move the target designator to lock a session and resolve its data.">
+  <div class="beyond" id="beyond" aria-hidden="true"></div>
   <canvas id="gl"></canvas>
+  <div class="combiner" aria-hidden="true"></div>
 
   <div class="chrome">
     <div class="rail">
@@ -895,10 +935,10 @@
       <div class="ccard">
         <div class="top">
           <span class="q">Approve Bash?</span>
-          <span class="sid" id="cSid">AG-5F6D</span>
+          <span class="sid" id="cSid">shop-api:3c9a1f52</span>
         </div>
-        <div class="cmd">kubectl delete deploy api --namespace production</div>
-        <div class="meta"><span id="cRepo">acme/infra</span> · opus 5 · unattended <span id="cAge">6m 12s</span></div>
+        <div class="cmd">kubectl delete deploy api --namespace prod</div>
+        <div class="meta"><span id="cModel">Sonnet</span> · unattended <span id="cAge">6m 12s</span></div>
         <div class="crow">
           <button class="allow" id="btnAllow">✓ Approve</button>
           <button class="deny"  id="btnDeny">✕ Deny</button>
@@ -1223,7 +1263,9 @@ sudo apt install ./agentglass_*.deb</code>
 (function(){
   "use strict";
   const hud=document.getElementById("hud"), cv=document.getElementById("gl");
-  const gl=cv.getContext("webgl2",{antialias:false,alpha:false,powerPreference:"high-performance"});
+  // alpha:true, and every frame leaves with alpha 0 — the canvas is a sheet of
+  // light laid over the page, so what sits behind the lens shows through it.
+  const gl=cv.getContext("webgl2",{antialias:false,alpha:true,powerPreference:"high-performance"});
   const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   /* ══════════════════════════════════════════════════════════════════
@@ -1281,42 +1323,86 @@ sudo apt install ./agentglass_*.deb</code>
   // HUD symbology is drawn in light, so alpha is the only blend that matters.
   function ink(col,alpha){ const c=parse(col); return "rgba("+c[0]+","+c[1]+","+c[2]+","+alpha+")"; }
 
-  /* ── the fleet ── */
-  const REPOS=["acme/shop-api","acme/shop-web","acme/infra","acme/billing","acme/mobile","acme/docs","acme/edge","acme/ops"];
+  /* ══════════════════════════════════════════════════════════════════
+     THE FLEET.
+
+     These eight contacts are the eight sessions the demo build flies —
+     same apps, same session ids, same models as `web/src/lib/demo.ts`.
+     That is not decoration. The glass opens onto the demo's own dashboard,
+     so the symbology drawn over it has to name the sessions that dashboard
+     names, or the two would be arguing in front of the visitor.
+
+     Everything here is invented, and invented in one place: the demo is a
+     fictional online store, and nothing in it is a real repo or company.
+     ══════════════════════════════════════════════════════════════════ */
+  const SESSIONS=[
+    {app:"shop-web",      sid:"7a3f21c9", model:"Opus"},
+    {app:"shop-web",      sid:"e2b8d640", model:"GPT-5"},
+    {app:"shop-api",      sid:"3c9a1f52", model:"Sonnet"},
+    {app:"agentglass",    sid:"b7e40a18", model:"Opus"},
+    {app:"payments-svc",  sid:"5f6d2e93", model:"Gemini Flash"},
+    {app:"inventory-svc", sid:"8a1c7b04", model:"GPT-5 mini"},
+    {app:"sandbox",       sid:"d4e903a7", model:"GPT-5"},
+    {app:"sandbox",       sid:"20f5c86b", model:"Sonnet"},
+  ];
   const TOOLS=["Write","Edit","Bash","Grep","Read","Glob","Task","WebFetch"];
-  const FILES=["src/routes/checkout.ts","src/components/Cart.tsx","src/services/pricing.ts",
-               "test/checkout.test.ts","src/lib/useLive.ts","docker-compose.yml","db/migrations/014.sql"];
+  // one of the four commands the demo's own gate holds, so the card in the
+  // corner and the Alerts panel under the glass are telling one story
+  const HELD_CMD="kubectl delete deploy api --namespace prod";
+  // the tails of the demo's own PATHS, so a resolved contact names a file the
+  // Live events panel under the glass is naming too
+  const FILES=["src/services/pricing.ts","src/components/Cart.tsx","src/routes/checkout.ts",
+               "models/product.py","handlers/webhook.go"];
   const rnd=(a,b)=>a+Math.random()*(b-a), pick=a=>a[(Math.random()*a.length)|0];
-  const fleet=[];
-  for(let i=0;i<8;i++) fleet.push({
-    id:"AG-"+(0x1000+((Math.random()*0xEFFF)|0)).toString(16).toUpperCase().slice(0,4),
-    repo:REPOS[i], ctx:rnd(0.10,0.66), rate:rnd(0.00019,0.00085),
+  const tok=n=>n>=1e6?(n/1e6).toFixed(2)+"M tok":n>=1000?(n/1000).toFixed(1)+"k tok":(n|0)+" tok";
+  const fleet=SESSIONS.map(s=>({
+    id:s.app+":"+s.sid, app:s.app, model:s.model,
+    // what the app's own timeline calls it when it is short of room
+    short:s.app+":"+s.sid.slice(0,5),
+    ctx:rnd(0.10,0.66), rate:rnd(0.00019,0.00085),
     cost:rnd(0.4,22), burn:rnd(0.0035,0.019), tool:pick(TOOLS), file:pick(FILES),
-    ms:rnd(30,380)|0, next:rnd(0.9,3.6), age:rnd(60,900), state:"run",
+    tools:rnd(3,180)|0, ms:rnd(30,380)|0, next:rnd(0.9,3.6), age:rnd(60,900), state:"run",
     brg:rnd(0,Math.PI*2), drift:rnd(-0.05,0.05)
-  });
-  const actor=fleet[2]; actor.repo="acme/infra"; actor.ctx=0.91; actor.rate=0.0004;
+  }));
+  // the one the master caution will be about: far enough along the context
+  // ladder to be the contact your eye goes to first
+  const actor=fleet[2]; actor.ctx=0.91; actor.rate=0.0004;
   // The closing instrument reads this same fleet: the eight contacts you met
   // at the top are the eight you leave with, further along than you found them.
   window.__fleet = fleet;
   window.__since = () => ({calls:callsSince, cost:costSince});
 
+  // What the fleet has cost. It starts at the figure the demo's own KPI strip
+  // shows, and once the app behind the glass is up it IS that figure.
+  let spend=359.85;
   let started=performance.now(), callsSince=0, costSince=0, ctxSince=0;
   const log=[]; const two=n=>String(n).padStart(2,"0");
   let clock=Math.floor(Date.now()/1000)-120;
   function stamp(){ clock+=1+((Math.random()*3)|0); const d=new Date(clock*1000);
     return two(d.getHours())+":"+two(d.getMinutes())+":"+two(d.getSeconds()); }
-  function push(s){ log.unshift({t:stamp(),tool:s.tool,file:s.repo.split("/")[1]+"/"+s.file,ms:s.ms,sid:s.id});
+  function push(s){ log.unshift({t:stamp(),tool:s.tool,file:s.app+"/"+s.file,ms:s.ms,sid:s.id});
     if(log.length>140) log.pop(); }
   for(let i=0;i<60;i++) push(fleet[i%fleet.length]);
   function tick(dt){
     for(const s of fleet){
+      if(s.state==="done") continue;
+      // Context and spend belong to the app behind the glass from the moment it
+      // is up. Running our own alongside its would put two answers to the same
+      // question on one screen, and the wrong one would be ours.
+      if(bridged){
+        if(s.ctxTarget!=null) s.ctx+=(s.ctxTarget-s.ctx)*Math.min(1,dt*2.5);
+      } else if(s.state==="run"){
+        s.ctx+=s.rate*dt; if(s.ctx>=1) s.ctx=rnd(0.16,0.34);
+        s.cost+=s.burn*dt; costSince+=s.burn*dt; spend+=s.burn*dt; ctxSince+=s.rate*dt*1000;
+        s.tools++;
+      }
+      s.age+=dt; s.brg+=s.drift*dt;
+      // The record keeps running either way: the rain outside the lens is the
+      // raw hook stream, and it is ours to draw whether or not the app is up.
       if(s.state!=="run") continue;
-      s.age+=dt; s.ctx+=s.rate*dt; if(s.ctx>=1) s.ctx=rnd(0.16,0.34);
-      s.cost+=s.burn*dt; costSince+=s.burn*dt; ctxSince+=s.rate*dt*1000;
-      s.brg+=s.drift*dt; s.next-=dt;
+      s.next-=dt;
       if(s.next<=0){ s.next=rnd(0.9,3.6); s.tool=pick(TOOLS); s.file=pick(FILES); s.ms=rnd(30,380)|0;
-        callsSince++; push(s); }
+        if(!bridged) callsSince++; push(s); }
     }
   }
 
@@ -1329,6 +1415,19 @@ sudo apt install ./agentglass_*.deb</code>
      block. Both share the same geometry function, so a contact never
      moves between the two layers — the glass only ever adds knowledge,
      which is the entire claim the product makes.
+
+     This is the whole point of the hero, and for a while it was dead: the
+     resolved half was never drawn. Layer B had been replaced by a second,
+     separate picture — a hand-drawn imitation of the dashboard on its own
+     grid — so the lens showed a crop of a mock that had nothing to do with
+     the contact you had aimed at, and every contact stayed UNK wherever you
+     put the glass. The imitation is gone. Under the lens now: the real
+     product (see `.beyond`), with the contacts over it resolved.
+
+     Both layers are drawn as LIGHT — transparent canvases, composited by
+     adding. Nothing the HUD draws can darken what is behind it, which is
+     how a combiner works and, more practically, is what lets the dashboard
+     show through the gaps in the symbology.
      ══════════════════════════════════════════════════════════════════ */
   let W=0,H=0,DPR=1,R=0,lockOn=null;
   const A=document.createElement("canvas"), a=A.getContext("2d");
@@ -1370,13 +1469,14 @@ sudo apt install ./agentglass_*.deb</code>
   function drawScene(c,C,res,t){
     C.width=W; C.height=H; c.setTransform(DPR,0,0,DPR,0,0);
     const w=W/DPR,h=H/DPR;
-    c.fillStyle="#030407"; c.fillRect(0,0,w,h);
+    c.clearRect(0,0,w,h);                       // light on clear glass, never a fill
     const P=V("--primary"), WARN=V("--warning"), ERR=V("--error"), OK=V("--success");
 
-    // The record itself, running underneath everything. Barely there without
-    // the glass; readable through it. A HUD is transparent — you are always
-    // looking at something beyond the symbology.
-    (function(){
+    // The record itself, running underneath everything: the raw hook stream,
+    // which is all a terminal ever gives you. Skipped on the resolved layer
+    // once the demo is actually behind the glass — the dashboard down there
+    // IS this record, read. Drawing our own over it would be arguing with it.
+    if(!(res && beyond.live)) (function(){
       const fs=10, lh=fs*1.62, cols=Math.max(1,Math.round(w/380));
       c.font=fs+'px ui-monospace,"SF Mono",Menlo,monospace';
       const n=Math.ceil(h/lh)+2, off=(t*20)%lh, step=Math.floor(t*20/lh);
@@ -1449,11 +1549,58 @@ sudo apt install ./agentglass_*.deb</code>
     c.moveTo(g0.cx,g0.cy-12); c.lineTo(g0.cx,g0.cy-4);
     c.moveTo(g0.cx,g0.cy+4); c.lineTo(g0.cx,g0.cy+12); c.stroke();
 
-    // ── the contacts
+    /* ── the contacts
+       On the resolved layer a contact only opens up if the glass is actually
+       over it. Resolving all eight at once was the honest reading of "res=1",
+       and it was unreadable: at low context the fleet sits close in around the
+       boresight, and six data blocks landed on top of each other and on the
+       app behind them. A designator resolves what it is pointed at — so the
+       nearest three to the lens centre resolve, fading in over the last 44px,
+       and the rest stay UNK on both sides of the glass. */
+    const lx=lens.x/DPR, ly=lens.y/DPR, lr=R/DPR, tight=lr<130;
+    const gain=new Array(fleet.length).fill(0), slot=new Array(fleet.length).fill(null);
+    if(res){
+      // Wide enough for the longest line the block can draw, and no wider: the
+      // lens is 460px across, and a block that measures a third of that is one
+      // a contact near the rim can still hang inside the glass. A phone's lens
+      // is 188px across, where the full block cannot fit at all — so there it
+      // resolves to the two facts that carry the argument, and not the rest.
+      const BW=tight?116:162, BH=tight?36:60;
+      const near=fleet.map((s,i)=>({i, p:contactPos(s,i,w,h,t)}))
+        .map(o=>(o.d=Math.hypot(o.p.x-lx,o.p.y-ly), o))
+        .sort((m,n)=>m.d-n.d).slice(0,3);
+      const boxes=[];
+      for(const it of near){
+        const g=Math.max(0,Math.min(1,(lr*0.80-it.d)/44));
+        if(g<=0) continue;
+        gain[it.i]=g;
+        // The block hangs toward the middle of the lens, never toward the middle
+        // of the screen: a contact resolved at the left rim used to write its
+        // data off the left rim, where the glass is not, and a careful aim was
+        // rewarded with four clipped characters.
+        const right = it.p.x<=lx;
+        const x0 = right ? it.p.x+28 : it.p.x-28-BW;
+        // Two contacts a few pixels apart would otherwise stack their blocks in
+        // the same place. Try above, then below, then further out — the nearest
+        // contact is placed first, so the one you aimed at keeps the best spot.
+        const up = it.p.y>ly;
+        let by=null;
+        for(const cd of tight ? [up?-20:12, up?12:-20] : [up?-30:14, up?14:-30, -102, 86]){
+          const y=it.p.y+cd;
+          if(!boxes.some(b=> x0<b.x1 && x0+BW>b.x0 && y-14<b.y1 && y+BH>b.y0)){ by=y; break; }
+        }
+        // Nowhere clear to hang it. Two blocks written across each other are
+        // worth less than one block and a contact that stays honestly unknown,
+        // so this one keeps its UNK and waits for you to aim at it.
+        if(by===null){ gain[it.i]=0; continue; }
+        boxes.push({x0, x1:x0+BW, y0:by-14, y1:by+BH});
+        slot[it.i]={by, right};
+      }
+    }
     fleet.forEach((s,i)=>{
-      const p=contactPos(s,i,w,h,t), f=Math.min(1,s.ctx);
+      const p=contactPos(s,i,w,h,t), f=Math.min(1,s.ctx), g=gain[i];
       const hot=s.state==="held"||f>=0.86;
-      const col=hot?ERR:f>=0.7?WARN:OK;
+      const col=hot?ERR:(s.state==="wait"||f>=0.7)?WARN:OK;
       const sz=hot?15:12;
       // a contact is a bracket, never a filled dot — HUD symbology is drawn in light
       c.strokeStyle=ink(col,hot?1:.9); c.lineWidth=hot?1.8:1.4;
@@ -1470,37 +1617,67 @@ sudo apt install ./agentglass_*.deb</code>
 
       if(lock.on && lock.i===i) drawLock(c,p.x,p.y,sz,col);
 
-      if(res < 0.5){
-        // unaided: bearing only. You know it is there. Nothing else.
-        c.fillStyle=ink(col,.75); c.textAlign="center";
+      if(g < 0.999){
+        // Unaided, or aimed elsewhere: bearing only. You know it is there,
+        // and that is the whole of what you know.
+        c.fillStyle=ink(col,.75*(1-g)); c.textAlign="center";
         c.font='9px ui-monospace,Menlo,monospace';
         c.fillText("UNK",p.x,p.y+3); c.textAlign="left";
         c.font='10px ui-monospace,Menlo,monospace';
-        return;
+        if(g <= 0.001) return;
       }
 
-      // through the glass: the contact resolves into a full data block,
-      // hung off a leader line the way a HUD tags a designated target.
-      const right = p.x < w*0.5;
-      const dx = right ? 1 : -1;
-      const bx = p.x + dx*(sz+16), by = p.y - 26;
-      c.strokeStyle=ink(col,.45);
-      c.beginPath(); c.moveTo(p.x+dx*sz,p.y); c.lineTo(bx-dx*6,by+28); c.lineTo(bx,by+28); c.stroke();
+      // Through the glass the contact resolves, hung off a leader line the way
+      // a HUD tags a designated target. The fields are the ones the app's own
+      // session card carries — key, model, what it is doing, tools, spend,
+      // context against the model's window — because the card itself is on the
+      // other side of this glass and the two have to agree.
+      const right = slot[i].right, by = slot[i].by;
+      const dx = right ? 1 : -1, up = by < p.y;
+      const bx = p.x + dx*(sz+16);
+      c.strokeStyle=ink(col,.45*g);
+      c.beginPath(); c.moveTo(p.x+dx*sz,p.y); c.lineTo(bx-dx*6,by+(up?30:0)); c.lineTo(bx,by+(up?30:0)); c.stroke();
       c.textAlign = right ? "left" : "right";
       const ax = right ? bx+4 : bx-4;
-      c.fillStyle=ink(V("--text"),.95); c.font='600 11px ui-monospace,Menlo,monospace';
-      c.fillText(s.id,ax,by+4);
-      c.font='9.5px ui-monospace,Menlo,monospace';
-      c.fillStyle=ink(P,.8);  c.fillText(s.repo.toUpperCase(),ax,by+16);
-      c.fillStyle=ink(col,.9);
-      c.fillText(hot?"HELD · KUBECTL DELETE":Math.round(f*100)+"% CTX · "+s.tool.toUpperCase(),ax,by+28);
-      c.fillStyle=ink(V("--text3"),.75);
-      c.fillText("$"+s.cost.toFixed(2)+" · "+s.ms+"MS",ax,by+40);
+      // status light, on the leader side of the key — the rail the card carries
+      c.fillStyle=ink(col,.95*g);
+      c.beginPath(); c.arc(right?ax-6:ax+6, by, 2.6, 0, Math.PI*2); c.fill();
+      // the identifier, lower case: it is what you paste into a resume command,
+      // and it is spelled exactly like this on the card below the glass
+      const cut=(x,n)=>x.length>n?x.slice(0,n-1)+"…":x;
+      c.fillStyle=ink(V("--text"),.97*g);
+      c.font='600 '+(tight?10:11.5)+'px ui-monospace,Menlo,monospace';
+      c.fillText(tight?s.short:s.id,ax,by+4);
+      c.font=(tight?9:9.5)+'px ui-monospace,Menlo,monospace';
+      if(tight){
+        // key, spend, context bar. On 188px of glass a fourth line is a smudge.
+        c.fillStyle=ink(hot&&s.state==="held"?ERR:V("--text2"),.9*g);
+        c.fillText(hot&&s.state==="held"?"HELD FOR APPROVAL":"$"+s.cost.toFixed(2),ax,by+16);
+      } else if(hot && s.state==="held"){
+        c.fillStyle=ink(ERR,.95*g); c.fillText("HELD · "+cut(HELD_CMD,20),ax,by+18);
+      } else {
+        c.fillStyle=ink(P,.9*g);
+        c.fillText(cut(s.model+" · "+(s.action || ("running "+s.tool)),26),ax,by+18);
+      }
+      if(!tight){
+        c.fillStyle=ink(V("--text2"),.85*g);
+        // Tokens once the app behind the glass is reporting them, milliseconds
+        // while we are flying our own simulation. Never both: a real spend beside
+        // an invented latency is a lie wearing three true numbers as cover.
+        c.fillText(s.tools+" tools · "+(bridged ? tok(s.tokens) : s.ms+"ms")+" · $"+s.cost.toFixed(2),ax,by+31);
+      }
+      // context against the window, the same law the range rings measure by
+      const bw=tight?76:88, byy=by+(tight?24:40);
+      const bxx=right?bx+4:bx-4-bw;
+      c.fillStyle=ink(P,.16*g); c.fillRect(bxx,byy,bw,3.5);
+      c.fillStyle=ink(col,.9*g); c.fillRect(bxx,byy,bw*f,3.5);
+      c.font=(tight?8.5:9)+'px ui-monospace,Menlo,monospace'; c.fillStyle=ink(col,.85*g);
+      c.letterSpacing="0.1em";
+      c.fillText(tight ? Math.round(f*100)+"% CONTEXT"
+               : f>=0.86 ? Math.round(f*100)+"% · COMPACTION IMMINENT"
+                         : Math.round(f*100)+"% OF 1M CONTEXT", ax, byy+13);
+      c.letterSpacing="0em";
       c.textAlign="left";
-      // a context bar under the block
-      const bw=76, byy=by+46;
-      c.strokeStyle=ink(P,.3); c.strokeRect(right?bx+4:bx-4-bw,byy,bw,3);
-      c.fillStyle=ink(col,.8); c.fillRect(right?bx+4:bx-4-bw,byy,bw*f,3);
     });
 
     // ── corner blocks
@@ -1521,14 +1698,14 @@ sudo apt install ./agentglass_*.deb</code>
       // to stand apart; at 390 they collided in the middle and both clipped.
       block(18,h-150,"left",[
         ["FLEET · 8 CONTACTS · "+clock,0,10,P,.85],
-        ["$"+(359.85+costSince).toFixed(2)+"  +$"+costSince.toFixed(2)+" SINCE YOU CAME",0,13,V("--text"),.95],
+        ["$"+spend.toFixed(2)+"  +$"+costSince.toFixed(2)+" SINCE YOU CAME",0,13,V("--text"),.95],
         ["779.2K TOKENS · P50 73MS",0,null,V("--text3"),.7],
         [held?"⚠ "+held+" HELD FOR APPROVAL":"NO HOLDS · THEY HAVE NOT STOPPED",0,null,held?ERR:OK,.9]
       ]);
     } else {
       block(30,h-118,"left",[
         ["FLEET · 8 CONTACTS",0,10,P,.85],
-        ["SPEND  $"+(359.85+costSince).toFixed(2),0,13,V("--text"),.95],
+        ["SPEND  $"+spend.toFixed(2),0,13,V("--text"),.95],
         ["TOKENS 779.2K · P50 73MS",0,null,V("--text3"),.7],
         [held?"⚠ "+held+" HELD FOR APPROVAL":"NO HOLDS",0,null,held?ERR:OK,.9]
       ]);
@@ -1554,248 +1731,114 @@ sudo apt install ./agentglass_*.deb</code>
     // the long form does not fit a phone, and a clipped instruction is worse
     // than a short one
     c.fillText(res<0.5 ? (nar?"THE GLASS IS THE INSTRUMENT":"THE GLASS IS THE INSTRUMENT — MOVE IT OVER A CONTACT")
+             : beyond.live ? (nar?"RESOLVED · THE APP ITSELF, BEHIND THE GLASS":"EVERY CONTACT RESOLVED — AND THAT IS THE APP ITSELF BEHIND THE GLASS")
                        : (nar?"EVERY CONTACT RESOLVED · SAME SECOND":"EVERY CONTACT RESOLVED · SAME MACHINE · SAME SECOND"),
                sx, sy+size*0.98+24);
     c.letterSpacing="0em";
   }
 
-  const drawUnaided = t => drawScene(a,A,0,t);
+  const drawUnaided  = t => drawScene(a,A,0,t);
+  const drawResolved = t => drawScene(b,B,1,t);
 
   /* ══════════════════════════════════════════════════════════════════
-     UNDER THE GLASS — the cockpit itself.
+     WHAT THE GLASS OPENS ONTO.
 
-     Not symbology standing in for the app: these are the dashboard's own
-     panels, with the eyebrows and titles it actually ships (Live radar,
-     Live events, What needs you, Every agent session, Tool wall-clock
-     duration, Where the money goes, Activity over time). Drawn in stroke
-     and phosphor so it belongs to the HUD, and with the radar pinned to
-     the same boresight the symbology uses — so the glass reads as tearing
-     the HUD open onto the real thing, not cutting to a different picture.
+     The demo build — the real UI, running the fabricated fleet, the same
+     thing /demo/ serves — parked behind the hero and clipped to the lens.
+     It is the product's own dashboard, not a drawing of one, and it is the
+     honest answer to the only question the hero asks: what does the glass
+     show you that the dark does not.
+
+     Held back until it is cheap: it costs a second document and an app
+     bundle, so it waits for the page to be idle, and it never loads on a
+     phone, on a metered connection, or for a visitor who asked for less
+     motion. When it is absent nothing breaks — the resolved layer still
+     names every contact, which is the part that carries the argument.
      ══════════════════════════════════════════════════════════════════ */
-  function pnl(c,x,y,w,hh,eyebrow,title,right){
-    const P=V("--primary"), cut=11;
-    c.beginPath();
-    c.moveTo(x+cut,y); c.lineTo(x+w,y); c.lineTo(x+w,y+hh-cut);
-    c.lineTo(x+w-cut,y+hh); c.lineTo(x,y+hh); c.lineTo(x,y+cut); c.closePath();
-    const g=c.createLinearGradient(0,y,0,y+hh*0.5);
-    g.addColorStop(0,ink(P,.055)); g.addColorStop(1,"rgba(0,0,0,0)");
-    c.fillStyle="#02040A"; c.fill(); c.fillStyle=g; c.fill();
-    c.strokeStyle=ink(P,.30); c.lineWidth=1; c.stroke();
-    if(eyebrow){
-      c.font='600 8.5px ui-monospace,Menlo,monospace'; c.fillStyle=ink(P,.9);
-      c.letterSpacing="0.22em"; c.fillText(eyebrow.toUpperCase(),x+13,y+18); c.letterSpacing="0em";
-    }
-    if(title){
-      c.font='600 13px ui-sans-serif,system-ui,-apple-system,sans-serif';
-      c.fillStyle=ink(V("--text"),.95); c.fillText(title,x+13,y+36);
-    }
-    if(right){
-      c.font='9px ui-monospace,Menlo,monospace'; c.fillStyle=ink(V("--text4"),.85);
-      c.textAlign="right"; c.fillText(right,x+w-13,y+18); c.textAlign="left";
-    }
-    return y+48;
-  }
-
-  function drawResolved(t){
-    B.width=W; B.height=H; b.setTransform(DPR,0,0,DPR,0,0);
-    const w=W/DPR, hh=H/DPR;
-    const P=V("--primary"), OK=V("--success"), WARN=V("--warning"), ERR=V("--error"), TX=V("--text");
-    b.fillStyle="#010309"; b.fillRect(0,0,w,hh);
-    const au=b.createRadialGradient(w*0.72,-hh*0.1,0,w*0.72,-hh*0.1,Math.max(w,hh)*0.65);
-    au.addColorStop(0,ink(P,.10)); au.addColorStop(1,"rgba(0,0,0,0)");
-    b.fillStyle=au; b.fillRect(0,0,w,hh);
-    b.lineWidth=1; b.textBaseline="alphabetic";
-
-    const pad=12, gap=10;
-    const colL=Math.min(w*0.34,470), colR=Math.min(w*0.30,400);
-    const colM=w-pad*2-colL-colR-gap*2;
-    const xL=pad, xM=xL+colL+gap, xR=xM+colM+gap;
-
-    /* ── KPI strip: the app's own hero row ── */
-    const kh=62;
-    (function(){
-      const cells=[
-        ["Spend · this window","$"+(359.85+costSince).toFixed(2),OK,"779,200 tokens · 402k cached"],
-        ["Working",String(fleet.filter(s=>s.state==="run").length),OK,"live agents"],
-        ["Tools run","2,955",TX,"18,402 events"],
-        ["Failed","3",ERR,""],
-        ["Waiting",String(fleet.filter(s=>s.state==="held").length),WARN,""]
-      ];
-      const ws=[1.85,1,1,.7,.7], tot=ws.reduce((a,c)=>a+c,0);
-      let x=pad;
-      cells.forEach((cl,i)=>{
-        const cw=(w-pad*2-gap*(cells.length-1))*ws[i]/tot;
-        pnl(b,x,pad,cw,kh,null,null,null);
-        b.font='600 8.5px ui-monospace,Menlo,monospace'; b.fillStyle=ink(P,.85);
-        b.letterSpacing="0.2em"; b.fillText(cl[0].toUpperCase(),x+12,pad+18); b.letterSpacing="0em";
-        b.font='600 26px ui-monospace,Menlo,monospace'; b.fillStyle=ink(cl[2],.98);
-        b.fillText(cl[1],x+12,pad+46);
-        if(cl[3]){ b.font='9px ui-monospace,Menlo,monospace'; b.fillStyle=ink(V("--text4"),.8);
-          b.fillText(cl[3],x+12,pad+58); }
-        if(i===0){ // the sparkline + health ring the hero cell carries
-          const sw=64, sx=x+cw-sw-58, sy=pad+42;
-          b.strokeStyle=ink(OK,.75); b.beginPath();
-          for(let k=0;k<24;k++){
-            const v=0.5+0.42*Math.sin(k*0.7+t*0.25)*Math.cos(k*0.31);
-            const px2=sx+sw*k/23, py=sy-v*22;
-            k?b.lineTo(px2,py):b.moveTo(px2,py);
-          }
-          b.stroke();
-          const rx=x+cw-30, ry=pad+kh/2, rr2=15;
-          b.strokeStyle=ink(P,.25); b.beginPath(); b.arc(rx,ry,rr2,0,Math.PI*2); b.stroke();
-          b.strokeStyle=ink(OK,.95); b.lineWidth=2.5;
-          b.beginPath(); b.arc(rx,ry,rr2,-Math.PI/2,-Math.PI/2+Math.PI*2*0.97); b.stroke(); b.lineWidth=1;
-          b.font='600 9px ui-monospace,Menlo,monospace'; b.fillStyle=ink(OK,.95);
-          b.textAlign="center"; b.fillText("97",rx,ry+3); b.textAlign="left";
-        }
-        x+=cw+gap;
-      });
-    })();
-
-    const yTop=pad+kh+gap, hBody=hh-yTop-pad;
-
-    /* ── Radar · Live radar — pinned to the HUD's own boresight ── */
-    const radH=Math.min(hBody*0.62,360);
-    let cy0=pnl(b,xL,yTop,colL,radH,"Radar","Live radar","context = distance");
-    (function(){
-      const g0=contactPos(fleet[0],0,w,hh,t);
-      const rcx=g0.cx, rcy=Math.min(yTop+radH-24, Math.max(cy0+70, g0.cy));
-      const rad=Math.min(colL*0.40,(radH-70)*0.46);
-      b.strokeStyle=ink(P,.20);
-      for(let i=1;i<=4;i++){ b.beginPath(); b.arc(rcx,rcy,rad*i/4,0,Math.PI*2); b.stroke(); }
-      b.strokeStyle=ink(ERR,.5); b.setLineDash([3,4]);
-      b.beginPath(); b.arc(rcx,rcy,rad*0.92,0,Math.PI*2); b.stroke(); b.setLineDash([]);
-      b.font='8.5px ui-monospace,Menlo,monospace'; b.fillStyle=ink(ERR,.8);
-      b.fillText("COMPACTION",rcx-rad*0.92,rcy-rad*0.92-5);
-      if(b.createConicGradient){
-        const cg=b.createConicGradient(t*0.6,rcx,rcy);
-        cg.addColorStop(0,ink(P,.30)); cg.addColorStop(0.08,"rgba(0,0,0,0)"); cg.addColorStop(1,"rgba(0,0,0,0)");
-        b.fillStyle=cg; b.beginPath(); b.arc(rcx,rcy,rad,0,Math.PI*2); b.fill();
-      }
-      fleet.forEach((s,i)=>{
-        const f=Math.min(1,s.ctx), ang=s.brg+i*(Math.PI*2/fleet.length)+t*0.05;
-        const x=rcx+Math.cos(ang)*rad*f, y=rcy+Math.sin(ang)*rad*f;
-        const hot=s.state==="held"||f>=0.86, col=hot?ERR:f>=0.7?WARN:OK;
-        b.fillStyle=ink(col,.18); b.beginPath(); b.arc(x,y,hot?11:8,0,Math.PI*2); b.fill();
-        b.fillStyle=ink(col,.98); b.beginPath(); b.arc(x,y,hot?4:2.8,0,Math.PI*2); b.fill();
-        b.font='8.5px ui-monospace,Menlo,monospace'; b.fillStyle=ink(hot?col:V("--text3"),.9);
-        b.fillText(s.id,x+8,y+3);
-      });
-    })();
-
-    /* ── Alerts · What needs you ── */
-    const alY=yTop+radH+gap, alH=hBody-radH-gap;
-    let ay=pnl(b,xL,alY,colL,alH,"Alerts","What needs you",null);
-    (function(){
-      const held=fleet.filter(s=>s.state==="held");
-      if(held.length){
-        b.font='600 12px ui-monospace,Menlo,monospace'; b.fillStyle=ink(ERR,.98);
-        b.fillText("● "+held.length+" TOOL CALL HELD",xL+13,ay+6);
-        b.font='10px ui-monospace,Menlo,monospace'; b.fillStyle=ink(V("--text3"),.85);
-        b.fillText(held[0].id+" · kubectl delete deploy api",xL+13,ay+22);
-      } else {
-        b.font='600 12px ui-monospace,Menlo,monospace'; b.fillStyle=ink(OK,.9);
-        b.fillText("● ALL NOMINAL",xL+13,ay+6);
-      }
-      b.font='10px ui-monospace,Menlo,monospace'; b.fillStyle=ink(WARN,.9);
-      b.fillText("▲ AG-33F9 at 92% context — compaction imminent",xL+13,ay+40);
-      b.fillStyle=ink(V("--text4"),.8);
-      b.fillText("▲ 3 tool errors in the last 5 min · shop-web",xL+13,ay+56);
-    })();
-
-    /* ── Mission timeline · Activity over time ── */
-    const tlH=Math.min(hBody*0.34,168);
-    let my=pnl(b,xM,yTop,colM,tlH,"Mission timeline","Activity over time",null);
-    (function(){
-      const n=38, bw=(colM-26)/n, base=yTop+tlH-16;
-      for(let i=0;i<n;i++){
-        const v=0.25+0.6*Math.abs(Math.sin(i*0.42+t*0.2))*Math.abs(Math.cos(i*0.19));
-        const hgt=(base-my-6)*v;
-        b.fillStyle=ink(P,.28+0.4*v);
-        b.fillRect(xM+13+i*bw, base-hgt, Math.max(1.5,bw-2), hgt);
-      }
-      b.strokeStyle=ink(P,.16); b.beginPath(); b.moveTo(xM+13,base); b.lineTo(xM+colM-13,base); b.stroke();
-    })();
-
-    /* ── Performance · Tool wall-clock duration ── */
-    const ltY=yTop+tlH+gap, ltH=Math.min(hBody*0.34,168);
-    let ly=pnl(b,xM,ltY,colM,ltH,"Performance","Tool wall-clock duration","p50 · p95");
-    (function(){
-      const rows=[["Bash",73,261],["Write",41,118],["Edit",38,96],["Grep",22,64],["Task",380,1240]];
-      const max=1240;
-      rows.forEach((r,i)=>{
-        const y=ly+8+i*20;
-        b.font='10px ui-monospace,Menlo,monospace'; b.fillStyle=ink(V("--text2"),.9);
-        b.fillText(r[0],xM+13,y+4);
-        const bx=xM+68, bw=colM-68-70;
-        b.fillStyle=ink(P,.22); b.fillRect(bx,y-4,bw*(r[2]/max),7);
-        b.fillStyle=ink(P,.85); b.fillRect(bx,y-4,bw*(r[1]/max),7);
-        b.font='9.5px ui-monospace,Menlo,monospace'; b.fillStyle=ink(V("--text4"),.85);
-        b.textAlign="right"; b.fillText(r[1]+" / "+r[2]+"ms",xM+colM-13,y+4); b.textAlign="left";
-      });
-    })();
-
-    /* ── Cost · Where the money goes ── */
-    const cmY=ltY+ltH+gap, cmH=hh-cmY-pad;
-    if(cmH>60){
-      let cy2=pnl(b,xM,cmY,colM,cmH,"Cost","Where the money goes","By model");
-      const models=[["opus 5",.58,P],["sonnet 5",.27,OK],["haiku 4.5",.11,WARN],["gpt-5",.04,V("--info")]];
-      let cx2=xM+13; const bw=colM-26;
-      models.forEach(m=>{ b.fillStyle=ink(m[2],.8); b.fillRect(cx2,cy2+2,bw*m[1],12); cx2+=bw*m[1]; });
-      models.forEach((m,i)=>{
-        const y=cy2+34+i*15;
-        if(y>cmY+cmH-8) return;
-        b.fillStyle=ink(m[2],.85); b.fillRect(xM+13,y-7,7,7);
-        b.font='10px ui-monospace,Menlo,monospace'; b.fillStyle=ink(V("--text3"),.9);
-        b.fillText(m[0],xM+26,y);
-        b.textAlign="right"; b.fillStyle=ink(V("--text2"),.9);
-        b.fillText("$"+((359.85+costSince)*m[1]).toFixed(2),xM+colM-13,y); b.textAlign="left";
-      });
-    }
-
-    /* ── Live · Live events ── */
-    const feH=Math.min(hBody*0.56,330);
-    let fy=pnl(b,xR,yTop,colR,feH,"Live","Live events",null);
-    (function(){
-      const fs=10.5, lh=fs*1.72, n=Math.floor((feH-52)/lh);
-      b.font=fs+'px ui-monospace,Menlo,monospace';
-      const off=(t*20)%lh, step=Math.floor(t*20/lh);
-      for(let i=0;i<n;i++){
-        const r=log[(i+step)%log.length]; if(!r) continue;
-        const y=fy+10+i*lh;
-        b.fillStyle=ink(V("--text4"),.75); b.fillText(r.t,xR+13,y);
-        b.fillStyle=ink(TX,.92); b.fillText(r.tool,xR+58,y);
-        b.fillStyle=ink(V("--text3"),.6);
-        const f=r.file.length>22?r.file.slice(-22):r.file;
-        b.fillText(f,xR+108,y);
-        b.textAlign="right"; b.fillStyle=ink(OK,.8);
-        b.fillText(r.ms+"ms",xR+colR-13,y); b.textAlign="left";
-      }
-    })();
-
-    /* ── Sessions · Every agent session ── */
-    const seY=yTop+feH+gap, seH=hh-seY-pad;
-    let sy=pnl(b,xR,seY,colR,seH,"Sessions","Every agent session",null);
-    if(lock.on){
-      const lp=contactPos(actor,lock.i,w,hh,t);
-      drawLock(b,lp.x,lp.y,15,ERR);
-    }
-    fleet.slice(0,Math.max(0,Math.floor((seH-56)/26))).forEach((s,i)=>{
-      const f=Math.min(1,s.ctx), hot=s.state==="held"||f>=0.86;
-      const col=hot?ERR:f>=0.7?WARN:OK, y=sy+10+i*26;
-      b.font='10.5px ui-monospace,Menlo,monospace';
-      b.fillStyle=ink(TX,.92); b.fillText(s.id,xR+13,y);
-      b.fillStyle=ink(V("--text4"),.8); b.fillText(s.repo.split("/")[1],xR+70,y);
-      b.textAlign="right"; b.fillStyle=ink(V("--text2"),.9);
-      b.fillText("$"+s.cost.toFixed(2),xR+colR-13,y); b.textAlign="left";
-      const bx=xR+13, bw=colR-26;
-      b.fillStyle=ink(P,.14); b.fillRect(bx,y+6,bw,3);
-      b.fillStyle=ink(col,.9); b.fillRect(bx,y+6,bw*f,3);
+  const beyond={el:document.getElementById("beyond"), frame:null, live:false};
+  function openBeyond(){
+    if(beyond.frame || !beyond.el || !ok) return;
+    if(innerWidth<980 || innerHeight<620) return;      // the glass is too small to read it
+    if(reduce) return;
+    const conn=navigator.connection;
+    if(conn && (conn.saveData || /2g/.test(conn.effectiveType||""))) return;
+    const f=document.createElement("iframe");
+    f.src="./demo/";
+    f.title="agentglass, running";                     // aria-hidden on the wrapper; this is for tooling
+    f.setAttribute("tabindex","-1");
+    f.setAttribute("scrolling","no");
+    // Nothing behind the glass is reachable: not by pointer, not by tab, not by
+    // a screen reader. It is scenery, and a visitor who tabs from the rail to
+    // the download button must not fall into a whole second application on the
+    // way — `inert` is what carries that through to the framed document.
+    f.setAttribute("inert","");
+    f.addEventListener("load",()=>{
+      // A landing page served without its /demo/ next door gets a 404 document
+      // here, and a 404 under the lens is worse than the honest dark.
+      try{ if(!f.contentWindow.document.getElementById("root")) return void drop(); }catch(e){ return void drop(); }
+      beyond.live=true; beyond.el.classList.add("lit");
     });
+    beyond.el.appendChild(f);
+    beyond.frame=f;
+    function drop(){ f.remove(); beyond.frame=null; beyond.live=false; }
+  }
+  // The lens is a hole in the dark. Nothing behind it is visible anywhere else,
+  // so the clip is the only thing standing between a visitor and a whole second
+  // app rendered flat on the page.
+  function clipBeyond(){
+    if(!beyond.frame) return;
+    const x=lens.x/DPR, y=lens.y/DPR, r=R/DPR;
+    beyond.el.style.clipPath="circle("+r.toFixed(1)+"px at "+x.toFixed(1)+"px "+y.toFixed(1)+"px)";
+  }
+
+  /* ── the fleet, as the app behind the glass reports it ──
+     The demo publishes what it knows (web/src/lib/demoBridge.ts) and this reads
+     it straight out of the frame — same origin, no messaging. From then on the
+     contacts are not a simulation of the app's fleet, they ARE it: the block
+     you resolve over a card is quoting that card.
+
+     Read at 4Hz, eased into place, and entirely optional: an older /demo/ build
+     publishes nothing, and the hero keeps flying its own eight. */
+  let bridged=false, bridgeAt=0, spend0=null, calls0=0;
+  function readBeyond(now){
+    if(!beyond.live || now-bridgeAt<250) return;
+    bridgeAt=now;
+    let d=null;
+    try{ d=beyond.frame.contentWindow.__agxFleet; }catch(e){}
+    if(!d || d.v!==1 || !d.sessions) return;
+    const by=new Map(d.sessions.map(x=>[x.key.replace(/-demo$/,""),x]));
+    let hit=0, calls=0;
+    for(const s of fleet){
+      const x=by.get(s.id); if(!x) continue;
+      hit++;
+      // Context is the radar's whole geometry, so it moves at the speed the
+      // glass can follow rather than snapping between polls.
+      if(x.ctx>0) s.ctxTarget=x.ctx;
+      s.cost=x.cost; s.tools=x.tools; s.model=x.model; s.tokens=x.tokens;
+      calls+=x.tools;
+      // the card's own sentence — "running Read · 220ms", "Agent is waiting for
+      // your input" — rather than a tool name guessed back out of it
+      s.action=x.action||"";
+      if(s.state!=="held") s.state = x.status==="waiting" ? "wait" : "run";
+    }
+    if(!hit) return;
+    bridged=true;
+    // What it has cost since you arrived, and how many calls it took — both
+    // measured from the first reading, which is the moment you got here.
+    if(spend0===null){ spend0=d.spend; calls0=calls; }
+    spend=d.spend; costSince=Math.max(0,d.spend-spend0); callsSince=Math.max(0,calls-calls0);
   }
 
 
-  /* ══ the glass: a curved combiner, not a magnifier ══ */
+  /* ══════════════════════════════════════════════════════════════════
+     THE GLASS — a curved combiner, not a magnifier.
+
+     Both layers arrive as premultiplied light on clear film, and the frame
+     leaves with alpha 0, so the compositor ADDS it to the page: the HUD can
+     brighten what is behind it and can never darken it. That is what lets
+     the demo behind the lens read through the gaps in the symbology instead
+     of being painted over by a black canvas.
+     ══════════════════════════════════════════════════════════════════ */
   const VS='#version 300 es\nin vec2 p; out vec2 uv;\nvoid main(){ uv=p*0.5+0.5; gl_Position=vec4(p,0.,1.); }';
   const FS=[
   '#version 300 es','precision highp float;',
@@ -1803,6 +1846,9 @@ sudo apt install ./agentglass_*.deb</code>
   'uniform sampler2D uA; uniform sampler2D uB;',
   'uniform vec2 uRes; uniform vec2 uLens; uniform float uR; uniform float uT;',
   'uniform vec3 uPh;',
+  // Each channel is bent by a slightly different amount — the dispersion a
+  // thick curved combiner puts on everything it carries. Textures are uploaded
+  // premultiplied, so every sample is already light and needs no alpha of its own.
   'vec3 disperse(vec2 c, vec2 dir, float bend, float zoom){',
   '  vec2 base = uLens/uRes;',
   '  vec2 rel  = c - base;',
@@ -1838,14 +1884,12 @@ sudo apt install ./agentglass_*.deb</code>
   '    col = mix(col, uPh*1.15, edge*0.55);',
   '    col = mix(texture(uA,uv).rgb, col, 1.0 - smoothstep(0.995,1.0,r));',
   '  }',
-  // ── combiner treatment over the whole frame: scanlines, bloom-ish lift,
-  //    and a vignette, so the page reads as projected light on curved glass.
-  '  float scan = 0.955 + 0.045*sin(uv.y*uRes.y*1.6 + uT*1.4);',
-  '  col *= scan;',
-  '  float vig = 1.0 - 0.55*pow(length((uv-0.5)*vec2(1.16,1.0)), 2.4);',
-  '  col *= vig;',
+  // The scanlines and the vignette used to live here, where they could only
+  // reach the canvas. They are CSS now (.combiner), one layer above, so the
+  // world behind the glass is under the same treatment as the symbology.
   '  col += uPh * 0.018;',                                          // ambient phosphor haze
-  '  frag = vec4(col, 1.0);',
+  // alpha 0: everything this shader draws is added to the page, never over it
+  '  frag = vec4(col, 0.0);',
   '}'].join('\n');
 
   let prog=null,uRes,uLens,uR,uT,uPh,texA,texB;
@@ -1864,6 +1908,11 @@ sudo apt install ./agentglass_*.deb</code>
     const l=gl.getAttribLocation(prog,"p");
     gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l,2,gl.FLOAT,false,0,0);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+    // Upload premultiplied, so a texel is already the light it contributes and
+    // the shader never has to un-premultiply a canvas that was premultiplied to
+    // begin with — the rain is drawn at alpha .055, where that round trip costs
+    // visible banding.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,true);
     const tex=u=>{const x=gl.createTexture(); gl.activeTexture(gl.TEXTURE0+u); gl.bindTexture(gl.TEXTURE_2D,x);
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
@@ -1928,7 +1977,7 @@ sudo apt install ./agentglass_*.deb</code>
   function raise(){
     asked=true; askAt=performance.now(); actor.state="held";
     document.getElementById("cSid").textContent=actor.id;
-    document.getElementById("cRepo").textContent=actor.repo;
+    document.getElementById("cModel").textContent=actor.model;
     document.getElementById("cAge").textContent=((actor.age/60)|0)+"m "+two((actor.age%60)|0)+"s";
     setMode("CAUTION · DECISION REQUIRED");
     cEl.classList.add("on"); document.getElementById("btnDeny").focus();
@@ -1959,10 +2008,11 @@ sudo apt install ./agentglass_*.deb</code>
   document.getElementById("btnAllow").addEventListener("click",()=>settle("allow"));
   cEl.addEventListener("keydown",e=>{ if(e.key==="Escape") settle("deny"); });
 
-  let prev=performance.now();
+  let prev=performance.now(), beyondOn=true;
   function frame(now){
     const dt=Math.min(0.1,(now-prev)/1000); prev=now;
     const t=(now-started)/1000;
+    readBeyond(now);
     tick(dt);
     if(!asked && document.visibilityState==="visible" && (t>14 || leaving)) raise();
     if(asked && !decided){
@@ -1971,6 +2021,13 @@ sudo apt install ./agentglass_*.deb</code>
       document.getElementById("cdN").textContent=Math.ceil(left);
       document.getElementById("ringFg").setAttribute("stroke-dashoffset",String(CIRC*(1-left/CD)));
       if(left<=0) settle("timeout");
+    }
+    // Scrolled past: the render loop stands down below, and the app behind the
+    // glass stops being composited with it. It keeps running — coming back to a
+    // frozen dashboard would read as a crash — it is just not drawn.
+    if(beyond.frame){
+      const on=window.__hudVisible!==false;
+      if(on!==beyondOn){ beyondOn=on; beyond.el.style.visibility=on?"":"hidden"; }
     }
     if(ok && window.__hudVisible !== false){
       if(!introDone && !reduce){
@@ -2016,8 +2073,13 @@ sudo apt install ./agentglass_*.deb</code>
             lens.tx=g.cx*DPR+Math.cos(t*0.22)*orbit;
             lens.ty=g.cy*DPR+Math.sin(t*0.22)*orbit*0.62;
           } else {
-            const m=Math.min(W,H)*0.5-R*0.4;
-            lens.tx=W*0.5+Math.cos(t*0.19)*m*1.05; lens.ty=H*0.5+Math.sin(t*0.27)*m*0.55;
+            // Orbit the boresight, the way the phone already did. The old figure
+            // swung 1.05 of the half-screen and spent a third of its time parked
+            // on the headline — which was survivable when there was nothing under
+            // the glass but rain, and is not now that the app is under there.
+            const g=contactPos(fleet[0],0,W/DPR,H/DPR,t);
+            lens.tx=g.cx*DPR+Math.cos(t*0.19)*g.rad*0.58*DPR;
+            lens.ty=g.cy*DPR+Math.sin(t*0.27)*g.rad*0.42*DPR;
           }
         }
         // A fixed per-frame weight makes the glass heavier the faster your
@@ -2026,6 +2088,7 @@ sudo apt install ./agentglass_*.deb</code>
         const k = reduce ? 1 : 1-Math.pow(1-0.085, Math.min(4, dt*60));
         lens.x+=(lens.tx-lens.x)*k; lens.y+=(lens.ty-lens.y)*k;
       }
+      clipBeyond();
       drawUnaided(t); drawResolved(t);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,texA);
       gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,A);
@@ -2045,6 +2108,15 @@ sudo apt install ./agentglass_*.deb</code>
   setMode(modeTxt);
   addEventListener("resize",()=>{ resize(); setMode(modeTxt); });
   requestAnimationFrame(frame);
+
+  // The app behind the glass comes up once the page has nothing better to do.
+  // The intro slew is 7 seconds long and the visitor is reading a headline for
+  // the first two of them, which is exactly the room a second document needs.
+  (function(){
+    const go=()=>openBeyond();
+    if(document.readyState==="complete") setTimeout(go,350);
+    else addEventListener("load",()=>setTimeout(go,350),{once:true});
+  })();
 })();
 </script>
 <script>
@@ -2283,7 +2355,7 @@ sudo apt install ./agentglass_*.deb</code>
         const c=cells[i]; if(!c) return;
         const f=Math.min(1,s.ctx), hot=s.state==="held"||f>=0.86;
         c.id.textContent=s.id;
-        c.repo.textContent=s.repo.split("/")[1];
+        c.repo.textContent=s.model;
         c.cost.textContent="$"+s.cost.toFixed(2);
         c.bar.style.width=(f*100).toFixed(1)+"%";
         c.bar.style.background= hot?ERR : f>=0.7?WARN : OK;

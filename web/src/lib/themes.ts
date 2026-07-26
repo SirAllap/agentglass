@@ -82,3 +82,23 @@ function syncTheme(t: Theme) {
 export function initialTheme(): string {
   try { return localStorage.getItem("agentglass-theme") || DEFAULT_THEME; } catch { return DEFAULT_THEME; }
 }
+
+/**
+ * Follow the theme when another document of ours changes it.
+ *
+ * `storage` only fires in the OTHER documents on this origin, which is exactly
+ * the case worth handling: a second tab, and the landing page, which picks a
+ * phosphor for the demo it is showing behind the glass and writes it to the
+ * same key this app reads. Without this the frame kept whatever palette it
+ * booted in and the page had two colour schemes on screen at once.
+ *
+ * Never syncs outward: this document did not make the choice, so it has no
+ * business telling tmux and nvim about it.
+ */
+export function watchThemeStorage() {
+  addEventListener("storage", (e) => {
+    if (e.key !== "agentglass-theme" || !e.newValue) return;
+    if (document.documentElement.getAttribute("data-theme") === e.newValue) return;
+    applyTheme(e.newValue);
+  });
+}

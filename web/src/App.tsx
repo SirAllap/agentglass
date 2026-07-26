@@ -3,6 +3,7 @@ import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
 import { useStats } from "./lib/useStats.ts";
 import { deriveAgents, deriveAlerts, buildTitles } from "./lib/derive.ts";
+import { publishFleet } from "./lib/demoBridge.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
 import { initialTheme, applyTheme, THEMES } from "./lib/themes.ts";
@@ -268,6 +269,14 @@ export default function App() {
   );
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
   useAlertSound(alerts.length, sound);
+
+  // Demo builds only: hand the fleet to whoever is showing this build inside a
+  // frame. Today that is the landing page's head-up display, which draws the
+  // same eight sessions over the top of this dashboard and has to agree with it
+  // to the cent. A no-op in every other build — see lib/demoBridge.ts.
+  useEffect(() => {
+    publishFleet(agentsAll, stats?.totals.cost_usd ?? 0);
+  }, [agentsAll, stats]);
 
   const clearFilters = useCallback(() => setFilter({ app: "", type: "", provider: "" }), []);
 
