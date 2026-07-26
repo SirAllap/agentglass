@@ -269,6 +269,60 @@ function TypingDots() {
   );
 }
 
+/** An interactive prompt waiting in a chat's tmux pane, and the keys to answer it.
+ *
+ *  The pane is the only thing that can render a `/model` picker properly, so
+ *  this shows what it drew and forwards the few keys a picker takes. Each press
+ *  returns the next frame, which is what makes it feel like using the menu
+ *  rather than firing keys into the dark.
+ *
+ *  Escape both cancels the prompt and clears this, because a cancelled picker
+ *  leaves nothing to answer. */
+function PanePrompt({ chat }: { chat: Chat }) {
+  const [busy, setBusy] = useState(false);
+  const screen = chat.paneNeedsYou?.screen ?? "";
+  const press = async (key: string) => {
+    if (busy || !chat.sessionId) return;
+    setBusy(true);
+    try {
+      const r = await api.chatPaneKey(chat.sessionId, key);
+      // Enter and Escape both end a picker. Rather than guess which, the next
+      // frame decides: no key hints left means nothing is waiting any more.
+      const done = key === "Escape" || !/Esc to cancel|Enter to confirm|to use this session only/.test(r.screen);
+      update(chat.id, (c) => {
+        if (done) { c.paneNeedsYou = undefined; c.attention = "none"; }
+        else c.paneNeedsYou = { screen: r.screen };
+      });
+    } catch {
+      // The pane may have been reclaimed under us. Clearing is the honest
+      // outcome: there is nothing left to answer.
+      update(chat.id, (c) => { c.paneNeedsYou = undefined; c.attention = "none"; });
+    } finally { setBusy(false); }
+  };
+  const key = (label: string, k: string, title: string) => (
+    <button onClick={() => press(k)} disabled={busy} title={title}
+      className="text-[11px] px-2 py-1 rounded-md disabled:opacity-40"
+      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>{label}</button>
+  );
+  return (
+    <div className="mb-2 px-2.5 py-2 rounded-lg text-[11px]"
+      style={{ background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--text2)" }}>
+      <div style={{ color: "var(--text)" }}>This chat's pane is asking you something.</div>
+      <pre className="agx-scroll mt-1.5 mb-2 px-2 py-1.5 rounded overflow-x-auto whitespace-pre text-[10.5px] leading-[1.45]"
+        style={{ ...CODE_FONT_STYLE, background: "color-mix(in srgb, var(--bg3) 60%, transparent)", color: "var(--text)", maxHeight: 220 }}>{screen}</pre>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {key("←", "Left", "Left")}
+        {key("→", "Right", "Right")}
+        {key("↑", "Up", "Up")}
+        {key("↓", "Down", "Down")}
+        {key("Enter", "Enter", "Confirm")}
+        {key("Esc", "Escape", "Cancel and close this")}
+        <span className="ml-auto t-dim2 text-[10px]">or open it in a terminal: <code style={CODE_FONT_STYLE}>{chat.attachCommand || "tmux -L agentglass attach"}</code></span>
+      </div>
+    </div>
+  );
+}
+
 /** A header button that copies something and says it did.
  *
  *  The confirmation is the whole point: a copy that succeeds looks exactly like
@@ -1102,6 +1156,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           </div>
                         ))}
                       </div>
+                    )}
+                    {active?.paneNeedsYou && (
+                      // Answerable from here. The alternative shipped first and
+                      // was telling someone to open a terminal to move a cursor
+                      // one step, which is a dead end wearing instructions.
+                      <PanePrompt chat={active} />
                     )}
                     {active?.setupNeeded && (
                       // The CLI never started. Retrying is pointless until the

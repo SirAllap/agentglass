@@ -185,6 +185,11 @@ export type Chat = {
    *  `claude` that has never been logged in. Distinct from a failed turn:
    *  retrying changes nothing until the command is run. */
   setupNeeded?: { command: string; why: string };
+  /** An interactive prompt waiting in this chat's pane — a `/model` picker and
+   *  the like. Held as state rather than left as text in the reply, because it
+   *  is a thing to answer, not a thing to read: the screen redraws as keys are
+   *  sent to it. */
+  paneNeedsYou?: { screen: string };
   /** Timestamp of the newest thing already on screen from the session's own
    *  transcript. The live socket replays a window of recent events on every
    *  connect, so without a watermark reopening the panel would re-append the
@@ -768,6 +773,21 @@ export async function send(id: string, text: string, isActive: () => boolean, al
         // started, and it will fail identically every time until you do the one
         // thing it names. Raise it as attention so the chat says it needs you
         // rather than just going quiet.
+        // A picker in the pane is answerable from here, so it is raised as
+        // something to act on rather than appended to the reply as prose. The
+        // screen the server sent is the starting frame; each key sent back
+        // returns the next one.
+        if (o.errorType === "pane_needs_you") {
+          const text = String(o.error ?? "");
+          const screen = text.slice(text.indexOf("\n\n") + 2);
+          c.paneNeedsYou = { screen: screen.slice(screen.indexOf("\n\n") + 2) || screen };
+          c.attention = "blocked";
+          const last = c.messages[c.messages.length - 1];
+          // The prose above the screen is worth keeping; the screen itself is
+          // about to be drawn properly, so it does not belong in the text too.
+          if (last?.role === "assistant") last.text = last.text.split("\n\n")[0];
+          return;
+        }
         if (typeof o.setupCommand === "string") {
           c.setupNeeded = { command: o.setupCommand, why: String(o.error ?? "") };
           c.attention = "blocked";

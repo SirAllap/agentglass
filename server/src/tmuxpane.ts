@@ -235,6 +235,24 @@ export async function interrupt(name: string): Promise<TmuxResult> {
   return tmux(["send-keys", "-t", paneTarget(name), "Escape"]);
 }
 
+/** Keys a chat may send to its own pane.
+ *
+ *  An allowlist of tmux's own key names, not free text. These reach the server
+ *  from a browser request and land in a live terminal running an agent with
+ *  tools: anything unbounded here would be a way to type arbitrary commands
+ *  into it. Navigation and the two answers a prompt takes is the whole job —
+ *  ordinary text still goes through the paste path, which cannot be mistaken
+ *  for a keystroke. */
+const SENDABLE = new Set(["Up", "Down", "Left", "Right", "Enter", "Escape", "Space", "Tab", "BSpace"]);
+export const sendableKey = (k: unknown): k is string => typeof k === "string" && SENDABLE.has(k);
+
+/** Press one key in the chat's pane. */
+export async function sendKey(name: string, key: string): Promise<TmuxResult> {
+  if (!validPaneName(name)) return { ok: false, stdout: "", stderr: "invalid pane name" };
+  if (!sendableKey(key)) return { ok: false, stdout: "", stderr: "key not allowed" };
+  return tmux(["send-keys", "-t", paneTarget(name), key]);
+}
+
 /** What the pane currently shows. Only for diagnostics and for the "why is this
  *  stuck" path — the conversation itself is read from the transcript, never
  *  scraped from here. */

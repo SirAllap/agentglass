@@ -60,7 +60,7 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
 import { chatSend, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope } from "./config.ts";
 import { hookStatus, applyHooks } from "./hooksetup.ts";
@@ -1115,6 +1115,24 @@ const server = Bun.serve<WsData>({
       if (was) await killPane(id);
       forgetPane(id);
       return json({ killed: was });
+    }
+    // Answer an interactive prompt without leaving the chat. The pane already
+    // takes Enter and Escape from us; arrows are the rest of what a picker
+    // needs, and sending them here beats telling someone to open a terminal to
+    // move a cursor one step.
+    if (pathname === "/chat/pane/key" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      const id = typeof b.session === "string" ? b.session : "";
+      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
+      if (!sendableKey(b.key)) return json({ error: "key not allowed" }, 400);
+      if (!(await paneAlive(id))) return json({ error: "that chat's pane is gone" }, 409);
+      const r = await sendKey(id, b.key);
+      if (!r.ok) return json({ error: r.stderr.trim() || "could not send the key" }, 500);
+      // Hand back what the pane shows now, so the chat can redraw the prompt
+      // the keystroke just moved rather than guessing at it.
+      return json({ screen: await capturePane(id) });
     }
     if (pathname === "/chat/attach") {
       const id = url.searchParams.get("session") || "";

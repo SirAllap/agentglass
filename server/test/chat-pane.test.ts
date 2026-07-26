@@ -201,3 +201,32 @@ test("a working turn is never idle, however long it says nothing", () => {
   expect(mod.__isRunning(working)).toBe(true);
   expect(mod.__needsYou(working)).toBe(false);
 });
+
+// --- answering a prompt in the pane -----------------------------------------
+
+test("only navigation keys may be sent into a live pane", () => {
+  // These arrive on an HTTP request and land in a terminal running an agent
+  // with tools. An unbounded key channel would be a way to type commands into
+  // it, so this is an allowlist rather than a sanitiser. Ordinary text still
+  // goes through the paste path, which cannot be mistaken for a keystroke.
+  for (const k of ["Up", "Down", "Left", "Right", "Enter", "Escape"]) {
+    expect(pane.sendableKey(k)).toBe(true);
+  }
+  for (const k of ["C-c", "rm -rf /", "q", "", "Enter Enter", "M-x", 5, null, "escape"]) {
+    expect(pane.sendableKey(k as unknown)).toBe(false);
+  }
+});
+
+test("a key for an invalid pane name is refused before tmux is reached", async () => {
+  // Same reasoning as every other pane entry point: the name decides the tmux
+  // target, so a crafted one must never get as far as being resolved.
+  const r = await pane.sendKey("other:1.0", "Enter");
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("invalid pane name");
+});
+
+test("a disallowed key is refused even for a valid pane", async () => {
+  const r = await pane.sendKey("6f1c9b52-0000-4000-8000-0123456789ab", "C-c");
+  expect(r.ok).toBe(false);
+  expect(r.stderr).toContain("not allowed");
+});
