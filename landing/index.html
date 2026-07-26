@@ -60,13 +60,13 @@
     opacity:0; transition:opacity .8s ease;}
   .beyond.lit{opacity:1;}
   .beyond iframe{position:absolute; inset:0; width:100%; height:100%; border:0; display:block;
-    /* The world seen through a tinted combiner. Level comes down so the
-       symbology stays the brightest thing on the glass, and chroma comes down
-       with it for a subtler reason: the app under here is wearing the same
-       phosphor the HUD is drawn in, and purple-on-purple was one texture.
-       Draining the world's colour puts the two layers back on separate
-       planes — which is what a combiner does to the view through it. */
-    filter:brightness(.54) saturate(.32) contrast(1.06);}
+    /* The world through a tinted combiner: a touch under full, and no more.
+       It was down at half brightness and a third of its colour, because the
+       symbology was pure additive light and anything lit behind it won. Now
+       the symbology carries its own coverage and its own plates, so the app
+       can be shown as the app — which is the entire point of putting it
+       there. */
+    filter:brightness(.86) saturate(.98) contrast(1.02);}
 
   /* The combiner treatment — scanlines, phosphor haze, vignette — over
      everything the glass carries, symbology and world alike. It used to be
@@ -102,6 +102,25 @@
      equal specificity and the cue kept showing on phones */
   @media (max-width:700px){ .hud.glass .cue{display:none;} }
   .acts{display:flex; gap:8px; pointer-events:auto; flex-wrap:wrap;}
+  /* What a button resolves into when the designator is on it. Same surface as
+     the data blocks the contacts resolve into — cut corner, phosphor edge, dark
+     enough to be read over whatever the glass is showing at the time. */
+  .rev{
+    /* Right-aligned, always: .acts is pinned to the right end of the hero's
+       foot, and a callout anchored to a button's left edge ran off the
+       viewport and lost its last four words. */
+    position:absolute; right:0; bottom:calc(100% + 10px); white-space:nowrap;
+    font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; line-height:1;
+    color:var(--primary); padding:7px 10px;
+    border:1px solid color-mix(in srgb,var(--primary) 42%,transparent);
+    background:color-mix(in srgb,#02040a 88%,transparent);
+    clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);
+    opacity:0; transform:translateY(5px); pointer-events:none;
+    transition:opacity .2s ease, transform .2s ease;
+  }
+  .act{position:relative; display:inline-flex;}
+  .act.lit .rev{opacity:1; transform:none;}
+  @media (max-width:820px){ .rev{display:none;} }
   .btn{
     font-family:var(--mono); font-size:11.5px; letter-spacing:.09em; text-transform:uppercase;
     padding:10px 18px; color:var(--primary); background:transparent; position:relative;
@@ -112,12 +131,14 @@
   .btn:hover,.btn:focus-visible{background:color-mix(in srgb,var(--primary) 14%,transparent); border-color:var(--primary); outline:none; text-shadow:0 0 10px var(--primary);}
   .btn.pri{background:color-mix(in srgb,var(--primary) 20%,transparent); border-color:var(--primary); font-weight:700;}
 
+  /* The phosphor picker, on the console rather than on the glass — it used to
+     be pinned to the hero's top-left, which is exactly where the app behind the
+     lens keeps its own theme control. */
   .themer{
-    /* clear of the bearing tape at y=64 — at 1440 the swatch row reached it */
-    position:absolute; left:30px; top:92px; z-index:5; pointer-events:auto;
-    display:flex; align-items:center; gap:6px; padding:7px 10px;
-    border:1px solid color-mix(in srgb,var(--primary) 30%,transparent);
-    background:color-mix(in srgb,#000 55%,transparent); backdrop-filter:blur(6px);
+    display:inline-flex; align-items:center; gap:7px; flex-wrap:wrap;
+    margin:0 0 18px; padding:8px 11px;
+    border:1px solid color-mix(in srgb,var(--primary) 26%,transparent);
+    background:color-mix(in srgb,#000 45%,transparent);
     clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);
   }
   .themer .cap{font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--text4);}
@@ -125,7 +146,6 @@
   .themer button{width:13px; height:13px; border:1px solid rgba(255,255,255,.2); cursor:pointer; padding:0; transition:transform .14s;}
   .themer button:hover,.themer button:focus-visible{transform:scale(1.3); outline:none; border-color:#fff;}
   .themer button[aria-pressed="true"]{box-shadow:0 0 0 1px #000,0 0 0 2.5px currentColor;}
-  @media (max-width:960px){ .themer{display:none;} }
   @media (max-width:820px){ .rail a:not(.gh){display:none;} }
 
   /* ══════════════════════════════════════════════════════════════════
@@ -910,16 +930,24 @@
 
     <div class="foot">
       <div class="cue">Move the designator — <b>lock any contact</b></div>
+      <!-- Under the glass a contact stops being UNK. So does a button: the
+           designator crossing one resolves what taking it actually costs you.
+           Absolutely positioned, so nothing on the page moves when it opens. -->
       <div class="acts">
-        <a class="btn pri" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">Download <span data-agx="version">the app</span></a>
-        <a class="btn" href="./demo/">Live demo</a>
+        <!-- The callout is a sibling of the button, not a child of it: .btn is
+             cut-cornered with clip-path, and clip-path clips its descendants —
+             the first version of this drew the callout perfectly, inside a
+             shape 18px too small to show any of it. -->
+        <span class="act" data-glass>
+          <a class="btn pri" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">Download <span data-agx="version">the app</span></a>
+          <span class="rev">macOS · Linux · Windows · MIT · nothing phones home</span>
+        </span>
+        <span class="act" data-glass>
+          <a class="btn" href="./demo/">Live demo</a>
+          <span class="rev">No install · it is already running behind this glass</span>
+        </span>
       </div>
     </div>
-  </div>
-
-  <div class="themer" id="themer" aria-label="Theme">
-    <span class="cap">PHOSPHOR</span>
-    <span class="nm" id="thName">Midnight Purple</span>
   </div>
 
   <div class="glare" aria-hidden="true"></div>
@@ -1232,6 +1260,15 @@ sudo apt install ./agentglass_*.deb</code>
     <a class="btn" data-dl="win" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass/releases/latest">Windows</a>
     <a class="btn" target="_blank" rel="noopener" href="https://github.com/SirAllap/agentglass">Star on GitHub</a>
   </div>
+  <!-- The phosphor picker. It sat in the top-left corner of the hero until the
+       glass started opening onto the app, whose own theme control is up there
+       too: two theme pickers stacked, one of them refracted. Down here it is
+       out of the instrument, and it still repaints the page, the hero and the
+       app behind the glass in one go. -->
+  <div class="themer" id="themer" aria-label="Phosphor">
+    <span class="cap">Phosphor</span>
+    <span class="nm" id="thName">Midnight Purple</span>
+  </div>
   <p class="meta">Open source · MIT · Bun + SQLite · React + Vite · Electron · 22 phosphors · macOS, Linux, Windows</p>
 </section>
 
@@ -1449,6 +1486,28 @@ sudo apt install ./agentglass_*.deb</code>
     return {x:cx+Math.cos(ang)*rad*Math.min(1,s.ctx), y:cy+Math.sin(ang)*rad*Math.min(1,s.ctx)*sq, cx:cx, cy:cy, rad:rad, sq:sq};
   }
 
+  /* The plate a resolved block is written on.
+     The app behind the glass is lit, and lit is what it should be — but a
+     phosphor sentence over a phosphor panel is two things at once and neither
+     of them readable. So the block gets a surface: cut-cornered the way every
+     panel in the app is, dark enough to own its own pixels, with the phosphor
+     edge that says it belongs to the glass rather than to what is under it. */
+  function plate(c,x,y,w,hh,col,al){
+    const cut=8;
+    c.beginPath();
+    c.moveTo(x+cut,y); c.lineTo(x+w,y); c.lineTo(x+w,y+hh-cut);
+    c.lineTo(x+w-cut,y+hh); c.lineTo(x,y+hh); c.lineTo(x,y+cut); c.closePath();
+    c.fillStyle="rgba(2,4,10,"+(0.88*al).toFixed(3)+")"; c.fill();
+    c.strokeStyle=ink(col,.45*al); c.lineWidth=1; c.stroke();
+  }
+  /* Symbology that has to survive a lit background under it. A dark halo is
+     what a HUD does not have and a canvas badly needs: at 9px over a panel,
+     phosphor on phosphor loses every time. */
+  function halo(c,on){
+    c.shadowColor = on ? "rgba(0,0,0,0.92)" : "transparent";
+    c.shadowBlur  = on ? 5 : 0;
+  }
+
   /* Designator lock. The brackets fly in from wide and settle — how a HUD
      says "this one". Drawn on both layers so it survives the glass arriving. */
   function drawLock(c,x,y,sz,col){
@@ -1597,7 +1656,7 @@ sudo apt install ./agentglass_*.deb</code>
         // so this one keeps its UNK and waits for you to aim at it.
         if(by===null){ gain[it.i]=0; continue; }
         boxes.push({x0, x1:x0+BW, y0:by-14, y1:by+BH});
-        slot[it.i]={by, right};
+        slot[it.i]={by, right, w:BW, h:BH};
       }
     }
     fleet.forEach((s,i)=>{
@@ -1622,11 +1681,16 @@ sudo apt install ./agentglass_*.deb</code>
 
       if(g < 0.999){
         // Unaided, or aimed elsewhere: bearing only. You know it is there,
-        // and that is the whole of what you know.
-        c.fillStyle=ink(col,.75*(1-g)); c.textAlign="center";
-        c.font='9px ui-monospace,Menlo,monospace';
-        c.fillText("UNK",p.x,p.y+3); c.textAlign="left";
+        // and that is the whole of what you know. Set heavy and haloed — it
+        // was 9px of thin phosphor, and over the rain it read as lint.
+        halo(c,true);
+        c.fillStyle=ink(col,.96*(1-g)); c.textAlign="center";
+        c.font='700 10px ui-monospace,Menlo,monospace';
+        c.letterSpacing="0.06em";
+        c.fillText("UNK",p.x,p.y+3.5);
+        c.letterSpacing="0em"; c.textAlign="left";
         c.font='10px ui-monospace,Menlo,monospace';
+        halo(c,false);
         if(g <= 0.001) return;
       }
 
@@ -1638,6 +1702,11 @@ sudo apt install ./agentglass_*.deb</code>
       const right = slot[i].right, by = slot[i].by;
       const dx = right ? 1 : -1, up = by < p.y;
       const bx = p.x + dx*(sz+16);
+      {
+        const pw=slot[i].w, ph=slot[i].h;
+        plate(c, right?bx-6:bx+6-pw, by-15, pw, ph, col, g);
+      }
+      halo(c,true);
       c.strokeStyle=ink(col,.45*g);
       c.beginPath(); c.moveTo(p.x+dx*sz,p.y); c.lineTo(bx-dx*6,by+(up?30:0)); c.lineTo(bx,by+(up?30:0)); c.stroke();
       c.textAlign = right ? "left" : "right";
@@ -1667,7 +1736,8 @@ sudo apt install ./agentglass_*.deb</code>
         // Tokens once the app behind the glass is reporting them, milliseconds
         // while we are flying our own simulation. Never both: a real spend beside
         // an invented latency is a lie wearing three true numbers as cover.
-        c.fillText(s.tools+" tools · "+(bridged ? tok(s.tokens) : s.ms+"ms")+" · $"+s.cost.toFixed(2),ax,by+31);
+          const mid = bridged ? (s.tokens>0 ? tok(s.tokens)+" · " : "") : s.ms+"ms · ";
+        c.fillText(s.tools+" tools · "+mid+"$"+s.cost.toFixed(2),ax,by+31);
       }
       // context against the window, the same law the range rings measure by
       const bw=tight?76:88, byy=by+(tight?24:40);
@@ -1681,6 +1751,7 @@ sudo apt install ./agentglass_*.deb</code>
                          : Math.round(f*100)+"% OF 1M CONTEXT", ax, byy+13);
       c.letterSpacing="0em";
       c.textAlign="left";
+      halo(c,false);
     });
 
     // ── corner blocks
@@ -1706,17 +1777,27 @@ sudo apt install ./agentglass_*.deb</code>
         [held?"⚠ "+held+" HELD FOR APPROVAL":"NO HOLDS · THEY HAVE NOT STOPPED",0,null,held?ERR:OK,.9]
       ]);
     } else {
-      block(30,h-118,"left",[
+      // A fourth line on each block, on the resolved side only: the readouts
+      // are as unaided as the contacts are until the glass is over them.
+      // Counted, never asserted: the fleet is bridged from the app behind the
+      // glass, and a hand-typed "3 providers" would be a claim about data we
+      // are holding in our hand.
+      const apps=new Set(fleet.map(x=>x.app)).size;
+      const models=new Set(fleet.map(x=>x.model)).size;
+      const provs=new Set(fleet.map(x=>/gpt/i.test(x.model)?"openai":/gemini/i.test(x.model)?"google":"anthropic")).size;
+      block(30,h-133,"left",[
         ["FLEET · 8 CONTACTS",0,10,P,.85],
         ["SPEND  $"+spend.toFixed(2),0,13,V("--text"),.95],
         ["TOKENS 779.2K · P50 73MS",0,null,V("--text3"),.7],
-        [held?"⚠ "+held+" HELD FOR APPROVAL":"NO HOLDS",0,null,held?ERR:OK,.9]
+        [held?"⚠ "+held+" HELD FOR APPROVAL":"NO HOLDS",0,null,held?ERR:OK,.9],
+        ...(res?[[apps+" PROJECTS · "+models+" MODELS · "+provs+" PROVIDERS",0,null,OK,.8]]:[])
       ]);
-      block(w-30,h-118,"right",[
+      block(w-30,h-133,"right",[
         ["MISSION CLOCK",0,10,P,.85],
         [clock+" ON GLASS",0,13,V("--text"),.95],
         ["THEY HAVE NOT STOPPED",0,null,V("--text3"),.7],
-        ["+$"+costSince.toFixed(2)+" SINCE YOU ARRIVED",0,null,WARN,.9]
+        ["+$"+costSince.toFixed(2)+" SINCE YOU ARRIVED",0,null,WARN,.9],
+        ...(res?[[callsSince+" TOOL CALLS WHILE YOU READ THIS",0,null,OK,.8]]:[])
       ]);
     }
 
@@ -1726,17 +1807,37 @@ sudo apt install ./agentglass_*.deb</code>
     c.font='800 '+size+'px ui-sans-serif,system-ui,-apple-system,sans-serif';
     const sx=nar?18:30, sy=nar?h*0.275:h*0.30;
     c.fillStyle=ink(V("--text"),.96); c.fillText("EIGHT ARE FLYING.",sx,sy);
-    c.fillStyle=ink(P,.96); c.fillText("YOU CAN SEE ONE.",sx,sy+size*0.98);
+    /* The claim is the demonstration.
+       Both layers write "YOU CAN SEE " identically, so nothing doubles or
+       shivers as the glass crosses the line — and then the last word, and only
+       the last word, is different on the far side of the glass. Sweep the
+       designator along the sentence and the sentence changes its mind: ONE
+       becomes ALL EIGHT, in the colour the fleet reads when it is resolved.
+       There is no copy on this page that argues the product better than a
+       visitor doing that once by accident. */
+    const lead="YOU CAN SEE ", ly2=sy+size*0.98;
+    c.fillStyle=ink(P,.96); c.fillText(lead,sx,ly2);
+    const lw=c.measureText(lead).width;
+    c.fillStyle=ink(res>=0.5?OK:P,.96);
+    c.fillText(res>=0.5?"ALL EIGHT.":"ONE.",sx+lw,ly2);
     c.letterSpacing="0em";
     c.font=(nar?'10px ':'10.5px ')+'ui-monospace,Menlo,monospace';
     c.fillStyle=ink(V("--text3"),.72);
     c.letterSpacing=nar?"0.05em":"0.09em";
     // the long form does not fit a phone, and a clipped instruction is worse
     // than a short one
-    c.fillText(res<0.5 ? (nar?"THE GLASS IS THE INSTRUMENT":"THE GLASS IS THE INSTRUMENT — MOVE IT OVER A CONTACT")
-             : beyond.live ? (nar?"RESOLVED · THE APP ITSELF, BEHIND THE GLASS":"EVERY CONTACT RESOLVED — AND THAT IS THE APP ITSELF BEHIND THE GLASS")
-                       : (nar?"EVERY CONTACT RESOLVED · SAME SECOND":"EVERY CONTACT RESOLVED · SAME MACHINE · SAME SECOND"),
-               sx, sy+size*0.98+24);
+    // Shared opening, swapped tail — for the same reason as the line above it.
+    // Two entirely different sentences fighting over the same 700px read as a
+    // rendering fault, which is what the old pair did.
+    const cue0=nar?"THE GLASS IS THE INSTRUMENT":"THE GLASS IS THE INSTRUMENT — ";
+    c.fillText(cue0, sx, sy+size*0.98+24);
+    if(!nar){
+      const cw=c.measureText(cue0).width;
+      c.fillStyle=ink(res<0.5?V("--text3"):OK,res<0.5?.72:.9);
+      c.fillText(res<0.5 ? "MOVE IT OVER A CONTACT"
+               : beyond.live ? "AND THAT IS THE APP ITSELF UNDER IT"
+                             : "EVERY CONTACT UNDER IT IS RESOLVED", sx+cw, sy+size*0.98+24);
+    }
     c.letterSpacing="0em";
   }
 
@@ -1782,12 +1883,47 @@ sudo apt install ./agentglass_*.deb</code>
       beyond.live=true; beyond.el.classList.add("lit");
       // The claim below the fold changes when the app is genuinely up there.
       const sub=document.getElementById("reelSub");
-      if(sub) sub.innerHTML='The symbology up there is drawn. What resolved under the glass is not — that was the app itself, live in the page, flying the eight sessions the designator named. This is the rest of it, recorded on a real machine.';
+      if(sub) sub.innerHTML='The symbology up there is drawn. What resolved under the glass is not: that was the app itself, live in the page, flying the eight sessions the designator named. This is the rest of it, recorded on a real machine.';
     });
     beyond.el.appendChild(f);
     beyond.frame=f;
     function drop(){ f.remove(); beyond.frame=null; beyond.live=false; }
   }
+  /* ── what the glass does to the chrome ──
+     The rail and the buttons are HTML, a layer above the canvas, so the lens
+     cannot bend them. It can still be over them, and a designator that resolves
+     every contact it crosses and then slides across a button as if the button
+     were scenery is a designator that stops meaning anything. So the elements
+     that have something worth saying are asked directly. */
+  const glassy=[...document.querySelectorAll("[data-glass]")];
+  let glassBox=[];
+  function measureGlassy(){
+    const r=hud.getBoundingClientRect();
+    glassBox=glassy.map(el=>{
+      const b=el.getBoundingClientRect();
+      return {el, x0:b.left-r.left, y0:b.top-r.top, x1:b.right-r.left, y1:b.bottom-r.top, on:false};
+    });
+  }
+  function litGlassy(){
+    if(!glassBox.length) return;
+    const x=lens.x/DPR, y=lens.y/DPR, rr=R/DPR*0.92;
+    // One designator, one target. Both buttons fall inside a 460px lens at
+    // once and lit both, which put two callouts on top of each other — and a
+    // designator that resolves everything it can reach is not aiming at all.
+    let best=null, bd=1e9;
+    for(const g of glassBox){
+      // nearest point of the box to the lens centre, which is the honest test
+      // for "is the glass over this" for something that is not a point
+      const nx=Math.max(g.x0,Math.min(x,g.x1)), ny=Math.max(g.y0,Math.min(y,g.y1));
+      const d=Math.hypot(x-nx,y-ny);
+      if(d<=rr && d<bd){ bd=d; best=g; }
+    }
+    for(const g of glassBox){
+      const on=g===best;
+      if(on!==g.on){ g.on=on; g.el.classList.toggle("lit",on); }
+    }
+  }
+
   // The lens is a hole in the dark. Nothing behind it is visible anywhere else,
   // so the clip is the only thing standing between a visitor and a whole second
   // app rendered flat on the page.
@@ -1839,11 +1975,16 @@ sudo apt install ./agentglass_*.deb</code>
   /* ══════════════════════════════════════════════════════════════════
      THE GLASS — a curved combiner, not a magnifier.
 
-     Both layers arrive as premultiplied light on clear film, and the frame
-     leaves with alpha 0, so the compositor ADDS it to the page: the HUD can
-     brighten what is behind it and can never darken it. That is what lets
-     the demo behind the lens read through the gaps in the symbology instead
-     of being painted over by a black canvas.
+     Both layers arrive as premultiplied ink on clear film. The frame leaves
+     carrying that ink's own coverage as alpha, plus the glass's light — the
+     fresnel, the rim, the glare — added on top with no coverage of its own.
+     So the light only ever brightens what is behind the glass, while the
+     symbology can sit ON the world rather than glowing through it.
+
+     That distinction is the whole reason the app behind the lens can be shown
+     at something close to its real brightness. Pure addition meant every lit
+     pixel of the dashboard fought every lit pixel of the HUD, and the way to
+     make the HUD win was to turn the dashboard down until it was a rumour.
      ══════════════════════════════════════════════════════════════════ */
   const VS='#version 300 es\nin vec2 p; out vec2 uv;\nvoid main(){ uv=p*0.5+0.5; gl_Position=vec4(p,0.,1.); }';
   const FS=[
@@ -1853,16 +1994,23 @@ sudo apt install ./agentglass_*.deb</code>
   'uniform vec2 uRes; uniform vec2 uLens; uniform float uR; uniform float uT;',
   'uniform vec3 uPh;',
   // Each channel is bent by a slightly different amount — the dispersion a
-  // thick curved combiner puts on everything it carries. Textures are uploaded
-  // premultiplied, so every sample is already light and needs no alpha of its own.
-  'vec3 disperse(vec2 c, vec2 dir, float bend, float zoom){',
+  // thick curved combiner puts on everything it carries. Coverage comes from
+  // the middle tap: at a bend of about a pixel, three alphas would be the same
+  // alpha anyway.
+  // Magnification is small on purpose: most of what the two layers carry is
+  // identical (the headline, the rings, the ladder), and at 1.07 the glass drew
+  // a second, offset copy of every one of them — a lens that ghosts its own
+  // furniture rather than one that magnifies.
+  'vec4 disperse(vec2 c, vec2 dir, float bend, float zoom){',
   '  vec2 base = uLens/uRes;',
   '  vec2 rel  = c - base;',
   '  vec2 off  = dir*bend/uRes;',
-  '  return vec3(',
+  '  vec4 g = texture(uB, base + rel/(zoom*1.0000) - off*1.000);',
+  '  return vec4(',
   '    texture(uB, base + rel/(zoom*0.9945) - off*1.012).r,',
-  '    texture(uB, base + rel/(zoom*1.0000) - off*1.000).g,',
-  '    texture(uB, base + rel/(zoom*1.0055) - off*0.988).b);',
+  '    g.g,',
+  '    texture(uB, base + rel/(zoom*1.0055) - off*0.988).b,',
+  '    g.a);',
   '}',
   'void main(){',
   // Declared separately: initialising d from px in the same statement leaves it
@@ -1871,31 +2019,38 @@ sudo apt install ./agentglass_*.deb</code>
   '  vec2 px = uv*uRes;',
   '  vec2 d  = px - uLens;',
   '  float r = length(d)/uR;',
-  '  vec3 col;',
+  '  vec4 ink;',
+  '  vec3 lit = vec3(0.0);',
   '  if(r >= 1.0){',
-  '    col = texture(uA, uv).rgb;',
+  '    ink = texture(uA, uv);',
   // edge0 < edge1 always: a reversed smoothstep is undefined and returns NaN.
-  '    col *= 1.0 - (1.0 - smoothstep(1.0, 1.34, r)) * 0.30;',
+  // Scaling colour and coverage together keeps the symbology's hue and just
+  // lets more of the page through — dimming rgb alone would grey it out.
+  '    ink *= 1.0 - (1.0 - smoothstep(1.0, 1.34, r)) * 0.30;',
   '  } else {',
   '    float h = sqrt(max(0.0, 1.0 - r*r));',
   '    vec2 dir = (r > 0.0001) ? d/(r*uR) : vec2(0.0);',
   '    float k = 1.0 - h;',
-  '    col = disperse(uv, dir, k*k*uR*0.16, 1.0 + 0.07*h) * 1.06;',
-  '    col += uPh * pow(1.0-h, 3.0) * 0.20;',                       // fresnel, in phosphor
+  '    ink = disperse(uv, dir, k*k*uR*0.16, 1.0 + 0.022*h);',
+  '    ink.rgb *= 1.06;',                                           // symbology runs hot on glass
+  '    lit += uPh * pow(1.0-h, 3.0) * 0.13;',                       // fresnel, in phosphor
   '    float caustic = smoothstep(0.90,0.975,r) * (1.0 - smoothstep(0.975,1.0,r));',
-  '    col += uPh * caustic * 0.42;',                               // the combiner rim glows
+  '    lit += uPh * caustic * 0.34;',                               // the combiner rim glows
   '    vec2 L = normalize(vec2(-0.55, 0.62 + 0.05*sin(uT*0.5)));',
-  '    col += vec3(1.0) * (1.0 - smoothstep(0.0, 0.34, length(d/uR - L*0.5))) * 0.07;',
+  '    lit += vec3(1.0) * (1.0 - smoothstep(0.0, 0.34, length(d/uR - L*0.5))) * 0.045;',
   '    float edge = smoothstep(0.982,1.0,r);',
-  '    col = mix(col, uPh*1.15, edge*0.55);',
-  '    col = mix(texture(uA,uv).rgb, col, 1.0 - smoothstep(0.995,1.0,r));',
+  '    lit += uPh * edge * 0.42;',
+  // the last half-pixel of the rim, where the two layers change places
+  '    ink = mix(texture(uA,uv), ink, 1.0 - smoothstep(0.995,1.0,r));',
   '  }',
+  // Every figure above came down when the world behind the glass came up:
+  // the same phosphor that read as glass over black reads as fog over a lit
+  // dashboard.
   // The scanlines and the vignette used to live here, where they could only
   // reach the canvas. They are CSS now (.combiner), one layer above, so the
   // world behind the glass is under the same treatment as the symbology.
-  '  col += uPh * 0.018;',                                          // ambient phosphor haze
-  // alpha 0: everything this shader draws is added to the page, never over it
-  '  frag = vec4(col, 0.0);',
+  '  lit += uPh * 0.012;',                                          // ambient phosphor haze
+  '  frag = vec4(ink.rgb + lit, ink.a);',
   '}'].join('\n');
 
   let prog=null,uRes,uLens,uR,uT,uPh,texA,texB;
@@ -2094,7 +2249,7 @@ sudo apt install ./agentglass_*.deb</code>
         const k = reduce ? 1 : 1-Math.pow(1-0.085, Math.min(4, dt*60));
         lens.x+=(lens.tx-lens.x)*k; lens.y+=(lens.ty-lens.y)*k;
       }
-      clipBeyond();
+      clipBeyond(); litGlassy();
       drawUnaided(t); drawResolved(t);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,texA);
       gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,A);
@@ -2110,9 +2265,9 @@ sudo apt install ./agentglass_*.deb</code>
     }
     requestAnimationFrame(frame);
   }
-  resize(); lens.x=lens.tx=W*0.5; lens.y=lens.ty=H*0.5;
+  resize(); measureGlassy(); lens.x=lens.tx=W*0.5; lens.y=lens.ty=H*0.5;
   setMode(modeTxt);
-  addEventListener("resize",()=>{ resize(); setMode(modeTxt); });
+  addEventListener("resize",()=>{ resize(); measureGlassy(); setMode(modeTxt); });
   requestAnimationFrame(frame);
 
   // The app behind the glass comes up once the page has nothing better to do.
