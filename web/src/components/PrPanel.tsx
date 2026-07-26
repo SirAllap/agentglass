@@ -176,9 +176,13 @@ export const MD_CSS = `
 .agx-btn:active:not(:disabled){transform:translateY(1px) scale(.99)}
 .agx-btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .agx-btn[data-busy]{pointer-events:none;opacity:.6}
-/* margin:0, not "0 auto". The measure is still capped for reading, but a
-   centred column inside a card sets the body 380px away from the author name
-   above it, which reads as a layout fault rather than as typography. */
+/* A body fills the box it was given. There used to be a 78ch measure here,
+   borrowed from prose typography, and it was the wrong rule twice over: this
+   panel renders in a monospace face, so ch is a fixed pixel wall (measured at
+   584px) rather than a measure that breathes, and it left a third of a card
+   empty beside text that stopped in mid-air. GitHub caps nothing here either,
+   so the same pull request read narrower in the app than on the page it came
+   from. Reading comfort on a wide display is what the panel width is for. */
 /* One timeline, one rail. The node says what kind of thing happened; the
    rail says they happened in an order. */
 .agx-tl{position:relative;padding-left:26px}
@@ -209,7 +213,7 @@ export const MD_CSS = `
 .agx-hl pre{margin:0;padding:10px 12px;border-radius:8px;overflow-x:auto;background:color-mix(in srgb,#000 42%,transparent) !important;border:1px solid color-mix(in srgb,var(--border) 30%,transparent)}
 .agx-hl code{font-size:11.5px;line-height:1.65}
 .agx-md .agx-hl{margin:0 0 .85em}
-.agx-md{max-width:78ch;margin:0;line-height:1.7;font-size:12.5px;color:var(--text2)}
+.agx-md{margin:0;line-height:1.7;font-size:12.5px;color:var(--text2)}
 .agx-md>*:first-child{margin-top:0}
 .agx-md>*:last-child{margin-bottom:0}
 .agx-md p{margin:0 0 .85em}
