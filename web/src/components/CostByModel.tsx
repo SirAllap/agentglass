@@ -3,7 +3,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { motion } from "motion/react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
-import { fmtUsd, fmtTokens, modelColor } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, modelColor, repoColor } from "../lib/format.ts";
 
 type View = "model" | "repo";
 type Item = { key: string; label: string; color: string; cost: number; tokens: number };
@@ -20,9 +20,9 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
           .map((m) => ({ key: m.model_name, label: m.model_name, color: modelColor(m.model_name), cost: m.cost_usd, tokens: m.input_tokens + m.output_tokens }))
       : (stats?.by_repo ?? [])
           .filter((r) => r.cost_usd > 0 || r.input_tokens > 0)
-          .map((r) => {
+          .map((r, i) => {
             const label = r.project_path ? repoName(r.project_path) : "no repo";
-            return { key: r.project_path ?? "—", label, color: modelColor(label), cost: r.cost_usd, tokens: r.input_tokens + r.output_tokens };
+            return { key: r.project_path ?? "—", label, color: repoColor(i), cost: r.cost_usd, tokens: r.input_tokens + r.output_tokens };
           });
 
   const total = items.reduce((s, m) => s + m.cost, 0);

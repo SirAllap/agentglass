@@ -121,3 +121,9 @@ export const MODEL_COLORS: Record<string, string> = {
   unknown: "#64748b",
 };
 export const modelColor = (m: string) => MODEL_COLORS[m] ?? hashColor(m);
+
+const REPO_COLORS = [
+  "#f472b6", "#60a5fa", "#34d399", "#fb923c", "#c084fc", "#facc15",
+  "#22d3ee", "#f87171", "#a3e635", "#818cf8", "#2dd4bf", "#e879f9",
+];
+export const repoColor = (index: number) => REPO_COLORS[index % REPO_COLORS.length];
