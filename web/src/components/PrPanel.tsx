@@ -34,6 +34,7 @@ import { stepFileIndex } from "../lib/prNav.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { parseQuery, applyFilters, buildFacets, activeCount } from "../lib/prFilter.ts";
 import { getHighlighter, shikiTheme } from "../lib/highlight.ts";
+import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 
 type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
@@ -1204,7 +1205,7 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
 
       <div className="flex gap-1.5 flex-wrap items-center">
         <Btn onClick={onLocalReview} disabled={busy} primary title="Check the PR out into a throwaway worktree and review it with the whole repo in context">Review locally with Claude</Btn>
-        <a href={d.url} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
+        <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open on GitHub ↗</a>
       </div>
 
@@ -1392,7 +1393,7 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLab
               <MenuItem onClick={() => { close(); onDraft(); }}>◌ {d.isDraft ? "Mark ready for review" : "Convert to draft"}</MenuItem>
               <MenuSep />
               <MenuItem onClick={() => { close(); onCopyLink(); }}>🔗 Copy link</MenuItem>
-              <MenuItem onClick={() => { close(); window.open(d.url, "_blank", "noreferrer,noopener"); }}>↗ Open on GitHub</MenuItem>
+              <MenuItem onClick={() => { close(); openExternal(d.url); }}>↗ Open on GitHub</MenuItem>
               <MenuItem onClick={() => { close(); onLocalReview(); }}>✦ Review locally with Claude</MenuItem>
               <MenuSep />
               <MenuItem onClick={() => { close(); onClose(); }} danger>✕ {d.state === "CLOSED" ? "Reopen" : "Close"} pull request</MenuItem>
@@ -1682,8 +1683,13 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
 /** Out to GitHub, for the one thing the panel does not show — the full history
  *  of an edit, a reaction, the blame behind a line. */
 function GhLink({ href, title }: { href: string; title: string }) {
+  // Nothing rather than a link we cannot vouch for: every one of these comes
+  // out of an API response, and a link that does not navigate somewhere plain
+  // is not one we should be offering.
+  const safe = externalUrl(href);
+  if (!safe) return null;
   return (
-    <a href={href} target="_blank" rel="noreferrer noopener" title={title}
+    <a href={safe} target="_blank" rel="noreferrer noopener" title={title}
       className="shrink-0 text-[10px] px-1 rounded"
       style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>↗</a>
   );
@@ -2108,7 +2114,7 @@ function Checks({ d, onRerun, onAsk, busy }: { d: PrDetail; onRerun: () => void;
                     <div className="flex items-center gap-1.5 flex-wrap px-2.5 pb-2 pt-0.5">
                       {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude">✦ Ask Claude why</Btn>}
                       {k.url && (
-                        <a href={k.url} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
+                        <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
                           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open run ↗</a>
                       )}
                       <Btn onClick={onRerun} disabled={busy} small title="Re-run every failing check on this pull request">↻ Re-run failed</Btn>
