@@ -9,6 +9,11 @@ dist/
 .env.local
 web/dist/
 
+# non-bun lockfiles — this repo installs with bun (bun.lock)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
 # python
 __pycache__/
 *.pyc
