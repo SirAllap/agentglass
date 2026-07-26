@@ -235,9 +235,22 @@ function checksRank(p: PrSummary): number {
   return v[0] === "red" ? 0 : v[0] === "pending" ? 1 : 2;
 }
 
-/** The filtered + sorted rows the list renders. */
+/** The filtered + sorted rows, for callers that hold the whole set. */
 export function applyFilters(prs: PrSummary[], f: FilterState): PrSummary[] {
   return prs.filter((p) => matches(p, f)).sort(SORTERS[f.sort] ?? SORTERS[DEFAULT_SORT]);
+}
+
+/**
+ * Sort only, no filtering.
+ *
+ * What the panel wants now that the filter travels to GitHub: the rows in hand
+ * ARE the answer, and re-running the same predicate over them can only remove
+ * some — which is how a list ends up showing eight rows under a heading that
+ * says 216 total. GitHub's `status:` and this panel's `checks:` are close but
+ * not identical, and the page is a page, not the set.
+ */
+export function sortRows(prs: PrSummary[], f: FilterState): PrSummary[] {
+  return [...prs].sort(SORTERS[f.sort] ?? SORTERS[DEFAULT_SORT]);
 }
 
 export interface FacetOption { value: string; label: string; count: number }
@@ -266,7 +279,16 @@ function optionLabel(key: ArrayKey, value: string): string {
 // number of rows that pass every OTHER facet and carry that option — so a
 // facet's own ticks never shrink its sibling counts. Rows whose field is
 // unknown (checks still loading) are left out of the tally.
-export function buildFacets(prs: PrSummary[], f: FilterState): FacetView[] {
+/** The repository's own options, so the menus are not a sample of one page. */
+export interface RepoFacets {
+  authors: string[];
+  assignees: string[];
+  labels: { name: string; color: string }[];
+  milestones: string[];
+  bases: string[];
+}
+
+export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets | null): FacetView[] {
   return FACETS.map((facet) => {
     const others: FilterState = { ...f, [facet.key]: [] };
     const pool = prs.filter((p) => matches(p, others));
@@ -283,13 +305,24 @@ export function buildFacets(prs: PrSummary[], f: FilterState): FacetView[] {
       for (const v of vals) note(v);
     }
 
-    // Fixed-enum facets show every option (even zero) in a stable order;
-    // free-form facets show the values that exist, most-common first.
+    // Fixed-enum facets show every option in a stable order. Free-form ones
+    // come from the REPOSITORY when we know it — the values on the current page
+    // are a sample, and a menu built from a sample cannot offer the contributor
+    // whose pull requests are all on page four. The page's own values are the
+    // fallback, and are merged in so nothing on screen is missing from the menu.
     let values: string[];
     if (facet.fixed) {
       values = facet.fixed.slice();
     } else {
-      values = order.sort((a, b) => (counts.get(b)! - counts.get(a)!) || a.localeCompare(b));
+      const fromRepo =
+        facet.key === "authors" ? repo?.authors
+        : facet.key === "assignees" ? repo?.assignees
+        : facet.key === "labels" ? repo?.labels.map((l) => l.name)
+        : facet.key === "milestones" ? repo?.milestones
+        : facet.key === "base" ? repo?.bases
+        : undefined;
+      const seen = order.sort((a, b) => (counts.get(b)! - counts.get(a)!) || a.localeCompare(b));
+      values = fromRepo?.length ? [...new Set([...fromRepo, ...seen])] : seen;
     }
     // Keep a selected value visible even if it currently matches nothing, so its
     // checkbox stays tickable (the escape hatch out of an empty filter).
@@ -300,6 +333,9 @@ export function buildFacets(prs: PrSummary[], f: FilterState): FacetView[] {
       queryKey: facet.queryKey,
       label: facet.label,
       selected: f[facet.key] as string[],
+      // No count. It could only ever count the page in hand, and GitHub's own
+      // facet menus do not show one either — a number that means "on this page"
+      // beside a filter that searches everything is worse than no number.
       options: values.map((v) => ({ value: v, label: optionLabel(facet.key, v), count: counts.get(v) ?? 0 })),
     };
   });

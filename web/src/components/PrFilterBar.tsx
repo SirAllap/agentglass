@@ -107,7 +107,7 @@ export function PrFilterBar({
           <button onClick={() => onQuery("")} className="text-[9.5px] px-1.5 py-0.5 rounded-full hover:bg-white/5" style={{ color: "var(--text3)" }}>
             Clear all
           </button>
-          <span className="ml-auto text-[9px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{shown} of {total}</span>
+          <span className="ml-auto text-[9px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{total} match{total === 1 ? "" : "es"}</span>
         </div>
       )}
     </div>

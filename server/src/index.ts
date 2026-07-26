@@ -52,7 +52,7 @@ import {
 } from "./docker.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
-  editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables,
+  editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
   rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
 } from "./prs.ts";
@@ -979,7 +979,11 @@ const server = Bun.serve<WsData>({
         url.searchParams.get("state") || "open",
         url.searchParams.get("force") === "1",
         url.searchParams.get("after") || undefined,
+        url.searchParams.get("q") || undefined,
       ));
+    }
+    if (pathname === "/prs/facets") {
+      return json(await facetOptions(url.searchParams.get("root") || ""));
     }
     if (pathname === "/prs/mentions") {
       return json(await mentionables(url.searchParams.get("root") || ""));

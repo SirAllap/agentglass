@@ -400,7 +400,7 @@ const LIST_TTL_MS = 90_000;
 // `\u0000` written as an escape, never as the byte: a raw NUL makes the whole
 // file read as binary to grep, which then skips it in silence. Same separator,
 // same keys, still searchable.
-const cacheKey = (repo: PrRepoId, filter: PrFilter, state: PrState, after?: string) => `${repo.key}\u0000${filter}\u0000${state}\u0000${after ?? ""}`;
+const cacheKey = (repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, query?: string) => `${repo.key}\u0000${filter}\u0000${state}\u0000${after ?? ""}\u0000${query ?? ""}`;
 
 // Exported for the test that pins the gh-JSON field extraction (assignees,
 // milestone) — the shapes gh returns are an assumption worth guarding.
@@ -470,7 +470,30 @@ const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
 }`;
 
 /** The search expression for a scope + state, in GitHub's own qualifier grammar. */
-function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState): string {
+/**
+ * The panel's filter, expressed as GitHub's own search.
+ *
+ * The facets used to be applied to whatever page happened to be loaded, which
+ * meant the Author menu listed only the authors on that page and picking one
+ * filtered 25 rows out of 216 — you could not see all of a contributor's pull
+ * requests at all. Every facet GitHub's search understands is therefore sent to
+ * GitHub, and the answer is the whole repository rather than the current page.
+ *
+ * The panel's grammar and GitHub's differ in three places, so those are mapped:
+ * `checks:` is GitHub's `status:`, `is:draft|ready` is `draft:true|false`, and a
+ * value with spaces is quoted. Repeated values of one facet are OR-ed, which
+ * search does natively for the qualifiers that allow repetition.
+ */
+const QUALIFIER: Record<string, string> = {
+  author: "author", assignee: "assignee", label: "label",
+  milestone: "milestone", review: "review", base: "base",
+};
+
+function quoteQ(v: string): string {
+  return /[\s"]/.test(v) ? `"${v.replace(/"/g, "")}"` : v;
+}
+
+function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState, query?: string): string {
   const parts = [`repo:${repo.nameWithOwner}`, "is:pr"];
   // `is:closed` covers merged as well, which is what GitHub's own Closed tab
   // means and what this panel promises.
@@ -478,8 +501,57 @@ function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState): string {
   else if (state === "closed") parts.push("is:closed");
   if (filter === "mine") parts.push("author:@me");
   else if (filter === "review") parts.push("review-requested:@me");
+
+  const free: string[] = [];
+  for (const tok of tokenize(query ?? "")) {
+    const ci = tok.indexOf(":");
+    const key = ci > 0 ? tok.slice(0, ci).toLowerCase() : "";
+    const rawValue = ci > 0 ? tok.slice(ci + 1) : "";
+    const value = rawValue.startsWith('"') ? rawValue.slice(1, rawValue.endsWith('"') ? -1 : undefined) : rawValue;
+    // A half-typed `author:` is a filter in progress, not a phrase to search
+    // for — sending it makes GitHub narrow to an empty author, or reject the
+    // query outright.
+    if (key && !value) continue;
+    if (!key) { if (tok.trim()) free.push(tok); continue; }
+    const q = QUALIFIER[key];
+    if (q) { parts.push(`${q}:${quoteQ(value)}`); continue; }
+    if (key === "checks") {
+      const st = value.toLowerCase() === "green" ? "success" : value.toLowerCase() === "red" ? "failure" : "pending";
+      parts.push(`status:${st}`);
+      continue;
+    }
+    if (key === "is") {
+      if (value.toLowerCase() === "draft") parts.push("draft:true");
+      else if (value.toLowerCase() === "ready") parts.push("draft:false");
+      continue;
+    }
+    if (key === "sort") continue; // ordering is decided below, not by the user's text
+    free.push(tok); // an unknown qualifier is somebody's words, not a filter
+  }
+  // Free words search the title and body, which is what typing into the box
+  // means. ALWAYS quoted: `foo:bar` is not a qualifier we know, and sent bare it
+  // would either be read as one or make GitHub reject the whole search.
+  for (const w of free) parts.push(`"${w.replace(/"/g, "")}"`);
+
   parts.push("sort:updated-desc");
   return parts.join(" ");
+}
+
+/** Exported for the test that pins the translation to GitHub's grammar. */
+export const __test_searchExpr = searchExpr;
+
+/** Split on spaces, keeping `key:"two words"` in one piece. */
+function tokenize(input: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quoted = false;
+  for (const ch of input) {
+    if (ch === '"') { quoted = !quoted; cur += ch; continue; }
+    if (!quoted && /\s/.test(ch)) { if (cur) out.push(cur); cur = ""; continue; }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
 }
 
 /**
@@ -493,8 +565,8 @@ function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState): string {
  * rollup to its cheap aggregate counts (see fetchCheckRollups).
  */
 type ListPage = { rows: PrSummary[]; total: number; hasNext: boolean; cursor: string | null };
-async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, onRows?: (p: ListPage) => void): Promise<ListPage | null> {
-  const vars = { q: searchExpr(repo, filter, state), first: LIST_PAGE, ...(after ? { after } : {}) };
+async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, onRows?: (p: ListPage) => void, query?: string): Promise<ListPage | null> {
+  const vars = { q: searchExpr(repo, filter, state, query), first: LIST_PAGE, ...(after ? { after } : {}) };
   // Both at once — GitHub really does run them concurrently (measured: the pair
   // costs what the slower one costs, not their sum). The rows are handed over
   // the moment they land rather than waiting on the checks, so the list appears
@@ -687,8 +759,8 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, state: PrState, rows: P
 }
 
 /** Refresh behind the response. Never awaited by a request handler. */
-function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string): void {
-  const key = cacheKey(repo, filter, state, after);
+function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, query?: string): void {
+  const key = cacheKey(repo, filter, state, after, query);
   if (inflight.has(key)) return;
   inflight.add(key);
   const prev = listCache.get(key);
@@ -716,7 +788,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: s
           at: Date.now(), prs: early.rows, loading: false, checksPending: true,
           total: early.total, hasNext: early.hasNext, cursor: early.cursor,
         });
-      });
+      }, query);
       if (page === null) {
         // gh itself failed (a network blip, a rate-limit) — far more likely than
         // a repository that lost every pull request, so keep whatever we had. But
@@ -829,6 +901,49 @@ export async function mentionables(rootIn: unknown): Promise<{ ok: boolean; data
 }
 
 /**
+ * What the facet menus can offer, taken from the repository rather than the
+ * page on screen.
+ *
+ * This is the fix for a menu that listed three authors because three authors
+ * happened to appear in the first twenty-five rows — with pages, anything
+ * derived from the loaded rows is a sample, not a set. Cached for a few
+ * minutes: labels and milestones change on a human timescale.
+ */
+export type PrFacetOptions = {
+  authors: string[];
+  assignees: string[];
+  labels: { name: string; color: string }[];
+  milestones: string[];
+  bases: string[];
+};
+const facetCache = new Map<string, { at: number; data: PrFacetOptions }>();
+const FACET_TTL_MS = 5 * 60_000;
+
+export async function facetOptions(rootIn: unknown): Promise<{ ok: boolean; data?: PrFacetOptions; error?: string }> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const hit = facetCache.get(repo.key);
+  if (hit && Date.now() - hit.at < FACET_TTL_MS) return { ok: true, data: hit.data };
+  const r = repo.nameWithOwner;
+  const [contribs, assignees, labels, milestones, branches] = await Promise.all([
+    ghJson<any[]>(["api", `repos/${r}/contributors?per_page=100`]),
+    ghJson<any[]>(["api", `repos/${r}/assignees?per_page=100`]),
+    ghJson<any[]>(["api", `repos/${r}/labels?per_page=100`]),
+    ghJson<any[]>(["api", `repos/${r}/milestones?state=all&per_page=100`]),
+    ghJson<any[]>(["api", `repos/${r}/branches?per_page=100`]),
+  ]);
+  const data: PrFacetOptions = {
+    authors: (contribs ?? []).map((c: any) => String(c?.login ?? "")).filter(Boolean),
+    assignees: (assignees ?? []).map((a: any) => String(a?.login ?? "")).filter(Boolean),
+    labels: (labels ?? []).map((l: any) => ({ name: String(l?.name ?? ""), color: String(l?.color ?? "") })).filter((l) => l.name),
+    milestones: (milestones ?? []).map((m: any) => String(m?.title ?? "")).filter(Boolean),
+    bases: (branches ?? []).map((b: any) => String(b?.name ?? "")).filter(Boolean),
+  };
+  facetCache.set(repo.key, { at: Date.now(), data });
+  return { ok: true, data };
+}
+
+/**
  * The checkout's current branch, cached briefly.
  *
  * `git rev-parse` ran on every single list read — a process spawn on the 20s
@@ -852,11 +967,14 @@ async function headBranch(root: string): Promise<string> {
  * old — so the poll never waits on the network, and the age is shown rather
  * than hidden behind a spinner that lies.
  */
-export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unknown, force = false, afterIn?: unknown): Promise<PrListResponse> {
+export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unknown, force = false, afterIn?: unknown, queryIn?: unknown): Promise<PrListResponse> {
   const filter: PrFilter = filterIn === "review" || filterIn === "all" ? filterIn : "mine";
   const state: PrState = stateIn === "closed" || stateIn === "all" ? stateIn : "open";
   // A cursor is opaque base64 from GitHub; anything else is not ours to send on.
   const after = typeof afterIn === "string" && /^[A-Za-z0-9+/=_-]{1,200}$/.test(afterIn) ? afterIn : undefined;
+  // The panel's filter text, kept whole: searchExpr decides what of it is a
+  // qualifier and what is somebody's words.
+  const query = typeof queryIn === "string" ? queryIn.slice(0, 400) : undefined;
   const repo = await repoIdFor(rootIn);
   if (!repo) {
     const cap = await ghCapability();
@@ -866,10 +984,10 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
       error: !cap.available || !cap.authed ? cap.reason : "no GitHub remote on this repository",
     };
   }
-  const key = cacheKey(repo, filter, state, after);
+  const key = cacheKey(repo, filter, state, after, query);
   const hit = listCache.get(key);
   const age = hit ? Date.now() - hit.at : Infinity;
-  if (force || !hit || age > LIST_TTL_MS) refreshList(repo, filter, state, after);
+  if (force || !hit || age > LIST_TTL_MS) refreshList(repo, filter, state, after, query);
   const cur = listCache.get(key);
 
   // "you are here" — the checkout's branch, matched against the PR heads. This

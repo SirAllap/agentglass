@@ -35,7 +35,7 @@ import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex } from "../lib/prNav.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
-import { parseQuery, applyFilters, buildFacets, activeCount } from "../lib/prFilter.ts";
+import { parseQuery, sortRows, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
 import { getHighlighter, shikiTheme } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 
@@ -547,6 +547,18 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   // Fetched once per repo, cached server-side for five minutes: the composer
   // wants an instant dropdown, not a live directory.
   const [mentions, setMentions] = useState<Mentionables | null>(null);
+  /** The repository's own labels, authors, milestones and branches. Derived
+   *  from the loaded page before, which made the Author menu a list of whoever
+   *  happened to be on page one. */
+  const [facetOpts, setFacetOpts] = useState<RepoFacets | null>(null);
+  useEffect(() => {
+    if (!active || !root) return;
+    let live = true;
+    api.prFacets(root)
+      .then((r) => { if (live && r.ok && r.data) setFacetOpts(r.data); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [active, root]);
   useEffect(() => {
     if (!active || !root) return;
     let live = true;
@@ -592,7 +604,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (!root) return;
     const req = ++listReq.current;
     const want = filter;
-    api.prList(root, filter, stateSel, force, cursor).then((r) => {
+    api.prList(root, filter, stateSel, force, cursor, query).then((r) => {
       if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
       setPrs(r.prs);
@@ -608,7 +620,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       if (req !== listReq.current) return;
       setListState({ fetchedAt: 0, loading: false, error: String(e) });
     });
-  }, [root, filter, stateSel, cursor]);
+  }, [root, filter, stateSel, cursor, query]);
 
   /**
    * Switching filter empties the pane before anything is fetched.
@@ -773,8 +785,8 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   // editors of it (see lib/prFilter.ts). `filters` is a pure derivation, never
   // stored, so the bar and the menus can never disagree.
   const filters = useMemo(() => parseQuery(query), [query]);
-  const visiblePrs = useMemo(() => applyFilters(prs, filters), [prs, filters]);
-  const facets = useMemo(() => buildFacets(prs, filters), [prs, filters]);
+  const visiblePrs = useMemo(() => sortRows(prs, filters), [prs, filters]);
+  const facets = useMemo(() => buildFacets(prs, filters, facetOpts), [prs, filters, facetOpts]);
 
   /** What each view last counted.
    *
@@ -785,22 +797,17 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
    *  because a made-up one next to "Failing" is worse than none: you would act
    *  on it. */
   const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
-  useEffect(() => {
-    if (listState.loading) return;
-    const seen: Record<string, number> = {};
-    for (const v of VIEWS) if (v.scope === filter) seen[v.id] = applyFilters(prs, parseQuery(v.query)).length;
-    setViewCounts((cur) => ({ ...cur, ...seen }));
-  }, [prs, filter, listState.loading]);
-
+  /**
+   * Only the server's totals. Nothing is counted from the rows on screen.
+   *
+   * A tally of the current page under a pill that filters the whole repository
+   * is not a smaller truth, it is a wrong one — it read "Yoshiofthewire 2" when
+   * he has three, because the third is on page four.
+   */
   const viewCount = useCallback((v: (typeof VIEWS)[number]): number | null => {
-    // The server's exact total wins. Counting the rows on screen was right when
-    // the list was everything; with pages it answers "how many on this page",
-    // which is a different question wearing the same badge.
     const exact = viewCounts[v.id];
-    if (typeof exact === "number") return exact;
-    if (v.scope === filter && !listState.loading && !listState.hasNext) return applyFilters(prs, parseQuery(v.query)).length;
-    return null;
-  }, [filter, prs, viewCounts, listState.loading, listState.hasNext]);
+    return typeof exact === "number" ? exact : null;
+  }, [viewCounts]);
 
   const activeView = VIEWS.find((v) => v.scope === filter && v.query === query.trim());
 
@@ -1238,7 +1245,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
               onQuery={setQuery}
               checksPending={listState.checksPending}
               shown={visiblePrs.length}
-              total={prs.length}
+              total={listState.total ?? prs.length}
             />
           )}
           <div ref={listRef} tabIndex={-1} onKeyDown={onListKey} className="flex-1 overflow-y-auto min-h-0 agx-scroll outline-none">

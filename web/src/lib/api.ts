@@ -361,8 +361,12 @@ const realApi = {
     post<PrActionResult>("/prs/assignees", { root, number, add, remove }),
   prMilestone: (root: string, number: number, title: string) =>
     post<PrActionResult>("/prs/milestone", { root, number, title }),
-  prList: (root: string, filter: "mine" | "review" | "all", state: "open" | "closed" | "all" = "open", force = false, after?: string) =>
-    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}${after ? `&after=${encodeURIComponent(after)}` : ""}`),
+  prList: (root: string, filter: "mine" | "review" | "all", state: "open" | "closed" | "all" = "open", force = false, after?: string, q?: string) =>
+    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}${after ? `&after=${encodeURIComponent(after)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
+  /** What the facet menus can offer — from the repository, not the page. */
+  prFacets: (root: string) =>
+    get<{ ok: boolean; data?: { authors: string[]; assignees: string[]; labels: { name: string; color: string }[]; milestones: string[]; bases: string[] }; error?: string }>(
+      `/prs/facets?root=${encodeURIComponent(root)}`),
   /** Who `@` can complete to, and which issues `#` can. */
   prMentions: (root: string) =>
     get<{ ok: boolean; data?: { users: string[]; issues: { number: number; title: string }[] }; error?: string }>(
@@ -584,7 +588,8 @@ const demoApi: typeof realApi = {
   // The panel used to answer available:false here, so the feature the landing
   // page calls out as new was dead in the demo that page links to.
   prCapability: (_force?: boolean) => D(demo.prCapability()),
-  prList: (root: string, filter: "mine" | "review" | "all", _state?: "open" | "closed" | "all", _force?: boolean, _after?: string) => D<PrListResponse>(demo.prList(root, filter)),
+  prFacets: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; data?: { authors: string[]; assignees: string[]; labels: { name: string; color: string }[]; milestones: string[]; bases: string[] }; error?: string }),
+  prList: (root: string, filter: "mine" | "review" | "all", _state?: "open" | "closed" | "all", _force?: boolean, _after?: string, _q?: string) => D<PrListResponse>(demo.prList(root, filter)),
   prMentions: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; data?: { users: string[]; issues: { number: number; title: string }[] }; error?: string }),
   prLineComment: () => D(demoPrAction()),
   prJobLog: () => D({ ok: false, error: "not available in the demo" }),
