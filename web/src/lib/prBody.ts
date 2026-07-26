@@ -87,6 +87,28 @@ export function renderInline(raw: string, autolinkRepo?: string): string {
   return s.replace(new RegExp(`${SLOT}(\\d+)${SLOT}`, "g"), (_m, i: string) => spans[Number(i)] ?? "");
 }
 
+/**
+ * The text inside a `<summary>`, with any markup taken out.
+ *
+ * Stripping tags in one pass is the classic incomplete sanitisation: `<scr` +
+ * `<b>` + `ipt>` survives as `<script>`, because removing the inner tag closes
+ * the outer one up. Repeating until the string stops changing is what actually
+ * removes them. The result is rendered as a React text child (escaped again on
+ * the way out), so this is belt and braces rather than the only guard — but a
+ * function that looks like a sanitiser has to be one.
+ */
+export function stripTags(raw: string): string {
+  let prev = "";
+  let out = raw;
+  // Bounded, so a pathological input cannot spin here.
+  for (let i = 0; i < 20 && out !== prev; i++) {
+    prev = out;
+    out = out.replace(/<[^<>]*>/g, "");
+  }
+  // Anything left that still looks like a tag opener is neutralised outright.
+  return out.replace(/[<>]/g, "");
+}
+
 export type MdListItem = { html: string; checked?: boolean; depth: number };
 
 export type MdBlock =
@@ -145,7 +167,7 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
         if (/^\s*<details[^>]*>\s*$/i.test(l)) depth++;
         if (/^\s*<\/details>\s*$/i.test(l)) { depth--; if (depth === 0) break; }
         const sum = l.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i);
-        if (sum && !summary) { summary = sum[1]!.replace(/<[^>]+>/g, "").trim(); continue; }
+        if (sum && !summary) { summary = stripTags(sum[1]!).trim(); continue; }
         inner.push(l);
       }
       out.push({ kind: "details", summary: summary || "Details", blocks: parseBody(inner.join("\n"), autolinkRepo) });

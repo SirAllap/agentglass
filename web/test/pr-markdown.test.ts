@@ -6,7 +6,7 @@
 // as punctuation. The escaping tests are the ones with teeth — a body is a
 // string a stranger wrote.
 import { describe, expect, test } from "bun:test";
-import { parseBody, renderInline } from "../src/lib/prBody.ts";
+import { parseBody, renderInline, stripTags } from "../src/lib/prBody.ts";
 
 describe("<details>", () => {
   test("folds into a details block, with its summary and its inner markdown", () => {
@@ -130,5 +130,34 @@ describe("suggested changes", () => {
 
   test("the language match is case-insensitive and survives a longer fence", () => {
     expect(parseBody("````SUGGESTION\nz\n````")[0]!.kind).toBe("suggestion");
+  });
+});
+
+describe("summary sanitisation", () => {
+  // The old strip was a single `replace(/<[^>]+>/g, "")`, which is what CodeQL
+  // called incomplete multi-character sanitization. Verified against it: each
+  // of these came out with `<script` still in the string.
+  test("an unclosed tag does not survive — the one-pass strip left it whole", () => {
+    for (const evil of ["report <script", "a <script src=x", "<b>ok</b> <script"]) {
+      expect(stripTags(evil)).not.toContain("<script");
+      expect(stripTags(evil)).not.toContain("<");
+    }
+  });
+
+  test("nested tags cannot reassemble into one", () => {
+    expect(stripTags("<scr<b>ipt>alert(1)</scr</b>ipt>")).not.toContain("<script");
+    expect(stripTags("<scr<b>ipt>")).not.toContain("<");
+  });
+
+  test("a <details> summary comes through as plain text, whatever was in it", () => {
+    const blocks = parseBody("<details>\n<summary>report <script</summary>\nbody\n</details>");
+    const d = blocks[0]!;
+    if (d.kind !== "details") throw new Error("not details");
+    expect(d.summary).not.toContain("<");
+    expect(d.summary).not.toContain(">");
+  });
+
+  test("ordinary markup inside a summary is simply removed", () => {
+    expect(stripTags("<b>Coverage</b> report")).toBe("Coverage report");
   });
 });
