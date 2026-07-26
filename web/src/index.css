@@ -568,6 +568,39 @@
 }
 :root[data-idle="1"] .agx-pip { animation-play-state: paused !important; }
 
+/* A reply that has been asked for and has not started arriving.
+
+   This was a single static caret, which says "something is here" and nothing
+   more — indistinguishable from a turn that has quietly stalled, which is the
+   one thing you actually want to rule out while waiting. Dots that keep time
+   say the far end is alive.
+
+   Opacity on three small spans, nothing else: no layout, no repaint of what is
+   behind them. A turn can run for minutes, and on a software-composited stack
+   an animation that touches layout is a per-frame CPU tax for all of it. */
+@keyframes agx-typing {
+  0%, 60%, 100% { opacity: 0.2; }
+  30%           { opacity: 0.95; }
+}
+.agx-typing-dot { animation: agx-typing 1.25s ease-in-out infinite; }
+.agx-typing-dot:nth-child(2) { animation-delay: 0.16s; }
+.agx-typing-dot:nth-child(3) { animation-delay: 0.32s; }
+
+/* The caret that trails text as it streams. Same reasoning, quieter: here the
+   arriving words are already proof of life, so this only has to look like a
+   cursor rather than carry the signal on its own. */
+@keyframes agx-caret { 0%, 45% { opacity: 1; } 55%, 100% { opacity: 0.15; } }
+.agx-caret { animation: agx-caret 1.1s steps(1, end) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still visibly "waiting", just not moving. Removing them entirely would
+     leave the reply looking like it had not been sent. */
+  .agx-typing-dot { animation: none; opacity: 0.6; }
+  .agx-caret { animation: none; opacity: 0.7; }
+}
+:root[data-idle="1"] .agx-typing-dot,
+:root[data-idle="1"] .agx-caret { animation-play-state: paused !important; }
+
 /* A chat that replied while you were elsewhere. Deliberately a slow, low-
    contrast breath rather than a hard blink: it sits in a header you look at
    all day, and something that flashes urgently for a message that can wait

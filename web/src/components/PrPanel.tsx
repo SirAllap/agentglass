@@ -245,7 +245,9 @@ export const MD_CSS = `
 .agx-md .agx-details>summary{cursor:pointer;color:var(--text);font-weight:600;list-style:revert}
 .agx-md .agx-details>div{margin-top:.7em}
 .agx-md .agx-suggestion{margin:0 0 .9em;border:1px solid color-mix(in srgb,var(--success) 45%,transparent);border-radius:6px;overflow:hidden}
-.agx-md .agx-suggestion-head{font-size:.8em;letter-spacing:.05em;text-transform:uppercase;padding:.35em .8em;color:var(--success);background:color-mix(in srgb,var(--success) 12%,transparent)}
+.agx-md .agx-suggestion-head{font-size:.8em;letter-spacing:.05em;text-transform:uppercase;padding:.35em .8em;color:var(--success);background:color-mix(in srgb,var(--success) 12%,transparent);display:flex;align-items:center;gap:.7em}
+.agx-md .agx-suggestion-apply{margin-left:auto;text-transform:none;letter-spacing:0;font-size:.95em;padding:.1em .6em;border-radius:5px;border:1px solid color-mix(in srgb,var(--success) 50%,transparent);color:var(--success);cursor:pointer}
+.agx-md .agx-suggestion-apply:disabled{opacity:.45;cursor:default}
 .agx-md .agx-suggestion pre{margin:0;border:0;border-radius:0;background:color-mix(in srgb,var(--success) 6%,transparent)}
 .agx-md .agx-alert{margin:0 0 .9em;padding:.6em .9em;border-left:3px solid;border-radius:0 6px 6px 0;display:flex;flex-direction:column;gap:.3em}
 .agx-md .agx-alert>b{font-size:.82em;letter-spacing:.06em}
@@ -257,6 +259,31 @@ export const MD_CSS = `
 
 /** One markdown block. Images go through the proxy — GitHub's own attachment
  *  URLs answer 404 without the token, and those are the review's evidence. */
+/**
+ * A proposed replacement, with the button that takes it.
+ *
+ * GitHub has no API for this — their Apply button is web-only — so the server
+ * writes the commit itself: read the file at the head of the branch, splice the
+ * lines, commit through `createCommitOnBranch` with the head oid as a guard so
+ * a concurrent push is refused rather than clobbered.
+ */
+function Suggestion({ text }: { text: string }) {
+  const ctx = useContext(SuggestCtx);
+  return (
+    <div className="agx-suggestion">
+      <div className="agx-suggestion-head">
+        <span>Suggested change</span>
+        {ctx && (
+          <button onClick={() => ctx.apply(text)} disabled={ctx.busy}
+            title="Commit this to the pull request's branch"
+            className="agx-btn agx-suggestion-apply">Apply</button>
+        )}
+      </div>
+      <pre><code>{text}</code></pre>
+    </div>
+  );
+}
+
 function Block({ b }: { b: MdBlock }) {
   if (b.kind === "heading") {
     const H = (["h1", "h2", "h3", "h4", "h5", "h6"][b.level - 1] ?? "h6") as "h1";
@@ -306,17 +333,7 @@ function Block({ b }: { b: MdBlock }) {
       </div>
     );
   }
-  if (b.kind === "suggestion") {
-    // Shown as what it is: the replacement being proposed. Rendering it as an
-    // ordinary code block (which is what happened before) hid the fact that
-    // there was a change on offer at all.
-    return (
-      <div className="agx-suggestion">
-        <div className="agx-suggestion-head">Suggested change</div>
-        <pre><code>{b.text}</code></pre>
-      </div>
-    );
-  }
+  if (b.kind === "suggestion") return <Suggestion text={b.text} />;
   const isTask = b.items.some((i) => i.checked !== undefined);
   const List = b.ordered ? "ol" : "ul";
   return (
@@ -379,6 +396,12 @@ const EMOJI_NAMES: Record<string, string> = {
  *  threading a prop through all of them to reach the same value is noise. */
 export const RepoCtx = createContext<string | undefined>(undefined);
 
+/** How a suggestion block gets applied. Supplied by whichever thread the
+ *  comment belongs to, because only it knows the file and the lines; a markdown
+ *  block on its own knows neither. Null where there is nothing to apply to (a
+ *  suggestion written in the PR body, say). */
+export const SuggestCtx = createContext<{ apply: (text: string) => void; busy: boolean } | null>(null);
+
 export function Md({ body, className }: { body: string; className?: string }) {
   const repo = useContext(RepoCtx);
   const blocks = useMemo(() => parseBody(body, repo), [body, repo]);
@@ -399,9 +422,107 @@ function toFileChange(f: ParsedFile, i: number): FileChange {
   };
 }
 
-function DiffPane({ file, split, wrap, onPick, sel }: {
+/**
+ * The lines around a hunk, fetched on demand.
+ *
+ * A diff only carries what GitHub chose to send — three lines of context — so
+ * the code just above a change is not in the payload at all and there is
+ * nothing to reveal locally. Each expansion asks the server for that slice of
+ * the file at this side of the pull request, twenty lines at a time, the way
+ * GitHub's own chevrons work.
+ */
+function ExpandContext({ root, number, path, from, to, side = "RIGHT" }: {
+  root: string; number: number; path: string; from: number; to: number; side?: "LEFT" | "RIGHT";
+}) {
+  const [lines, setLines] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  if (from > to) return null;
+  const load = async () => {
+    setBusy(true); setErr(null);
+    const r = await api.prFileSlice(root, number, path, side, from, to).catch(() => null);
+    setBusy(false);
+    if (!r?.ok || !r.lines) { setErr(r?.error || "Could not read that part of the file"); return; }
+    setLines(r.lines);
+  };
+  if (lines) {
+    return (
+      <div className="whitespace-pre px-3 py-0.5 text-[12px]" style={{ ...CODE_FONT_STYLE, color: "var(--text3)", background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
+        {lines.join("\n")}
+      </div>
+    );
+  }
+  return (
+    <button onClick={load} disabled={busy} title={`Show lines ${from}-${to}`}
+      className="agx-btn w-full text-left px-3 py-0.5 text-[10.5px]"
+      style={{ color: err ? "var(--error)" : "var(--text3)", background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
+      {err ?? (busy ? "…" : `⌃⌄ Expand ${to - from + 1} line${to - from ? "s" : ""}`)}
+    </button>
+  );
+}
+
+/**
+ * An image, before and after.
+ *
+ * A unified diff cannot say anything about a PNG — the file list reports it as
+ * "no textual diff" and that is the end of it. Both sides are fetched by path
+ * and shown next to each other, which is the whole question an image change
+ * raises: what did it look like, and what does it look like now. Added and
+ * deleted files simply have one side.
+ */
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|ico|avif)$/i;
+
+function ImageDiff({ root, number, path, status }: {
+  root: string; number: number; path: string; status: string;
+}) {
+  const [sides, setSides] = useState<{ left?: string; right?: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const want: ("LEFT" | "RIGHT")[] =
+      status === "added" ? ["RIGHT"] : status === "removed" || status === "deleted" ? ["LEFT"] : ["LEFT", "RIGHT"];
+    Promise.all(want.map((side) => api.prFileSlice(root, number, path, side).then((r) => [side, r] as const).catch(() => [side, null] as const)))
+      .then((res) => {
+        if (!live) return;
+        const out: { left?: string; right?: string } = {};
+        for (const [side, r] of res) {
+          // Text came back for an image: that is an SVG, which is both. Render
+          // it from a data URL rather than round-tripping the bytes again.
+          const url = r?.ok
+            ? (r.url || (r.lines ? `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(r.lines.join("\n"))))}` : ""))
+            : "";
+          if (url) out[side === "LEFT" ? "left" : "right"] = api.prAssetUrl(url);
+        }
+        if (!out.left && !out.right) setErr("Could not read the image on either side");
+        setSides(out);
+      });
+    return () => { live = false; };
+  }, [root, number, path, status]);
+
+  if (err) return <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>{err}</div>;
+  if (!sides) return <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the image…</div>;
+  const pane = (label: string, src?: string, tint?: string) => (
+    <div className="flex-1 min-w-0 p-3 flex flex-col gap-1.5 items-start">
+      <span className="text-[9.5px] uppercase tracking-wider" style={{ color: tint ?? "var(--text3)" }}>{label}</span>
+      {src
+        ? <img src={src} alt="" className="max-w-full rounded" style={{ maxHeight: 320, border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", background: "repeating-conic-gradient(color-mix(in srgb, var(--border) 22%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px" }} />
+        : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>—</span>}
+    </div>
+  );
+  return (
+    <div className="flex flex-wrap w-full">
+      {sides.left !== undefined || sides.right === undefined ? pane("before", sides.left, "var(--error)") : null}
+      {sides.right !== undefined || sides.left === undefined ? pane("after", sides.right, "var(--success)") : null}
+    </div>
+  );
+}
+
+function DiffPane({ file, split, wrap, onPick, sel, expand }: {
   file: FileChange; split: boolean; wrap: boolean;
   onPick?: (p: LinePick) => void; sel?: LineSel;
+  /** Renders the "expand" strip above each hunk, when the file is one we can
+   *  fetch more of. Absent for a commit diff, which is not a pull request. */
+  expand?: (hunkIndex: number) => React.ReactNode;
 }) {
   // Syntax highlighting, which this pane never had: `Code` reads the theme out
   // of `HiliteCtx`, and with no Provider above it every PR diff rendered as
@@ -414,7 +535,7 @@ function DiffPane({ file, split, wrap, onPick, sel }: {
     <HiliteCtx.Provider value={heavy ? { ...hilite, theme: null } : hilite}>
       {split
         ? <SplitDiff c={file} wrap={wrap} onPick={onPick} sel={sel} />
-        : <UnifiedDiff c={file} wrap={wrap} onPick={onPick} sel={sel} />}
+        : <UnifiedDiff c={file} wrap={wrap} onPick={onPick} sel={sel} hunkAction={expand} />}
     </HiliteCtx.Provider>
   );
 }
@@ -1051,6 +1172,28 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   };
   /** Toggle an emoji. The node id is the GraphQL one, so the same call serves
    *  the body, a comment, a review and a line comment. */
+  /**
+   * Take a suggestion.
+   *
+   * Confirmed first: this writes a commit to somebody's branch, which is not
+   * something to do on a stray click. The author of the comment is credited as
+   * a co-author, as GitHub does.
+   */
+  const doApplySuggestion = async (t: PrThread, text: string) => {
+    if (!detail || !t.line) return;
+    const where = `${t.path}:${t.startLine && t.startLine !== t.line ? `${t.startLine}-${t.line}` : t.line}`;
+    const ok = await ask({
+      title: `Apply this suggestion to ${t.path.split("/").pop()}?`,
+      body: `${where}\n\nCommits to ${detail.headRefName}, crediting ${t.comments[0]?.author ?? "the author"}. If anyone has pushed since this loaded, GitHub refuses rather than overwriting them.`,
+      confirmLabel: "Apply suggestion",
+    });
+    if (!ok) return;
+    await act("Suggestion", () => api.prApplySuggestion(root, detail.number, {
+      path: t.path, line: t.line!, startLine: t.startLine ?? undefined,
+      suggestion: text, author: t.comments[0]?.author,
+    }));
+  };
+
   const doReact = async (nodeId: string, content: string, on: boolean) => {
     if (!nodeId) return;
     await act(on ? "Reaction" : "Reaction removed", () => api.prReactTo(root, nodeId, content, on));
@@ -1358,6 +1501,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                           d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy} onComment={doComment}
                           onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
                           onReply={doReply}
+                          onApply={doApplySuggestion}
                           onReact={doReact}
                         />
                       )}
@@ -1445,10 +1589,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
                 {tab === "files" && (
                   <FilesTab
-                    d={d} byPath={byPath} loaded={!!diff} seenFiles={seenFiles} onSeen={toggleSeen}
+                    d={d} root={root} byPath={byPath} loaded={!!diff} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
                     drafts={myDrafts} onAddDraft={addDraft}
                     busy={busy} onReply={doReply}
+                    onApply={doApplySuggestion}
                     onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
                   />
                 )}
@@ -2124,13 +2269,14 @@ function FileTree({ node, sel, onPick, seen, drafts, depth = 0 }: {
   );
 }
 
-function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onResolve, onReply, busy }: {
-  d: PrDetail; byPath: Map<string, FileChange>; loaded: boolean;
+function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onResolve, onReply, onApply, busy }: {
+  d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
   seenFiles: string[]; onSeen: (p: string) => void;
   sel: string | null; onSel: (p: string | null) => void;
   split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
   drafts: DraftComment[]; onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT") => void;
-  onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void; busy: boolean;
+  onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void;
+  onApply?: (t: PrThread, text: string) => void; busy: boolean;
 }) {
   const draftsFor = (p: string) => drafts.filter((x) => x.path === p).length;
   /**
@@ -2369,8 +2515,28 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
                     folded by default instead, which is the honest cap. */}
                 <div className="flex" style={{ overflowX: "auto" }}>
                   {!loaded ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the diff…</div>
-                    : change ? <DiffPane file={change} split={split} wrap={wrap} onPick={(pk) => pickLine(f.path, pk)} sel={selRange?.path === f.path ? selRange.sel : null} />
-                    : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
+                    : change ? (
+                      <DiffPane
+                        file={change} split={split} wrap={wrap}
+                        onPick={(pk) => pickLine(f.path, pk)}
+                        sel={selRange?.path === f.path ? selRange.sel : null}
+                        expand={(hi) => {
+                          // The gap between the end of the previous hunk and the
+                          // start of this one — the lines GitHub did not send.
+                          const h = change.hunks[hi];
+                          if (!h) return null;
+                          const prev = hi > 0 ? change.hunks[hi - 1] : null;
+                          const prevEnd = prev ? prev.newStart + prev.newLines - 1 : 0;
+                          const from = Math.max(prevEnd + 1, h.newStart - 20);
+                          const to = h.newStart - 1;
+                          if (to < from) return null;
+                          return <ExpandContext root={root} number={d.number} path={f.path} from={from} to={to} />;
+                        }}
+                      />
+                    )
+                    : IMAGE_EXT.test(f.path)
+                      ? <ImageDiff root={root} number={d.number} path={f.path} status={f.status} />
+                      : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
                 </div>
               </LazyMount>
             )}
@@ -2381,7 +2547,7 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
             {open && threadsFor(f.path).length > 0 && (
               <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
                 {threadsFor(f.path).map((t) => (
-                  <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} busy={busy} />
+                  <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />
                 ))}
               </div>
             )}
@@ -2577,14 +2743,23 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
   );
 }
 
-function Thread({ t, onResolve, onReply, busy }: {
-  t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void; busy: boolean;
+function Thread({ t, onResolve, onReply, onApply, busy }: {
+  t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void;
+  onApply?: (t: PrThread, text: string) => void; busy: boolean;
 }) {
   // The REST reply endpoint takes the numeric comment id. `id` is a GraphQL
   // node id (`PRRC_kwDO…`) and `Number()` of that is NaN — which is why reply
   // could never have worked before `databaseId` was asked for.
   const canReply = typeof t.comments[0]?.databaseId === "number";
+  // A suggestion inside this thread knows the file and the lines because the
+  // thread does. An outdated thread is refused: its lines have moved, so the
+  // range in hand no longer points where the comment meant.
+  const suggest = useMemo(
+    () => (onApply && !t.isOutdated && t.line ? { apply: (text: string) => onApply(t, text), busy } : null),
+    [onApply, t, busy],
+  );
   return (
+    <SuggestCtx.Provider value={suggest}>
     <div className="rounded-md overflow-hidden mb-2" style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
         style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
@@ -2617,6 +2792,7 @@ function Thread({ t, onResolve, onReply, busy }: {
         <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
       </div>
     </div>
+    </SuggestCtx.Provider>
   );
 }
 
@@ -2705,11 +2881,12 @@ function TimelineEvent({ e }: { e: PrEvent }) {
   );
 }
 
-function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onReact, busy }: {
+function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onReact, onApply, busy }: {
   d: PrDetail;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
   raw: boolean; onRaw: (v: boolean) => void;
   onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void;
+  onApply?: (t: PrThread, text: string) => void;
   onComment: (body: string) => Promise<boolean>;
   onReact: (nodeId: string, content: string, on: boolean) => void;
   busy: boolean;
@@ -2740,7 +2917,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           </Card>
           {mine.length > 0 && (
             <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
-              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} busy={busy} />)}
+              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
             </div>
           )}
         </>
@@ -2758,7 +2935,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     entries.push({
       at: t.comments[0]?.createdAt ?? "", key: `t${t.id}`,
       node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? "✓" : "○"}</span>,
-      body: <Thread t={t} onResolve={onResolve} onReply={onReply} busy={busy} />,
+      body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />,
     });
   }
   for (const [i, r] of lanes.botReviews.entries()) {
@@ -2816,7 +2993,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     </div>
   ) : null;
 
-  const composer = <Composer onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" />;
+  const composer = <Composer onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" onOpenGithub={() => openExternal(d.url)} />;
 
   if (entries.length === 0) {
     return (
@@ -2865,8 +3042,11 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
  * Write, preview, send. Shared by the conversation and by anywhere else that
  * takes markdown, so the two never drift into behaving differently.
  */
-function Composer({ onSend, busy, placeholder, sendLabel }: {
+function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub }: {
   onSend: (body: string) => Promise<boolean>; busy: boolean; placeholder: string; sendLabel: string;
+  /** Opens this pull request on GitHub — the only place an image can actually
+   *  be attached. */
+  onOpenGithub?: () => void;
 }) {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState(false);
@@ -2929,6 +3109,41 @@ function Composer({ onSend, busy, placeholder, sendLabel }: {
     });
   };
 
+  /**
+   * Files dropped or pasted into the composer.
+   *
+   * A text file is inserted as a fenced code block, which is what you wanted it
+   * for and needs nobody's permission. An image cannot be: GitHub has no public
+   * attachment-upload API — their paperclip is web-only, and there is no gist
+   * mutation or attachments endpoint to stand in for it (checked, not assumed).
+   * Rather than invent a place to put the bytes (committing screenshots into the
+   * repository is not a favour), it says so and offers the one thing that does
+   * work: attaching it on GitHub itself.
+   */
+  const [imageNote, setImageNote] = useState<string | null>(null);
+  const TEXTY = /\.(md|txt|log|json|jsonc|ya?ml|toml|ini|csv|tsv|diff|patch|ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|c|h|cpp|hpp|cs|sh|bash|zsh|sql|html?|css|scss|xml|svg)$/i;
+
+  const takeFiles = async (files: File[]) => {
+    if (!files.length) return;
+    const image = files.find((f) => f.type.startsWith("image/"));
+    if (image) {
+      setImageNote(image.name);
+      return;
+    }
+    const parts: string[] = [];
+    for (const f of files.slice(0, 4)) {
+      if (!TEXTY.test(f.name) && !f.type.startsWith("text/")) continue;
+      // A composer is not a file host: enough to quote, not enough to hang the
+      // panel pasting a 40MB log.
+      const body = (await f.text()).slice(0, 60_000);
+      const lang = (f.name.split(".").pop() ?? "").toLowerCase();
+      parts.push(`**${f.name}**\n\n\`\`\`${lang}\n${body}\n\`\`\``);
+    }
+    if (!parts.length) { setImageNote(files[0]?.name ?? "that file"); return; }
+    setText((t) => (t ? `${t}\n\n` : "") + parts.join("\n\n"));
+    setImageNote(null);
+  };
+
   const send = async () => {
     if (!text.trim() || sending) return;
     setSending(true);
@@ -2938,11 +3153,28 @@ function Composer({ onSend, busy, placeholder, sendLabel }: {
   };
 
   return (
-    <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
+    <div className="rounded-lg overflow-hidden"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => { e.preventDefault(); void takeFiles([...e.dataTransfer.files]); }}
+      onPaste={(e) => { const fs = [...e.clipboardData.files]; if (fs.length) { e.preventDefault(); void takeFiles(fs); } }}
+      style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
       <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
         <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
         <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
       </div>
+      {imageNote && (
+        <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
+          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+          <span className="min-w-0 truncate">
+            <b>{imageNote}</b> can't be attached from here — GitHub has no public upload API for attachments.
+          </span>
+          {onOpenGithub && (
+            <button onClick={onOpenGithub} className="agx-btn ml-auto shrink-0 px-2 py-0.5 rounded"
+              style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
+          )}
+          <button onClick={() => setImageNote(null)} className="agx-btn shrink-0 px-1" style={{ color: "var(--text3)" }} aria-label="Dismiss">×</button>
+        </div>
+      )}
       {preview ? (
         <div className="p-3 min-h-[80px]">{text.trim() ? <Md body={text} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}</div>
       ) : (
@@ -2981,7 +3213,7 @@ function Composer({ onSend, busy, placeholder, sendLabel }: {
       )}
       <div className="flex items-center gap-2 px-2.5 py-2"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · <b>@</b> people · <b>#</b> issues · <b>:</b> emoji · ⌘↵ to send</span>
+        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · <b>@</b> people · <b>#</b> issues · <b>:</b> emoji · drop a text file · ⌘↵ to send</span>
         <span className="ml-auto">
           <Btn onClick={send} disabled={sending || busy || !text.trim()} primary small
             title={!text.trim() ? "Write something first" : undefined}>

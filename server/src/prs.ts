@@ -1357,6 +1357,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     id: t.id,
     path: t.path || "",
     line: t.line ?? null,
+    startLine: t.startLine ?? null,
     isResolved: !!t.isResolved,
     isOutdated: !!t.isOutdated,
     // The hunk GitHub stored with the comment, not one reconstructed from the
@@ -1812,6 +1813,130 @@ export async function deleteComment(rootIn: unknown, nodeId: unknown, kind: unkn
  * github.com and was lost on another machine. GitHub also un-ticks a file by
  * itself when it changes after you marked it, which local state cannot do.
  */
+/**
+ * A slice of a file at one side of the pull request.
+ *
+ * What "expand context" needs: the diff only carries the hunks GitHub chose to
+ * send, so the twenty lines above a change simply are not in the payload. And
+ * what an image diff needs, in the other shape: the raw bytes of a binary file
+ * on each side, which the unified diff cannot represent at all.
+ */
+export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
+  path?: unknown; side?: unknown; from?: unknown; to?: unknown;
+}): Promise<{ ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }> {
+  const n = Number(numberIn);
+  const path = typeof args.path === "string" ? args.path : "";
+  if (!Number.isInteger(n) || n <= 0 || !path) return { ok: false, error: "invalid file" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const pr = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]);
+  // LEFT is the base — the file as it was; RIGHT is the head — as it is now.
+  const left = args.side === "LEFT";
+  const ref = left ? pr?.base?.sha : pr?.head?.sha;
+  const from = left ? repo.nameWithOwner : (pr?.head?.repo?.full_name ?? repo.nameWithOwner);
+  if (!ref) return { ok: false, error: "could not read the pull request's commits" };
+  const file = await ghJson<any>(["api", `repos/${from}/contents/${encodeURI(path)}?ref=${ref}`]);
+  if (!file) return { ok: false, error: `${path} is not on that side` };
+  // A file GitHub will not inline is a big one or a binary one; either way the
+  // bytes come from `download_url`, which the asset proxy can fetch.
+  if (!file.content || file.encoding !== "base64") {
+    return { ok: true, binary: true, url: file.download_url ?? "" };
+  }
+  const buf = Buffer.from(String(file.content).replace(/\n/g, ""), "base64");
+  // A NUL in the first few KB is the usual "this is not text" tell.
+  if (buf.subarray(0, 8000).includes(0)) return { ok: true, binary: true, url: file.download_url ?? "" };
+  const all = buf.toString("utf8").split("\n");
+  const start = Math.max(1, Number(args.from) || 1);
+  const to = Math.min(all.length, Number(args.to) || all.length);
+  return { ok: true, lines: all.slice(start - 1, to), start, total: all.length };
+}
+
+/**
+ * Replace lines [start, end] (inclusive, 1-based) with the suggested text.
+ *
+ * Its own function so it can be tested without writing a commit: this is the
+ * step that decides whether a file comes out correct or mangled, and an
+ * off-by-one here silently eats somebody's line.
+ */
+export function spliceLines(lines: string[], start: number, end: number, replacement: string): string {
+  return [...lines.slice(0, start - 1), ...replacement.split("\n"), ...lines.slice(end)].join("\n");
+}
+
+/**
+ * Apply a suggested change.
+ *
+ * GitHub has no "apply suggestion" API — the button on their site is web-only —
+ * so the commit has to be written here: read the file at the head of the pull
+ * request's branch, swap the suggested lines in, and commit the result with
+ * `createCommitOnBranch`. That mutation is the right tool because it commits
+ * through the API and the result is signed as a verified commit, which pushing
+ * from a local checkout would not be.
+ *
+ * `expectedHeadOid` is the safety belt: if anyone pushed between the read and
+ * the write, GitHub refuses rather than clobbering their work. And the person
+ * who suggested the change is credited as a co-author, exactly as GitHub does.
+ */
+export async function applySuggestion(rootIn: unknown, numberIn: unknown, args: {
+  path?: unknown; startLine?: unknown; line?: unknown; suggestion?: unknown; author?: unknown;
+}): Promise<PrActionResult> {
+  const g = writeGuard(rootIn); if (g) return g;
+  const n = Number(numberIn);
+  const path = typeof args.path === "string" ? args.path : "";
+  const end = Number(args.line);
+  const start = Number.isInteger(Number(args.startLine)) && Number(args.startLine) > 0 ? Number(args.startLine) : end;
+  const replacement = typeof args.suggestion === "string" ? args.suggestion : "";
+  if (!Number.isInteger(n) || n <= 0) return { ok: false, error: "invalid pull request number" };
+  if (!path || !Number.isInteger(end) || end <= 0) return { ok: false, error: "invalid line" };
+  if (start > end) return { ok: false, error: "invalid range" };
+
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+
+  // The branch this pull request is FROM, and the commit it is at. A suggestion
+  // applies to the head branch, which on a fork is not this repository.
+  const pr = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]);
+  const headRepo: string | undefined = pr?.head?.repo?.full_name;
+  const headRef: string | undefined = pr?.head?.ref;
+  const headSha: string | undefined = pr?.head?.sha;
+  if (!headRepo || !headRef || !headSha) return { ok: false, error: "could not read the pull request's branch" };
+  if (pr?.maintainer_can_modify === false && headRepo !== repo.nameWithOwner) {
+    return { ok: false, error: "this fork does not allow maintainers to push to it" };
+  }
+
+  // The file as it stands on that branch.
+  const file = await ghJson<any>(["api", `repos/${headRepo}/contents/${encodeURI(path)}?ref=${encodeURIComponent(headRef)}`]);
+  if (!file?.content || file.encoding !== "base64") return { ok: false, error: `could not read ${path}` };
+  const text = Buffer.from(String(file.content).replace(/\n/g, ""), "base64").toString("utf8");
+  const lines = text.split("\n");
+  if (end > lines.length) return { ok: false, error: "the file has changed since that suggestion was written" };
+
+  const next = spliceLines(lines, start, end, replacement);
+  if (next === text) return { ok: false, error: "that suggestion is already applied" };
+
+  const who = typeof args.author === "string" ? args.author.trim() : "";
+  const message = who
+    ? `Apply suggestion from @${who}\n\nCo-authored-by: ${who} <${who}@users.noreply.github.com>`
+    : "Apply suggestion";
+  const mutation = `mutation($input: CreateCommitOnBranchInput!) {
+    createCommitOnBranch(input: $input) { commit { oid } }
+  }`;
+  const input = {
+    branch: { repositoryNameWithOwner: headRepo, branchName: headRef },
+    expectedHeadOid: headSha,
+    message: { headline: message.split("\n")[0], body: message.split("\n").slice(1).join("\n").trim() || undefined },
+    fileChanges: { additions: [{ path, contents: Buffer.from(next, "utf8").toString("base64") }] },
+  };
+  const r = await gh(["api", "graphql", "-f", `query=${mutation}`, "--input", "-"],
+    undefined, JSON.stringify({ query: mutation, variables: { input } }));
+  invalidate(repo, n);
+  if (r.code !== 0) {
+    const msg = (r.stderr || r.stdout).trim().split("\n").find((l) => l.trim()) || "the commit was refused";
+    // The one failure worth naming: somebody pushed while you were reading.
+    return { ok: false, error: /expected.*oid|not.*match/i.test(msg) ? "somebody pushed to that branch — reload and try again" : msg };
+  }
+  return { ok: true, detail: `applied to ${path}:${start === end ? start : `${start}-${end}`}` };
+}
+
 export async function setFileViewed(rootIn: unknown, prNodeId: unknown, path: unknown, viewed: unknown): Promise<PrActionResult> {
   const g = writeGuard(rootIn); if (g) return g;
   const id = String(prNodeId || "");

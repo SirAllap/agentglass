@@ -52,7 +52,7 @@ import {
 } from "./docker.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
-  editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions,
+  editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
   rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
 } from "./prs.ts";
@@ -984,6 +984,14 @@ const server = Bun.serve<WsData>({
         url.searchParams.get("q") || undefined,
       ));
     }
+    if (pathname === "/prs/file-slice") {
+      return json(await fileSlice(url.searchParams.get("root") || "", url.searchParams.get("number") || "", {
+        path: url.searchParams.get("path") || "",
+        side: url.searchParams.get("side") || "RIGHT",
+        from: url.searchParams.get("from") || undefined,
+        to: url.searchParams.get("to") || undefined,
+      }));
+    }
     if (pathname === "/prs/facets") {
       return json(await facetOptions(url.searchParams.get("root") || ""));
     }
@@ -1049,6 +1057,7 @@ const server = Bun.serve<WsData>({
         case "/prs/rerun": res = await rerunFailedChecks(root, n); break;
         case "/prs/rerun-jobs": res = await rerunJobs(root, b.what, b.id); break;
         case "/prs/line-comment": res = await addLineComment(root, n, b); break;
+        case "/prs/apply-suggestion": res = await applySuggestion(root, n, b); break;
         case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
         case "/prs/review-prompt": res = await prepareReviewPrompt(root, n); break;

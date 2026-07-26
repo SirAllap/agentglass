@@ -363,6 +363,14 @@ const realApi = {
     post<PrActionResult>("/prs/milestone", { root, number, title }),
   prList: (root: string, filter: "mine" | "review" | "all", state: "open" | "closed" | "all" = "open", force = false, after?: string, q?: string) =>
     get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}${after ? `&after=${encodeURIComponent(after)}` : ""}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
+  /** Apply a suggested change: reads the file, splices the lines, commits. */
+  prApplySuggestion: (root: string, number: number, a: { path: string; startLine?: number; line: number; suggestion: string; author?: string }) =>
+    post<PrActionResult>("/prs/apply-suggestion", { root, number, ...a }),
+  /** A slice of a file at one side — for expanding diff context, and for the
+   *  bytes of a binary the diff cannot carry. */
+  prFileSlice: (root: string, number: number, path: string, side: "LEFT" | "RIGHT", from?: number, to?: number) =>
+    get<{ ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }>(
+      `/prs/file-slice?root=${encodeURIComponent(root)}&number=${number}&path=${encodeURIComponent(path)}&side=${side}${from ? `&from=${from}` : ""}${to ? `&to=${to}` : ""}`),
   /** What the facet menus can offer — from the repository, not the page. */
   prFacets: (root: string) =>
     get<{ ok: boolean; data?: { authors: string[]; assignees: string[]; labels: { name: string; color: string }[]; milestones: string[]; bases: string[] }; error?: string }>(
@@ -593,6 +601,8 @@ const demoApi: typeof realApi = {
   // The panel used to answer available:false here, so the feature the landing
   // page calls out as new was dead in the demo that page links to.
   prCapability: (_force?: boolean) => D(demo.prCapability()),
+  prApplySuggestion: () => D(demoPrAction()),
+  prFileSlice: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }),
   prFacets: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; data?: { authors: string[]; assignees: string[]; labels: { name: string; color: string }[]; milestones: string[]; bases: string[] }; error?: string }),
   prList: (root: string, filter: "mine" | "review" | "all", _state?: "open" | "closed" | "all", _force?: boolean, _after?: string, _q?: string) => D<PrListResponse>(demo.prList(root, filter)),
   prMentions: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; data?: { users: string[]; issues: { number: number; title: string }[] }; error?: string }),
