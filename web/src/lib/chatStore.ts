@@ -113,6 +113,24 @@ export type ChatUsage = {
 /** A message typed during someone else's turn, waiting for its own. */
 export type QueuedTurn = { id: string; text: string; images: ChatImage[] };
 
+/** The engine this chat's next turn will actually use.
+ *
+ *  A chat with no session yet has nothing to strand, so the current preference
+ *  wins — that is what makes changing the setting take effect on the chat you
+ *  are already looking at instead of only on the next one you remember to
+ *  create. Once a session exists the answer is fixed: it lives in a pane or it
+ *  does not.
+ *
+ *  `undefined` means "whatever the server is configured to do", which is a real
+ *  third answer and not a missing one.
+ *
+ *  Shared by the send path and the header so the two can never disagree — the
+ *  header claiming one engine while the turn used the other is the bug this
+ *  whole function exists to end. */
+export function engineFor(chat: Pick<Chat, "sessionId" | "engine">): ChatEngine | undefined {
+  return chat.sessionId ? chat.engine : (chatEnginePref() ?? undefined);
+}
+
 export type Chat = {
   id: string;
   cwd: string;
@@ -737,9 +755,27 @@ export async function send(id: string, text: string, isActive: () => boolean, al
     }
   };
 
+  /*
+   * Which engine this turn runs on.
+   *
+   * Freezing it when the chat object was created was wrong in the one case that
+   * matters: the panel opens a chat for you before you have touched anything, so
+   * the chat that is already on screen when you change the preference keeps the
+   * old engine — and says nothing about it. Changing the setting then appeared
+   * to do nothing at all, which is exactly how it was first reported.
+   *
+   * So the preference wins right up until the chat has a session. After that the
+   * engine is frozen for real: the session lives in a pane or it does not, and
+   * moving a running conversation between the two would strand one or the other.
+   */
+  const engine = engineFor(chat);
+  // Recorded on the chat as the turn starts, so the header can say where this
+  // conversation runs before its first reply rather than after.
+  if (engine !== chat.engine) update(id, (c) => { c.engine = engine; });
+
   let broke = false;
   try {
-    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images, engine: chat.engine }, onEvent, ac.signal);
+    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images, engine }, onEvent, ac.signal);
   } catch (e) {
     // A queue must not keep firing into a turn that failed or one you just
     // interrupted — the rest of it stays put, visible, for you to decide on.

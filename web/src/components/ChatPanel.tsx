@@ -28,6 +28,7 @@ import { worktreeTag, sessionWorktree, sessionCwd } from "../lib/worktree.ts";
 import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
+  engineFor,
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
   restoredActiveId, setActiveChatId, chatFocusRequest,
 } from "../lib/chatStore.ts";
@@ -883,12 +884,27 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         {/* Pushed right so the two copy actions sit together at
                             the end of the header rather than between pickers. */}
                         <span className="ml-auto flex items-center gap-1.5">
-                          {active.attachCommand && (
-                            <CopyButton
-                              label="⧉ tmux"
-                              title={`This chat runs in a tmux pane. Copy the command that opens it in your own terminal, where you can keep typing:\n\n${active.attachCommand}`}
-                              text={() => active.attachCommand!}
-                            />
+                          {/* Where this chat runs, stated before its first turn
+                              rather than after. Shown only for the pane engine:
+                              `claude -p` is the long-standing behaviour and a
+                              badge on every chat saying "normal" is noise. The
+                              chip is the only way to tell the two apart from the
+                              outside, and without it a preference that had not
+                              taken effect looked exactly like one that had. */}
+                          {engineFor(active) === "tmux" && (
+                            active.attachCommand ? (
+                              <CopyButton
+                                label="⧉ tmux"
+                                title={`This chat runs in a tmux pane. Copy the command that opens it in your own terminal, where you can keep typing:\n\n${active.attachCommand}`}
+                                text={() => active.attachCommand!}
+                              />
+                            ) : (
+                              <span
+                                className="text-[10px] px-2 py-1 rounded-md shrink-0"
+                                style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--border) 35%, transparent)" }}
+                                title="This chat will run in a tmux pane. The pane starts with the first message, and this turns into a button that copies the command to open it in your terminal."
+                              >⧉ tmux on send</span>
+                            )
                           )}
                           <CopyButton
                             label="Copy chat"
