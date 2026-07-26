@@ -15,6 +15,7 @@ import type { GitRepoRef, SessionRollup } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
+import { ToolFeed } from "./ToolFeed.tsx";
 import { buildRows } from "../lib/toolTree.ts";
 import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
@@ -80,17 +81,18 @@ const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)"
  * nothing to say. Collapsed by default and deliberately quiet — this is the
  * working-out, not the answer, and it is usually several times longer.
  *
- * Auto-opens only while it's the only thing happening: watching it stream is the
- * difference between "thinking" and "frozen". It folds itself the moment real
- * output starts.
+ * Closed until asked, streaming or not. It used to open itself while it was the
+ * only thing happening, on the grounds that watching it stream is the difference
+ * between "thinking" and "frozen" — but that put the working-out on screen by
+ * default, which is exactly what nobody asked to read. Liveness is the tool
+ * feed's running call and the composer's caret; this stays folded.
  */
 function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
-  const [openedByHand, setOpenedByHand] = useState<boolean | null>(null);
-  const open = openedByHand ?? streaming;
+  const [open, setOpen] = useState(false);
   const lines = text.trim().split("\n");
   return (
     <div className="mb-1.5 rounded-md overflow-hidden" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
-      <button onClick={() => setOpenedByHand(!open)}
+      <button onClick={() => setOpen(!open)} aria-expanded={open}
         className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:opacity-80">
         <span className="text-[8px] t-dim2 transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
         <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>thinking</span>
@@ -903,21 +905,22 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                               <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
                             </div>
                             {m.thinking && <Thinking text={m.thinking} streaming={!!m.streaming && !m.text} />}
-                            {m.tools.length > 0 && (
-                              <div className="flex flex-col gap-0.5 mb-1.5 pb-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                                {/* Folded the same way the session timeline
-                                    folds it: a subagent's work nests under the
-                                    call that spawned it rather than being
-                                    interleaved with the main thread's. */}
-                                {buildRows(m.tools.map((t) => ({
-                                  kind: "tool" as const, ts: t.ts, tool: t.name, target: t.target,
-                                  is_error: t.error, output: t.output, note: t.note,
-                                  agent_id: t.agentId, agent_type: t.agentType, tool_use_id: t.id,
-                                }))).map((r) => r.kind === "tool" && (
-                                  <ToolRow key={r.key} e={r.e} sub={r.children} />
-                                ))}
-                              </div>
-                            )}
+                            {/* Behind a fold, not in front of the answer. The
+                                summary line carries the running call and any
+                                failure; the feed itself is one click away. */}
+                            <ToolFeed tools={m.tools} streaming={!!m.streaming}>
+                              {/* Folded the same way the session timeline
+                                  folds it: a subagent's work nests under the
+                                  call that spawned it rather than being
+                                  interleaved with the main thread's. */}
+                              {buildRows(m.tools.map((t) => ({
+                                kind: "tool" as const, ts: t.ts, tool: t.name, target: t.target,
+                                is_error: t.error, output: t.output, note: t.note,
+                                agent_id: t.agentId, agent_type: t.agentType, tool_use_id: t.id,
+                              }))).map((r) => r.kind === "tool" && (
+                                <ToolRow key={r.key} e={r.e} sub={r.children} />
+                              ))}
+                            </ToolFeed>
                             {!!m.images?.length && (
                               <div className="flex flex-wrap gap-1.5 mb-1.5">
                                 {m.images.map((img, j) => (
@@ -1109,7 +1112,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                     <div className="mt-1.5 text-[9.5px] t-dim2">
                       {hint
                         ? <span style={{ color: "var(--warning)" }}>{hint}</span>
-                        : <>Runs claude in {active ? repoName(active.cwd) || "the repo" : "the repo"} · {MODES.find((x) => x.id === active?.mode)?.label} · tools appear as ⚙ chips</>}
+                        : <>Runs claude in {active ? repoName(active.cwd) || "the repo" : "the repo"} · {MODES.find((x) => x.id === active?.mode)?.label} · tool calls fold away, click to open</>}
                       {active?.mode === "bypassPermissions" && <span style={{ color: "var(--warning)" }}> · ⚡ runs tools unattended</span>}
                     </div>
                   </div>
