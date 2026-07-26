@@ -627,7 +627,13 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   const { scrollRef, contentRef, pinned, toBottom, onScroll } =
     useStuckBottom(open ? active?.id ?? "" : null);
 
-  const add = useCallback(() => {
+  /** Open a chat.
+   *
+   *  `seed` is the first thing typed when there was no chat to type into — the
+   *  composer opens one rather than sending the keystroke nowhere. It also
+   *  suppresses the refocus below: the box is already focused, and calling
+   *  focus() again would move the caret off the character just typed. */
+  const add = useCallback((seed?: string) => {
     // `workspace` last: a scoped instance always has one, so the only way to
     // reach "" now is a machine with no repo at all.
     const cwd = active?.cwd || defaultCwd || repos[0]?.root || workspace || "";
@@ -639,8 +645,10 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     if (!cwd) { setNoRepo(true); return; }
     setNoRepo(false);
     const c = newChat(cwd, active?.model ?? DEFAULT_MODEL, active?.mode ?? DEFAULT_MODE);
+    if (seed) update(c.id, (x) => { x.draft = seed; });
     setActiveId(c.id);
-    requestAnimationFrame(() => inputRef.current?.focus());
+    if (!seed) requestAnimationFrame(() => inputRef.current?.focus());
+    return c;
   }, [active, defaultCwd, repos, workspace]);
 
   // Adopt an existing claude session. Focusing an already-open tab rather than
@@ -741,8 +749,13 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   };
 
   const onPaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (!active) return;
     const files = imagesFrom(e.clipboardData);
+    // Pasting a screenshot into an empty panel is a complete thought too, and
+    // the same reason typing opens a chat applies here: the alternative is a
+    // paste that appears to work and goes nowhere. Pasted text needs no help —
+    // it lands as a change event and opens a chat through onChange.
+    const chat = active ?? (files.length ? add() ?? null : null);
+    if (!chat) return;
     if (!files.length) {
       // A paste that carried a file which wasn't an image would otherwise look
       // identical to the feature being broken.
@@ -753,7 +766,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
       return;
     }
     e.preventDefault();
-    setHint(await addAttachments(active.id, files));
+    setHint(await addAttachments(chat.id, files));
   };
 
   // A drag crossing a child element fires `dragleave` on the parent, so the
@@ -852,7 +865,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   <button onClick={() => setResumeOpen((v) => !v)} aria-expanded={resumeOpen} aria-haspopup="listbox"
                     className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
                     title="Continue a session that already exists — e.g. one you started in a terminal">↩ Resume</button>
-                  <button onClick={add} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="New chat">+ New</button>
+                  <button onClick={() => add()} className="text-[11px] px-2.5 py-1 rounded-lg shrink-0" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title="New chat">+ New</button>
                 </>} />
 
                 <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -876,7 +889,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         {query.trim() ? "No chats match"
                           : !reposKnown || !scopeKnown ? "Finding your projects…"
                           : !repos.length ? "No git repository found to run a chat in"
-                          : "No chats yet — press + new"}
+                          : "No chats yet — start typing below, or press + new"}
                       </div>
                     )}
                     {noRepo && (
@@ -1195,8 +1208,22 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
                         <ClipIcon />
                       </button>
-                      <textarea ref={inputRef} aria-label="Chat composer" value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
-                        onChange={(e) => active && update(active.id, (c) => { c.draft = e.target.value; })}
+                      {/* Enabled with no chat open, because typing is how you
+                          open one. The composer was disabled until you had
+                          pressed + New, which put a working-looking input in
+                          front of you that silently swallowed everything —
+                          the empty state said "press + new" and the box said
+                          "Message a new session…", and only one of them was
+                          telling the truth. */}
+                      <textarea ref={inputRef} aria-label="Chat composer" value={active?.draft ?? ""} disabled={!enabled} rows={2}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (active) { update(active.id, (c) => { c.draft = v; }); return; }
+                          // Only real text opens a chat. Otherwise clearing the
+                          // box, or a stray empty change event, would leave a
+                          // trail of blank tabs behind.
+                          if (v) add(v);
+                        }}
                         onKeyDown={onKey}
                         onPaste={onPaste}
                         placeholder={!enabled ? "Chat unavailable" : active?.sending ? "Still replying — type anyway, Enter queues it for the next turn" : active?.sessionId ? "Reply… (Enter to send, Shift+Enter newline)" : "Message a new session… (Enter to send)"}
