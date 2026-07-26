@@ -45,6 +45,26 @@ export function toolTarget(name: string, inp: Record<string, unknown>): string |
     : strv(inp.file_path) ?? strv(inp.path) ?? strv(inp.url) ?? strv(inp.query) ?? strv(inp.pattern) ?? strv(inp.description) ?? strv(inp.command);
 }
 
+/**
+ * Add a text block to what the assistant has said so far.
+ *
+ * A turn is one bubble, but the model reaches it in several frames: it says a
+ * sentence, runs a tool, says the next one. Each of those is its own complete
+ * text block, and appending them raw ran them together mid-word — "…in your
+ * screenshot.Picking it up again" — because the block that ended a thought had
+ * no reason to carry a trailing newline. Nothing was lost, but a turn's worth of
+ * separate remarks arrived as one paragraph nobody can skim.
+ *
+ * So blocks are joined the way they were meant: a blank line between them,
+ * unless the previous one already ended in a break of its own (a list, a code
+ * fence, a heading), where adding another would open a gap in the markdown.
+ */
+export function joinBlock(prev: string, next: string): string {
+  if (!prev) return next;
+  if (!next) return prev;
+  return /\n\s*$/.test(prev) ? prev + next : `${prev}\n\n${next}`;
+}
+
 export type ChatMsg = {
   role: "user" | "assistant";
   text: string;
@@ -571,10 +591,10 @@ export async function send(id: string, text: string, isActive: () => boolean, al
         const last = c.messages[c.messages.length - 1];
         if (!last || last.role !== "assistant") return;
         for (const b of blocks) {
-          if (b.type === "text" && typeof b.text === "string") last.text += b.text;
+          if (b.type === "text" && typeof b.text === "string") last.text = joinBlock(last.text, b.text);
           // Reasoning, kept apart from the answer. Streams in chunks like text.
           else if (b.type === "thinking" && typeof b.thinking === "string") {
-            last.thinking = (last.thinking ?? "") + b.thinking;
+            last.thinking = joinBlock(last.thinking ?? "", b.thinking);
           }
           else if (b.type === "tool_use" && typeof b.name === "string") {
             // The result comes back later keyed only by id, so remember which
