@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
+import { Avatar } from "./Avatar.tsx";
 
 /**
  * A multi-select facet dropdown, GitHub-style: a pill that opens a checkbox list
@@ -14,7 +15,13 @@ import { Portal } from "./Portal.tsx";
  * `mode="radio"`, used for Sort), each row shows a count, a real search box
  * appears once the list is long, and there is a "Clear" footer.
  */
-export interface FacetMenuOption { value: string; label: string; count: number }
+export interface FacetMenuOption {
+  value: string;
+  label: string;
+  count: number;
+  /** A GitHub login, when this option is a person. */
+  avatar?: string;
+}
 
 export function FacetMenu({
   label, options, selected, onToggle, onClear, mode = "multi", align = "left", note, disabled, pillActive,
@@ -182,8 +189,13 @@ export function FacetMenu({
                           }}>
                           {on ? (mode === "radio" ? "●" : "✓") : ""}
                         </span>
+                        {/* The person, when the facet is about people — the face
+                            is how you find a name in a list of twelve. */}
+                        {o.avatar && <Avatar login={o.avatar} size={16} />}
                         <span className="flex-1 truncate" style={{ color: on ? "var(--text)" : "var(--text2)" }}>{o.label}</span>
-                        <span className="text-[9.5px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>{o.count}</span>
+                        {/* No count. It could only ever count the page in hand,
+                            and the filter searches the whole repository; GitHub
+                            shows no number in these menus for the same reason. */}
                       </button>
                     );
                   })}

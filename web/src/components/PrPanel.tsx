@@ -35,6 +35,7 @@ import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex } from "../lib/prNav.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
+import { Avatar } from "./Avatar.tsx";
 import { parseQuery, sortRows, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
 import { getHighlighter, shikiTheme } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -132,23 +133,6 @@ function Bar({ parts }: { parts: { pct: number; tint: string }[] }) {
   );
 }
 
-/** GitHub's avatar for a login, through the server's allowlisted proxy. The
- *  name is always beside it — the picture is recognition, not identification. */
-function Avatar({ login, size = 18 }: { login: string; size?: number }) {
-  const [failed, setFailed] = useState(false);
-  const initials = (login || "?").replace(/\[bot\]$/, "").slice(0, 2).toUpperCase();
-  if (failed || !login) {
-    return (
-      <span className="shrink-0 rounded-full inline-flex items-center justify-center"
-        style={{ width: size, height: size, background: "var(--primary)", color: "var(--bg)", fontSize: size * 0.42 }}>{initials}</span>
-    );
-  }
-  return (
-    <img src={api.prAssetUrl(`https://avatars.githubusercontent.com/${encodeURIComponent(login.replace(/\[bot\]$/, ""))}?size=48`)}
-      alt="" aria-hidden width={size} height={size} onError={() => setFailed(true)}
-      className="shrink-0 rounded-full" style={{ width: size, height: size, objectFit: "cover" }} />
-  );
-}
 
 function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, small }: {
   children: React.ReactNode; onClick?: () => void; disabled?: boolean;

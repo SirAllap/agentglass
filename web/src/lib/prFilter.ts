@@ -253,7 +253,13 @@ export function sortRows(prs: PrSummary[], f: FilterState): PrSummary[] {
   return [...prs].sort(SORTERS[f.sort] ?? SORTERS[DEFAULT_SORT]);
 }
 
-export interface FacetOption { value: string; label: string; count: number }
+export interface FacetOption {
+  value: string;
+  label: string;
+  count: number;
+  /** The GitHub login this option stands for, when it is a person. */
+  avatar?: string;
+}
 export interface FacetView {
   key: ArrayKey;
   queryKey: string;
@@ -336,7 +342,14 @@ export function buildFacets(prs: PrSummary[], f: FilterState, repo?: RepoFacets 
       // No count. It could only ever count the page in hand, and GitHub's own
       // facet menus do not show one either — a number that means "on this page"
       // beside a filter that searches everything is worse than no number.
-      options: values.map((v) => ({ value: v, label: optionLabel(facet.key, v), count: counts.get(v) ?? 0 })),
+      options: values.map((v) => ({
+        value: v,
+        label: optionLabel(facet.key, v),
+        count: counts.get(v) ?? 0,
+        // Authors and assignees are people; a face finds a name in a list of a
+        // dozen faster than reading down it does.
+        ...(facet.key === "authors" || facet.key === "assignees" ? { avatar: v } : {}),
+      })),
     };
   });
 }
