@@ -69,6 +69,7 @@ import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
+import { noteClient, isLoopback, remoteStatus } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
@@ -435,6 +436,11 @@ const server = Bun.serve<WsData>({
     // anonymous freeze in a terminal. See loopwatch.ts.
     entered(`${req.method} ${pathname}`);
 
+    // Proof of reachability for the remote-access panel: which off-box devices
+    // have actually arrived. Loopback is ignored — it is every call the app
+    // makes of itself and says nothing about whether a phone can get in.
+    noteClient(srv.requestIP(req)?.address);
+
     // Per-request response helpers: `cors` reflects this caller's Origin, so it
     // has to be built here rather than shared as a module constant.
     const cors = corsFor(req);
@@ -694,6 +700,30 @@ const server = Bun.serve<WsData>({
       if (!cmd) return json({ ok: false, error: "unknown control command" }, 400);
       broadcast({ type: "control", data: cmd });
       return json({ ok: true });
+    }
+    /**
+     * Where this server can be reached from another device, and whether one
+     * ever has been.
+     *
+     * The token is handed out only to a caller on this machine. A page loaded
+     * over the LAN has already proved it holds the token to get this far, so
+     * withholding it is not a secret kept from a legitimate client — it is a
+     * refusal to *re-serve* the credential to whatever else is on the wifi if
+     * the token is ever set aside. The local UI is the only thing that needs it
+     * anyway: it is what draws the QR code.
+     */
+    if (pathname === "/remote/status") {
+      const ip = srv.requestIP(req)?.address ?? null;
+      return json(
+        remoteStatus({
+          bind: BIND,
+          port: srv.port ?? PORT,
+          trustLan: TRUST_LAN,
+          token: AUTH_TOKEN,
+          webUi: WEB_UI_ENABLED,
+          includeToken: !!ip && isLoopback(ip),
+        })
+      );
     }
     if (pathname === "/search") {
       const q = url.searchParams.get("q") || "";

@@ -16,6 +16,7 @@ import { ingestUpdate } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
+import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
@@ -124,7 +125,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "prefs" | "keys" | "open" | "export" | "hooks" | "reqs" | "about";
+type Pane = "prefs" | "keys" | "open" | "export" | "hooks" | "reqs" | "remote" | "about";
 const TABS: { id: Pane; label: string }[] = [
   { id: "prefs", label: "Preferences" },
   { id: "keys", label: "Shortcuts" },
@@ -132,6 +133,7 @@ const TABS: { id: Pane; label: string }[] = [
   { id: "export", label: "Export" },
   { id: "hooks", label: "Hooks" },
   { id: "reqs", label: "Requirements" },
+  { id: "remote", label: "Remote" },
   { id: "about", label: "About" },
 ];
 
@@ -909,6 +911,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   {pane === "hooks" && <HooksPane open={open} />}
 
                   {pane === "reqs" && <RequirementsPane open={open} />}
+
+                  {pane === "remote" && <RemoteAccessPane open={open} />}
 
                   {pane === "about" && <AboutPane open={open} />}
                   </div>

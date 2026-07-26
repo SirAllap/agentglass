@@ -10,6 +10,11 @@ A LAN is **not** trusted by default. Reaching the server from another machine is
 a deliberate three-part act: bind off loopback, set `AGENTGLASS_TRUST_LAN=1`, and
 carry a token. See [Trust model](#trust-model) below.
 
+The desktop app performs all three as one switch (Settings › Remote), which
+mints the token itself and shows the URL as a QR code. It is off by default, it
+states in plain words what turning it on grants to everyone on the network, and
+turning it off closes the port rather than merely hiding the link.
+
 ## Supported versions
 
 Only the latest `main` is supported. There are no LTS branches; fixes land on
@@ -41,6 +46,15 @@ complement, rather than replace, the private reporting path below.
 - **Desktop-only routes.** The self-update route executes arbitrary code and is
   reachable from the packaged shell's own origin and nothing else — not from a
   browser, not from another machine.
+- **The token is never re-served to the network.** `/remote/status` reports where
+  the server is reachable and whether a device has arrived, but includes the
+  token itself only for a caller on this machine (a loopback peer address). A
+  page loaded over the LAN already holds the token; handing it back out would
+  turn one leaked link into a permanent credential for anything on the wifi.
+- **Tailnet addresses.** CGNAT (`100.64.0.0/10`, what Tailscale assigns) counts
+  as private under `AGENTGLASS_TRUST_LAN=1`, alongside RFC1918. It is reachable
+  only across an authenticated, encrypted mesh, so it is a narrower grant than
+  trusting a wifi network, and it rides the same opt-in.
 - **Root escalation, once, with a visible prompt.** Rescuing a worktree whose
   files another user owns shells out to `pkexec chown`, so the desktop's own
   password dialog is what authorises it. The path is validated first, precisely

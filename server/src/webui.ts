@@ -22,15 +22,44 @@
 import { resolve, sep } from "node:path";
 import { readFileSync, statSync } from "node:fs";
 
-/** web/dist, iff a build actually exists there (index.html present). */
-const DIST: string | null = (() => {
-  const root = resolve(import.meta.dir, "../../web/dist");
+/** Does `root` hold a real build (index.html present)? */
+function hasBuild(root: string): boolean {
   try {
-    return statSync(resolve(root, "index.html")).isFile() ? root : null;
+    return statSync(resolve(root, "index.html")).isFile();
   } catch {
-    return null;
+    return false;
   }
-})();
+}
+
+/**
+ * Where the built UI lives: AGENTGLASS_WEB_DIR when set, else web/dist beside
+ * the source.
+ *
+ * The override exists because the relative path cannot work in the packaged
+ * desktop app. `import.meta.dir` inside a `bun build --compile` binary is
+ * `/$bunfs/root`, a virtual filesystem holding the bundled script and nothing
+ * else, so `../../web/dist` resolves to a path that has never existed and the
+ * sidecar reports no UI however the app was installed. The bundle *is* there —
+ * electron-builder copies web/dist to `resources/web` — and the shell knows
+ * exactly where, so it passes the path in. That is what lets the desktop app
+ * hand a phone on the LAN a dashboard instead of a JSON API.
+ *
+ * An override naming a directory with no index.html is ignored rather than
+ * fatal: a wrong path should cost the UI, not the server behind it.
+ */
+export function resolveDist(
+  webDir: string | undefined = process.env.AGENTGLASS_WEB_DIR,
+  fallback: string = resolve(import.meta.dir, "../../web/dist")
+): string | null {
+  const asked = webDir?.trim();
+  if (asked) {
+    const abs = resolve(asked);
+    if (hasBuild(abs)) return abs;
+  }
+  return hasBuild(fallback) ? fallback : null;
+}
+
+const DIST: string | null = resolveDist();
 
 export const WEB_UI_ENABLED = DIST !== null;
 

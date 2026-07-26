@@ -20,6 +20,14 @@ export function privateHost(hRaw: string, trustLan: boolean): boolean {
     const [a, b] = h.split(".").map(Number);
     if (a === 127) return true; // loopback is always local
     if (!trustLan) return false; // RFC1918 only when opted in
+    // 100.64/10 is CGNAT, which is what Tailscale hands every node on a
+    // tailnet. Without it the dashboard opened over Tailscale loads its HTML
+    // and then 403s every single API call, because the page's own origin is
+    // refused — a failure that looks exactly like a broken build. A tailnet
+    // address is a stronger claim than an RFC1918 one, not a weaker one: it is
+    // reachable only through an authenticated, encrypted mesh, whereas any
+    // café can hand out 192.168.1.x. It rides the same opt-in flag regardless.
+    if (a === 100 && b >= 64 && b <= 127) return true;
     return a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
   }
   if (v === 6) {

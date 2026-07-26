@@ -1,4 +1,5 @@
 import { api, IS_DEMO } from "./api.ts";
+import { IS_DESKTOP } from "./desktop.ts";
 import { recordNote } from "./sysNotify.ts";
 import type { UpdateStatus } from "../../../shared/types.ts";
 
@@ -109,7 +110,13 @@ async function check(): Promise<void> {
  * available for a week can wait another forty seconds.
  */
 export function startUpdateChecks(): () => void {
-  if (IS_DEMO || timer) return () => {};
+  // Only the desktop shell can answer. `/update/*` is gated on the custom
+  // scheme at the server (it reveals the install path and can start an
+  // install), so from a browser tab — and now from a phone on the LAN, which
+  // is a browser tab that someone is looking at — this poll can only ever
+  // produce a 403 in the console every six hours. Not asking is the fix; the
+  // badge it feeds is desktop-only too.
+  if (IS_DEMO || !IS_DESKTOP || timer) return () => {};
   const first = setTimeout(check, FIRST_CHECK_MS);
   timer = setInterval(check, EVERY_MS);
   return () => {

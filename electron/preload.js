@@ -19,6 +19,15 @@ contextBridge.exposeInMainWorld("agentglass", {
   apiOrigin: (() => {
     try { return ipcRenderer.sendSync("ag:apiOrigin") || null; } catch { return null; }
   })() || `http://127.0.0.1:${Number(process.env.AGENTGLASS_PORT || 4000)}`,
+  // The shared secret, when one is in force (remote access on, or a token set
+  // in the environment). Sync for the same reason as apiOrigin: api.ts reads it
+  // during module evaluation and there is no second chance to hand it over.
+  // Null in the ordinary loopback-only case, where nothing requires a token.
+  apiToken: (() => {
+    try { return ipcRenderer.sendSync("ag:apiToken") || null; } catch { return null; }
+  })(),
+  remoteEnabled: () => ipcRenderer.invoke("ag:remoteEnabled"),
+  setRemote: (on) => ipcRenderer.invoke("ag:setRemote", on),
   setFullscreen: (on) => ipcRenderer.invoke("ag:setFullscreen", on),
   isFullscreen: () => ipcRenderer.invoke("ag:isFullscreen"),
   setZoom: (factor) => ipcRenderer.invoke("ag:setZoom", factor),

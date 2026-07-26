@@ -35,6 +35,20 @@ describe("privateHost", () => {
     }
   });
 
+  test("CGNAT (Tailscale) is gated by trustLan, and its edges are exact", () => {
+    // A tailnet address is what Tailscale hands every node. Without this the
+    // dashboard loads over Tailscale and then 403s every call inside itself,
+    // which reads as a broken build rather than as a refused origin.
+    for (const h of ["100.64.0.1", "100.85.155.119", "100.127.255.254"]) {
+      expect(privateHost(h, false)).toBe(false);
+      expect(privateHost(h, true)).toBe(true);
+    }
+    // 100.0.0.0/10 is not CGNAT: the range starts at 100.64 and ends at 100.127.
+    for (const h of ["100.63.255.255", "100.128.0.1", "100.0.0.1", "100.255.255.255"]) {
+      expect(privateHost(h, true)).toBe(false);
+    }
+  });
+
   test("IPv6 unique-local gated by trustLan; ::1 always", () => {
     expect(privateHost("fc00::1", false)).toBe(false);
     expect(privateHost("fd12:3456::1", true)).toBe(true);

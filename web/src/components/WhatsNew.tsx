@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, IS_DEMO } from "../lib/api.ts";
+import { IS_DESKTOP } from "../lib/desktop.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { markSeen, releaseToAnnounce } from "../lib/whatsNew.ts";
 
@@ -26,7 +27,11 @@ export function WhatsNew() {
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
-    if (IS_DEMO) return;
+    // A browser tab cannot have updated anything: `/update/notes` is gated on
+    // the desktop scheme, so asking only logs a 403. The catch below already
+    // swallowed it, but a phone opening the dashboard should not have an error
+    // waiting in its console for a feature it does not have.
+    if (IS_DEMO || !IS_DESKTOP) return;
     let live = true;
     // Deliberately after the first paint rather than racing it: the dashboard
     // connecting matters more than the notes, and the modal is not urgent.

@@ -4,8 +4,8 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { resolveAsset, injectSameOrigin } from "../src/webui.ts";
+import { join, resolve, relative } from "node:path";
+import { resolveAsset, injectSameOrigin, resolveDist } from "../src/webui.ts";
 
 let dist: string;
 
@@ -73,5 +73,39 @@ describe("injectSameOrigin", () => {
 
   test("headless html still gets the marker (prepended)", () => {
     expect(injectSameOrigin("<div/>").startsWith("<script>")).toBe(true);
+  });
+});
+
+// AGENTGLASS_WEB_DIR: the override that lets the packaged desktop sidecar find
+// the dashboard at all. Without it a compiled binary looks for web/dist beside
+// its own source file, which inside `bun build --compile` is a virtual path
+// that has never existed — so the app could expose a port to a phone and serve
+// it nothing but JSON.
+describe("resolveDist", () => {
+  test("prefers the override when it holds a real build", () => {
+    expect(resolveDist(dist, "/nonexistent/fallback")).toBe(dist);
+  });
+
+  test("resolves a relative override to an absolute path", () => {
+    expect(resolveDist(relative(process.cwd(), dist), "/nonexistent/fallback")).toBe(dist);
+  });
+
+  test("an override with no index.html is ignored rather than fatal", () => {
+    // A wrong path should cost the UI, not the server behind it.
+    const empty = mkdtempSync(join(tmpdir(), "agentglass-webui-empty-"));
+    try {
+      expect(resolveDist(empty, dist)).toBe(dist);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  test("blank and unset fall through to the fallback", () => {
+    expect(resolveDist(undefined, dist)).toBe(dist);
+    expect(resolveDist("   ", dist)).toBe(dist);
+  });
+
+  test("null when neither the override nor the fallback holds a build", () => {
+    expect(resolveDist("/nonexistent/override", "/nonexistent/fallback")).toBe(null);
   });
 });

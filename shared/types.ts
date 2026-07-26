@@ -1351,3 +1351,45 @@ export interface HookSetupResult {
   settingsPath: string;
   error?: string;
 }
+
+// --- remote access ----------------------------------------------------------
+
+/** An address another device could reach this machine on. */
+export interface ReachableAddress {
+  address: string;
+  /** Interface name, so "which network is this" is answerable. */
+  iface: string;
+  /** A tailnet address (CGNAT 100.64/10) rather than a plain LAN one: works
+   *  from anywhere, but only for devices already on the tailnet. */
+  tailnet: boolean;
+  /** CIDR of the local subnet, used to scope the firewall command. */
+  subnet: string | null;
+}
+
+/** The firewall most likely to be dropping traffic, and the fix. Never run by
+ *  the app: it prints the command for a human to read and paste. */
+export interface FirewallHint {
+  tool: "ufw" | "firewalld" | "nftables";
+  command: string;
+  undo: string | null;
+}
+
+/** Whether another device can reach this server, and whether one ever has. */
+export interface RemoteStatus {
+  /** Bound off loopback, so off-box traffic can arrive at all. */
+  exposed: boolean;
+  bind: string;
+  port: number;
+  /** Private-network origins accepted. An exposed port without it 403s. */
+  trustLan: boolean;
+  tokenRequired: boolean;
+  /** This port serves the dashboard itself, not only the API. */
+  webUi: boolean;
+  /** Ready-to-open URLs, token included when the caller is local. */
+  urls: string[];
+  addresses: ReachableAddress[];
+  clients: { count: number; lastAt: number | null; addresses: string[] };
+  firewall: FirewallHint | null;
+  /** Only ever sent to a caller on this machine. */
+  token?: string;
+}
