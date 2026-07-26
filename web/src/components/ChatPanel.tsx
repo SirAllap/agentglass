@@ -11,7 +11,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
-import type { GitRepoRef, SessionRollup } from "../../../shared/types.ts";
+import { CHAT_EFFORTS } from "../../../shared/types.ts";
+import type { GitRepoRef, SessionRollup, ChatEffort } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
@@ -320,6 +321,57 @@ function PanePrompt({ chat }: { chat: Chat }) {
         <span className="ml-auto t-dim2 text-[10px]">or open it in a terminal: <code style={CODE_FONT_STYLE}>{chat.attachCommand || "tmux -L agentglass attach"}</code></span>
       </div>
     </div>
+  );
+}
+
+/** How hard the model is asked to think, as a dial you can read at a glance.
+ *
+ *  Bars rather than a dropdown because the values are ordered — the useful
+ *  question is "more or less than now", and a list of six words makes you read
+ *  all six to answer it. Filled bars carry the level; the label names it, since
+ *  bars alone cannot tell `xhigh` from `max`.
+ *
+ *  "Default" is a real seventh state and deliberately first: it means the CLI's
+ *  own configured effort is left alone, which is what someone who set it in
+ *  their settings.json wants. Anything else passes `--effort`. */
+function EffortDial({ chat }: { chat: Chat }) {
+  const [open, setOpen] = useState(false);
+  const at = chat.effort ? CHAT_EFFORTS.indexOf(chat.effort) : -1;
+  const label = chat.effort ?? "default";
+  const pick = (v: ChatEffort | undefined) => {
+    update(chat.id, (c) => { c.effort = v; });
+    setOpen(false);
+  };
+  return (
+    <span className="relative shrink-0">
+      <button onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="listbox"
+        title={"How hard the model thinks, sent as --effort.\n\nDefault leaves the CLI's own setting alone.\nChanging this restarts the chat's session, keeping the conversation."}
+        className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded-md"
+        style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+        <span className="flex items-end gap-[2px]" aria-hidden>
+          {CHAT_EFFORTS.map((_, i) => (
+            <span key={i} style={{
+              width: 3, height: 4 + i * 2, borderRadius: 1,
+              background: i <= at ? "var(--primary-hover)" : "color-mix(in srgb, var(--border) 70%, transparent)",
+            }} />
+          ))}
+        </span>
+        <span>{label}</span>
+      </button>
+      {open && (
+        <div role="listbox" className="absolute z-20 mt-1 right-0 rounded-lg py-1 min-w-[150px]"
+          style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+          <button onClick={() => pick(undefined)} role="option" aria-selected={!chat.effort}
+            className="w-full text-left px-2.5 py-1 text-[11px] hover:bg-white/5"
+            style={{ color: !chat.effort ? "var(--text)" : "var(--text3)" }}>Default</button>
+          {CHAT_EFFORTS.map((v) => (
+            <button key={v} onClick={() => pick(v)} role="option" aria-selected={chat.effort === v}
+              className="w-full text-left px-2.5 py-1 text-[11px] hover:bg-white/5"
+              style={{ color: chat.effort === v ? "var(--text)" : "var(--text3)" }}>{v}</button>
+          ))}
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -979,6 +1031,22 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             className="text-[10px] px-2 py-1 rounded-md outline-none min-w-0 flex-1 max-w-[280px]"
                             style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
                           />
+                        )}
+                        <EffortDial chat={active} />
+                        {/* Claude Code's own settings, which are global rather
+                            than per chat — so a button rather than something
+                            you have to remember is a slash command. Only in
+                            pane mode: `claude -p` has no interactive config to
+                            open, and offering a button that cannot work is
+                            worse than not offering one. */}
+                        {engineFor(active) === "tmux" && active.sessionId && (
+                          <button
+                            onClick={() => send(active.id, "/config", () => openRef.current && activeIdRef.current === active.id, [])}
+                            disabled={active.sending}
+                            title="Open Claude Code's own settings in this chat's pane. They apply to every chat, not just this one."
+                            className="text-[10px] px-2 py-1 rounded-md shrink-0 disabled:opacity-40"
+                            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                          >⚙ Config</button>
                         )}
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="Resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                         {/* Pushed right so the two copy actions sit together at

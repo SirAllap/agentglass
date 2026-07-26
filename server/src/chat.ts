@@ -14,7 +14,8 @@
 import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
 import { inScope, chatBypassAllowed } from "./config.ts";
 import { paneTurnStream, paneEngineCapability } from "./chatpane.ts";
-import type { ChatImage, ChatImageMediaType } from "../../shared/types.ts";
+import { CHAT_EFFORTS } from "../../shared/types.ts";
+import type { ChatImage, ChatImageMediaType, ChatEffort } from "../../shared/types.ts";
 
 const claudeBin = () => Bun.which("claude");
 export const CHAT_ENABLED = !!claudeBin();
@@ -65,6 +66,19 @@ const MAX_ALLOWED = 40;
  *  raise a permission dialog is simply refused — the chat reports "requires
  *  approval" and there is no way to grant it from inside. This is the way out:
  *  the caller says up front what may run without asking. */
+/** How hard to think, as `--effort` takes it.
+ *
+ *  `""` means "say nothing", which is a real answer rather than a missing one:
+ *  someone who set an effort in their own settings.json should not have every
+ *  chat quietly overriding it.
+ *
+ *  Anything outside the CLI's own list is dropped rather than forwarded. This
+ *  value lands on a `claude` command line, so a level invented by a caller
+ *  would either be rejected there or, worse, quietly mean something else. */
+export function effortLevel(v: unknown): ChatEffort | "" {
+  return (CHAT_EFFORTS as readonly string[]).includes(v as string) ? (v as ChatEffort) : "";
+}
+
 export function allowList(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.filter((t): t is string => typeof t === "string" && TOOL_RE.test(t.trim())).map((t) => t.trim()).slice(0, MAX_ALLOWED);
@@ -206,9 +220,9 @@ export function turnEnvelope(text: string, images: ChatImage[]): string {
  *  the whole of what keeps "open project" from being decorative. */
 export type TurnPlan =
   | { ok: false; response: Response }
-  | { ok: true; dir: string; text: string; model: string; mode: string; resumeId: string; images: ChatImage[]; allow: string[] };
+  | { ok: true; dir: string; text: string; model: string; mode: string; effort: ChatEffort | ""; resumeId: string; images: ChatImage[]; allow: string[] };
 
-export function planTurn(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown): TurnPlan {
+export function planTurn(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown, effort?: unknown): TurnPlan {
   const no = (r: Response): TurnPlan => ({ ok: false, response: r });
   if (!claudeBin()) return no(err("no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)", 403));
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return no(err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403));
@@ -237,7 +251,7 @@ export function planTurn(cwd: unknown, message: unknown, model: unknown, resumeI
   if (pm === "bypassPermissions" && !BYPASS_ALLOWED) pm = "default"; // opt-in only
   const rid = typeof resumeId === "string" && SESSION_RE.test(resumeId) ? resumeId : "";
   const allow = pm === "bypassPermissions" ? [] : allowList(allowedTools);
-  return { ok: true, dir, text: message, model: m, mode: pm, resumeId: rid, images: imgs, allow };
+  return { ok: true, dir, text: message, model: m, mode: pm, effort: effortLevel(effort), resumeId: rid, images: imgs, allow };
 }
 
 /** Which engine a chat uses when the request does not say.
@@ -256,7 +270,7 @@ export const CHAT_ENGINE_DEFAULT = process.env.AGENTGLASS_CHAT_ENGINE === "tmux"
  *  Validation happens once, before the split, so neither engine can be reached
  *  with a directory the other would have refused. */
 export function chatSend(b: Record<string, unknown>): Response {
-  const plan = planTurn(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images);
+  const plan = planTurn(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images, b.effort);
   if (!plan.ok) return plan.response;
   const want = b.engine === "tmux" || b.engine === "process" ? b.engine : CHAT_ENGINE_DEFAULT;
   if (want !== "tmux") return chatStreamPlanned(plan);
@@ -270,6 +284,7 @@ export function chatSend(b: Record<string, unknown>): Response {
     message: plan.text,
     model: plan.model,
     mode: plan.mode,
+    effort: plan.effort,
     // A chat with no session yet gets its id decided here rather than discovered
     // from the CLI: the pane has to be named something before it is launched,
     // and `--session-id` is what makes the two agree.
@@ -289,6 +304,10 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
   const { dir, text: msgText, model: m, mode: pm, resumeId: rid, images: imgs } = plan;
 
   const args = [bin, "-p", "--output-format", "stream-json", "--verbose", "--model", m];
+  // Same flag both engines use. Verified it applies to `-p` as well as to an
+  // interactive session, which is what makes the chat's dial mean the same
+  // thing whichever engine a chat happens to run on.
+  if (plan.effort) args.push("--effort", plan.effort);
   // Structured input is only switched on for a turn that actually needs it.
   // Plain text is the overwhelmingly common case and its path through `claude`
   // is the well-trodden one; `--input-format stream-json` is comparatively

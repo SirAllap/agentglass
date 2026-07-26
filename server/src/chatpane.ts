@@ -66,7 +66,7 @@ async function sizeOf(path: string): Promise<number> {
 // mid-conversation cannot be honoured by an already-running CLI — both are
 // process-level here — so the pane is relaunched with `--resume`, which costs
 // one slow turn and keeps the conversation intact.
-interface PaneSpec { model: string; mode: string; cwd: string }
+interface PaneSpec { model: string; mode: string; effort: string; cwd: string }
 const specs = new Map<string, PaneSpec>();
 
 /** How long to wait for the TUI to draw its input box before giving up.
@@ -202,7 +202,7 @@ async function submitConfirmed(name: string, pasted: string, deadline: number): 
  *  `--session-id` on an existing session is a hard error ("Session ID is already
  *  in use"), so getting this backwards does not degrade, it fails the turn. */
 async function ensurePane(
-  sessionId: string, cwd: string, model: string, mode: string,
+  sessionId: string, cwd: string, model: string, mode: string, effort: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const bin = claudeBin();
   if (!bin) return { ok: false, error: "no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)" };
@@ -211,7 +211,7 @@ async function ensurePane(
   const spec = specs.get(sessionId);
   // A live pane whose model or mode no longer matches what the chat is asking
   // for cannot be re-flagged in place; take it down and bring it back resumed.
-  if (alive && spec && (spec.model !== model || spec.mode !== mode)) {
+  if (alive && spec && (spec.model !== model || spec.mode !== mode || spec.effort !== effort)) {
     await killPane(sessionId);
     specs.delete(sessionId);
   } else if (alive) {
@@ -221,6 +221,7 @@ async function ensurePane(
 
   const fresh = (await sizeOf(transcriptFor(cwd, sessionId))) === 0;
   const argv = [bin, "--model", model];
+  if (effort) argv.push("--effort", effort);
   if (fresh) argv.push("--session-id", sessionId);
   else argv.push("--resume", sessionId);
   if (mode === "bypassPermissions") argv.push("--dangerously-skip-permissions");
@@ -236,7 +237,7 @@ async function ensurePane(
     const screen = (await capture(sessionId)).trim().split("\n").filter(Boolean).slice(-6).join("\n");
     return { ok: false, error: `the chat pane never became ready in ${Math.round(READY_TIMEOUT_MS / 1000)}s.\n${screen}` };
   }
-  specs.set(sessionId, { model, mode, cwd });
+  specs.set(sessionId, { model, mode, effort, cwd });
   touchPane(sessionId);
   return { ok: true };
 }
@@ -304,6 +305,8 @@ export interface PaneTurnOptions {
   message: string;
   model: string;
   mode: string;
+  /** Empty means "leave the CLI's own setting alone". */
+  effort: string;
   sessionId: string;
   images: { mediaType: string; data: string }[];
 }
@@ -358,7 +361,7 @@ const STALL_CHECK_MS = 15_000;
 /** Run one turn in the chat's pane, streaming the same ndjson the `-p` engine
  *  streams so the browser needs no new parsing. */
 export function paneTurnStream(opts: PaneTurnOptions): Response {
-  const { cwd, message, model, mode, sessionId, images } = opts;
+  const { cwd, message, model, mode, effort, sessionId, images } = opts;
   const enc = new TextEncoder();
   let cancelled = false;
 
@@ -373,7 +376,7 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
       };
 
       try {
-        const ready = await ensurePane(sessionId, cwd, model, mode);
+        const ready = await ensurePane(sessionId, cwd, model, mode, effort);
         if (!ready.ok) {
           // A pane that will not come up fails identically on every retry until
           // someone does something about it, which is exactly what the setup

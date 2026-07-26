@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -459,7 +459,7 @@ const realApi = {
    *  Only navigation and the two answers a prompt takes — the server keeps its
    *  own allowlist, since this reaches a live terminal running an agent. */
   chatPaneKey: (session: string, key: string) => post<{ screen: string }>("/chat/pane/key", { session, key }),
-  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
+  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     let res: Response;
     // A fetch that throws before a response has arrived never reached the
     // server, which is a different problem from one that dies mid-turn — the
@@ -604,7 +604,7 @@ const demoApi: typeof realApi = {
   chatAttach: (_session: string) => D({ command: "", live: false }),
   chatPaneClose: (_session: string) => D({ killed: false }),
   chatPaneKey: (_session: string, _key: string) => D({ screen: "" }),
-  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine }, onEvent: (o: Record<string, unknown>) => void) => {
+  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void) => {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });
     onEvent({ type: "result", result: "" });

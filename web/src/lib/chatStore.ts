@@ -8,7 +8,7 @@
 import { api, ChatStreamError } from "./api.ts";
 import { loadChats, saveChats } from "./chatPersist.ts";
 import { chatEnginePref } from "./chatEnginePref.ts";
-import type { ChatImage, WatchEvent, ChatEngine } from "../../../shared/types.ts";
+import type { ChatImage, WatchEvent, ChatEngine, ChatEffort } from "../../../shared/types.ts";
 
 /** A pasted image waiting in the composer. `url` is an object URL for the
  *  thumbnail; it is revoked when the attachment is dropped or sent, since
@@ -143,6 +143,12 @@ export type Chat = {
    *  first turn has started. */
   resolvedModel?: string;
   mode: string;
+  /** How hard to think, passed to the CLI as `--effort`.
+   *
+   *  Absent means "leave whatever the CLI is configured with alone" — a real
+   *  answer, not a missing one: someone who set an effort in their own
+   *  settings.json should not have every chat quietly overriding it. */
+  effort?: ChatEffort;
   /** How this chat's turns are run. Per chat rather than global because the
    *  trade is per chat: the one you are working in all afternoon is worth a warm
    *  CLI, the five you opened to ask one question each are not. Absent on chats
@@ -816,7 +822,7 @@ export async function send(id: string, text: string, isActive: () => boolean, al
 
   let broke = false;
   try {
-    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images, engine }, onEvent, ac.signal);
+    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, effort: chat.effort, resumeId: chat.sessionId, allowedTools, images, engine }, onEvent, ac.signal);
   } catch (e) {
     // A queue must not keep firing into a turn that failed or one you just
     // interrupted — the rest of it stays put, visible, for you to decide on.

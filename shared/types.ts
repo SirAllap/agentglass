@@ -910,6 +910,18 @@ export type ChatImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "ima
  *              The trade is memory: a warm CLI is ~380MB and grows with use. */
 export type ChatEngine = "process" | "tmux";
 
+/** How hard the model is asked to think, lowest first.
+ *
+ *  The order is the whole point: this is a dial, not a set of unrelated
+ *  choices, and everything that renders it — the meter in the chat header —
+ *  reads the position from this array rather than carrying its own copy.
+ *
+ *  Taken from the CLI's own `/effort` picker. `ultracode` sits past `max` and
+ *  is described there as "xhigh + workflows", so it is last rather than
+ *  alphabetical. */
+export const CHAT_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultracode"] as const;
+export type ChatEffort = (typeof CHAT_EFFORTS)[number];
+
 /** Whether the pane engine can be offered here, and why not when it cannot.
  *
  *  The reason is carried rather than derived in the UI because the two causes
