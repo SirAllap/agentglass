@@ -200,7 +200,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
         {open && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
+              className="fixed inset-0 agx-scrim" style={{ zIndex: 10000 }} onClick={onClose} />
             {/* Flex wrapper centers the card — Motion owns `transform` for its
                 scale/y animation, so Tailwind translate centering can't be used. */}
             <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10001 }}>

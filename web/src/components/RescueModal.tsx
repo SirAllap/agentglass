@@ -119,7 +119,7 @@ export function RescueModal({ reports, progress, onCancel, onConfirm }: {
     <Portal>
       <AnimatePresence>
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          className="fixed inset-0" style={{ zIndex: 10002, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onCancel} />
+          className="fixed inset-0 agx-scrim" style={{ zIndex: 10002 }} onClick={onCancel} />
         <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10003 }}>
           <motion.div
             initial={{ opacity: 0, scale: 0.98, y: 6 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98 }}

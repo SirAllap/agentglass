@@ -57,7 +57,7 @@ export function SearchModal({ open, onClose, onSelectApp }: { open: boolean; onC
         {open && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
+              className="fixed inset-0 agx-scrim" style={{ zIndex: 10000 }} onClick={onClose} />
             <div className="fixed inset-0 flex justify-center items-start pt-[9vh] px-4 pointer-events-none" style={{ zIndex: 10001 }}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.97, y: -10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.98, y: -6 }}

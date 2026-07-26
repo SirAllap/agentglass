@@ -30,12 +30,37 @@ export type Row =
  * running when we attached) still gets a row of its own rather than being
  * scattered through the main thread.
  */
+/**
+ * A key that names the *entry*, not its position in the list.
+ *
+ * The position is not stable and using it was expensive: the server returns a
+ * window of the newest runs, so every new tool call pushes the oldest one out
+ * and shifts every index by one. Index keys made React treat that as "every row
+ * changed", so a live session tore down and rebuilt its whole conversation —
+ * hundreds of rows, each re-parsing its markdown — on every three-second poll.
+ * It also silently collapsed any row the user had opened to read.
+ *
+ * `tool_use_id` identifies a run outright. Without one, the timestamp plus what
+ * the row is does the same job; the counter only breaks ties between entries
+ * that are genuinely indistinguishable, and a tie stays a tie across polls
+ * because the entries arrive in the same order every time.
+ */
+export function entryKey(e: TimelineEntry, seen: Map<string, number>): string {
+  const base = e.kind === "tool"
+    ? `t:${e.tool_use_id || `${e.ts}:${e.tool ?? ""}:${e.target ?? ""}`}`
+    : `m:${e.ts}:${e.role ?? ""}`;
+  const n = seen.get(base) ?? 0;
+  seen.set(base, n + 1);
+  return n ? `${base}#${n}` : base;
+}
+
 export function buildRows(entries: TimelineEntry[]): Row[] {
   const rows: Row[] = [];
   const byAgent = new Map<string, Row & { kind: "tool" }>();
   const unclaimed: (Row & { kind: "tool" })[] = [];
+  const seen = new Map<string, number>();
 
-  entries.forEach((e, i) => {
+  entries.forEach((e) => {
     const agent = e.agent_id || "";
     if (agent) {
       let host = byAgent.get(agent);
@@ -58,12 +83,12 @@ export function buildRows(entries: TimelineEntry[]): Row[] {
       return;
     }
     if (e.kind === "tool") {
-      const row: Row & { kind: "tool" } = { kind: "tool", e, children: [], key: `t${i}` };
+      const row: Row & { kind: "tool" } = { kind: "tool", e, children: [], key: entryKey(e, seen) };
       rows.push(row);
       if (SPAWN_TOOLS.has(e.tool ?? "")) unclaimed.push(row);
       return;
     }
-    rows.push({ kind: "message", e, key: `m${i}` });
+    rows.push({ kind: "message", e, key: entryKey(e, seen) });
   });
 
   return rows;

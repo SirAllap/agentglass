@@ -29,7 +29,7 @@ export interface LiveData {
  * flushed on a timer (not per-message) so a busy fleet causes a few renders a
  * second instead of dozens. Rendering pauses entirely while the tab is hidden.
  */
-export function useLive(): LiveData {
+export function useLive(paused = false): LiveData {
   const [events, setEvents] = useState<WatchEvent[]>([]);
   const [conn, setConn] = useState<ConnState>("connecting");
   const [lastEvent, setLastEvent] = useState<WatchEvent | null>(null);
@@ -48,18 +48,30 @@ export function useLive(): LiveData {
   const pending = useRef<WatchEvent[]>([]);
   const seen = useRef(new Set<number>());
   const flushScheduled = useRef(false);
+  // What is currently on screen. Read by the trim below, which used to close
+  // over the first render's empty array and so rebuilt the dedupe set without
+  // the ids it was meant to remember.
+  const shown = useRef(events);
+  shown.current = events;
+  // "Something is covering the dashboard." Rendering behind it is work nobody
+  // can see, and on the desktop app it is work charged to the same CPU that is
+  // trying to scroll whatever opened on top. Held in a ref so the flush reads it
+  // without the callback being rebuilt on each toggle.
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   const flush = useCallback(() => {
     flushScheduled.current = false;
-    // Don't touch React state while hidden — just keep the buffer bounded.
-    if (typeof document !== "undefined" && document.hidden) {
+    // Don't touch React state while hidden or covered — just keep the buffer
+    // bounded. Nothing is lost: uncovering flushes at once.
+    if (pausedRef.current || (typeof document !== "undefined" && document.hidden)) {
       if (pending.current.length > MAX_EVENTS) {
         pending.current = pending.current.slice(-MAX_EVENTS);
         // Rebuild the dedup set too, or it grows one id per event for the whole
         // time the tab is backgrounded. Keep the ids already displayed (events)
         // as well as those buffered, so a re-delivery of a shown event is still
         // caught after the trim.
-        seen.current = new Set([...events.map((e) => e.id), ...pending.current.map((e) => e.id)]);
+        seen.current = new Set([...shown.current.map((e) => e.id), ...pending.current.map((e) => e.id)]);
       }
       return;
     }
@@ -210,6 +222,12 @@ export function useLive(): LiveData {
   // on top — this is a monitoring surface people leave on-screen and watch, and
   // freezing the sweep under a still-visible, still-focused window would read as
   // a hung app rather than a saving.
+  // Catch up the moment the dashboard is uncovered — one render for everything
+  // that arrived while it was hidden, instead of five a second into the dark.
+  useEffect(() => {
+    if (!paused) flush();
+  }, [paused, flush]);
+
   useEffect(() => {
     const sync = () => {
       const looking = !document.hidden && document.hasFocus();

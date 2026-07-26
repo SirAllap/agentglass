@@ -221,9 +221,9 @@
   .rdr-sweep, .shimmer { animation: none !important; }
   [style*="ping-ring"] { animation: none !important; }
 }
-/* `data-ws` joins `data-idle` here: the workspace covers the dashboard, so its
-   ambient loops are animating something nobody can see. That is not a rounding
-   error. The desktop webview composites in software (no GPU process, measured),
+/* `data-ws` joins `data-idle` here: the workspace — or any full-screen modal —
+   covers the dashboard, so its ambient loops are animating something nobody can
+   see. That is not a rounding error. The desktop webview composites in software (no GPU process, measured),
    so every frame of these loops is a full repaint charged to the CPU: the UI
    process and the web process together sit at ~172% while the server, doing the
    actual work, uses 8%. Disabling the loops outright took the same page from
@@ -296,6 +296,41 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .agw-tip::after { transition: opacity 0.12s ease 0.25s; transform: none; }
+}
+
+/* The dim behind a modal.
+ *
+ * No backdrop-filter, for the same reason the panels dropped theirs: the
+ * desktop app composites in software, so a full-viewport blur is re-rastered on
+ * the CPU whenever anything under it moves — and what is under it is a live
+ * dashboard with a radar sweep, a ping per running agent and an event feed. The
+ * blur was charged per frame of all of that, while the modal on top was trying
+ * to scroll. At 3px over a dark wash almost nobody could see it anyway; the
+ * extra opacity does the same job of pushing the app back, for free.
+ *
+ * Modals with their own ground (a frosted panel, a lighter dim) set `background`
+ * inline over this and keep it. */
+.agx-scrim {
+  background: rgba(0, 0, 0, 0.66);
+}
+
+/* One row of a long, scrolling list — a session's conversation, a diff.
+ *
+ * `content-visibility: auto` lets the browser skip layout and paint for the
+ * rows that are off screen, which on a session with hundreds of tool runs is
+ * nearly all of them. `contain-intrinsic-size: auto` keeps the last real height
+ * of each row, so the scrollbar stops jumping once a row has been seen once and
+ * scrolling back over it lands where you left it. */
+.agx-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 22px;
+}
+/* A message bubble rather than a one-line tool run. The guess only stands in
+   until a row has been on screen once, but a guess an order of magnitude out
+   makes the scrollbar leap around on the way through — so the two shapes in
+   this list guess separately. */
+.agx-row-tall {
+  contain-intrinsic-size: auto 110px;
 }
 
 /* The workspace dynamic island.

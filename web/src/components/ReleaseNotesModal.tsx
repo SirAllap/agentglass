@@ -50,7 +50,7 @@ export function ReleaseNotesModal({ open, tag, notes, title = "What's new", load
           <>
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10010, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }}
+              className="fixed inset-0 agx-scrim" style={{ zIndex: 10010 }}
               onClick={onClose} />
             <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: 10011 }}>
               <motion.div

@@ -412,7 +412,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
           {full && (
             <>
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(3px)" }} onClick={() => setFull(false)} />
+                className="fixed inset-0 agx-scrim" style={{ zIndex: 10000 }} onClick={() => setFull(false)} />
               {/* Flex wrapper centers the card — Motion owns `transform` for its
                   scale/y animation, so Tailwind translate centering can't be used. */}
               <div className="fixed inset-0 flex items-center justify-center pointer-events-none" style={{ zIndex: 10001 }}>

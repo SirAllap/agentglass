@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { SessionDetail, TimelineEntry } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
@@ -8,7 +8,7 @@ import { usePoll } from "../lib/usePoll.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { fmtUsd, fmtTokens, fmtAgo, fmtTime, modelLabelOf, modelColor, sessionTitle } from "../lib/format.ts";
 import { ToolRow } from "./ToolRow.tsx";
-import { buildRows, type Row } from "../lib/toolTree.ts";
+import { buildRows, entryKey, type Row } from "../lib/toolTree.ts";
 import { sessionIsLive } from "../lib/derive.ts";
 import { sessionWorktree, sessionCwd } from "../lib/worktree.ts";
 import { useStuckBottom } from "../lib/useStuckBottom.ts";
@@ -25,7 +25,31 @@ function Stat({ k, v, color }: { k: string; v: string; color?: string }) {
   );
 }
 
-export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume }: { sessionId: string | null; sourceApp?: string; onClose: () => void; onFilter?: (app: string) => void; onResume?: (s: SessionDetail) => void }) {
+// Mixed against a solid base rather than `transparent`: over the panel's own
+// violet the old wash left both roles nearly the same colour, and some themes
+// flattened them completely. The left border carries the distinction even where
+// the fills don't.
+//
+// Hoisted out of the render, and memoised on three primitives: these were object
+// literals rebuilt for every message on every poll, which is a fresh style
+// recalculation for a bubble whose colours have never once changed.
+const USER_BUBBLE = { background: "color-mix(in srgb, var(--primary) 26%, var(--bg2))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", borderLeft: "3px solid var(--primary)" };
+const AGENT_BUBBLE = { background: "color-mix(in srgb, var(--bg3) 85%, var(--bg))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", borderLeft: "3px solid color-mix(in srgb, var(--info) 70%, transparent)" };
+
+const Bubble = memo(function Bubble({ role, ts, text }: { role: string; ts: number; text: string }) {
+  const user = role === "user";
+  return (
+    <div className={`flex ${user ? "justify-end" : "justify-start"}`}>
+      <div className="max-w-[85%] min-w-0 rounded-xl px-3 py-2 text-[11.5px] leading-relaxed break-words"
+        style={user ? USER_BUBBLE : AGENT_BUBBLE}>
+        <div className="text-[9px] uppercase tracking-wider mb-1" style={{ color: user ? "var(--primary-hover)" : "var(--info)" }}>{role} · {fmtTime(ts)}</div>
+        <Markdown text={text} />
+      </div>
+    </div>
+  );
+});
+
+export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume }:{ sessionId: string | null; sourceApp?: string; onClose: () => void; onFilter?: (app: string) => void; onResume?: (s: SessionDetail) => void }) {
   const [d, setD] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
@@ -44,6 +68,12 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
   // the file list all keep moving while the modal sits open. Refreshed in place
   // — no `loading` flag, no clearing `d` — so a running session updates under
   // you instead of flickering through an empty state every few seconds.
+  //
+  // A finished session polls slowly rather than not at all: its roll-up can
+  // still gain a cost correction or a late file change, but nothing about it is
+  // moving, and this response carries the whole conversation — a few hundred
+  // kilobytes to fetch and parse on the main thread, every tick, next to the
+  // scrolling the user is trying to do.
   usePoll(!!sessionId, () => {
     if (!sessionId) return;
     api.session(sessionId).then((s) => {
@@ -51,7 +81,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
       // genuinely changed session from an idle poll and skip the re-render.
       setD((prev) => (prev && s && prev.last_seen === s.last_seen && prev.events === s.events ? prev : s));
     }).catch(() => { /* keep showing what we have */ });
-  }, 3000);
+  }, d && !sessionIsLive(d) ? 20_000 : 3000);
 
   const open = !!sessionId;
   // The name if it has one, the uuid otherwise. `id` stays available for the
@@ -69,21 +99,31 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
 
   // Oldest-first, so it reads as a story rather than in reverse. Falls back to
   // the plain conversation for a server that predates the timeline field.
-  const entries: TimelineEntry[] = d?.timeline?.length
-    ? d.timeline
-    : (d?.conversation ?? []).map((c) => ({ kind: "message" as const, ts: c.ts, role: c.role, text: c.text }));
-  const toolCount = entries.reduce((n, e) => n + (e.kind === "tool" ? 1 : 0), 0);
-  // Subagents report the parent's session id, so a fleet of them lands on this
-  // one timeline. Focusing one is the only way to read what it actually did
-  // without its work being shuffled together with three siblings'.
-  const ordered = [...entries].reverse().filter((e) => showTools || e.kind !== "tool");
-  // Focusing one is a request to read ITS thread alone, so it stays flat —
-  // nesting it under a spawn row it is the only occupant of would only indent
-  // it. Unfocused, the fleet's work folds back under the calls that started it.
-  const rows: Row[] = focusAgent
-    ? ordered.filter((e) => e.agent_id === focusAgent).map((e, i): Row =>
-        e.kind === "tool" ? { kind: "tool", e, children: [], key: `f${i}` } : { kind: "message", e, key: `f${i}` })
-    : buildRows(ordered);
+  //
+  // Memoised as one unit, because none of it is cheap and all of it is redone
+  // on every re-render of this panel — and while a session is live the panel
+  // re-renders every three seconds, plus once per scroll-away and scroll-back.
+  const { rows, toolCount } = useMemo(() => {
+    const entries: TimelineEntry[] = d?.timeline?.length
+      ? d.timeline
+      : (d?.conversation ?? []).map((c) => ({ kind: "message" as const, ts: c.ts, role: c.role, text: c.text }));
+    const tools = entries.reduce((n, e) => n + (e.kind === "tool" ? 1 : 0), 0);
+    // Subagents report the parent's session id, so a fleet of them lands on this
+    // one timeline. Focusing one is the only way to read what it actually did
+    // without its work being shuffled together with three siblings'.
+    const ordered = [...entries].reverse().filter((e) => showTools || e.kind !== "tool");
+    // Focusing one is a request to read ITS thread alone, so it stays flat —
+    // nesting it under a spawn row it is the only occupant of would only indent
+    // it. Unfocused, the fleet's work folds back under the calls that started it.
+    const seen = new Map<string, number>();
+    const built: Row[] = focusAgent
+      ? ordered.filter((e) => e.agent_id === focusAgent).map((e): Row =>
+          e.kind === "tool"
+            ? { kind: "tool", e, children: [], key: entryKey(e, seen) }
+            : { kind: "message", e, key: entryKey(e, seen) })
+      : buildRows(ordered);
+    return { rows: built, toolCount: tools };
+  }, [d, showTools, focusAgent]);
 
   // Follow the newest turn, the way a terminal does — but only while you are
   // already at the bottom. Scrolling up to read something is an explicit "leave
@@ -101,7 +141,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
         {open && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
+              className="fixed inset-0 agx-scrim" style={{ zIndex: 10000 }} onClick={onClose} />
             <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10001 }}>
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
@@ -292,27 +332,14 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                             lands a moment after the row itself. */}
                         <div ref={convoContentRef} className="space-y-2.5">
                           {rows.length === 0 && <div className="t-dim2 text-[11px]">No prompts or messages captured</div>}
-                          {rows.map((r) => r.kind === "tool" ? (
-                            <ToolRow key={r.key} e={r.e} sub={r.children} />
-                          ) : (
-                            <div key={r.key} className={`flex ${r.e.role === "user" ? "justify-end" : "justify-start"}`}>
-                              <div
-                                className="max-w-[85%] min-w-0 rounded-xl px-3 py-2 text-[11.5px] leading-relaxed break-words"
-                                // Mixed against a solid base rather than
-                                // `transparent`: over the panel's own violet the
-                                // old wash left both roles nearly the same
-                                // colour, and some themes flattened them
-                                // completely. The left border carries the
-                                // distinction even where the fills don't.
-                                style={
-                                  r.e.role === "user"
-                                    ? { background: "color-mix(in srgb, var(--primary) 26%, var(--bg2))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 55%, transparent)", borderLeft: "3px solid var(--primary)" }
-                                    : { background: "color-mix(in srgb, var(--bg3) 85%, var(--bg))", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", borderLeft: "3px solid color-mix(in srgb, var(--info) 70%, transparent)" }
-                                }
-                              >
-                                <div className="text-[9px] uppercase tracking-wider mb-1" style={{ color: r.e.role === "user" ? "var(--primary-hover)" : "var(--info)" }}>{r.e.role} · {fmtTime(r.e.ts)}</div>
-                                <Markdown text={r.e.text ?? ""} />
-                              </div>
+                          {/* `agx-row` is what keeps a long session scrolling
+                              smoothly: the rows you are not looking at cost no
+                              layout and no paint. */}
+                          {rows.map((r) => (
+                            <div key={r.key} className={r.kind === "tool" ? "agx-row" : "agx-row agx-row-tall"}>
+                              {r.kind === "tool"
+                                ? <ToolRow e={r.e} sub={r.children} />
+                                : <Bubble role={r.e.role ?? "assistant"} ts={r.e.ts} text={r.e.text ?? ""} />}
                             </div>
                           ))}
                         </div>

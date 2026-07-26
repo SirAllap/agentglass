@@ -21,7 +21,7 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
           <>
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(3px)" }}
+              className="fixed inset-0 agx-scrim" style={{ zIndex: 10000 }}
               onClick={onClose}
             />
             {/* Flex wrapper centers the card — Motion owns `transform` for its

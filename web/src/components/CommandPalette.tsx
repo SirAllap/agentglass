@@ -109,7 +109,7 @@ export function CommandPalette({
         {open && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }} onClick={onClose} />
+              className="fixed inset-0 agx-scrim" style={{ zIndex: 10000 }} onClick={onClose} />
             {/* Centering wrapper: Motion owns the modal's `transform` (scale/y
                 animation), which clobbers a Tailwind -translate-x-1/2 — so a
                 flex wrapper does the centering instead. */}

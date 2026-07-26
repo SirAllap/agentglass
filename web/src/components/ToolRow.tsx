@@ -10,7 +10,7 @@
 // event, so a session's exploration buried the conversation it was supposed to
 // sit alongside. All of that detail is still here; it is what you open a row
 // FOR, not what you read a hundred rows of.
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { TimelineEntry } from "../../../shared/types.ts";
 import { fmtTime } from "../lib/format.ts";
 
@@ -22,14 +22,20 @@ const HEAD = 3;
 const MONO = { fontFamily: "var(--font-mono, ui-monospace, monospace)" };
 const RULE = "1px solid color-mix(in srgb, var(--border) 40%, transparent)";
 
-export function ToolRow({ e, sub = [], nested = false }: {
+/** Memoised: a session timeline is hundreds of these, and the panel around them
+ *  re-renders every few seconds while the session is live. The entry objects
+ *  come straight from the fetched payload, so an unchanged row gets identical
+ *  props and does no work at all. */
+interface ToolRowProps {
   e: TimelineEntry;
   /** A spawned subagent's entries, nested under the call that started it. */
   sub?: TimelineEntry[];
   /** Already inside a group: drop the timestamp gutter, as the CLI does, and
    *  indent against the parent instead. */
   nested?: boolean;
-}) {
+}
+
+export const ToolRow = memo(function ToolRow({ e, sub = [], nested = false }: ToolRowProps) {
   const [open, setOpen] = useState(false);
   const [all, setAll] = useState(false);
   const target = e.target ?? "";
@@ -103,4 +109,24 @@ export function ToolRow({ e, sub = [], nested = false }: {
       )}
     </div>
   );
+}, same);
+
+/** Compared by content, not by identity: every poll parses a fresh payload, so
+ *  the entry for a tool run that finished an hour ago is a brand-new object with
+ *  exactly the same fields in it. Reference equality would call all of those
+ *  changed and re-render the entire timeline for one new row at the bottom. */
+function same(a: ToolRowProps, b: ToolRowProps): boolean {
+  return a.nested === b.nested && sameEntry(a.e, b.e) && sameList(a.sub, b.sub);
+}
+
+function sameEntry(a: TimelineEntry, b: TimelineEntry): boolean {
+  return a.ts === b.ts && a.tool === b.tool && a.target === b.target && a.text === b.text
+    && a.is_error === b.is_error && a.duration_ms === b.duration_ms && a.note === b.note
+    && a.output === b.output && a.output_clipped === b.output_clipped && a.tool_use_id === b.tool_use_id;
+}
+
+function sameList(a: TimelineEntry[] = [], b: TimelineEntry[] = []): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((e, i) => sameEntry(e, b[i]));
 }

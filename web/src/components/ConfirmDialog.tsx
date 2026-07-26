@@ -72,7 +72,7 @@ export function ConfirmDialog({ pending }: { pending: Pending | null }) {
       {pending && (
         <Portal>
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0" style={{ zIndex: 10004, background: "rgba(0,0,0,0.55)", backdropFilter: "blur(3px)" }}
+            className="fixed inset-0 agx-scrim" style={{ zIndex: 10004 }}
             onClick={() => pending.resolve(isPrompt ? null : false)} />
           <div className="fixed inset-0 flex items-center justify-center p-6 pointer-events-none" style={{ zIndex: 10005 }}>
             <motion.div

@@ -14,7 +14,7 @@
 // dangerouslySetInnerHTML anywhere in here. Message text is untrusted (it can
 // contain anything a model or a tool emitted), so it must never be able to
 // become markup.
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 const CODE_BG = "color-mix(in srgb, var(--bg3) 55%, transparent)";
 
@@ -53,8 +53,14 @@ function inline(text: string, keyBase: string): ReactNode[] {
 }
 
 /** Render a markdown string as React nodes. Block level: fenced code, ATX
- *  headings, bullet and numbered lists, blockquotes, paragraphs. */
-export function Markdown({ text }: { text: string }) {
+ *  headings, bullet and numbered lists, blockquotes, paragraphs.
+ *
+ *  Memoised on the text. A session view holds a few hundred kilobytes of
+ *  messages and re-renders every few seconds while the session is live; parsing
+ *  all of it again to produce identical output is the single most expensive
+ *  thing that panel can do, and its one prop is a string, so the check is free.
+ */
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const lines = text.split("\n");
   const blocks: ReactNode[] = [];
   let i = 0;
@@ -204,4 +210,4 @@ export function Markdown({ text }: { text: string }) {
   flushPara(para);
 
   return <>{blocks}</>;
-}
+});

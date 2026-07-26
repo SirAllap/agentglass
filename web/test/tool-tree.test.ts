@@ -82,3 +82,28 @@ test("a non-spawning tool never adopts a subagent", () => {
   expect(rows[0].kind === "tool" && rows[0].children).toHaveLength(0);
   expect(rows[1].kind === "tool" && rows[1].e.tool).toBe("subagent");
 });
+
+test("a row keeps its key when the server's window slides", () => {
+  // The session response carries the newest N runs, so every new tool call
+  // pushes the oldest one out and moves everything else along by one. Keys used
+  // to be that position, which told React the whole conversation had changed:
+  // a live session tore down and rebuilt hundreds of rows every poll, losing
+  // any row the reader had opened. The rows themselves are what must be named.
+  const a = tool("Read", "a.ts", { tool_use_id: "u1" });
+  const b = tool("Bash", "ls", { tool_use_id: "u2" });
+  const c = tool("Edit", "b.ts", { tool_use_id: "u3" });
+  const d = tool("Bash", "git status", { tool_use_id: "u4" });
+
+  const before = buildRows([a, b, c]);
+  const after = buildRows([b, c, d]); // `a` aged out, `d` arrived
+  expect(before.slice(1).map((r) => r.key)).toEqual(after.slice(0, 2).map((r) => r.key));
+});
+
+test("indistinguishable rows still get distinct keys", () => {
+  // Same timestamp, same tool, same target, and no tool_use_id to tell them
+  // apart. They still need one key each, and the same key on each rebuild.
+  const twin = (): TimelineEntry => ({ kind: "tool", ts: 500, tool: "Bash", target: "ls" });
+  const keys = buildRows([twin(), twin(), twin()]).map((r) => r.key);
+  expect(new Set(keys).size).toBe(3);
+  expect(buildRows([twin(), twin(), twin()]).map((r) => r.key)).toEqual(keys);
+});
