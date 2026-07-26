@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, chmodSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, chmodSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type {
   WatchEvent,
@@ -43,7 +43,33 @@ function defaultDbPath(): string {
   }
 }
 
-const DB_PATH = process.env.AGENTGLASS_DB || defaultDbPath();
+/**
+ * Where a test's database lives, which is never the developer's.
+ *
+ * Several test files set AGENTGLASS_DB to a scratch file and only then import
+ * this module, which is the right instinct and does not survive contact with a
+ * full run: this file opens its Database at module load, so whichever test file
+ * imports it first decides the path for the whole process. Everyone after that
+ * silently reads and writes the real history instead. That is how 69 fixture
+ * events ("scoped", "other", "mono") ended up in a developer's own database,
+ * and why `whole-machine discovery` failed on a working machine while passing
+ * in CI: it was being handed the machine's actual repositories.
+ *
+ * So under `bun test`, which sets NODE_ENV=test, a scratch file is the floor.
+ * A test that asked for a specific path under the scratch directory still gets
+ * it; anything else, including asking for nothing, gets a fresh empty database
+ * that no import order can turn back into the real one.
+ */
+function testDbPath(): string {
+  const asked = process.env.AGENTGLASS_DB;
+  const scratch = tmpdir();
+  if (asked && (asked === scratch || asked.startsWith(scratch + "/"))) return asked;
+  return join(mkdtempSync(join(scratch, "agx-test-db-")), "agentglass.db");
+}
+
+const DB_PATH = process.env.NODE_ENV === "test"
+  ? testDbPath()
+  : process.env.AGENTGLASS_DB || defaultDbPath();
 const db = new Database(DB_PATH, { create: true });
 // The DB holds full prompts, file contents and command output in cleartext.
 // Default file perms (0644) leave it world-readable; only $HOME being 0700
