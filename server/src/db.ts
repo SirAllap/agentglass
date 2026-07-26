@@ -591,7 +591,16 @@ function safeJson(s: string): Record<string, unknown> {
 }
 
 const isToolPost = (t: string) => t === "PostToolUse" || t === "PostToolUseFailure";
-const isTerminal = (t: string) => t === "Stop" || t === "SessionEnd" || t === "SubagentStop";
+/**
+ * The events that end a *session*.
+ *
+ * `SubagentStop` is not one of them, though it used to be listed here. It fires
+ * in the parent session every time a Task subagent finishes, which in a long run
+ * is many times before anything is over. Treating it as terminal stamped an
+ * `ended_at` on a session that was still working: the fleet drew it as finished
+ * and its duration stopped mid-run.
+ */
+const isTerminal = (t: string) => t === "Stop" || t === "SessionEnd";
 
 // ---------------------------------------------------------------------------
 // Retention — keep at least a full week of history so the 7d window is always
@@ -720,7 +729,17 @@ const upsertStmt = db.query(`
     provider = COALESCE(excluded.provider, sessions.provider),
     project_path = COALESCE(excluded.project_path, sessions.project_path),
     cwd_path = COALESCE(excluded.cwd_path, sessions.cwd_path),
-    ended_at = COALESCE(excluded.ended_at, sessions.ended_at),
+    -- An end can be taken back. A session that speaks after the moment it was
+    -- said to have ended plainly did not end there: claude --resume picks a
+    -- session back up, and a Stop is followed by more turns. COALESCE alone
+    -- latched the first end for ever, so a resumed session stayed dead on the
+    -- board. An event older than the recorded end is a late-arriving hook
+    -- rather than new work, and leaves it standing.
+    ended_at = CASE
+      WHEN excluded.ended_at IS NOT NULL THEN excluded.ended_at
+      WHEN sessions.ended_at IS NOT NULL AND excluded.last_seen > sessions.ended_at THEN NULL
+      ELSE sessions.ended_at
+    END,
     last_seen = excluded.last_seen,
     event_count = sessions.event_count + 1,
     tool_count = sessions.tool_count + $tool,
@@ -1528,9 +1547,15 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     // The checkout it ran in, when that isn't the repo root — what a resume has
     // to use, and what names the worktree in the header.
     cwd_path: roll?.cwd_path ?? agg.cwd_path ?? null,
-    started_at: agg.started_at,
+    // All three from the session row, falling back to the events only for a
+    // session with no row at all. Mixing the two sources is how one session
+    // reported two different durations: `ended_at` came from the row while the
+    // start came from the events, and retention deletes events. Every prune
+    // walked the start forward and left the end where it was, so the deep dive
+    // disagreed with the list it was opened from.
+    started_at: roll?.started_at ?? agg.started_at,
     ended_at: roll?.ended_at ?? null,
-    last_seen: agg.last_seen,
+    last_seen: roll?.last_seen ?? agg.last_seen,
     events: agg.events,
     tools: agg.tools ?? 0,
     errors: agg.errors ?? 0,
