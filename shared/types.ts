@@ -1059,7 +1059,34 @@ export interface PrSummary {
 export type PrMergeState =
   | "CLEAN" | "BLOCKED" | "BEHIND" | "DIRTY" | "UNSTABLE" | "DRAFT" | "HAS_HOOKS" | "UNKNOWN";
 
-export interface PrThreadComment {
+/** One emoji tally on a comment, straight from GraphQL's `reactionGroups`.
+ *  `viewerHasReacted` is what lets the button render as already-pressed. */
+export interface PrReaction {
+  /** GitHub's own name: THUMBS_UP, HEART, ROCKET, EYES, LAUGH, HOORAY, CONFUSED, THUMBS_DOWN. */
+  content: string;
+  count: number;
+  viewerHasReacted: boolean;
+}
+
+/** How GitHub labels the person who wrote a comment: OWNER, MEMBER,
+ *  COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE. Shown as the little
+ *  badge beside the name — it is how a reader weighs a review at a glance. */
+export type PrAuthorAssociation =
+  | "OWNER" | "MEMBER" | "COLLABORATOR" | "CONTRIBUTOR"
+  | "FIRST_TIME_CONTRIBUTOR" | "FIRST_TIMER" | "MANNEQUIN" | "NONE";
+
+/** What everything a person wrote carries: who, when, whether they edited it,
+ *  what standing they have, and how people reacted. */
+export interface PrAuthored {
+  reactions?: PrReaction[];
+  /** Non-null when the comment was edited after posting — GitHub shows "edited". */
+  editedAt?: string | null;
+  association?: PrAuthorAssociation;
+  /** You wrote it, so you may edit or delete it. */
+  viewerDidAuthor?: boolean;
+}
+
+export interface PrThreadComment extends PrAuthored {
   id: string;
   /** The numeric id the REST reply endpoint wants; the `id` above is a GraphQL
    *  node id and the two are not interchangeable. */
@@ -1089,16 +1116,18 @@ export interface PrThread {
   comments: PrThreadComment[];
 }
 
-export interface PrReview {
+export interface PrReview extends PrAuthored {
   author: string;
   isBot: boolean;
   state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
   body: string;
   submittedAt: string;
   url?: string;
+  /** GraphQL node id, for reacting to the review body. */
+  nodeId?: string;
 }
 
-export interface PrComment {
+export interface PrComment extends PrAuthored {
   id: number;
   author: string;
   isBot: boolean;
@@ -1108,9 +1137,31 @@ export interface PrComment {
   /** Bot noise reduced to its point — a 46KB coverage table is three numbers
    *  and 1,847 rows nobody reads. Null when nothing could be extracted. */
   digest?: string | null;
+  /** GraphQL node id — what the reaction and edit mutations take. */
+  nodeId?: string;
 }
 
-export interface PrCommit { oid: string; short: string; message: string; author: string; isMerge: boolean }
+export interface PrCommit {
+  oid: string;
+  short: string;
+  /** The subject line. */
+  message: string;
+  /** Everything after the subject — the paragraphs, the Co-authored-by
+   *  trailers, the "why". Empty for a one-line commit. */
+  body?: string;
+  author: string;
+  isMerge: boolean;
+  /** Everyone credited, not just the first: a commit written with an agent
+   *  carries a Co-authored-by trailer, and "X and claude committed" is the
+   *  honest line. Includes the author; empty falls back to `author`. */
+  authors?: string[];
+  /** When it landed, so commits can be grouped by day like GitHub does. */
+  committedAt?: string;
+  /** A valid signature earns the Verified badge. */
+  verified?: boolean;
+  /** This commit's own check rollup: SUCCESS / FAILURE / PENDING / null. */
+  checks?: "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED" | null;
+}
 
 export interface PrFile {
   path: string;
@@ -1119,6 +1170,31 @@ export interface PrFile {
   status: string;
   /** Unresolved threads anchored to this file. */
   comments: number;
+  /** GitHub's own per-reviewer "viewed" tick, so marking a file read survives
+   *  leaving the panel and matches what github.com shows. */
+  viewed?: boolean;
+  /** Where it came from, when the change is a rename. */
+  previousPath?: string | null;
+}
+
+/** One entry in the conversation timeline that is not a comment: a push, a
+ *  rename, a label, a merge. GitHub renders these inline between comments, and
+ *  without them the conversation reads as if nothing happened between remarks. */
+export interface PrEvent {
+  kind:
+    | "force-push" | "commit" | "renamed" | "labeled" | "unlabeled"
+    | "assigned" | "unassigned" | "review-requested" | "review-request-removed"
+    | "ready-for-review" | "convert-to-draft" | "merged" | "closed" | "reopened"
+    | "cross-referenced" | "milestoned" | "demilestoned" | "head-ref-deleted"
+    | "auto-merge-enabled" | "auto-merge-disabled";
+  at: string;
+  actor: string;
+  /** One line of detail, already shaped for reading: the new title, the label
+   *  name, the sha pair of a force-push, the PR that referenced this one. */
+  detail?: string;
+  /** Colour for the label chip on labeled/unlabeled. */
+  tint?: string | null;
+  url?: string;
 }
 
 export interface PrChecklistItem { checked: boolean; text: string }
@@ -1147,6 +1223,29 @@ export interface PrDetail extends PrSummary {
   viewerDidAuthor: boolean;
   /** Somebody asked you for a review. This is what the review tab is for. */
   viewerRequested: boolean;
+  /** Everything that happened which is not a comment: pushes, renames, labels,
+   *  the merge itself. Ascending, so it interleaves with comments by time. */
+  timeline: PrEvent[];
+  /** Everyone who has touched the conversation — the sidebar's avatar row. */
+  participants: string[];
+  /** Reactions on the pull request body itself. */
+  bodyReactions: PrReaction[];
+  /** Emoji on the body needs the PR's own node id. */
+  nodeId?: string;
+  projects: string[];
+  /** Issues this pull request closes when it merges. */
+  linkedIssues: { number: number; title: string; url: string; state: string }[];
+  /** Armed auto-merge, so the UI can offer to cancel it rather than only arm it. */
+  autoMerge?: { enabledBy: string; method: string } | null;
+  mergedBy?: string | null;
+  mergedAt?: string | null;
+  closedAt?: string | null;
+  createdAt?: string;
+  /** You may edit the title/body. */
+  viewerCanUpdate?: boolean;
+  /** What the page could not show because a list hit its page size. Silence
+   *  here used to be a lie: a hundred-and-first file simply vanished. */
+  truncated?: { files?: number; commits?: number; comments?: number; threads?: number; checks?: number };
 }
 
 export interface PrListResponse {
@@ -1164,6 +1263,13 @@ export interface PrListResponse {
   error?: string;
   /** `gh` missing or not logged in — a first-class state, not an error toast. */
   needsAuth?: boolean;
+  /** How many pull requests match, across every page. */
+  total?: number;
+  /** Another page exists after this one. */
+  hasNext?: boolean;
+  /** Opaque cursor that fetches the page after this one. */
+  cursor?: string | null;
+  pageSize?: number;
 }
 
 export interface PrActionResult { ok: boolean; error?: string; detail?: string }

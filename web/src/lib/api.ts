@@ -346,8 +346,27 @@ const realApi = {
   dockerTop: (id: string) => get<{ ok: boolean; text: string; error?: string }>(`/docker/top?id=${encodeURIComponent(id)}`),
   // --- pull requests (gh-backed) ---
   prCapability: (force = false) => get<{ available: boolean; authed: boolean; login?: string; reason?: string }>(`/prs/capability${force ? "?force=1" : ""}`),
-  prList: (root: string, filter: "mine" | "review" | "all", state: "open" | "closed" | "all" = "open", force = false) =>
-    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}`),
+  /** Emoji on anything: the body, a comment, a review, a line comment. `nodeId`
+   *  is the GraphQL id, and `on:false` takes the reaction back off. */
+  prReactTo: (root: string, nodeId: string, content: string, on: boolean) =>
+    post<PrActionResult>("/prs/react", { root, nodeId, content, on }),
+  prEditComment: (root: string, nodeId: string, body: string, kind: "issue" | "review" = "issue") =>
+    post<PrActionResult>("/prs/comment-edit", { root, nodeId, body, kind }),
+  prDeleteComment: (root: string, nodeId: string, kind: "issue" | "review" = "issue") =>
+    post<PrActionResult>("/prs/comment-delete", { root, nodeId, kind }),
+  /** GitHub's own viewed tick, so it survives leaving the panel. */
+  prFileViewed: (root: string, prNodeId: string, path: string, viewed: boolean) =>
+    post<PrActionResult>("/prs/file-viewed", { root, prNodeId, path, viewed }),
+  prAssignees: (root: string, number: number, add: string[], remove: string[]) =>
+    post<PrActionResult>("/prs/assignees", { root, number, add, remove }),
+  prMilestone: (root: string, number: number, title: string) =>
+    post<PrActionResult>("/prs/milestone", { root, number, title }),
+  prList: (root: string, filter: "mine" | "review" | "all", state: "open" | "closed" | "all" = "open", force = false, after?: string) =>
+    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}${after ? `&after=${encodeURIComponent(after)}` : ""}`),
+  /** Exact totals for every saved view, in one request. */
+  prCounts: (root: string, state: "open" | "closed" | "all") =>
+    get<{ ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }>(
+      `/prs/counts?root=${encodeURIComponent(root)}&state=${state}`),
   prDetail: (root: string, number: number, force = false) =>
     get<{ ok: boolean; detail?: PrDetail; error?: string }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
   prDiff: (root: string, number: number) =>
@@ -376,7 +395,7 @@ const realApi = {
   prDraft: (root: string, number: number, draft: boolean) => post<PrActionResult>("/prs/draft", { root, number, draft }),
   prUpdateBranch: (root: string, number: number) => post<PrActionResult>("/prs/update-branch", { root, number }),
   prRerun: (root: string, number: number) => post<PrActionResult>("/prs/rerun", { root, number }),
-  prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string }) =>
+  prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) =>
     post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
   prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
   prLocalReview: (root: string, number: number) =>
@@ -547,7 +566,8 @@ const demoApi: typeof realApi = {
   // The panel used to answer available:false here, so the feature the landing
   // page calls out as new was dead in the demo that page links to.
   prCapability: (_force?: boolean) => D(demo.prCapability()),
-  prList: (root: string, filter: "mine" | "review" | "all", _state?: "open" | "closed" | "all", _force?: boolean) => D<PrListResponse>(demo.prList(root, filter)),
+  prList: (root: string, filter: "mine" | "review" | "all", _state?: "open" | "closed" | "all", _force?: boolean, _after?: string) => D<PrListResponse>(demo.prList(root, filter)),
+  prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
   prDiff: (_root: string, number: number) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
@@ -557,13 +577,19 @@ const demoApi: typeof realApi = {
   prReply: (_r: string, _n: number, _c: number, _b: string) => D(demoPrAction()),
   prSetThreadResolved: (_r: string, _t: string, _v: boolean) => D(demoPrAction()),
   prReact: (_r: string, _c: number, _content?: string) => D(demoPrAction()),
+  prReactTo: (_r: string, _id: string, _c: string, _on: boolean) => D(demoPrAction()),
+  prEditComment: (_r: string, _id: string, _b: string, _k?: "issue" | "review") => D(demoPrAction()),
+  prDeleteComment: (_r: string, _id: string, _k?: "issue" | "review") => D(demoPrAction()),
+  prFileViewed: (_r: string, _p: string, _path: string, _v: boolean) => D(demoPrAction()),
+  prAssignees: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
+  prMilestone: (_r: string, _n: number, _t: string) => D(demoPrAction()),
   prEdit: (_r: string, _n: number, _p: { title?: string; body?: string; base?: string }) => D(demoPrAction()),
   prLabels: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
   prReviewers: (_r: string, _n: number, _a: string[], _rm: string[]) => D(demoPrAction()),
   prDraft: (_r: string, _n: number, _d: boolean) => D(demoPrAction()),
   prUpdateBranch: (_r: string, _n: number) => D(demoPrAction()),
   prRerun: (_r: string, _n: number) => D(demoPrAction()),
-  prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string }) => D(demoPrAction()),
+  prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
   prLocalReview: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prLocalReviewDiscard: (_r: string, _n: number) => D(demoPrAction()),

@@ -741,6 +741,11 @@ const PR_482_THREADS: PrThread[] = [
 
 const PR_482_DETAIL: PrDetail = {
   ...PR_SUMMARIES[0],
+  timeline: [],
+  participants: [],
+  bodyReactions: [],
+  projects: [],
+  linkedIssues: [],
   body: [
     "Prices were rounded per line item, so a cart of 3 × €4.995 charged €15.00 while the",
     "invoice said €14.99. Rounding moves to the cart boundary.",
@@ -870,6 +875,7 @@ function prDetailOf(n: number): PrDetail | null {
   return {
     ...s,
     body: "", mergeable: "UNKNOWN", mergeState: "UNKNOWN", checklist: [],
+    timeline: [], participants: [], bodyReactions: [], projects: [], linkedIssues: [],
     reviewers: [], assignees: s.assignees, reviews: [], comments: [], threads: [],
     commits: [{ oid: "d4f7b03c5e42a6fb", short: "d4f7b03", message: s.title, author: s.author, isMerge: false }],
     files: [], checksAll: [],

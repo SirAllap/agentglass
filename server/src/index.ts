@@ -52,6 +52,7 @@ import {
 } from "./docker.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
+  editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
   rerunFailedChecks, mergePr, closePr, prepareLocalReview, discardLocalReview, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
 } from "./prs.ts";
@@ -977,7 +978,11 @@ const server = Bun.serve<WsData>({
         url.searchParams.get("filter") || "mine",
         url.searchParams.get("state") || "open",
         url.searchParams.get("force") === "1",
+        url.searchParams.get("after") || undefined,
       ));
+    }
+    if (pathname === "/prs/counts") {
+      return json(await viewCounts(url.searchParams.get("root") || "", url.searchParams.get("state") || "open"));
     }
     if (pathname === "/prs/detail") {
       return json(await prDetail(
@@ -1015,14 +1020,19 @@ const server = Bun.serve<WsData>({
         case "/prs/comment": res = await addComment(root, n, b.body); break;
         case "/prs/reply": res = await replyToThread(root, n, b.commentId, b.body); break;
         case "/prs/thread-resolved": res = await setThreadResolved(root, b.threadId, b.resolved); break;
-        case "/prs/react": res = await react(root, b.commentId, b.content); break;
+        case "/prs/react": res = await react(root, b.nodeId ?? b.commentId, b.content, b.on); break;
+        case "/prs/comment-edit": res = await editComment(root, b.nodeId, b.body, b.kind); break;
+        case "/prs/comment-delete": res = await deleteComment(root, b.nodeId, b.kind); break;
+        case "/prs/file-viewed": res = await setFileViewed(root, b.prNodeId, b.path, b.viewed); break;
+        case "/prs/assignees": res = await setAssignees(root, n, b.add, b.remove); break;
+        case "/prs/milestone": res = await setMilestone(root, n, b.title); break;
         case "/prs/edit": res = await editPr(root, n, { title: b.title, body: b.body, base: b.base }); break;
         case "/prs/labels": res = await setLabels(root, n, b.add, b.remove); break;
         case "/prs/reviewers": res = await setReviewers(root, n, b.add, b.remove); break;
         case "/prs/draft": res = await setDraft(root, n, b.draft); break;
         case "/prs/update-branch": res = await updateBranch(root, n); break;
         case "/prs/rerun": res = await rerunFailedChecks(root, n); break;
-        case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha }); break;
+        case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
         case "/prs/local-review": res = await prepareLocalReview(root, n); break;
         case "/prs/local-review-discard": res = await discardLocalReview(root, n); break;

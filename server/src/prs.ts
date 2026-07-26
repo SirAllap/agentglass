@@ -14,11 +14,15 @@
 // 3. Writes are public. A stray `gh pr merge` is not a UI bug, it is a deploy,
 //    so every mutation goes through `writeGuard` and the irreversible ones are
 //    named separately from the rest.
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { inScope } from "./config.ts";
 import type {
   PrRepoId, PrSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
+  PrAuthored, PrReaction, PrEvent,
 } from "../../shared/types.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
@@ -92,6 +96,21 @@ const CAP_TTL_MS = 60_000;
  * errors: "install gh" and "run gh auth login" are things the user can act on,
  * and a red toast saying "failed" is not.
  */
+/**
+ * The last known answer, without waiting for a fresh one.
+ *
+ * `gh auth status` is a 344ms subprocess (measured), and it sat in front of
+ * every list refresh — so a poll that had nothing else to do still paid it, on
+ * the one thread the PTY shares. Auth does not change between two polls; a
+ * minute-old answer is the right answer, and a stale one only ever means the
+ * *next* refresh reports "not logged in" instead of this one. Returns null the
+ * very first time, when there is genuinely nothing to go on.
+ */
+export function ghCapabilityCached(): GhCapability | null {
+  if (capCache && Date.now() - capCache.at < CAP_TTL_MS * 10) return capCache.cap;
+  return null;
+}
+
 export async function ghCapability(force = false): Promise<GhCapability> {
   if (!force && capCache && Date.now() - capCache.at < CAP_TTL_MS) return capCache.cap;
   let cap: GhCapability;
@@ -324,15 +343,64 @@ export function ciNotifiesFor(filter: PrFilter): boolean {
  */
 const LIST_FIELDS_FAST = "number,title,author,state,isDraft,headRefName,baseRefName,url,updatedAt,reviewDecision,additions,deletions,changedFiles,labels,assignees,milestone";
 
-type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string };
+type Entry = { at: number; prs: PrSummary[]; loading: boolean; checksPending: boolean; error?: string; total?: number; hasNext?: boolean; cursor?: string | null };
 const listCache = new Map<string, Entry>();
 const inflight = new Set<string>();
+
+/**
+ * The list cache, kept across restarts.
+ *
+ * Measured: a no-op call to api.github.com costs ~280ms before it does anything,
+ * and the list query 650-1000ms — while github.com's own page, rendered next to
+ * its database and served from their edge, answers in ~115ms. That gap is not
+ * something a better query closes; it is the internet. So the answer is to stop
+ * starting from nothing: the last known list is written to disk, read back at
+ * boot, and shown at once while a refresh runs behind it. Stale rows you can
+ * read beat a spinner you cannot, and the age is on screen either way.
+ *
+ * Rows only. Nothing here is secret (it is a public pull request list you can
+ * already read), but it is scoped to the user's own cache directory all the
+ * same, and a corrupt or unreadable file is simply ignored.
+ */
+const CACHE_FILE = join(homedir(), ".cache", "agentglass", "pr-list.json");
+const CACHE_MAX_ENTRIES = 24;
+let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
+
+function loadDiskCache(): void {
+  try {
+    if (!existsSync(CACHE_FILE)) return;
+    const raw = JSON.parse(readFileSync(CACHE_FILE, "utf8")) as Record<string, Entry>;
+    for (const [k, e] of Object.entries(raw)) {
+      if (!e || !Array.isArray(e.prs)) continue;
+      // Never restored as "fresh": `at` is what it was, so the age shown is
+      // honest and the first read triggers a refresh.
+      listCache.set(k, { ...e, loading: false, checksPending: false });
+    }
+  } catch { /* unreadable or from an older shape — start empty */ }
+}
+
+function saveDiskCache(): void {
+  if (cacheWriteTimer) clearTimeout(cacheWriteTimer);
+  // Debounced: a burst of refreshes writes once.
+  cacheWriteTimer = setTimeout(() => {
+    try {
+      const entries = [...listCache.entries()]
+        .filter(([, e]) => e.prs.length > 0 && !e.error)
+        .sort((a, b) => b[1].at - a[1].at)
+        .slice(0, CACHE_MAX_ENTRIES);
+      mkdirSync(dirname(CACHE_FILE), { recursive: true });
+      writeFileSync(CACHE_FILE, JSON.stringify(Object.fromEntries(entries)));
+    } catch { /* a cache that cannot be written is not an error worth raising */ }
+  }, 1_000);
+}
+
+loadDiskCache();
 const LIST_TTL_MS = 90_000;
 
 // `\u0000` written as an escape, never as the byte: a raw NUL makes the whole
 // file read as binary to grep, which then skips it in silence. Same separator,
 // same keys, still searchable.
-const cacheKey = (repo: PrRepoId, filter: PrFilter, state: PrState) => `${repo.key}\u0000${filter}\u0000${state}`;
+const cacheKey = (repo: PrRepoId, filter: PrFilter, state: PrState, after?: string) => `${repo.key}\u0000${filter}\u0000${state}\u0000${after ?? ""}`;
 
 // Exported for the test that pins the gh-JSON field extraction (assignees,
 // milestone) — the shapes gh returns are an assumption worth guarding.
@@ -362,29 +430,106 @@ export function mapSummary(p: any, withChecks: boolean): PrSummary {
   };
 }
 
-async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState): Promise<PrSummary[] | null> {
-  // `closed` returns merged + closed (gh's own semantics, matching GitHub's
-  // "Closed" tab); each row still carries its own OPEN/CLOSED/MERGED state, so
-  // the list can tell them apart.
-  const args = ["pr", "list", "-R", repo.nameWithOwner, "--state", state, "--limit", "50", "--json", LIST_FIELDS_FAST];
-  // `gh pr list --search` rather than `gh search prs`: the latter is a global
-  // search that would need its own repo filter anyway, and it rate-limits
-  // separately from the REST path everything else here uses.
-  if (filter === "review") args.push("--search", "review-requested:@me");
-  if (filter === "mine") args.push("--author", "@me");
-  const rows = await ghJson<any[]>(args);
-  // null (gh failed / unparsable) and [] (gh answered, no matching PRs) are
-  // different facts and the caller has to tell them apart: keep null distinct so
-  // a network blip holds the last good list while a genuine empty is allowed to
-  // empty the panel. Collapsing both to [] is what made a merged PR linger.
-  if (rows === null) return null;
-  // Newest-first, so the panel reads recent → old and the per-PR check probe in
-  // refreshChecks (which walks this order) fills the rows you actually watch
-  // first. `gh pr list` has no reliable `--sort`, and updatedAt is an ISO string
-  // that sorts lexically, so order it here — same idiom as branchMergeState below.
-  return rows
-    .map((r) => mapSummary(r, false))
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+/** One page of the list, and everything the rows need, in a single request. */
+const LIST_PAGE = 25;
+
+const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
+  search(query:$q, type:ISSUE, first:$first, after:$after){
+    issueCount
+    pageInfo{hasNextPage endCursor}
+    nodes{ ... on PullRequest {
+      number title url state isDraft createdAt updatedAt
+      additions deletions changedFiles baseRefName headRefName reviewDecision
+      author{login}
+      labels(first:10){nodes{name color}}
+      assignees(first:5){nodes{login}}
+      milestone{title}
+    } }
+  }
+}`;
+
+/**
+ * The same page, but only its check rollups.
+ *
+ * Measured against this repo: the row fields cost ~730ms and `statusCheckRollup`
+ * adds ~410ms on top when they travel together. Asked for separately the two
+ * run at the same time, so the whole thing costs what the slower one costs
+ * (~810ms) instead of their sum — and, more to the point, the rows can be put
+ * on screen the moment they land rather than waiting for the checks.
+ */
+const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
+  search(query:$q, type:ISSUE, first:$first, after:$after){
+    nodes{ ... on PullRequest {
+      number
+      commits(last:1){nodes{commit{statusCheckRollup{
+        state
+        contexts(first:0){checkRunCountsByState{state count} statusContextCountsByState{state count}}
+      }}}}
+    } }
+  }
+}`;
+
+/** The search expression for a scope + state, in GitHub's own qualifier grammar. */
+function searchExpr(repo: PrRepoId, filter: PrFilter, state: PrState): string {
+  const parts = [`repo:${repo.nameWithOwner}`, "is:pr"];
+  // `is:closed` covers merged as well, which is what GitHub's own Closed tab
+  // means and what this panel promises.
+  if (state === "open") parts.push("is:open");
+  else if (state === "closed") parts.push("is:closed");
+  if (filter === "mine") parts.push("author:@me");
+  else if (filter === "review") parts.push("review-requested:@me");
+  parts.push("sort:updated-desc");
+  return parts.join(" ");
+}
+
+/**
+ * A page of pull requests WITH their check states, in one GraphQL request.
+ *
+ * This used to be two round trips — `gh pr list` for the rows, then a second
+ * batched query for the check rollups — which is why every row said "Checks…"
+ * for a beat, and why the whole list waited on a REST call that returns
+ * everything or nothing. `search` takes a cursor, so it also gives the panel
+ * something it never had: a second page. `contexts(first: 0)` keeps the
+ * rollup to its cheap aggregate counts (see fetchCheckRollups).
+ */
+type ListPage = { rows: PrSummary[]; total: number; hasNext: boolean; cursor: string | null };
+async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string, onRows?: (p: ListPage) => void): Promise<ListPage | null> {
+  const vars = { q: searchExpr(repo, filter, state), first: LIST_PAGE, ...(after ? { after } : {}) };
+  // Both at once — GitHub really does run them concurrently (measured: the pair
+  // costs what the slower one costs, not their sum). The rows are handed over
+  // the moment they land rather than waiting on the checks, so the list appears
+  // as soon as there is a list to show.
+  const rowsP = ghGraphql<any>(SEARCH_ROWS, vars);
+  const checksP = ghGraphql<any>(SEARCH_CHECKS, vars);
+  const rowsRes = await rowsP;
+  const search = rowsRes?.data?.search;
+  // null (gh failed / unparsable) and an empty page are different facts: keep
+  // null distinct so a network blip holds the last good list while a genuine
+  // empty is allowed to empty the panel.
+  if (!search) return null;
+  const bare: PrSummary[] = (search.nodes || [])
+    .filter((n: any) => n && typeof n.number === "number")
+    .map((n: any) => mapSummary({ ...n, labels: n.labels?.nodes ?? [], assignees: n.assignees?.nodes ?? [] }, false));
+  const meta = {
+    total: Number(search.issueCount ?? bare.length),
+    hasNext: !!search.pageInfo?.hasNextPage,
+    cursor: search.pageInfo?.endCursor ?? null,
+  };
+  onRows?.({ rows: bare, ...meta });
+
+  const checksRes = await checksP;
+  const rollups = new Map<number, PrCheckRollup>();
+  for (const n of checksRes?.data?.search?.nodes ?? []) {
+    if (!n?.number) continue;
+    const roll = n.commits?.nodes?.[0]?.commit?.statusCheckRollup;
+    const ctx = roll?.contexts;
+    rollups.set(n.number, rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, roll?.state));
+  }
+  const rows: PrSummary[] = bare.map((r) => {
+    const rollup = rollups.get(r.number);
+    return rollup ? { ...r, checks: rollup, checksLoaded: true } : r;
+  });
+  return { rows, ...meta };
 }
 
 /**
@@ -542,8 +687,8 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, state: PrState, rows: P
 }
 
 /** Refresh behind the response. Never awaited by a request handler. */
-function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState): void {
-  const key = cacheKey(repo, filter, state);
+function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState, after?: string): void {
+  const key = cacheKey(repo, filter, state, after);
   if (inflight.has(key)) return;
   inflight.add(key);
   const prev = listCache.get(key);
@@ -554,17 +699,25 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState): void {
 
   void (async () => {
     try {
-      const cap = await ghCapability();
+      // Do not pay `gh auth status` (344ms) before every refresh. Trust the
+      // last answer if there is one, and only block on a fresh check the very
+      // first time — after that, a failed fetch is what tells us auth broke.
+      const cap = ghCapabilityCached() ?? await ghCapability();
       if (!cap.available || !cap.authed) {
         listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false, error: cap.reason }));
         return;
       }
 
-      // One cheap query for the rows themselves — titles, authors, review
-      // decisions. Enough to choose a pull request, and it is what the panel
-      // is blocked on.
-      const rows = await fetchList(repo, filter, state);
-      if (rows === null) {
+      // Rows and their check rollups, in one request.
+      // Put the rows on screen the moment they arrive; the checks land a beat
+      // later and only fill in the dots.
+      const page = await fetchList(repo, filter, state, after, (early) => {
+        listCache.set(key, {
+          at: Date.now(), prs: early.rows, loading: false, checksPending: true,
+          total: early.total, hasNext: early.hasNext, cursor: early.cursor,
+        });
+      });
+      if (page === null) {
         // gh itself failed (a network blip, a rate-limit) — far more likely than
         // a repository that lost every pull request, so keep whatever we had. But
         // DO advance `at`: leaving it stale re-runs gh on every single poll and
@@ -574,16 +727,18 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState): void {
         listCache.set(key, keep({ at: Date.now(), loading: false, checksPending: false }));
         return;
       }
-      // Carry over any check states already known, so switching back to a tab
-      // does not blank the states it had.
-      const merged = rows.map((r) => {
-        const hit = checkCache.get(`${repo.key}\u0000${r.number}`);
-        return hit && hit.updatedAt === r.updatedAt ? { ...r, checks: hit.rollup, checksLoaded: true } : r;
+      // The rollups arrived with the rows, so there is no second pass to wait
+      // on and nothing to carry over. Feed the per-PR cache anyway: the detail
+      // view and the notification latch both read it.
+      for (const r of page.rows) checkCache.set(`${repo.key}\u0000${r.number}`, { updatedAt: r.updatedAt, rollup: r.checks });
+      listCache.set(key, {
+        at: Date.now(), prs: page.rows, loading: false, checksPending: false,
+        total: page.total, hasNext: page.hasNext, cursor: page.cursor,
       });
-      listCache.set(key, { at: Date.now(), prs: merged, loading: false, checksPending: merged.some((p) => !p.checksLoaded) });
+      saveDiskCache();
       // Only open PRs raise CI notifications — a merged or closed PR's checks
       // are history, not something to alert on.
-      refreshChecks(repo, filter, state, merged, state === "open" && ciNotifiesFor(filter));
+      if (state === "open" && ciNotifiesFor(filter)) for (const r of page.rows) noteCi(repo, r);
     } catch (e) {
       listCache.set(key, keep({ loading: false, checksPending: false, error: String(e) }));
     } finally {
@@ -593,13 +748,84 @@ function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState): void {
 }
 
 /**
+ * Exact counts for every saved view, in one request.
+ *
+ * The panel used to get these by fetching the OTHER scopes' lists in the
+ * background — two extra full list queries, each costing what the visible one
+ * costs, purely to put a number on a pill. `issueCount` with `first: 0` returns
+ * the count and no rows, so all five arrive together for ~700ms and nothing is
+ * fetched twice. They are also the TRUE totals: a count taken from the page on
+ * screen stopped being the answer the moment the list got pages.
+ */
+const VIEW_COUNT_QUERY = `query($a:String!,$b:String!,$c:String!,$d:String!,$e:String!){
+  review:search(query:$a,type:ISSUE,first:0){issueCount}
+  mine:search(query:$b,type:ISSUE,first:0){issueCount}
+  failing:search(query:$c,type:ISSUE,first:0){issueCount}
+  ready:search(query:$d,type:ISSUE,first:0){issueCount}
+  all:search(query:$e,type:ISSUE,first:0){issueCount}
+}`;
+
+export type PrViewCounts = { review: number; mine: number; failing: number; ready: number; all: number };
+const countCache = new Map<string, { at: number; counts: PrViewCounts }>();
+const COUNT_TTL_MS = 60_000;
+
+export async function viewCounts(rootIn: unknown, stateIn: unknown): Promise<{ ok: boolean; counts?: PrViewCounts; error?: string }> {
+  const state: PrState = stateIn === "closed" || stateIn === "all" ? stateIn : "open";
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const key = `${repo.key}|${state}`;
+  const hit = countCache.get(key);
+  if (hit && Date.now() - hit.at < COUNT_TTL_MS) return { ok: true, counts: hit.counts };
+  const base = `repo:${repo.nameWithOwner} is:pr${state === "open" ? " is:open" : state === "closed" ? " is:closed" : ""}`;
+  const res = await ghGraphql<any>(VIEW_COUNT_QUERY, {
+    a: `${base} review-requested:@me`,
+    b: `${base} author:@me`,
+    c: `${base} status:failure`,
+    d: `${base} review:approved status:success`,
+    e: base,
+  });
+  const d = res?.data;
+  if (!d) return { ok: false, error: "could not read the counts" };
+  const counts: PrViewCounts = {
+    review: Number(d.review?.issueCount ?? 0),
+    mine: Number(d.mine?.issueCount ?? 0),
+    failing: Number(d.failing?.issueCount ?? 0),
+    ready: Number(d.ready?.issueCount ?? 0),
+    all: Number(d.all?.issueCount ?? 0),
+  };
+  countCache.set(key, { at: Date.now(), counts });
+  return { ok: true, counts };
+}
+
+/**
+ * The checkout's current branch, cached briefly.
+ *
+ * `git rev-parse` ran on every single list read — a process spawn on the 20s
+ * poll, for a value that only changes when somebody checks out. Five seconds is
+ * short enough that switching branches still lights up "you are here" almost at
+ * once, and long enough that the poll costs nothing.
+ */
+const headCache = new Map<string, { at: number; head: string }>();
+const HEAD_TTL_MS = 5_000;
+async function headBranch(root: string): Promise<string> {
+  const hit = headCache.get(root);
+  if (hit && Date.now() - hit.at < HEAD_TTL_MS) return hit.head;
+  const r = await gitAsync(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const head = r.code === 0 ? r.stdout.trim() : "";
+  headCache.set(root, { at: Date.now(), head });
+  return head;
+}
+
+/**
  * The panel's read. Answers from cache and triggers a refresh if the copy is
  * old — so the poll never waits on the network, and the age is shown rather
  * than hidden behind a spinner that lies.
  */
-export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unknown, force = false): Promise<PrListResponse> {
+export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unknown, force = false, afterIn?: unknown): Promise<PrListResponse> {
   const filter: PrFilter = filterIn === "review" || filterIn === "all" ? filterIn : "mine";
   const state: PrState = stateIn === "closed" || stateIn === "all" ? stateIn : "open";
+  // A cursor is opaque base64 from GitHub; anything else is not ours to send on.
+  const after = typeof afterIn === "string" && /^[A-Za-z0-9+/=_-]{1,200}$/.test(afterIn) ? afterIn : undefined;
   const repo = await repoIdFor(rootIn);
   if (!repo) {
     const cap = await ghCapability();
@@ -609,25 +835,30 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
       error: !cap.available || !cap.authed ? cap.reason : "no GitHub remote on this repository",
     };
   }
-  const key = cacheKey(repo, filter, state);
+  const key = cacheKey(repo, filter, state, after);
   const hit = listCache.get(key);
   const age = hit ? Date.now() - hit.at : Infinity;
-  if (force || !hit || age > LIST_TTL_MS) refreshList(repo, filter, state);
+  if (force || !hit || age > LIST_TTL_MS) refreshList(repo, filter, state, after);
   const cur = listCache.get(key);
 
   // "you are here" — the checkout's branch, matched against the PR heads. This
   // is the branch/PR link, and it falls out of the dedupe rather than costing
   // a call of its own.
-  let head = "";
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
-  if (root) {
-    const r = await gitAsync(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (r.code === 0) head = r.stdout.trim();
-  }
+  const head = root ? await headBranch(root) : "";
   const prs = (cur?.prs ?? []).map((p) => (p.headRefName && p.headRefName === head ? { ...p, isCurrentBranch: true } : p));
 
-  const cap = await ghCapability();
+  // Never block the read on it. With rows already in hand (from the disk cache
+  // at boot, or a previous refresh) waiting 344ms on `gh auth status` only
+  // delays showing them; if auth really is broken the refresh behind this
+  // response says so, and the next poll reports it. Only a first read with
+  // nothing to show waits.
+  let cap = ghCapabilityCached();
+  if (!cap) {
+    if (cur?.prs.length) void ghCapability();
+    else cap = await ghCapability();
+  }
   return {
     ok: true,
     repo,
@@ -637,7 +868,16 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unkno
     loading: !!cur?.loading,
     checksPending: !!cur?.checksPending,
     error: cur?.error,
-    needsAuth: !cap.available || !cap.authed,
+    // Unknown yet (the check runs behind an already-cached list) is not the
+    // same as "not logged in" — claiming the latter would put a "run gh auth
+    // login" banner over rows that are plainly on screen.
+    needsAuth: cap ? !cap.available || !cap.authed : false,
+    // What the panel needs to offer a second page: how many there are in total,
+    // whether another page exists, and the cursor that fetches it.
+    total: cur?.total,
+    hasNext: !!cur?.hasNext,
+    cursor: cur?.cursor ?? null,
+    pageSize: LIST_PAGE,
   };
 }
 
@@ -724,32 +964,178 @@ export function parseChecklist(body: string): PrChecklistItem[] {
 // detail
 // ---------------------------------------------------------------------------
 
+// Everything the detail view renders, in one request.
+//
+// `reactionGroups`, `lastEditedAt`, `authorAssociation` and `viewerDidAuthor`
+// ride along on every authored thing — they are what turn a wall of text into
+// a conversation you can read and answer (who has standing, what was edited,
+// what people already said with an emoji rather than another paragraph).
+//
+// Note `comments(last:…)`: GraphQL's `first:` is oldest-first, so a PR with
+// more comments than the page size lost its NEWEST ones — the opposite of what
+// anyone wants from a conversation. `last:` keeps the recent end.
 const DETAIL_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
-    number title url state isDraft createdAt updatedAt
-    additions deletions changedFiles
+    id number title url state isDraft createdAt updatedAt closedAt mergedAt
+    additions deletions changedFiles totalCommentsCount
     baseRefName headRefName body
-    mergeable mergeStateStatus reviewDecision viewerDidAuthor
+    mergeable mergeStateStatus reviewDecision viewerDidAuthor viewerCanUpdate
     author{login}
-    labels(first:20){nodes{name color}}
+    mergedBy{login}
+    reactionGroups{content viewerHasReacted users{totalCount}}
+    labels(first:50){nodes{name color}}
     milestone{title}
-    assignees(first:10){nodes{login}}
-    reviewRequests(first:10){nodes{requestedReviewer{... on User{login} ... on Team{name}}}}
-    reviews(first:50){nodes{author{login} state body submittedAt url}}
-    comments(first:50){nodes{databaseId author{login} body createdAt url}}
-    commits(first:100){nodes{commit{oid messageHeadline parents{totalCount} author{user{login} name}}}}
-    files(first:100){nodes{path additions deletions changeType}}
-    reviewThreads(first:50){nodes{
-      id isResolved isOutdated path line
-      comments(first:20){nodes{id databaseId author{login} body createdAt url diffHunk originalLine}}
+    closingIssuesReferences(first:10){nodes{number title url state}}
+    participants(first:30){nodes{login}}
+    autoMergeRequest{enabledBy{login} mergeMethod}
+    assignees(first:20){nodes{login}}
+    reviewRequests(first:20){nodes{requestedReviewer{... on User{login} ... on Team{name}}}}
+    reviews(last:60){nodes{
+      id author{login} state body submittedAt url lastEditedAt authorAssociation viewerDidAuthor
+      reactionGroups{content viewerHasReacted users{totalCount}}
     }}
-    timelineItems(last:30, itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT]){nodes{... on HeadRefForcePushedEvent{createdAt}}}
+    comments(last:80){nodes{
+      id databaseId author{login} body createdAt url lastEditedAt authorAssociation viewerDidAuthor
+      reactionGroups{content viewerHasReacted users{totalCount}}
+    }}
+    commits(last:100){nodes{commit{
+      oid message committedDate parents{totalCount}
+      author{user{login} name}
+      authors(first:8){nodes{user{login} name}}
+      signature{isValid state}
+      statusCheckRollup{state}
+    }}}
+    files(first:100){nodes{path additions deletions changeType viewerViewedState}}
+    reviewThreads(first:80){nodes{
+      id isResolved isOutdated path line startLine
+      comments(first:50){nodes{
+        id databaseId author{login} body createdAt url diffHunk originalLine
+        lastEditedAt authorAssociation viewerDidAuthor
+        reactionGroups{content viewerHasReacted users{totalCount}}
+      }}
+    }}
+    timelineItems(last:80, itemTypes:[
+      HEAD_REF_FORCE_PUSHED_EVENT, RENAMED_TITLE_EVENT, LABELED_EVENT, UNLABELED_EVENT,
+      ASSIGNED_EVENT, UNASSIGNED_EVENT, REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT,
+      READY_FOR_REVIEW_EVENT, CONVERT_TO_DRAFT_EVENT, MERGED_EVENT, CLOSED_EVENT, REOPENED_EVENT,
+      CROSS_REFERENCED_EVENT, MILESTONED_EVENT, DEMILESTONED_EVENT, HEAD_REF_DELETED_EVENT,
+      AUTO_MERGE_ENABLED_EVENT, AUTO_MERGE_DISABLED_EVENT
+    ]){nodes{
+      __typename
+      ... on HeadRefForcePushedEvent{createdAt actor{login} beforeCommit{oid} afterCommit{oid}}
+      ... on RenamedTitleEvent{createdAt actor{login} previousTitle currentTitle}
+      ... on LabeledEvent{createdAt actor{login} label{name color}}
+      ... on UnlabeledEvent{createdAt actor{login} label{name color}}
+      ... on AssignedEvent{createdAt actor{login} assignee{... on User{login}}}
+      ... on UnassignedEvent{createdAt actor{login} assignee{... on User{login}}}
+      ... on ReviewRequestedEvent{createdAt actor{login} requestedReviewer{... on User{login} ... on Team{name}}}
+      ... on ReviewRequestRemovedEvent{createdAt actor{login} requestedReviewer{... on User{login} ... on Team{name}}}
+      ... on ReadyForReviewEvent{createdAt actor{login}}
+      ... on ConvertToDraftEvent{createdAt actor{login}}
+      ... on MergedEvent{createdAt actor{login} mergeRefName commit{oid} url}
+      ... on ClosedEvent{createdAt actor{login} url}
+      ... on ReopenedEvent{createdAt actor{login}}
+      ... on CrossReferencedEvent{createdAt actor{login} source{
+        ... on PullRequest{number title url} ... on Issue{number title url}
+      }}
+      ... on MilestonedEvent{createdAt actor{login} milestoneTitle}
+      ... on DemilestonedEvent{createdAt actor{login} milestoneTitle}
+      ... on HeadRefDeletedEvent{createdAt actor{login} headRefName}
+      ... on AutoMergeEnabledEvent{createdAt actor{login}}
+      ... on AutoMergeDisabledEvent{createdAt actor{login} reason}
+    }}
     statusCheckRollup:commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{
       __typename
       ... on CheckRun{name status conclusion detailsUrl checkSuite{workflowRun{workflow{name}}}}
       ... on StatusContext{context state targetUrl}
     }}}}}}
   } } }`;
+
+/** The reaction tallies, "edited", standing and ownership that ride on
+ *  everything a person wrote. Shared by comments, reviews and thread replies so
+ *  the three can never drift apart. */
+function authoredOf(n: any): Partial<PrAuthored> {
+  const reactions: PrReaction[] = (n?.reactionGroups || [])
+    .map((g: any) => ({
+      content: String(g?.content || ""),
+      count: Number(g?.users?.totalCount ?? 0),
+      viewerHasReacted: !!g?.viewerHasReacted,
+    }))
+    // Only what somebody actually pressed: GitHub returns all eight groups with
+    // zeroes, and rendering eight empty buttons on every comment is noise.
+    .filter((r: PrReaction) => r.count > 0 || r.viewerHasReacted);
+  return {
+    reactions,
+    editedAt: n?.lastEditedAt ?? null,
+    association: n?.authorAssociation ?? undefined,
+    viewerDidAuthor: !!n?.viewerDidAuthor,
+  };
+}
+
+const ACTOR = (n: any) => n?.actor?.login || "";
+const REVIEWER = (n: any) => n?.requestedReviewer?.login || n?.requestedReviewer?.name || "";
+
+/**
+ * The conversation's non-comment events, in the shape the panel renders.
+ *
+ * GitHub interleaves these with comments, and without them a conversation reads
+ * as if nothing happened between remarks — the force-push that invalidated a
+ * review, the rename, the label, the merge itself all vanish. Unknown types are
+ * dropped rather than guessed at.
+ */
+function mapTimeline(nodes: any[]): PrEvent[] {
+  const out: PrEvent[] = [];
+  for (const n of nodes || []) {
+    const at = n?.createdAt || "";
+    const actor = ACTOR(n);
+    const base = { at, actor };
+    switch (n?.__typename) {
+      case "HeadRefForcePushedEvent":
+        out.push({ ...base, kind: "force-push", detail: `${(n.beforeCommit?.oid || "").slice(0, 7)} → ${(n.afterCommit?.oid || "").slice(0, 7)}` });
+        break;
+      case "RenamedTitleEvent":
+        out.push({ ...base, kind: "renamed", detail: n.currentTitle || "" });
+        break;
+      case "LabeledEvent":
+        out.push({ ...base, kind: "labeled", detail: n.label?.name || "", tint: n.label?.color || null });
+        break;
+      case "UnlabeledEvent":
+        out.push({ ...base, kind: "unlabeled", detail: n.label?.name || "", tint: n.label?.color || null });
+        break;
+      case "AssignedEvent":
+        out.push({ ...base, kind: "assigned", detail: n.assignee?.login || "" });
+        break;
+      case "UnassignedEvent":
+        out.push({ ...base, kind: "unassigned", detail: n.assignee?.login || "" });
+        break;
+      case "ReviewRequestedEvent":
+        out.push({ ...base, kind: "review-requested", detail: REVIEWER(n) });
+        break;
+      case "ReviewRequestRemovedEvent":
+        out.push({ ...base, kind: "review-request-removed", detail: REVIEWER(n) });
+        break;
+      case "ReadyForReviewEvent": out.push({ ...base, kind: "ready-for-review" }); break;
+      case "ConvertToDraftEvent": out.push({ ...base, kind: "convert-to-draft" }); break;
+      case "MergedEvent":
+        out.push({ ...base, kind: "merged", detail: n.mergeRefName || "", url: n.url || undefined });
+        break;
+      case "ClosedEvent": out.push({ ...base, kind: "closed", url: n.url || undefined }); break;
+      case "ReopenedEvent": out.push({ ...base, kind: "reopened" }); break;
+      case "CrossReferencedEvent": {
+        const s = n.source || {};
+        if (s.number) out.push({ ...base, kind: "cross-referenced", detail: `#${s.number} ${s.title || ""}`.trim(), url: s.url || undefined });
+        break;
+      }
+      case "MilestonedEvent": out.push({ ...base, kind: "milestoned", detail: n.milestoneTitle || "" }); break;
+      case "DemilestonedEvent": out.push({ ...base, kind: "demilestoned", detail: n.milestoneTitle || "" }); break;
+      case "HeadRefDeletedEvent": out.push({ ...base, kind: "head-ref-deleted", detail: n.headRefName || "" }); break;
+      case "AutoMergeEnabledEvent": out.push({ ...base, kind: "auto-merge-enabled" }); break;
+      case "AutoMergeDisabledEvent": out.push({ ...base, kind: "auto-merge-disabled", detail: n.reason || "" }); break;
+      default: break; // a type we do not render yet; dropping beats guessing
+    }
+  }
+  return out.filter((e) => e.at).sort((a, b) => a.at.localeCompare(b.at));
+}
 
 const detailCache = new Map<string, { at: number; detail: PrDetail }>();
 const DETAIL_TTL_MS = 45_000;
@@ -798,6 +1184,8 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     body: r.body || "",
     submittedAt: r.submittedAt || "",
     url: r.url || "",
+    nodeId: r.id || "",
+    ...authoredOf(r),
   }));
 
   const comments: PrComment[] = (p.comments?.nodes || []).map((c: any) => {
@@ -805,12 +1193,14 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     const bot = isBotLogin(author);
     return {
       id: c.databaseId,
+      nodeId: c.id || "",
       author,
       isBot: bot,
       body: c.body || "",
       createdAt: c.createdAt || "",
       url: c.url || "",
       digest: bot ? digestBotComment(c.body || "") : null,
+      ...authoredOf(c),
     };
   });
 
@@ -836,16 +1226,36 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
       body: c.body || "",
       createdAt: c.createdAt || "",
       url: c.url || "",
+      ...authoredOf(c),
     })),
   }));
 
   const commits: PrCommit[] = (p.commits?.nodes || []).map((n: any) => {
     const c = n.commit || {};
+    // Everyone credited, in order, deduped. A commit written with an agent
+    // carries a Co-authored-by trailer, and GitHub says "X and claude
+    // committed" — naming only the first author hides half of who wrote it.
+    const authors: string[] = [];
+    for (const a of c.authors?.nodes || []) {
+      const who = a?.user?.login || a?.name || "";
+      if (who && !authors.includes(who)) authors.push(who);
+    }
     return {
+      // Split the FULL message ourselves. `messageHeadline` is GitHub's own
+      // truncation — it cuts the subject at ~70 characters with an ellipsis and
+      // puts the remainder at the front of `messageBody`, so using the pair
+      // renders a chopped subject and an orphan fragment underneath it.
       oid: c.oid || "",
       short: (c.oid || "").slice(0, 8),
-      message: c.messageHeadline || "",
+      message: String(c.message || "").split("\n")[0] ?? "",
+      body: String(c.message || "").split("\n").slice(1).join("\n").trim(),
       author: c.author?.user?.login || c.author?.name || "",
+      authors,
+      committedAt: c.committedDate || "",
+      // A signature GitHub could verify. The badge is the whole point: it says
+      // this commit is from who it claims to be from.
+      verified: !!c.signature?.isValid,
+      checks: c.statusCheckRollup?.state ?? null,
       // A trunk catch-up merge is not work to review. Naming it lets the UI
       // dim it instead of making you read it.
       isMerge: (c.parents?.totalCount ?? 1) > 1,
@@ -859,13 +1269,21 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     path: f.path,
     additions: f.additions ?? 0,
     deletions: f.deletions ?? 0,
-    status: f.changeType || "",
+    // Lowercased on purpose: GraphQL says `MODIFIED`, and the panel's "only
+    // chip it when it is not a plain modification" test compares against
+    // "modified" — so every single file was wearing a MODIFIED badge.
+    status: String(f.changeType || "").toLowerCase(),
     comments: openByPath.get(f.path) ?? 0,
+    // GitHub's own per-reviewer tick, so "viewed" survives leaving the panel
+    // and agrees with what github.com shows.
+    viewed: f.viewerViewedState === "VIEWED",
   }));
+
+  const timeline = mapTimeline(p.timelineItems?.nodes || []);
 
   // A force-push after a submitted review makes that review stale — the
   // approval you are looking at was for code that no longer exists.
-  const pushes: string[] = (p.timelineItems?.nodes || []).map((n: any) => n?.createdAt).filter(Boolean);
+  const pushes: string[] = timeline.filter((e) => e.kind === "force-push").map((e) => e.at);
   const lastReviewAt = reviews.length ? reviews[reviews.length - 1]!.submittedAt : "";
   const forcePushedSinceReview = !!lastReviewAt && pushes.some((at) => at > lastReviewAt);
 
@@ -901,6 +1319,40 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     viewerDidAuthor: !!p.viewerDidAuthor,
     viewerRequested: (p.reviewRequests?.nodes || [])
       .some((n: any) => (n.requestedReviewer?.login || "") === viewerLogin && !!viewerLogin),
+    timeline,
+    participants: (p.participants?.nodes || []).map((n: any) => n?.login).filter(Boolean),
+    bodyReactions: authoredOf(p).reactions ?? [],
+    nodeId: p.id || "",
+    // Deliberately not fetched: `projectsV2` needs the `read:project` scope,
+    // which a normal `gh auth login` token does not carry — asking for it makes
+    // the WHOLE query fail with INSUFFICIENT_SCOPES and the panel shows nothing.
+    // A projects column is not worth costing everyone their pull requests.
+    projects: [],
+    linkedIssues: (p.closingIssuesReferences?.nodes || [])
+      .filter((n: any) => n?.number)
+      .map((n: any) => ({ number: n.number, title: n.title || "", url: n.url || "", state: n.state || "" })),
+    autoMerge: p.autoMergeRequest
+      ? { enabledBy: p.autoMergeRequest.enabledBy?.login || "", method: p.autoMergeRequest.mergeMethod || "" }
+      : null,
+    mergedBy: p.mergedBy?.login || null,
+    mergedAt: p.mergedAt || null,
+    closedAt: p.closedAt || null,
+    createdAt: p.createdAt || "",
+    viewerCanUpdate: !!p.viewerCanUpdate,
+    // Say what a page size cut off, rather than letting it disappear. The file
+    // list disagreeing with the header count is how nobody noticed for months.
+    // Only claim truncation when a page came back FULL — that is the one
+    // unambiguous signal there is more. Subtracting counts that measure
+    // different things (totalCommentsCount includes review bodies) invents a
+    // "1 more comment" that does not exist, and a lying badge is worse than
+    // none. `files` is the exception: `changedFiles` is an exact total.
+    truncated: {
+      files: Math.max(0, (p.changedFiles ?? 0) - files.length) || undefined,
+      commits: (p.commits?.nodes || []).length >= 100 ? 100 : undefined,
+      comments: comments.length >= 80 ? 80 : undefined,
+      threads: (p.reviewThreads?.nodes || []).length >= 80 ? 80 : undefined,
+      checks: rawChecks.length >= 100 ? 100 : undefined,
+    },
   };
 
   detailCache.set(key, { at: Date.now(), detail });
@@ -950,6 +1402,38 @@ export function assetAllowed(raw: string): URL | null {
 let tokenCache: { at: number; token: string } | null = null;
 
 /** The token `gh` already holds. Never sent anywhere but the allowlisted host. */
+/**
+ * A GraphQL call over HTTP, with no `gh` process in the way.
+ *
+ * `gh api graphql` is a Go binary that re-resolves auth on every invocation:
+ * measured against this repo it costs 570-710ms where the same query over
+ * `fetch` costs 520-540ms, and every one of those spawns lands on the single
+ * thread the PTY rides. The token is already cached for five minutes, so the
+ * subprocess buys nothing. It stays as the fallback for the case the token
+ * cannot be read (an unusual `gh` setup, a keyring that will not answer).
+ */
+async function ghGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T | null> {
+  const token = await ghToken();
+  if (!token) return ghJson<T>(["api", "graphql", "-f", `query=${query}`,
+    ...Object.entries(variables).flatMap(([k, v]) => ["-F", `${k}=${String(v)}`])]);
+  try {
+    const res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: {
+        authorization: `bearer ${token}`,
+        "content-type": "application/json",
+        "user-agent": "agentglass",
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(GH_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 async function ghToken(): Promise<string> {
   if (tokenCache && Date.now() - tokenCache.at < 5 * 60_000) return tokenCache.token;
   const r = await gh(["auth", "token"]);
@@ -1088,19 +1572,107 @@ export async function setThreadResolved(rootIn: unknown, threadId: unknown, reso
   return { ok: true };
 }
 
-/** 👍 on a review comment — how most teams acknowledge without adding noise. */
-export async function react(rootIn: unknown, commentId: unknown, content: unknown): Promise<PrActionResult> {
+/** The eight GitHub allows. There is no ninth, and no custom emoji. */
+const REACTIONS = ["THUMBS_UP", "THUMBS_DOWN", "LAUGH", "HOORAY", "CONFUSED", "HEART", "ROCKET", "EYES"];
+
+/**
+ * React to anything: the pull request body, a conversation comment, a review, or
+ * a line comment.
+ *
+ * GraphQL's `addReaction`/`removeReaction` take a node id and do not care which
+ * kind of thing it is — which is the whole reason to use them. The REST route
+ * this used to call was `/pulls/comments/{id}/reactions`, the *review comment*
+ * endpoint, so reacting to an ordinary conversation comment answered 404: the
+ * one case anybody actually hits. Toggling off needs a mutation of its own,
+ * which REST could not express here either.
+ */
+export async function react(rootIn: unknown, nodeId: unknown, content: unknown, on: unknown = true): Promise<PrActionResult> {
   const g = writeGuard(rootIn); if (g) return g;
-  const cid = Number(commentId);
-  const allowed = ["+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"];
-  const c = String(content || "+1");
-  if (!Number.isInteger(cid)) return { ok: false, error: "invalid comment" };
-  if (!allowed.includes(c)) return { ok: false, error: "invalid reaction" };
+  const id = String(nodeId || "");
+  const c = String(content || "THUMBS_UP").toUpperCase();
+  if (!id) return { ok: false, error: "invalid comment" };
+  if (!REACTIONS.includes(c)) return { ok: false, error: "invalid reaction" };
+  const add = on !== false && on !== "false";
+  const mutation = add
+    ? `mutation($id:ID!,$c:ReactionContent!){addReaction(input:{subjectId:$id,content:$c}){clientMutationId}}`
+    : `mutation($id:ID!,$c:ReactionContent!){removeReaction(input:{subjectId:$id,content:$c}){clientMutationId}}`;
+  const r = await gh(["api", "graphql", "-f", `query=${mutation}`, "-F", `id=${id}`, "-F", `c=${c}`]);
+  // Drop the cached detail either way: a reaction that does not show up until
+  // the 45s TTL expires reads as a button that did nothing.
   const repo = await repoIdFor(rootIn);
-  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
-  const r = await gh(["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/comments/${cid}/reactions`, "-f", `content=${c}`]);
+  if (repo) invalidate(repo);
   if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "reaction failed" };
   return { ok: true };
+}
+
+/** Edit your own comment. The PR body goes through `editPr`, not here. */
+export async function editComment(rootIn: unknown, nodeId: unknown, body: unknown, kind: unknown = "issue"): Promise<PrActionResult> {
+  const g = writeGuard(rootIn); if (g) return g;
+  const id = String(nodeId || "");
+  const text = String(body ?? "");
+  if (!id) return { ok: false, error: "invalid comment" };
+  if (!text.trim()) return { ok: false, error: "a comment cannot be empty" };
+  const review = kind === "review";
+  const mutation = review
+    ? `mutation($id:ID!,$b:String!){updatePullRequestReviewComment(input:{pullRequestReviewCommentId:$id,body:$b}){clientMutationId}}`
+    : `mutation($id:ID!,$b:String!){updateIssueComment(input:{id:$id,body:$b}){clientMutationId}}`;
+  const r = await gh(["api", "graphql", "-f", `query=${mutation}`, "-F", `id=${id}`, "-F", `b=${text}`]);
+  const repo = await repoIdFor(rootIn);
+  if (repo) invalidate(repo);
+  if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "could not edit the comment" };
+  return { ok: true };
+}
+
+/** Delete your own comment. */
+export async function deleteComment(rootIn: unknown, nodeId: unknown, kind: unknown = "issue"): Promise<PrActionResult> {
+  const g = writeGuard(rootIn); if (g) return g;
+  const id = String(nodeId || "");
+  if (!id) return { ok: false, error: "invalid comment" };
+  const review = kind === "review";
+  const mutation = review
+    ? `mutation($id:ID!){deletePullRequestReviewComment(input:{id:$id}){clientMutationId}}`
+    : `mutation($id:ID!){deleteIssueComment(input:{id:$id}){clientMutationId}}`;
+  const r = await gh(["api", "graphql", "-f", `query=${mutation}`, "-F", `id=${id}`]);
+  const repo = await repoIdFor(rootIn);
+  if (repo) invalidate(repo);
+  if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "could not delete the comment" };
+  return { ok: true };
+}
+
+/**
+ * GitHub's own per-reviewer "viewed" tick.
+ *
+ * The panel has always kept this in localStorage, which means it disagreed with
+ * github.com and was lost on another machine. GitHub also un-ticks a file by
+ * itself when it changes after you marked it, which local state cannot do.
+ */
+export async function setFileViewed(rootIn: unknown, prNodeId: unknown, path: unknown, viewed: unknown): Promise<PrActionResult> {
+  const g = writeGuard(rootIn); if (g) return g;
+  const id = String(prNodeId || "");
+  const p = String(path || "");
+  if (!id || !p) return { ok: false, error: "invalid file" };
+  const mutation = viewed !== false && viewed !== "false"
+    ? `mutation($id:ID!,$p:String!){markFileAsViewed(input:{pullRequestId:$id,path:$p}){clientMutationId}}`
+    : `mutation($id:ID!,$p:String!){unmarkFileAsViewed(input:{pullRequestId:$id,path:$p}){clientMutationId}}`;
+  const r = await gh(["api", "graphql", "-f", `query=${mutation}`, "-F", `id=${id}`, "-F", `p=${p}`]);
+  if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "could not mark the file" };
+  return { ok: true };
+}
+
+/** Assignees and milestone: the two sidebar fields that were read-only. */
+export async function setAssignees(rootIn: unknown, number: unknown, add: unknown[], remove: unknown[]): Promise<PrActionResult> {
+  const args = ["pr", "edit", String(Number(number))];
+  for (const a of (add || [])) if (String(a).trim()) args.push("--add-assignee", String(a).trim());
+  for (const a of (remove || [])) if (String(a).trim()) args.push("--remove-assignee", String(a).trim());
+  if (args.length === 3) return { ok: false, error: "nothing to change" };
+  return runPr(rootIn, Number(number), args);
+}
+
+export async function setMilestone(rootIn: unknown, number: unknown, title: unknown): Promise<PrActionResult> {
+  const t = String(title ?? "").trim();
+  // gh spells "no milestone" as an empty --milestone, so clearing is expressible.
+  const args = ["pr", "edit", String(Number(number)), t ? "--milestone" : "--remove-milestone", ...(t ? [t] : [])];
+  return runPr(rootIn, Number(number), args);
 }
 
 export async function editPr(rootIn: unknown, number: unknown, patch: { title?: unknown; body?: unknown; base?: unknown }): Promise<PrActionResult> {
@@ -1192,13 +1764,26 @@ export async function rerunFailedChecks(rootIn: unknown, number: unknown): Promi
  * would merge a commit you never saw. The caller passes the head it showed you,
  * and GitHub refuses if that is no longer the tip.
  */
-export async function mergePr(rootIn: unknown, number: unknown, method: unknown, opts: { deleteBranch?: unknown; auto?: unknown; headSha?: unknown }): Promise<PrActionResult> {
+export async function mergePr(rootIn: unknown, number: unknown, method: unknown, opts: { deleteBranch?: unknown; auto?: unknown; headSha?: unknown; subject?: unknown; body?: unknown; disableAuto?: unknown }): Promise<PrActionResult> {
+  // Cancelling an armed auto-merge is its own verb, not a merge with a flag —
+  // and it was missing entirely, so a "merge when green" could be armed and
+  // never called off from here.
+  if (opts.disableAuto === true || opts.disableAuto === "true") {
+    return runPr(rootIn, Number(number), ["pr", "merge", String(Number(number)), "--disable-auto"]);
+  }
   const flag = method === "merge" ? "--merge" : method === "rebase" ? "--rebase" : method === "squash" ? "--squash" : null;
   if (!flag) return { ok: false, error: "choose squash, merge or rebase" };
   const args = ["pr", "merge", String(Number(number)), flag];
   if (opts.auto === true || opts.auto === "true") args.push("--auto");
   if (opts.deleteBranch === true || opts.deleteBranch === "true") args.push("--delete-branch");
   if (typeof opts.headSha === "string" && /^[0-9a-f]{7,40}$/i.test(opts.headSha)) args.push("--match-head-commit", opts.headSha);
+  // The commit this writes onto the base branch is permanent and public; being
+  // able to fix its subject before it lands is the whole point of the dialog.
+  // Rebase writes no commit of its own, so gh rejects a message there.
+  if (flag !== "--rebase") {
+    if (typeof opts.subject === "string" && opts.subject.trim()) args.push("--subject", opts.subject.trim());
+    if (typeof opts.body === "string" && opts.body.trim()) args.push("--body", opts.body);
+  }
   return runPr(rootIn, Number(number), args);
 }
 
