@@ -166,23 +166,30 @@ type SubmitOutcome = "sent" | "diverted" | "stuck";
 async function submitConfirmed(name: string, pasted: string, deadline: number): Promise<SubmitOutcome> {
   for (;;) {
     await submit(name);
-    // Long enough for the TUI to redraw after accepting, short enough that the
-    // common case (accepted on the second press) is not perceptibly slower.
-    await Bun.sleep(250);
-    const box = inputBox(await capture(name));
-    if (!box?.trim()) return "sent";
+    // Long enough for the TUI to redraw after accepting. Deliberately generous:
+    // the cost of waiting is a slower turn, the cost of looking too early is a
+    // second Enter, and those two are not the same size at all — see below.
+    await Bun.sleep(600);
+    const screen = await capture(name);
     /*
-     * Only keep pressing while the box still holds OUR prompt.
+     * A picker on screen means the prompt was ACCEPTED and opened something.
+     * Never press again.
      *
-     * This guard is the whole reason the retry is safe. Claude Code's pickers
-     * draw their selection cursor with the same `❯` glyph as the input box, so
-     * a `/model` menu reads as "box still full" — and in that menu Enter means
-     * "set as default". Retrying blindly walked straight into changing the
-     * user's saved model and effort, silently, from a chat that appeared to be
-     * hanging. Verified by reproducing it: a second Enter after `/effort`
-     * printed "Set effort level to xhigh (saved as your default for new
-     * sessions)".
+     * This check has to come before the box check, and that ordering is the
+     * whole fix. `/model` and `/effort` open a menu in which Enter means "set
+     * as default" — it writes to the user's real settings.json. The previous
+     * version looked only at the input box, and a capture taken 250ms after
+     * Enter could still show the frame from before the menu drew: box still
+     * holds "/effort", so it pressed Enter again, and that second press
+     * confirmed the menu. It changed a real machine's saved effort from `high`
+     * to `xhigh` twice before anyone noticed, once from a chat that looked like
+     * it was simply thinking.
      */
+    if (NEEDS_YOU_RE.test(screen)) return "diverted";
+    const box = inputBox(screen);
+    if (!box?.trim()) return "sent";
+    // Still our text, nothing opened: the Enter really was swallowed (the TUI
+    // folds the first one into the bracketed paste). Safe to press again.
     if (box.trim() !== pasted.trim()) return "diverted";
     if (Date.now() > deadline) return "stuck";
   }
@@ -315,6 +322,17 @@ export interface PaneTurnOptions {
 const NEEDS_YOU_RE = /Esc to cancel|Enter to confirm|to use this session only/;
 export const __needsYou = (screen: string): boolean => NEEDS_YOU_RE.test(screen);
 export const __isRunning = (screen: string): boolean => RUNNING_RE.test(screen);
+
+/** The submit loop's decision for one observed frame, without the tmux round
+ *  trip. Exported so the ordering that matters — picker before input box — is
+ *  pinned by a test rather than by a comment. */
+export function __submitVerdict(screen: string, pasted: string): SubmitOutcome | "retry" {
+  if (NEEDS_YOU_RE.test(screen)) return "diverted";
+  const box = inputBox(screen);
+  if (!box?.trim()) return "sent";
+  if (box.trim() !== pasted.trim()) return "diverted";
+  return "retry";
+}
 
 /** A turn that is actually working says so. Used to tell "idle" apart from
  *  "thinking", which is the difference between ending a turn and abandoning it. */

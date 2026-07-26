@@ -230,3 +230,34 @@ test("a disallowed key is refused even for a valid pane", async () => {
   expect(r.ok).toBe(false);
   expect(r.stderr).toContain("not allowed");
 });
+
+// --- never press Enter twice into a menu ------------------------------------
+// Enter in a `/model` or `/effort` picker means "set as default": it writes the
+// user's real settings.json. This happened on a live machine, twice, once from
+// a chat that merely looked like it was thinking.
+
+/** The frame that caused it: the menu has drawn, but the input box row above it
+ *  still shows the command from before the redraw. */
+const PICKER_WITH_STALE_BOX = [
+  "❯ /effort",
+  "   Effort",
+  "   low   medium   high   xhigh   max",
+  "   ←/→ to adjust · Enter to confirm · Esc to cancel",
+].join("\n");
+
+test("a menu on screen stops the retry even when the box looks unsent", () => {
+  // The ordering IS the fix. Reading the box first sees "/effort" still there,
+  // concludes the Enter was swallowed, and presses again — confirming the menu.
+  expect(mod.__submitVerdict(PICKER_WITH_STALE_BOX, "/effort")).toBe("diverted");
+});
+
+test("a genuinely swallowed Enter is still retried", () => {
+  // The behaviour this must not break: the TUI folds the first Enter into the
+  // bracketed paste, so without a retry ordinary turns are silently lost.
+  const stillWaiting = ["❯ write me a test", "────────", "  ⏵⏵ bypass permissions on"].join("\n");
+  expect(mod.__submitVerdict(stillWaiting, "write me a test")).toBe("retry");
+});
+
+test("an emptied box is taken as sent", () => {
+  expect(mod.__submitVerdict("● thinking…\n❯ \n────────", "write me a test")).toBe("sent");
+});
