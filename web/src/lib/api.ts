@@ -544,11 +544,12 @@ const demoApi: typeof realApi = {
   // fake PR list in front of someone evaluating the app. It reports the same
   // "gh isn't set up" state a real machine without gh would, which is honest
   // and is a screen worth showing anyway.
-  prCapability: (_force?: boolean) => D({ available: false, authed: false, reason: "pull requests need the GitHub CLI — not available in the demo" }),
-  prList: (_root: string, _filter: "mine" | "review" | "all", _force?: boolean) =>
-    D<PrListResponse>({ ok: true, repo: null, prs: [], fetchedAt: 0, stale: false, loading: false, needsAuth: true, error: "not available in the demo" }),
-  prDetail: (_root: string, _number: number, _force?: boolean) => D({ ok: false, error: "not available in the demo" }),
-  prDiff: (_root: string, _number: number) => D({ ok: false, error: "not available in the demo" }),
+  // The panel used to answer available:false here, so the feature the landing
+  // page calls out as new was dead in the demo that page links to.
+  prCapability: (_force?: boolean) => D(demo.prCapability()),
+  prList: (root: string, _filter: "mine" | "review" | "all", _force?: boolean) => D<PrListResponse>(demo.prList(root)),
+  prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
+  prDiff: (_root: string, number: number) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
   prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),
   prReviewWith: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string, _c: unknown[]) => D(demoPrAction()),
