@@ -58,7 +58,9 @@ import {
 } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
-import { chatStream, CHAT_ENABLED, CHAT_BYPASS_ALLOWED } from "./chat.ts";
+import { chatSend, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
+import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
+import { paneAlive, startPaneSweeper } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope } from "./config.ts";
 import { hookStatus, applyHooks } from "./hooksetup.ts";
@@ -1069,12 +1071,33 @@ const server = Bun.serve<WsData>({
     // --- multi-chat: drive claude sessions from the browser ---
     // `bypass` rides along so the mode picker can stop offering a mode the
     // server would silently downgrade — the downgrade itself stays server-side.
-    if (pathname === "/chat/enabled") return json({ enabled: CHAT_ENABLED, bypass: CHAT_BYPASS_ALLOWED });
+    // `tmuxEngine` tells the UI whether the pane engine can be offered at all,
+    // and says why not in the same breath — "tmux is not installed" and "not on
+    // Windows" need different words, and a toggle that silently does nothing is
+    // worse than one that explains itself.
+    if (pathname === "/chat/enabled") {
+      const pane = paneEngineCapability();
+      return json({
+        enabled: CHAT_ENABLED,
+        bypass: CHAT_BYPASS_ALLOWED,
+        tmuxEngine: { available: pane.available, reason: pane.reason, defaultOn: CHAT_ENGINE_DEFAULT === "tmux" },
+      });
+    }
     if (pathname === "/chat/send" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      return chatStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images);
+      return chatSend(b);
+    }
+    // The command that hands a chat to the user's own terminal. Server-side
+    // because the socket name and flags are the engine's business, and a string
+    // the UI assembled itself would drift the first time either changed.
+    if (pathname === "/chat/attach") {
+      const id = url.searchParams.get("session") || "";
+      const pane = paneEngineCapability();
+      if (!pane.available) return json({ error: pane.reason }, 400);
+      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
+      return json({ command: attachCommand(id), live: await paneAlive(id) });
     }
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---
@@ -1303,6 +1326,12 @@ function prune() {
 }
 prune();
 setInterval(prune, 3_600_000);
+
+// Reclaim chat panes nobody has spoken to in a while. A warm CLI is the whole
+// point of the pane engine and also its whole cost (~380MB and climbing), so an
+// abandoned chat gives its memory back and resumes transparently next time.
+// A no-op when the engine is off, tmux is absent, or eviction is disabled.
+startPaneSweeper();
 
 // Read every Claude Code session on this machine from ~/.claude/projects, then
 // keep watching. This is what makes the dashboard cover all projects at once

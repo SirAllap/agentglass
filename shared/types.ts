@@ -898,6 +898,31 @@ export interface ChatImage {
  *  rejected downstream anyway. */
 export type ChatImageMediaType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
+/** How a chat's turns are actually run.
+ *
+ *  `process` — one `claude -p` per turn. Nothing is left running between turns,
+ *              so an idle chat costs nothing, and every turn pays the CLI's full
+ *              session start (measured 2.9-3.8s on a machine with MCP servers).
+ *  `tmux`    — one interactive `claude` per chat, alive in a pane on agentglass's
+ *              own tmux server. The start-up cost is paid once (same turn
+ *              measured at 1.2-1.4s), and because the pane is a real tmux
+ *              session the user can attach and carry on in their own terminal.
+ *              The trade is memory: a warm CLI is ~380MB and grows with use. */
+export type ChatEngine = "process" | "tmux";
+
+/** Whether the pane engine can be offered here, and why not when it cannot.
+ *
+ *  The reason is carried rather than derived in the UI because the two causes
+ *  need different words — "tmux is not installed" is a thing the user can fix,
+ *  "not on Windows" is not. */
+export interface TmuxEngineInfo {
+  available: boolean;
+  reason: string;
+  /** The server's own default, so the toggle can show what happens if the user
+   *  never touches it. */
+  defaultOn: boolean;
+}
+
 // --- in-browser terminal (real PTY shell per repo/worktree) ------------------
 /** A ready-to-run project command surfaced in the terminal panel. */
 export interface ProjectCommand {

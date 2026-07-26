@@ -7,7 +7,8 @@
 
 import { api, ChatStreamError } from "./api.ts";
 import { loadChats, saveChats } from "./chatPersist.ts";
-import type { ChatImage, WatchEvent } from "../../../shared/types.ts";
+import { chatEnginePref } from "./chatEnginePref.ts";
+import type { ChatImage, WatchEvent, ChatEngine } from "../../../shared/types.ts";
 
 /** A pasted image waiting in the composer. `url` is an object URL for the
  *  thumbnail; it is revoked when the attachment is dropped or sent, since
@@ -124,6 +125,15 @@ export type Chat = {
    *  first turn has started. */
   resolvedModel?: string;
   mode: string;
+  /** How this chat's turns are run. Per chat rather than global because the
+   *  trade is per chat: the one you are working in all afternoon is worth a warm
+   *  CLI, the five you opened to ask one question each are not. Absent on chats
+   *  saved before the pane engine existed, which is what the server default is
+   *  for. */
+  engine?: ChatEngine;
+  /** The command that reopens this chat in the user's own terminal. Only a
+   *  `tmux` chat has one, and only after its first turn has named the session. */
+  attachCommand?: string;
   title: string;        // derived from the first message; the tab label
   messages: ChatMsg[];
   sessionId: string;    // claude's own id, for resuming
@@ -271,6 +281,11 @@ export function newChat(
   const id = `c${++seq}-${Date.now().toString(36)}`;
   const chat: Chat = {
     id, cwd, model, mode,
+    // Chosen once, at birth. The engine decides where this chat's session lives,
+    // so switching it later would either strand a warm CLI or a live turn — the
+    // preference is a default for new chats, never a control over old ones.
+    // `undefined` defers to whatever the server was configured with.
+    engine: chatEnginePref() ?? undefined,
     title: resume?.title || "new chat",
     messages: [], sessionId: resume?.sessionId ?? "",
     sending: false, draft: "", attachments: [], queued: [], createdAt: Date.now(), abort: null, unread: false,
@@ -599,6 +614,10 @@ export async function send(id: string, text: string, isActive: () => boolean, al
         c.sessionId = o.session_id as string;
         c.liveFrom = Date.now();
         if (typeof o.model === "string" && o.model) c.resolvedModel = o.model;
+        // The pane engine names the session itself and sends back the command
+        // that reopens it in a terminal. Carried on the frame rather than asked
+        // for separately so the UI can offer it the moment the chat has one.
+        if (typeof o.agx_attach === "string") c.attachCommand = o.agx_attach;
       });
       return;
     }
@@ -720,7 +739,7 @@ export async function send(id: string, text: string, isActive: () => boolean, al
 
   let broke = false;
   try {
-    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images }, onEvent, ac.signal);
+    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images, engine: chat.engine }, onEvent, ac.signal);
   } catch (e) {
     // A queue must not keep firing into a turn that failed or one you just
     // interrupted — the rest of it stays put, visible, for you to decide on.

@@ -17,6 +17,7 @@ import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
 import { ToolFeed } from "./ToolFeed.tsx";
 import { buildRows } from "../lib/toolTree.ts";
+import { chatToMarkdown } from "../lib/chatTranscript.ts";
 import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
@@ -249,6 +250,38 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
         aria-label={`Close chat: ${chat.title}`}
       >✕</button>
     </div>
+  );
+}
+
+/** A header button that copies something and says it did.
+ *
+ *  The confirmation is the whole point: a copy that succeeds looks exactly like
+ *  a copy that silently failed, and both look like a button that does nothing.
+ *  The label reverts on its own so the header does not stay changed. */
+function CopyButton({ label, title, text, disabled }: { label: string; title: string; text: () => string; disabled?: boolean }) {
+  const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!done) return;
+    const t = setTimeout(() => setDone(false), 1600);
+    return () => clearTimeout(t);
+  }, [done]);
+  return (
+    <button
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text());
+          setDone(true);
+        } catch {
+          // Clipboard access can be refused (an insecure origin, a denied
+          // permission). Saying nothing would read as the copy having worked.
+          setDone(false);
+        }
+      }}
+      disabled={disabled}
+      title={title}
+      className="text-[10px] px-2 py-1 rounded-md shrink-0 disabled:opacity-40"
+      style={{ color: done ? "var(--ok, var(--text2))" : "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}
+    >{done ? "Copied" : label}</button>
   );
 }
 
@@ -847,6 +880,23 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           />
                         )}
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="Resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
+                        {/* Pushed right so the two copy actions sit together at
+                            the end of the header rather than between pickers. */}
+                        <span className="ml-auto flex items-center gap-1.5">
+                          {active.attachCommand && (
+                            <CopyButton
+                              label="⧉ tmux"
+                              title={`This chat runs in a tmux pane. Copy the command that opens it in your own terminal, where you can keep typing:\n\n${active.attachCommand}`}
+                              text={() => active.attachCommand!}
+                            />
+                          )}
+                          <CopyButton
+                            label="Copy chat"
+                            title="Copy the whole conversation as markdown — messages, reasoning and tool calls"
+                            text={() => chatToMarkdown(active)}
+                            disabled={!active.messages.length}
+                          />
+                        </span>
                       </>
                     ) : <span className="text-[12px] t-dim2">No chat selected</span>}
                   </div>

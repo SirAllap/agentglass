@@ -21,6 +21,8 @@ import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import type { UpdateStatus, ReleaseNotes, HookSetupStatus } from "../../../shared/types.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, notifyQuiet, setNotifyQuiet, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
+import { chatEnginePref, setChatEnginePref, type ChatEnginePref } from "../lib/chatEnginePref.ts";
+import type { TmuxEngineInfo } from "../../../shared/types.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
@@ -538,6 +540,16 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [quiet, setQuietState] = useState(() => notifyQuiet());
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
   useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
+  const [enginePref, setEnginePref] = useState<ChatEnginePref>(() => chatEnginePref());
+  // Asked while the modal is open rather than at startup: it is a subprocess
+  // probe on the server, and nothing outside this row needs the answer.
+  const [tmuxEngine, setTmuxEngine] = useState<TmuxEngineInfo | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    void api.chatEnabled()
+      .then((r) => setTmuxEngine(r.tmuxEngine ?? { available: false, reason: "this server is too old to run chats in panes", defaultOn: false }))
+      .catch(() => setTmuxEngine({ available: false, reason: "the agentglass server did not answer", defaultOn: false }));
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -637,6 +649,32 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         { v: "auto", label: "Auto" },
                         { v: "gpu", label: "GPU" },
                         { v: "dom", label: "Compatibility" },
+                      ]} />
+                    {/* Two genuinely different bargains, so the row names both
+                        rather than implying one is simply better. Panes are
+                        faster per turn and attachable from a real terminal;
+                        they also hold a live CLI (~380MB and growing) for as
+                        long as the chat is warm. Applies to new chats only —
+                        an open chat's session already lives somewhere. */}
+                    <Choice<"server" | "process" | "tmux">
+                      label="How new chats run"
+                      hint={
+                        tmuxEngine && !tmuxEngine.available
+                          ? `tmux panes unavailable — ${tmuxEngine.reason}`
+                          : "Panes keep a warm claude per chat: faster turns, and you can attach from your terminal. Separate takes longer per turn and leaves nothing running."
+                      }
+                      disabled={tmuxEngine ? !tmuxEngine.available : true}
+                      disabledHint={tmuxEngine ? `Unavailable — ${tmuxEngine.reason}` : "Checking…"}
+                      value={enginePref ?? "server"}
+                      onPick={(v) => {
+                        const next = v === "server" ? null : v;
+                        setChatEnginePref(next);
+                        setEnginePref(next);
+                      }}
+                      options={[
+                        { v: "server", label: tmuxEngine?.defaultOn ? "Default (panes)" : "Default (separate)" },
+                        { v: "process", label: "Separate" },
+                        { v: "tmux", label: "tmux panes" },
                       ]} />
                     <Choice<SysNotifyMode>
                       label="Desktop notifications on the notch"

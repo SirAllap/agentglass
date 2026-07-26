@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -434,8 +434,12 @@ const realApi = {
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
-  chatEnabled: () => get<{ enabled: boolean; bypass?: boolean }>("/chat/enabled"),
-  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[] }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
+  chatEnabled: () => get<{ enabled: boolean; bypass?: boolean; tmuxEngine?: TmuxEngineInfo }>("/chat/enabled"),
+  /** The command that hands a chat to the user's own terminal, and whether its
+   *  pane is up right now. Assembled server-side so the socket name never has to
+   *  be duplicated here. */
+  chatAttach: (session: string) => get<{ command: string; live: boolean }>(`/chat/attach?session=${encodeURIComponent(session)}`),
+  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     let res: Response;
     // A fetch that throws before a response has arrived never reached the
     // server, which is a different problem from one that dies mid-turn — the
@@ -570,8 +574,9 @@ const demoApi: typeof realApi = {
   dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
   dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
-  chatEnabled: () => D({ enabled: false }),
-  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[] }, onEvent: (o: Record<string, unknown>) => void) => {
+  chatEnabled: () => D({ enabled: false, tmuxEngine: { available: false, reason: "the demo runs no local processes", defaultOn: false } }),
+  chatAttach: (_session: string) => D({ command: "", live: false }),
+  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine }, onEvent: (o: Record<string, unknown>) => void) => {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });
     onEvent({ type: "result", result: "" });

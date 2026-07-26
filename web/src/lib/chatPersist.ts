@@ -32,7 +32,8 @@ const MAX_BYTES = 2_000_000;
  *  serializable or not true after a reload. */
 type StoredChat = Pick<Chat,
   | "id" | "cwd" | "model" | "resolvedModel" | "mode" | "title" | "sessionId" | "draft"
-  | "queued" | "createdAt" | "unread" | "renamed" | "attention" | "usage" | "liveFrom">
+  | "queued" | "createdAt" | "unread" | "renamed" | "attention" | "usage" | "liveFrom"
+  | "engine" | "attachCommand">
   & { messages: ChatMsg[] };
 
 type Stored = { v: 1; activeId: string; chats: StoredChat[] };
@@ -77,6 +78,10 @@ function pack(c: Chat): StoredChat {
     sessionId: c.sessionId, draft: c.draft, queued: c.queued, createdAt: c.createdAt,
     unread: c.unread, renamed: c.renamed, attention: c.attention, usage: c.usage,
     liveFrom: c.liveFrom,
+    // Which engine this chat runs on has to survive a reload, or a warm tmux
+    // chat silently becomes a `-p` chat after a refresh and the terminal command
+    // the user was shown stops matching anything.
+    engine: c.engine, attachCommand: c.attachCommand,
     messages: messages.slice(-MAX_MESSAGES).map(packMsg),
   };
 }
