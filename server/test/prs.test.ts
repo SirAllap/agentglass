@@ -323,6 +323,35 @@ describe("asset proxy allowlist", () => {
   });
 });
 
+describe("who may see the GitHub token", () => {
+  /**
+   * Narrower than the fetch allowlist on purpose: being allowed to serve us an
+   * image is not the same as being allowed to hold the user's credential.
+   */
+  test("github.com and its own subdomains, and nothing else", () => {
+    expect(prs.tokenAllowedHost("github.com")).toBe(true);
+    expect(prs.tokenAllowedHost("GitHub.com")).toBe(true);
+    expect(prs.tokenAllowedHost("codeload.github.com")).toBe(true);
+  });
+
+  test("a lookalike that ends in the same letters gets nothing", () => {
+    expect(prs.tokenAllowedHost("evilgithub.com")).toBe(false);
+    expect(prs.tokenAllowedHost("github.com.evil.example")).toBe(false);
+    expect(prs.tokenAllowedHost("notgithub.com")).toBe(false);
+  });
+
+  /** Allowed to serve images, never allowed the credential. */
+  test("the other asset hosts are not token hosts", () => {
+    expect(prs.tokenAllowedHost("user-images.githubusercontent.com")).toBe(false);
+    expect(prs.tokenAllowedHost("t14295188.p.clickup-attachments.com")).toBe(false);
+  });
+
+  /** `https://github.com./x` is a valid absolute-form FQDN. */
+  test("a trailing root dot is not a way around the comparison", () => {
+    expect(prs.tokenAllowedHost("evilgithub.com.")).toBe(false);
+  });
+});
+
 describe("CI notification latch", () => {
   const rollup = (over: Record<string, unknown> = {}) =>
     ({ total: 61, success: 43, failure: 0, skipped: 18, pending: 0, allDone: true, verdict: "green", failing: [], ...over });

@@ -947,6 +947,22 @@ export function assetAllowed(raw: string): URL | null {
   return null;
 }
 
+/**
+ * Whether this host may be shown the user's GitHub token.
+ *
+ * A separate, narrower question than `assetAllowed`: that one decides what we
+ * will fetch, this one decides what we will hand a credential to. It has to be
+ * an exact domain match — `hostname.endsWith("github.com")`, which is what
+ * stood here, is also true of `evilgithub.com`. Nothing reachable today gets
+ * through `assetAllowed` to ask, but a substring test on a hostname is one
+ * allowlist edit away from posting `gh auth token` to somebody else's server,
+ * and the edit would look harmless.
+ */
+export function tokenAllowedHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/\.$/, "");
+  return h === "github.com" || h.endsWith(".github.com");
+}
+
 let tokenCache: { at: number; token: string } | null = null;
 
 /** The token `gh` already holds. Never sent anywhere but the allowlisted host. */
@@ -973,8 +989,9 @@ export async function prAsset(rawUrl: unknown): Promise<Response> {
   const token = await ghToken();
   const headers: Record<string, string> = { accept: "image/*" };
   // Only GitHub gets the credential. ClickUp is public and has no business
-  // receiving a GitHub token.
-  if (token && u.hostname.toLowerCase().endsWith("github.com")) headers.authorization = `token ${token}`;
+  // receiving a GitHub token. Redirects stay safe on their own: fetch drops
+  // Authorization when a redirect crosses to another origin.
+  if (token && tokenAllowedHost(u.hostname)) headers.authorization = `token ${token}`;
   let res: Response;
   try {
     res = await fetch(u.toString(), { headers, redirect: "follow", signal: AbortSignal.timeout(20_000) });

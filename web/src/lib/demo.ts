@@ -18,8 +18,21 @@ import { ctxLimitOf } from "./contextWindow.ts";
 
 export const IS_DEMO = import.meta.env.VITE_DEMO === "1";
 
-const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
-const rnd = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
+// Every random draw in this file shapes invented dashboard data — no id, key
+// or token here authorises anything. It still comes from the CSPRNG rather
+// than `Math.random`: a scanner cannot tell fixtures from secrets, so a
+// fixture generator that calls `Math.random` is a permanent shelf of "insecure
+// randomness" findings sitting on top of the ones that would matter. Drawn a
+// page at a time, because the live stream asks for these on a timer.
+const ENTROPY = new Uint32Array(256);
+let entropyAt = ENTROPY.length;
+function random(): number {
+  if (entropyAt >= ENTROPY.length) { crypto.getRandomValues(ENTROPY); entropyAt = 0; }
+  return ENTROPY[entropyAt++]! / 2 ** 32;
+}
+
+const pick = <T,>(a: T[]): T => a[Math.floor(random() * a.length)];
+const rnd = (lo: number, hi: number) => lo + random() * (hi - lo);
 const rint = (lo: number, hi: number) => Math.floor(rnd(lo, hi + 1));
 const uid = () => Array.from({ length: 8 }, () => "0123456789abcdef"[rint(0, 15)]).join("") + "-demo";
 
@@ -102,7 +115,7 @@ function mkEvent(o: Partial<WatchEvent> & { source_app: string; session_id: stri
 function nextEvent(): WatchEvent {
   // Resolve an open Pre first, most of the time — running rows should morph
   // into finished ones within a few ticks, the way the real pairing behaves.
-  if (openPres.length && (Math.random() < 0.45 || openPres.length > 4)) {
+  if (openPres.length && (random() < 0.45 || openPres.length > 4)) {
     const p = openPres.shift()!;
     return mkEvent({
       source_app: p.app, session_id: p.sid, model_name: p.model, timestamp: Date.now(),
@@ -113,11 +126,11 @@ function nextEvent(): WatchEvent {
   }
   const s = pick(SESSIONS);
   const base = { source_app: s.app, session_id: s.sid, model_name: s.model, timestamp: Date.now() };
-  const roll = Math.random();
+  const roll = random();
   if (roll < 0.5) {
     const tool = pick(["Bash", "Read", "Edit", "Write", "Grep"]);
     const detail = tool === "Bash" ? pick(BASHES) : pick(PATHS);
-    const isErr = Math.random() < 0.05;
+    const isErr = random() < 0.05;
     return mkEvent({
       ...base, hook_event_type: "PostToolUse", tool_name: tool, tool_use_id: uid(),
       duration_ms: rint(60, tool === "Bash" ? 4000 : 300),
@@ -230,12 +243,12 @@ export function stats(windowMs: number, provider?: string): StatsSummary {
   const heatmap = Array.from({ length: 168 }, (_, k) => {
     const h = k % 24, d = Math.floor(k / 24);
     const work = h >= 9 && h <= 19 && d >= 1 && d <= 5 ? rnd(0, 30) : rnd(0, 3);
-    return Math.round(work * (0.5 + Math.random()));
+    return Math.round(work * (0.5 + random()));
   });
   const buckets = Array.from({ length: 60 }, (_, i) => {
     const t = Date.now() - (60 - i) * (windowMs / 60);
     const busy = 0.15 + 0.85 * f;
-    return { t, events: rint(0, Math.round(40 * busy)), errors: Math.random() < 0.1 ? rint(1, 3) : 0, cost_usd: Number(rnd(0, 12 * busy).toFixed(3)), tokens: rint(0, Math.round(60000 * busy)) };
+    return { t, events: rint(0, Math.round(40 * busy)), errors: random() < 0.1 ? rint(1, 3) : 0, cost_usd: Number(rnd(0, 12 * busy).toFixed(3)), tokens: rint(0, Math.round(60000 * busy)) };
   });
   const summary: StatsSummary = {
     totals: { events: si(12840) + streamed.events, sessions: si(41), tool_calls: si(6210) + streamed.tools, errors: Math.round(34 * f), cost_usd: Number((sc(4498.08) + streamed.cost).toFixed(2)), input_tokens: Math.round(9_100_000 * f), output_tokens: Math.round(640_000 * f), cache_creation_tokens: Math.round(1_200_000 * f), cache_read_tokens: Math.round(78_000_000 * f) },
