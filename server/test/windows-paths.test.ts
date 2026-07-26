@@ -61,6 +61,24 @@ describe("isAbsoluteLike (path-completion's absolute-path guard)", () => {
   });
 });
 
+describe("recorded paths vs scope roots (db.ts scopeClause)", () => {
+  // scopeClause filters the paths the events table actually holds against the
+  // project's checkouts, and used its own hardcoded `r + "/"`. It now shares
+  // isWithin. The DB-level test for this lives in scope.test.ts and cannot
+  // cover Windows: it builds real directories on disk, and a POSIX box has no
+  // `C:\`. So the predicate that call site applies is asserted here instead.
+  const roots = ["C:\\Users\\x\\proj", "C:\\Users\\x\\proj-WEB-1042"];
+  const recordedIn = (p: string) => roots.some((r) => isWithin(p, r, "\\"));
+
+  test("Windows: a path inside a linked worktree is in scope", () => {
+    expect(recordedIn("C:\\Users\\x\\proj-WEB-1042\\server")).toBe(true);
+  });
+
+  test("Windows: a sibling that merely shares the prefix is not", () => {
+    expect(recordedIn("C:\\Users\\x\\proj-backup\\server")).toBe(false);
+  });
+});
+
 describe("configuredRepoDirs (AGENTGLASS_REPO_DIRS delimiter)", () => {
   test("splits on the platform path delimiter, not a hardcoded colon", async () => {
     // On POSIX, path.delimiter is ":" - the same character the old, broken

@@ -16,7 +16,7 @@ import type {
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel } from "./pricing.ts";
-import { workspaceRoot, scopeRoots } from "./config.ts";
+import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
 
 /**
  * Where the database lives.
@@ -457,7 +457,12 @@ export function scopeClause(scope: string | null = workspaceRoot()): { clause: s
   // dashboard for a day spent working in ~/code/orbit-WEB-1042, which is where
   // the work actually happens.
   const roots = scopeRoots(scope);
-  const inScope = recordedPaths().filter((p) => roots.some((r) => p === r || p.startsWith(r + "/")));
+  // isWithin rather than a hardcoded `r + "/"`: these are resolve()-derived
+  // host paths, so on Windows they are backslash-joined and the literal slash
+  // matched a checkout root itself but nothing inside it — the same bug fixed
+  // in config.ts one layer up (#188), which would have left a scoped cockpit
+  // there showing an empty dashboard for every project it was opened on.
+  const inScope = recordedPaths().filter((p) => roots.some((r) => isWithin(p, r)));
   // Nothing recorded for this project yet. `AND 0` is the honest answer and the
   // fast one; an empty IN list is a syntax error.
   if (!inScope.length) return { clause: " AND 0", args: [] };
