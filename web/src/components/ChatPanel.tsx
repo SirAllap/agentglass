@@ -21,6 +21,7 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { buildRows } from "../lib/toolTree.ts";
 import { chatToMarkdown } from "../lib/chatTranscript.ts";
 import { tidyPaneScreen } from "../lib/paneScreen.ts";
+import { quickSkills, pinnedSkills, togglePinnedSkill } from "../lib/quickSkills.ts";
 import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
@@ -610,11 +611,19 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // --disable-slash-commands is passed, which we never do. What was missing is
   // knowing they exist: you had to remember the exact name with no way to look
   // it up without leaving the chat.
-  const [skills, setSkills] = useState<{ name: string; description: string }[]>([]);
+  // `calls` and `last_used` are kept, not mapped away: the quick strip ranks on
+  // them, and asking the server twice for the same list to get two views of it
+  // would be silly.
+  const [skills, setSkills] = useState<{ name: string; description: string; calls: number; last_used: number | null }[]>([]);
   useEffect(() => {
     if (!open || skills.length) return;
-    api.skills().then((r) => setSkills(r.skills.map((k) => ({ name: k.name, description: k.when_to_use || k.description })))).catch(() => {});
+    api.skills().then((r) => setSkills(r.skills.map((k) => ({
+      name: k.name, description: k.when_to_use || k.description, calls: k.calls, last_used: k.last_used,
+    })))).catch(() => {});
   }, [open, skills.length]);
+  const [pinnedNames, setPinnedNames] = useState<string[]>(() => pinnedSkills());
+  const quick = useMemo(() => quickSkills(skills, pinnedNames), [skills, pinnedNames]);
+  const togglePin = (name: string) => setPinnedNames(togglePinnedSkill(name));
 
   // Looked up in the scoped list, not the store, so a restored tab belonging to
   // another project never renders even for the frame before the effect below
@@ -1314,6 +1323,25 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         ))}
                       </div>
                     )}
+                    {quick.length > 0 && active && !active.sending && (
+                      // What you pinned, then what you actually run. The `/`
+                      // menu already lists everything, but fifty entries behind
+                      // a keystroke you have to remember is a reference, not a
+                      // shortcut. Hidden mid-turn: the composer is for queueing
+                      // then, and a row of one-click starters invites the wrong
+                      // thing.
+                      <div className="mb-2 flex items-center gap-1.5 flex-wrap">
+                        {quick.map((k) => (
+                          <button key={k.name} onClick={() => pickSkill(k.name)}
+                            title={`${k.description}${k.calls ? `\n\nRun ${k.calls} time${k.calls === 1 ? "" : "s"}` : ""}`}
+                            className="text-[10.5px] px-2 py-1 rounded-md shrink-0 flex items-center gap-1"
+                            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                            {pinnedNames.includes(k.name) && <span style={{ color: "var(--primary-hover)" }}>★</span>}
+                            /{k.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                     {active?.paneNeedsYou && (
                       // Answerable from here. The alternative shipped first and
                       // was telling someone to open a terminal to move a cursor
@@ -1374,6 +1402,16 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             style={{ background: i === slashIdx ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent" }}>
                             <span className="text-[11.5px] shrink-0" style={{ color: "var(--primary-hover)" }}>/{k.name}</span>
                             <span className="text-[10px] t-dim2 truncate">{k.description}</span>
+                            {/* Pinning lives here because this is the one place
+                                every skill is listed. onMouseDown, and stopped,
+                                so pinning does not also insert the command. */}
+                            <button
+                              onMouseDown={(ev) => { ev.preventDefault(); ev.stopPropagation(); togglePin(k.name); }}
+                              title={pinnedNames.includes(k.name) ? `Unpin /${k.name}` : `Pin /${k.name} to the quick strip`}
+                              aria-label={pinnedNames.includes(k.name) ? `Unpin ${k.name}` : `Pin ${k.name}`}
+                              className="ml-auto shrink-0 text-[10px] px-1 leading-none hover:opacity-100"
+                              style={{ color: pinnedNames.includes(k.name) ? "var(--primary-hover)" : "var(--text3)", opacity: pinnedNames.includes(k.name) ? 1 : 0.55 }}
+                            >★</button>
                           </div>
                         ))}
                         <div className="px-2.5 py-1 text-[9.5px] t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
