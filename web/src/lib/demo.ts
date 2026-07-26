@@ -11,6 +11,7 @@ import type {
   SearchHit, PendingGate, SessionDetail, RepoStatus, CommitResult,
   WalkthroughResult, WalkthroughInputFile, GitRepoRef, WorkingTree, GitFileChange, GitActionResult,
   GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult,
+  PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
 } from "../../../shared/types.ts";
 import { providerOf } from "./format.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -547,3 +548,410 @@ function spawnGate() {
 if (IS_DEMO) { spawnGate(); setInterval(() => { if (gates.length < 2) spawnGate(); }, 18_000); }
 export function gatePending(): { gates: PendingGate[] } { return { gates: [...gates] }; }
 export function gateDecide(id: string): { ok: boolean } { gates = gates.filter((g) => g.id !== id); return { ok: true }; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   PULL REQUESTS.
+
+   The panel used to answer `available: false` here, so the one feature the
+   landing page calls out as new — reviewing a pull request without opening a
+   browser — was invisible in the demo that same page links to. Someone who
+   clicked through to see it found a dead panel.
+
+   These seven are fabricated to light up every state the panel can draw, not
+   to look plausible in aggregate: between them they cover all three review
+   decisions, every merge state worth explaining, checks green / red / pending,
+   a draft, a bot author, a stale review after a force-push, a PR you wrote
+   yourself (which GitHub will not let you review, and neither does the panel),
+   the branch you happen to be standing on, threads resolved and outdated and
+   live, and a 46KB coverage comment reduced to its three numbers.
+
+   Everything is invented, in the same fictional "Acme Shop" universe as the
+   rest of this file. Fixed timestamps rather than Date.now(): a demo that
+   reorders itself between two screenshots is a demo that looks broken.
+   ══════════════════════════════════════════════════════════════════════ */
+const PR_REPO: PrRepoId = {
+  key: "github.com/acme/shop-api", host: "github.com",
+  owner: "acme", name: "shop-api", nameWithOwner: "acme/shop-api",
+};
+/** The fixture's clock is "now", so a pull request reads as "2h ago" rather
+ *  than as four months stale. The offsets below are relative, so the order of
+ *  the list is fixed even though the timestamps are not. */
+const PR_NOW = Date.now();
+const ago = (mins: number) => new Date(PR_NOW - mins * 60_000).toISOString();
+
+function rollup(p: { ok?: number; bad?: string[]; pending?: number; skipped?: number; workflow?: string }): PrCheckRollup {
+  const wf = p.workflow ?? "CI";
+  const failing: PrCheck[] = (p.bad ?? []).map((name) => ({ name, workflow: wf, state: "failure", done: true }));
+  const success = p.ok ?? 0, pending = p.pending ?? 0, skipped = p.skipped ?? 0;
+  const total = success + failing.length + pending + skipped;
+  const allDone = pending === 0;
+  return {
+    total, success, failure: failing.length, skipped, pending, allDone,
+    verdict: allDone ? (failing.length ? "red" : "green") : null,
+    failing,
+  };
+}
+const chk = (name: string, state: PrCheckState, workflow = "CI"): PrCheck =>
+  ({ name, workflow, state, done: state !== "pending" });
+
+const PR_SUMMARIES: PrSummary[] = [
+  {
+    number: 482, title: "Round prices at the cart boundary, not per line",
+    author: "rmoreno", state: "OPEN", isDraft: false,
+    headRefName: "fix/rounding-boundary", baseRefName: "main",
+    url: "https://github.com/acme/shop-api/pull/482", updatedAt: ago(118),
+    reviewDecision: "REVIEW_REQUIRED", additions: 84, deletions: 31, changedFiles: 6,
+    labels: [{ name: "bug", color: "d73a4a" }, { name: "pricing", color: "0e8a16" }],
+    assignees: ["rmoreno"], milestone: "Q2 · checkout",
+    checks: rollup({ ok: 3, bad: ["e2e (checkout)"], skipped: 1 }), checksLoaded: true,
+  },
+  {
+    number: 479, title: "Cache the price table per request",
+    author: "jkwan", state: "OPEN", isDraft: false,
+    headRefName: "perf/price-cache", baseRefName: "main",
+    url: "https://github.com/acme/shop-api/pull/479", updatedAt: ago(54),
+    reviewDecision: "APPROVED", additions: 41, deletions: 12, changedFiles: 3,
+    labels: [{ name: "performance", color: "1d76db" }],
+    assignees: ["jkwan"], milestone: "Q2 · checkout",
+    checks: rollup({ ok: 5 }), checksLoaded: true,
+  },
+  {
+    number: 476, title: "Bump bun to 1.1.38",
+    author: "acme-bot", state: "OPEN", isDraft: false,
+    headRefName: "deps/bun-1.1.38", baseRefName: "main",
+    url: "https://github.com/acme/shop-api/pull/476", updatedAt: ago(31),
+    reviewDecision: null, additions: 4, deletions: 4, changedFiles: 2,
+    labels: [{ name: "dependencies", color: "0366d6" }],
+    assignees: [], milestone: null,
+    checks: rollup({ ok: 5 }), checksLoaded: true,
+  },
+  {
+    number: 471, title: "Otel spans around the approval gate",
+    author: "t-okafor", state: "OPEN", isDraft: true,
+    headRefName: "feat/gate-spans", baseRefName: "main",
+    url: "https://github.com/acme/shop-api/pull/471", updatedAt: ago(9),
+    reviewDecision: null, additions: 212, deletions: 8, changedFiles: 11,
+    labels: [{ name: "observability", color: "5319e7" }],
+    assignees: ["t-okafor"], milestone: null,
+    checks: rollup({ ok: 2, pending: 3 }), checksLoaded: true,
+  },
+  {
+    number: 468, title: "Stabilise the checkout test under load",
+    author: "jkwan", state: "OPEN", isDraft: false,
+    headRefName: "test/checkout-flake", baseRefName: "main",
+    url: "https://github.com/acme/shop-api/pull/468", updatedAt: ago(260),
+    reviewDecision: "CHANGES_REQUESTED", additions: 63, deletions: 44, changedFiles: 4,
+    labels: [{ name: "flaky", color: "fbca04" }, { name: "tests", color: "c2e0c6" }],
+    assignees: ["jkwan"], milestone: "Q2 · checkout",
+    checks: rollup({ ok: 2, bad: ["integration (postgres)"], skipped: 1 }), checksLoaded: true,
+  },
+  {
+    number: 465, title: "Retry the charge before failing the order",
+    author: "you", state: "OPEN", isDraft: false,
+    headRefName: "fix/charge-retry", baseRefName: "main",
+    url: "https://github.com/acme/shop-api/pull/465", updatedAt: ago(400),
+    reviewDecision: "REVIEW_REQUIRED", additions: 96, deletions: 18, changedFiles: 5,
+    labels: [{ name: "payments", color: "d4c5f9" }],
+    assignees: ["you"], milestone: "Q2 · checkout",
+    checks: rollup({ ok: 4, skipped: 1 }), checksLoaded: true,
+    isCurrentBranch: true,
+  },
+  {
+    number: 461, title: "Drop the legacy coupon table",
+    author: "t-okafor", state: "OPEN", isDraft: false,
+    headRefName: "chore/drop-coupons-v1", baseRefName: "main",
+    url: "https://github.com/acme/shop-api/pull/461", updatedAt: ago(1_450),
+    reviewDecision: "APPROVED", additions: 9, deletions: 604, changedFiles: 8,
+    labels: [{ name: "cleanup", color: "bfd4f2" }],
+    assignees: ["t-okafor"], milestone: null,
+    checks: rollup({ ok: 5 }), checksLoaded: true,
+  },
+];
+
+/** #482 in full: the one the panel was built for. A human wants a change, a
+ *  bot wrote 46KB nobody will read, one thread is already settled and another
+ *  points at code that has since moved, and one check is red with a name. */
+const PR_482_THREADS: PrThread[] = [
+  {
+    id: "PRRT_demo482a", path: "src/services/pricing.ts", line: 61,
+    isResolved: false, isOutdated: false, originalLine: 61,
+    url: "https://github.com/acme/shop-api/pull/482#discussion_r1",
+    diffHunk: "@@ -58,6 +58,9 @@ export function cartTotal(cart: Cart) {\n   const subtotal = cart.items.reduce((s, i) => s + i.price * i.qty, 0);\n+  assertRounded(subtotal);\n   const discount = cart.coupon ? applyCoupon(subtotal, cart.coupon) : 0;",
+    comments: [
+      {
+        id: "IC_demo1", databaseId: 90001, author: "rmoreno", isBot: false, createdAt: ago(118),
+        body: "Rounding at the boundary is the right call. But `assertRounded` throws on legacy carts written before the migration — we still have ~2k of them in `orders_2024`. Can we guard it, or backfill first?",
+      },
+      {
+        id: "IC_demo2", databaseId: 90002, author: "jkwan", isBot: false, createdAt: ago(96),
+        body: "Backfill is a 40-minute job on prod. I'd rather guard and drop the guard next release.",
+      },
+    ],
+  },
+  {
+    id: "PRRT_demo482b", path: "src/routes/checkout.ts", line: null,
+    isResolved: false, isOutdated: true, originalLine: 118,
+    url: "https://github.com/acme/shop-api/pull/482#discussion_r2",
+    diffHunk: "@@ -115,7 +115,7 @@ router.post('/checkout', async (req, res) => {\n-  const total = cartTotal(cart);\n+  const total = round2(cartTotal(cart));",
+    comments: [{
+      id: "IC_demo3", databaseId: 90003, author: "t-okafor", isBot: false, createdAt: ago(300),
+      body: "Double rounding here — `cartTotal` already rounds now.",
+    }],
+  },
+  {
+    id: "PRRT_demo482c", path: "src/services/pricing.ts", line: 12,
+    isResolved: true, isOutdated: false, originalLine: 12,
+    url: "https://github.com/acme/shop-api/pull/482#discussion_r3",
+    diffHunk: "@@ -9,4 +9,6 @@\n+const CENTS = 100;",
+    comments: [{
+      id: "IC_demo4", databaseId: 90004, author: "jkwan", isBot: false, createdAt: ago(340),
+      body: "Name it `CENTS_PER_UNIT`? `CENTS` reads like a count.",
+    }, {
+      id: "IC_demo5", databaseId: 90005, author: "rmoreno", isBot: false, createdAt: ago(320),
+      body: "Renamed.",
+    }],
+  },
+];
+
+const PR_482_DETAIL: PrDetail = {
+  ...PR_SUMMARIES[0],
+  body: [
+    "Prices were rounded per line item, so a cart of 3 × €4.995 charged €15.00 while the",
+    "invoice said €14.99. Rounding moves to the cart boundary.",
+    "",
+    "- [x] Unit tests for the boundary case",
+    "- [x] Backfill script for `orders_2024`",
+    "- [ ] Soak on staging for 24h",
+    "",
+    "Fixes #477.",
+  ].join("\n"),
+  mergeable: "MERGEABLE", mergeState: "BLOCKED",
+  checklist: [
+    { checked: true, text: "Unit tests for the boundary case" },
+    { checked: true, text: "Backfill script for `orders_2024`" },
+    { checked: false, text: "Soak on staging for 24h" },
+  ],
+  reviewers: ["you", "jkwan"], assignees: ["rmoreno"],
+  reviews: [
+    { author: "rmoreno", isBot: false, state: "CHANGES_REQUESTED", submittedAt: ago(118),
+      body: "One blocker on legacy carts — see the thread on `pricing.ts`. Everything else reads well." },
+    { author: "jkwan", isBot: false, state: "COMMENTED", submittedAt: ago(96), body: "" },
+    { author: "acme-ci", isBot: true, state: "COMMENTED", submittedAt: ago(110), body: "Coverage report attached." },
+  ],
+  comments: [
+    { id: 70001, author: "t-okafor", isBot: false, createdAt: ago(180),
+      body: "Worth a changelog entry — this changes what customers are charged." },
+    { id: 70002, author: "acme-ci", isBot: true, createdAt: ago(110),
+      body: "<!-- coverage-report -->\n## Coverage report\n\n| File | Stmts | Branch | Funcs | Lines |\n| --- | --- | --- | --- | --- |\n" +
+        Array.from({ length: 180 }, (_, i) => `| src/module_${i}.ts | 98.${i % 10}% | 91.${i % 10}% | 100% | 98.${i % 10}% |`).join("\n"),
+      digest: "coverage 91.4% (+0.8%) · 6 files changed · 0 uncovered lines added" },
+  ],
+  threads: PR_482_THREADS,
+  commits: [
+    { oid: "a1c4e70f2b19d3c8", short: "a1c4e70", message: "Round at the cart boundary", author: "rmoreno", isMerge: false },
+    { oid: "b2d5f81a3c20e4d9", short: "b2d5f81", message: "Guard assertRounded for legacy carts", author: "rmoreno", isMerge: false },
+    { oid: "c3e6a92b4d31f5ea", short: "c3e6a92", message: "Backfill script for orders_2024", author: "rmoreno", isMerge: false },
+  ],
+  files: [
+    { path: "src/services/pricing.ts", additions: 34, deletions: 11, status: "modified", comments: 1 },
+    { path: "src/routes/checkout.ts", additions: 8, deletions: 6, status: "modified", comments: 1 },
+    { path: "src/lib/money.ts", additions: 22, deletions: 0, status: "added", comments: 0 },
+    { path: "scripts/backfill_orders_2024.ts", additions: 14, deletions: 0, status: "added", comments: 0 },
+    { path: "test/pricing.boundary.test.ts", additions: 6, deletions: 0, status: "added", comments: 0 },
+    { path: "src/legacy/coupon_v1.ts", additions: 0, deletions: 14, status: "removed", comments: 0 },
+  ],
+  checksAll: [
+    chk("lint", "success"), chk("typecheck", "success"), chk("unit", "success"),
+    chk("e2e (checkout)", "failure"), chk("license-scan", "skipped", "compliance"),
+  ],
+  forcePushedSinceReview: false, viewerDidAuthor: false, viewerRequested: true,
+};
+
+/** The other six: enough detail to open, plus the one state each exists to
+ *  show. `mergeState` is the interesting field — a disabled merge button that
+ *  cannot say why is the thing this panel was written to replace. */
+const PR_EXTRA: Record<number, Partial<PrDetail>> = {
+  479: {
+    body: "Memoises the price table for the life of a request. p95 on `/checkout` goes 73ms → 41ms on staging.",
+    mergeable: "MERGEABLE", mergeState: "CLEAN",
+    reviewers: ["rmoreno"],
+    reviews: [{ author: "rmoreno", isBot: false, state: "APPROVED", submittedAt: ago(50), body: "Nice. Ship it." }],
+    files: [
+      { path: "src/services/pricing.ts", additions: 28, deletions: 9, status: "modified", comments: 0 },
+      { path: "src/lib/requestCache.ts", additions: 11, deletions: 0, status: "added", comments: 0 },
+      { path: "test/pricing.cache.test.ts", additions: 2, deletions: 3, status: "modified", comments: 0 },
+    ],
+    checksAll: [chk("lint", "success"), chk("typecheck", "success"), chk("unit", "success"), chk("e2e (checkout)", "success"), chk("bench", "success")],
+  },
+  476: {
+    body: "Bumps `bun` from 1.1.34 to 1.1.38.\n\nOpened automatically by the dependency bot. Release notes are linked from the tag.",
+    mergeable: "MERGEABLE", mergeState: "CLEAN",
+    files: [
+      { path: "package.json", additions: 1, deletions: 1, status: "modified", comments: 0 },
+      { path: "bun.lockb", additions: 3, deletions: 3, status: "modified", comments: 0 },
+    ],
+    checksAll: [chk("lint", "success"), chk("typecheck", "success"), chk("unit", "success"), chk("e2e (checkout)", "success"), chk("bench", "success")],
+  },
+  471: {
+    body: "Draft. Spans around PreToolUse/PostToolUse so a held call shows up on the trace.\n\n- [ ] Decide on span names\n- [ ] Sampling rate",
+    mergeable: "UNKNOWN", mergeState: "DRAFT",
+    checklist: [{ checked: false, text: "Decide on span names" }, { checked: false, text: "Sampling rate" }],
+    files: [{ path: "src/otel/gate.ts", additions: 118, deletions: 0, status: "added", comments: 0 }],
+    checksAll: [chk("lint", "success"), chk("typecheck", "success"), chk("unit", "pending"), chk("e2e (checkout)", "pending"), chk("bench", "pending")],
+  },
+  468: {
+    body: "The checkout e2e fails about one run in nine under parallel load. Serialises the fixture teardown.",
+    mergeable: "MERGEABLE", mergeState: "UNSTABLE",
+    reviewers: ["you"],
+    reviews: [{ author: "t-okafor", isBot: false, state: "CHANGES_REQUESTED", submittedAt: ago(280),
+      body: "Serialising teardown hides it rather than fixing it — the fixture leaks a connection." }],
+    files: [
+      { path: "test/checkout.e2e.ts", additions: 41, deletions: 38, status: "modified", comments: 1 },
+      { path: "test/support/fixture.ts", additions: 22, deletions: 6, status: "modified", comments: 0 },
+    ],
+    checksAll: [chk("lint", "success"), chk("typecheck", "success"), chk("integration (postgres)", "failure"), chk("license-scan", "skipped", "compliance")],
+    // force-pushed after t-okafor reviewed: that review is stale and the panel says so
+    forcePushedSinceReview: true, viewerRequested: true,
+  },
+  465: {
+    body: "Retries a card charge once on a 5xx from the PSP before failing the order.",
+    mergeable: "CONFLICTING", mergeState: "DIRTY",
+    files: [
+      { path: "src/payments/charge.ts", additions: 61, deletions: 12, status: "modified", comments: 0 },
+      { path: "src/payments/retry.ts", additions: 30, deletions: 0, status: "added", comments: 0 },
+    ],
+    checksAll: [chk("lint", "success"), chk("typecheck", "success"), chk("unit", "success"), chk("e2e (checkout)", "success"), chk("license-scan", "skipped", "compliance")],
+    // you opened this one: GitHub will not let you review your own work
+    viewerDidAuthor: true,
+  },
+  461: {
+    body: "The v1 coupon table has had no writes since the v2 migration. Drops the table and its dead code paths.",
+    mergeable: "MERGEABLE", mergeState: "BEHIND",
+    reviews: [{ author: "rmoreno", isBot: false, state: "APPROVED", submittedAt: ago(1_400), body: "" }],
+    files: [
+      { path: "src/legacy/coupon_v1.ts", additions: 0, deletions: 412, status: "removed", comments: 0 },
+      { path: "migrations/031_drop_coupons_v1.sql", additions: 9, deletions: 0, status: "added", comments: 0 },
+    ],
+    checksAll: [chk("lint", "success"), chk("typecheck", "success"), chk("unit", "success"), chk("e2e (checkout)", "success"), chk("bench", "success")],
+  },
+};
+
+function prDetailOf(n: number): PrDetail | null {
+  if (n === 482) return PR_482_DETAIL;
+  const s = PR_SUMMARIES.find((p) => p.number === n);
+  if (!s) return null;
+  const x = PR_EXTRA[n] ?? {};
+  return {
+    ...s,
+    body: "", mergeable: "UNKNOWN", mergeState: "UNKNOWN", checklist: [],
+    reviewers: [], assignees: s.assignees, reviews: [], comments: [], threads: [],
+    commits: [{ oid: "d4f7b03c5e42a6fb", short: "d4f7b03", message: s.title, author: s.author, isMerge: false }],
+    files: [], checksAll: [],
+    forcePushedSinceReview: false, viewerDidAuthor: false, viewerRequested: false,
+    ...x,
+  };
+}
+
+/** A unified diff for the flagship, so the Files tab has something real to
+ *  render rather than an empty state. */
+const PR_482_DIFF = `diff --git a/src/services/pricing.ts b/src/services/pricing.ts
+index 3f1a9c2..8b4e7d1 100644
+--- a/src/services/pricing.ts
++++ b/src/services/pricing.ts
+@@ -56,10 +56,13 @@ import { round2 } from "../lib/money.ts";
+ export function cartTotal(cart: Cart) {
+-  const subtotal = cart.items.reduce((s, i) => s + round2(i.price * i.qty), 0);
+-  return applyCoupon(subtotal, cart.coupon);
++  const subtotal = cart.items.reduce((s, i) => s + i.price * i.qty, 0);
++  assertRounded(subtotal);
++  const discount = cart.coupon ? applyCoupon(subtotal, cart.coupon) : 0;
++  return round2(Math.max(0, subtotal - discount));
+ }
+diff --git a/src/lib/money.ts b/src/lib/money.ts
+new file mode 100644
+index 0000000..1d9c4a7
+--- /dev/null
++++ b/src/lib/money.ts
+@@ -0,0 +1,8 @@
++const CENTS_PER_UNIT = 100;
++
++/** Half-up to the minor unit. Banker's rounding under-charges at scale. */
++export const round2 = (n: number) =>
++  Math.round((n + Number.EPSILON) * CENTS_PER_UNIT) / CENTS_PER_UNIT;
++
++export const assertRounded = (n: number) => {
++  if (Math.abs(n * CENTS_PER_UNIT - Math.round(n * CENTS_PER_UNIT)) > 1e-6) throw new Error("unrounded money: " + n);
++};
+diff --git a/src/routes/checkout.ts b/src/routes/checkout.ts
+index 7c2b415..e91d3a8 100644
+--- a/src/routes/checkout.ts
++++ b/src/routes/checkout.ts
+@@ -113,9 +113,11 @@ router.post("/checkout", async (req, res) => {
+   const cart = await carts.load(req.body.cartId);
+-  const total = round2(cartTotal(cart));
+-  if (total <= 0) return res.status(400).json({ error: "empty cart" });
++  const total = cartTotal(cart);           // already rounded at the boundary
++  if (total <= 0) return res.status(400).json({ error: "empty cart" });
++  req.log.info({ cartId: cart.id, total }, "checkout total");
+   const charge = await psp.charge(cart.customerId, total);
+   return res.json({ orderId: charge.orderId, total });
+ });
+diff --git a/scripts/backfill_orders_2024.ts b/scripts/backfill_orders_2024.ts
+new file mode 100644
+index 0000000..5a1f8c3
+--- /dev/null
++++ b/scripts/backfill_orders_2024.ts
+@@ -0,0 +1,14 @@
++/* One-shot: re-round the 2024 orders written before the boundary change.
++   Idempotent — re-running it is a no-op once every row is clean. */
++import { db } from "../src/db.ts";
++import { round2 } from "../src/lib/money.ts";
++
++const rows = await db.query("select id, total from orders_2024 where rounded = false");
++for (const r of rows) {
++  await db.exec("update orders_2024 set total = ?, rounded = true where id = ?", [round2(r.total), r.id]);
++}
++console.log("backfilled " + rows.length + " orders");
+diff --git a/test/pricing.boundary.test.ts b/test/pricing.boundary.test.ts
+new file mode 100644
+index 0000000..2e7d90b
+--- /dev/null
++++ b/test/pricing.boundary.test.ts
+@@ -0,0 +1,6 @@
++test("three items at 4.995 charge what the invoice says", () => {
++  const cart = { items: [{ price: 4.995, qty: 3 }], coupon: null };
++  expect(cartTotal(cart)).toBe(14.99);
++});
+diff --git a/src/legacy/coupon_v1.ts b/src/legacy/coupon_v1.ts
+deleted file mode 100644
+index c81a5e0..0000000
+--- a/src/legacy/coupon_v1.ts
++++ /dev/null
+@@ -1,14 +0,0 @@
+-/* Superseded by applyCoupon in services/pricing.ts. */
+-export function applyCouponV1(subtotal: number, code: string | null) {
+-  if (!code) return subtotal;
+-  const pct = LEGACY_CODES[code];
+-  return pct ? subtotal - subtotal * pct : subtotal;
+-}
+`;
+
+export function prCapability() {
+  return { available: true, authed: true, login: "you" };
+}
+export function prList(root: string): PrListResponse {
+  // Only the fictional shop-api has a forge remote in this fixture; the other
+  // checkout answers "no pull requests here", which is a real state too.
+  const mine = /shop-api/.test(root);
+  return {
+    ok: true, repo: mine ? PR_REPO : null, prs: mine ? PR_SUMMARIES : [],
+    fetchedAt: Date.now() - 90_000, stale: false, loading: false, checksPending: false,
+  };
+}
+export function prDetail(n: number): { ok: boolean; detail?: PrDetail; error?: string } {
+  const d = prDetailOf(n);
+  return d ? { ok: true, detail: d } : { ok: false, error: "no such pull request in the demo" };
+}
+export function prDiff(n: number): { ok: boolean; text?: string; error?: string } {
+  return n === 482 ? { ok: true, text: PR_482_DIFF } : { ok: true, text: "" };
+}
