@@ -15,7 +15,11 @@ let setChatEnginePref: typeof import("../src/lib/chatEnginePref.ts")["setChatEng
 let KEY: string;
 beforeAll(async () => {
   (globalThis as any).location ??= new URL("http://localhost:5173/");
-  (globalThis as any).localStorage ??= {
+  // Assigned, not `??=`. Several other test files install a NO-OP localStorage
+  // (`setItem: () => {}`), and under `bun test` all of them share one process —
+  // so whichever loads first decides whether writes here go anywhere at all.
+  // This test reads back what it writes, so it has to own the store.
+  (globalThis as any).localStorage = {
     getItem: (k: string) => cell.get(k) ?? null,
     setItem: (k: string, v: string) => { cell.set(k, v); },
     removeItem: (k: string) => { cell.delete(k); },

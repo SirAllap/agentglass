@@ -60,7 +60,7 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
 import { chatSend, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
-import { paneAlive, startPaneSweeper } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope } from "./config.ts";
 import { hookStatus, applyHooks } from "./hooksetup.ts";
@@ -1101,6 +1101,21 @@ const server = Bun.serve<WsData>({
     // The command that hands a chat to the user's own terminal. Server-side
     // because the socket name and flags are the engine's business, and a string
     // the UI assembled itself would drift the first time either changed.
+    // Closing a chat gives its warm CLI back. Safe because it destroys nothing:
+    // the conversation is on disk in the transcript, and resuming relaunches the
+    // pane with `--resume`. Without this the ~380MB sits there until the idle
+    // sweeper notices, half an hour after you said you were done with it.
+    if (pathname === "/chat/pane/close" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      const id = typeof b.session === "string" ? b.session : "";
+      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
+      const was = await paneAlive(id);
+      if (was) await killPane(id);
+      forgetPane(id);
+      return json({ killed: was });
+    }
     if (pathname === "/chat/attach") {
       const id = url.searchParams.get("session") || "";
       const pane = paneEngineCapability();

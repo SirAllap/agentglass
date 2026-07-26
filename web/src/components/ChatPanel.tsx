@@ -16,6 +16,7 @@ import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
 import { ToolFeed } from "./ToolFeed.tsx";
+import { useDialogs } from "./ConfirmDialog.tsx";
 import { buildRows } from "../lib/toolTree.ts";
 import { chatToMarkdown } from "../lib/chatTranscript.ts";
 import { fmtTime } from "../lib/format.ts";
@@ -489,6 +490,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   const [activeId, setActiveId] = useState(restoredActiveId);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [enabled, setEnabled] = useState(true);
+  // Only used on one path: closing a chat that is still mid-turn.
+  const { ask, dialog } = useDialogs();
   // The server silently downgrades bypassPermissions unless the operator opted
   // in (AGENTGLASS_CHAT_BYPASS=1) — don't offer a mode that wouldn't stick.
   const [bypassAllowed, setBypassAllowed] = useState(false);
@@ -658,11 +661,27 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [active]);
 
-  const drop = useCallback((id: string) => {
-    const rest = listChats().filter((c) => c.id !== id);
+  const drop = useCallback(async (id: string) => {
+    // Closing a chat also releases its tmux pane, which costs nothing when the
+    // chat is idle — the transcript survives and Resume relaunches it. Mid-turn
+    // is the one case that throws away real work: the agent may be halfway
+    // through editing files or running a build, and nothing else in the app
+    // would say so. Ask, and only here.
+    const c = getChat(id);
+    if (c?.sending) {
+      const ok = await ask({
+        title: "Close this chat while it is still working?",
+        body: `"${c.title}" has a turn in progress. Closing stops it, and anything it was part-way through is left as it is.\n\nThe conversation itself is kept — you can pick it back up from Resume.`,
+        confirmLabel: "Close and stop",
+        cancelLabel: "Keep it open",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    const rest = listChats().filter((x) => x.id !== id);
     closeChat(id);
     if (activeIdRef.current === id) setActiveId(rest[rest.length - 1]?.id ?? "");
-  }, []);
+  }, [ask]);
 
   const submit = () => {
     if (!active) return;
@@ -1204,6 +1223,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                   </div>
                 </div>
                 </div>
+      {/* The mid-turn close confirmation. Mounted here so it renders whether or
+          not the panel is the active view. */}
+      {dialog}
     </div>
   );
 }

@@ -558,6 +558,27 @@ export function closeChat(id: string) {
   const c = chats.get(id);
   if (!c) return;
   c.abort?.abort(); // a closed tab must not keep a stream running
+  /*
+   * Give the pane engine's warm CLI back.
+   *
+   * Closing a tab is the clearest "done with this" there is, and a pane holds
+   * ~380MB for as long as it lives. Left alone it survives until the idle
+   * sweeper reaches it half an hour later, which is a long time to hold memory
+   * for a chat the user has already dismissed — and it is visible: `tmux -L
+   * agentglass ls` keeps listing sessions for chats that are gone.
+   *
+   * Done without asking because it destroys nothing. The conversation is on
+   * disk in the session's transcript; Resume brings it back and relaunches the
+   * pane with `--resume`. The only thing thrown away is the warm process, which
+   * costs one slower turn to rebuild. A confirmation for that would be a dialog
+   * on every close for a decision with no downside — the one case that DOES
+   * lose work, closing mid-turn, is confirmed by the caller instead.
+   *
+   * Fire and forget: a chat must close instantly whether or not the server is
+   * reachable, and a pane nobody reclaimed is exactly the state the idle
+   * sweeper already exists to handle.
+   */
+  if (c.sessionId && c.engine === "tmux") void api.chatPaneClose(c.sessionId).catch(() => {});
   for (const a of c.attachments) URL.revokeObjectURL(a.url);
   chats.delete(id);
   emit();

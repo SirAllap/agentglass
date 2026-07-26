@@ -447,6 +447,9 @@ const realApi = {
    *  pane is up right now. Assembled server-side so the socket name never has to
    *  be duplicated here. */
   chatAttach: (session: string) => get<{ command: string; live: boolean }>(`/chat/attach?session=${encodeURIComponent(session)}`),
+  /** Give a chat's warm CLI back. Destroys no conversation — the transcript
+   *  stays on disk and resuming relaunches the pane with `--resume`. */
+  chatPaneClose: (session: string) => post<{ killed: boolean }>("/chat/pane/close", { session }),
   chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     let res: Response;
     // A fetch that throws before a response has arrived never reached the
@@ -584,6 +587,7 @@ const demoApi: typeof realApi = {
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
   chatEnabled: () => D({ enabled: false, tmuxEngine: { available: false, reason: "the demo runs no local processes", defaultOn: false } }),
   chatAttach: (_session: string) => D({ command: "", live: false }),
+  chatPaneClose: (_session: string) => D({ killed: false }),
   chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine }, onEvent: (o: Record<string, unknown>) => void) => {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });
