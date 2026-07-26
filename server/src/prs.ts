@@ -22,7 +22,7 @@ import { inScope } from "./config.ts";
 import type {
   PrRepoId, PrSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
-  PrAuthored, PrReaction, PrEvent,
+  PrAuthored, PrReaction, PrEvent, PrCheckJob,
 } from "../../shared/types.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
@@ -795,6 +795,37 @@ export async function viewCounts(rootIn: unknown, stateIn: unknown): Promise<{ o
   };
   countCache.set(key, { at: Date.now(), counts });
   return { ok: true, counts };
+}
+
+/**
+ * What `@` and `#` can complete to.
+ *
+ * Typing a mention or an issue reference by hand means leaving the panel to go
+ * look the name up, which is the thing this is trying to avoid. Both lists are
+ * small, change slowly, and are cached for a few minutes — the point is that
+ * the dropdown is instant, not that it is live to the second.
+ */
+export type PrMentions = { users: string[]; issues: { number: number; title: string }[] };
+const mentionCache = new Map<string, { at: number; data: PrMentions }>();
+const MENTION_TTL_MS = 5 * 60_000;
+
+export async function mentionables(rootIn: unknown): Promise<{ ok: boolean; data?: PrMentions; error?: string }> {
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const hit = mentionCache.get(repo.key);
+  if (hit && Date.now() - hit.at < MENTION_TTL_MS) return { ok: true, data: hit.data };
+  const [collab, issues] = await Promise.all([
+    ghJson<any[]>(["api", `repos/${repo.nameWithOwner}/collaborators?per_page=100`]),
+    ghJson<any[]>(["api", `repos/${repo.nameWithOwner}/issues?state=all&per_page=50&sort=updated`]),
+  ]);
+  const data: PrMentions = {
+    users: (collab ?? []).map((c: any) => String(c?.login ?? "")).filter(Boolean),
+    issues: (issues ?? [])
+      .filter((i: any) => typeof i?.number === "number")
+      .map((i: any) => ({ number: i.number, title: String(i.title ?? "") })),
+  };
+  mentionCache.set(repo.key, { at: Date.now(), data });
+  return { ok: true, data };
 }
 
 /**
@@ -1748,6 +1779,90 @@ export async function updateBranch(rootIn: unknown, number: unknown): Promise<Pr
 
 /** Re-run the failed jobs on the PR's head — the usual answer to a red run,
  *  and today the usual reason to leave the app. */
+/**
+ * The log of one CI job, in the app.
+ *
+ * The panel used to say "the log itself lives on GitHub — this panel does not
+ * download run logs", which meant every red check sent you to a browser. It is
+ * one REST call. Capped, because a chatty job runs to megabytes and this is a
+ * panel, not a log store: the TAIL is kept, since the failure is at the end.
+ */
+const LOG_MAX_BYTES = 400_000;
+const logCache = new Map<string, { at: number; text: string }>();
+const LOG_TTL_MS = 5 * 60_000;
+
+export async function jobLog(rootIn: unknown, jobIdIn: unknown): Promise<{ ok: boolean; text?: string; truncated?: boolean; error?: string }> {
+  const jobId = String(jobIdIn ?? "");
+  if (!/^\d+$/.test(jobId)) return { ok: false, error: "invalid job" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const key = `${repo.key}#${jobId}`;
+  const hit = logCache.get(key);
+  if (hit && Date.now() - hit.at < LOG_TTL_MS) return { ok: true, text: hit.text };
+  const r = await gh(["api", `repos/${repo.nameWithOwner}/actions/jobs/${jobId}/logs`]);
+  if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "could not read the log" };
+  const full = r.stdout;
+  const truncated = full.length > LOG_MAX_BYTES;
+  const text = truncated ? full.slice(full.length - LOG_MAX_BYTES) : full;
+  logCache.set(key, { at: Date.now(), text });
+  return { ok: true, text, truncated };
+}
+
+/**
+ * The jobs behind this pull request's checks, so a check can be opened.
+ *
+ * A check run's `detailsUrl` carries the run id; the jobs under it are what
+ * actually have logs and what a single re-run targets.
+ */
+export async function checkJobs(rootIn: unknown, number: unknown): Promise<{ ok: boolean; jobs?: PrCheckJob[]; error?: string }> {
+  const n = Number(number);
+  if (!Number.isInteger(n) || n <= 0) return { ok: false, error: "invalid pull request number" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const det = await prDetail(rootIn, n);
+  if (!det.ok || !det.detail) return { ok: false, error: det.error };
+  const runIds = new Set<string>();
+  for (const c of det.detail.checksAll) {
+    const m = /\/actions\/runs\/(\d+)/.exec(c.url || "");
+    if (m) runIds.add(m[1]!);
+  }
+  const jobs: PrCheckJob[] = [];
+  for (const id of [...runIds].slice(0, 6)) {
+    const r = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/actions/runs/${id}/jobs`, "--paginate"]);
+    for (const j of r?.jobs ?? []) {
+      jobs.push({
+        id: String(j.id),
+        runId: id,
+        name: String(j.name ?? ""),
+        status: String(j.status ?? ""),
+        conclusion: j.conclusion ?? null,
+        startedAt: j.started_at ?? null,
+        completedAt: j.completed_at ?? null,
+        url: j.html_url ?? "",
+      });
+    }
+  }
+  return { ok: true, jobs };
+}
+
+/** Re-run everything, only what failed, or one job. */
+export async function rerunJobs(rootIn: unknown, what: unknown, id: unknown): Promise<PrActionResult> {
+  const g = writeGuard(rootIn); if (g) return g;
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const target = String(id ?? "");
+  if (!/^\d+$/.test(target)) return { ok: false, error: "invalid run or job" };
+  const args = what === "job"
+    ? ["api", "--method", "POST", `repos/${repo.nameWithOwner}/actions/jobs/${target}/rerun`]
+    : what === "all"
+      ? ["api", "--method", "POST", `repos/${repo.nameWithOwner}/actions/runs/${target}/rerun`]
+      : ["api", "--method", "POST", `repos/${repo.nameWithOwner}/actions/runs/${target}/rerun-failed-jobs`];
+  const r = await gh(args);
+  if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "could not start the re-run" };
+  invalidate(repo);
+  return { ok: true, detail: what === "job" ? "Re-running that job" : what === "all" ? "Re-running every job" : "Re-running the failed jobs" };
+}
+
 export async function rerunFailedChecks(rootIn: unknown, number: unknown): Promise<PrActionResult> {
   const g = writeGuard(rootIn); if (g) return g;
   const n = Number(number);
@@ -1981,6 +2096,46 @@ export async function commitDiff(rootIn: unknown, shaIn: unknown): Promise<{ ok:
  * `position` (an offset within the diff), which is fragile the moment the
  * branch moves; the line number survives a rebase.
  */
+/**
+ * One line comment, on its own, without opening a review.
+ *
+ * GitHub offers both — "Add single comment" and "Start a review" — and only the
+ * second existed here, so a one-line remark meant queueing a draft, going to the
+ * review tab and submitting a verdict you did not want to give.
+ */
+export async function addLineComment(rootIn: unknown, numberIn: unknown, c: {
+  path?: unknown; line?: unknown; startLine?: unknown; side?: unknown; body?: unknown;
+}): Promise<PrActionResult> {
+  const g = writeGuard(rootIn); if (g) return g;
+  const n = Number(numberIn);
+  if (!Number.isInteger(n) || n <= 0) return { ok: false, error: "invalid pull request number" };
+  const path = typeof c.path === "string" ? c.path : "";
+  const line = Number(c.line);
+  const text = typeof c.body === "string" ? c.body.trim() : "";
+  if (!path || !Number.isInteger(line) || line <= 0) return { ok: false, error: "invalid line" };
+  if (!text) return { ok: false, error: "a comment cannot be empty" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const side = c.side === "LEFT" ? "LEFT" : "RIGHT";
+  const start = Number(c.startLine);
+  const payload: Record<string, unknown> = { path, line, side, body: text };
+  if (Number.isInteger(start) && start > 0 && start < line) { payload.start_line = start; payload.start_side = side; }
+  // The single-comment endpoint needs the commit it applies to.
+  const head = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]);
+  const sha = head?.head?.sha;
+  if (!sha) return { ok: false, error: "could not read the head commit" };
+  payload.commit_id = sha;
+  const r = await gh(
+    ["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/${n}/comments`, "--input", "-"],
+    undefined, JSON.stringify(payload),
+  );
+  invalidate(repo, n);
+  if (r.code !== 0) {
+    return { ok: false, error: (r.stderr || r.stdout).trim().split("\n").find((l) => l.trim()) || "the comment was not accepted" };
+  }
+  return { ok: true, detail: `commented on ${path}:${payload.start_line ? `${payload.start_line}-${line}` : line}` };
+}
+
 export async function submitReviewWith(
   rootIn: unknown, numberIn: unknown, verb: unknown, body: unknown, commentsIn: unknown,
 ): Promise<PrActionResult> {
@@ -1990,13 +2145,27 @@ export async function submitReviewWith(
   const event = verb === "approve" ? "APPROVE" : verb === "request_changes" ? "REQUEST_CHANGES" : verb === "comment" ? "COMMENT" : null;
   if (!event) return { ok: false, error: "choose approve, request changes, or comment" };
 
-  const comments: { path: string; line: number; side: string; body: string }[] = [];
+  // A comment can cover a RANGE, which is how you say "this whole block is the
+  // problem" instead of pinning it on one arbitrary line. GitHub takes
+  // `start_line`/`start_side` alongside `line`/`side`; sending only `line` (all
+  // this could do before) collapsed every multi-line remark to its last line.
+  type OutComment = { path: string; line: number; side: string; body: string; start_line?: number; start_side?: string };
+  const comments: OutComment[] = [];
   for (const c of Array.isArray(commentsIn) ? commentsIn : []) {
     const path = typeof c?.path === "string" ? c.path : "";
     const line = Number(c?.line);
     const text = typeof c?.body === "string" ? c.body.trim() : "";
     if (!path || !Number.isInteger(line) || line <= 0 || !text) continue;
-    comments.push({ path, line, side: c?.side === "LEFT" ? "LEFT" : "RIGHT", body: text });
+    const side = c?.side === "LEFT" ? "LEFT" : "RIGHT";
+    const out: OutComment = { path, line, side, body: text };
+    const start = Number(c?.startLine);
+    // GitHub rejects a start that is not strictly before the end, and a range
+    // that spans both sides of the diff.
+    if (Number.isInteger(start) && start > 0 && start < line) {
+      out.start_line = start;
+      out.start_side = c?.startSide === "LEFT" ? "LEFT" : side;
+    }
+    comments.push(out);
   }
 
   const text = String(body ?? "").trim();

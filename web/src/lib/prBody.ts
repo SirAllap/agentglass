@@ -39,7 +39,18 @@ function decodeEntities(s: string): string {
  */
 const SLOT = "";
 
-export function renderInline(raw: string): string {
+/** The shortcodes that actually turn up in pull requests. Not the whole set —
+ *  a thousand-entry table for a handful of real uses is weight for nothing. */
+const EMOJI: Record<string, string> = {
+  tada: "🎉", rocket: "🚀", sparkles: "✨", bug: "🐛", fire: "🔥", warning: "⚠️",
+  white_check_mark: "✅", heavy_check_mark: "✔️", x: "❌", "+1": "👍", "-1": "👎",
+  eyes: "👀", heart: "❤️", pray: "🙏", clap: "👏", wrench: "🔧", hammer: "🔨",
+  memo: "📝", books: "📚", lock: "🔒", zap: "⚡", boom: "💥", art: "🎨",
+  recycle: "♻️", construction: "🚧", bulb: "💡", mag: "🔍", package: "📦",
+  robot: "🤖", ok_hand: "👌",
+};
+
+export function renderInline(raw: string, autolinkRepo?: string): string {
   const spans: string[] = [];
   let s = decodeEntities(raw).replace(/`([^`]+)`/g, (_m, code: string) => {
     spans.push(`<code>${escapeHtml(code)}</code>`);
@@ -57,6 +68,22 @@ export function renderInline(raw: string): string {
   s = s.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)/g,
     (_m, pre: string, href: string) => `${pre}<a href="${href}" target="_blank" rel="noreferrer noopener">${href}</a>`);
 
+  // `:tada:` and friends. GitHub renders these everywhere and a bot's release
+  // notes are full of them; unrendered they read as punctuation soup.
+  s = s.replace(/:([a-z0-9_+-]{2,32}):/g, (m, name: string) => EMOJI[name] ?? m);
+
+  // `#123`, `owner/repo#123`, and bare SHAs — the references a pull request
+  // body is mostly made of. Linked against the repo this body belongs to, which
+  // the caller supplies; without it they stay as text rather than guessing.
+  if (autolinkRepo) {
+    s = s.replace(/(^|[\s(])(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/g,
+      (_m, pre: string, repo: string | undefined, num: string) =>
+        `${pre}<a href="https://github.com/${repo ?? autolinkRepo}/issues/${num}" target="_blank" rel="noreferrer noopener">${repo ?? ""}#${num}</a>`);
+    s = s.replace(/(^|[\s(])([0-9a-f]{7,40})\b/g,
+      (_m, pre: string, sha: string) =>
+        `${pre}<a href="https://github.com/${autolinkRepo}/commit/${sha}" target="_blank" rel="noreferrer noopener"><code>${sha.slice(0, 7)}</code></a>`);
+  }
+
   return s.replace(new RegExp(`${SLOT}(\\d+)${SLOT}`, "g"), (_m, i: string) => spans[Number(i)] ?? "");
 }
 
@@ -70,29 +97,76 @@ export type MdBlock =
   | { kind: "table"; head: string[]; rows: string[][] }
   | { kind: "quote"; html: string }
   | { kind: "image"; src: string; alt: string }
+  /** `<details><summary>…` — what every bot folds its output into. Rendered as
+   *  a real disclosure rather than escaped tags. */
+  | { kind: "details"; summary: string; blocks: MdBlock[] }
+  /** GitHub's callouts: `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`,
+   *  `[!CAUTION]`. */
+  | { kind: "alert"; level: "note" | "tip" | "important" | "warning" | "caution"; html: string }
+  /** A ```suggestion block: the replacement the author is proposing for the
+   *  lines the comment is anchored to. Its own kind because it is a change to
+   *  accept, not a snippet to read. */
+  | { kind: "suggestion"; text: string }
   | { kind: "rule" };
 
 /** A table cell is markdown too. Returning the raw text put `**Drift**` on
  *  screen with its asterisks — the bold that a RED/GREEN comparison leans on
  *  was exactly what stopped rendering. */
-const cells = (l: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => renderInline(c.trim()));
+const cells = (l: string, repo?: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => renderInline(c.trim(), repo));
 const isDivider = (l: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
 const IMG_MD = /^\s*!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)\s*$/;
 const IMG_HTML = /<img[^>]*\bsrc="(https?:\/\/[^"]+)"[^>]*>/i;
 
-export function parseBody(body: string): MdBlock[] {
+export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
   const out: MdBlock[] = [];
   const lines = (body || "").split(/\r?\n/);
   let para: string[] = [];
 
   const flushPara = () => {
     if (!para.length) return;
-    out.push({ kind: "para", html: para.map(renderInline).join(" ") });
+    out.push({ kind: "para", html: para.map((x) => renderInline(x, autolinkRepo)).join(" ") });
     para = [];
   };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
+
+    // <details>: take everything up to the matching </details> and parse it as
+    // its own little document, so a folded bot comment keeps its lists and code.
+    const det = line.match(/^\s*<details[^>]*>\s*$/i);
+    if (det) {
+      flushPara();
+      let summary = "";
+      const inner: string[] = [];
+      let depth = 1;
+      i++;
+      for (; i < lines.length; i++) {
+        const l = lines[i]!;
+        if (/^\s*<details[^>]*>\s*$/i.test(l)) depth++;
+        if (/^\s*<\/details>\s*$/i.test(l)) { depth--; if (depth === 0) break; }
+        const sum = l.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i);
+        if (sum && !summary) { summary = sum[1]!.replace(/<[^>]+>/g, "").trim(); continue; }
+        inner.push(l);
+      }
+      out.push({ kind: "details", summary: summary || "Details", blocks: parseBody(inner.join("\n"), autolinkRepo) });
+      continue;
+    }
+
+    // > [!NOTE] and friends. The first line names the kind; the rest is the body.
+    const alert = line.match(/^\s*>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*$/i);
+    if (alert) {
+      flushPara();
+      const body: string[] = [];
+      while (i + 1 < lines.length && /^\s*>/.test(lines[i + 1]!)) {
+        body.push(lines[++i]!.replace(/^\s*>\s?/, ""));
+      }
+      out.push({
+        kind: "alert",
+        level: alert[1]!.toLowerCase() as "note",
+        html: body.map((x) => renderInline(x, autolinkRepo)).join(" "),
+      });
+      continue;
+    }
 
     const fence = line.match(/^\s*```+\s*(\S*)/);
     if (fence) {
@@ -101,7 +175,9 @@ export function parseBody(body: string): MdBlock[] {
       const buf: string[] = [];
       i++;
       while (i < lines.length && !/^\s*```/.test(lines[i]!)) { buf.push(lines[i]!); i++; }
-      out.push({ kind: "code", text: buf.join("\n"), lang });
+      // ```suggestion is a proposal, not a sample.
+      if ((lang || "").toLowerCase() === "suggestion") out.push({ kind: "suggestion", text: buf.join("\n") });
+      else out.push({ kind: "code", text: buf.join("\n"), lang });
       continue;
     }
 
@@ -110,7 +186,7 @@ export function parseBody(body: string): MdBlock[] {
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flushPara(); out.push({ kind: "rule" }); continue; }
 
     const h = line.match(/^(#{1,6})\s+(.*)$/);
-    if (h) { flushPara(); out.push({ kind: "heading", level: h[1]!.length, html: renderInline(h[2]!) }); continue; }
+    if (h) { flushPara(); out.push({ kind: "heading", level: h[1]!.length, html: renderInline(h[2]!, autolinkRepo) }); continue; }
 
     const img = line.match(IMG_MD);
     if (img) { flushPara(); out.push({ kind: "image", src: img[2]!, alt: img[1]! }); continue; }
@@ -125,10 +201,10 @@ export function parseBody(body: string): MdBlock[] {
     // is not a table, and treating it as one ate the sentence.
     if (line.includes("|") && i + 1 < lines.length && isDivider(lines[i + 1]!)) {
       flushPara();
-      const head = cells(line);
+      const head = cells(line, autolinkRepo);
       const rows: string[][] = [];
       i += 2;
-      while (i < lines.length && lines[i]!.includes("|") && lines[i]!.trim()) { rows.push(cells(lines[i]!)); i++; }
+      while (i < lines.length && lines[i]!.includes("|") && lines[i]!.trim()) { rows.push(cells(lines[i]!, autolinkRepo)); i++; }
       i--;
       out.push({ kind: "table", head, rows });
       continue;
@@ -139,7 +215,7 @@ export function parseBody(body: string): MdBlock[] {
       const quoted: string[] = [];
       while (i < lines.length && /^\s*>\s?/.test(lines[i]!)) { quoted.push(lines[i]!.replace(/^\s*>\s?/, "")); i++; }
       i--;
-      out.push({ kind: "quote", html: quoted.map(renderInline).join(" ") });
+      out.push({ kind: "quote", html: quoted.map((x) => renderInline(x, autolinkRepo)).join(" ") });
       continue;
     }
 
@@ -154,7 +230,7 @@ export function parseBody(body: string): MdBlock[] {
           // An indented continuation belongs to the item above it — GitHub's
           // own checklist wraps this way and it read as a stray paragraph.
           if (items.length && lines[i]!.trim() && /^\s{2,}\S/.test(lines[i]!)) {
-            items[items.length - 1]!.html += " " + renderInline(lines[i]!.trim());
+            items[items.length - 1]!.html += " " + renderInline(lines[i]!.trim(), autolinkRepo);
             i++;
             continue;
           }
@@ -163,8 +239,8 @@ export function parseBody(body: string): MdBlock[] {
         const depth = Math.min(4, Math.floor(m[1]!.replace(/\t/g, "  ").length / 2));
         const task = m[3]!.match(/^\[([ xX])\]\s+(.*)$/);
         items.push(task
-          ? { html: renderInline(task[2]!), checked: task[1]!.toLowerCase() === "x", depth }
-          : { html: renderInline(m[3]!), depth });
+          ? { html: renderInline(task[2]!, autolinkRepo), checked: task[1]!.toLowerCase() === "x", depth }
+          : { html: renderInline(m[3]!, autolinkRepo), depth });
         i++;
       }
       i--;

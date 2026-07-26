@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob } from "../../../shared/types.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -363,6 +363,23 @@ const realApi = {
     post<PrActionResult>("/prs/milestone", { root, number, title }),
   prList: (root: string, filter: "mine" | "review" | "all", state: "open" | "closed" | "all" = "open", force = false, after?: string) =>
     get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}${after ? `&after=${encodeURIComponent(after)}` : ""}`),
+  /** Who `@` can complete to, and which issues `#` can. */
+  prMentions: (root: string) =>
+    get<{ ok: boolean; data?: { users: string[]; issues: { number: number; title: string }[] }; error?: string }>(
+      `/prs/mentions?root=${encodeURIComponent(root)}`),
+  /** One line comment, posted on its own — no review, no verdict. */
+  prLineComment: (root: string, number: number, c: { path: string; line: number; startLine?: number; side?: "LEFT" | "RIGHT"; body: string }) =>
+    post<PrActionResult>("/prs/line-comment", { root, number, ...c }),
+  /** One CI job's log, read in the app instead of sending you to a browser. */
+  prJobLog: (root: string, job: string) =>
+    get<{ ok: boolean; text?: string; truncated?: boolean; error?: string }>(
+      `/prs/job-log?root=${encodeURIComponent(root)}&job=${encodeURIComponent(job)}`),
+  prCheckJobs: (root: string, number: number) =>
+    get<{ ok: boolean; jobs?: PrCheckJob[]; error?: string }>(
+      `/prs/check-jobs?root=${encodeURIComponent(root)}&number=${number}`),
+  /** Re-run everything, only the failures, or a single job. */
+  prRerunJobs: (root: string, what: "all" | "failed" | "job", id: string) =>
+    post<PrActionResult>("/prs/rerun-jobs", { root, what, id }),
   /** Exact totals for every saved view, in one request. */
   prCounts: (root: string, state: "open" | "closed" | "all") =>
     get<{ ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }>(
@@ -383,7 +400,7 @@ const realApi = {
    *  request — GitHub's "pending review", which arrives as one notification
    *  instead of a scatter. */
   prReviewWith: (root: string, number: number, verb: "approve" | "request_changes" | "comment", body: string,
-    comments: { path: string; line: number; side?: "LEFT" | "RIGHT"; body: string }[]) =>
+    comments: { path: string; line: number; startLine?: number; side?: "LEFT" | "RIGHT"; startSide?: "LEFT" | "RIGHT"; body: string }[]) =>
     post<PrActionResult>("/prs/review-with", { root, number, verb, body, comments }),
   prComment: (root: string, number: number, body: string) => post<PrActionResult>("/prs/comment", { root, number, body }),
   prReply: (root: string, number: number, commentId: number, body: string) => post<PrActionResult>("/prs/reply", { root, number, commentId, body }),
@@ -567,6 +584,11 @@ const demoApi: typeof realApi = {
   // page calls out as new was dead in the demo that page links to.
   prCapability: (_force?: boolean) => D(demo.prCapability()),
   prList: (root: string, filter: "mine" | "review" | "all", _state?: "open" | "closed" | "all", _force?: boolean, _after?: string) => D<PrListResponse>(demo.prList(root, filter)),
+  prMentions: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; data?: { users: string[]; issues: { number: number; title: string }[] }; error?: string }),
+  prLineComment: () => D(demoPrAction()),
+  prJobLog: () => D({ ok: false, error: "not available in the demo" }),
+  prCheckJobs: () => D({ ok: false, error: "not available in the demo" } as { ok: boolean; jobs?: PrCheckJob[]; error?: string }),
+  prRerunJobs: () => D(demoPrAction()),
   prCounts: (_r: string, _s: "open" | "closed" | "all") => D({ ok: false, error: "not available in the demo" } as { ok: boolean; counts?: { review: number; mine: number; failing: number; ready: number; all: number }; error?: string }),
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
   prDiff: (_root: string, number: number) => D(demo.prDiff(number)),

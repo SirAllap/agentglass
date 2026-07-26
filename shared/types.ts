@@ -1197,6 +1197,19 @@ export interface PrEvent {
   url?: string;
 }
 
+/** One CI job behind a check — what actually has a log, and what a single
+ *  re-run targets. */
+export interface PrCheckJob {
+  id: string;
+  runId: string;
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  url: string;
+}
+
 export interface PrChecklistItem { checked: boolean; text: string }
 
 export interface PrDetail extends PrSummary {

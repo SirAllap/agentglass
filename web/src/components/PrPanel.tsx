@@ -19,17 +19,17 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrCheck, GitRepoRef, FileChange,
-  PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile,
+  PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob,
 } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
-import { SCROLLBAR_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle } from "./ChangesModal.tsx";
+import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
@@ -73,7 +73,16 @@ const SEEN_KEY = "agentglass.pr.seen";
 const DRAFT_KEY = "agentglass.pr.drafts";
 
 /** A line comment written but not yet sent — GitHub's "pending review". */
-export interface DraftComment { path: string; line: number; body: string }
+export interface DraftComment {
+  path: string;
+  /** The last line of the comment — GitHub's `line`. */
+  line: number;
+  /** The first, when the comment covers a range. Absent for a single line. */
+  startLine?: number;
+  /** Which side of the diff: RIGHT is the new file, LEFT the old. */
+  side?: "LEFT" | "RIGHT";
+  body: string;
+}
 
 const loadMap = <T,>(k: string): Record<string, T> => {
   try { return JSON.parse(localStorage.getItem(k) || "{}"); } catch { return {}; }
@@ -244,6 +253,14 @@ export const MD_CSS = `
 .agx-md th{text-align:left;padding:.4em .8em;background:color-mix(in srgb,var(--border) 22%,transparent);color:var(--text);font-weight:600;border:1px solid color-mix(in srgb,var(--border) 40%,transparent);white-space:nowrap}
 .agx-md td{padding:.4em .8em;border:1px solid color-mix(in srgb,var(--border) 30%,transparent);vertical-align:top}
 .agx-md tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--border) 10%,transparent)}
+.agx-md .agx-details{margin:0 0 .9em;border:1px solid color-mix(in srgb,var(--border) 40%,transparent);border-radius:6px;padding:.5em .8em;background:color-mix(in srgb,var(--border) 8%,transparent)}
+.agx-md .agx-details>summary{cursor:pointer;color:var(--text);font-weight:600;list-style:revert}
+.agx-md .agx-details>div{margin-top:.7em}
+.agx-md .agx-suggestion{margin:0 0 .9em;border:1px solid color-mix(in srgb,var(--success) 45%,transparent);border-radius:6px;overflow:hidden}
+.agx-md .agx-suggestion-head{font-size:.8em;letter-spacing:.05em;text-transform:uppercase;padding:.35em .8em;color:var(--success);background:color-mix(in srgb,var(--success) 12%,transparent)}
+.agx-md .agx-suggestion pre{margin:0;border:0;border-radius:0;background:color-mix(in srgb,var(--success) 6%,transparent)}
+.agx-md .agx-alert{margin:0 0 .9em;padding:.6em .9em;border-left:3px solid;border-radius:0 6px 6px 0;display:flex;flex-direction:column;gap:.3em}
+.agx-md .agx-alert>b{font-size:.82em;letter-spacing:.06em}
 .agx-md hr{border:0;border-top:1px solid color-mix(in srgb,var(--border) 40%,transparent);margin:1.2em 0}
 .agx-md figure{margin:0 0 .9em}
 .agx-md figure img{max-width:100%;border-radius:6px;border:1px solid color-mix(in srgb,var(--border) 40%,transparent);display:block}
@@ -276,6 +293,39 @@ function Block({ b }: { b: MdBlock }) {
           <thead><tr>{b.head.map((h, i) => <th key={i} dangerouslySetInnerHTML={{ __html: h }} />)}</tr></thead>
           <tbody>{b.rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} dangerouslySetInnerHTML={{ __html: c }} />)}</tr>)}</tbody>
         </table>
+      </div>
+    );
+  }
+  if (b.kind === "details") {
+    // A real disclosure. Bots fold their output into <details>, and until now
+    // the tags came through escaped — the "collapsed" part of a collapsed
+    // comment was the one thing that did not work.
+    return (
+      <details className="agx-details">
+        <summary>{b.summary}</summary>
+        <div>{b.blocks.map((inner, i) => <Block key={i} b={inner} />)}</div>
+      </details>
+    );
+  }
+  if (b.kind === "alert") {
+    const tint = b.level === "caution" || b.level === "warning" ? "var(--warning)"
+      : b.level === "important" ? "var(--primary)"
+      : b.level === "tip" ? "var(--success)" : "var(--info)";
+    return (
+      <div className="agx-alert" style={{ borderColor: tint, background: `color-mix(in srgb, ${tint} 8%, transparent)` }}>
+        <b style={{ color: tint }}>{b.level.toUpperCase()}</b>
+        <span dangerouslySetInnerHTML={{ __html: b.html }} />
+      </div>
+    );
+  }
+  if (b.kind === "suggestion") {
+    // Shown as what it is: the replacement being proposed. Rendering it as an
+    // ordinary code block (which is what happened before) hid the fact that
+    // there was a change on offer at all.
+    return (
+      <div className="agx-suggestion">
+        <div className="agx-suggestion-head">Suggested change</div>
+        <pre><code>{b.text}</code></pre>
       </div>
     );
   }
@@ -322,8 +372,28 @@ function CodeBlock({ text, lang }: { text: string; lang?: string }) {
   return <pre><code>{text}</code></pre>;
 }
 
+/** Who `@` completes to and which issues `#` does, for the composer. A context
+ *  for the same reason as RepoCtx: the composer is rendered from several places
+ *  and none of them should have to carry this. */
+export type Mentionables = { users: string[]; issues: { number: number; title: string }[] };
+export const MentionCtx = createContext<Mentionables | null>(null);
+
+/** The emoji names the composer offers. Same table the renderer uses. */
+const EMOJI_NAMES: Record<string, string> = {
+  tada: "🎉", rocket: "🚀", sparkles: "✨", bug: "🐛", fire: "🔥", warning: "⚠️",
+  white_check_mark: "✅", x: "❌", "+1": "👍", "-1": "👎", eyes: "👀", heart: "❤️",
+  pray: "🙏", clap: "👏", wrench: "🔧", memo: "📝", lock: "🔒", zap: "⚡",
+  boom: "💥", art: "🎨", recycle: "♻️", bulb: "💡", mag: "🔍", robot: "🤖",
+};
+
+/** The `owner/name` these bodies belong to, so `#123` and bare SHAs can link
+ *  somewhere real. A context because `Md` is rendered from a dozen places and
+ *  threading a prop through all of them to reach the same value is noise. */
+export const RepoCtx = createContext<string | undefined>(undefined);
+
 export function Md({ body, className }: { body: string; className?: string }) {
-  const blocks = useMemo(() => parseBody(body), [body]);
+  const repo = useContext(RepoCtx);
+  const blocks = useMemo(() => parseBody(body, repo), [body, repo]);
   if (!body?.trim()) return null;
   return <div className={`agx-md ${className ?? ""}`}>{blocks.map((b, i) => <Block key={i} b={b} />)}</div>;
 }
@@ -341,27 +411,10 @@ function toFileChange(f: ParsedFile, i: number): FileChange {
   };
 }
 
-function DiffPane({ file, split, wrap, onComment }: {
+function DiffPane({ file, split, wrap, onPick, sel }: {
   file: FileChange; split: boolean; wrap: boolean;
-  onComment?: (line: number) => void;
+  onPick?: (p: LinePick) => void; sel?: LineSel;
 }) {
-  // `hunkAction` is the seam the viewer already offers. A comment anchors to
-  // the last added line of its hunk — the line you are almost always talking
-  // about — falling back to the hunk's last line when it only removes.
-  const action = onComment
-    ? (hi: number) => {
-        const h = file.hunks[hi];
-        if (!h) return null;
-        const nums = newLineNumbers(h);
-        let target = 0;
-        h.lines.forEach((l, i) => { if (l.startsWith("+") && nums[i]) target = nums[i]!; });
-        if (!target) for (let i = nums.length - 1; i >= 0; i--) if (nums[i]) { target = nums[i]!; break; }
-        if (!target) return null;
-        return <button onClick={() => onComment(target)} className="text-[10px] px-1.5 rounded"
-          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
-          title={`Comment on line ${target}`}>+ Comment</button>;
-      }
-    : undefined;
   // Syntax highlighting, which this pane never had: `Code` reads the theme out
   // of `HiliteCtx`, and with no Provider above it every PR diff rendered as
   // plain monochrome text while the very same viewer in the changes modal came
@@ -371,7 +424,9 @@ function DiffPane({ file, split, wrap, onComment }: {
   const heavy = file.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000;
   return (
     <HiliteCtx.Provider value={heavy ? { ...hilite, theme: null } : hilite}>
-      {split ? <SplitDiff c={file} wrap={wrap} /> : <UnifiedDiff c={file} wrap={wrap} hunkAction={action} />}
+      {split
+        ? <SplitDiff c={file} wrap={wrap} onPick={onPick} sel={sel} />
+        : <UnifiedDiff c={file} wrap={wrap} onPick={onPick} sel={sel} />}
     </HiliteCtx.Provider>
   );
 }
@@ -486,6 +541,20 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   // Which commits have their full message open. Separate from `selCommit`, so
   // reading the message costs nothing and does not fetch a diff.
   const [openMsgs, setOpenMsgs] = useState<Set<string>>(new Set());
+  // The CI jobs behind this pull request's checks. Fetched only when the checks
+  // tab is opened — it costs a couple of REST calls and most visits never look.
+  const [jobs, setJobs] = useState<PrCheckJob[]>([]);
+  // Fetched once per repo, cached server-side for five minutes: the composer
+  // wants an instant dropdown, not a live directory.
+  const [mentions, setMentions] = useState<Mentionables | null>(null);
+  useEffect(() => {
+    if (!active || !root) return;
+    let live = true;
+    api.prMentions(root)
+      .then((r) => { if (live && r.ok && r.data) setMentions(r.data); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [active, root]);
   const toggleMsg = (oid: string) => setOpenMsgs((cur) => {
     const next = new Set(cur);
     if (next.has(oid)) next.delete(oid); else next.add(oid);
@@ -745,6 +814,16 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     }
   }, [visiblePrs, selected]);
 
+  useEffect(() => {
+    if (tab !== "checks" || !detail || !root) return;
+    let live = true;
+    setJobs([]);
+    api.prCheckJobs(root, detail.number)
+      .then((r) => { if (live && r.ok && r.jobs) setJobs(r.jobs); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [tab, detail?.number, root]);
+
   // Keyboard nav over the list, keyboard-first like the files tab (which relies
   // on the same thing: App.tsx ignores bare letters while the workspace is open,
   // so j/k/n/p are free here). Selection is derived, not a second state.
@@ -842,16 +921,17 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (id) void api.prFileViewed(root, id, path, nowViewed).catch(() => { /* local tick still stands */ });
   };
 
-  const addDraft = async (path: string, line: number) => {
+  const addDraft = async (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT") => {
+    const where = startLine && startLine !== line ? `${startLine}-${line}` : String(line);
     const body = await askText({
-      title: `Comment on ${path.split("/").pop()}:${line}`,
+      title: `Comment on ${path.split("/").pop()}:${where}`,
       body: "Queued with the rest of your review — nothing is sent until you submit.",
       confirmLabel: "Add to review",
       input: { label: "Comment", placeholder: "What needs to change here…" },
     });
     if (!body?.trim() || !key) return;
     setDrafts((cur) => {
-      const next = { ...cur, [key]: [...(cur[key] ?? []), { path, line, body: body.trim() }] };
+      const next = { ...cur, [key]: [...(cur[key] ?? []), { path, line, ...(startLine && startLine !== line ? { startLine } : {}), ...(side ? { side } : {}), body: body.trim() }] };
       saveMap(DRAFT_KEY, next);
       return next;
     });
@@ -1082,8 +1162,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   ] : [];
 
   return (
+    <RepoCtx.Provider value={repo?.nameWithOwner}>
+    <MentionCtx.Provider value={mentions}>
     <div className="flex flex-col h-full min-h-0">
-      <style>{SCROLLBAR_CSS}{MD_CSS}</style>
+      <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}</style>
 
       <div className={viewHeaderClass} style={viewHeaderStyle}>
         <span className={viewTitleClass} style={{ color: "var(--text)" }}>Pull Requests</span>
@@ -1375,8 +1457,9 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
                 {tab === "checks" && (
                   <Checks
-                    d={d} busy={busy}
+                    d={d} root={root} jobs={jobs} busy={busy}
                     onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
+                    onRerunJobs={(what, id) => act("Re-run", () => api.prRerunJobs(root, what, id))}
                     onAsk={onOpenChatWith ? (k) => askClaudeAboutCheck(k) : undefined}
                   />
                 )}
@@ -1395,6 +1478,8 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       </div>
       {dialog}
     </div>
+    </MentionCtx.Provider>
+    </RepoCtx.Provider>
   );
 }
 
@@ -2046,10 +2131,34 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
   seenFiles: string[]; onSeen: (p: string) => void;
   sel: string | null; onSel: (p: string | null) => void;
   split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
-  drafts: DraftComment[]; onAddDraft: (path: string, line: number) => void;
+  drafts: DraftComment[]; onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT") => void;
   onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void; busy: boolean;
 }) {
   const draftsFor = (p: string) => drafts.filter((x) => x.path === p).length;
+  /**
+   * The line, or range of lines, a comment is being written about.
+   *
+   * A plain click starts at that line; shift-click extends from it, which is
+   * GitHub's gesture for "this whole block". Kept here rather than in the diff
+   * component so the highlight survives a re-render of the file and so only one
+   * file can be mid-selection at a time.
+   */
+  const [selRange, setSelRange] = useState<{ path: string; sel: LineSel } | null>(null);
+  const pickLine = (path: string, pk: LinePick) => {
+    const cur = selRange?.path === path ? selRange.sel : null;
+    if (pk.shift && cur && cur.side === pk.side) {
+      const sel = { start: cur.start, end: pk.line, side: pk.side };
+      setSelRange({ path, sel });
+      onAddDraft(path, Math.max(sel.start, sel.end), Math.min(sel.start, sel.end), pk.side);
+      setSelRange(null);
+      return;
+    }
+    // A single line: offer it straight away, and remember it so a following
+    // shift-click can stretch the range instead of starting over.
+    setSelRange({ path, sel: { start: pk.line, end: pk.line, side: pk.side } });
+    onAddDraft(path, pk.line, undefined, pk.side);
+    setSelRange(null);
+  };
   /** Unresolved first: a resolved thread is history, an open one is a question. */
   const threadsFor = (p: string) => d.threads.filter((t) => t.path === p)
     .sort((a, b) => Number(a.isResolved) - Number(b.isResolved));
@@ -2262,7 +2371,7 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
                     folded by default instead, which is the honest cap. */}
                 <div className="flex" style={{ overflowX: "auto" }}>
                   {!loaded ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the diff…</div>
-                    : change ? <DiffPane file={change} split={split} wrap={wrap} onComment={(line) => onAddDraft(f.path, line)} />
+                    : change ? <DiffPane file={change} split={split} wrap={wrap} onPick={(pk) => pickLine(f.path, pk)} sel={selRange?.path === f.path ? selRange.sel : null} />
                     : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
                 </div>
               </LazyMount>
@@ -2764,6 +2873,63 @@ function Composer({ onSend, busy, placeholder, sendLabel }: {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState(false);
   const [sending, setSending] = useState(false);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * `@`, `#` and `:` complete.
+   *
+   * Typing a collaborator's login or an issue number from memory means leaving
+   * the panel to look it up, which is exactly the trip this is meant to save.
+   * The trigger is the token immediately before the caret; Enter or Tab takes
+   * the highlighted match, Escape drops the menu without touching the text.
+   */
+  const mentions = useContext(MentionCtx);
+  const [ac, setAc] = useState<{ kind: "@" | "#" | ":"; q: string; at: number } | null>(null);
+  const [acIdx, setAcIdx] = useState(0);
+
+  type AcItem = { insert: string; label: string; hint?: string };
+  const matches = useMemo<AcItem[]>(() => {
+    if (!ac) return [];
+    const q = ac.q.toLowerCase();
+    if (ac.kind === "@") {
+      return (mentions?.users ?? [])
+        .filter((u) => u.toLowerCase().includes(q))
+        .slice(0, 8).map((u) => ({ insert: `@${u} `, label: u }));
+    }
+    if (ac.kind === "#") {
+      return (mentions?.issues ?? [])
+        .filter((i) => String(i.number).startsWith(q) || i.title.toLowerCase().includes(q))
+        .slice(0, 8).map((i) => ({ insert: `#${i.number} `, label: `#${i.number}`, hint: i.title.slice(0, 44) }));
+    }
+    return Object.keys(EMOJI_NAMES).filter((n) => n.startsWith(q)).slice(0, 8)
+      .map((n) => ({ insert: `:${n}: `, label: `${EMOJI_NAMES[n]}  :${n}:` }));
+  }, [ac, mentions]);
+
+  const onType = (v: string, caret: number) => {
+    setText(v);
+    // Only the token the caret is sitting in, and only at a word boundary —
+    // an email address must not open a mention menu.
+    const before = v.slice(0, caret);
+    const m = /(^|[\s(])([@#:])([\w.-]*)$/.exec(before);
+    if (!m) { setAc(null); return; }
+    setAc({ kind: m[2] as "@", q: m[3] ?? "", at: caret - (m[3]?.length ?? 0) - 1 });
+    setAcIdx(0);
+  };
+
+  const take = (i: number) => {
+    const pick = matches[i];
+    if (!ac || !pick) return;
+    const next = text.slice(0, ac.at) + pick.insert + text.slice(ac.at + 1 + ac.q.length);
+    setText(next);
+    setAc(null);
+    requestAnimationFrame(() => {
+      const el = taRef.current;
+      if (!el) return;
+      const pos = ac.at + pick.insert.length;
+      el.focus();
+      el.setSelectionRange(pos, pos);
+    });
+  };
 
   const send = async () => {
     if (!text.trim() || sending) return;
@@ -2782,16 +2948,42 @@ function Composer({ onSend, busy, placeholder, sendLabel }: {
       {preview ? (
         <div className="p-3 min-h-[80px]">{text.trim() ? <Md body={text} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}</div>
       ) : (
-        <textarea
-          value={text} onChange={(e) => setText(e.target.value)} rows={4} placeholder={placeholder}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(); } }}
-          className="w-full p-3 text-[11.5px] outline-none resize-y bg-transparent agx-scroll"
-          style={{ color: "var(--text)", lineHeight: 1.6 }}
-        />
+        <div className="relative">
+          <textarea
+            ref={taRef}
+            value={text}
+            onChange={(e) => onType(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+            rows={4} placeholder={placeholder}
+            onKeyDown={(e) => {
+              if (ac && matches.length) {
+                if (e.key === "ArrowDown") { e.preventDefault(); setAcIdx((i) => (i + 1) % matches.length); return; }
+                if (e.key === "ArrowUp") { e.preventDefault(); setAcIdx((i) => (i - 1 + matches.length) % matches.length); return; }
+                if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); take(acIdx); return; }
+                if (e.key === "Escape") { e.preventDefault(); setAc(null); return; }
+              }
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(); }
+            }}
+            className="w-full p-3 text-[11.5px] outline-none resize-y bg-transparent agx-scroll"
+            style={{ color: "var(--text)", lineHeight: 1.6 }}
+          />
+          {ac && matches.length > 0 && (
+            <div className="absolute left-3 bottom-2 z-20 rounded-lg overflow-hidden"
+              style={{ background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 14px 34px -16px rgba(0,0,0,.75)" }}>
+              {matches.map((m, i) => (
+                <button key={m.label} onMouseEnter={() => setAcIdx(i)} onClick={() => take(i)}
+                  className="agx-btn w-full text-left flex items-center gap-2 px-2.5 py-1 text-[11px]"
+                  style={{ background: i === acIdx ? "color-mix(in srgb, var(--primary) 22%, transparent)" : "transparent", color: "var(--text2)" }}>
+                  <span>{m.label}</span>
+                  {m.hint && <span className="truncate text-[10px]" style={{ color: "var(--text3)" }}>{m.hint}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       <div className="flex items-center gap-2 px-2.5 py-2"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · ⌘↵ to send</span>
+        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · <b>@</b> people · <b>#</b> issues · <b>:</b> emoji · ⌘↵ to send</span>
         <span className="ml-auto">
           <Btn onClick={send} disabled={sending || busy || !text.trim()} primary small
             title={!text.trim() ? "Write something first" : undefined}>
@@ -2823,7 +3015,99 @@ function groupOf(k: PrCheck): string {
   return parts.length > 1 ? parts.slice(0, -1).join(" / ") : "Checks";
 }
 
-function Checks({ d, onRerun, onAsk, busy }: { d: PrDetail; onRerun: () => void; onAsk?: (check: PrCheck) => void; busy: boolean }) {
+/**
+ * One job's log, folded by its own step markers.
+ *
+ * GitHub Actions writes `##[group]` / `##[endgroup]` around each step and
+ * stamps every line with an ISO timestamp. Folding on the first and stripping
+ * the second is the difference between a wall of two thousand lines and a list
+ * of steps you can open — and the failing step opens itself, because that is
+ * the one you came for.
+ */
+function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrCheckJob[] }) {
+  // Match the check to its job by name; GitHub names them the same thing.
+  const job = useMemo(() => jobs.find((j) => j.name === name) ?? jobs.find((j) => name.includes(j.name)), [jobs, name]);
+  const [text, setText] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [openSteps, setOpenSteps] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (!open || !job || text !== null) return;
+    let live = true;
+    api.prJobLog(root, job.id)
+      .then((r) => { if (!live) return; if (r.ok) setText(r.text ?? ""); else setErr(r.error || "Could not read the log"); })
+      .catch(() => { if (live) setErr("Could not reach the server"); });
+    return () => { live = false; };
+  }, [open, job, root, text]);
+
+  const steps = useMemo(() => {
+    if (!text) return [];
+    const out: { title: string; lines: string[]; failed: boolean }[] = [];
+    let cur: { title: string; lines: string[]; failed: boolean } | null = null;
+    for (const raw of text.split("\n")) {
+      // Strip the timestamp GitHub prefixes to every single line.
+      const line = raw.replace(/^\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z\s?/, "");
+      const g = line.match(/^##\[group\](.*)$/);
+      if (g) { if (cur) out.push(cur); cur = { title: g[1] || "step", lines: [], failed: false }; continue; }
+      if (/^##\[endgroup\]/.test(line)) { if (cur) { out.push(cur); cur = null; } continue; }
+      const target = cur ?? (out[out.length - 1] && !cur ? null : null);
+      if (/^##\[error\]/.test(line) && cur) cur.failed = true;
+      if (cur) cur.lines.push(line);
+      else if (line.trim()) {
+        if (!out.length || out[out.length - 1]!.title !== "output") out.push({ title: "output", lines: [], failed: false });
+        out[out.length - 1]!.lines.push(line);
+        if (/^##\[error\]/.test(line)) out[out.length - 1]!.failed = true;
+      }
+      void target;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }, [text]);
+
+  // The failing step opens itself.
+  useEffect(() => {
+    const bad = steps.findIndex((st) => st.failed);
+    if (bad >= 0) setOpenSteps((cur) => (cur.has(bad) ? cur : new Set([...cur, bad])));
+  }, [steps]);
+
+  if (!job) return null;
+  return (
+    <div className="px-2.5 pb-2">
+      <button onClick={() => setOpen((v) => !v)} className="agx-btn text-[10px] px-2 py-0.5 rounded"
+        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
+        {open ? "▾ Hide log" : "▸ Show log"}
+      </button>
+      {open && (
+        <div className="mt-1.5 rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+          {err ? <div className="p-2 text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>
+            : text === null ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the log…</div>
+            : steps.length === 0 ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>The log is empty.</div>
+            : steps.map((st, i) => {
+              const on = openSteps.has(i);
+              return (
+                <div key={i} style={i ? { borderTop: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" } : undefined}>
+                  <button onClick={() => setOpenSteps((c) => { const n = new Set(c); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
+                    className="agx-btn w-full text-left flex items-center gap-2 px-2 py-1 text-[10.5px]"
+                    style={{ background: st.failed ? "color-mix(in srgb, var(--error) 10%, transparent)" : "transparent" }}>
+                    <span className="text-[9px]" style={{ color: "var(--text3)" }}>{on ? "▾" : "▸"}</span>
+                    <span className="truncate" style={{ color: st.failed ? "var(--error)" : "var(--text2)" }}>{st.title}</span>
+                    <span className="ml-auto tabular-nums text-[9.5px]" style={{ color: "var(--text3)" }}>{st.lines.length}</span>
+                  </button>
+                  {on && (
+                    <pre className="overflow-x-auto text-[10px] max-h-80 agx-scroll px-2 py-1"
+                      style={{ ...CODE_FONT_STYLE, color: "var(--text3)", background: "var(--bg)" }}>{st.lines.join("\n")}</pre>
+                  )}
+                </div>
+              );
+            })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDetail; root: string; jobs: PrCheckJob[]; onRerun: () => void; onRerunJobs?: (what: "all" | "failed" | "job", id: string) => void; onAsk?: (check: PrCheck) => void; busy: boolean }) {
   const c = d.checks;
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [showSkipped, setShowSkipped] = useState(false);
@@ -2911,9 +3195,25 @@ function Checks({ d, onRerun, onAsk, busy }: { d: PrDetail; onRerun: () => void;
                           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open run ↗</a>
                       )}
                       <Btn onClick={onRerun} disabled={busy} small title="Re-run every failing check on this pull request">↻ Re-run failed</Btn>
-                      <span className="text-[10px]" style={{ color: "var(--text3)" }}>The log itself lives on GitHub — this panel does not download run logs.</span>
+                      {/* GitHub offers all three, and "the whole run failed
+                          again for one flaky job" is exactly when you want the
+                          single-job one. */}
+                      {(() => {
+                        const job = jobs.find((j) => j.name === k.name) ?? jobs.find((j) => k.name.includes(j.name));
+                        if (!job || !onRerunJobs) return null;
+                        return (
+                          <>
+                            <Btn onClick={() => onRerunJobs("job", job.id)} disabled={busy} small title={`Re-run only ${job.name}`}>↻ This job</Btn>
+                            <Btn onClick={() => onRerunJobs("all", job.runId)} disabled={busy} small title="Re-run every job in this run, passing ones included">↻ All jobs</Btn>
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
+                  {/* The log, here. It used to say "the log lives on GitHub" and
+                      send you to a browser for the one thing you opened the
+                      check to read. */}
+                  {expanded && <JobLog root={root} name={k.name} jobs={jobs} />}
                 </div>
               );
             })}
@@ -2987,7 +3287,7 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
               {drafts.map((c, i) => (
                 <div key={i} className="flex items-start gap-2 px-2.5 py-1.5 text-[11px]"
                   style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}>
-                  <span className="shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.path.split("/").pop()}:{c.line}</span>
+                  <span className="shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.path.split("/").pop()}:{c.startLine && c.startLine !== c.line ? `${c.startLine}-${c.line}` : c.line}</span>
                   <span className="min-w-0 flex-1" style={{ color: "var(--text2)" }}>{c.body}</span>
                   <button onClick={() => onDrop(i)} className="shrink-0 text-[10px]" style={{ color: "var(--error)" }}>Drop</button>
                 </div>

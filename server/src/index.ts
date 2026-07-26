@@ -52,7 +52,7 @@ import {
 } from "./docker.ts";
 import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
-  editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts,
+  editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
   rerunFailedChecks, mergePr, closePr, prepareLocalReview, discardLocalReview, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
 } from "./prs.ts";
@@ -981,6 +981,15 @@ const server = Bun.serve<WsData>({
         url.searchParams.get("after") || undefined,
       ));
     }
+    if (pathname === "/prs/mentions") {
+      return json(await mentionables(url.searchParams.get("root") || ""));
+    }
+    if (pathname === "/prs/job-log") {
+      return json(await jobLog(url.searchParams.get("root") || "", url.searchParams.get("job") || ""));
+    }
+    if (pathname === "/prs/check-jobs") {
+      return json(await checkJobs(url.searchParams.get("root") || "", url.searchParams.get("number") || ""));
+    }
     if (pathname === "/prs/counts") {
       return json(await viewCounts(url.searchParams.get("root") || "", url.searchParams.get("state") || "open"));
     }
@@ -1032,6 +1041,8 @@ const server = Bun.serve<WsData>({
         case "/prs/draft": res = await setDraft(root, n, b.draft); break;
         case "/prs/update-branch": res = await updateBranch(root, n); break;
         case "/prs/rerun": res = await rerunFailedChecks(root, n); break;
+        case "/prs/rerun-jobs": res = await rerunJobs(root, b.what, b.id); break;
+        case "/prs/line-comment": res = await addLineComment(root, n, b); break;
         case "/prs/merge": res = await mergePr(root, n, b.method, { deleteBranch: b.deleteBranch, auto: b.auto, headSha: b.headSha, subject: b.subject, body: b.body, disableAuto: b.disableAuto }); break;
         case "/prs/close": res = await closePr(root, n, b.reopen === true); break;
         case "/prs/local-review": res = await prepareLocalReview(root, n); break;
