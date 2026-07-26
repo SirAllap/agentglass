@@ -7,15 +7,46 @@
 // overrides the file without editing it.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter } from "node:path";
 import { worktreeFamily } from "./worktree.ts";
 
-export const CONFIG_PATH = join(
-  process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
-  "agentglass",
-  "config.json"
-);
+/**
+ * Resolved per call, and read per path.
+ *
+ * This was a module constant beside a `const config = load()`, which meant the
+ * first import in the process decided both, on whatever HOME the process
+ * happened to start with. Tests that redirect HOME or XDG_CONFIG_HOME and then
+ * import were reading the developer's own settings: their `root` scoped tests
+ * that had deliberately unscoped themselves, and their `repoDirs` filtered
+ * every fixture repo out of discovery. That is why `whole-machine discovery`
+ * and `open-tool memo` failed on a machine with real projects and passed in CI,
+ * where the file does not exist.
+ */
+export function configPath(): string {
+  return join(
+    process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
+    "agentglass",
+    "config.json"
+  );
+}
+
+/**
+ * Under `bun test`, settings may only come from the scratch directory.
+ *
+ * A test that points XDG_CONFIG_HOME at a temp dir gets exactly what it wrote
+ * there. Everything else reads as "no config", whatever the import order was,
+ * so no suite can inherit the settings of the machine it runs on or write over
+ * them. Same rule as the theme sync and the database, for the same reason.
+ */
+const IS_TEST = process.env.NODE_ENV === "test";
+function isScratch(p: string): boolean {
+  const scratch = tmpdir();
+  return p === scratch || p.startsWith(scratch + "/");
+}
+function realConfigOffLimits(p: string): boolean {
+  return IS_TEST && !isScratch(p);
+}
 
 interface Config {
   /** Work on this one project and nothing else. */
@@ -35,10 +66,10 @@ interface Config {
   terminalDisabled?: boolean;
 }
 
-function load(): Config {
+function load(path: string): Config {
   try {
-    if (!existsSync(CONFIG_PATH)) return {};
-    const raw = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as unknown;
+    if (realConfigOffLimits(path) || !existsSync(path)) return {};
+    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
     // A hand-edited config.json can hold anything. A top level that isn't a
     // plain object (a bare number, a string, an array, null) would make the
     // `root` check below throw on `in`, and a non-string `root` reached
@@ -47,24 +78,31 @@ function load(): Config {
     // corrupt config must degrade, never prevent startup, so coerce the shape:
     // drop what we can't use, warn, keep the rest.
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      console.error(`[config] ignoring ${CONFIG_PATH}: expected a JSON object`);
+      console.error(`[config] ignoring ${path}: expected a JSON object`);
       return {};
     }
     const cfg = raw as Config;
     if ("root" in cfg && cfg.root !== undefined && typeof cfg.root !== "string") {
-      console.error(`[config] ignoring non-string "root" in ${CONFIG_PATH}`);
+      console.error(`[config] ignoring non-string "root" in ${path}`);
       delete cfg.root;
     }
     return cfg;
   } catch (e) {
     // A typo shouldn't take the server down, but it must not pass unnoticed
     // either — the symptom would be settings mysteriously not applying.
-    console.error(`[config] ignoring ${CONFIG_PATH}: ${e instanceof Error ? e.message : e}`);
+    console.error(`[config] ignoring ${path}: ${e instanceof Error ? e.message : e}`);
     return {};
   }
 }
 
-const config = load();
+/** Read once per resolved path, so the app pays the same single read it always
+ *  did while a test that moves its home is actually followed. */
+let cached: { path: string; cfg: Config } | null = null;
+function config(): Config {
+  const path = configPath();
+  if (!cached || cached.path !== path) cached = { path, cfg: load(path) };
+  return cached.cfg;
+}
 
 const expand = (p: string) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
 
@@ -93,7 +131,7 @@ const expand = (p: string) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) 
 let cachedRoot: string | null | undefined;
 let cachedFor: string | undefined;
 export function workspaceRoot(): string | null {
-  const asked = process.env.AGENTGLASS_ROOT || config.root;
+  const asked = process.env.AGENTGLASS_ROOT || config().root;
   // Keyed on what was asked for, not merely "have we answered before". The
   // scope never changes in a running server, so this costs one comparison —
   // but `bun test` shares a process, and the first suite to call this used to
@@ -208,25 +246,33 @@ export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspac
   // setting written there by hand must not be clobbered by a stale snapshot.
   let persisted = false;
   let note: string | undefined;
+  const path = configPath();
+  // A test may choose a workspace; it may not rewrite the settings of the
+  // machine it runs on. The switch still applies in memory, which is all any
+  // test needs, and cachedRoot above already carries it.
+  if (realConfigOffLimits(path)) {
+    return { ok: true, workspace: next, persisted: false, note: "not persisted: tests write settings only under os.tmpdir()" };
+  }
   try {
     let cur: Config = {};
     try {
-      cur = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Config;
+      cur = JSON.parse(readFileSync(path, "utf8")) as Config;
     } catch (e) {
       // Absent → start fresh. Present but unreadable/malformed → do NOT write:
       // rewriting would silently destroy whatever else the user keeps in it
       // (repoDirs, future keys). The runtime switch still applies.
-      if (existsSync(CONFIG_PATH)) {
-        console.error(`[config] not persisting workspace — ${CONFIG_PATH} exists but can't be parsed: ${e instanceof Error ? e.message : e}`);
-        return { ok: true, workspace: next, persisted: false, note: `config file is malformed — fix ${CONFIG_PATH} to persist this choice` };
+      if (existsSync(path)) {
+        console.error(`[config] not persisting workspace — ${path} exists but can't be parsed: ${e instanceof Error ? e.message : e}`);
+        return { ok: true, workspace: next, persisted: false, note: `config file is malformed — fix ${path} to persist this choice` };
       }
     }
     if (next) cur.root = next; else delete cur.root;
-    mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-    writeFileSync(CONFIG_PATH, JSON.stringify(cur, null, 2) + "\n");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(cur, null, 2) + "\n");
+    cached = null; // the file changed under us; next read picks it up
     persisted = true;
   } catch (e) {
-    console.error(`[config] could not persist workspace to ${CONFIG_PATH}: ${e instanceof Error ? e.message : e}`);
+    console.error(`[config] could not persist workspace to ${path}: ${e instanceof Error ? e.message : e}`);
   }
   // The env var is read before the config file at boot, so it will shadow this
   // choice on the next launch (e.g. the desktop app started with a directory).
@@ -245,7 +291,7 @@ export function setWorkspaceRoot(rootIn: string | null): { ok: boolean; workspac
  */
 export function chatBypassAllowed(): boolean {
   if (process.env.AGENTGLASS_CHAT_BYPASS !== undefined) return process.env.AGENTGLASS_CHAT_BYPASS === "1";
-  return config.chatBypass === true;
+  return config().chatBypass === true;
 }
 
 /**
@@ -258,7 +304,7 @@ export function terminalDisabledSource(): "env" | "config" | null {
   if (process.env.AGENTGLASS_TERMINAL_DISABLED !== undefined) {
     return process.env.AGENTGLASS_TERMINAL_DISABLED === "1" ? "env" : null;
   }
-  return config.terminalDisabled === true ? "config" : null;
+  return config().terminalDisabled === true ? "config" : null;
 }
 
 export function configuredRepoDirs(): string[] {
@@ -267,7 +313,7 @@ export function configuredRepoDirs(): string[] {
   // or hold non-string entries. Guard before mapping: an unguarded `.map(expand)`
   // threw a TypeError that broke GET /git/repos in the default whole-machine mode
   // — a single typo in config.json taking out the repo picker for the machine.
-  const raw = fromEnv.length ? fromEnv : config.repoDirs ?? [];
+  const raw = fromEnv.length ? fromEnv : config().repoDirs ?? [];
   const dirs = Array.isArray(raw) ? raw.filter((d): d is string => typeof d === "string") : [];
   return dirs.map(expand);
 }
