@@ -282,10 +282,31 @@ export function useLive(paused = false): LiveData {
         connect();
       }
     };
+    /**
+     * The shell moved the server under us: a new port, a new token, or both,
+     * after remote access was toggled or a link revoked.
+     *
+     * The old socket is already dead — its server is gone — but the backoff
+     * would keep the app disconnected for seconds over a change the user just
+     * made and is watching. Reconnect at once, against the URL the api module
+     * has just rebuilt. `unauthorized` is cleared deliberately: a rotated token
+     * is exactly the case where the previous refusal no longer applies.
+     */
+    const onServerChanged = () => {
+      if (disposed.current) return;
+      if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; }
+      retry.current = 0;
+      firstFailAt.current = 0;
+      try { wsRef.current?.close(); } catch { /* already gone */ }
+      wsRef.current = null;
+      connect();
+    };
     document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("agentglass:server-changed", onServerChanged);
     return () => {
       disposed.current = true;
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("agentglass:server-changed", onServerChanged);
       if (timer.current) clearTimeout(timer.current);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();

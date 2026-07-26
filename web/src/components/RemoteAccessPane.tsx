@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
 import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
@@ -33,6 +33,10 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   const [confirming, setConfirming] = useState(false);
   const [revokeNote, setRevokeNote] = useState<string | null>(null);
 
+  const load = useCallback(() => {
+    api.remoteStatus().then(setSt).catch(() => setSt(null));
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     let live = true;
@@ -49,12 +53,12 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
 
   const toggle = async () => {
     setBusy(true);
-    // The shell restarts the sidecar and reloads this window, so in the normal
-    // case nothing below ever runs. The state update is for the case where it
-    // declines.
+    // The shell restarts the sidecar and hands the page its new origin and
+    // token; nothing reloads, so this has to refresh its own state afterwards.
     const next = await setRemoteAccess(!enabled);
     setBusy(false);
     if (next !== null) setEnabled(next);
+    load();
   };
 
   const revoke = async () => {
@@ -62,9 +66,10 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     const ok = await revokeRemoteAccess();
     setBusy(false);
     setConfirming(false);
-    // In the ordinary case the shell restarts the server and reloads this
-    // window, so nothing below is ever seen. The messages are for the two cases
-    // where it declines.
+    // The new code is already on its way to this page over the bridge; asking
+    // the server again is what puts it in the QR.
+    if (ok) load();
+    // The messages below are for the two cases where the shell declines.
     if (ok === false) setRevokeNote("AGENTGLASS_TOKEN is set in this app's environment, so the app cannot rotate it. Change it where it is set.");
     else if (ok === null) setRevokeNote("This shell cannot rotate the access code.");
   };

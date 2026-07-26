@@ -382,8 +382,15 @@ async function restartSidecar() {
   // killed the server; anything still answering is either the corpse above or
   // something that is not ours to hand the app to.
   await ensureServer(false);
+  // Tell the page where the server is now, rather than reloading it.
+  //
+  // A reload was the first version of this and it was awful: flipping a setting
+  // threw away every terminal, every unsent chat draft and every scroll
+  // position in the app. The renderer reads the origin and the token through
+  // live bindings (web/src/lib/api.ts), so handing it the new pair is enough —
+  // the next fetch and the next socket connect use them.
   for (const w of BrowserWindow.getAllWindows()) {
-    try { w.webContents.reload(); } catch { /* window went away mid-toggle */ }
+    try { w.webContents.send("ag:server-changed", { origin: apiOrigin, token: currentToken() }); } catch { /* window went away mid-toggle */ }
   }
 }
 

@@ -29,6 +29,13 @@ contextBridge.exposeInMainWorld("agentglass", {
   remoteEnabled: () => ipcRenderer.invoke("ag:remoteEnabled"),
   setRemote: (on) => ipcRenderer.invoke("ag:setRemote", on),
   revokeRemote: () => ipcRenderer.invoke("ag:revokeRemote"),
+  // Fired when the sidecar has been restarted under the app: a new port, a new
+  // token, or both. Carries them rather than asking the page to reload.
+  onServerChanged: (fn) => {
+    const h = (_e, payload) => { try { fn(payload); } catch { /* renderer's problem */ } };
+    ipcRenderer.on("ag:server-changed", h);
+    return () => ipcRenderer.removeListener("ag:server-changed", h);
+  },
   setFullscreen: (on) => ipcRenderer.invoke("ag:setFullscreen", on),
   isFullscreen: () => ipcRenderer.invoke("ag:isFullscreen"),
   setZoom: (factor) => ipcRenderer.invoke("ag:setZoom", factor),

@@ -34,6 +34,30 @@
     color: var(--text);
     @apply font-mono antialiased overflow-hidden;
   }
+  /*
+   * The phone application scrolls; the cockpit does not.
+   *
+   * `overflow: hidden` with everything pinned to 100% height is right for a
+   * desk UI made of panels that scroll internally — and it is why the phone
+   * view could not be scrolled at all: its content ran past the viewport into
+   * a body that had been told never to move. The attribute is set on <html> by
+   * main.tsx at the same moment it picks which application to render, so the
+   * two can never disagree.
+   *
+   * Letting the *body* scroll rather than an inner container is deliberate: it
+   * is what gives a phone its native behaviour — the address bar collapsing on
+   * scroll, momentum, and the overscroll bounce landing where the OS expects.
+   */
+  html[data-layout="phone"],
+  html[data-layout="phone"] body,
+  html[data-layout="phone"] #root {
+    height: auto;
+    min-height: 100%;
+  }
+  html[data-layout="phone"] body {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
   ::-webkit-scrollbar {
     width: 7px;
     height: 7px;

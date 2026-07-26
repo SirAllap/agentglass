@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App.tsx";
 import { MobileApp } from "./mobile/MobileApp.tsx";
 import { phoneLayoutNow } from "./lib/viewport.ts";
+import { followServerChanges } from "./lib/desktop.ts";
 import { applyTheme, initialTheme, watchThemeStorage } from "./lib/themes.ts";
 import { restoreScale } from "./lib/uiScale.ts";
 import "./index.css";
@@ -23,7 +24,16 @@ restoreScale();
  * Rendering one tree or the other is also what keeps the phone UI honest — it
  * cannot quietly grow a dependency on desktop state it does not have.
  */
-const Root = phoneLayoutNow() ? MobileApp : App;
+const phone = phoneLayoutNow();
+// The stylesheet needs to know too: the cockpit pins html/body/#root to the
+// viewport and hides overflow, which is correct for panels that scroll
+// internally and fatal for a page that is meant to scroll as a whole.
+document.documentElement.dataset.layout = phone ? "phone" : "desktop";
+const Root = phone ? MobileApp : App;
+
+// The shell restarts its sidecar when remote access is toggled or a link is
+// revoked. Adopt the new origin/token in place rather than reloading the app.
+followServerChanges();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -1,3 +1,5 @@
+import { adoptServer } from "./api.ts";
+
 // Desktop-only capabilities.
 //
 // The same bundle runs in a browser tab and inside the Electron window, so
@@ -16,6 +18,7 @@ type DesktopBridge = {
   remoteEnabled?: () => Promise<boolean>;
   setRemote?: (on: boolean) => Promise<boolean>;
   revokeRemote?: () => Promise<boolean>;
+  onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null }) => void) => () => void;
 };
 
 function bridge(): DesktopBridge | null {
@@ -172,4 +175,23 @@ export async function revokeRemoteAccess(): Promise<boolean | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Follow the sidecar when the shell restarts it.
+ *
+ * Toggling remote access and revoking a link both bring the server back with a
+ * different token, and possibly on a different port. This is what lets that
+ * happen under a running app: the shell hands over the new pair, the api module
+ * adopts it, and a `agentglass:server-changed` event lets anything holding a
+ * socket reconnect. No reload, so terminals, drafts and scroll positions
+ * survive a setting change.
+ */
+export function followServerChanges(): () => void {
+  const b = bridge();
+  if (!b?.onServerChanged) return () => {};
+  return b.onServerChanged((p) => {
+    adoptServer(p);
+    window.dispatchEvent(new CustomEvent("agentglass:server-changed"));
+  });
 }

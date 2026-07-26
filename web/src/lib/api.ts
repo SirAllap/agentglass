@@ -21,7 +21,7 @@ const DESKTOP_API: string | undefined =
     ? (window as unknown as { agentglass?: { apiOrigin?: string } }).agentglass?.apiOrigin
     : undefined;
 
-export const SERVER: string =
+export let SERVER: string =
   (import.meta.env.VITE_CW_SERVER as string | undefined)?.replace(/\/$/, "") ||
   DESKTOP_API?.replace(/\/$/, "") ||
   (SERVED_BY_API ? location.origin : `http://${location.hostname}:4000`);
@@ -91,7 +91,7 @@ export async function probeServer(timeoutMs = 2500): Promise<ServerIdentity> {
  *  once from `?token=` — then stripped from the URL bar so it isn't shoulder-
  *  surfed or copied around — or from a prior localStorage save. Empty on the
  *  usual local box, where every call below is a no-op passthrough. */
-const TOKEN: string = (() => {
+let TOKEN: string = (() => {
   try {
     const u = new URL(location.href);
     const fromUrl = u.searchParams.get("token");
@@ -178,7 +178,36 @@ export function reauthPrompt(): void {
   }
 }
 
-export const WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
+export let WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
+
+/**
+ * Point this client at a (possibly new) server, without reloading the page.
+ *
+ * Turning remote access on or off, and revoking a link, all restart the sidecar
+ * with a different environment: it may come back on another port, and it comes
+ * back demanding a token the page did not have when it loaded. The obvious way
+ * to deal with that is to reload the window, which is what this replaced — and
+ * reloading the whole cockpit because a setting changed is a jarring answer to
+ * a small question. Terminals, drafts and scroll positions are not worth a
+ * rotated secret.
+ *
+ * `SERVER`, `TOKEN` and `WS_URL` are live bindings for exactly this reason:
+ * every consumer reads them at call time, so the next fetch and the next socket
+ * connect go to the right place with the right credential.
+ */
+export function adoptServer(next: { origin?: string | null; token?: string | null }): void {
+  if (next.origin) SERVER = next.origin.replace(/\/$/, "");
+  if (next.token !== undefined) {
+    TOKEN = next.token ?? "";
+    // Keep storage in step, so a genuine reload later does not fall back to a
+    // secret that has been revoked.
+    try {
+      if (TOKEN) localStorage.setItem("agentglass_token", TOKEN);
+      else localStorage.removeItem("agentglass_token");
+    } catch { /* private mode */ }
+  }
+  WS_URL = withToken(SERVER.replace(/^http/, "ws") + "/stream");
+}
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
 export const ptyWsUrl = (root: string, cols: number, rows: number) =>
