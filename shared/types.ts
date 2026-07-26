@@ -1129,6 +1129,8 @@ export interface PrThread {
   id: string;
   path: string;
   line: number | null;
+  /** The first line, when the thread covers a range. Null for one line. */
+  startLine?: number | null;
   isResolved: boolean;
   /** The code under it has changed since; usually safe to skip. */
   isOutdated: boolean;
