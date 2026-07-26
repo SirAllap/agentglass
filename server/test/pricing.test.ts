@@ -17,6 +17,18 @@ describe("priceFor", () => {
     expect(priceFor("o4-mini-2025")?.label).toBe("o-mini");
   });
 
+  test("matches GPT-5.6 Sol separately from legacy GPT-5", () => {
+    expect(priceFor("gpt-5.6-sol")).toEqual({
+      match: ["gpt-5.6-sol"],
+      label: "GPT-5.6 Sol",
+      input: 5,
+      output: 30,
+      cache_write: 6.25,
+      cache_read: 0.5,
+    });
+    expect(priceFor("gpt-5")?.label).toBe("GPT-5");
+  });
+
   test("Gemini pro variants beat generic flash/gemini match", () => {
     expect(priceFor("gemini-2.5-pro")?.label).toBe("Gemini Pro");
     expect(priceFor("gemini-2.0-flash-lite")?.label).toBe("Gemini Flash-Lite");
@@ -63,6 +75,7 @@ describe("costUsd", () => {
 describe("modelLabel", () => {
   test("returns table label when matched, otherwise the raw name", () => {
     expect(modelLabel("claude-opus-4")).toBe("Opus");
+    expect(modelLabel("gpt-5.6-sol")).toBe("GPT-5.6 Sol");
     expect(modelLabel("custom-finetune-xyz")).toBe("custom-finetune-xyz");
     expect(modelLabel(null)).toBe("unknown");
   });

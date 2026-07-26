@@ -43,7 +43,10 @@ export const PRICE_TABLE: ModelPrice[] = [
   { match: ["gpt-4o", "chatgpt-4o", "4o"], label: "GPT-4o", input: 2.5, output: 10, cache_write: 0, cache_read: 1.25 },
   { match: ["gpt-4.1-nano", "4.1-nano"], label: "GPT-4.1 nano", input: 0.1, output: 0.4, cache_write: 0, cache_read: 0.025 },
   { match: ["gpt-4.1-mini", "4.1-mini"], label: "GPT-4.1 mini", input: 0.4, output: 1.6, cache_write: 0, cache_read: 0.1 },
-  { match: ["gpt-4.1", "gpt-5", "gpt-4.5"], label: "GPT-4.1", input: 2, output: 8, cache_write: 0, cache_read: 0.5 },
+  // Standard short-context rates; service tiers and >272K-token prompts differ.
+  { match: ["gpt-5.6-sol"], label: "GPT-5.6 Sol", input: 5, output: 30, cache_write: 6.25, cache_read: 0.5 },
+  { match: ["gpt-5"], label: "GPT-5", input: 1.25, output: 10, cache_write: 0, cache_read: 0.125 },
+  { match: ["gpt-4.1", "gpt-4.5"], label: "GPT-4.1", input: 2, output: 8, cache_write: 0, cache_read: 0.5 },
   { match: ["o4-mini", "o3-mini", "o1-mini"], label: "o-mini", input: 1.1, output: 4.4, cache_write: 0, cache_read: 0.275 },
   { match: ["o1"], label: "o1", input: 15, output: 60, cache_write: 0, cache_read: 7.5 },
   { match: ["o3"], label: "o3", input: 2, output: 8, cache_write: 0, cache_read: 0.5 },
