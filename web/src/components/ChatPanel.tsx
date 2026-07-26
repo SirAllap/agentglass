@@ -254,6 +254,20 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
   );
 }
 
+/** The reply is coming but has not started.
+ *
+ *  Announced once to assistive tech, because the visual signal here is motion
+ *  and motion alone — there is no text to read until the answer begins. */
+function TypingDots() {
+  return (
+    <span className="inline-flex items-center gap-[3.5px] align-middle py-1" role="status" aria-label="Waiting for a reply">
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="agx-typing-dot rounded-full" style={{ width: 5, height: 5, background: "var(--text3)" }} />
+      ))}
+    </span>
+  );
+}
+
 /** A header button that copies something and says it did.
  *
  *  The confirmation is the whole point: a copy that succeeds looks exactly like
@@ -1007,8 +1021,8 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                                 {m.imagesDropped} image{m.imagesDropped > 1 ? "s" : ""} sent with this turn, not kept when the chat was restored
                               </div>
                             )}
-                            {m.text ? <Markdown text={m.text} /> : (m.streaming ? <span className="t-dim2">▍</span> : "")}
-                            {m.streaming && m.text && <span className="t-dim2">▍</span>}
+                            {m.text ? <Markdown text={m.text} /> : (m.streaming ? <TypingDots /> : "")}
+                            {m.streaming && m.text && <span className="t-dim2 agx-caret">▍</span>}
                           </div>
                           </div>
                         </div>
