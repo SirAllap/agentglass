@@ -975,6 +975,7 @@ const server = Bun.serve<WsData>({
       return json(await listPrs(
         url.searchParams.get("root") || "",
         url.searchParams.get("filter") || "mine",
+        url.searchParams.get("state") || "open",
         url.searchParams.get("force") === "1",
       ));
     }

@@ -287,6 +287,11 @@ export function noteCi(repo: PrRepoId, pr: PrSummary): void {
 // ---------------------------------------------------------------------------
 
 export type PrFilter = "mine" | "review" | "all";
+// The open/closed axis, orthogonal to the mine/review/all scope. `closed`
+// includes merged, exactly as gh's `--state closed` and GitHub's own "Closed"
+// tab do; `all` is everything. Drives the fetch (a closed PR is never fetched
+// under `open`), so it is part of the cache key, not a client-side facet.
+export type PrState = "open" | "closed" | "all";
 
 /**
  * Whether probing a filter's PRs should also raise CI notifications.
@@ -327,7 +332,7 @@ const LIST_TTL_MS = 90_000;
 // `\u0000` written as an escape, never as the byte: a raw NUL makes the whole
 // file read as binary to grep, which then skips it in silence. Same separator,
 // same keys, still searchable.
-const cacheKey = (repo: PrRepoId, filter: PrFilter) => `${repo.key}\u0000${filter}`;
+const cacheKey = (repo: PrRepoId, filter: PrFilter, state: PrState) => `${repo.key}\u0000${filter}\u0000${state}`;
 
 // Exported for the test that pins the gh-JSON field extraction (assignees,
 // milestone) — the shapes gh returns are an assumption worth guarding.
@@ -357,8 +362,11 @@ export function mapSummary(p: any, withChecks: boolean): PrSummary {
   };
 }
 
-async function fetchList(repo: PrRepoId, filter: PrFilter): Promise<PrSummary[] | null> {
-  const args = ["pr", "list", "-R", repo.nameWithOwner, "--state", "open", "--limit", "50", "--json", LIST_FIELDS_FAST];
+async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState): Promise<PrSummary[] | null> {
+  // `closed` returns merged + closed (gh's own semantics, matching GitHub's
+  // "Closed" tab); each row still carries its own OPEN/CLOSED/MERGED state, so
+  // the list can tell them apart.
+  const args = ["pr", "list", "-R", repo.nameWithOwner, "--state", state, "--limit", "50", "--json", LIST_FIELDS_FAST];
   // `gh pr list --search` rather than `gh search prs`: the latter is a global
   // search that would need its own repo filter anyway, and it rate-limits
   // separately from the REST path everything else here uses.
@@ -489,8 +497,8 @@ async function fetchCheckRollups(repo: PrRepoId, numbers: number[]): Promise<Map
   return out;
 }
 
-function refreshChecks(repo: PrRepoId, filter: PrFilter, rows: PrSummary[], notify: boolean): void {
-  const key = cacheKey(repo, filter);
+function refreshChecks(repo: PrRepoId, filter: PrFilter, state: PrState, rows: PrSummary[], notify: boolean): void {
+  const key = cacheKey(repo, filter, state);
   if (checkRunning.has(key)) return;
   checkRunning.add(key);
 
@@ -534,8 +542,8 @@ function refreshChecks(repo: PrRepoId, filter: PrFilter, rows: PrSummary[], noti
 }
 
 /** Refresh behind the response. Never awaited by a request handler. */
-function refreshList(repo: PrRepoId, filter: PrFilter): void {
-  const key = cacheKey(repo, filter);
+function refreshList(repo: PrRepoId, filter: PrFilter, state: PrState): void {
+  const key = cacheKey(repo, filter, state);
   if (inflight.has(key)) return;
   inflight.add(key);
   const prev = listCache.get(key);
@@ -555,7 +563,7 @@ function refreshList(repo: PrRepoId, filter: PrFilter): void {
       // One cheap query for the rows themselves — titles, authors, review
       // decisions. Enough to choose a pull request, and it is what the panel
       // is blocked on.
-      const rows = await fetchList(repo, filter);
+      const rows = await fetchList(repo, filter, state);
       if (rows === null) {
         // gh itself failed (a network blip, a rate-limit) — far more likely than
         // a repository that lost every pull request, so keep whatever we had. But
@@ -573,7 +581,9 @@ function refreshList(repo: PrRepoId, filter: PrFilter): void {
         return hit && hit.updatedAt === r.updatedAt ? { ...r, checks: hit.rollup, checksLoaded: true } : r;
       });
       listCache.set(key, { at: Date.now(), prs: merged, loading: false, checksPending: merged.some((p) => !p.checksLoaded) });
-      refreshChecks(repo, filter, merged, ciNotifiesFor(filter));
+      // Only open PRs raise CI notifications — a merged or closed PR's checks
+      // are history, not something to alert on.
+      refreshChecks(repo, filter, state, merged, state === "open" && ciNotifiesFor(filter));
     } catch (e) {
       listCache.set(key, keep({ loading: false, checksPending: false, error: String(e) }));
     } finally {
@@ -587,8 +597,9 @@ function refreshList(repo: PrRepoId, filter: PrFilter): void {
  * old — so the poll never waits on the network, and the age is shown rather
  * than hidden behind a spinner that lies.
  */
-export async function listPrs(rootIn: unknown, filterIn: unknown, force = false): Promise<PrListResponse> {
+export async function listPrs(rootIn: unknown, filterIn: unknown, stateIn: unknown, force = false): Promise<PrListResponse> {
   const filter: PrFilter = filterIn === "review" || filterIn === "all" ? filterIn : "mine";
+  const state: PrState = stateIn === "closed" || stateIn === "all" ? stateIn : "open";
   const repo = await repoIdFor(rootIn);
   if (!repo) {
     const cap = await ghCapability();
@@ -598,10 +609,10 @@ export async function listPrs(rootIn: unknown, filterIn: unknown, force = false)
       error: !cap.available || !cap.authed ? cap.reason : "no GitHub remote on this repository",
     };
   }
-  const key = cacheKey(repo, filter);
+  const key = cacheKey(repo, filter, state);
   const hit = listCache.get(key);
   const age = hit ? Date.now() - hit.at : Infinity;
-  if (force || !hit || age > LIST_TTL_MS) refreshList(repo, filter);
+  if (force || !hit || age > LIST_TTL_MS) refreshList(repo, filter, state);
   const cur = listCache.get(key);
 
   // "you are here" — the checkout's branch, matched against the PR heads. This

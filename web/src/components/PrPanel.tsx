@@ -38,6 +38,14 @@ import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 
 type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
+// The open/closed axis, orthogonal to the scope views. "closed" holds merged +
+// closed, exactly like GitHub's own Closed tab; "all" is everything.
+type StateSel = "open" | "closed" | "all";
+const STATES: { id: StateSel; label: string }[] = [
+  { id: "open", label: "Open" },
+  { id: "closed", label: "Closed" },
+  { id: "all", label: "All" },
+];
 
 /**
  * Saved views: a scope and a query, together, under one name.
@@ -394,6 +402,8 @@ function PrRow({ p, active, onSelect }: { p: PrSummary; active: boolean; onSelec
         boxShadow: active ? "inset 2px 0 0 var(--primary)" : undefined,
       }}>
       <div className="flex items-center gap-1.5">
+        {p.state === "MERGED" ? <Chip text="merged" tint="var(--primary)" title="Merged" />
+          : p.state === "CLOSED" ? <Chip text="closed" tint="var(--error)" title="Closed without merging" /> : null}
         <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>#{p.number}</span>
         <span className="text-[11.5px] truncate" style={{ color: "var(--text)" }}>{p.title}</span>
         {p.isCurrentBranch && <Chip text="here" tint="var(--primary)" title="This checkout is on that branch" />}
@@ -432,6 +442,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
    *  the first load falls through to your own pull requests once, so opening it
    *  never lands on an empty pane. */
   const [filter, setFilter] = useState<Filter>("review");
+  const [stateSel, setStateSel] = useState<StateSel>("open");
   const fellBack = useRef(false);
   // The filter query for the current scope tab — the single source of truth for
   // both the search box and every facet dropdown (parsed in lib/prFilter.ts).
@@ -485,7 +496,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (!root) return;
     const req = ++listReq.current;
     const want = filter;
-    api.prList(root, filter, force).then((r) => {
+    api.prList(root, filter, stateSel, force).then((r) => {
       if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
       setPrs(r.prs);
@@ -494,7 +505,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       setSelected((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : r.prs[0]?.number ?? null));
       // Nothing waiting on you: show your own instead of an empty pane. Once
       // only, so choosing "Needs my review" yourself is never overruled.
-      if (want === "review" && r.prs.length === 0 && !r.loading && !r.error && !fellBack.current) {
+      if (want === "review" && stateSel === "open" && r.prs.length === 0 && !r.loading && !r.error && !fellBack.current) {
         fellBack.current = true;
         setFilter("mine");
       }
@@ -502,7 +513,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       if (req !== listReq.current) return;
       setListState({ fetchedAt: 0, loading: false, error: String(e) });
     });
-  }, [root, filter]);
+  }, [root, filter, stateSel]);
 
   /**
    * Switching filter empties the pane before anything is fetched.
@@ -513,7 +524,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
    */
   const lastScope = useRef<string>("");
   useEffect(() => {
-    const scope = `${root}\u0000${filter}`;
+    const scope = `${root}\u0000${filter}\u0000${stateSel}`;
     if (lastScope.current === scope) return; // re-render, not a switch
     const first = lastScope.current === "";
     lastScope.current = scope;
@@ -524,7 +535,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     setDetail(null);
     setDetailErr("");
     setListState((st) => ({ ...st, loading: true, fetchedAt: 0 }));
-  }, [filter, root]);
+  }, [filter, root, stateSel]);
 
   // Polling pauses while the view is hidden — no point spending requests on a
   // pane nobody is looking at — and resumes on return. Resuming refreshes; it
@@ -543,12 +554,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (!active || !root) return;
     const others = (["mine", "review", "all"] as Filter[]).filter((f) => f !== filter);
     const timers = others.map((f, i) => setTimeout(() => {
-      api.prList(root, f, false)
+      api.prList(root, f, stateSel, false)
         .then((r) => setCounts((c) => ({ ...c, [f]: r.prs.length })))
         .catch(() => {});
     }, 1200 + i * 2500));
     return () => timers.forEach(clearTimeout);
-  }, [active, root, filter]);
+  }, [active, root, filter, stateSel]);
 
   const loadDetail = useCallback((n: number, force = false) => {
     const req = ++detailReq.current;
@@ -955,6 +966,20 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
               <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0 self-center"
                 style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)" }}>Custom</span>
             )}
+            {/* Open / Closed / All — the state axis. "Closed" holds merged +
+                closed, like GitHub's own Closed tab. */}
+            <div className="ml-auto flex rounded-full overflow-hidden shrink-0 self-center" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+              {STATES.map((s) => (
+                <button key={s.id} onClick={() => setStateSel(s.id)} title={`Show ${s.label.toLowerCase()} pull requests`}
+                  className="agx-btn text-[10px] px-2 py-0.5"
+                  style={{
+                    color: stateSel === s.id ? "var(--bg)" : "var(--text3)",
+                    background: stateSel === s.id ? "var(--primary)" : "transparent",
+                  }}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
           </div>
           {repo && prs.length > 0 && (
             <PrFilterBar

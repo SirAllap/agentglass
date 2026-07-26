@@ -346,8 +346,8 @@ const realApi = {
   dockerTop: (id: string) => get<{ ok: boolean; text: string; error?: string }>(`/docker/top?id=${encodeURIComponent(id)}`),
   // --- pull requests (gh-backed) ---
   prCapability: (force = false) => get<{ available: boolean; authed: boolean; login?: string; reason?: string }>(`/prs/capability${force ? "?force=1" : ""}`),
-  prList: (root: string, filter: "mine" | "review" | "all", force = false) =>
-    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}${force ? "&force=1" : ""}`),
+  prList: (root: string, filter: "mine" | "review" | "all", state: "open" | "closed" | "all" = "open", force = false) =>
+    get<PrListResponse>(`/prs/list?root=${encodeURIComponent(root)}&filter=${filter}&state=${state}${force ? "&force=1" : ""}`),
   prDetail: (root: string, number: number, force = false) =>
     get<{ ok: boolean; detail?: PrDetail; error?: string }>(`/prs/detail?root=${encodeURIComponent(root)}&number=${number}${force ? "&force=1" : ""}`),
   prDiff: (root: string, number: number) =>
@@ -547,7 +547,7 @@ const demoApi: typeof realApi = {
   // The panel used to answer available:false here, so the feature the landing
   // page calls out as new was dead in the demo that page links to.
   prCapability: (_force?: boolean) => D(demo.prCapability()),
-  prList: (root: string, filter: "mine" | "review" | "all", _force?: boolean) => D<PrListResponse>(demo.prList(root, filter)),
+  prList: (root: string, filter: "mine" | "review" | "all", _state?: "open" | "closed" | "all", _force?: boolean) => D<PrListResponse>(demo.prList(root, filter)),
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
   prDiff: (_root: string, number: number) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
