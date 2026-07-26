@@ -15,6 +15,7 @@ type DesktopBridge = {
   setAutostart: (on: boolean) => Promise<boolean>;
   remoteEnabled?: () => Promise<boolean>;
   setRemote?: (on: boolean) => Promise<boolean>;
+  revokeRemote?: () => Promise<boolean>;
 };
 
 function bridge(): DesktopBridge | null {
@@ -147,6 +148,27 @@ export async function setRemoteAccess(on: boolean): Promise<boolean | null> {
   if (!b?.setRemote) return null;
   try {
     return await b.setRemote(on);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Invalidate every link handed out so far and mint a new one.
+ *
+ * The toggle cannot do this on its own: turning remote access off shuts the
+ * port, but a phone that scanned the code still holds a working key for the
+ * next time it goes on. Rotating the secret is the only revoke that reaches
+ * devices you no longer have.
+ *
+ * False when the shell declines — a token pinned in the environment is not the
+ * app's to rotate. Null when there is no shell to ask.
+ */
+export async function revokeRemoteAccess(): Promise<boolean | null> {
+  const b = bridge();
+  if (!b?.revokeRemote) return null;
+  try {
+    return await b.revokeRemote();
   } catch {
     return null;
   }

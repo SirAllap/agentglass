@@ -152,6 +152,24 @@ function currentToken() {
 }
 
 /**
+ * Throw away the shared secret and mint another.
+ *
+ * The toggle alone cannot do this. Turning remote access off shuts the port,
+ * but every device that ever scanned the code still holds a working key for the
+ * moment it comes back on — a phone lent to someone, a tablet left behind, a
+ * link forwarded in a chat. Rotating is the only honest revoke: the old link
+ * stops working everywhere, at once, and there is nothing to hunt down.
+ *
+ * Refuses when the token came from the environment, because rotating a file the
+ * server will not read would report a revoke that did not happen.
+ */
+function rotateToken() {
+  if (process.env.AGENTGLASS_TOKEN) return null;
+  try { fs.rmSync(TOKEN_PATH, { force: true }); } catch { /* already gone */ }
+  return ensureToken();
+}
+
+/**
  * The environment the sidecar is spawned with.
  *
  * AGENTGLASS_WEB_DIR is always set, remote access or not. Without it the
@@ -343,10 +361,27 @@ async function ensureServer(adopt) {
  */
 async function restartSidecar() {
   killSidecar();
+
+  // Wait for the socket to actually be gone before looking for a port.
+  //
+  // A server that has just been signalled goes on answering /health for a
+  // moment, and pickPort reads that as "an instance of ours is already up" and
+  // adopts it. It then returns without spawning anything, the old process
+  // finishes dying, and the app is left with no server at all — no window, no
+  // error, just every panel failing. Measured intermittent: the same click
+  // worked and then did not.
+  for (let i = 0; i < 50; i++) {
+    if ((await probe(SERVER_PORT, 300)) !== "ours") break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
   // The port can move: an exposed instance wants the preferred port so the URL
   // on the phone stays true, and pickPort's adoption rule changes with it.
-  const adopt = await resolvePort();
-  await ensureServer(adopt);
+  await resolvePort();
+  // Never adopt here, whatever the probe says. We are the process that just
+  // killed the server; anything still answering is either the corpse above or
+  // something that is not ours to hand the app to.
+  await ensureServer(false);
   for (const w of BrowserWindow.getAllWindows()) {
     try { w.webContents.reload(); } catch { /* window went away mid-toggle */ }
   }
@@ -375,6 +410,20 @@ function registerIpc(win) {
     setRemoteEnabled(!!on);
     await restartSidecar();
     return remoteEnabled();
+  });
+  /**
+   * Revoke every link handed out so far.
+   *
+   * The restart is what enforces it — the running server holds the old secret
+   * in memory and would go on accepting it — and it also drops the record of
+   * which devices had connected, so the panel goes back to waiting for the
+   * first one rather than claiming a phone that can no longer get in.
+   */
+  ipcMain.handle("ag:revokeRemote", async () => {
+    const next = rotateToken();
+    if (!next) return false; // AGENTGLASS_TOKEN is set in the environment; the file is not in charge
+    await restartSidecar();
+    return true;
   });
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api.ts";
-import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess } from "../lib/desktop.ts";
+import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
 import type { RemoteStatus } from "../../../shared/types.ts";
@@ -29,6 +29,9 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [pick, setPick] = useState(0);
+  // Revoking cannot be undone and cannot be partially done, so it asks once.
+  const [confirming, setConfirming] = useState(false);
+  const [revokeNote, setRevokeNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -52,6 +55,18 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     const next = await setRemoteAccess(!enabled);
     setBusy(false);
     if (next !== null) setEnabled(next);
+  };
+
+  const revoke = async () => {
+    setBusy(true);
+    const ok = await revokeRemoteAccess();
+    setBusy(false);
+    setConfirming(false);
+    // In the ordinary case the shell restarts the server and reloads this
+    // window, so nothing below is ever seen. The messages are for the two cases
+    // where it declines.
+    if (ok === false) setRevokeNote("AGENTGLASS_TOKEN is set in this app's environment, so the app cannot rotate it. Change it where it is set.");
+    else if (ok === null) setRevokeNote("This shell cannot rotate the access code.");
   };
 
   const copy = (text: string) => {
@@ -156,6 +171,46 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
             </div>
 
             <Devices st={st} onCopy={copy} copied={copied} />
+
+            {/* The toggle shuts the port; it does not take back the key. A
+                phone that scanned the code once can still get in the next time
+                remote access goes on — lent, lost, or forwarded in a chat.
+                Rotating the code is the revoke that reaches devices you no
+                longer have in your hand. */}
+            {enabled !== null && st.tokenRequired && (
+              <div className="flex flex-col gap-1.5">
+                {!confirming ? (
+                  <button onClick={() => { setConfirming(true); setRevokeNote(null); }} disabled={busy}
+                    className="self-start text-[11px] px-2.5 py-1.5 rounded-lg hover:opacity-80"
+                    style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                    Revoke this link
+                  </button>
+                ) : (
+                  <div className="flex flex-col gap-1.5 px-2.5 py-2 rounded-lg" style={{
+                    background: "color-mix(in srgb, var(--error) 8%, transparent)",
+                    border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)",
+                  }}>
+                    <div className="text-[11px]" style={{ color: "var(--text)" }}>
+                      Every device that has this link stops working, including the ones you cannot reach.
+                      A new code is generated and the phones you still want will need to scan it again.
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={revoke} disabled={busy}
+                        className="text-[11px] px-3 py-1.5 rounded-lg font-medium"
+                        style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
+                        {busy ? "Revoking…" : "Revoke and make a new code"}
+                      </button>
+                      <button onClick={() => setConfirming(false)} disabled={busy}
+                        className="text-[11px] px-3 py-1.5 rounded-lg hover:opacity-80"
+                        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                        Keep it
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {revokeNote && <div className="text-[10.5px]" style={{ color: "var(--warning)" }}>{revokeNote}</div>}
+              </div>
+            )}
           </>
         )}
 

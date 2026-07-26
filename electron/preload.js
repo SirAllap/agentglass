@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("agentglass", {
   })(),
   remoteEnabled: () => ipcRenderer.invoke("ag:remoteEnabled"),
   setRemote: (on) => ipcRenderer.invoke("ag:setRemote", on),
+  revokeRemote: () => ipcRenderer.invoke("ag:revokeRemote"),
   setFullscreen: (on) => ipcRenderer.invoke("ag:setFullscreen", on),
   isFullscreen: () => ipcRenderer.invoke("ag:isFullscreen"),
   setZoom: (factor) => ipcRenderer.invoke("ag:setZoom", factor),
