@@ -17,14 +17,48 @@
 // it would put our update cycle in a fight with their local edits forever.
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { liveNvimSockets } from "./editor.ts";
 
-const CONFIG_HOME = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-export const THEME_DIR = join(CONFIG_HOME, "agentglass");
-export const NVIM_THEME = join(THEME_DIR, "theme.lua");
-export const TMUX_THEME = join(THEME_DIR, "theme.tmux.conf");
+/*
+ * Resolved per call, not once at import.
+ *
+ * These used to be module constants, which meant the first `import` of this
+ * file froze the paths for the whole process. A test that points HOME and
+ * XDG_CONFIG_HOME at a scratch directory and only then imports this module got
+ * the cached copy, still aimed at the real one, and wrote a white "Light"
+ * palette into the user's own theme file. Every tmux server that sourced it
+ * afterwards painted its panes `#ffffff`, which is what a terminal turning
+ * white on its own actually was.
+ */
+const configHome = () => process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+export const themeDir = () => join(configHome(), "agentglass");
+export const nvimThemePath = () => join(themeDir(), "theme.lua");
+export const tmuxThemePath = () => join(themeDir(), "theme.tmux.conf");
+
+/*
+ * A second lock on the same door.
+ *
+ * Lazy paths fix the cache, but only for a test that remembers to redirect
+ * HOME. This makes forgetting harmless: under `bun test`, which sets
+ * NODE_ENV=test, these files may only be written inside the scratch directory,
+ * and no palette may be pushed into a live tmux or nvim at all.
+ *
+ * The rule is "inside `os.tmpdir()`" rather than "outside the user's home"
+ * because `$HOME` is the very thing an isolated test moves, and Bun's
+ * `homedir()` and `userInfo()` both follow it. Anchoring on the scratch
+ * directory instead cannot be defeated by import order or by which variable a
+ * test remembered to set. Same shape as the notification guard in alerts.ts,
+ * and for the same reason: a test suite may not redecorate the machine it runs
+ * on.
+ */
+const IS_TEST = process.env.NODE_ENV === "test";
+function blockedInTest(target: string): boolean {
+  if (!IS_TEST) return false;
+  const scratch = tmpdir();
+  return !(target === scratch || target.startsWith(scratch + "/"));
+}
 
 /** The subset of the palette worth exporting. Everything here exists in every
  *  theme; anything theme-specific would break the ones that lack it. */
@@ -438,8 +472,14 @@ export async function syncTheme(vars: Record<string, unknown>, themeName: string
   const v = normalizeVars(vars);
   const wrote: string[] = [];
   const reloaded: string[] = [];
+  const dir = themeDir();
+  const NVIM_THEME = nvimThemePath();
+  const TMUX_THEME = tmuxThemePath();
+  if (blockedInTest(dir)) {
+    return { ok: false, wrote, reloaded, error: `refusing to write ${dir} from a test: point XDG_CONFIG_HOME at a directory under os.tmpdir()` };
+  }
   try {
-    mkdirSync(THEME_DIR, { recursive: true });
+    mkdirSync(dir, { recursive: true });
     writeFileSync(NVIM_THEME, nvimTheme(v, themeName));
     wrote.push(NVIM_THEME);
     writeFileSync(TMUX_THEME, tmuxTheme(v, themeName));
@@ -450,7 +490,13 @@ export async function syncTheme(vars: Record<string, unknown>, themeName: string
 
   // tmux: cheap and safe — sourcing a file it already sources is a no-op if
   // nothing changed, and there is no session to disturb if it isn't running.
-  try {
+  //
+  // Never from a test, and the guard has to live here rather than in the test's
+  // environment: `Bun.spawn` hands the child the environment the process
+  // started with, so a test that sets TMUX_TMPDIR and deletes TMUX at runtime
+  // changes nothing about the tmux it spawns. That is how a "Light" fixture
+  // reached a developer's own session and painted every pane white.
+  if (!IS_TEST) try {
     const p = Bun.spawn(["tmux", "source-file", TMUX_THEME], { stdout: "ignore", stderr: "ignore" });
     const t = setTimeout(() => { try { p.kill(); } catch { /* gone */ } }, 2000);
     if ((await p.exited) === 0) reloaded.push("tmux");
@@ -466,7 +512,7 @@ export async function syncTheme(vars: Record<string, unknown>, themeName: string
    * now. `luafile` because the generated file is a module that applies itself
    * and registers its own ColorScheme autocmd.
    */
-  try {
+  if (!IS_TEST) try {
     const socks = await liveNvimSockets();
     const keys = `<C-\\><C-N>:luafile ${NVIM_THEME}<CR>`;
     const done = await Promise.all(socks.map(async (sock) => {
@@ -507,7 +553,7 @@ export const SNIPPETS = {
  * reads it and it is the path every tmux answer on the internet names.
  */
 export function tmuxConfPath(): string {
-  const xdg = join(CONFIG_HOME, "tmux", "tmux.conf");
+  const xdg = join(configHome(), "tmux", "tmux.conf");
   const dot = join(homedir(), ".tmux.conf");
   if (existsSync(xdg)) return xdg;
   return existsSync(dot) ? dot : xdg;
@@ -529,7 +575,9 @@ export function tmuxConfPath(): string {
  * the file is not there yet.
  */
 export function applyThemeTo(socket: string[]): boolean {
-  if (!existsSync(TMUX_THEME)) return false;
+  const TMUX_THEME = tmuxThemePath();
+  // A test may open a terminal; it may not repaint the machine's tmux.
+  if (IS_TEST || !existsSync(TMUX_THEME)) return false;
   try {
     const p = Bun.spawnSync(["tmux", ...socket, "source-file", "-q", TMUX_THEME], {
       stdout: "ignore", stderr: "ignore", timeout: 2000,
@@ -540,7 +588,7 @@ export function applyThemeTo(socket: string[]): boolean {
 
 /** Has the user already opted in? Read-only — this never edits their files. */
 export function snippetStatus(): { nvim: boolean; tmux: boolean; nvimPath: string; tmuxPath: string } {
-  const nvimPath = join(CONFIG_HOME, "nvim", "lua", "plugins", "theme.lua");
+  const nvimPath = join(configHome(), "nvim", "lua", "plugins", "theme.lua");
   const tmuxPath = tmuxConfPath();
   const has = (p: string, needle: string) => {
     try { return existsSync(p) && readFileSync(p, "utf8").includes(needle); } catch { return false; }

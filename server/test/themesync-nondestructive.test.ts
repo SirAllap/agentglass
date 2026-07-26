@@ -12,7 +12,7 @@
 // byte-for-byte assertions hold regardless; TMUX_TMPDIR and an empty
 // XDG_RUNTIME_DIR keep them from perturbing a real tmux/nvim while tests run.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,19 +67,63 @@ describe("syncTheme never edits the user's own config", () => {
     ] as const) {
       const r = await ts.syncTheme(palette(bg, primary), name);
       expect(r.ok).toBe(true);
+      // Nothing running is repainted from a test. Env isolation cannot deliver
+      // this on its own: Bun.spawn gives the child the environment the process
+      // started with, so TMUX_TMPDIR set at runtime never reaches tmux.
+      expect(r.reloaded).toEqual([]);
       // Every path it reports writing is inside agentglass's own dir.
-      for (const p of r.wrote) expect(p.startsWith(ts.THEME_DIR)).toBe(true);
+      for (const p of r.wrote) expect(p.startsWith(ts.themeDir())).toBe(true);
+      // And inside the scratch home this file set up, never the real one.
+      for (const p of r.wrote) expect(p.startsWith(home)).toBe(true);
     }
     expect(readFileSync(userTmux, "utf8")).toBe(userTmuxBody);
     expect(readFileSync(userNvim, "utf8")).toBe(userNvimBody);
   });
 
   test("it does write its own theme files, under ~/.config/agentglass only", () => {
-    const written = readdirSync(ts.THEME_DIR).sort();
+    const written = readdirSync(ts.themeDir()).sort();
     expect(written).toContain("theme.tmux.conf");
     expect(written).toContain("theme.lua");
-    expect(ts.TMUX_THEME.startsWith(ts.THEME_DIR)).toBe(true);
-    expect(ts.NVIM_THEME.startsWith(ts.THEME_DIR)).toBe(true);
+    expect(ts.tmuxThemePath().startsWith(ts.themeDir())).toBe(true);
+    expect(ts.nvimThemePath().startsWith(ts.themeDir())).toBe(true);
+  });
+
+  /**
+   * The leak this file was supposed to prevent, and did not.
+   *
+   * The paths used to be module constants, so the first import in the process
+   * froze them. `security.test.ts` and `terminal-commands.test.ts` sort ahead of
+   * this file and pull `themesync.ts` in through `terminal.ts`, which meant the
+   * env redirected above arrived too late and the "Light" palette below was
+   * written straight into the developer's own `~/.config/agentglass/`. Every
+   * tmux server that sourced it afterwards painted its panes `#ffffff`. That is
+   * what "the terminal went white on its own" was.
+   *
+   * Two things stop it now, and both are worth holding: the paths resolve per
+   * call, and a write outside the scratch directory is refused outright while
+   * NODE_ENV=test.
+   */
+  test("a test that forgot to redirect its home cannot write the real one", async () => {
+    const saved = process.env.XDG_CONFIG_HOME;
+    // Deliberately outside os.tmpdir(): this stands in for a real home. Reading
+    // the actual one is not an option here, since by this point in a full suite
+    // another file may already have moved HOME somewhere harmless.
+    const notScratch = "/home/agx-not-a-scratch-dir";
+    process.env.XDG_CONFIG_HOME = join(notScratch, ".config");
+    try {
+      expect(ts.themeDir().startsWith(notScratch)).toBe(true); // resolved live, not at import
+      const r = await ts.syncTheme(palette("#ffffff", "#7c3aed"), "Light");
+      expect(r.ok).toBe(false);
+      expect(r.wrote).toEqual([]);
+      expect(r.error).toContain("refusing to write");
+      expect(existsSync(notScratch)).toBe(false); // and it created nothing on the way
+    } finally {
+      process.env.XDG_CONFIG_HOME = saved;
+    }
+  });
+
+  test("no live tmux is repainted from a test, whatever the file says", () => {
+    expect(ts.applyThemeTo([])).toBe(false);
   });
 
   test("snippetStatus reports opt-in state read-only, without editing anything", () => {
