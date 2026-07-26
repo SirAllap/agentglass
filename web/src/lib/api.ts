@@ -547,7 +547,7 @@ const demoApi: typeof realApi = {
   // The panel used to answer available:false here, so the feature the landing
   // page calls out as new was dead in the demo that page links to.
   prCapability: (_force?: boolean) => D(demo.prCapability()),
-  prList: (root: string, _filter: "mine" | "review" | "all", _force?: boolean) => D<PrListResponse>(demo.prList(root)),
+  prList: (root: string, filter: "mine" | "review" | "all", _force?: boolean) => D<PrListResponse>(demo.prList(root, filter)),
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
   prDiff: (_root: string, number: number) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,

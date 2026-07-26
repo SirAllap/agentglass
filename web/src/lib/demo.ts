@@ -627,12 +627,12 @@ const PR_SUMMARIES: PrSummary[] = [
   },
   {
     number: 471, title: "Otel spans around the approval gate",
-    author: "t-okafor", state: "OPEN", isDraft: true,
+    author: "you", state: "OPEN", isDraft: true,
     headRefName: "feat/gate-spans", baseRefName: "main",
     url: "https://github.com/acme/shop-api/pull/471", updatedAt: ago(9),
     reviewDecision: null, additions: 212, deletions: 8, changedFiles: 11,
     labels: [{ name: "observability", color: "5319e7" }],
-    assignees: ["t-okafor"], milestone: null,
+    assignees: ["you"], milestone: null,
     checks: rollup({ ok: 2, pending: 3 }), checksLoaded: true,
   },
   {
@@ -939,12 +939,21 @@ index c81a5e0..0000000
 export function prCapability() {
   return { available: true, authed: true, login: "you" };
 }
-export function prList(root: string): PrListResponse {
+/** Who owns what, in the fixture's fiction. The real list is scoped by `gh`
+ *  server-side, so the demo has to scope it too — otherwise every saved view
+ *  reports the same total and the counts are decoration rather than an answer. */
+const PR_MINE = new Set([465, 471]);
+const PR_REVIEW = new Set([482, 468, 461]);
+
+export function prList(root: string, filter: "mine" | "review" | "all" = "all"): PrListResponse {
   // Only the fictional shop-api has a forge remote in this fixture; the other
   // checkout answers "no pull requests here", which is a real state too.
-  const mine = /shop-api/.test(root);
+  const here = /shop-api/.test(root);
+  const scoped = filter === "mine" ? PR_SUMMARIES.filter((p) => PR_MINE.has(p.number))
+    : filter === "review" ? PR_SUMMARIES.filter((p) => PR_REVIEW.has(p.number))
+    : PR_SUMMARIES;
   return {
-    ok: true, repo: mine ? PR_REPO : null, prs: mine ? PR_SUMMARIES : [],
+    ok: true, repo: here ? PR_REPO : null, prs: here ? scoped : [],
     fetchedAt: Date.now() - 90_000, stale: false, loading: false, checksPending: false,
   };
 }

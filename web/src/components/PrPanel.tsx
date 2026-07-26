@@ -38,10 +38,22 @@ import { getHighlighter, shikiTheme } from "../lib/highlight.ts";
 type Filter = "mine" | "review" | "all";
 type Tab = "overview" | "conversation" | "commits" | "files" | "checks" | "review";
 
-const FILTERS: { id: Filter; label: string; hint: string }[] = [
-  { id: "mine", label: "Mine", hint: "Pull requests you opened" },
-  { id: "review", label: "Review", hint: "Waiting on your review" },
-  { id: "all", label: "All", hint: "Every open pull request" },
+/**
+ * Saved views: a scope and a query, together, under one name.
+ *
+ * The three scopes are what the server can fetch; the interesting questions
+ * ("what of mine is red", "what of mine could land right now") are a scope plus
+ * a filter, and asking them used to mean picking a tab and then building the
+ * query by hand every time. A view is only ever shorthand — it writes the same
+ * query string the facets write, so the chips below still show what is on and
+ * still take it off again.
+ */
+const VIEWS: { id: string; label: string; scope: Filter; query: string; tint?: string; hint: string }[] = [
+  { id: "review", label: "Needs my review", scope: "review", query: "", tint: "var(--warning)", hint: "Somebody asked you to look" },
+  { id: "mine", label: "Mine", scope: "mine", query: "", tint: "var(--primary)", hint: "Pull requests you opened" },
+  { id: "failing", label: "Failing", scope: "all", query: "checks:red", tint: "var(--error)", hint: "Open here with a red check" },
+  { id: "ready", label: "Ready", scope: "all", query: "review:approved checks:green", tint: "var(--success)", hint: "Approved and green — these can land" },
+  { id: "all", label: "All", scope: "all", query: "", hint: "Every open pull request" },
 ];
 
 const POLL_MS = 20_000;
@@ -162,6 +174,33 @@ export const MD_CSS = `
 /* margin:0, not "0 auto". The measure is still capped for reading, but a
    centred column inside a card sets the body 380px away from the author name
    above it, which reads as a layout fault rather than as typography. */
+/* One timeline, one rail. The node says what kind of thing happened; the
+   rail says they happened in an order. */
+.agx-tl{position:relative;padding-left:26px}
+.agx-tl::before{content:"";position:absolute;left:9px;top:6px;bottom:6px;width:2px;border-radius:2px;background:color-mix(in srgb,var(--border) 42%,transparent)}
+.agx-ev{position:relative;margin-bottom:10px}
+.agx-ev:last-child{margin-bottom:0}
+.agx-node{position:absolute;left:-26px;top:6px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid color-mix(in srgb,var(--border) 50%,transparent)}
+/* A small event — opened, force-pushed, review requested. It sits on the same
+   rail as the comments but weighs a fraction of one, because it is context
+   rather than something anybody said. */
+.agx-tiny{position:relative;display:flex;align-items:center;gap:7px;font-size:10.5px;color:var(--text3);padding:3px 0;margin-bottom:10px}
+.agx-tiny .agx-node{top:1px;width:18px;height:18px;left:-26px}
+.agx-tiny b{color:var(--text2);font-weight:500}
+/* menus */
+.agx-menu{background:var(--bg);border:1px solid color-mix(in srgb,var(--primary) 40%,transparent);box-shadow:0 20px 50px -20px #000}
+.agx-mi:hover{background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--text)}
+.agx-mi:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+/* the "＋" that adds a reviewer or a label, inline with the values it extends */
+.agx-inline-add{font-size:10px;padding:1px 6px;border-radius:5px;color:var(--text3);border:1px solid color-mix(in srgb,var(--border) 50%,transparent);transition:color .13s,border-color .13s,background .13s}
+.agx-inline-add:hover:not(:disabled){color:var(--primary);border-color:var(--primary);background:color-mix(in srgb,var(--primary) 10%,transparent)}
+.agx-inline-add:disabled{opacity:.4;cursor:not-allowed}
+/* the viewed switch on a file header — a checkbox does not read as a state you
+   are keeping, and "viewed" is state you keep across a whole review */
+.agx-sw{position:relative;width:24px;height:14px;border-radius:8px;flex:none;background:color-mix(in srgb,var(--border) 50%,transparent);transition:background .17s}
+.agx-sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--text3);transition:transform .17s,background .17s}
+.agx-sw[data-on="1"]{background:color-mix(in srgb,var(--success) 55%,transparent)}
+.agx-sw[data-on="1"]::after{transform:translateX(10px);background:var(--success)}
 .agx-hl pre{margin:0;padding:10px 12px;border-radius:8px;overflow-x:auto;background:color-mix(in srgb,#000 42%,transparent) !important;border:1px solid color-mix(in srgb,var(--border) 30%,transparent)}
 .agx-hl code{font-size:11.5px;line-height:1.65}
 .agx-md .agx-hl{margin:0 0 .85em}
@@ -387,7 +426,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
   const [repo, setRepo] = useState<PrRepoId | null>(null);
-  const [filter, setFilter] = useState<Filter>("mine");
+  /** The panel opens on what is waiting on you, not on what you wrote — that
+   *  is the question a review dashboard exists to answer. If nothing is waiting
+   *  the first load falls through to your own pull requests once, so opening it
+   *  never lands on an empty pane. */
+  const [filter, setFilter] = useState<Filter>("review");
+  const fellBack = useRef(false);
   // The filter query for the current scope tab — the single source of truth for
   // both the search box and every facet dropdown (parsed in lib/prFilter.ts).
   // Cleared when the scope changes so each tab (mine / review / all) starts
@@ -447,6 +491,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       setCounts((c) => ({ ...c, [want]: r.prs.length }));
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth });
       setSelected((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : r.prs[0]?.number ?? null));
+      // Nothing waiting on you: show your own instead of an empty pane. Once
+      // only, so choosing "Needs my review" yourself is never overruled.
+      if (want === "review" && r.prs.length === 0 && !r.loading && !r.error && !fellBack.current) {
+        fellBack.current = true;
+        setFilter("mine");
+      }
     }).catch((e) => {
       if (req !== listReq.current) return;
       setListState({ fetchedAt: 0, loading: false, error: String(e) });
@@ -570,6 +620,29 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const filters = useMemo(() => parseQuery(query), [query]);
   const visiblePrs = useMemo(() => applyFilters(prs, filters), [prs, filters]);
   const facets = useMemo(() => buildFacets(prs, filters), [prs, filters]);
+
+  /** What each view last counted.
+   *
+   *  Only the scope currently loaded has rows to count, so a view on another
+   *  scope can only report what it last saw — the same deal the panel already
+   *  makes for the list itself, which shows its own age rather than pretending
+   *  to be live. A view that has never been loaded shows no number at all,
+   *  because a made-up one next to "Failing" is worse than none: you would act
+   *  on it. */
+  const [viewCounts, setViewCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (listState.loading) return;
+    const seen: Record<string, number> = {};
+    for (const v of VIEWS) if (v.scope === filter) seen[v.id] = applyFilters(prs, parseQuery(v.query)).length;
+    setViewCounts((cur) => ({ ...cur, ...seen }));
+  }, [prs, filter, listState.loading]);
+
+  const viewCount = useCallback((v: (typeof VIEWS)[number]): number | null => {
+    if (v.scope === filter && !listState.loading) return applyFilters(prs, parseQuery(v.query)).length;
+    return viewCounts[v.id] ?? (v.query ? null : counts[v.scope] ?? null);
+  }, [filter, prs, counts, viewCounts, listState.loading]);
+
+  const activeView = VIEWS.find((v) => v.scope === filter && v.query === query.trim());
 
   // If the selected row is filtered out, move the selection to the first row
   // still visible rather than leaving a phantom highlight on a hidden PR — the
@@ -728,6 +801,79 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     finally { setBusy(false); }
   };
 
+  const doEditTitle = async () => {
+    if (!detail) return;
+    const title = await askText({ title: `Rename #${detail.number}`, confirmLabel: "Save", input: { label: "Title", initial: detail.title } });
+    if (!title?.trim() || title.trim() === detail.title) return;
+    await act("Edit title", () => api.prEdit(root, detail.number, { title: title.trim() }));
+  };
+
+  const doEditBody = async (body: string) => {
+    if (!detail) return false;
+    return act("Description", () => api.prEdit(root, detail.number, { body }));
+  };
+
+  /** Labels and reviewers both take a comma-separated list and diff it against
+   *  what is already there, so one box does both adding and removing. */
+  const doLabels = async () => {
+    if (!detail) return;
+    const cur = detail.labels.map((l) => l.name);
+    const next = await askText({
+      title: `Labels on #${detail.number}`, confirmLabel: "Save",
+      input: { label: "Comma-separated — remove one by deleting it", initial: cur.join(", ") },
+    });
+    if (next == null) return;
+    const want = next.split(",").map((s) => s.trim()).filter(Boolean);
+    const add = want.filter((l) => !cur.includes(l));
+    const remove = cur.filter((l) => !want.includes(l));
+    if (add.length === 0 && remove.length === 0) return;
+    await act("Labels", () => api.prLabels(root, detail.number, add, remove));
+  };
+
+  const doReviewers = async () => {
+    if (!detail) return;
+    const cur = detail.reviewers;
+    const next = await askText({
+      title: `Reviewers on #${detail.number}`, confirmLabel: "Save",
+      input: { label: "Comma-separated logins — remove one by deleting it", initial: cur.join(", ") },
+    });
+    if (next == null) return;
+    const want = next.split(",").map((s) => s.trim().replace(/^@/, "")).filter(Boolean);
+    const add = want.filter((l) => !cur.includes(l));
+    const remove = cur.filter((l) => !want.includes(l));
+    if (add.length === 0 && remove.length === 0) return;
+    await act("Reviewers", () => api.prReviewers(root, detail.number, add, remove));
+  };
+
+  const doCopyLink = async () => {
+    if (!detail) return;
+    try { await navigator.clipboard.writeText(detail.url); flash(true, "Link copied"); }
+    catch { flash(false, "Could not reach the clipboard"); }
+  };
+
+  /** Hand a failing check to the chat with the pull request already checked out,
+   *  so the answer is written against the code that failed rather than a guess
+   *  from the name of the job. */
+  const askClaudeAboutCheck = async (check: PrCheck) => {
+    if (!detail || !onOpenChatWith) return;
+    setBusy(true);
+    try {
+      const r = await api.prLocalReview(root, detail.number);
+      if (!r.ok || !r.cwd) { flash(false, r.error || "Could not check the pull request out"); return; }
+      onOpenChatWith(r.cwd,
+        `The check "${check.name}"${check.workflow ? ` in the ${check.workflow} workflow` : ""} is failing on pull request #${detail.number} (${detail.title}).\n\n` +
+        `This worktree is on ${detail.headRefName}. Work out why it is failing and propose the fix.` +
+        (check.url ? `\n\nThe run is at ${check.url}.` : ""));
+      flash(true, `Checked out #${detail.number} — the failure is waiting in chat`);
+    } catch (e) { flash(false, String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const doComment = async (body: string) => {
+    if (!detail) return false;
+    return act("Comment", () => api.prComment(root, detail.number, body));
+  };
+
   const lanes = useMemo(() => {
     if (!detail) return { humans: [] as PrReview[], botReviews: [] as PrReview[], humanComments: [] as PrComment[], bots: [] as PrComment[] };
     // Oldest first, the way a conversation is read — GitHub's order, and the
@@ -786,22 +932,28 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
       <div className="flex flex-1 min-h-0">
         <div className="flex flex-col min-h-0 shrink-0" style={{ width: sidebarW }}>
-          <div className="flex gap-1 px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
-            {FILTERS.map((f) => {
-              const n = counts[f.id];
+          <div className="flex gap-1 flex-wrap px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+            {VIEWS.map((v) => {
+              const n = viewCount(v);
+              const on = activeView?.id === v.id;
               return (
-                <button key={f.id} onClick={() => { setFilter(f.id); setQuery(""); }} title={f.hint}
-                  className="text-[10px] px-2 py-0.5 rounded-full"
+                <button key={v.id} onClick={() => { setFilter(v.scope); setQuery(v.query); }} title={v.hint}
+                  className="agx-btn text-[10px] px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0"
                   style={{
-                    color: filter === f.id ? "var(--bg)" : "var(--text2)",
-                    background: filter === f.id ? "var(--primary)" : "transparent",
-                    border: `1px solid ${filter === f.id ? "var(--primary)" : "color-mix(in srgb, var(--border) 45%, transparent)"}`,
+                    color: on ? "var(--bg)" : "var(--text2)",
+                    background: on ? "var(--primary)" : "transparent",
+                    border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 45%, transparent)"}`,
                   }}>
-                  {f.label}
-                  {n ? <span className="ml-1 tabular-nums" style={{ opacity: filter === f.id ? .8 : 1, color: filter === f.id ? undefined : f.id === "review" ? "var(--warning)" : undefined }}>{n}</span> : null}
+                  {v.tint && !on && <span className="rounded-full shrink-0" style={{ width: 5, height: 5, background: v.tint }} />}
+                  {v.label}
+                  {n != null && <span className="tabular-nums" style={{ opacity: on ? .8 : .75 }}>{n}</span>}
                 </button>
               );
             })}
+            {!activeView && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0 self-center"
+                style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)" }}>Custom</span>
+            )}
           </div>
           {repo && prs.length > 0 && (
             <PrFilterBar
@@ -850,6 +1002,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             </div>
           ) : (
             <>
+              <Masthead
+                d={d} busy={busy}
+                onEditTitle={doEditTitle} onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
+                onClose={doClose} onLocalReview={doLocalReview}
+                onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink}
+              />
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
                 {TABS.map((t) => (
                   <button key={t.id} onClick={() => setTab(t.id)} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
@@ -875,6 +1033,8 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                 {tab === "overview" && (
                   <Overview
                     d={d} busy={busy} openThreads={openThreads.length}
+                    conversationCount={d.comments.length + d.reviews.length + d.threads.length}
+                    onEditBody={doEditBody}
                     onLocalReview={doLocalReview} onMerge={doMerge} onClose={doClose}
                     onUpdateBranch={() => act("Update branch", () => api.prUpdateBranch(root, d.number))}
                     onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
@@ -886,7 +1046,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
                 {tab === "conversation" && (
                   <Conversation
-                    d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy}
+                    d={d} lanes={lanes} raw={rawBots} onRaw={setRawBots} busy={busy} onComment={doComment}
                     onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
                     onReply={async (t) => {
                       const first = t.comments[0];
@@ -937,7 +1097,13 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                   />
                 )}
 
-                {tab === "checks" && <Checks d={d} busy={busy} onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))} />}
+                {tab === "checks" && (
+                  <Checks
+                    d={d} busy={busy}
+                    onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
+                    onAsk={onOpenChatWith ? (k) => askClaudeAboutCheck(k) : undefined}
+                  />
+                )}
 
                 {tab === "review" && canReview && (
                   <ReviewTab
@@ -970,30 +1136,17 @@ const MERGE_WHY: Record<string, string> = {
   UNKNOWN: "GitHub has not finished working it out",
 };
 
-function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onDraft, onGoThreads }: {
-  d: PrDetail; busy: boolean; openThreads: number;
+function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onDraft, onGoThreads, onEditBody }: {
+  d: PrDetail; busy: boolean; openThreads: number; conversationCount: number;
   onLocalReview: () => void; onMerge: () => void; onClose: () => void; onUpdateBranch: () => void;
   onRerun: () => void; onAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
+  onEditBody: (body: string) => Promise<boolean>;
 }) {
   const c = d.checks;
   const canMerge = d.mergeState === "CLEAN";
 
   return (
     <div className="flex flex-col gap-3">
-      <div>
-        <div className="text-[14px] leading-snug" style={{ color: "var(--text)" }}>{d.title}</div>
-        <div className="text-[10.5px] mt-1 flex items-center gap-1.5 flex-wrap" style={{ color: "var(--text3)" }}>
-          <Avatar login={d.author} size={15} />
-          <span>#{d.number} · {d.author} · {d.headRefName} → {d.baseRefName} ·</span>
-          <span style={{ color: "var(--success)" }}>+{d.additions}</span>
-          <span style={{ color: "var(--error)" }}>−{d.deletions}</span>
-          <span>· {d.changedFiles} files</span>
-        </div>
-        {d.labels.length > 0 && (
-          <div className="flex gap-1 flex-wrap mt-1.5">{d.labels.map((l) => <Chip key={l.name} text={l.name} tint="var(--primary)" />)}</div>
-        )}
-      </div>
-
       {d.forcePushedSinceReview && (
         <div className="text-[10.5px] px-2.5 py-2 rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
           The author force-pushed after the last review — that review was for code that is no longer here.
@@ -1047,15 +1200,240 @@ function Overview({ d, busy, openThreads, onLocalReview, onMerge, onClose, onUpd
         </div>
       </section>
 
-      <section>
-        <div className="text-[9.5px] uppercase tracking-wider mb-2" style={{ color: "var(--text3)" }}>description</div>
-        {d.body.trim() ? <Md body={d.body} /> : <div className="text-[11px]" style={{ color: "var(--text3)" }}>No description.</div>}
-      </section>
+      <Description d={d} busy={busy} onSave={onEditBody} />
 
-      <div className="flex gap-1.5 flex-wrap">
+      <div className="flex gap-1.5 flex-wrap items-center">
         <Btn onClick={onLocalReview} disabled={busy} primary title="Check the PR out into a throwaway worktree and review it with the whole repo in context">Review locally with Claude</Btn>
         <a href={d.url} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open on GitHub ↗</a>
+      </div>
+
+      {/* Where to go next. Overview answers "can this land"; the conversation is
+          usually the reason it cannot, and it should not need finding. */}
+      <button onClick={onGoThreads}
+        className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-left agx-btn"
+        style={{ border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)", background: "color-mix(in srgb, var(--primary) 7%, transparent)" }}>
+        <span className="min-w-0">
+          <span className="block text-[9px] uppercase tracking-[.13em]" style={{ color: "var(--text3)" }}>Next</span>
+          <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>Conversation</span>
+        </span>
+        <span className="ml-auto text-[10.5px] shrink-0" style={{ color: "var(--primary)" }}>
+          {conversationCount === 0 ? "Nothing said yet" : `${conversationCount} comment${conversationCount === 1 ? "" : "s"} and thread${conversationCount === 1 ? "" : "s"}`} →
+        </span>
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The description, and a way to fix it without leaving.
+ *
+ * Write/Preview rather than a bare textarea: a description is markdown, and
+ * finding out how it renders by saving it and looking is not a review flow.
+ */
+function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: (body: string) => Promise<boolean> }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(d.body);
+  const [preview, setPreview] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // A new pull request means a new body; without this the editor keeps the
+  // previous one and offers to save it over the one you are looking at.
+  useEffect(() => { setEditing(false); setPreview(false); setText(d.body); }, [d.number, d.body]);
+
+  const done = d.checklist.filter((i) => i.checked).length;
+
+  const save = async () => {
+    if (text === d.body) { setEditing(false); return; }
+    setSaving(true);
+    const ok = await onSave(text);
+    setSaving(false);
+    if (ok) setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
+        <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+          <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
+          <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
+        </div>
+        {preview ? (
+          <div className="p-3 min-h-[160px]">{text.trim() ? <Md body={text} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}</div>
+        ) : (
+          <textarea
+            value={text} onChange={(e) => setText(e.target.value)} autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { setText(d.body); setEditing(false); }
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
+            }}
+            className="w-full p-3 text-[12px] outline-none resize-y agx-scroll"
+            style={{ ...CODE_FONT_STYLE, minHeight: 160, background: "transparent", color: "var(--text2)", lineHeight: 1.6 }}
+          />
+        )}
+        <div className="flex items-center gap-1.5 px-2.5 py-2"
+          style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+          <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · ⌘↵ save · Esc cancel</span>
+          <span className="ml-auto flex gap-1.5">
+            <Btn onClick={() => { setText(d.body); setEditing(false); }} disabled={saving} small>Cancel</Btn>
+            <Btn onClick={save} disabled={saving || busy} primary small>{saving ? "Saving…" : "Save"}</Btn>
+          </span>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
+      <div className="flex items-center gap-2 px-3 py-1.5"
+        style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>description</span>
+        <span className="ml-auto"><Btn onClick={() => setEditing(true)} disabled={busy} small>✎ Edit</Btn></span>
+      </div>
+      <div className="p-3">
+        {d.checklist.length > 0 && (
+          <div className="flex items-center gap-2 mb-3 text-[10.5px]" style={{ color: done === d.checklist.length ? "var(--success)" : "var(--text3)" }}>
+            <span className="tabular-nums shrink-0">{done} of {d.checklist.length} done</span>
+            <span className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              <span className="block h-full rounded-full" style={{ width: `${(done / d.checklist.length) * 100}%`, background: done === d.checklist.length ? "var(--success)" : "var(--primary)" }} />
+            </span>
+          </div>
+        )}
+        {d.body.trim() ? <Md body={d.body} /> : <div className="text-[11px]" style={{ color: "var(--text3)" }}>No description.</div>}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * A dropdown that closes on an outside click, on Escape, and on choosing
+ * something. All three, because a menu that only closes one of those ways is
+ * the kind of thing you only notice when it is stuck open over the diff.
+ */
+function Menu({ label, title, children, align = "right" }: {
+  label: string; title?: string; children: (close: () => void) => React.ReactNode; align?: "left" | "right";
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  return (
+    <div className="relative shrink-0" ref={box}>
+      <Btn onClick={() => setOpen((v) => !v)} title={title} small>{label}</Btn>
+      {open && (
+        <div className="absolute z-50 mt-1.5 rounded-lg overflow-hidden agx-menu" style={{ [align]: 0, minWidth: 216 }}>
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ children, onClick, danger, kbd }: {
+  children: React.ReactNode; onClick: () => void; danger?: boolean; kbd?: string;
+}) {
+  return (
+    <button onClick={onClick} className="agx-mi w-full text-left flex items-center gap-2 px-3 py-1.5 text-[11px]"
+      style={{ color: danger ? "var(--error)" : "var(--text2)" }}>
+      <span className="min-w-0 truncate">{children}</span>
+      {kbd && <span className="ml-auto text-[9.5px] shrink-0" style={{ color: "var(--text3)" }}>{kbd}</span>}
+    </button>
+  );
+}
+
+const MenuSep = () => <div style={{ height: 1, background: "color-mix(in srgb, var(--border) 26%, transparent)", margin: "3px 0" }} />;
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0" style={{ maxWidth: 260 }}>
+      <div className="text-[9px] uppercase tracking-[.12em] mb-1" style={{ color: "var(--text3)" }}>{label}</div>
+      <div className="text-[11px] flex items-center gap-1.5 flex-wrap" style={{ color: "var(--text2)" }}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * The identity of the pull request, above the tabs so it survives every tab.
+ *
+ * Everything here used to live at the top of Overview, which meant that the
+ * moment you opened Files you no longer knew whose pull request you were
+ * reading or what branch it targeted.
+ */
+function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLabels, onReviewers, onCopyLink }: {
+  d: PrDetail; busy: boolean;
+  onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: () => void;
+  onLabels: () => void; onReviewers: () => void; onCopyLink: () => void;
+}) {
+  const tint = stateTint(d);
+  const state = d.state === "MERGED" ? "Merged" : d.state === "CLOSED" ? "Closed" : d.isDraft ? "Draft" : "Open";
+  return (
+    <div className="px-3 pt-2.5 pb-2 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <span className="text-[9.5px] px-1.5 py-0.5 rounded-full align-middle"
+            style={{ color: tint, border: `1px solid color-mix(in srgb, ${tint} 45%, transparent)`, background: `color-mix(in srgb, ${tint} 12%, transparent)` }}>
+            ● {state}
+          </span>
+          <span className="text-[14px] leading-snug ml-2" style={{ color: "var(--text)" }}>
+            <span className="tabular-nums mr-1.5" style={{ color: "var(--text3)" }}>#{d.number}</span>{d.title}
+          </span>
+        </div>
+        <Menu label="⋯" title="More actions">
+          {(close) => (
+            <>
+              <MenuItem onClick={() => { close(); onEditTitle(); }}>✎ Edit title</MenuItem>
+              <MenuItem onClick={() => { close(); onReviewers(); }}>◍ Request a review</MenuItem>
+              <MenuItem onClick={() => { close(); onLabels(); }}>⌗ Edit labels</MenuItem>
+              <MenuItem onClick={() => { close(); onDraft(); }}>◌ {d.isDraft ? "Mark ready for review" : "Convert to draft"}</MenuItem>
+              <MenuSep />
+              <MenuItem onClick={() => { close(); onCopyLink(); }}>🔗 Copy link</MenuItem>
+              <MenuItem onClick={() => { close(); window.open(d.url, "_blank", "noreferrer,noopener"); }}>↗ Open on GitHub</MenuItem>
+              <MenuItem onClick={() => { close(); onLocalReview(); }}>✦ Review locally with Claude</MenuItem>
+              <MenuSep />
+              <MenuItem onClick={() => { close(); onClose(); }} danger>✕ {d.state === "CLOSED" ? "Reopen" : "Close"} pull request</MenuItem>
+            </>
+          )}
+        </Menu>
+      </div>
+
+      {/* Packed left and wrapping, not stretched to fill: six fields spread
+          across a wide pane put Milestone a screen away from Author, and the
+          eye has to travel the whole width to read one header. */}
+      <div className="flex flex-wrap gap-x-7 gap-y-2 mt-2.5">
+        <Field label="Author"><Avatar login={d.author} size={15} />{d.author}</Field>
+        <Field label="Branch">
+          <code className="px-1 py-0.5 rounded text-[10.5px] truncate" style={{ ...CODE_FONT_STYLE, color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>{d.headRefName}</code>
+          <span style={{ color: "var(--text3)" }}>→ {d.baseRefName}</span>
+        </Field>
+        <Field label="Changes">
+          <span className="tabular-nums" style={{ color: "var(--success)" }}>+{d.additions}</span>
+          <span className="tabular-nums" style={{ color: "var(--error)" }}>−{d.deletions}</span>
+          <span style={{ color: "var(--text3)" }}>· {d.changedFiles} file{d.changedFiles === 1 ? "" : "s"}</span>
+        </Field>
+        <Field label="Reviewers">
+          {d.reviewers.length === 0
+            ? <span style={{ color: "var(--text3)" }}>nobody yet</span>
+            : d.reviewers.map((r) => <span key={r} className="flex items-center gap-1"><Avatar login={r} size={14} />{r}</span>)}
+          <button onClick={onReviewers} disabled={busy} title="Request a review" className="agx-inline-add">＋</button>
+        </Field>
+        <Field label="Assignee">
+          {d.assignees.length === 0
+            ? <span style={{ color: "var(--text3)" }}>unassigned</span>
+            : d.assignees.map((a) => <span key={a} className="flex items-center gap-1"><Avatar login={a} size={14} />{a}</span>)}
+        </Field>
+        <Field label="Milestone">
+          {d.milestone ? <span className="truncate">{d.milestone}</span> : <span style={{ color: "var(--text3)" }}>none</span>}
+        </Field>
+      </div>
+
+      <div className="flex gap-1 flex-wrap mt-2.5 items-center">
+        {d.labels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}
+        <button onClick={onLabels} disabled={busy} className="agx-inline-add" style={{ borderStyle: "dashed" }}>＋ Label</button>
       </div>
     </div>
   );
@@ -1115,6 +1493,34 @@ function FileStack({ files, split, wrap, onSplit, onWrap }: {
   );
 }
 
+/**
+ * Renders its children only once they have come near the viewport.
+ *
+ * Every file on this tab is open by default, which is the right default for
+ * reading a change — but mounting sixty syntax-highlighted diffs at once is not
+ * a tab you can scroll. This keeps the default and pays for each diff at the
+ * moment it is about to be looked at; `once` means scrolling back up does not
+ * unmount what you already read.
+ */
+function LazyMount({ minHeight, children }: { minHeight: number; children: React.ReactNode }) {
+  const [shown, setShown] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (shown) return;
+    const el = box.current;
+    if (!el) return;
+    if (typeof IntersectionObserver !== "function") { setShown(true); return; }
+    const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { setShown(true); io.disconnect(); } }, { rootMargin: "600px 0px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [shown]);
+  return <div ref={box} style={shown ? undefined : { minHeight }}>{shown ? children : null}</div>;
+}
+
+/** Above this many changed lines a file starts folded. A 4,000-line lockfile is
+ *  not something anybody reads, and it should not be what the tab opens on. */
+const BIG_FILE_LINES = 600;
+
 function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft }: {
   d: PrDetail; byPath: Map<string, FileChange>; loaded: boolean;
   seenFiles: string[]; onSeen: (p: string) => void;
@@ -1122,16 +1528,35 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
   split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
   drafts: DraftComment[]; onAddDraft: (path: string, line: number) => void;
 }) {
-  const current = sel ? byPath.get(sel) : undefined;
   const draftsFor = (p: string) => drafts.filter((x) => x.path === p).length;
   const frameRef = useRef<HTMLDivElement>(null);
+  const [q, setQ] = useState("");
+  // Folded, not opened: every file is open by default and this records the ones
+  // you have put away. Seeded with the files too big to be a sensible default.
+  const [folded, setFolded] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setQ("");
+    setFolded(new Set(d.files.filter((f) => f.additions + f.deletions > BIG_FILE_LINES).map((f) => f.path)));
+  }, [d.number, d.files]);
+
+  const shownFiles = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return needle ? d.files.filter((f) => f.path.toLowerCase().includes(needle)) : d.files;
+  }, [d.files, q]);
+
+  const toggleFold = (p: string) => setFolded((cur) => {
+    const next = new Set(cur);
+    if (next.has(p)) next.delete(p); else next.add(p);
+    return next;
+  });
+  const allFolded = shownFiles.length > 0 && shownFiles.every((f) => folded.has(f.path));
 
   // The same keyboard model as the changes modal, so the two review surfaces
   // don't diverge: j/k walk the file list, n/p walk the hunks of the open diff,
   // x toggles reviewed. The diff itself is ChangesModal's UnifiedDiff/SplitDiff,
   // so its [data-hunk] markers and [data-vscroll] container are reused verbatim.
   const stepFile = (dir: 1 | -1) => {
-    const files = d.files;
+    const files = shownFiles;
     if (!files.length) return;
     const i = stepFileIndex(files.length, files.findIndex((f) => f.path === sel), dir);
     onSel(files[i].path);
@@ -1160,6 +1585,7 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
     else if (k === "n") { e.preventDefault(); e.stopPropagation(); jumpHunk(1); }
     else if (k === "p") { e.preventDefault(); e.stopPropagation(); jumpHunk(-1); }
     else if (k === "x") { e.preventDefault(); e.stopPropagation(); if (sel) onSeen(sel); }
+    else if (k === "enter" || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); if (sel) toggleFold(sel); }
   };
   // Focus the frame when the files tab mounts, so the keys work without a click
   // first — the same first-frame focus the changes modal does.
@@ -1167,52 +1593,84 @@ function FilesTab({ d, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wra
 
   return (
     <div ref={frameRef} tabIndex={-1} onKeyDown={onKey} className="text-[11px] flex flex-col gap-2 outline-none">
-      <div className="flex items-center gap-2 text-[10px]" style={{ color: "var(--text3)" }}>
-        <span className="tabular-nums">{seenFiles.length}/{d.files.length} reviewed</span>
-        <span className="shrink-0 t-dim2 hidden sm:inline"><b>j/k</b> file · <b>n/p</b> hunk · <b>x</b> reviewed</span>
-        <Bar parts={[{ pct: d.files.length ? (seenFiles.length / d.files.length) * 100 : 0, tint: "var(--primary)" }]} />
+      {/* One bar, and it stays put: filter, view mode, progress. Everything that
+          used to be repeated on each file's own toolbar lives here once. */}
+      <div className="flex items-center gap-2 flex-wrap sticky top-0 z-20 py-1.5 px-1 -mx-1 rounded"
+        style={{ background: "var(--bg)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+        <span className="flex items-center gap-1.5 px-2 py-1 rounded shrink-0"
+          style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+          <span style={{ color: "var(--text3)" }}>⌕</span>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter files…"
+            className="bg-transparent outline-none text-[10.5px] w-28" style={{ color: "var(--text2)" }} />
+          {q && <button onClick={() => setQ("")} title="Clear" style={{ color: "var(--text3)" }}>×</button>}
+        </span>
+        <Btn onClick={() => onSplit(false)} small primary={!split} title="One column, with a “+ Comment” target on every line">Unified</Btn>
+        <Btn onClick={() => onSplit(true)} small primary={split} title="Before and after, side by side">Split</Btn>
+        <Btn onClick={() => onWrap(!wrap)} small primary={wrap} title="Wrap long lines rather than scrolling them">Wrap</Btn>
+        <Btn onClick={() => setFolded(allFolded ? new Set() : new Set(shownFiles.map((f) => f.path)))} small>
+          {allFolded ? "Expand all" : "Collapse all"}
+        </Btn>
+        <span className="ml-auto flex items-center gap-2 min-w-[150px]">
+          <span className="tabular-nums shrink-0 text-[10px]" style={{ color: seenFiles.length === d.files.length ? "var(--success)" : "var(--text3)" }}>
+            {seenFiles.length} of {d.files.length} viewed
+          </span>
+          <Bar parts={[{ pct: d.files.length ? (seenFiles.length / d.files.length) * 100 : 0, tint: seenFiles.length === d.files.length ? "var(--success)" : "var(--primary)" }]} />
+        </span>
       </div>
 
-      <div className="rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
-        {d.files.map((f) => {
-          const done = seenFiles.includes(f.path);
-          const open = sel === f.path;
-          const nd = draftsFor(f.path);
-          return (
-            <div key={f.path} data-file={open ? "active" : undefined} className="flex items-center gap-2 px-2 py-1"
-              style={{
-                borderBottom: "1px solid color-mix(in srgb, var(--border) 18%, transparent)",
-                background: open ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-                boxShadow: open ? "inset 2px 0 0 var(--primary)" : undefined,
-              }}>
-              {/* The tick means "I have read this" — a different intent from
-                  "show me this", so it is a different target. */}
-              <input type="checkbox" checked={done} onChange={() => onSeen(f.path)}
-                style={{ accentColor: "var(--primary)" }} title="Mark reviewed" aria-label={`Mark ${f.path} reviewed`} />
-              <button onClick={() => onSel(open ? null : f.path)} className="flex-1 min-w-0 text-left flex items-center gap-2">
+      <div className="text-[10px] px-1" style={{ color: "var(--text3)" }}>
+        <b>j/k</b> file · <b>n/p</b> hunk · <b>x</b> viewed · <b>↵</b> fold
+        {q && <span> · showing {shownFiles.length} of {d.files.length}</span>}
+      </div>
+
+      {shownFiles.length === 0 && (
+        <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No file matches “{q}”.</div>
+      )}
+
+      {shownFiles.map((f) => {
+        const done = seenFiles.includes(f.path);
+        const open = !folded.has(f.path);
+        const focused = sel === f.path;
+        const nd = draftsFor(f.path);
+        const change = byPath.get(f.path);
+        return (
+          <div key={f.path} data-file={focused ? "active" : undefined} className="rounded overflow-hidden"
+            style={{
+              border: `1px solid color-mix(in srgb, ${focused ? "var(--primary) 45%" : "var(--border) 30%"}, transparent)`,
+              opacity: done && !open ? 0.72 : 1,
+            }}>
+            <div className="flex items-center gap-2 px-2.5 py-1.5"
+              style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: open ? "1px solid color-mix(in srgb, var(--border) 25%, transparent)" : undefined }}>
+              <button onClick={() => { onSel(f.path); toggleFold(f.path); }} className="flex-1 min-w-0 text-left flex items-center gap-2">
                 <span className="shrink-0" style={{ color: "var(--text3)" }}>{open ? "▾" : "▸"}</span>
-                <span className="truncate" style={{ color: done ? "var(--text3)" : "var(--text2)", textDecoration: done ? "line-through" : undefined }}>{f.path}</span>
+                <span className="truncate" style={{ ...CODE_FONT_STYLE, color: done ? "var(--text3)" : "var(--text)" }}>{f.path}</span>
+                {f.status && f.status !== "modified" && <Chip text={f.status} tint="var(--text3)" />}
                 {f.comments > 0 && <Chip text={`${f.comments} open`} tint="var(--warning)" />}
                 {nd > 0 && <Chip text={`${nd} pending`} tint="var(--primary)" title="Queued in your review" />}
                 <span className="ml-auto shrink-0 tabular-nums" style={{ color: "var(--success)" }}>+{f.additions}</span>
                 <span className="shrink-0 tabular-nums" style={{ color: "var(--error)" }}>−{f.deletions}</span>
               </button>
+              {/* "Viewed" is state you keep for the length of a review, not a
+                  one-off tick — a switch says that and a checkbox does not. */}
+              <button onClick={() => onSeen(f.path)} title={done ? "Mark not viewed" : "Mark viewed"}
+                aria-pressed={done}
+                className="agx-btn shrink-0 flex items-center gap-1.5 text-[10px] px-1.5 py-0.5 rounded"
+                style={{ color: done ? "var(--success)" : "var(--text3)", border: `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 45%"}, transparent)` }}>
+                <span className="agx-sw" data-on={done ? "1" : "0"} />Viewed
+              </button>
             </div>
-          );
-        })}
-      </div>
-
-      {sel && (
-        <div className="rounded overflow-hidden flex flex-col" style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", height: 560 }}>
-          <DiffToolbar path={sel} add={current?.additions} del={current?.deletions} split={split} wrap={wrap} onSplit={onSplit} onWrap={onWrap}
-            right={<span className="text-[10px] mr-1" style={{ color: "var(--text3)" }}>Unified shows “+ Comment”</span>} />
-          <div className="flex-1 min-h-0 flex">
-            {!loaded ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the diff…</div>
-              : current ? <DiffPane file={current} split={split} wrap={wrap} onComment={(line) => onAddDraft(sel, line)} />
-              : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
+            {open && (
+              <LazyMount minHeight={Math.min(320, 40 + (f.additions + f.deletions) * 18)}>
+                <div className="flex" style={{ maxHeight: 560, overflow: "auto" }}>
+                  {!loaded ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the diff…</div>
+                    : change ? <DiffPane file={change} split={split} wrap={wrap} onComment={(line) => onAddDraft(f.path, line)} />
+                    : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
+                </div>
+              </LazyMount>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })}
     </div>
   );
 }
@@ -1351,79 +1809,197 @@ function Thread({ t, onResolve, onReply, busy }: {
   );
 }
 
-function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, busy }: {
+/**
+ * The conversation, as one timeline.
+ *
+ * It used to be four lanes — humans, line threads, automation, raw — each a
+ * separate pile under its own rule. That splits a verdict from its reasons and
+ * makes "what happened here, in what order" unanswerable: you read a pile of
+ * replies, then scrolled back up to find what they were replying to.
+ *
+ * Now everything that happened is one list in the order it happened, on a rail,
+ * with a node per entry saying what kind of thing it was. A review still owns
+ * the threads submitted with it, because that grouping IS the meaning: a
+ * "requested changes" is a verdict and the threads under it are the reasons.
+ */
+function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, busy }: {
   d: PrDetail;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
   raw: boolean; onRaw: (v: boolean) => void;
-  onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void; busy: boolean;
+  onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void;
+  onComment: (body: string) => Promise<boolean>; busy: boolean;
 }) {
+  const [newest, setNewest] = useState(false);
   const kb = Math.round(lanes.bots.reduce((n, c) => n + c.body.length, 0) / 1024);
-  // Threads whose author never submitted a review of their own — a bot's
-  // findings, or a comment left outside a review. They still need a home.
   const reviewAuthors = new Set(lanes.humans.map((r) => r.author));
   const orphanThreads = d.threads.filter((t) => !reviewAuthors.has(t.comments[0]?.author ?? ""));
 
+  type Entry = { at: string; key: string; node: React.ReactNode; body: React.ReactNode };
+  const entries: Entry[] = [];
+
+  for (const [i, r] of lanes.humans.entries()) {
+    const mine = d.threads.filter((t) => t.comments[0]?.author === r.author);
+    const tone = r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
+    entries.push({
+      at: r.submittedAt, key: `r${i}`,
+      node: <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
+        {r.state === "CHANGES_REQUESTED" ? "✕" : r.state === "APPROVED" ? "✓" : "💬"}</span>,
+      body: (
+        <>
+          <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone={tone}
+            chip={r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
+              : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
+            {r.body ? <Md body={r.body} />
+              : <span style={{ color: "var(--text3)" }}>({r.state.toLowerCase().replace("_", " ")}, no note)</span>}
+          </Card>
+          {mine.length > 0 && (
+            <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+              {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} busy={busy} />)}
+            </div>
+          )}
+        </>
+      ),
+    });
+  }
+  for (const c of lanes.humanComments) {
+    entries.push({
+      at: c.createdAt, key: `c${c.id}`, node: <span style={{ color: "var(--text3)" }}>💬</span>,
+      body: <Card who={c.author} when={ago(c.createdAt)} url={c.url}><Md body={c.body} /></Card>,
+    });
+  }
+  for (const t of orphanThreads) {
+    entries.push({
+      at: t.comments[0]?.createdAt ?? "", key: `t${t.id}`,
+      node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? "✓" : "○"}</span>,
+      body: <Thread t={t} onResolve={onResolve} onReply={onReply} busy={busy} />,
+    });
+  }
+  for (const [i, r] of lanes.botReviews.entries()) {
+    entries.push({
+      at: r.submittedAt, key: `br${i}`, node: <span style={{ color: "var(--info)" }}>⌬</span>,
+      body: <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot"
+        chip={<Chip text="automation" tint="var(--info)" />}><Md body={r.body} /></Card>,
+    });
+  }
+  for (const c of lanes.bots) {
+    entries.push({
+      at: c.createdAt, key: `b${c.id}`, node: <span style={{ color: "var(--info)" }}>⌬</span>,
+      body: (
+        <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}>
+          {raw
+            ? <pre className="overflow-x-auto text-[10px] max-h-72 agx-scroll" style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.body}</pre>
+            : <span style={{ color: "var(--text2)" }}>{c.digest || "(Nothing worth pulling out)"}</span>}
+        </Card>
+      ),
+    });
+  }
+
+  entries.sort((a, b) => (newest ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at)));
+
+  /* The events between the comments. GitHub has no timestamp on either of these
+     — "opened" is not on the detail payload and a force-push is a boolean —
+     so they are anchored to the ends of the timeline rather than given a time
+     they would be making up. */
+  const opened = (
+    <div key="opened" className="agx-tiny">
+      <span className="agx-node">＋</span>
+      <span><b>{d.author}</b> opened this pull request from <code style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{d.headRefName}</code> into <code style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{d.baseRefName}</code></span>
+    </div>
+  );
+  const forced = d.forcePushedSinceReview ? (
+    <div key="forced" className="agx-tiny">
+      <span className="agx-node" style={{ color: "var(--warning)" }}>↻</span>
+      <span><b>{d.author}</b> force-pushed after the last review — <span style={{ color: "var(--warning)" }}>that review was for code that is no longer here</span></span>
+    </div>
+  ) : null;
+
+  const composer = <Composer onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" />;
+
+  if (entries.length === 0) {
+    return (
+      <div className="text-[11px]">
+        <div className="agx-tl">{opened}</div>
+        <div className="text-[11px] mb-3" style={{ color: "var(--text3)" }}>Nobody has said anything yet.</div>
+        {composer}
+      </div>
+    );
+  }
+
   return (
     <div className="text-[11px]">
-      <Lane label="humans" />
-      {lanes.humans.length === 0 && lanes.humanComments.length === 0 && (
-        <div style={{ color: "var(--text3)" }}>Nobody has said anything yet.</div>
-      )}
-      {lanes.humans.map((r, i) => {
-        // The line comments that belong to THIS review. GitHub nests them under
-        // the review they were submitted with, and that grouping is most of the
-        // meaning: a "requested changes" is a verdict, and the threads beneath
-        // it are the reasons. Split apart into separate lanes, you get a
-        // verdict with no reasons and a pile of reasons with no verdict.
-        const mine = d.threads.filter((t) => t.comments[0]?.author === r.author);
-        return (
-          <div key={`r${i}`} className="mb-2">
-            <Card who={r.author} when={ago(r.submittedAt)} url={r.url}
-              tone={r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined}
-              chip={r.state === "CHANGES_REQUESTED" ? <Chip text="requested changes" tint="var(--error)" />
-                : r.state === "APPROVED" ? <Chip text="approved" tint="var(--success)" /> : undefined}>
-              {r.body ? <Md body={r.body} /> : <span style={{ color: "var(--text3)" }}>({r.state.toLowerCase().replace("_", " ")}, no note)</span>}
-            </Card>
-            {mine.length > 0 && (
-              <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
-                {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} busy={busy} />)}
-              </div>
-            )}
+      <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: "var(--text3)" }}>
+        <span>One timeline — reviews, comments and threads in the order they happened</span>
+        <span className="flex-1" />
+        {lanes.bots.length > 0 && (
+          <Btn small onClick={() => onRaw(!raw)}>
+            {raw ? "Digest automation" : `Show automation in full · ${kb} KB`}
+          </Btn>
+        )}
+        <Btn small onClick={() => setNewest(false)} primary={!newest}>Oldest</Btn>
+        <Btn small onClick={() => setNewest(true)} primary={newest}>Newest</Btn>
+      </div>
+      <div className="agx-tl">
+        {!newest && opened}
+        {newest && forced}
+        {entries.map((e) => (
+          <div key={e.key} className="agx-ev">
+            <span className="agx-node">{e.node}</span>
+            {e.body}
           </div>
-        );
-      })}
-      {lanes.humanComments.map((c) => (
-        <Card key={c.id} who={c.author} when={ago(c.createdAt)} url={c.url}><Md body={c.body} /></Card>
-      ))}
+        ))}
+        {!newest && forced}
+        {newest && opened}
+      </div>
+      <div className="mt-3">{composer}</div>
+    </div>
+  );
+}
 
-      {orphanThreads.length > 0 && (
-        <>
-          <Lane label="line threads" extra={`${orphanThreads.filter((t) => !t.isResolved).length} open of ${orphanThreads.length}`} />
-          {orphanThreads.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} busy={busy} />)}
-        </>
-      )}
+/**
+ * Write, preview, send. Shared by the conversation and by anywhere else that
+ * takes markdown, so the two never drift into behaving differently.
+ */
+function Composer({ onSend, busy, placeholder, sendLabel }: {
+  onSend: (body: string) => Promise<boolean>; busy: boolean; placeholder: string; sendLabel: string;
+}) {
+  const [text, setText] = useState("");
+  const [preview, setPreview] = useState(false);
+  const [sending, setSending] = useState(false);
 
-      <Lane label="automation" extra={lanes.bots.length ? `${lanes.bots.length} comments · ${kb} KB` : undefined} />
-      {lanes.botReviews.map((r, i) => (
-        <Card key={`br${i}`} who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}>
-          <Md body={r.body} />
-        </Card>
-      ))}
-      {lanes.bots.length > 0 && (
-        <>
-          <button onClick={() => onRaw(!raw)} className="w-full text-left text-[10px] px-2.5 py-1.5 rounded mb-2"
-            style={{ color: "var(--text2)", border: "1px dashed color-mix(in srgb, var(--border) 50%, transparent)" }}>
-            <span style={{ color: "var(--primary)" }}>{raw ? "▾" : "▸"}</span>{" "}
-            {lanes.bots.length} machine comment{lanes.bots.length === 1 ? "" : "s"} · {kb} KB {raw ? "— hide raw" : "collapsed — show raw"}
-          </button>
-          {lanes.bots.map((c) => (
-            <Card key={c.id} who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}>
-              {raw ? <pre className="overflow-x-auto text-[10px] max-h-72 agx-scroll" style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.body}</pre>
-                : <span style={{ color: "var(--text2)" }}>{c.digest || "(Nothing worth pulling out)"}</span>}
-            </Card>
-          ))}
-        </>
+  const send = async () => {
+    if (!text.trim() || sending) return;
+    setSending(true);
+    const ok = await onSend(text);
+    setSending(false);
+    if (ok) { setText(""); setPreview(false); }
+  };
+
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
+      <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+        <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
+        <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
+      </div>
+      {preview ? (
+        <div className="p-3 min-h-[80px]">{text.trim() ? <Md body={text} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}</div>
+      ) : (
+        <textarea
+          value={text} onChange={(e) => setText(e.target.value)} rows={4} placeholder={placeholder}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(); } }}
+          className="w-full p-3 text-[11.5px] outline-none resize-y bg-transparent agx-scroll"
+          style={{ color: "var(--text)", lineHeight: 1.6 }}
+        />
       )}
+      <div className="flex items-center gap-2 px-2.5 py-2"
+        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · ⌘↵ to send</span>
+        <span className="ml-auto">
+          <Btn onClick={send} disabled={sending || busy || !text.trim()} primary small
+            title={!text.trim() ? "Write something first" : undefined}>
+            {sending ? "Sending…" : sendLabel}
+          </Btn>
+        </span>
+      </div>
     </div>
   );
 }
@@ -1448,10 +2024,11 @@ function groupOf(k: PrCheck): string {
   return parts.length > 1 ? parts.slice(0, -1).join(" / ") : "Checks";
 }
 
-function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: boolean }) {
+function Checks({ d, onRerun, onAsk, busy }: { d: PrDetail; onRerun: () => void; onAsk?: (check: PrCheck) => void; busy: boolean }) {
   const c = d.checks;
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const [showSkipped, setShowSkipped] = useState(false);
+  const [openCheck, setOpenCheck] = useState<string | null>(null);
 
   const groups = useMemo(() => {
     const m = new Map<string, PrCheck[]>();
@@ -1510,17 +2087,37 @@ function Checks({ d, onRerun, busy }: { d: PrDetail; onRerun: () => void; busy: 
               {good > 0 && <span style={{ color: "var(--success)" }}>{good} ✓</span>}
               <span className="ml-auto tabular-nums" style={{ color: "var(--text3)" }}>{list.length}</span>
             </button>
-            {isOpen && list.map((k, i) => (
-              <div key={`${k.name}-${i}`} className="flex items-center gap-2 px-2.5 py-1"
-                style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 16%, transparent)" }}>
-                <span className="shrink-0 w-3 text-center" style={{ color: CHECK_TINT[k.state] }}>{CHECK_GLYPH[k.state]}</span>
-                <span className="truncate" style={{ color: k.state === "skipped" || k.state === "neutral" ? "var(--text3)" : "var(--text2)" }}>
-                  {k.name.startsWith(name) ? k.name.slice(name.length).replace(/^\s*\/\s*/, "") || k.name : k.name}
-                </span>
-                <span className="ml-auto shrink-0 text-[9.5px] uppercase tracking-wide" style={{ color: CHECK_TINT[k.state] }}>{k.state}</span>
-                {k.url && <a href={k.url} target="_blank" rel="noreferrer noopener" className="shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>Log ↗</a>}
-              </div>
-            ))}
+            {isOpen && list.map((k, i) => {
+              const bad = k.state === "failure";
+              const id = `${name}::${k.name}::${i}`;
+              const expanded = bad && openCheck === id;
+              return (
+                <div key={id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 16%, transparent)", background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
+                  {/* A failing check is the one row on this tab you came for, so
+                      it is the one row that opens into somewhere to go next. */}
+                  <button onClick={() => bad && setOpenCheck(expanded ? null : id)} disabled={!bad}
+                    className="w-full text-left flex items-center gap-2 px-2.5 py-1" style={{ cursor: bad ? "pointer" : "default" }}>
+                    <span className="shrink-0 w-3 text-center" style={{ color: CHECK_TINT[k.state] }}>{CHECK_GLYPH[k.state]}</span>
+                    <span className="truncate" style={{ color: k.state === "skipped" || k.state === "neutral" ? "var(--text3)" : "var(--text2)" }}>
+                      {k.name.startsWith(name) ? k.name.slice(name.length).replace(/^\s*\/\s*/, "") || k.name : k.name}
+                    </span>
+                    <span className="ml-auto shrink-0 text-[9.5px] uppercase tracking-wide" style={{ color: CHECK_TINT[k.state] }}>{k.state}</span>
+                    {bad && <span className="shrink-0" style={{ color: "var(--text3)" }}>{expanded ? "▾" : "▸"}</span>}
+                  </button>
+                  {expanded && (
+                    <div className="flex items-center gap-1.5 flex-wrap px-2.5 pb-2 pt-0.5">
+                      {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude">✦ Ask Claude why</Btn>}
+                      {k.url && (
+                        <a href={k.url} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open run ↗</a>
+                      )}
+                      <Btn onClick={onRerun} disabled={busy} small title="Re-run every failing check on this pull request">↻ Re-run failed</Btn>
+                      <span className="text-[10px]" style={{ color: "var(--text3)" }}>The log itself lives on GitHub — this panel does not download run logs.</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -1604,6 +2201,36 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
             </div>
           )}
 
+          {/* The verdict, chosen before the note is written — it is what the
+              note is for, and each option says what submitting it does rather
+              than leaving you to infer it from one word. */}
+          <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(168px, 1fr))" }}>
+            {([
+              ["approve", "✓ Approve", "Submit and mark the pull request approved.", "var(--success)"],
+              ["request_changes", "✕ Request changes", "Submit and block the merge until they land.", "var(--error)"],
+              ["comment", "💬 Comment", "Submit without a verdict.", "var(--text)"],
+            ] as const).map(([id, label, hint, tint]) => {
+              const on = verb === id;
+              const off = id !== "comment" && d.viewerDidAuthor;
+              return (
+                <button key={id} onClick={() => setVerb(id)} disabled={off}
+                  aria-pressed={on}
+                  title={off ? "GitHub does not let you approve or block your own pull request" : undefined}
+                  className="agx-btn text-left rounded-lg px-2.5 py-2"
+                  style={{
+                    border: `1px solid color-mix(in srgb, ${on ? "var(--primary) 70%" : "var(--border) 42%"}, transparent)`,
+                    background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent",
+                    opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer",
+                  }}>
+                  <b className="block text-[12px]" style={{ color: tint, fontWeight: 600 }}>{label}</b>
+                  <i className="block text-[10px] not-italic mt-0.5 leading-snug" style={{ color: "var(--text3)" }}>
+                    {off ? "Not available on your own pull request" : hint}
+                  </i>
+                </button>
+              );
+            })}
+          </div>
+
           <div className="flex gap-0 text-[10.5px]" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
             {(["write", "preview"] as const).map((m) => (
               <button key={m} onClick={() => setPreview(m === "preview")} className="px-3 py-1"
@@ -1625,26 +2252,11 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
               style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }} />
           )}
 
-          <div className="flex flex-col gap-1 text-[11.5px]" style={{ color: "var(--text2)" }}>
-            {([
-              ["comment", "Comment", "General feedback without explicit approval.", "var(--text)"],
-              ["approve", "Approve", "Submit feedback and approve merging these changes.", "var(--success)"],
-              ["request_changes", "Request changes", "Submit feedback that must be addressed first.", "var(--error)"],
-            ] as const).map(([id, label, hint, tint]) => (
-              <label key={id} className="flex items-start gap-2 cursor-pointer">
-                <input type="radio" name="agx-review-verb" checked={verb === id} onChange={() => setVerb(id)}
-                  style={{ accentColor: "var(--primary)", marginTop: 3 }} />
-                <span>
-                  <b style={{ color: tint, fontWeight: 500 }}>{label}</b>
-                  <span className="block text-[10.5px]" style={{ color: "var(--text3)" }}>{hint}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-
           <div className="flex items-center gap-2 pt-1">
             <span className="text-[10px]" style={{ color: "var(--text3)" }}>
-              Posted publicly to your team{drafts.length ? `, with ${drafts.length} line comment${drafts.length === 1 ? "" : "s"}` : ""}.
+              {verb !== "approve" && nothing
+                ? "Nothing to submit yet — write a note, or queue a line comment from Files."
+                : `Posted publicly to your team${drafts.length ? `, with ${drafts.length} line comment${drafts.length === 1 ? "" : "s"} — one notification, not ${drafts.length + 1}` : ""}.`}
             </span>
             <span className="ml-auto">
               <Btn onClick={() => onSubmit(verb, body)} disabled={busy || (verb !== "approve" && nothing)} primary
