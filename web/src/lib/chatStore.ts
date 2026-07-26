@@ -8,6 +8,7 @@
 import { api, ChatStreamError } from "./api.ts";
 import { loadChats, saveChats } from "./chatPersist.ts";
 import { chatEnginePref } from "./chatEnginePref.ts";
+import { paneStillAsking } from "./paneScreen.ts";
 import type { ChatImage, WatchEvent, ChatEngine, ChatEffort } from "../../../shared/types.ts";
 
 /** A pasted image waiting in the composer. `url` is an object URL for the
@@ -112,6 +113,34 @@ export type ChatUsage = {
 
 /** A message typed during someone else's turn, waiting for its own. */
 export type QueuedTurn = { id: string; text: string; images: ChatImage[] };
+
+/** Press one key in a chat's pane and take in what it drew next.
+ *
+ *  Lives here rather than in the panel because two things call it: the buttons
+ *  under the prompt, and the composer forwarding the real arrow keys. Those had
+ *  better behave identically — a picker that answers a click but not the key
+ *  the picker itself is telling you to press is worse than one with no buttons
+ *  at all.
+ *
+ *  Whether the prompt is over is read from the next frame rather than inferred
+ *  from the key: Enter and Escape can both end one, and some pickers stay open
+ *  after Enter. */
+export async function answerPane(id: string, key: string): Promise<void> {
+  const chat = chats.get(id);
+  if (!chat?.sessionId || !chat.paneNeedsYou) return;
+  try {
+    const r = await api.chatPaneKey(chat.sessionId, key);
+    const stillAsking = paneStillAsking(r.screen);
+    update(id, (c) => {
+      if (key === "Escape" || !stillAsking) { c.paneNeedsYou = undefined; c.attention = "none"; }
+      else c.paneNeedsYou = { screen: r.screen };
+    });
+  } catch {
+    // The pane may have been reclaimed under us. Clearing is the honest
+    // outcome: there is nothing left to answer.
+    update(id, (c) => { c.paneNeedsYou = undefined; c.attention = "none"; });
+  }
+}
 
 /** The engine this chat's next turn will actually use.
  *

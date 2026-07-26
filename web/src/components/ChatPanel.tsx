@@ -20,6 +20,7 @@ import { ToolFeed } from "./ToolFeed.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { buildRows } from "../lib/toolTree.ts";
 import { chatToMarkdown } from "../lib/chatTranscript.ts";
+import { tidyPaneScreen } from "../lib/paneScreen.ts";
 import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
@@ -31,7 +32,7 @@ import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
   engineFor,
-  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
+  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, answerPane, dropAttachment, renameChat, clearAttention, type Chat,
   restoredActiveId, setActiveChatId, chatFocusRequest,
 } from "../lib/chatStore.ts";
 import { peekChatIntent, subscribeChatIntent, takeChatIntent } from "../lib/chatIntent.ts";
@@ -280,45 +281,38 @@ function TypingDots() {
  *  Escape both cancels the prompt and clears this, because a cancelled picker
  *  leaves nothing to answer. */
 function PanePrompt({ chat }: { chat: Chat }) {
-  const [busy, setBusy] = useState(false);
-  const screen = chat.paneNeedsYou?.screen ?? "";
-  const press = async (key: string) => {
-    if (busy || !chat.sessionId) return;
-    setBusy(true);
-    try {
-      const r = await api.chatPaneKey(chat.sessionId, key);
-      // Enter and Escape both end a picker. Rather than guess which, the next
-      // frame decides: no key hints left means nothing is waiting any more.
-      const done = key === "Escape" || !/Esc to cancel|Enter to confirm|to use this session only/.test(r.screen);
-      update(chat.id, (c) => {
-        if (done) { c.paneNeedsYou = undefined; c.attention = "none"; }
-        else c.paneNeedsYou = { screen: r.screen };
-      });
-    } catch {
-      // The pane may have been reclaimed under us. Clearing is the honest
-      // outcome: there is nothing left to answer.
-      update(chat.id, (c) => { c.paneNeedsYou = undefined; c.attention = "none"; });
-    } finally { setBusy(false); }
-  };
-  const key = (label: string, k: string, title: string) => (
-    <button onClick={() => press(k)} disabled={busy} title={title}
-      className="text-[11px] px-2 py-1 rounded-md disabled:opacity-40"
-      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>{label}</button>
+  const screen = useMemo(() => tidyPaneScreen(chat.paneNeedsYou?.screen ?? ""), [chat.paneNeedsYou?.screen]);
+  const press = (k: string) => void answerPane(chat.id, k);
+  // Small, quiet, and second to the real keys. These exist so the keys are
+  // discoverable and for anyone who reaches for the mouse — not as the way in.
+  const Key = ({ label, k }: { label: string; k: string }) => (
+    <button onClick={() => press(k)} title={`Send ${k} to the pane`}
+      className="text-[10px] leading-none px-1.5 py-1 rounded"
+      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{label}</button>
   );
   return (
-    <div className="mb-2 px-2.5 py-2 rounded-lg text-[11px]"
-      style={{ background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)", color: "var(--text2)" }}>
-      <div style={{ color: "var(--text)" }}>This chat's pane is asking you something.</div>
-      <pre className="agx-scroll mt-1.5 mb-2 px-2 py-1.5 rounded overflow-x-auto whitespace-pre text-[10.5px] leading-[1.45]"
-        style={{ ...CODE_FONT_STYLE, background: "color-mix(in srgb, var(--bg3) 60%, transparent)", color: "var(--text)", maxHeight: 220 }}>{screen}</pre>
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {key("←", "Left", "Left")}
-        {key("→", "Right", "Right")}
-        {key("↑", "Up", "Up")}
-        {key("↓", "Down", "Down")}
-        {key("Enter", "Enter", "Confirm")}
-        {key("Esc", "Escape", "Cancel and close this")}
-        <span className="ml-auto t-dim2 text-[10px]">or open it in a terminal: <code style={CODE_FONT_STYLE}>{chat.attachCommand || "tmux -L agentglass attach"}</code></span>
+    <div className="mb-2 rounded-lg overflow-hidden"
+      style={{ border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+      <div className="px-2.5 py-1.5 flex items-center gap-2 text-[11px]"
+        style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--text)" }}>
+        <span>Waiting on you</span>
+        {/* The keys the prompt itself names, shown as keys. */}
+        <span className="flex items-center gap-1 ml-auto">
+          <Key label="←" k="Left" /><Key label="→" k="Right" />
+          <Key label="↑" k="Up" /><Key label="↓" k="Down" />
+          <Key label="Enter" k="Enter" /><Key label="Esc" k="Escape" />
+        </span>
+      </div>
+      <pre className="agx-scroll px-2.5 py-2 overflow-x-auto whitespace-pre text-[11px] leading-[1.5] m-0"
+        style={{ ...CODE_FONT_STYLE, background: "color-mix(in srgb, var(--bg3) 45%, transparent)", color: "var(--text2)", maxHeight: 260 }}>{screen}</pre>
+      <div className="px-2.5 py-1 text-[9.5px] t-dim2 flex items-center gap-1.5"
+        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        <span>Your arrow keys work here.</span>
+        {chat.attachCommand && (
+          <button onClick={() => navigator.clipboard?.writeText(chat.attachCommand!)}
+            className="ml-auto hover:opacity-70" title={chat.attachCommand}
+            style={{ color: "var(--text3)" }}>Copy the tmux command</button>
+        )}
       </div>
     </div>
   );
@@ -960,7 +954,27 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     return text;
   };
 
+  const PANE_KEYS: Record<string, string> = {
+    ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right",
+    Enter: "Enter", Escape: "Escape", Tab: "Tab",
+  };
+
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    /*
+     * A prompt waiting in the pane owns the keyboard, and this has to be the
+     * first thing checked.
+     *
+     * The picker itself says "←/→ to adjust · Enter to confirm". Shipping that
+     * instruction next to buttons you had to click instead was the wrong way
+     * round — the keys it names are the ones that should work. The buttons stay
+     * as the discoverable version, and for anyone who reaches for the mouse.
+     */
+    if (active?.paneNeedsYou) {
+      const k = PANE_KEYS[e.key];
+      if (k) { e.preventDefault(); void answerPane(active.id, k); return; }
+      // Anything else is someone typing a message instead of answering. Let it
+      // through rather than swallowing it — the prompt is not a modal.
+    }
     // The skill menu owns the arrows, Tab and Enter while it is showing, or
     // Enter would send `/rev` as a message instead of completing it.
     if (slashMatches.length) {
