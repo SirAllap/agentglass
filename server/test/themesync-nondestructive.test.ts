@@ -140,3 +140,20 @@ describe("syncTheme never edits the user's own config", () => {
     expect(readFileSync(userNvim, "utf8")).toBe(nvimBefore);
   });
 });
+
+// --- the status bar belongs to the user -------------------------------------
+
+test("the theme colours the status bar without deciding what is in it", async () => {
+  const { tmuxTheme, normalizeVars } = await import("../src/themesync.ts");
+  const conf = tmuxTheme(normalizeVars({}), "Midnight Purple");
+  // Styles: ours to set. They theme whatever the user has there.
+  expect(conf).toContain("status-left-style");
+  expect(conf).toContain("status-right-style");
+  // Content: not ours. Setting it replaced whatever was already in those
+  // segments, and people put working interpolations there — a git branch, a
+  // battery, and in one real case `#(continuum_save.sh)`, which IS
+  // tmux-continuum's entire save timer. Overwriting it silently turned off
+  // session persistence and came back on every theme re-source.
+  expect(conf).not.toMatch(/^set -g status-left "/m);
+  expect(conf).not.toMatch(/^set -g status-right "/m);
+});

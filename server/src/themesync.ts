@@ -424,14 +424,22 @@ setw -g window-status-separator ""
 setw -g window-status-format " #[fg=${v.text4}]#I #[fg=${v.text3}]#W "
 setw -g window-status-current-format " #[fg=${v.primary},bold]#I #[fg=${v.text}]#W "
 
-# Left: the session, as the app renders the open project.
-set -g status-left " #[fg=${v.primary},bold]#S #[fg=${v.border2}]│"
+# The two status segments are deliberately NOT set here.
+#
+# They used to be: a session name on the left, a clock on the right. Both
+# replaced whatever the user already had, and people put working things in
+# those segments — a git branch, a battery, and in at least one real case the
+# #(continuum_save.sh) interpolation that IS tmux-continuum's entire timer.
+# Overwriting that silently turned off session persistence: continuum kept
+# reporting a 15-minute interval and had not saved for days, and it came back
+# every time the theme was re-sourced, which is on every theme change and every
+# new server. The user only found out by wondering why their layout was stale
+# after a reboot.
+#
+# So this file colours the bar and does not decide what is in it. The styles
+# above still theme whatever is there, which was the part worth having.
 set -g status-left-length 30
-
-# Right: kept quiet. The cockpit already shows the clock, the branch and the
-# plan meters, and repeating them here is noise competing with itself.
-set -g status-right "#[fg=${v.text4}]#{?client_prefix,#[fg=${v.warning}]^b ,}%H:%M "
-set -g status-right-length 40
+set -g status-right-length 60
 set -g status-justify left
 
 # Borders: the inactive one a hairline against the panel, the active one the
