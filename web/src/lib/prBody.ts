@@ -317,6 +317,23 @@ export function splitDiff(text: string): Map<string, string> {
 export interface ParsedHunk { oldStart: number; oldLines: number; newStart: number; newLines: number; lines: string[] }
 export interface ParsedFile { path: string; additions: number; deletions: number; hunks: ParsedHunk[] }
 
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|ico|avif)$/i;
+
+/**
+ * Which viewer a changed file needs.
+ *
+ * The subtlety, and the bug this exists to stop coming back: `gh pr diff` still
+ * emits a header for a binary file — `Binary files a/x and b/x differ`, and
+ * nothing else — so the parser yields an entry with ZERO hunks rather than no
+ * entry at all. Deciding on "is there a parsed file" therefore sent every PNG
+ * down the text path and drew an empty diff, which is why the image viewer
+ * never appeared. The count of hunks is the honest question.
+ */
+export function diffKind(path: string, hunks: number): "image" | "text" | "none" {
+  if (hunks > 0) return "text";
+  return IMAGE_EXT.test(path) ? "image" : "none";
+}
+
 /**
  * A unified diff, in the shape the app's own diff viewer already speaks.
  *

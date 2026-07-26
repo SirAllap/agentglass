@@ -6,7 +6,7 @@
 // as punctuation. The escaping tests are the ones with teeth — a body is a
 // string a stranger wrote.
 import { describe, expect, test } from "bun:test";
-import { parseBody, renderInline, stripTags } from "../src/lib/prBody.ts";
+import { parseBody, renderInline, stripTags, diffKind } from "../src/lib/prBody.ts";
 
 describe("<details>", () => {
   test("folds into a details block, with its summary and its inner markdown", () => {
@@ -159,5 +159,34 @@ describe("summary sanitisation", () => {
 
   test("ordinary markup inside a summary is simply removed", () => {
     expect(stripTags("<b>Coverage</b> report")).toBe("Coverage report");
+  });
+});
+
+describe("which viewer a changed file needs", () => {
+  test("a binary image is an image, even though the parser gave it an entry", () => {
+    // The bug this pins: `gh pr diff` emits a header for a binary file with no
+    // hunks under it, so the parser yields an entry. Deciding on "is there a
+    // parsed file" sent every PNG down the text path and drew an empty pane.
+    expect(diffKind(".github/assets/pr.png", 0)).toBe("image");
+    expect(diffKind("landing/hero.gif", 0)).toBe("image");
+    expect(diffKind("web/public/favicon.svg", 0)).toBe("image");
+  });
+
+  test("a file with hunks is text, whatever it is called", () => {
+    // An SVG that came through as a real textual diff should be read, not
+    // rendered — the diff is the answer there.
+    expect(diffKind("web/public/favicon.svg", 3)).toBe("text");
+    expect(diffKind("server/src/prs.ts", 1)).toBe("text");
+  });
+
+  test("a binary that is not an image has nothing to show", () => {
+    expect(diffKind("bun.lock", 0)).toBe("none");
+    expect(diffKind("assets/font.woff2", 0)).toBe("none");
+  });
+
+  test("the extension test is case-insensitive and anchored to the end", () => {
+    expect(diffKind("A/B/Shot.PNG", 0)).toBe("image");
+    // `.png` in the middle of a name is not an image.
+    expect(diffKind("src/png-encoder.ts", 0)).toBe("none");
   });
 });

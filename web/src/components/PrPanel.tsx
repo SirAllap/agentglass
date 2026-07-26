@@ -33,7 +33,7 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
-import { parseBody, parseUnifiedDiff, newLineNumbers, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
+import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex } from "../lib/prNav.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -471,7 +471,6 @@ function ExpandContext({ root, number, path, from, to, side = "RIGHT" }: {
  * raises: what did it look like, and what does it look like now. Added and
  * deleted files simply have one side.
  */
-const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|ico|avif)$/i;
 
 function ImageDiff({ root, number, path, status }: {
   root: string; number: number; path: string; status: string;
@@ -2522,8 +2521,17 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                     scroll, and it is not what GitHub does. Long files are
                     folded by default instead, which is the honest cap. */}
                 <div className="flex" style={{ overflowX: "auto" }}>
+                  {/* An image first, and a file with no hunks second.
+                      `gh pr diff` still emits a header for a binary file — just
+                      "Binary files … differ" and nothing else — so the parser
+                      produces an entry with zero hunks. Testing `change` before
+                      the image put every PNG down the text path and rendered an
+                      empty diff pane, which is why the image viewer never
+                      appeared at all. */}
                   {!loaded ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the diff…</div>
-                    : change ? (
+                    : diffKind(f.path, change?.hunks.length ?? 0) === "image"
+                      ? <ImageDiff root={root} number={d.number} path={f.path} status={f.status} />
+                    : change?.hunks.length ? (
                       <DiffPane
                         file={change} split={split} wrap={wrap}
                         onPick={(pk) => pickLine(f.path, pk)}
@@ -2542,9 +2550,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                         }}
                       />
                     )
-                    : IMAGE_EXT.test(f.path)
-                      ? <ImageDiff root={root} number={d.number} path={f.path} status={f.status} />
-                      : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
+                    : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
                 </div>
               </LazyMount>
             )}
