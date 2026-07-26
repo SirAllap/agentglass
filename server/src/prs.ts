@@ -2139,6 +2139,22 @@ export async function rerunFailedChecks(rootIn: unknown, number: unknown): Promi
  * would merge a commit you never saw. The caller passes the head it showed you,
  * and GitHub refuses if that is no longer the tip.
  */
+/**
+ * What "Merge when green" actually means when it fails.
+ *
+ * gh relays GitHub's GraphQL error verbatim: "Auto merge is not allowed for
+ * this repository (enablePullRequestAutoMerge)". Every word of that is true
+ * and none of it is actionable in the panel it lands in. The setting is not
+ * anything about this pull request, it is a repository option that is off by
+ * default, and the person reading the message is the person who can turn it
+ * on. Say where it lives instead of quoting the mutation that failed.
+ */
+export function autoMergeHint(error: string): string | null {
+  return /auto[- ]?merge is not allowed/i.test(error)
+    ? "auto-merge is off for this repository: turn on Settings > General > Pull requests > Allow auto-merge, then arm it again"
+    : null;
+}
+
 export async function mergePr(rootIn: unknown, number: unknown, method: unknown, opts: { deleteBranch?: unknown; auto?: unknown; headSha?: unknown; subject?: unknown; body?: unknown; disableAuto?: unknown }): Promise<PrActionResult> {
   // Cancelling an armed auto-merge is its own verb, not a merge with a flag —
   // and it was missing entirely, so a "merge when green" could be armed and
@@ -2149,7 +2165,8 @@ export async function mergePr(rootIn: unknown, number: unknown, method: unknown,
   const flag = method === "merge" ? "--merge" : method === "rebase" ? "--rebase" : method === "squash" ? "--squash" : null;
   if (!flag) return { ok: false, error: "choose squash, merge or rebase" };
   const args = ["pr", "merge", String(Number(number)), flag];
-  if (opts.auto === true || opts.auto === "true") args.push("--auto");
+  const auto = opts.auto === true || opts.auto === "true";
+  if (auto) args.push("--auto");
   if (opts.deleteBranch === true || opts.deleteBranch === "true") args.push("--delete-branch");
   if (typeof opts.headSha === "string" && /^[0-9a-f]{7,40}$/i.test(opts.headSha)) args.push("--match-head-commit", opts.headSha);
   // The commit this writes onto the base branch is permanent and public; being
@@ -2159,7 +2176,12 @@ export async function mergePr(rootIn: unknown, number: unknown, method: unknown,
     if (typeof opts.subject === "string" && opts.subject.trim()) args.push("--subject", opts.subject.trim());
     if (typeof opts.body === "string" && opts.body.trim()) args.push("--body", opts.body);
   }
-  return runPr(rootIn, Number(number), args);
+  const res = await runPr(rootIn, Number(number), args);
+  if (!res.ok && auto) {
+    const hint = autoMergeHint(res.error || "");
+    if (hint) return { ...res, error: hint };
+  }
+  return res;
 }
 
 export async function closePr(rootIn: unknown, number: unknown, reopen = false): Promise<PrActionResult> {

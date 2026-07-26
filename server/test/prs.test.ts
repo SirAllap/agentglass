@@ -323,6 +323,32 @@ describe("asset proxy allowlist", () => {
   });
 });
 
+describe("arming auto-merge on a repository that has it switched off", () => {
+  /**
+   * The error the panel used to show was gh quoting the failed mutation:
+   * "Auto merge is not allowed for this repository (enablePullRequestAutoMerge)".
+   * Accurate, and it leaves the reader looking for a setting on the pull
+   * request that is actually a repository option.
+   */
+  test("names the setting and where it lives", () => {
+    const hint = prs.autoMergeHint("GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)");
+    expect(hint).toContain("Allow auto-merge");
+    expect(hint).toContain("Settings");
+  });
+
+  test("matches the hyphenated wording too, since GitHub has used both", () => {
+    expect(prs.autoMergeHint("auto-merge is not allowed for this repository")).not.toBeNull();
+  });
+
+  /** Every other merge failure must reach the user unchanged: "not mergeable",
+   *  a head that moved, a protected branch. Rewriting those would hide them. */
+  test("leaves any other failure alone", () => {
+    expect(prs.autoMergeHint("Pull request is not mergeable")).toBeNull();
+    expect(prs.autoMergeHint("failed to run git: exit status 1")).toBeNull();
+    expect(prs.autoMergeHint("")).toBeNull();
+  });
+});
+
 describe("who may see the GitHub token", () => {
   /**
    * Narrower than the fetch allowlist on purpose: being allowed to serve us an
