@@ -13,7 +13,7 @@ import type {
   GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult,
   PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
 } from "../../../shared/types.ts";
-import { providerOf } from "./format.ts";
+import { modelLabelOf, providerOf } from "./format.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
 
 export const IS_DEMO = import.meta.env.VITE_DEMO === "1";
@@ -57,6 +57,28 @@ const PATHS = [
   "/home/dev/code/payments-svc/handlers/webhook.go",
 ];
 const SKILL_NAMES = ["pr-summary", "code-review", "test-scaffold", "dep-upgrade", "changelog-gen"];
+
+// What the live stream has spent since this page opened.
+//
+// The totals below are a fixed portrait of one window, and the stream that
+// runs on top of them used to be free: the fleet visibly worked, tool calls
+// piled up, the session cards' own costs climbed — and "Spend · this window"
+// sat at exactly $359.85 for as long as you cared to watch. Spend is the first
+// number anyone checks against the clock, and a frozen one is the demo saying
+// out loud that none of this is connected to anything.
+//
+// Kept by model as well as in total, so the KPI and the donut that breaks it
+// down never disagree.
+const streamed = { events: 0, tools: 0, cost: 0, byModel: new Map<string, number>() };
+function account(e: WatchEvent) {
+  streamed.events++;
+  if (e.tool_name && e.hook_event_type === "PostToolUse") streamed.tools++;
+  if (e.cost_usd) {
+    streamed.cost += e.cost_usd;
+    const m = modelLabelOf(e.model_name);
+    streamed.byModel.set(m, (streamed.byModel.get(m) ?? 0) + e.cost_usd);
+  }
+}
 
 let idc = 1000;
 const demoCtx = new Map<string, number>(); // session → simulated context size
@@ -150,7 +172,7 @@ let streamTimer: ReturnType<typeof setInterval> | null = null;
 export function startStream(push: (e: WatchEvent) => void): () => void {
   listeners.push(push);
   if (!streamTimer) {
-    const tick = () => listeners.forEach((l) => l(nextEvent()));
+    const tick = () => { const e = nextEvent(); account(e); listeners.forEach((l) => l(e)); };
     streamTimer = setInterval(tick, 900);
   }
   return () => {
@@ -216,7 +238,7 @@ export function stats(windowMs: number, provider?: string): StatsSummary {
     return { t, events: rint(0, Math.round(40 * busy)), errors: Math.random() < 0.1 ? rint(1, 3) : 0, cost_usd: Number(rnd(0, 12 * busy).toFixed(3)), tokens: rint(0, Math.round(60000 * busy)) };
   });
   const summary: StatsSummary = {
-    totals: { events: si(12840), sessions: si(41), tool_calls: si(6210), errors: Math.round(34 * f), cost_usd: sc(4498.08), input_tokens: Math.round(9_100_000 * f), output_tokens: Math.round(640_000 * f), cache_creation_tokens: Math.round(1_200_000 * f), cache_read_tokens: Math.round(78_000_000 * f) },
+    totals: { events: si(12840) + streamed.events, sessions: si(41), tool_calls: si(6210) + streamed.tools, errors: Math.round(34 * f), cost_usd: Number((sc(4498.08) + streamed.cost).toFixed(2)), input_tokens: Math.round(9_100_000 * f), output_tokens: Math.round(640_000 * f), cache_creation_tokens: Math.round(1_200_000 * f), cache_read_tokens: Math.round(78_000_000 * f) },
     by_model: [
       { model_name: "Opus", input_tokens: Math.round(4_100_000 * f), output_tokens: Math.round(300_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(2350.0), sessions: si(14) },
       { model_name: "GPT-5", input_tokens: Math.round(3_200_000 * f), output_tokens: Math.round(240_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(1180.3), sessions: si(11) },
@@ -238,6 +260,10 @@ export function stats(windowMs: number, provider?: string): StatsSummary {
     heatmap,
     window_ms: windowMs,
   };
+  for (const m of summary.by_model) {
+    const extra = streamed.byModel.get(m.model_name);
+    if (extra) m.cost_usd = Number((m.cost_usd + extra).toFixed(2));
+  }
   return provider ? scopeStats(summary, provider) : summary;
 }
 

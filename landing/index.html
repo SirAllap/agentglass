@@ -986,7 +986,10 @@
   <div class="reel-head">
     <span class="eyebrow">Recorded, not drawn</span>
     <h2>This is it, <em>actually running.</em></h2>
-    <p class="reel-sub">Everything above this line is a simulation of the product. This is the product.</p>
+    <!-- True as it stands, for the visitor who never got the frame — a phone, a
+         metered connection, a request for less motion. The hero rewrites it the
+         moment the app really is behind the glass. -->
+    <p class="reel-sub" id="reelSub">Everything above this line is a simulation of the product. This is the product.</p>
   </div>
 
   <figure class="reel">
@@ -1777,6 +1780,9 @@ sudo apt install ./agentglass_*.deb</code>
       // here, and a 404 under the lens is worse than the honest dark.
       try{ if(!f.contentWindow.document.getElementById("root")) return void drop(); }catch(e){ return void drop(); }
       beyond.live=true; beyond.el.classList.add("lit");
+      // The claim below the fold changes when the app is genuinely up there.
+      const sub=document.getElementById("reelSub");
+      if(sub) sub.innerHTML='The symbology up there is drawn. What resolved under the glass is not — that was the app itself, live in the page, flying the eight sessions the designator named. This is the rest of it, recorded on a real machine.';
     });
     beyond.el.appendChild(f);
     beyond.frame=f;
