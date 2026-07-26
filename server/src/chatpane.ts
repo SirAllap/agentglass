@@ -314,9 +314,23 @@ export interface PaneTurnOptions {
  *  different string and deliberately not matched here. */
 const NEEDS_YOU_RE = /Esc to cancel|Enter to confirm|to use this session only/;
 export const __needsYou = (screen: string): boolean => NEEDS_YOU_RE.test(screen);
+export const __isRunning = (screen: string): boolean => RUNNING_RE.test(screen);
+
+/** A turn that is actually working says so. Used to tell "idle" apart from
+ *  "thinking", which is the difference between ending a turn and abandoning it. */
+const RUNNING_RE = /esc to interrupt/i;
 
 /** How often to look at the screen while a turn has produced nothing at all. */
 const NEEDS_YOU_PROBE_MS = 4_000;
+
+/** Consecutive idle probes before a turn that never started is called over.
+ *
+ *  Two, so ~8s of an empty box with nothing running and not one byte written.
+ *  The margin is affordable because the signal underneath is already strong: a
+ *  real turn writes its own user message to the transcript within a few hundred
+ *  milliseconds of being submitted (measured ~220ms), so `grew` is true almost
+ *  immediately for anything that is genuinely a turn. */
+const IDLE_PROBES_TO_END = 2;
 
 /** How long a turn may go with no transcript growth at all before we check
  *  whether the pane is still alive. Long turns are silent for minutes at a time
@@ -406,12 +420,14 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
         // cost frame can be priced. The `-p` engine gets this handed to it by
         // the CLI; here it is ours to compute.
         let inTok = 0, outTok = 0, cacheW = 0, cacheR = 0;
+        const startedAt = Date.now();
         let carry = "";
         let lastGrowth = Date.now();
         // Whether this turn has produced a single byte. An interactive prompt
         // produces none, ever, which is what tells it apart from a slow one.
         let grew = false;
         let lastProbe = Date.now();
+        let idleProbes = 0;
 
         for (;;) {
           if (cancelled) return;
@@ -468,6 +484,40 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
               });
               controller.close();
               return;
+            }
+            /*
+             * Nothing written, nothing running, nothing asking. The CLI handled
+             * this itself and went back to the prompt.
+             *
+             * `/clear` and `/compact` do exactly this — verified: no
+             * `turn_duration`, no picker hints, not running — and so, presumably,
+             * do commands that do not exist yet. Enumerating them is a race
+             * nobody wins, which is why this is a state check rather than a list:
+             * a turn that produced no transcript and left the pane idle is over,
+             * whatever it was called.
+             */
+            const running = RUNNING_RE.test(screen);
+            const box = inputBox(screen);
+            if (!running && !box?.trim()) {
+              if (++idleProbes >= IDLE_PROBES_TO_END) {
+                emit({
+                  type: "assistant",
+                  message: {
+                    role: "assistant",
+                    content: [{
+                      type: "text",
+                      text: "_This ran inside the chat's tmux pane and produced no conversation — commands like "
+                        + "`/clear` and `/compact` are handled by the CLI itself. To see what it did, open the pane:_\n\n"
+                        + "```\n" + attachCommand(sessionId) + "\n```",
+                    }],
+                  },
+                });
+                emit({ type: "result", subtype: "success", total_cost_usd: 0, duration_ms: Date.now() - startedAt });
+                controller.close();
+                return;
+              }
+            } else {
+              idleProbes = 0;
             }
           } else if (Date.now() - lastGrowth > STALL_CHECK_MS) {
             // Silence is normal — a long tool call says nothing for minutes. What

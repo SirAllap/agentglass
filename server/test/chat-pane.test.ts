@@ -173,3 +173,31 @@ test("a screen with no prompt row at all reads as taken", () => {
   // entirely; that must count as accepted rather than as a lost prompt.
   expect(mod.inputBox("● working…\n✻ Brewed for 2s")).toBeNull();
 });
+
+/** `/clear` leaves no trace at all: nothing written, no picker, not running.
+ *  Captured from a live pane — this is the case that enumerating commands
+ *  would always have missed. */
+const IDLE_AFTER_LOCAL_COMMAND = [
+  "▐▛███▜▌   Claude Code v2.1.220",
+  "────────────",
+  "❯ ",
+  "────────────",
+  "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
+].join("\n");
+
+test("a pane that went quiet with nothing written is idle, not working", () => {
+  // The general rule the picker check cannot cover: `/clear` and `/compact`
+  // produce no turn, no hints and no activity. A turn waiting on the CLI's own
+  // end-of-turn line would wait for one that is never written.
+  expect(mod.__needsYou(IDLE_AFTER_LOCAL_COMMAND)).toBe(false);
+  expect(mod.__isRunning(IDLE_AFTER_LOCAL_COMMAND)).toBe(false);
+  expect(mod.inputBox(IDLE_AFTER_LOCAL_COMMAND)?.trim()).toBe("");
+});
+
+test("a working turn is never idle, however long it says nothing", () => {
+  // The one that must not regress: a tool call can be silent for minutes, and
+  // ending the turn under it would throw away work in flight.
+  const working = "● Reading files…\n✻ Brewed for 94s (esc to interrupt)";
+  expect(mod.__isRunning(working)).toBe(true);
+  expect(mod.__needsYou(working)).toBe(false);
+});
