@@ -11,12 +11,16 @@ import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/Vi
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { openExternal } from "../lib/externalUrl.ts";
 import type { GitRepoRef, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 import { wantsWebgl, fallBackToDom } from "../lib/termRenderer.ts";
+import { isFindChord } from "../lib/termKeys.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -85,6 +89,9 @@ type Sess = {
   title: string;
   term: Terminal;
   fit: FitAddon;
+  /** Per shell, because a match is a position in *this* scrollback: the find
+   *  bar in the header drives whichever pane has the focus. */
+  search: SearchAddon;
   holder: HTMLDivElement; // xterm's home element — reparented into the panel
   ws: WebSocket | null;
   status: SessStatus;
@@ -179,6 +186,16 @@ export function liveSessionCount() { return liveCount; }
 const rosterChanged = () => { const before = liveCount; recount(); if (before !== liveCount) rosterSubs.forEach((fn) => fn()); };
 // Set by the mounted panel so the terminal itself can close it (Shift+Esc).
 let panelClose: () => void = () => {};
+
+/**
+ * Open the find bar, when there is one to open.
+ *
+ * Set by the terminal view while it is mounted, the same way `panelClose` is.
+ * It stays a no-op returning false everywhere else — a shell in the docked
+ * console strip has no find bar in front of it, and swallowing the key there
+ * would take a chord away from the program running in it and give nothing back.
+ */
+let panelFind: () => boolean = () => false;
 
 // The panel is built to keep many shells open at once, so eviction is a last
 // resort rather than routine: it only runs at the server's own ceiling, and it
@@ -374,6 +391,19 @@ function createSession(root: string): Sess {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  const search = new SearchAddon();
+  term.loadAddon(search);
+  /*
+   * URLs in output become clickable, and open where the user's links open.
+   *
+   * `openExternal` rather than the addon's default handler: it is the one path
+   * the whole app already uses, which the desktop shell intercepts
+   * (`setWindowOpenHandler` in electron/main.js) to hand the URL to the OS
+   * browser instead of opening a chromeless window inside the app. It also
+   * refuses anything that is not http(s), which matters more here than
+   * anywhere else — the text being linkified is whatever a program printed.
+   */
+  term.loadAddon(new WebLinksAddon((_e, uri) => { openExternal(uri); }));
   /*
    * Draw on the GPU when the machine will let us.
    *
@@ -402,7 +432,9 @@ function createSession(root: string): Sess {
   }
   // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
   term.attachCustomKeyEventHandler((e) => {
-    if (e.type === "keydown" && e.key === "Escape" && e.shiftKey) { panelClose(); return false; }
+    if (e.type !== "keydown") return true;
+    if (e.key === "Escape" && e.shiftKey) { panelClose(); return false; }
+    if (isFindChord(e) && panelFind()) return false;
     return true;
   });
   const holder = document.createElement("div");
@@ -411,7 +443,7 @@ function createSession(root: string): Sess {
   // background colour instead of a white flash.
   holder.style.cssText = "width:100%;height:100%;background:var(--bg)";
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxSession: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxSession: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
     /*
@@ -503,6 +535,82 @@ function killSession(s: Sess) {
   s.holder.remove();
   sessions.delete(s.id);
   rosterChanged();
+}
+
+/**
+ * Find in scrollback, for whichever pane has the focus.
+ *
+ * Lives in the header rather than floating over the terminal: the shell below
+ * is a fixed grid of cells, and an overlay would cover output while you are
+ * reading it looking for the very thing you searched for.
+ *
+ * The highlight colours are the app's own tokens rather than xterm's defaults,
+ * which are a fixed yellow that disappears on the light themes.
+ */
+function FindBar({ sess, onClose }: { sess: Sess | undefined; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [at, setAt] = useState<{ index: number; count: number } | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
+
+  // `onDidChangeResults` is the only honest source for "3 of 17": the addon
+  // counts as it walks the buffer, and a running shell keeps adding to it.
+  useEffect(() => {
+    if (!sess) return;
+    const sub = sess.search.onDidChangeResults((r) => setAt(r ? { index: r.resultIndex + 1, count: r.resultCount } : null));
+    return () => { sub.dispose(); };
+  }, [sess]);
+
+  const opts = {
+    decorations: {
+      matchBackground: "#00000000",
+      matchOverviewRuler: readVar(rootStyle(), "--warning", "#fbbf24"),
+      activeMatchBackground: readVar(rootStyle(), "--primary", "#a78bfa"),
+      activeMatchColorOverviewRuler: readVar(rootStyle(), "--primary", "#a78bfa"),
+      matchBorder: readVar(rootStyle(), "--warning", "#fbbf24"),
+    },
+  };
+
+  const step = (back: boolean) => {
+    if (!sess || !q) return;
+    if (back) sess.search.findPrevious(q, opts); else sess.search.findNext(q, opts);
+  };
+
+  // Clearing the term clears the highlights with it — leaving them on screen
+  // after the box is empty is the kind of stale state nobody can dismiss.
+  const change = (v: string) => {
+    setQ(v);
+    if (!sess) return;
+    if (!v) { sess.search.clearDecorations(); setAt(null); return; }
+    sess.search.findNext(v, { ...opts, incremental: true });
+  };
+
+  const close = () => { try { sess?.search.clearDecorations(); } catch { /* disposed */ } onClose(); };
+
+  return (
+    <div className="flex items-center gap-1" onMouseDown={(e) => e.stopPropagation()}>
+      <input
+        ref={inputRef}
+        value={q}
+        onChange={(e) => change(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") { e.preventDefault(); step(e.shiftKey); }
+          if (e.key === "Escape") { e.preventDefault(); close(); }
+        }}
+        placeholder="Find in scrollback…"
+        aria-label="Find in scrollback"
+        className="px-2 py-1 rounded-md text-[11px] outline-none"
+        style={{ width: 190, background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
+      />
+      <span className="text-[10px] tabular-nums t-dim2" style={{ minWidth: 46 }}>
+        {q ? (at?.count ? `${at.index}/${at.count}` : "none") : ""}
+      </span>
+      <button onClick={() => step(true)} disabled={!q} title="Previous match (Shift+Enter)" className="text-[11px] px-1.5 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↑</button>
+      <button onClick={() => step(false)} disabled={!q} title="Next match (Enter)" className="text-[11px] px-1.5 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↓</button>
+      <button onClick={close} title="Close find (Esc)" className="text-[11px] px-1.5 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>✕</button>
+    </div>
+  );
 }
 
 /** Type a command into the repo's shell (starting one if needed). */
@@ -804,9 +912,17 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const closeRef = useRef(onClose);
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
 
+  /** The find bar is open over the focused pane. Reset when the repo changes:
+   *  a search is about one shell's scrollback, not about the panel. */
+  const [findOpen, setFindOpen] = useState(false);
+  useEffect(() => { setFindOpen(false); }, [root]);
+
   useEffect(() => {
     if (!open || IS_DEMO) return;
     panelClose = () => closeRef.current();
+    // Claim the find chord only while this view is on screen and has a pane to
+    // search — see `panelFind`.
+    panelFind = () => { setFindOpen(true); return true; };
     const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver; unTheme: () => void; stopFit: () => void }[] = [];
     paneIds.forEach((id, i) => {
       const s = sessions.get(id);
@@ -833,6 +949,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     if (focused) requestAnimationFrame(() => focused.term.focus());
     return () => {
       panelClose = () => {};
+      panelFind = () => false;
       for (const { s, el, ro, unTheme, stopFit } of mounted) {
         ro.disconnect();
         stopFit();
@@ -1112,7 +1229,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   {/* keepTermFocus so none of these buttons — split, restart,
                       clear, the status pill — steals the shell's cursor on
                       press; they act and the terminal keeps the keyboard. */}
-                  <div className="ml-auto flex items-center gap-1.5 shrink-0" onMouseDown={keepTermFocus}>
+                  {/* Find sits outside the keepTermFocus group on purpose: its
+                      input is the one control here that has to take the cursor
+                      off the shell, and closing it hands the cursor back. */}
+                  <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                    {findOpen
+                      ? <FindBar sess={sessions.get(paneIds[focusIdx] ?? "")} onClose={() => { setFindOpen(false); focusTerm(); }} />
+                      : <button onMouseDown={keepTermFocus} onClick={() => setFindOpen(true)} disabled={!root || IS_DEMO || disabled} title="Find in scrollback (Ctrl+Shift+F)" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⌕ Find</button>}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0" onMouseDown={keepTermFocus}>
                     <span onClick={status === "unauthorized" ? reauthPrompt : undefined}
                       className={`flex items-center gap-1.5 text-[10px] t-dim2 mr-1 ${status === "unauthorized" ? "cursor-pointer" : ""}`}
                       title={status === "unauthorized" ? "This server needs an access token — click to enter it" : "Shell status"}>
