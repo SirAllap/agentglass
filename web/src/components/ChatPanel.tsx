@@ -28,7 +28,7 @@ import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, clearAttention, type Chat,
-  restoredActiveId, setActiveChatId,
+  restoredActiveId, setActiveChatId, chatFocusRequest,
 } from "../lib/chatStore.ts";
 import { peekChatIntent, subscribeChatIntent, takeChatIntent } from "../lib/chatIntent.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
@@ -548,6 +548,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // Opened to continue a specific session (from the fleet view): show that tab
   // rather than whichever was last active, or the request looks ignored.
   useEffect(() => { if (focusId && getChat(focusId)) setActiveId(focusId); }, [focusId]);
+
+  // The same thing asked from inside the workspace, where there is no prop to
+  // pass: the PR panel seeds a chat and asks for it. The request carries a
+  // serial, so asking again for the tab you just wandered off brings it back.
+  const focusReq = useSyncExternalStore(subscribe, chatFocusRequest, chatFocusRequest);
+  useEffect(() => { if (focusReq.id && getChat(focusReq.id)) setActiveId(focusReq.id); }, [focusReq]);
 
   useEffect(() => { if (defaultCwd) { try { localStorage.setItem(CWD_KEY, defaultCwd); } catch { /* ignore */ } } }, [defaultCwd]);
 

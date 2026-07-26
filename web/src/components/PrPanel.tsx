@@ -499,7 +499,7 @@ function PrRow({ p, active, onSelect }: { p: PrSummary; active: boolean; onSelec
 // panel
 // ---------------------------------------------------------------------------
 
-export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChatWith?: (cwd: string, prompt: string) => void }) {
+export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChatWith?: (cwd: string, prompt: string, title: string) => void }) {
   const sidebarW = useSidebarWidth();
   const { ask, askText, dialog } = useDialogs();
 
@@ -1009,10 +1009,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (!detail) return;
     setBusy(true);
     try {
-      const r = await api.prLocalReview(root, detail.number);
+      const r = await api.prReviewPrompt(root, detail.number);
       if (!r.ok || !r.cwd || !r.prompt) { flash(false, r.error || "Could not prepare the review"); return; }
-      if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt); flash(true, `Checked out #${detail.number} — review waiting in chat`); }
-      else flash(true, `Checked out at ${r.cwd}`);
+      if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt, `Review #${detail.number}`); flash(true, `#${detail.number} is waiting in chat`); }
+      else flash(false, "The chat is not available here");
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
   };
@@ -1105,20 +1105,23 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     catch { flash(false, "Could not reach the clipboard"); }
   };
 
-  /** Hand a failing check to the chat with the pull request already checked out,
-   *  so the answer is written against the code that failed rather than a guess
-   *  from the name of the job. */
+  /** Hand a failing check to the chat pointed at this project, with the job that
+   *  broke named, so the answer is written against the code that failed rather
+   *  than a guess from the name of the job. */
   const askClaudeAboutCheck = async (check: PrCheck) => {
     if (!detail || !onOpenChatWith) return;
     setBusy(true);
     try {
-      const r = await api.prLocalReview(root, detail.number);
-      if (!r.ok || !r.cwd) { flash(false, r.error || "Could not check the pull request out"); return; }
+      const r = await api.prReviewPrompt(root, detail.number);
+      if (!r.ok || !r.cwd) { flash(false, r.error || "Could not prepare the question"); return; }
       onOpenChatWith(r.cwd,
-        `The check "${check.name}"${check.workflow ? ` in the ${check.workflow} workflow` : ""} is failing on pull request #${detail.number} (${detail.title}).\n\n` +
-        `This worktree is on ${detail.headRefName}. Work out why it is failing and propose the fix.` +
-        (check.url ? `\n\nThe run is at ${check.url}.` : ""));
-      flash(true, `Checked out #${detail.number} — the failure is waiting in chat`);
+        `The check "${check.name}"${check.workflow ? ` in the ${check.workflow} workflow` : ""} is failing on pull request #${detail.number} (${detail.title}), on branch ${detail.headRefName}.\n\n` +
+        `Read the failure with:  gh run view --log-failed --repo <this repo>  (or the run URL below)\n` +
+        `Read the change with:  gh pr diff ${detail.number}\n\n` +
+        `This working directory is the same project, but not the pull request. Work out why the job is failing and propose the fix. Do not change any files yet.` +
+        (check.url ? `\n\nThe run is at ${check.url}.` : ""),
+        `Check on #${detail.number}`);
+      flash(true, `#${detail.number} is waiting in chat`);
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
   };
@@ -1630,7 +1633,7 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
       <Description d={d} busy={busy} onSave={onEditBody} />
 
       <div className="flex gap-1.5 flex-wrap items-center">
-        <Btn onClick={onLocalReview} disabled={busy} primary title="Check the PR out into a throwaway worktree and review it with the whole repo in context">Review locally with Claude</Btn>
+        <Btn onClick={onLocalReview} disabled={busy} primary title="Open a chat with the review prompt ready. Reads only: no checkout, nothing written to this repository">Review with Claude</Btn>
         <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
           style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open on GitHub ↗</a>
       </div>
@@ -1929,7 +1932,7 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLab
               <MenuSep />
               <MenuItem onClick={() => { close(); onCopyLink(); }}>🔗 Copy link</MenuItem>
               <MenuItem onClick={() => { close(); openExternal(d.url); }}>↗ Open on GitHub</MenuItem>
-              <MenuItem onClick={() => { close(); onLocalReview(); }}>✦ Review locally with Claude</MenuItem>
+              <MenuItem onClick={() => { close(); onLocalReview(); }}>✦ Review with Claude</MenuItem>
               {d.state !== "MERGED" && <>
                 <MenuSep />
                 <MenuItem onClick={() => { close(); onClose(); }} danger={d.state !== "CLOSED"}>

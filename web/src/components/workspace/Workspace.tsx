@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Portal } from "../Portal.tsx";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
-import { subscribe as subscribeChats, attentionCount, newChat, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
+import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
 import { GitView } from "../GitPanel.tsx";
 import { DiffView } from "../ChangesModal.tsx";
 import { PrView } from "../PrPanel.tsx";
@@ -47,14 +47,24 @@ export function Workspace({
   /**
    * Start a chat already pointed at a directory, with a prompt waiting.
    *
-   * The prompt lands in the composer rather than being sent: a local PR review
-   * is a real Claude run against a real checkout, and it should not begin
-   * because you clicked a button one pane over. You read it, then you send it.
+   * The prompt lands in the composer rather than being sent: a PR review is a
+   * real Claude run that costs real tokens, and it should not begin because you
+   * clicked a button one pane over. You read it, then you send it.
+   *
+   * `requestChatFocus` rather than `setActiveChatId` alone, because the panel
+   * reads the first and only writes the second: without it the chat was created
+   * and filled behind whichever tab was already up.
+   *
+   * A seeded tab that was never sent is reused rather than duplicated. Clicking
+   * the same button twice means "show me that again", not "give me a second
+   * copy of it"; a review already under way is left alone.
    */
-  const openChatWith = useCallback((cwd: string, prompt: string) => {
-    const chat = newChat(cwd);
-    updateChat(chat.id, (c) => { c.draft = prompt; c.title = "PR review"; });
+  const openChatWith = useCallback((cwd: string, prompt: string, title: string) => {
+    const spare = listChats().find((c) => c.cwd === cwd && c.title === title && !c.messages.length && !c.sending);
+    const chat = spare ?? newChat(cwd);
+    updateChat(chat.id, (c) => { c.draft = prompt; c.title = title; });
     setActiveChatId(chat.id);
+    requestChatFocus(chat.id);
     onView("chat");
   }, [onView]);
   const frameRef = useRef<HTMLDivElement>(null);

@@ -214,6 +214,23 @@ export function setActiveChatId(id: string) {
   persistSoon();
 }
 
+/**
+ * Ask the panel to bring a chat to the front.
+ *
+ * The panel owns selection, so this cannot simply assign it: `setActiveChatId`
+ * records which tab is up for the next restore, and nothing was reading it back
+ * — which is how "review this PR with Claude" came to create a chat, fill its
+ * composer, and leave it behind whichever tab was already showing, looking for
+ * all the world like the button did nothing.
+ *
+ * Carries a serial so asking twice for the same tab is two requests. The second
+ * click after you wandered off to another tab means the same thing as the first
+ * one did.
+ */
+let focusReq = { id: "", n: 0 };
+export function requestChatFocus(id: string) { focusReq = { id, n: focusReq.n + 1 }; emit(); }
+export const chatFocusRequest = () => focusReq;
+
 // Restored synchronously, at module load, on purpose. The panel seeds a blank
 // chat when it opens and finds none, so a restore that resolved a tick later
 // would race that and land behind an empty tab nobody asked for.

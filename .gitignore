@@ -21,3 +21,9 @@ __pycache__/
 # ignored there — the sidecar is a ~100MB compiled server binary.
 .claude/
 *.bun-build
+
+# Nothing writes this any more. Earlier builds checked a pull request out into
+# .agentglass/pr-review/<n> to review it, and those worktrees outlived the
+# review — anyone upgrading has some, and they are not the repository's.
+# `git worktree remove` them when you want the disk back.
+.agentglass/

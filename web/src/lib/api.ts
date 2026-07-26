@@ -415,9 +415,10 @@ const realApi = {
   prMerge: (root: string, number: number, method: "squash" | "merge" | "rebase", opts: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) =>
     post<PrActionResult>("/prs/merge", { root, number, method, ...opts }),
   prClose: (root: string, number: number, reopen = false) => post<PrActionResult>("/prs/close", { root, number, reopen }),
-  prLocalReview: (root: string, number: number) =>
-    post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/local-review", { root, number }),
-  prLocalReviewDiscard: (root: string, number: number) => post<PrActionResult>("/prs/local-review-discard", { root, number }),
+  /** The prompt to review a PR with Claude, and the directory to run it in.
+   *  Reads only: no fetch, no checkout, nothing left behind. */
+  prReviewPrompt: (root: string, number: number) =>
+    post<{ ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }>("/prs/review-prompt", { root, number }),
   /** Where a local branch lives on the web. A live branch resolves to its tree
    *  with no network at all; a gone one resolves to the PR it came from. */
   prCommitDiff: (root: string, sha: string) =>
@@ -613,8 +614,7 @@ const demoApi: typeof realApi = {
   prRerun: (_r: string, _n: number) => D(demoPrAction()),
   prMerge: (_r: string, _n: number, _m: "squash" | "merge" | "rebase", _o: { deleteBranch?: boolean; auto?: boolean; headSha?: string; subject?: string; body?: string; disableAuto?: boolean }) => D(demoPrAction()),
   prClose: (_r: string, _n: number, _reopen?: boolean) => D(demoPrAction()),
-  prLocalReview: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
-  prLocalReviewDiscard: (_r: string, _n: number) => D(demoPrAction()),
+  prReviewPrompt: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prCommitDiff: (_r: string, _s: string) => D({ ok: false, error: "not available in the demo" }),
   prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
 };

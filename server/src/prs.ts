@@ -1924,44 +1924,43 @@ export async function closePr(rootIn: unknown, number: unknown, reopen = false):
 }
 
 // ---------------------------------------------------------------------------
-// local review
+// review this pull request with Claude
 // ---------------------------------------------------------------------------
 
-/**
- * Where throwaway PR checkouts live. Under the repo's own git dir rather than
- * /tmp, so they share the object store — checking out a 12-file PR against a
- * large repo copies nothing.
- */
-const REVIEW_WT_DIR = ".agentglass/pr-review";
-
-export interface LocalReviewPlan { ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }
+export interface ReviewPromptPlan { ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }
 
 /**
- * Put a PR's head on disk and hand back the prompt to review it.
+ * Hand back the prompt to review a pull request, and nothing else.
  *
  * Deliberately does not run Claude itself: the app already has a chat pipeline
- * — `chatStream` in chat.ts, with streaming, an allowlist and a keepalive — and
- * a second copy of that would rot. This returns a cwd and a prompt; the caller
+ * (`chatStream` in chat.ts, with streaming, an allowlist and a keepalive) and a
+ * second copy of that would rot. This returns a cwd and a prompt; the caller
  * feeds them to the pipeline that already exists.
  *
- * The point of a worktree rather than the diff alone is context. A review that
- * can only see `-` and `+` lines cannot follow a call site, check whether the
- * helper being changed has another caller, or run the tests. That is the whole
- * difference from the review the CI bot already posts.
+ * It also, deliberately, writes nothing at all. This used to fetch
+ * `pull/N/head` and check it out into a throwaway worktree under
+ * `.agentglass/pr-review/N`, for the context a bare diff cannot give: who else
+ * calls the helper being changed, whether the tests reach the new path. The
+ * context was worth having; the checkout was not the way to get it. It outlived
+ * the review every time, so a repository accumulated a working tree and an
+ * untracked directory per PR anybody had ever glanced at, and the prompt itself
+ * ended by forbidding every write a working tree is for.
  *
- * `pull/N/head` rather than the branch name: the branch may be on a fork you
- * have no remote for, and this ref exists for every PR regardless.
+ * The same review without the copy: `gh pr diff` carries the patch, the project
+ * already open carries the surroundings, and `gh api .../contents?ref=<sha>`
+ * fetches any file exactly as the PR leaves it when the diff is not enough.
+ * That last one is also what makes a fork work without a remote for it.
  */
-export async function prepareLocalReview(rootIn: unknown, numberIn: unknown): Promise<LocalReviewPlan> {
-  const g = writeGuard(rootIn);
-  // A worktree is a local write, so it takes the same gate — but the failure
-  // message should say that, not talk about pull requests.
-  if (g) return { ok: false, error: g.error };
+export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown): Promise<ReviewPromptPlan> {
   const number = Number(numberIn);
   if (!Number.isInteger(number) || number <= 0) return { ok: false, error: "invalid pull request number" };
   const abs = safeAbs(rootIn);
   const root = abs ? repoRootOf(abs) : null;
   if (!root) return { ok: false, error: "not a git repository" };
+  // No `writeGuard`: nothing here writes, so a read-only scope can still review
+  // a pull request. The scope check is still owed, because the chat is about to
+  // be pointed at this directory.
+  if (!inScope(root)) return { ok: false, error: "outside the open project — open the parent folder to work across repos" };
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
 
@@ -1969,25 +1968,22 @@ export async function prepareLocalReview(rootIn: unknown, numberIn: unknown): Pr
   if (!detail.ok || !detail.detail) return { ok: false, error: detail.error || "could not read the pull request" };
   const pr = detail.detail;
 
-  const ref = `refs/agentglass/pr-${number}`;
-  const fetched = await gitAsync(root, ["fetch", "--no-tags", "--force", "origin", `pull/${number}/head:${ref}`]);
-  if (fetched.code !== 0) return { ok: false, error: `could not fetch the pull request: ${fetched.stderr.trim().split("\n")[0]}` };
-
-  const dir = `${root}/${REVIEW_WT_DIR}/${number}`;
-  // Re-preparing the same PR is normal — you review, they push, you review
-  // again. Drop the old checkout rather than failing on "already exists".
-  await gitAsync(root, ["worktree", "remove", "--force", dir]);
-  const added = await gitAsync(root, ["worktree", "add", "--detach", dir, ref]);
-  if (added.code !== 0) return { ok: false, error: `could not create the review worktree: ${added.stderr.trim().split("\n")[0]}` };
-
+  // Commits arrive oldest first, so the last one is the head. Pinning the
+  // review to a sha rather than a branch name means a push mid-review does not
+  // quietly swap the code underneath it.
+  const head = pr.commits[pr.commits.length - 1]?.oid || pr.headRefName;
   const openThreads = pr.threads.filter((t) => !t.isResolved);
   const prompt = [
     `Review pull request #${pr.number} of ${repo.nameWithOwner}: "${pr.title}".`,
     ``,
-    `This working directory is the PR's head commit, checked out in full — read whatever you need around the diff.`,
-    `Base branch: ${pr.baseRefName}. Head: ${pr.headRefName}. ${pr.changedFiles} files, +${pr.additions} −${pr.deletions}.`,
+    `Read-only: do not change any files, do not commit, do not push, and do not post anything to GitHub. Report back here.`,
     ``,
-    `Start with:  git diff ${pr.baseRefName}...HEAD`,
+    `Base branch: ${pr.baseRefName}. Head: ${pr.headRefName} at ${head}. ${pr.changedFiles} files, +${pr.additions} −${pr.deletions}.`,
+    ``,
+    `The diff:  gh pr diff ${pr.number}`,
+    `A file as the pull request leaves it:  gh api "repos/${repo.nameWithOwner}/contents/<path>?ref=${head}" -H "Accept: application/vnd.github.raw"`,
+    ``,
+    `This working directory is the same project, but not this pull request: it is on whatever you have checked out, and may be behind. Use it for the surroundings rather than for the change itself — other callers of a helper the diff touches, the tests that cover the path, the convention the change is meant to follow — and read the changed code from the two commands above.`,
     ``,
     `## What the author says`,
     pr.body.slice(0, 4000) || "(no description)",
@@ -1996,29 +1992,11 @@ export async function prepareLocalReview(rootIn: unknown, numberIn: unknown): Pr
     ``,
     `## What I want`,
     `Find real defects: incorrect logic, unhandled cases, race conditions, missing test coverage for the behaviour being changed.`,
-    `Use the full checkout — check whether changed helpers have other callers, and whether the tests actually exercise the new path.`,
+    `Check whether changed helpers have other callers, and whether the tests actually exercise the new path.`,
     `Report each finding as: file:line, one sentence on the defect, and a concrete failure case. Say plainly if you find nothing serious.`,
-    `Do not post anything to GitHub, do not push, and do not change any files. This is a read-only review.`,
   ].filter((l) => l !== "").join("\n");
 
-  return { ok: true, cwd: dir, prompt, branch: pr.headRefName };
-}
-
-/** Tear down a review checkout. Cheap, and leaving them around turns the
- *  branches panel into a list of ghosts. */
-export async function discardLocalReview(rootIn: unknown, numberIn: unknown): Promise<PrActionResult> {
-  const g = writeGuard(rootIn); if (g) return g;
-  const number = Number(numberIn);
-  const abs = safeAbs(rootIn);
-  const root = abs ? repoRootOf(abs) : null;
-  if (!root || !Number.isInteger(number)) return { ok: false, error: "invalid request" };
-  const dir = `${root}/${REVIEW_WT_DIR}/${number}`;
-  const r = await gitAsync(root, ["worktree", "remove", "--force", dir]);
-  await gitAsync(root, ["update-ref", "-d", `refs/agentglass/pr-${number}`]);
-  if (r.code !== 0 && !/is not a working tree|No such file/i.test(r.stderr)) {
-    return { ok: false, error: r.stderr.trim().split("\n")[0] || "could not remove the review worktree" };
-  }
-  return { ok: true };
+  return { ok: true, cwd: root, prompt, branch: pr.headRefName };
 }
 
 // ---------------------------------------------------------------------------
