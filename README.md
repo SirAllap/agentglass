@@ -35,7 +35,7 @@ gate. No install, no server. *(Everything there is fake; it's a showcase.)*
 - [Every project, one cockpit](#every-project-one-cockpit)
 - [More than a dashboard — a workspace](#more-than-a-dashboard--a-workspace)
 - [Why](#why) · [Themes](#themes)
-- [Quickstart](#quickstart)
+- [Quickstart](#quickstart) · [Requirements](#requirements-what-agentglass-expects-to-find)
 - [Desktop app](#desktop-app) · [Updating](#updating)
 - [Security model — read this before installing](#security-model--read-this-before-installing)
 - [Control plane — approve / deny remotely](#control-plane--approve--deny-tool-calls-remotely-opt-in)
@@ -315,7 +315,10 @@ python3 hooks/seed_demo.py            # optional: streams demo agents for ~30s
 ### Running from source
 
 For hacking on agentglass, or for a headless box. Requires
-[Bun](https://bun.sh) ≥ 1.1 and Python 3 (for the hook forwarder).
+[Bun](https://bun.sh) ≥ 1.1 and Python 3 (the hook forwarder and the terminal's
+pseudo-terminal both run under it). Everything else agentglass shells out to is
+listed under [Requirements](#requirements-what-agentglass-expects-to-find), and
+checked for you in Settings ▸ Requirements.
 
 ```bash
 bun install
@@ -386,6 +389,53 @@ Both use a dependency-free Python forwarder that POSTs to the server; `Stop` /
 `SubagentStop` / `SessionEnd` pass `--add-chat` so token usage can be read from
 the transcript. The raw hook blocks also live in
 [`hooks/settings.example.json`](hooks/settings.example.json) for manual setups.
+
+---
+
+## Requirements: what agentglass expects to find
+
+agentglass drives the tools you already have rather than bundling its own. The
+app itself is self-contained (the server ships inside it), so this list is about
+**what each feature shells out to**, and what stands down when it isn't there.
+
+**The app checks all of it for you: Settings ▸ Requirements** shows every tool,
+whether this machine has it, what stops working without it, and a link to the
+project's own install page. Nothing there installs anything, and the guidance is
+deliberately generic: there is one macOS, one Windows and an unbounded number of
+Linux distributions, so how you install software is yours to know.
+
+**Needed**
+
+| Tool | Why | Without it |
+| --- | --- | --- |
+| [git](https://git-scm.com/downloads) | Source control, file changes, pull requests, worktrees; the terminal uses it to decide where to open | Those panels stay empty and the terminal cannot open in a repo |
+| [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/setup) | The chat panel runs `claude`: every turn, the pane engine, Review with Claude, the walkthrough | No chatting from the app. Sessions still appear: the transcript scanner reads `~/.claude/projects` regardless |
+| [Python 3](https://www.python.org/downloads/) | Runs the hook forwarder, and backs the terminal's pseudo-terminal | Hooks stay wired and fail on every event, so nothing streams live and nothing says why. The terminal still opens, in a mode where full-screen programs do not render. Windows hooks use `py` or `python` |
+
+**Per feature**
+
+| Tool | Gives you | Without it |
+| --- | --- | --- |
+| [tmux](https://github.com/tmux/tmux/wiki/Installing) | Chats as live panes you can attach to, your tmux windows as tabs, theme sync | Chats run one process per turn instead: slower to start, nothing left running |
+| [GitHub CLI](https://cli.github.com) | The whole pull-requests panel | No PRs. It also has to be logged in (`gh auth login`), which is the step people miss |
+| [Docker](https://docs.docker.com/get-started/get-docker/) | Containers, images, volumes, logs | No docker panel. The daemon has to be running, not just the CLI installed |
+| [Neovim](https://neovim.io) | Sending a file to a live editor, theme sync | The app hands you a command to paste instead |
+| setsid, script ([util-linux](https://github.com/util-linux/util-linux)) | Process groups per shell, and the fallback pseudo-terminal | A closed terminal can leave background processes behind |
+| [D-Bus tools](https://www.freedesktop.org/wiki/Software/dbus/), [libnotify](https://gitlab.gnome.org/GNOME/libnotify), [xdg-utils](https://www.freedesktop.org/wiki/Software/xdg-utils/) | Mirroring desktop notifications onto the notch, alerts when no window is open, opening their links (Linux) | Those notifications simply do not appear |
+| [polkit](https://gitlab.freedesktop.org/polkit/polkit) | Handing a worktree back to you when a container left root-owned files in it | That one repair button fails |
+
+**Two more that are not binaries**
+
+- **Linux `.AppImage`**: needs FUSE, which some distributions no longer install
+  by default. The `.deb` has no such requirement.
+- **Self-update** ("Install & restart" in Settings ▸ About) builds the new
+  version on your machine, so it wants `git`, [Bun](https://bun.sh) and a
+  working build toolchain. It is opt-in and never automatic.
+
+**On Windows**, the terminal, tmux chat panes, the notification mirror and
+self-update are off by design rather than broken: they need a POSIX
+pseudo-terminal, a Unix shell and a D-Bus session respectively. Everything else,
+including the transcript scanner and the git and PR panels, works.
 
 ---
 

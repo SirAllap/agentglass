@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
+import { depSpec } from "../../../shared/deps.ts";
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
@@ -263,9 +264,12 @@ function DockerMissing({ reason }: { reason?: string }) {
         <span className="text-[11.5px]" style={{ color: "var(--text2)" }}>
           {reason || "The docker CLI isn't on your PATH"}. Containers, images, volumes and logs stay empty until it is.
         </span>
+        {/* Generic: one macOS, one Windows, an unbounded number of Linux
+            distributions. Docker's own page covers every one of them, and
+            Settings ▸ Requirements is the same check for every other tool. */}
         <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-          Get it from <code>docker.com/get-started</code> (Docker Desktop), or your package manager:{" "}
-          <code>apt install docker.io</code>, <code>brew install docker</code> — then reopen.
+          Install it however you install software here (<code>{depSpec("docker")?.url}</code>), then reopen.
+          Settings ▸ Requirements checks this and every other tool agentglass uses.
         </span>
       </div>
     </div>

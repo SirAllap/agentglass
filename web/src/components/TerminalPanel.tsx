@@ -278,7 +278,10 @@ function connect(s: Sess) {
     if (f.t === "ready") {
       reconnected(s);
       s.status = "live"; s.mode = f.mode ?? null; s.shell = f.shell || "shell"; s.canResize = f.resize !== false;
-      if (f.mode === "pipe") s.term.writeln("\x1b[2m(no pty available on this host — plain-pipe shell: TUI apps won't render)\x1b[0m");
+      // Names the cure, not only the symptom: this mode is what a host with no
+      // python3 gets, and "TUI apps won't render" alone left people believing
+      // the terminal itself was broken.
+      if (f.mode === "pipe") s.term.writeln("\x1b[2m(no pty on this host: plain-pipe shell, full-screen programs won't render. Install python3 and reopen; Settings ▸ Requirements has the details.)\x1b[0m");
       for (const d of s.pending.splice(0)) ws.send(JSON.stringify({ t: "in", d }));
       // the fit that ran while connecting may not have reached the server
       ws.send(JSON.stringify({ t: "resize", cols: s.term.cols, rows: s.term.rows }));

@@ -1,4 +1,5 @@
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo } from "../../../shared/types.ts";
+import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
 export const IS_DEMO = demo.IS_DEMO;
@@ -241,6 +242,10 @@ const realApi = {
   fsComplete: (prefix: string) => get<FsCompletion>(`/fs/complete?prefix=${encodeURIComponent(prefix)}`),
   // --- live git panel (lazygit-style) ---
   gitCapability: () => get<GitCapability>("/git/capability"),
+  /** Every outside tool the app shells out to, and what this machine has.
+   *  `force` is the Recheck button: it re-probes inside the server's cache
+   *  window, which is the only case where a stale answer is the wrong one. */
+  dependencies: (force = false) => get<DepsResponse>(`/dependencies${force ? "?force=1" : ""}`),
   gitRepos: () => get<{ repos: GitRepoRef[] }>("/git/repos"),
   /** Every repo on the machine — for the project picker, even when scoped. */
   gitReposAll: () => get<{ repos: GitRepoRef[] }>("/git/repos?all=1"),
@@ -515,6 +520,12 @@ const demoApi: typeof realApi = {
   // The demo has no filesystem to browse, so completion is simply always empty.
   fsComplete: (_prefix: string) => D({ base: "", entries: [], truncated: false }),
   gitCapability: () => D({ available: true } as GitCapability),
+  // The demo runs no local processes, so it has nothing to probe. The catalog
+  // is still the honest thing to show: it is what the real app would check.
+  dependencies: (_force = false) => D({
+    platform: "demo",
+    deps: DEPS.map((d) => ({ ...d, status: "unsupported" as const, detail: "the demo runs no local processes, so nothing here is probed" })),
+  } as DepsResponse),
   gitRepos: () => D(demo.gitRepos()),
   gitReposAll: () => D(demo.gitRepos()),
   gitTree: (root: string) => D(demo.gitTree(root)),

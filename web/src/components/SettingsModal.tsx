@@ -19,10 +19,12 @@ import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESK
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
+import { externalUrl } from "../lib/externalUrl.ts";
 import type { UpdateStatus, ReleaseNotes, HookSetupStatus } from "../../../shared/types.ts";
 import { sysNotifyMode, setSysNotifyMode, notifyCapability, notifyQuiet, setNotifyQuiet, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
 import { chatEnginePref, setChatEnginePref, type ChatEnginePref } from "../lib/chatEnginePref.ts";
 import type { TmuxEngineInfo } from "../../../shared/types.ts";
+import type { DepReport, DepStatus } from "../../../shared/deps.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
@@ -122,13 +124,14 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "prefs" | "keys" | "open" | "export" | "hooks" | "about";
+type Pane = "prefs" | "keys" | "open" | "export" | "hooks" | "reqs" | "about";
 const TABS: { id: Pane; label: string }[] = [
   { id: "prefs", label: "Preferences" },
   { id: "keys", label: "Shortcuts" },
   { id: "open", label: "Open" },
   { id: "export", label: "Export" },
   { id: "hooks", label: "Hooks" },
+  { id: "reqs", label: "Requirements" },
   { id: "about", label: "About" },
 ];
 
@@ -461,6 +464,145 @@ function HooksPane({ open }: { open: boolean }) {
   );
 }
 
+/**
+ * What agentglass needs from the machine, and what it found.
+ *
+ * The panels have always said this one tool at a time, in the panel that needs
+ * it, and only once you opened that panel. Two of them never said it at all:
+ * python3 and setsid fail quietly, which is exactly the failure worth a list.
+ *
+ * Guidance is deliberately generic. There is one macOS, one Windows and an
+ * unbounded number of Linux distributions, so a package-manager line would be
+ * wrong for most readers. Each row names the tool, says what it costs to be
+ * without it, and links the project's own page. Nothing here installs anything.
+ */
+const STATUS_LABEL: Record<DepStatus, string> = {
+  ok: "Ready",
+  attention: "Needs setup",
+  missing: "Not installed",
+  unsupported: "Not used here",
+};
+
+function statusColor(d: DepReport): string {
+  if (d.status === "ok") return "var(--success)";
+  if (d.status === "attention") return "var(--warning)";
+  if (d.status === "unsupported") return "var(--text3)";
+  return d.required ? "var(--error)" : "var(--text3)";
+}
+
+/** Worst first: what is broken, then what is merely unconfigured, then the
+ *  rest. Someone opening this pane is looking for the problem, not the list. */
+const RANK: Record<DepStatus, number> = { missing: 0, attention: 1, ok: 2, unsupported: 3 };
+const byUrgency = (a: DepReport, b: DepReport) =>
+  (RANK[a.status] - RANK[b.status]) || (Number(b.required) - Number(a.required));
+
+function DepRow({ d }: { d: DepReport }) {
+  const color = statusColor(d);
+  const href = externalUrl(d.url);
+  return (
+    <div className="px-3 py-2 rounded-lg flex items-start gap-2.5 hover:bg-white/5">
+      <span className="mt-[5px] shrink-0 w-[7px] h-[7px] rounded-full" style={{ background: color }} aria-hidden />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2 flex-wrap">
+          <span className="text-[12.5px]" style={{ color: "var(--text)" }}>{d.title}</span>
+          <code className="text-[10px] t-mono t-dim2">{d.bin}</code>
+          <span className="text-[10px]" style={{ color }}>{STATUS_LABEL[d.status]}</span>
+          {d.status !== "ok" && d.status !== "unsupported" && d.required && (
+            <span className="chip text-[9px]" style={{ color: "var(--error)" }}>needed</span>
+          )}
+        </span>
+        <span className="block text-[10.5px] t-dim2 mt-0.5">{d.what}</span>
+        {d.detail && d.status !== "ok" && (
+          <span className="block text-[10.5px] mt-0.5" style={{ color }}>{d.detail}</span>
+        )}
+        {d.note && d.status !== "ok" && d.status !== "unsupported" && (
+          <span className="block text-[10px] t-dim2 mt-0.5">{d.note}</span>
+        )}
+      </span>
+      {/* Only where there is something to do about it. A row that is already
+          ready does not need a link, and a tool this platform never uses has
+          nothing to install. */}
+      {href && d.status !== "unsupported" && d.status !== "ok" && (
+        <a href={href} target="_blank" rel="noreferrer noopener"
+          className="shrink-0 text-[10.5px] px-2 py-1 rounded-lg"
+          style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)" }}>
+          Install guide
+        </a>
+      )}
+    </div>
+  );
+}
+
+function RequirementsPane({ open }: { open: boolean }) {
+  const [deps, setDeps] = useState<DepReport[] | null>(null);
+  const [platform, setPlatform] = useState<string>("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = (force: boolean) => {
+    setBusy(true); setErr(null);
+    return api.dependencies(force)
+      .then((r) => { setDeps(r.deps); setPlatform(r.platform); })
+      .catch(() => setErr("Could not reach the server, so nothing could be checked."))
+      .finally(() => setBusy(false));
+  };
+
+  // Probed on open rather than at startup: it costs a handful of PATH lookups
+  // plus two cached subprocess answers, and nothing outside this pane wants it.
+  useEffect(() => { if (open) void load(false); }, [open]);
+
+  if (err) return <Section title="Requirements"><div className="px-3 py-2 text-[11px]" style={{ color: "var(--error)" }}>{err}</div></Section>;
+  if (!deps) return <Section title="Requirements"><div className="px-3 py-2 text-[11px] t-dim2">Checking this machine…</div></Section>;
+
+  const live = deps.filter((d) => d.status !== "unsupported");
+  const idle = deps.filter((d) => d.status === "unsupported");
+  const needed = live.filter((d) => d.required).sort(byUrgency);
+  const optional = live.filter((d) => !d.required).sort(byUrgency);
+  const broken = live.filter((d) => d.status === "missing" && d.required).length;
+  const wanting = live.filter((d) => d.status === "attention" || (d.status === "missing" && !d.required)).length;
+
+  return (
+    <Section title="Requirements">
+      <div className="px-3 pb-2 flex flex-col gap-2">
+        <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
+          agentglass drives the tools you already have rather than bundling its own. This is what it looks for
+          {platform && platform !== "demo" ? <> on this machine (<span className="t-mono text-[10.5px]">{platform}</span>)</> : null}, and what stops
+          working when one is absent. Install whatever is missing however you normally install software here, then recheck.
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px]" style={{ color: broken ? "var(--error)" : wanting ? "var(--warning)" : "var(--success)" }}>
+            {broken
+              ? `${broken} needed ${broken === 1 ? "tool is" : "tools are"} missing`
+              : wanting
+                ? `Everything needed is here. ${wanting} optional ${wanting === 1 ? "feature is" : "features are"} standing down.`
+                : "Everything agentglass looks for is here."}
+          </span>
+          <button onClick={() => void load(true)} disabled={busy}
+            className="ml-auto text-[10.5px] px-2.5 py-1 rounded-lg"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+            {busy ? "Checking…" : "Recheck"}
+          </button>
+        </div>
+      </div>
+
+      <div className="panel-eyebrow px-3 pt-1 pb-1">Needed</div>
+      {needed.map((d) => <DepRow key={d.id} d={d} />)}
+
+      <div className="panel-eyebrow px-3 pt-2 pb-1">Per feature</div>
+      {optional.map((d) => <DepRow key={d.id} d={d} />)}
+
+      {idle.length > 0 && (
+        <>
+          <div className="panel-eyebrow px-3 pt-2 pb-1">Not used on {platform}</div>
+          <div className="px-3 pb-2 text-[10.5px] t-dim2">
+            {idle.map((d) => d.title).join(", ")}. Nothing to do about these here.
+          </div>
+        </>
+      )}
+    </Section>
+  );
+}
+
 export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp }: {
   open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
   scale: number; onZoom: (dir: 1 | -1 | 0) => void;
@@ -660,11 +802,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       label="How new chats run"
                       hint={
                         tmuxEngine && !tmuxEngine.available
-                          ? `tmux panes unavailable — ${tmuxEngine.reason}`
+                          // A reason on its own leaves "tmux is not installed"
+                          // as a dead end inside a settings dialog that has the
+                          // install guidance one tab away. Say where it is.
+                          ? `tmux panes unavailable: ${tmuxEngine.reason}. Chats still run, one process per turn. See Requirements for how to add tmux.`
                           : "Panes keep a warm claude per chat: faster turns, and you can attach from your terminal. Separate takes longer per turn and leaves nothing running."
                       }
                       disabled={tmuxEngine ? !tmuxEngine.available : true}
-                      disabledHint={tmuxEngine ? `Unavailable — ${tmuxEngine.reason}` : "Checking…"}
+                      disabledHint={tmuxEngine ? `Unavailable: ${tmuxEngine.reason}` : "Checking…"}
                       value={enginePref ?? "server"}
                       onPick={(v) => {
                         const next = v === "server" ? null : v;
@@ -762,6 +907,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   )}
 
                   {pane === "hooks" && <HooksPane open={open} />}
+
+                  {pane === "reqs" && <RequirementsPane open={open} />}
 
                   {pane === "about" && <AboutPane open={open} />}
                   </div>

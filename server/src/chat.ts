@@ -210,7 +210,7 @@ export type TurnPlan =
 
 export function planTurn(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown): TurnPlan {
   const no = (r: Response): TurnPlan => ({ ok: false, response: r });
-  if (!claudeBin()) return no(err("no local `claude` CLI — install Claude Code to chat", 403));
+  if (!claudeBin()) return no(err("no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)", 403));
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return no(err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403));
   const dir = safeAbs(cwd);
   if (!dir || !repoRootOf(dir)) {

@@ -12,6 +12,7 @@
 // server-origin check there is nothing to poll back to health.
 import { useEffect, useState } from "react";
 import { api, IS_DEMO } from "../lib/api.ts";
+import { depSpec } from "../../../shared/deps.ts";
 import type { GitCapability } from "../../../shared/types.ts";
 
 export default function GitMissingBanner() {
@@ -41,9 +42,13 @@ export default function GitMissingBanner() {
         {cap.reason || "git is not installed"}. The source-control, diff and pull-request panels stay empty, and the
         terminal cannot open, until it is on your <code>PATH</code>.
       </span>
+      {/* Generic guidance on purpose: naming one package manager is wrong for
+          most readers, since there is one macOS, one Windows and an unbounded
+          number of Linux distributions. The project's own page covers all of
+          them, and Settings ▸ Requirements lists the rest of the tools. */}
       <span style={{ color: "var(--text3)" }}>
-        Install it from <code>git-scm.com/downloads</code> (or your package manager: <code>apt install git</code>,{" "}
-        <code>brew install git</code>), then reopen.
+        Install it however you install software here (<code>{depSpec("git")?.url}</code>), then reopen. Settings ▸ Requirements
+        checks this and every other tool agentglass uses.
       </span>
     </div>
   );

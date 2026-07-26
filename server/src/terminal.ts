@@ -48,6 +48,16 @@ export const TERMINAL_ENABLED = TERMINAL_DISABLED_REASON === null;
 const HAS_SETSID = !!Bun.which("setsid");
 const PYTHON = Bun.which("python3") || Bun.which("python");
 const HAS_SCRIPT = process.platform === "linux" && !!Bun.which("script");
+/**
+ * Which of the three backends below a new shell will get.
+ *
+ * Resolved here because this is where the choice is made, and exported because
+ * "pipe" is the one degraded state the user cannot see coming: the shell opens,
+ * and only a full-screen program not rendering says anything is wrong. The
+ * requirements report reads this to name the cause (no python3) rather than
+ * leaving the terminal to mention it in grey, inside itself, after the fact.
+ */
+export const PTY_BACKEND: "pty" | "script" | "pipe" = PYTHON ? "pty" : HAS_SCRIPT ? "script" : "pipe";
 // Embedded rather than resolved from import.meta.url: once the server is
 // compiled into a standalone binary there is no pty_bridge.py on disk next to
 // it, and the terminal would die on a path that never existed.

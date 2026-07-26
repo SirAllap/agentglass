@@ -26,6 +26,7 @@ import type {
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob,
 } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
+import { depSpec } from "../../../shared/deps.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -1383,7 +1384,14 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             {listState.needsAuth ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>
                 <div style={{ color: "var(--warning)" }}>{listState.error || "The GitHub CLI is not set up"}</div>
-                <div className="mt-2">Pull requests come from <code>gh</code>. Install it, run <code>gh auth login</code>, then refresh.</div>
+                {/* Two steps, and the second is the one people miss: an
+                    installed gh that has never logged in reads exactly like a
+                    missing one from here. The link is the project's own page,
+                    not a package-manager line, because the reader's system is
+                    not knowable from here. */}
+                <div className="mt-2">
+                  Pull requests come from <code>gh</code>. Install it (<code>{depSpec("gh")?.url}</code>), run <code>gh auth login</code>, then refresh.
+                </div>
               </div>
             ) : !repo ? (
               <div className="p-3 text-[11px]" style={{ color: "var(--text3)" }}>{listState.error || "No GitHub remote on this repository"}</div>

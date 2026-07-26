@@ -28,6 +28,7 @@ import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
 import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability } from "./git.ts";
+import { dependencyReport } from "./deps.ts";
 import {
   workingTree, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
@@ -57,7 +58,7 @@ import {
   rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
 } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
-import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, type PtyWsData } from "./terminal.ts";
+import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { chatSend, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper } from "./tmuxpane.ts";
@@ -728,6 +729,12 @@ const server = Bun.serve<WsData>({
     // Is git even installed? A plain read like the rest of /git/*, so the
     // surface-wide origin/rebinding gate is the whole authorisation story.
     if (pathname === "/git/capability") return json(gitCapability());
+    // Every outside tool at once, for the Requirements pane. The per-panel
+    // capability routes above stay: each panel needs its own answer to render,
+    // and this one exists for the question none of them can answer alone.
+    // `force=1` is the Recheck button, which is the only reason a caller would
+    // want to pay for the probes again inside the cache window.
+    if (pathname === "/dependencies") return json(await dependencyReport(url.searchParams.get("force") === "1"));
     if (pathname === "/git/repos") {
       // `all=1` is the project picker: it needs the whole machine even when the
       // cockpit is currently scoped to one project, or there'd be no way out.
@@ -1466,4 +1473,11 @@ watchLoop();
 {
   const gc = gitCapability();
   if (!gc.available) console.warn(`⚠  git not found on PATH — the git, diff, pull-request and terminal panels will not work. Install git to enable them.`);
+  // Said for the same reason, and it is the quieter failure of the two: with no
+  // python3 the hooks stay wired and fail on every event, so the dashboard is
+  // simply empty and nothing anywhere names the cause. Settings ▸ Requirements
+  // is the same list for anyone who never sees this log.
+  if (PTY_BACKEND !== "pty" && !Bun.which("python3") && !Bun.which("python")) {
+    console.warn(`⚠  python3 not found on PATH — the Claude Code hooks cannot forward events (nothing will stream live), and the terminal falls back to ${PTY_BACKEND} mode.`);
+  }
 }

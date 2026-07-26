@@ -180,7 +180,7 @@ async function ensurePane(
   sessionId: string, cwd: string, model: string, mode: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const bin = claudeBin();
-  if (!bin) return { ok: false, error: "no local `claude` CLI — install Claude Code to chat" };
+  if (!bin) return { ok: false, error: "no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)" };
 
   const alive = await paneAlive(sessionId);
   const spec = specs.get(sessionId);
@@ -427,7 +427,7 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
 export function paneEngineCapability(): { available: boolean; reason: string } {
   const t = tmuxCapability();
   if (!t.available) return t;
-  if (!claudeBin()) return { available: false, reason: "no local `claude` CLI — install Claude Code to chat" };
+  if (!claudeBin()) return { available: false, reason: "no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)" };
   return { available: true, reason: "" };
 }
 
