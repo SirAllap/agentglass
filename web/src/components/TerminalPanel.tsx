@@ -21,6 +21,7 @@ import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 import { wantsWebgl, fallBackToDom } from "../lib/termRenderer.ts";
 import { isFindChord } from "../lib/termKeys.ts";
+import { typingWouldLandInApp } from "../lib/termForeground.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -196,6 +197,17 @@ let panelClose: () => void = () => {};
  * would take a chord away from the program running in it and give nothing back.
  */
 let panelFind: () => boolean = () => false;
+
+/**
+ * Tell the docked console that a command aimed at it was refused.
+ *
+ * `runInConsole` is called from other panels — the Docker one opens a shell
+ * into a container this way — and those callers have nowhere to put the news.
+ * The strip is where the shell is, so the strip is where the notice belongs.
+ * A no-op while no strip is mounted, in which case the boolean return is the
+ * only answer and the caller may ignore it.
+ */
+let consoleBlocked: (cmd: string) => void = () => {};
 
 // The panel is built to keep many shells open at once, so eviction is a last
 // resort rather than routine: it only runs at the server's own ceiling, and it
@@ -613,13 +625,45 @@ function FindBar({ sess, onClose }: { sess: Sess | undefined; onClose: () => voi
   );
 }
 
-/** Type a command into the repo's shell (starting one if needed). */
-function runInShell(s: Sess, cmd: string) {
+/**
+ * "That did not go anywhere, and here is what to do about it."
+ *
+ * Shown when a command was refused because a full-screen program had the
+ * screen. Silence would be worse than the old behaviour: a chip that does
+ * nothing reads as broken, where a chip that types into vim at least tells you
+ * what happened, eventually, badly.
+ */
+function BlockedNotice({ cmd, onSend, onDismiss }: { cmd: string; onSend: () => void; onDismiss: () => void }) {
+  return (
+    <div className="flex items-center gap-2 text-[10.5px] px-2 py-1 rounded-lg min-w-0"
+      style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--warning) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)" }}>
+      <span className="truncate" title={`Not sent: ${cmd}`}>
+        A full-screen program is running — <b className="font-mono">{cmd}</b> was not typed
+      </span>
+      <button onClick={onSend} className="shrink-0 px-1.5 py-0.5 rounded" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Send anyway</button>
+      <button onClick={onDismiss} className="shrink-0 px-1 t-dim2" aria-label="Dismiss">✕</button>
+    </div>
+  );
+}
+
+/**
+ * Type a command into the repo's shell (starting one if needed).
+ *
+ * Returns false without typing anything when a full-screen program has the
+ * screen — vim, htop, lazygit — because the keystrokes would land in it rather
+ * than at a prompt: `:wq` typed into a buffer, `git status` inserted into the
+ * file you were editing. `force` sends it anyway, which is what the notice the
+ * caller shows offers, since only the person watching knows whether the program
+ * on screen wants that line.
+ */
+function runInShell(s: Sess, cmd: string, force = false): boolean {
+  if (!force && typingWouldLandInApp(s.term.buffer.active)) return false;
   const line = cmd + "\r";
   s.lastUsed = Date.now();
   if (s.status === "live" && s.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ t: "in", d: line }));
   else { s.pending.push(line); if (!s.ws) connect(s); }
   s.term.focus();
+  return true;
 }
 
 /**
@@ -629,13 +673,19 @@ function runInShell(s: Sess, cmd: string) {
  * calling this before the strip has mounted converges on one shell rather than
  * racing it into two. `runInShell` queues into `pending` when the socket is not
  * up yet, so the command still runs once it connects.
+ *
+ * Returns false when a full-screen program is holding that shell and the
+ * command was therefore not typed. Callers from other panels get a plain answer
+ * rather than a command that vanished into somebody's editor.
  */
-export function runInConsole(root: string, cmd: string) {
-  if (!root || IS_DEMO) return;
+export function runInConsole(root: string, cmd: string): boolean {
+  if (!root || IS_DEMO) return false;
   const existing = sessionsFor(root).find((x) => x.title === CONSOLE_TITLE);
   const s = existing ?? createSession(root);
   s.title = CONSOLE_TITLE;
-  runInShell(s, cmd);
+  const sent = runInShell(s, cmd);
+  if (!sent) consoleBlocked(cmd);
+  return sent;
 }
 
 // --- the panel ---------------------------------------------------------------
@@ -696,10 +746,19 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     setRepoOpen(false); setRepoQuery("");
     focusConsole();
   };
-  const runHere = useCallback((cmd: string) => {
+  /** Same guard as the terminal view: a chip must not type into vim. */
+  const [blocked, setBlocked] = useState<string | null>(null);
+  // Also carries refusals from `runInConsole`, which other panels call.
+  useEffect(() => {
+    if (!open) return;
+    consoleBlocked = setBlocked;
+    return () => { consoleBlocked = () => {}; };
+  }, [open]);
+  const runHere = useCallback((cmd: string, force = false) => {
     const s = sessions.get(sid);
     if (!s || IS_DEMO) return;
-    runInShell(s, cmd);
+    if (runInShell(s, cmd, force)) setBlocked(null);
+    else setBlocked(cmd);
   }, [sid]);
 
   // One console shell per repo, reused. `sessionsFor` already orders by
@@ -825,6 +884,12 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
         <div className="flex items-center gap-2 min-w-0" onMouseDown={(e) => e.stopPropagation()}>
           <CommandBar root={root} disabled={!sid} font={TERM_FONT} onRun={runHere} onClose={focusConsole} dropUp />
         </div>
+
+        {blocked && (
+          <div className="min-w-0" onMouseDown={(e) => e.stopPropagation()}>
+            <BlockedNotice cmd={blocked} onSend={() => { runHere(blocked, true); setBlocked(null); }} onDismiss={() => setBlocked(null)} />
+          </div>
+        )}
 
         <span className="ml-auto text-[9px] t-dim2 shrink-0">Drag to resize</span>
         <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="Hide the console (the shell keeps running)">✕</button>
@@ -1096,10 +1161,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     setFocusIdx(0);
   }, []);
 
-  const run = useCallback((cmd: string) => {
+  /** The command a full-screen program stopped, kept so it can still be sent. */
+  const [blocked, setBlocked] = useState<string | null>(null);
+  const run = useCallback((cmd: string, force = false) => {
     if (!root || IS_DEMO) return;
     const s = sessions.get(paneIds[focusIdx] ?? "") ?? createSession(root);
-    runInShell(s, cmd);
+    if (runInShell(s, cmd, force)) setBlocked(null);
+    else setBlocked(cmd);
   }, [root, paneIds, focusIdx]);
 
   const restart = useCallback(() => {
@@ -1232,6 +1300,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   {/* Find sits outside the keepTermFocus group on purpose: its
                       input is the one control here that has to take the cursor
                       off the shell, and closing it hands the cursor back. */}
+                  {blocked && <BlockedNotice cmd={blocked} onSend={() => { run(blocked, true); setBlocked(null); }} onDismiss={() => setBlocked(null)} />}
+
                   <div className="ml-auto flex items-center gap-1.5 shrink-0">
                     {findOpen
                       ? <FindBar sess={sessions.get(paneIds[focusIdx] ?? "")} onClose={() => { setFindOpen(false); focusTerm(); }} />
