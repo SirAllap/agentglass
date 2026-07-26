@@ -110,7 +110,7 @@ const INPUT_ROWS = /^❯(.*)$/gm;
 /** What is typed in the live input box right now, or `null` if it is not on
  *  screen at all (the TUI redraws while a turn runs). Note the box renders its
  *  empty state with U+00A0, which `\s` covers. */
-function inputBox(screen: string): string | null {
+export function inputBox(screen: string): string | null {
   let last: string | null = null;
   for (const m of screen.matchAll(INPUT_ROWS)) last = m[1];
   return last;
@@ -128,23 +128,27 @@ function inputBox(screen: string): string | null {
  *  Polling the box rather than sleeping a magic number: the wait is over when
  *  the thing we are waiting for has happened, on a fast machine and a slow one
  *  alike. */
-async function waitPasted(name: string, deadline: number): Promise<boolean> {
+async function waitPasted(name: string, deadline: number): Promise<string | null> {
   for (;;) {
     const box = inputBox(await capture(name));
-    if (box?.trim()) return true;
-    if (Date.now() > deadline) return false;
+    // Returned rather than merely confirmed: what the box looks like holding
+    // our prompt is the reference submitConfirmed compares against, and it is
+    // not always the prompt itself — a multi-line paste renders as
+    // "[Pasted text #1 +3 lines]".
+    if (box?.trim()) return box;
+    if (Date.now() > deadline) return null;
     await Bun.sleep(60);
   }
 }
 
-/** Is the input box empty — i.e. did the prompt get taken?
+/** What happened to the prompt we submitted.
  *
- *  Absence of the row counts as taken: while a turn runs the TUI redraws and the
- *  prompt row can be off the captured screen entirely. */
-async function boxEmpty(name: string): Promise<boolean> {
-  const box = inputBox(await capture(name));
-  return !box?.trim();
-}
+ *  `sent` — the box emptied, the CLI took it.
+ *  `diverted` — the box holds something that is not our prompt any more. In
+ *    practice this means an interactive command opened a picker: `/model`,
+ *    `/effort`, `/config` do not run a turn, they draw a menu.
+ *  `stuck` — still our text, still not taken, out of time. */
+type SubmitOutcome = "sent" | "diverted" | "stuck";
 
 /** Press Enter until the prompt is actually accepted.
  *
@@ -159,14 +163,28 @@ async function boxEmpty(name: string): Promise<boolean> {
  *  retry safe — the worst case of racing a submit that did land is a keystroke
  *  that does nothing. A fixed sleep was the alternative and it would have been a
  *  guess that silently drops turns on a slower machine. */
-async function submitConfirmed(name: string, deadline: number): Promise<boolean> {
+async function submitConfirmed(name: string, pasted: string, deadline: number): Promise<SubmitOutcome> {
   for (;;) {
     await submit(name);
     // Long enough for the TUI to redraw after accepting, short enough that the
     // common case (accepted on the second press) is not perceptibly slower.
     await Bun.sleep(250);
-    if (await boxEmpty(name)) return true;
-    if (Date.now() > deadline) return false;
+    const box = inputBox(await capture(name));
+    if (!box?.trim()) return "sent";
+    /*
+     * Only keep pressing while the box still holds OUR prompt.
+     *
+     * This guard is the whole reason the retry is safe. Claude Code's pickers
+     * draw their selection cursor with the same `❯` glyph as the input box, so
+     * a `/model` menu reads as "box still full" — and in that menu Enter means
+     * "set as default". Retrying blindly walked straight into changing the
+     * user's saved model and effort, silently, from a chat that appeared to be
+     * hanging. Verified by reproducing it: a second Enter after `/effort`
+     * printed "Set effort level to xhigh (saved as your default for new
+     * sessions)".
+     */
+    if (box.trim() !== pasted.trim()) return "diverted";
+    if (Date.now() > deadline) return "stuck";
   }
 }
 
@@ -283,6 +301,23 @@ export interface PaneTurnOptions {
   images: { mediaType: string; data: string }[];
 }
 
+/** The footer Claude Code draws under an interactive prompt.
+ *
+ *  `/model`, `/effort` and `/config` do not run a turn — they draw a picker and
+ *  wait for arrow keys. Nothing is ever written to the transcript, so a turn
+ *  waiting for it waits forever, which is exactly how this was reported: a chat
+ *  stuck on `/effort` with no way out.
+ *
+ *  Matched on the picker's own key hints rather than its title, because those
+ *  are shared by every picker and are what make it a prompt at all. Careful not
+ *  to catch a running turn: that one says "esc to interrupt", which is a
+ *  different string and deliberately not matched here. */
+const NEEDS_YOU_RE = /Esc to cancel|Enter to confirm|to use this session only/;
+export const __needsYou = (screen: string): boolean => NEEDS_YOU_RE.test(screen);
+
+/** How often to look at the screen while a turn has produced nothing at all. */
+const NEEDS_YOU_PROBE_MS = 4_000;
+
 /** How long a turn may go with no transcript growth at all before we check
  *  whether the pane is still alive. Long turns are silent for minutes at a time
  *  while a tool runs, so this is a liveness check, not a deadline. */
@@ -330,13 +365,39 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
         const pasted = await pasteText(sessionId, panePrompt(message, paths));
         if (!pasted.ok) { fail(pasted.stderr.trim() || "could not write the prompt into the pane"); controller.close(); return; }
         // Enter only once the text is demonstrably in the box; see waitPasted.
-        if (!(await waitPasted(sessionId, Date.now() + PASTE_TIMEOUT_MS))) {
+        const pastedBox = await waitPasted(sessionId, Date.now() + PASTE_TIMEOUT_MS);
+        if (pastedBox === null) {
           fail("the prompt never landed in the chat pane's input box");
           controller.close();
           return;
         }
-        if (!(await submitConfirmed(sessionId, Date.now() + PASTE_TIMEOUT_MS))) {
+        const outcome = await submitConfirmed(sessionId, pastedBox, Date.now() + PASTE_TIMEOUT_MS);
+        if (outcome === "stuck") {
           fail("the chat pane would not accept the prompt");
+          controller.close();
+          return;
+        }
+        if (outcome === "diverted") {
+          /*
+           * The CLI is showing something that wants a person, not a turn.
+           *
+           * `/model`, `/effort` and `/config` draw a picker and never run a
+           * turn, so waiting for the transcript to grow would wait forever —
+           * which is exactly how this was reported: a chat spinning on `/effort`
+           * that could not be got out of.
+           *
+           * The picker is deliberately left open rather than cancelled with
+           * Escape. The user asked for it; throwing it away to tidy up would
+           * discard what they wanted. Instead, hand them the way in.
+           */
+          const screen = (await capture(sessionId)).split("\n").filter((l) => l.trim()).slice(-12).join("\n");
+          emit({
+            type: "agx_error",
+            code: null,
+            errorType: "pane_needs_you",
+            error: `This opened an interactive prompt in the chat's tmux pane, which the chat cannot draw. `
+              + `It is still open and waiting — finish it in your terminal:\n\n${attachCommand(sessionId)}\n\n${screen}`,
+          });
           controller.close();
           return;
         }
@@ -347,12 +408,17 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
         let inTok = 0, outTok = 0, cacheW = 0, cacheR = 0;
         let carry = "";
         let lastGrowth = Date.now();
+        // Whether this turn has produced a single byte. An interactive prompt
+        // produces none, ever, which is what tells it apart from a slow one.
+        let grew = false;
+        let lastProbe = Date.now();
 
         for (;;) {
           if (cancelled) return;
           const size = await sizeOf(path);
           if (size > offset) {
             lastGrowth = Date.now();
+            grew = true;
             const chunk = await Bun.file(path).slice(offset, size).text();
             offset = size;
             const lines = (carry + chunk).split("\n");
@@ -382,6 +448,26 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
                 cacheR += Number(u.cache_read_input_tokens) || 0;
               }
               emit(o);
+            }
+          } else if (!grew && Date.now() - lastProbe > NEEDS_YOU_PROBE_MS) {
+            lastProbe = Date.now();
+            const screen = await capture(sessionId);
+            if (NEEDS_YOU_RE.test(screen)) {
+              /*
+               * Left open rather than cancelled with Escape. The user asked for
+               * this prompt; throwing it away to tidy up would discard what
+               * they wanted. Hand them the way in instead.
+               */
+              const tail = screen.split("\n").filter((l) => l.trim()).slice(-14).join("\n");
+              emit({
+                type: "agx_error",
+                code: null,
+                errorType: "pane_needs_you",
+                error: "This opened an interactive prompt in the chat's tmux pane, which the chat cannot draw. "
+                  + `It is still open and waiting for you — finish it in your terminal:\n\n${attachCommand(sessionId)}\n\n${tail}`,
+              });
+              controller.close();
+              return;
             }
           } else if (Date.now() - lastGrowth > STALL_CHECK_MS) {
             // Silence is normal — a long tool call says nothing for minutes. What

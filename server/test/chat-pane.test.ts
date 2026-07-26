@@ -117,3 +117,59 @@ test("tmux availability is reported with a reason a person can act on", () => {
   // the settings row prints this string verbatim.
   if (!cap.available) expect(cap.reason.length).toBeGreaterThan(0);
 });
+
+// --- interactive commands ---------------------------------------------------
+// `/model`, `/effort` and `/config` do not run a turn; they draw a picker. Two
+// things went wrong with that, and the second was the dangerous one.
+
+/** A real `/model` picker, captured from a live pane. Note the selection cursor:
+ *  the picker draws it with the SAME `❯` glyph the input box uses. */
+const MODEL_PICKER = [
+  "   Select model",
+  "   Switch between Claude models. Your pick becomes the default for new sessions.",
+  "     1. Default (recommended)  Opus 5 with 1M context",
+  "     4. Sonnet                 Sonnet 5 · Efficient for routine tasks",
+  "   ❯ 5. Haiku ✔                Haiku 4.5 · Fastest for quick answers",
+  "   Enter to set as default · s to use this session only · Esc to cancel",
+].join("\n");
+
+/** The ordinary case: history above, the live box last. */
+const NORMAL = [
+  "❯ Say hello",
+  "  ⎿  did the thing",
+  "● hello",
+  "────────────",
+  "❯ ",
+].join("\n");
+
+test("the live input box is the last prompt row, not the first", () => {
+  // A submitted prompt stays on screen with the same glyph, so reading the
+  // first match reported failure on a turn that had already answered.
+  expect(mod.inputBox(NORMAL)?.trim()).toBe("");
+});
+
+test("a picker's indented cursor is not read as the input box", () => {
+  // The picker draws its cursor with the same `❯` glyph, but indented, so the
+  // box detector ignores it. That is why the submit retry did not walk the menu
+  // — worth pinning, because a picker that ever drew its cursor at column 0
+  // would turn every retried Enter into a menu selection.
+  expect(mod.inputBox(MODEL_PICKER)).toBeNull();
+});
+
+test("an interactive prompt is recognised from its key hints", () => {
+  // This is what stops the turn hanging: `/model`, `/effort` and `/config`
+  // never write to the transcript, so without this the chat waits forever.
+  expect(mod.__needsYou(MODEL_PICKER)).toBe(true);
+});
+
+test("a running turn is not mistaken for an interactive prompt", () => {
+  // A turn in flight says "esc to interrupt"; a picker says "Esc to cancel".
+  // Confusing the two would abandon every long turn four seconds in.
+  expect(mod.__needsYou("● working…\n✻ Brewed for 12s (esc to interrupt)")).toBe(false);
+});
+
+test("a screen with no prompt row at all reads as taken", () => {
+  // While a turn runs the TUI redraws and the prompt row can be off-screen
+  // entirely; that must count as accepted rather than as a lost prompt.
+  expect(mod.inputBox("● working…\n✻ Brewed for 2s")).toBeNull();
+});
