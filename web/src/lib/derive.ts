@@ -39,6 +39,9 @@ export interface AgentCard {
   events: number;
   tools: number;
   errors: number;
+  /** The subset of `errors` that was a tool call failing. The only numerator
+   *  `tools` is a legitimate denominator for — see the rate rule below. */
+  toolErrors: number;
   cost: number;
   tokens: number;
   lastSeen: number;
@@ -105,6 +108,7 @@ function blankCard(key: string, source_app: string, session_id: string, model_na
     events: 0,
     tools: 0,
     errors: 0,
+    toolErrors: 0,
     cost: 0,
     tokens: 0,
     lastSeen: 0,
@@ -198,8 +202,13 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
       if (e.agent_type || !prev) m.set(e.agent_id, e.agent_type || prev || "subagent");
     }
     a.events++;
-    if (e.hook_event_type === "PostToolUse" || e.hook_event_type === "PostToolUseFailure") a.tools++;
-    if (e.is_error) { a.errors++; if (e.timestamp >= a.lastErrorTs) a.lastErrorTs = e.timestamp; }
+    const isTool = e.hook_event_type === "PostToolUse" || e.hook_event_type === "PostToolUseFailure";
+    if (isTool) a.tools++;
+    if (e.is_error) {
+      a.errors++;
+      if (isTool) a.toolErrors++;
+      if (e.timestamp >= a.lastErrorTs) a.lastErrorTs = e.timestamp;
+    }
     a.cost += e.cost_usd;
     a.tokens += e.input_tokens + e.output_tokens;
     if (e.timestamp >= a.lastSeen) {
@@ -390,7 +399,10 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
         out.push({ id: "long:" + a.key, level: "warn", agent: a.key, ts: a.runningSince,
           text: `${a.runningTool} running ${openFor} — nothing local to check, so this could be either` });
     }
-    const rate = a.tools > 3 ? a.errors / a.tools : 0;
+    // toolErrors, not errors: the denominator is tool calls, and an errored
+    // LLM span or notification never enters it. With the all-events count this
+    // read "high failure rate 150%" on a session whose every tool succeeded.
+    const rate = a.tools > 3 ? a.toolErrors / a.tools : 0;
     if (rate > 0.25)
       out.push({ id: "rate:" + a.key, level: "error", agent: a.key, text: `high failure rate ${(rate * 100).toFixed(0)}%`, ts: a.lastSeen });
   }

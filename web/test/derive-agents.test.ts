@@ -5,7 +5,7 @@
 // and keep well clear of the thresholds (STALL 20s, IDLE 5m) so a few ms of
 // drift between the two Date.now() reads can never flip a case.
 import { test, expect } from "bun:test";
-import { deriveAgents, buildTitles } from "../src/lib/derive.ts";
+import { deriveAgents, deriveAlerts, buildTitles } from "../src/lib/derive.ts";
 import type { WatchEvent } from "../../shared/types.ts";
 
 const now = Date.now();
@@ -121,4 +121,37 @@ test("buildTitles prefers a custom title over an ai title, and omits sessions wi
   // A session with no title is left out entirely, so the UI falls back to the
   // uuid rather than being handed an empty string.
   expect(t.get("s-none")).toBeUndefined();
+});
+
+// A failure rate needs a numerator and denominator drawn from the same
+// population (#248 F6). `errors` counts every errored event — an OTLP source
+// flags "Turn complete" spans, and any event carrying a top-level error string
+// gets it — while the denominator is tool calls only. So a session whose every
+// tool call succeeded raised "high failure rate 150%".
+test("a failure rate counts tool failures, not every errored event", () => {
+  const events = [
+    ...Array.from({ length: 4 }, (_, i) =>
+      ev({ hook_event_type: "PostToolUse", is_error: 0, timestamp: now - 5000 - i })),
+    ...Array.from({ length: 6 }, (_, i) =>
+      ev({ hook_event_type: "Turn complete", tool_name: null, is_error: 1, timestamp: now - 4000 - i })),
+  ];
+  const card = only(events);
+  expect(card.tools).toBe(4);
+  expect(card.errors).toBe(6);   // still the honest "how much went wrong"
+  expect(card.toolErrors).toBe(0); // ...but no tool failed
+  expect(deriveAlerts([card]).filter((a) => a.id.startsWith("rate:"))).toEqual([]);
+});
+
+test("a real tool failure still raises the rate alert", () => {
+  const events = [
+    ...Array.from({ length: 2 }, (_, i) =>
+      ev({ hook_event_type: "PostToolUse", is_error: 0, timestamp: now - 5000 - i })),
+    ...Array.from({ length: 3 }, (_, i) =>
+      ev({ hook_event_type: "PostToolUseFailure", is_error: 1, timestamp: now - 4000 - i })),
+  ];
+  const card = only(events);
+  expect(card.toolErrors).toBe(3);
+  const rate = deriveAlerts([card]).filter((a) => a.id.startsWith("rate:"));
+  expect(rate.length).toBe(1);
+  expect(rate[0].text).toBe("high failure rate 60%");
 });

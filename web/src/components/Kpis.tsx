@@ -79,10 +79,16 @@ export function Kpis({
   const waiting = agents.filter((a) => a.status === "waiting").length;
   const failed = t?.errors ?? 0;
   const tools = t?.tool_calls ?? 0;
+  // Health is a *tool* failure rate, so its numerator has to be tool failures.
+  // `errors` counts every errored event — an LLM span or a notification can
+  // carry one — and none of those are in `tool_calls`, so dividing by it drove
+  // the ring below zero on a fleet where no tool had failed at all. Falls back
+  // to the old field so a server that predates tool_errors still renders.
+  const toolFailed = t?.tool_errors ?? failed;
   const cost = t?.cost_usd ?? 0;
   const tokens = (t?.input_tokens ?? 0) + (t?.output_tokens ?? 0);
   const cached = t?.cache_read_tokens ?? 0;
-  const health = tools > 0 ? Math.max(0, Math.round((1 - failed / Math.max(tools, 1)) * 100)) : 100;
+  const health = tools > 0 ? Math.max(0, Math.round((1 - toolFailed / Math.max(tools, 1)) * 100)) : 100;
   const spark = (stats?.timeline ?? []).slice(-24).map((b) => b.cost_usd);
   const healthLabel = health >= 80 ? "All nominal" : health >= 50 ? "Degraded" : "Critical";
   const healthColor = health >= 80 ? "var(--success)" : health >= 50 ? "var(--warning)" : "var(--error)";

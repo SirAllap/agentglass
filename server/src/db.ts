@@ -1148,6 +1148,14 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
       `SELECT COUNT(*) AS events,
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) AS tool_calls,
               SUM(is_error) AS errors,
+              -- Errors that were actually a tool failing, which is the only
+              -- numerator tool_calls can honestly serve as a denominator for.
+              -- The errors column counts every errored event, and an LLM span
+              -- or a notification can carry is_error too (otlp.ts sets it on
+              -- "Turn complete") — dividing that by tool calls produced a
+              -- health ring below zero, and insights reading "6 of 4 tool
+              -- calls failed". Both ship; each answers its own question.
+              SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END) AS tool_errors,
               COUNT(DISTINCT session_id) AS sessions,
               SUM(input_tokens) AS input_tokens,
               SUM(output_tokens) AS output_tokens,
@@ -1157,7 +1165,7 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
        FROM events WHERE timestamp >= ?${pf}`
     )
     .get(...A)!;
-  const evtTotals = totals as { events: number; tool_calls: number; errors: number };
+  const evtTotals = totals as { events: number; tool_calls: number; errors: number; tool_errors: number };
   const tokTotals = totals;
 
   // Per-model breakdown (from events so it respects the window).
@@ -1323,6 +1331,7 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
       sessions: tokTotals.sessions ?? 0,
       tool_calls: evtTotals.tool_calls ?? 0,
       errors: evtTotals.errors ?? 0,
+      tool_errors: evtTotals.tool_errors ?? 0,
       cost_usd: tokTotals.cost_usd ?? 0,
       input_tokens: tokTotals.input_tokens ?? 0,
       output_tokens: tokTotals.output_tokens ?? 0,
