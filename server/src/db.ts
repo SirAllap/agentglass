@@ -1785,8 +1785,51 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
 }
 
 /** Full-text search across every event's prompts, commands and outputs. */
+/**
+ * Turn what somebody typed into an fts5 MATCH expression.
+ *
+ * The old one-liner stripped every character that was not alphanumeric or an
+ * underscore, then prefix-starred what was left. That welds a term with an
+ * inner separator into a single token the unicode61 tokenizer can never
+ * produce, so the search returned ZERO hits for text sitting verbatim in the
+ * index:
+ *
+ *   src/db.ts       -> srcdbts*     0 hits
+ *   foo-bar         -> foobar*      0 hits
+ *   error: ENOENT   -> error* enoent*
+ *   C++             -> C*           matches nearly everything
+ *
+ * Paths, hyphenated flags, dotted symbols and email addresses are most of
+ * what anyone searches an agent's output for, so this was the common case
+ * rather than the edge.
+ *
+ * Each term becomes a quoted fts5 phrase with the prefix star OUTSIDE the
+ * quotes: `src/db.ts` -> `"src/db.ts"*`, which the tokenizer splits into the
+ * phrase src+db+ts and matches. Double quotes in the input are honoured as a
+ * phrase rather than split on whitespace, because a user who quotes means it.
+ * A term that tokenizes to nothing at all (`C++`, `--`) is dropped rather
+ * than degraded into a bare star that matches the whole table.
+ */
+export function ftsQuery(q: string): string {
+  const terms: string[] = [];
+  // "quoted phrase" | bare-run-of-non-space
+  for (const m of q.matchAll(/"([^"]*)"|(\S+)/g)) {
+    const raw = (m[1] ?? m[2] ?? "").trim();
+    if (!raw) continue;
+    // fts5 escapes a double quote inside a phrase by doubling it.
+    const phrase = raw.replace(/"/g, '""');
+    // Nothing the tokenizer can index — a run of pure punctuation. Skipping it
+    // is what stops `C++` becoming `C*`.
+    if (!/[\p{L}\p{N}]/u.test(raw)) continue;
+    // The star is a prefix operator on the last token of the phrase, and it
+    // only means that outside the quotes.
+    terms.push(`"${phrase}"*`);
+  }
+  return terms.join(" ");
+}
+
 export function searchEvents(q: string, limit = 60): import("../../shared/types.ts").SearchHit[] {
-  const match = q.trim().split(/\s+/).map((t) => t.replace(/[^a-zA-Z0-9_]/g, "")).filter(Boolean).map((t) => t + "*").join(" ");
+  const match = ftsQuery(q);
   if (!match) return [];
   const s = scopeClause();
   const scoped = s.clause.replace(/\b(project_path|cwd_path)\b/g, "e.$1");
