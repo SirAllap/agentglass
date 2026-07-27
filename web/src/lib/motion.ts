@@ -1,12 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { usePoll } from "./usePoll.ts";
 
 /** A clock that ticks every second — returns elapsed ms since `start`. */
 export function useTicker(start: number): number {
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  usePoll(true, () => setNow(Date.now()), 1000, true);
   return Math.max(0, now - start);
 }
 

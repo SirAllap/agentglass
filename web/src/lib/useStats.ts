@@ -1,6 +1,7 @@
-import { useEffect, useState, useCallback } from "react";
+import { useState, useCallback } from "react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import { api } from "./api.ts";
+import { usePoll } from "./usePoll.ts";
 
 /**
  * How often to re-poll for a given window.
@@ -28,7 +29,7 @@ export function useStats(windowMs: number, intervalMs?: number, provider = "") {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    api
+    return api
       .stats(windowMs, provider || undefined)
       .then((s) => {
         setStats(s);
@@ -38,11 +39,7 @@ export function useStats(windowMs: number, intervalMs?: number, provider = "") {
   }, [windowMs, provider]);
 
   const every = intervalMs ?? pollFor(windowMs);
-  useEffect(() => {
-    load();
-    const id = setInterval(load, every);
-    return () => clearInterval(id);
-  }, [load, every]);
+  usePoll(true, load, every, true, `${windowMs}:${provider}`);
 
   return { stats, error };
 }

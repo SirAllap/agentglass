@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { Alert } from "../lib/derive.ts";
 import type { Insight, PendingGate } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo, agentLabel } from "../lib/format.ts";
+import { usePoll } from "../lib/usePoll.ts";
 
 const LEVEL: Record<Alert["level"], { color: string; icon: string }> = {
   error: { color: "var(--error)", icon: "✕" },
@@ -19,22 +20,10 @@ export function Alerts({ alerts, onSelectApp, bump }: { alerts: Alert[]; onSelec
   const [gates, setGates] = useState<PendingGate[]>([]);
   const [acting, setActing] = useState<Record<string, boolean>>({});
 
-  useEffect(() => {
-    let alive = true;
-    const load = () => api.insights().then((r) => alive && setInsights(r.insights)).catch(() => {});
-    load();
-    const id = setInterval(load, 15_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [bump]);
+  usePoll(true, () => api.insights().then((r) => setInsights(r.insights)).catch(() => {}), 15_000, true, String(bump ?? ""));
 
   // Pending gate requests are the most urgent thing — poll fast.
-  useEffect(() => {
-    let alive = true;
-    const load = () => api.gatePending().then((r) => alive && setGates(r.gates)).catch(() => {});
-    load();
-    const id = setInterval(load, 2000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
+  usePoll(true, () => api.gatePending().then((r) => setGates(r.gates)).catch(() => {}), 2000, true);
 
   const decide = (g: PendingGate, decision: "allow" | "deny") => {
     setActing((a) => ({ ...a, [g.id]: true }));

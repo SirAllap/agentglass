@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, type UsagePayload } from "../lib/api.ts";
+import { usePoll } from "../lib/usePoll.ts";
 
 // Human reset label: "in 1h 44m" when soon, else "Wed 3:00 PM".
 function resetLabel(iso: string | null): string {
@@ -42,19 +43,13 @@ function Meter({ label, used, resets }: { label: string; used: number; resets: s
 export function UsageWidget() {
   const [u, setU] = useState<UsagePayload | null>(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    // Keep the last good payload through transient failures — the meters
-    // should never blink out because one poll errored.
-    const load = () =>
-      api
-        .usage()
-        .then((next) => setU((prev) => (next.available ? next : prev?.available ? prev : next)))
-        .catch(() => {})
-        .finally(() => setLoading(false));
-    load();
-    const id = setInterval(load, 30_000);
-    return () => clearInterval(id);
-  }, []);
+  // Keep the last good payload through transient failures — the meters should
+  // never blink out because one poll errored.
+  usePoll(true, () => api
+    .usage()
+    .then((next) => setU((prev) => (next.available ? next : prev?.available ? prev : next)))
+    .catch(() => {})
+    .finally(() => setLoading(false)), 30_000, true);
 
   // First fetch in flight — show a spinner so it's clearly loading, not missing.
   if (loading && !u) {

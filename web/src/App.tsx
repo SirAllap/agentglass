@@ -34,6 +34,7 @@ import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
+import { usePoll } from "./lib/usePoll.ts";
 
 export default function App() {
   const { events, conn, lastEvent, openTools, sessionNames } = useLive();
@@ -99,22 +100,14 @@ export default function App() {
   }, [theme]);
 
   // Filter options change rarely (a new app/event type) — poll slowly.
-  useEffect(() => {
-    const load = () => api.filterOptions().then(setOpts).catch(() => {});
-    load();
-    const id = setInterval(load, 20_000);
-    return () => clearInterval(id);
-  }, []);
+  usePoll(true, () => api.filterOptions().then(setOpts).catch(() => {}), 20_000, true);
 
   // Statuses are functions of the clock, not only of the buffer: a session
   // mid-build emits nothing for minutes, and without a tick its card would
   // freeze on whatever was derived at the last event — never demoting to
   // idle, never advancing the "running Bash · 4m" duration.
   const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 10_000);
-    return () => clearInterval(id);
-  }, []);
+  usePoll(true, () => setTick((t) => t + 1), 10_000);
 
   // Every session's provider, from the FULL buffer (so the list is stable and
   // never collapses when one provider is selected).

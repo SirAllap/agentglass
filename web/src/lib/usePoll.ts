@@ -22,7 +22,7 @@ import { useEffect, useRef } from "react";
  * so the pause is invisible — that is also the moment the state is most likely
  * to have changed underneath you.
  */
-export function usePoll(active: boolean, fn: () => void, ms = 2500) {
+export function usePoll(active: boolean, fn: () => void | Promise<unknown>, ms = 2500, immediate = false, key = "") {
   // Held in a ref so a caller can pass an inline closure without the interval
   // being torn down and rebuilt on every render.
   const saved = useRef(fn);
@@ -30,9 +30,20 @@ export function usePoll(active: boolean, fn: () => void, ms = 2500) {
 
   useEffect(() => {
     if (!active) return;
-    const tick = () => { if (!document.hidden) saved.current(); };
+    let inFlight = false;
+    const tick = () => {
+      if (document.hidden || inFlight) return;
+      try {
+        const result = saved.current();
+        if (result && typeof result.then === "function") {
+          inFlight = true;
+          void result.catch(() => {}).finally(() => { inFlight = false; });
+        }
+      } catch { /* the next interval or focus refresh may recover */ }
+    };
+    if (immediate) tick();
     const id = setInterval(tick, ms);
-    const onVisible = () => { if (!document.hidden) saved.current(); };
+    const onVisible = () => { if (!document.hidden) tick(); };
     window.addEventListener("focus", onVisible);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -40,5 +51,5 @@ export function usePoll(active: boolean, fn: () => void, ms = 2500) {
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [active, ms]);
+  }, [active, ms, immediate, key]);
 }

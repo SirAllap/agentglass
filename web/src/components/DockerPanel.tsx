@@ -8,6 +8,7 @@ import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
+import { usePoll } from "../lib/usePoll.ts";
 
 // Strip ANSI CSI (colors, cursor moves, erases) + OSC sequences, not just SGR.
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g; // eslint-disable-line no-control-regex
@@ -97,32 +98,20 @@ export function DockerPanel({ open, onClose }: { open: boolean; onClose: () => v
   }, []);
 
   // open → load overview (cheap), then poll every 5s.
+  usePoll(open, loadOverview, 5000, true);
   useEffect(() => {
     if (!open) return;
     setToast(null);
-    loadOverview();
-    const t = setInterval(loadOverview, 5000);
     requestAnimationFrame(() => frameRef.current?.focus());
-    return () => clearInterval(t);
-  }, [open, loadOverview]);
+  }, [open]);
 
   // stats: only poll the (slow) `docker stats` sample while viewing containers.
-  useEffect(() => {
-    if (!open || view !== "containers") return;
-    loadStats();
-    const t = setInterval(loadStats, 5000);
-    return () => clearInterval(t);
-  }, [open, view, loadStats]);
+  usePoll(open && view === "containers", loadStats, 5000, true);
 
   // logs: poll every 3s while a container's log tab is visible. Keyed by id
   // (not the container object) so the 5s overview refresh doesn't restart it.
-  useEffect(() => {
-    const id = selected?.id;
-    if (!open || view !== "containers" || tab !== "logs" || !id) return;
-    loadLogs(id, tail);
-    const t = setInterval(() => loadLogs(id, tail), 3000);
-    return () => clearInterval(t);
-  }, [open, view, tab, selected?.id, tail, loadLogs]);
+  const logId = selected?.id ?? "";
+  usePoll(open && view === "containers" && tab === "logs" && !!logId, () => loadLogs(logId, tail), 3000, true, `${logId}:${tail}`);
 
   // keep the log view pinned to the bottom.
   useEffect(() => { const el = logRef.current; if (el && stuckBottom.current) el.scrollTop = el.scrollHeight; }, [logs]);

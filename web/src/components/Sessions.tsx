@@ -1,10 +1,11 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import type { SessionRollup } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Panel } from "./Panel.tsx";
 import { Select } from "./Select.tsx";
 import { fmtUsd, fmtMs, fmtTokens, modelColor, modelLabelOf, agentLabel } from "../lib/format.ts";
+import { usePoll } from "../lib/usePoll.ts";
 
 type Sort = "recent" | "cost-desc" | "cost-asc";
 const SORT_OPTIONS = [
@@ -16,12 +17,7 @@ const SORT_OPTIONS = [
 export const Sessions = memo(function Sessions({ provider = "" }: { provider?: string }) {
   const [sessions, setSessions] = useState<SessionRollup[]>([]);
   const [sort, setSort] = useState<Sort>("recent");
-  useEffect(() => {
-    const load = () => api.sessions(40, provider || undefined).then(setSessions).catch(() => {});
-    load();
-    const id = setInterval(load, 5000);
-    return () => clearInterval(id);
-  }, [provider]);
+  usePoll(true, () => api.sessions(40, provider || undefined).then(setSessions).catch(() => {}), 5000, true, provider);
 
   // `recent` keeps the server order (last_seen DESC). Cost sorts reorder rows
   // vertically only — the bar positions below stay keyed off timestamps.
