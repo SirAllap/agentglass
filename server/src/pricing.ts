@@ -107,6 +107,24 @@ export interface TokenUsage {
   cache_read_tokens?: number;
 }
 
+/**
+ * Whether the table actually has a rate for this model.
+ *
+ * costUsd() falls back to DEFAULT_PRICE — Sonnet-tier $3/$15 — for anything
+ * it does not recognise, and returns that number with exactly the same
+ * confidence as a real one. Nothing downstream could tell the two apart, so
+ * a model the table has never heard of produced a spend figure that looked
+ * measured. This is the question the dashboard needs in order to say so.
+ *
+ * Deliberately not "is this cost estimated": a source that reports its own
+ * exact cost bypasses the table entirely (see reported_cost_usd), so the
+ * honest, checkable statement is the narrower one — agentglass has no rate
+ * for this model.
+ */
+export function hasPrice(modelName: string | null | undefined): boolean {
+  return priceFor(modelName) !== null;
+}
+
 /** Cost in USD for a given usage + model. Unknown model → DEFAULT_PRICE. */
 export function costUsd(usage: TokenUsage, modelName: string | null | undefined): number {
   const p = priceFor(modelName) ?? { ...DEFAULT_PRICE, match: [], label: "unknown" };
