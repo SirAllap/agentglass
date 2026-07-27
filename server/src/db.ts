@@ -250,7 +250,7 @@ const insertStmt = db.query(`
     $agent_id, $agent_type, $model_name, $is_error, $error_text, $duration_ms,
     $input_tokens, $output_tokens, $cache_creation_tokens, $cache_read_tokens,
     $cost_usd, $summary, $payload, $timestamp
-  ) RETURNING id
+  ) RETURNING *
 `);
 
 // Find the matching PreToolUse for a Post event: by tool_use_id when present,
@@ -278,8 +278,6 @@ const getSessionTokens = db.query<SessionTokenRow, [string]>(
   `SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, model_name
    FROM sessions WHERE session_id = ?`
 );
-
-const rowToEvent = db.query<any, [number]>(`SELECT * FROM events WHERE id = ?`);
 
 function parseEventRow(r: any): WatchEvent {
   return {
@@ -361,7 +359,7 @@ function insertEventCore(n: NormalizedEvent): InsertResult {
     if (pre) duration_ms = Math.max(0, n.timestamp - pre.timestamp);
   }
 
-  const { id } = insertStmt.get({
+  const inserted = insertStmt.get({
     $source_app: n.source_app,
     $session_id: n.session_id,
     $hook_event_type: n.hook_event_type,
@@ -381,10 +379,10 @@ function insertEventCore(n: NormalizedEvent): InsertResult {
     $summary: n.summary,
     $payload: JSON.stringify(n.payload ?? {}),
     $timestamp: n.timestamp,
-  }) as { id: number };
+  }) as Record<string, unknown>;
 
-  const event = parseEventRow(rowToEvent.get(id));
-  try { ftsInsert.run({ $id: id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
+  const event = parseEventRow(inserted);
+  try { ftsInsert.run({ $id: event.id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
   const session = upsertSession(n, dIn, dOut, dCw, dCr);
   return { event, session };
 }
