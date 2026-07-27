@@ -45,7 +45,8 @@ import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
-import { syncTheme, snippetStatus, SNIPPETS } from "./themesync.ts";
+import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme } from "./themesync.ts";
+import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -1412,6 +1413,37 @@ function backfillProvider() {
   if (n || ev) console.log(`🏷  tagged ${n} sessions and ${ev} events with a provider`);
 }
 backfillProvider();
+
+/**
+ * Repair a theme file written before #336.
+ *
+ * #336 stopped generating `set -g status-left "…"` / `set -g status-right
+ * "…"`, which replaced whatever the user had in those segments — including,
+ * in the case that found this, the `#(continuum_save.sh)` interpolation that
+ * is tmux-continuum's entire save timer. But that only changed what is
+ * *written*: the file is rewritten once per theme change, so anyone who ran
+ * agentglass before the fix still has the old one on disk, sourced by every
+ * tmux server that opts in. The bug came back on the next new server, and
+ * the owner had no reason to suspect a file they have never opened.
+ *
+ * Fixed here rather than on the next theme change, because regenerating the
+ * file needs the palette and the palette comes from the browser — so waiting
+ * means the people happiest with their theme never get the fix.
+ */
+function repairThemeArtifacts() {
+  const path = tmuxThemePath();
+  try {
+    if (!fsExists(path)) return;
+    const repaired = repairTmuxTheme(fsRead(path, "utf8"));
+    if (repaired === null) return;
+    fsWrite(path, repaired);
+    console.log(`🩹 removed the status-left/right lines from ${path} — those segments are yours (#339)`);
+  } catch {
+    // Unreadable or read-only: not worth failing a boot over. The generator
+    // no longer writes those lines, so a fresh file is correct anyway.
+  }
+}
+repairThemeArtifacts();
 
 // Retention: prune at boot and hourly so the DB stays lean but the 7d window
 // always has full history (see AGENTGLASS_RETENTION_DAYS in db.ts).
