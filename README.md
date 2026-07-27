@@ -34,6 +34,7 @@ gate. No install, no server. *(Everything there is fake; it's a showcase.)*
 
 - [Every project, one cockpit](#every-project-one-cockpit)
 - [More than a dashboard — a workspace](#more-than-a-dashboard--a-workspace)
+- [Away from the desk — the phone companion](#away-from-the-desk--the-phone-companion)
 - [Why](#why) · [Themes](#themes)
 - [Quickstart](#quickstart) · [Requirements](#requirements-what-agentglass-expects-to-find)
 - [Desktop app](#desktop-app) · [Updating](#updating)
@@ -231,6 +232,77 @@ discoverable).
 ---
 
 ![chat panel](.github/assets/chat.png)
+
+---
+
+## Away from the desk — the phone companion
+
+The cockpit stays at the desk. A terminal, a hunk-level diff and a docker table
+are not things anybody drives with a thumb, and a narrower version of them is
+not a phone app — it is the wrong app, smaller. So **a phone gets a different
+application**, not a different stylesheet: `main.tsx` chooses one tree or the
+other before React mounts. That is also what keeps the phone build honest —
+nothing heavy can leak into it. No terminal, no charts, no radar; the fleet's
+pulse is fourteen CSS-animated bars rather than a canvas, which on a phone is a
+battery decision as much as a layout one.
+
+**What decides.** Width under 768px, or a coarse pointer up to 900px — that
+second rule catches the phone held sideways, where the width alone would say
+"small laptop". A tablet in landscape is a perfectly good desk and keeps the
+cockpit. An explicit choice, stored per device, always wins over both.
+
+### The home screen is a queue, not a dashboard
+
+That is the whole difference: a dashboard is something you re-read, and this is
+something you can **empty**. Every card is one decision carrying its own action,
+and answering it takes the card out of the list.
+
+| Card | What it is, and what you can do about it |
+|---|---|
+| **Blocked · waiting on you** | A gate. The agent is stopped dead until you answer, so this outranks everything: allow or deny, with the command it wants to run in front of you. |
+| **Container down** | A container that exited non-zero, is restarting, or is dead. Tail the log, restart it, or hand it to Claude. |
+| **CI went red** | The failing check on one of your pull requests. Open the log, or re-run it. |
+| **Ready to merge** | Approved, checks green, nothing in the way. The one card that finishes work rather than starting it. |
+| **Review requested** | Somebody asked for your eyes. Opens the pull request, diff and all. |
+| **Stopped · wants direction** | A session that ended its turn and has gone quiet — between four minutes and twelve hours. Under four it is probably still thinking; over twelve it is yesterday's problem, not tonight's. |
+
+Ordered by what it costs you to be away: blocking a person first, then broken,
+then finished-and-waiting, then everything else — and within a rank, newest
+first. A card you are not going to deal with tonight can be snoozed, and it
+comes back when it changes.
+
+### Three tabs, and no more
+
+- **Now** — the queue above.
+- **Chats** — say something back. The same conversation you left at the desk,
+  and still the same one when you sit back down: the session lives on the
+  server, not in a browser tab. Turns stream in as they happen, with the tools
+  the agent runs named as it runs them.
+- **Repos** — for when you want to look rather than need to. Pick a repository,
+  then the facet: **Changes** (a switch per file *is* the staging, then commit
+  and push), **Pull requests**, **Containers**. It opens on whatever is wrong.
+
+The diff is unified, wrapped, with a `+` or `−` glyph on every line as well as
+the tint — at 11.5px, outdoors, in one hand, colour alone is not a signal to
+rely on, and for a good number of people it is not a signal at all.
+
+### Getting it onto your phone
+
+**Settings ▸ Remote access**, one switch. It prints a QR code, because the URL
+is an IP, a port and a 32-character secret and nobody is typing that. Scan it
+and the phone remembers the code; the link only carries it once.
+
+It is **your network only** — the server binds to the LAN, the code is required,
+and a phone that scanned it once keeps working until you rotate it. The same
+pane will tell you when a host firewall is dropping the packets, because
+otherwise the phone shows a white page and nothing anywhere says why.
+
+The page ships a web manifest, so **Add to home screen** gives you an icon that
+opens without browser chrome.
+
+---
+
+![the phone companion — the queue, a repository's changes, and the chat list](.github/assets/mobile.png)
 
 ## Why
 
@@ -838,16 +910,18 @@ Where this is going — themes, not dates. The living version is the issue track
 **Later / exploring**
 - An API panel to exercise the endpoints the fleet is building — [#170](https://github.com/SirAllap/agentglass/issues/170)
 - Tasks per project, and a decision log mined from transcripts — [#12](https://github.com/SirAllap/agentglass/issues/12), [#13](https://github.com/SirAllap/agentglass/issues/13)
-- A phone-friendly view for monitoring and answering gate approvals — [#7](https://github.com/SirAllap/agentglass/issues/7)
 - Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
 
 **Recently shipped** — see the [releases](https://github.com/SirAllap/agentglass/releases) for the full record.
-- **unreleased** — a slow tool call is told from a hung one by evidence rather than by a timer, per tool class, with "can't tell" as a real answer ([#134](https://github.com/SirAllap/agentglass/issues/134)); the UI says so when something other than agentglass owns `:4000`.
-  - **The numbers got audited.** A client clock that disagrees with the server no longer skews every window ([#245](https://github.com/SirAllap/agentglass/issues/245)); provider is attributed **per event** rather than per session, and sessions whose model was never resolved get a real **Unknown** bucket instead of vanishing from every filter ([#246](https://github.com/SirAllap/agentglass/issues/246)); a token delta that spans a model switch is priced per its own model ([#247](https://github.com/SirAllap/agentglass/issues/247)); insights are scoped to the open project like every other metric, and the `/stats` timeline stopped dropping the newest events ([#248](https://github.com/SirAllap/agentglass/issues/248)).
-  - **Pull requests.** Check states load in **one batched GraphQL query** instead of a subprocess per PR ([#249](https://github.com/SirAllap/agentglass/issues/249)); GitHub-style facet filters and a query bar; keyboard navigation in the files tab; and CI results notify you only for the PRs you authored or were asked to review ([#244](https://github.com/SirAllap/agentglass/issues/244)).
-  - **Desktop.** The Claude Code hooks ship inside the app and wire from **Settings ▸ Hooks**, so a packaged install needs no clone ([#187](https://github.com/SirAllap/agentglass/issues/187)); self-update is gated off on Windows rather than shelling to `bash` ([#189](https://github.com/SirAllap/agentglass/issues/189)); push alerts are delivered cross-platform, not only through `notify-send` ([#192](https://github.com/SirAllap/agentglass/issues/192)); and two Linux rendering faults — a white-out on the final frame and a blank terminal from WebGL context loss — are fixed, with a **Terminal renderer** setting to override the default.
-  - **Supply chain.** CodeQL and Dependabot now watch the repo ([#169](https://github.com/SirAllap/agentglass/issues/169)), and a privacy-first diagnostic scrubber built from an allowlist landed for the reporting paths ([#207](https://github.com/SirAllap/agentglass/issues/207)).
-  - **From the community.** `POST /control`, so a Stream Deck or a phone can drive the cockpit's own UI ([#237](https://github.com/SirAllap/agentglass/issues/237), thanks [@Yoshiofthewire](https://github.com/Yoshiofthewire)); the terminal disabling itself honestly on Windows at the server seam ([#140](https://github.com/SirAllap/agentglass/issues/140), thanks [@emre155](https://github.com/emre155)); and every deprecated GitHub Action brought up to a current major ([#242](https://github.com/SirAllap/agentglass/issues/242), thanks [@mvanhorn](https://github.com/mvanhorn)).
+- **v0.6.0** — the cockpit leaves the desk, and the pull request panel stops being a viewer: the dashboard reaches your own phone in one switch, installs as an app, and answers agents from it ([#344](https://github.com/SirAllap/agentglass/issues/344), [#346](https://github.com/SirAllap/agentglass/issues/346), [#349](https://github.com/SirAllap/agentglass/issues/349)).
+  - **The phone.** Exposed to your own devices without hand-editing a bind address or inventing a token ([#344](https://github.com/SirAllap/agentglass/issues/344)); built as a **companion** rather than a shrunken cockpit, so it carries the views that make sense in a pocket ([#349](https://github.com/SirAllap/agentglass/issues/349)).
+  - **Pull requests.** The panel is rebuilt around the review you are doing ([#305](https://github.com/SirAllap/agentglass/issues/305)): line and range comments, CI logs, applied **suggestions**, mentions, image changes, and real markdown ([#316](https://github.com/SirAllap/agentglass/issues/316), [#326](https://github.com/SirAllap/agentglass/issues/326)); parity with the site for timeline, reactions, sidebar and pagination ([#310](https://github.com/SirAllap/agentglass/issues/310)); review without checking the branch out ([#314](https://github.com/SirAllap/agentglass/issues/314)); and Open / Closed / All with facets over the whole repository ([#306](https://github.com/SirAllap/agentglass/issues/306), [#317](https://github.com/SirAllap/agentglass/issues/317)).
+  - **Chat.** A chat can run as a **live tmux pane** you attach to from a real terminal ([#324](https://github.com/SirAllap/agentglass/issues/324)); it answers a pane's prompt without going to find one ([#337](https://github.com/SirAllap/agentglass/issues/337)), carries an effort dial ([#342](https://github.com/SirAllap/agentglass/issues/342)), recalls what you sent with Up ([#341](https://github.com/SirAllap/agentglass/issues/341)), and folds a turn's tool calls ([#313](https://github.com/SirAllap/agentglass/issues/313)).
+  - **Terminal.** Find in the scrollback and clickable URLs ([#322](https://github.com/SirAllap/agentglass/issues/322)); a one-click command no longer types itself into vim ([#323](https://github.com/SirAllap/agentglass/issues/323)); and Windows-style paths are recognised in scope, completion and env splitting ([#308](https://github.com/SirAllap/agentglass/issues/308)).
+  - **The numbers got audited.** A client clock that disagrees with the server no longer skews every window ([#250](https://github.com/SirAllap/agentglass/issues/250)); provider is attributed **per event** rather than per session, with a real **Unknown** bucket ([#261](https://github.com/SirAllap/agentglass/issues/261), [#251](https://github.com/SirAllap/agentglass/issues/251)); a cumulative delta spanning a model switch is priced per its own model ([#253](https://github.com/SirAllap/agentglass/issues/253)); a subagent finishing is not the session ending ([#320](https://github.com/SirAllap/agentglass/issues/320)); and two freezes turned out to be indexes — open tool calls went from 2.5s to ~1ms ([#232](https://github.com/SirAllap/agentglass/issues/232), [#256](https://github.com/SirAllap/agentglass/issues/256)).
+  - **Security.** Only an exact host match may see the GitHub token ([#311](https://github.com/SirAllap/agentglass/issues/311)); the pkexec ownership gate rejects prunable worktrees, closing a privilege-escalation path ([#222](https://github.com/SirAllap/agentglass/issues/222)); and ten low-severity findings from the audit are fixed ([#228](https://github.com/SirAllap/agentglass/issues/228), [#229](https://github.com/SirAllap/agentglass/issues/229), [#230](https://github.com/SirAllap/agentglass/issues/230)).
+  - **Desktop.** The Claude Code hooks ship inside the app and wire from **Settings ▸ Hooks** ([#285](https://github.com/SirAllap/agentglass/issues/285)); push alerts are cross-platform, not only `notify-send` ([#263](https://github.com/SirAllap/agentglass/issues/263)); self-update is gated off on Windows rather than shelling to `bash` ([#268](https://github.com/SirAllap/agentglass/issues/268)); and a build made on a release tag is named by the tag ([#264](https://github.com/SirAllap/agentglass/issues/264)); and on macOS, "app is damaged" is **Gatekeeper on an unsigned build**, not a broken download — the `xattr` fix is written down ([#262](https://github.com/SirAllap/agentglass/issues/262)).
+  - **From the community.** An external controller can drive the cockpit's own UI and open a new chat on it, so a Stream Deck or a phone reaches the dashboard without it knowing about either ([#237](https://github.com/SirAllap/agentglass/issues/237), [#288](https://github.com/SirAllap/agentglass/issues/288)), and the **Claude 5** family and 1M context window are tracked ([#289](https://github.com/SirAllap/agentglass/issues/289)) — thanks [@Yoshiofthewire](https://github.com/Yoshiofthewire); Windows-style paths recognised in scope, completion and env splitting ([#308](https://github.com/SirAllap/agentglass/issues/308), thanks [@SpiliosDmk](https://github.com/SpiliosDmk)); the terminal disabling itself honestly on Windows at the server seam ([#140](https://github.com/SirAllap/agentglass/issues/140), thanks [@emre155](https://github.com/emre155)); and every deprecated GitHub Action brought up to a current major ([#242](https://github.com/SirAllap/agentglass/issues/242), thanks [@mvanhorn](https://github.com/mvanhorn)).
 - **v0.5.0** — pull request review inside the cockpit, and the freeze is gone: the event loop is watched, and every expensive git, docker and database read left the thread that carries the terminal
 - **v0.4.0** — evidence-of-life signal for open tool calls; the shell no longer adopts a stranger's server on `:4000`
 - **v0.3.0** — in-app merge-conflict resolution, whole-project docker controls, a rearrangeable workspace, and an in-app updater

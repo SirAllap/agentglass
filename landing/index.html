@@ -3,22 +3,22 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>agentglass — mission control for every AI coding agent on your machine</title>
-<meta name="description" content="Every AI coding agent on your machine, on one screen. Claude Code, Codex, Gemini CLI — watch every tool call, token and dollar live, and hold a dangerous call until you decide.">
+<meta name="description" content="Every AI coding agent on your machine, on one screen. Claude Code, Codex, Gemini CLI — watch every tool call, token and dollar live, and hold a dangerous call until you decide. Now from your phone, too.">
 <meta name="theme-color" content="#0f0a1a">
 <link rel="canonical" target="_blank" rel="noopener" href="https://sirallap.github.io/agentglass/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2032%2032%22%20fill%3D%22none%22%3E%3Cg%20color%3D%22%23a78bfa%22%3E%3Cline%20x1%3D%2220.2%22%20y1%3D%2220.2%22%20x2%3D%2227%22%20y2%3D%2227%22%20stroke%3D%22currentColor%22%20stroke-width%3D%223.1%22%20stroke-linecap%3D%22round%22/%3E%3Ccircle%20cx%3D%2213.5%22%20cy%3D%2213.5%22%20r%3D%229%22%20fill%3D%22currentColor%22%20fill-opacity%3D%220.1%22/%3E%3Cpath%20d%3D%22M13.5%2013.5%20L13.5%204.6%20A8.9%208.9%200%200%201%2019.7%207%20Z%22%20fill%3D%22currentColor%22%20fill-opacity%3D%220.2%22/%3E%3Ccircle%20cx%3D%229%22%20cy%3D%2216.4%22%20r%3D%221.7%22%20fill%3D%22%2334d399%22/%3E%3Ccircle%20cx%3D%2213.5%22%20cy%3D%2213.5%22%20r%3D%229.6%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222.3%22/%3E%3C/g%3E%3C/svg%3E">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="agentglass">
 <meta property="og:title" content="agentglass — mission control for every AI coding agent">
-<meta property="og:description" content="Every AI coding agent on your machine, on one screen. Claude Code, Codex, Gemini CLI — watch every tool call, token and dollar live, and hold a dangerous call until you decide.">
+<meta property="og:description" content="Every AI coding agent on your machine, on one screen. Claude Code, Codex, Gemini CLI — watch every tool call, token and dollar live, and hold a dangerous call until you decide. Now from your phone, too.">
 <meta property="og:url" content="https://sirallap.github.io/agentglass/">
 <meta property="og:image" content="https://sirallap.github.io/agentglass/og.png">
 <meta property="og:image:width" content="2400">
 <meta property="og:image:height" content="1260">
-<meta property="og:image:alt" content="agentglass — a loupe whose lens is a mission-control radar, tracking your fleet of AI coding agents">
+<meta property="og:image:alt" content="agentglass — a loupe whose lens is a mission-control radar tracking your fleet of AI coding agents, and beside it a phone showing an agent held on a permission">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="agentglass — mission control for every AI coding agent">
-<meta name="twitter:description" content="Every AI coding agent on your machine, on one screen. Claude Code, Codex, Gemini CLI — watch every tool call, token and dollar live, and hold a dangerous call until you decide.">
+<meta name="twitter:description" content="Every AI coding agent on your machine, on one screen. Claude Code, Codex, Gemini CLI — watch every tool call, token and dollar live, and hold a dangerous call until you decide. Now from your phone, too.">
 <meta name="twitter:image" content="https://sirallap.github.io/agentglass/og.png">
 <style>
   :root{
@@ -906,6 +906,641 @@
   }
 
   @media (prefers-reduced-motion:reduce){ .caution::before,.clamp .sq{animation:none;} html{scroll-behavior:auto;} }
+
+
+  /* ══════════════ AWAY FROM THE DESK ══════════════ */
+.pk button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;text-align:left}
+/* ══════════════════════════════════════════════════════════════════════
+   A landing section for the phone companion.  v5.
+
+   v4 was wrong on the most basic axis and I should have caught it: it
+   was blue, chamfered and invented, while agentglass — app and landing
+   both — is midnight-purple with 1rem-rounded panels. A section that
+   shows the product in a product that does not exist is a promise the
+   download cannot keep.
+
+   So the split is explicit now:
+
+     · The FRAME is the landing's own language — cut corners, corner
+       brackets, the wire, the option-select row, the keycaps. That is
+       page furniture and it should look like this page.
+     · What sits INSIDE the desk panel and INSIDE the phone glass is the
+       application, reproduced: the same variables, the same radii, the
+       same class names, the same components. .panel, .panel-eyebrow,
+       .chip on the desk; .mb-hero, .mb-item, .mb-btn, .mb-spin,
+       .mb-toast, .mb-screen, .mb-sw on the phone.
+
+   And it is not a still life. Every step plays its real feedback loop —
+   press, the button spins, a toast says what happened in the past tense,
+   the card leaves the queue, the badge drops, the acknowledgement crosses
+   the wire, the desk moves. The chat one streams: the turn goes out, the
+   assistant bubble opens with a caret, tool lines land one by one, the
+   text arrives a word at a time, and Send is a red Stop until it is done.
+   That is what using it is like, so that is what it should show.
+   ══════════════════════════════════════════════════════════════════════ */
+
+
+
+
+
+
+.pk .num{font-variant-numeric:tabular-nums}
+
+/* The app's own backdrop, so the section sits on the same ground it does. */
+
+
+
+
+
+
+/* ── the page's own furniture ─────────────────────────────────────── */
+.pk{max-width:1120px;margin:0 auto;padding:96px 30px 120px}
+
+.pk h2{font-family:var(--sans);font-size:clamp(27px,4vw,47px);font-weight:750;letter-spacing:-.035em;
+  line-height:1.06;margin-bottom:22px;text-wrap:balance;max-width:17ch}
+.pk h2 em{font-style:normal;color:var(--primary)}
+.pk .lede{font-size:14px;line-height:1.8;color:var(--text3);max-width:62ch;margin-bottom:48px}
+.pk .lede b{color:var(--text2)}
+
+.pk .rig{display:grid;grid-template-columns:minmax(0,1fr) minmax(72px,96px) 340px;align-items:center}
+.pk .end{position:relative;padding:20px}
+.pk .pk-brk{position:absolute;width:14px;height:14px;border:1px solid var(--primary);opacity:0;
+  transition:opacity .45s,transform .55s cubic-bezier(.2,.9,.25,1)}
+.pk .pk-brk.tl{top:0;left:0;border-right:0;border-bottom:0;transform:translate(-9px,-9px)}
+.pk .pk-brk.tr{top:0;right:0;border-left:0;border-bottom:0;transform:translate(9px,-9px)}
+.pk .pk-brk.bl{bottom:0;left:0;border-right:0;border-top:0;transform:translate(-9px,9px)}
+.pk .pk-brk.br{bottom:0;right:0;border-left:0;border-top:0;transform:translate(9px,9px)}
+.pk .on .pk-brk{opacity:.55;transform:none}
+.pk .cap{position:absolute;top:0;left:20px;color:var(--primary);opacity:0;transition:opacity .4s .3s}
+.pk .on .cap{opacity:.7}
+
+/* ── the wire ─────────────────────────────────────────────────────── */
+.pk .wire{position:relative;height:190px}
+.pk .pk-rail{position:absolute;left:0;right:0;top:50%;height:1px;
+  background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--primary) 42%,transparent) 12%,
+    color-mix(in srgb,var(--primary) 42%,transparent) 88%,transparent)}
+.pk .pk-rail::before{content:"";position:absolute;left:0;right:0;top:-3px;height:7px;
+  background:repeating-linear-gradient(90deg,color-mix(in srgb,var(--primary) 26%,transparent) 0 1px,transparent 1px 15px);
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 15%,#000 85%,transparent);
+  mask-image:linear-gradient(90deg,transparent,#000 15%,#000 85%,transparent)}
+.pk .wlab{position:absolute;left:50%;transform:translateX(-50%);top:calc(50% + 16px);color:var(--text4);
+  white-space:nowrap;text-align:center}
+.pk .wlab b{color:var(--primary);font-weight:600;display:block;margin-bottom:3px}
+.pk .wlab .rate{letter-spacing:0;text-transform:none;font-size:9px;color:var(--text4)}
+.pk .wlab .rate b{display:inline;color:var(--text3);margin:0}
+.pk .mote{position:absolute;width:3px;height:3px;pointer-events:none;opacity:0;transform:translate(-50%,-50%);
+  background:var(--primary);box-shadow:0 0 6px var(--primary);animation:mote 1.5s linear forwards}
+@keyframes mote{0%{left:1%;opacity:0}12%{opacity:.72}82%{opacity:.72}100%{left:99%;opacity:0}}
+.pk .mote.rev{animation:moterev 1.4s linear forwards;background:var(--primary-hover);
+  box-shadow:0 0 6px var(--primary-hover)}
+@keyframes moterev{0%{left:99%;opacity:0}12%{opacity:.72}82%{opacity:.72}100%{left:1%;opacity:0}}
+.pk .mote.err{background:var(--error);box-shadow:0 0 7px var(--error)}
+.pk .pkt{position:absolute;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:7px;
+  opacity:0;white-space:nowrap;pointer-events:none;z-index:3}
+.pk .pkt i{width:7px;height:7px;background:var(--primary);box-shadow:0 0 12px var(--primary);flex:none;font-style:normal}
+.pk .pkt span{color:var(--primary);font-size:8px;letter-spacing:.18em;text-transform:uppercase;
+  text-shadow:0 0 10px color-mix(in srgb,var(--primary) 70%,transparent)}
+.pk .pkt.out{animation:cross 1s cubic-bezier(.35,0,.3,1)}
+.pk .pkt.back{animation:crossback 1s cubic-bezier(.35,0,.3,1)}
+@keyframes cross{0%{left:2%;opacity:0}12%{opacity:1}88%{opacity:1}100%{left:98%;opacity:0}}
+@keyframes crossback{0%{left:98%;opacity:0}12%{opacity:1}88%{opacity:1}100%{left:2%;opacity:0}}
+.pk .pkt.back i{background:var(--success);box-shadow:0 0 12px var(--success)}
+.pk .pkt.back span{color:var(--success);text-shadow:0 0 10px color-mix(in srgb,var(--success) 70%,transparent)}
+
+/* ══ THE DESK: agentglass, reproduced ══════════════════════════════
+   .panel, .panel-eyebrow, .panel-title, .chip, .t-dim* are the app's
+   own class names with the app's own values — 1rem radius, the faint
+   hairline, the top-tinted gradient, the 10px/.2em eyebrow.            */
+.pk .panel{position:relative;border-radius:1rem;overflow:hidden;display:flex;flex-direction:column;min-width:0;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--primary) 7%,transparent),transparent 42%),
+    color-mix(in srgb,var(--bg2) 90%,var(--bg));
+  border:1px solid color-mix(in srgb,var(--primary) 12%,transparent);
+  box-shadow:0 18px 40px -28px var(--shadow),inset 0 1px 0 0 rgba(255,255,255,.04)}
+.pk .panel-h{padding:11px 15px 7px;display:flex;align-items:flex-start;justify-content:space-between;flex:none;gap:10px}
+.pk .panel-eyebrow{font-size:10px;letter-spacing:.2em;text-transform:uppercase;
+  color:color-mix(in srgb,var(--primary) 85%,var(--text))}
+.pk .panel-title{font-family:var(--sans);font-size:15px;font-weight:600;line-height:1.15;letter-spacing:-.01em;
+  color:var(--text)}
+.pk .panel-b{flex:1;min-height:0;padding:0 15px 11px}
+.pk .chip{font-size:10px;padding:1px 6px;border-radius:6px;
+  border:1px solid color-mix(in srgb,var(--border) 60%,transparent)}
+.pk .t-dim{color:var(--text3)} .pk .t-dim2{color:var(--text4)}
+.pk .rt{text-align:right;line-height:1.25}
+
+.pk .deck{display:flex;flex-direction:column;gap:12px}
+/* The dashboard's KPI row is 1.5 / 1.1 / 1.4 across the full width of a
+   cockpit. At the width this section gives it, that leaves the pulse cells
+   too narrow to hold their own labels — which is exactly why the app itself
+   drops to a stacked grid under `lg`. Same idea, one step less far: the
+   spend hero takes the row, the two counters share the one below. */
+.pk .kpirow{display:grid;grid-template-columns:1.15fr 1fr;gap:8px}
+.pk .kpirow>.hero1{grid-column:1/-1}
+/* hero — spend + health lead the eye */
+.pk .hero1{flex-direction:row;flex-wrap:wrap;align-items:center;gap:6px 16px;padding:13px 18px}
+.pk .hero1 .big{font-size:32px;font-weight:600;line-height:1;letter-spacing:-.02em;color:var(--success);
+  font-variant-numeric:tabular-nums}
+.pk .hero1 .sub{font-size:11px;color:var(--text4);margin-top:6px;font-variant-numeric:tabular-nums}
+.pk .hero1 .grow{min-width:0;flex-grow:1}
+.pk .spark{width:104px;height:40px;flex:none}
+.pk .vrule{width:1px;align-self:stretch;margin:4px 0;background:color-mix(in srgb,var(--primary) 14%,transparent)}
+.pk .hring{display:flex;align-items:center;gap:10px;flex:none}
+.pk .pk-ring{width:44px;height:44px;flex:none}
+.pk .pk-ring .bgc{fill:none;stroke:color-mix(in srgb,var(--text4) 26%,transparent);stroke-width:3}
+.pk .pk-ring .fgc{fill:none;stroke:var(--success);stroke-width:3;stroke-linecap:round;
+  transform:rotate(-90deg);transform-origin:50% 50%;transition:stroke-dasharray .5s,stroke .4s}
+.pk .pk-ring text{fill:var(--text2);font-size:13px;font-family:var(--mono);text-anchor:middle}
+.pk .hring .w{font-size:10px;color:var(--text4);line-height:1.5}
+.pk .hring .w b{display:block;font-weight:600;color:var(--success)}
+
+.pk .cellgrid{display:grid;gap:1px;background:color-mix(in srgb,var(--primary) 9%,transparent);height:100%}
+.pk .cellgrid.p3{grid-template-columns:repeat(3,1fr)}
+.pk .cellgrid.p2{grid-template-columns:repeat(2,1fr)}
+.pk .cell{background:color-mix(in srgb,var(--bg2) 66%,transparent);padding:10px 12px;min-width:0}
+/* The app's own narrow-screen rule: tighten the tracking rather than shrink
+   the type, or the eyebrow wraps into a vertical stack of letters. */
+.pk .cell .panel-eyebrow{letter-spacing:.1em}
+.pk .cell .n{font-size:21px;font-weight:600;line-height:1;margin-top:4px;font-variant-numeric:tabular-nums;color:var(--text)}
+.pk .cell .u{font-size:9.5px;color:var(--text4);margin-top:5px;line-height:1.35}
+/* a status cell that only lights up when it needs attention */
+.pk .scell{display:flex;align-items:center;gap:12px;padding:11px 15px;min-width:0;
+  background:color-mix(in srgb,var(--bg2) 66%,transparent);transition:background .35s}
+.pk .scell .d{width:10px;height:10px;border-radius:50%;flex:none;background:var(--text4)}
+.pk .scell .n{font-size:22px;font-weight:600;line-height:1;margin-top:2px;font-variant-numeric:tabular-nums;
+  color:var(--text3)}
+.pk .scell.hot{background:color-mix(in srgb,var(--tone) 11%,transparent)}
+.pk .scell.hot .d{background:var(--tone);box-shadow:0 0 8px var(--tone)}
+.pk .scell.hot .n{color:var(--tone)}
+.pk .uprow{padding:7px 15px;font-size:10px;color:var(--text4);text-align:right;font-variant-numeric:tabular-nums;
+  border-top:1px solid color-mix(in srgb,var(--primary) 10%,transparent)}
+.pk .uprow b{color:var(--text3);font-weight:600}
+
+/* A fixed row, not a fixed box: without the explicit track the row sizes to
+   its tallest child and the whole cockpit spills past the height it was
+   given — which is how the session list ended up hanging out of the panel. */
+.pk .cockpit{display:grid;grid-template-columns:7fr 5fr;grid-template-rows:286px;gap:12px}
+.pk .cockpit>*{min-height:0;min-width:0}
+.pk .rcol{display:grid;grid-template-rows:minmax(0,1fr);gap:12px;min-width:0;min-height:0}
+.pk .rcol>*{min-height:0}
+.pk .charts{display:grid;grid-template-columns:1fr;grid-template-rows:1fr 1fr;gap:12px;min-width:0;min-height:0}
+.pk .feedwrap{display:grid;grid-template-rows:196px}
+.pk .feedwrap>*{min-height:0}
+.pk .charts>*{min-height:0}
+
+/* session cards, as Fleet draws them */
+/* The panel scrolls in the app. Here the list is fixed, so the bottom edge
+   fades instead of slicing a card in half — the same thing the scroll was
+   telling you. */
+.pk .fleetb{overflow:hidden;display:flex;flex-direction:column;gap:10px;
+  -webkit-mask-image:linear-gradient(180deg,#000 88%,transparent);
+  mask-image:linear-gradient(180deg,#000 88%,transparent)}
+.pk .grp{display:flex;align-items:center;gap:8px;padding:2px 6px;color:var(--text2)}
+.pk .grp .g{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.pk .grp .lv{width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 6px var(--success)}
+.pk .grp .r{margin-left:auto;font-size:9.5px;color:var(--text4);font-variant-numeric:tabular-nums}
+.pk .sc{position:relative;border-radius:.75rem;padding:10px 10px 10px 16px;
+  background:color-mix(in srgb,var(--bg3) 40%,transparent);
+  border:1px solid color-mix(in srgb,var(--primary) 10%,transparent)}
+.pk .sc .rl{position:absolute;left:3px;top:10px;bottom:10px;width:3px;border-radius:99px;background:var(--text4)}
+.pk .sc.working .rl{background:var(--success);box-shadow:0 0 6px var(--success)}
+.pk .sc.waiting .rl{background:var(--warning);box-shadow:0 0 6px var(--warning)}
+.pk .sc.errored .rl{background:var(--error);box-shadow:0 0 6px var(--error)}
+.pk .sc .t1{display:flex;align-items:center;gap:8px;min-width:0}
+.pk .sc .dot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--text4);position:relative}
+.pk .sc.working .dot{background:var(--success)} .pk .sc.waiting .dot{background:var(--warning)}
+.pk .sc.errored .dot{background:var(--error)}
+.pk .sc.working .dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:inherit;opacity:.6;
+  animation:pingring 1.6s ease-out infinite}
+@keyframes pingring{0%{transform:scale(.6);opacity:.8}100%{transform:scale(2.4);opacity:0}}
+.pk .sc .nm{font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pk .sc .wt{flex:none;color:var(--primary-hover);
+  background:color-mix(in srgb,var(--primary) 14%,transparent);border-color:transparent}
+.pk .sc .md{margin-left:auto;flex:none;color:var(--primary);
+  background:color-mix(in srgb,var(--primary) 14%,transparent);border-color:transparent}
+.pk .sc .t2{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:4px}
+.pk .sc .act{font-size:11px;color:var(--text4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pk .spk{display:flex;align-items:flex-end;gap:1.5px;height:24px;flex:none}
+.pk .spk i{width:3px;border-radius:2px;background:var(--success);transition:height .3s}
+.pk .sc.waiting .spk i{background:var(--warning)} .pk .sc.errored .spk i{background:var(--error)}
+.pk .sc.idle .spk i{background:color-mix(in srgb,var(--border) 50%,transparent)}
+.pk .sc .t3{display:flex;gap:12px;margin-top:6px;font-size:10px;color:var(--text4);font-variant-numeric:tabular-nums}
+.pk .sc .t3 .ok{color:var(--success)} .pk .sc .t3 .er{color:var(--error)} .pk .sc .t3 .ag{margin-left:auto}
+.pk .sc .sub{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:10px;color:var(--info)}
+
+/* throughput + tool mix */
+.pk .tpw{position:relative;flex:1;min-height:0}
+.pk .tp{width:100%;height:100%;display:block}
+.pk .tp .ar{fill:url(#tpg)} .pk .tp .ln{fill:none;stroke:var(--primary);stroke-width:2;stroke-linejoin:round}
+.pk .tp .av{stroke:color-mix(in srgb,var(--text4) 50%,transparent);stroke-width:1;stroke-dasharray:4 4}
+.pk .tpn{position:absolute;left:0;bottom:0;font-size:10px;color:var(--text4);font-variant-numeric:tabular-nums}
+.pk .bigr{font-size:22px;font-weight:600;color:var(--primary);font-variant-numeric:tabular-nums;line-height:1.1}
+.pk .mixw{display:flex;flex-direction:column;justify-content:center;height:100%;gap:12px}
+.pk .mix{display:flex;height:16px;border-radius:99px;overflow:hidden;gap:2px;
+  background:color-mix(in srgb,var(--border) 22%,transparent)}
+.pk .mix i{transition:width .5s cubic-bezier(.3,0,.2,1)}
+.pk .mixl{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--text3)}
+.pk .mixl span{display:flex;align-items:center;gap:6px}
+.pk .mixl em{width:10px;height:10px;border-radius:3px;flex:none;font-style:normal}
+.pk .mixl b{color:var(--text4);font-weight:400;font-variant-numeric:tabular-nums}
+
+/* the live feed */
+.pk .feedb{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.pk .fsearch{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex:none}
+.pk .fsearch .box{flex:1;min-width:0;padding:5px 11px;border-radius:.5rem;font-size:11px;color:var(--text4);
+  background:color-mix(in srgb,var(--bg3) 40%,transparent);
+  border:1px solid color-mix(in srgb,var(--border) 45%,transparent);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pk .fsearch .chip{color:var(--text4)}
+.pk .fsearch .chip.sel{color:var(--primary);background:color-mix(in srgb,var(--primary) 16%,transparent);
+  border-color:color-mix(in srgb,var(--primary) 50%,transparent)}
+/* Pinned to the newest line; older ones run off the top, so the top edge
+   fades rather than cutting a row through the middle. */
+.pk .frows{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden;gap:0;
+  -webkit-mask-image:linear-gradient(180deg,transparent,#000 9%);
+  mask-image:linear-gradient(180deg,transparent,#000 9%)}
+.pk .fr{position:relative;display:flex;align-items:center;gap:8px;padding:3px 6px 3px 12px;border-radius:.375rem;
+  font-size:11px;min-width:0;animation:frin .5s cubic-bezier(.2,.8,.3,1) both}
+@keyframes frin{from{opacity:0;transform:translateX(-12px)}}
+.pk .fr.noanim{animation:none}
+.pk .fr .lane{position:absolute;left:3px;top:4px;bottom:4px;width:3px;border-radius:99px}
+.pk .fr .ts{color:var(--text4);font-variant-numeric:tabular-nums;flex:none}
+.pk .fr .d{width:8px;height:8px;border-radius:50%;flex:none}
+.pk .fr .vb{flex:none;font-weight:500}
+.pk .fr .tool{flex:none;color:var(--info);background:color-mix(in srgb,var(--info) 14%,transparent);
+  border-color:transparent}
+.pk .fr .dt{min-width:0;flex:1;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pk .fr .cost{flex:none;color:var(--success)}
+.pk .fr .who{flex:none;max-width:120px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ══ THE PHONE ═════════════════════════════════════════════════════ */
+.pk .phone{position:relative;width:300px;margin:0 auto;z-index:1}
+.pk .hw{position:relative;padding:10px;border-radius:44px;
+  background:linear-gradient(150deg,#3b414c,#191d25 34%,#12151b 62%,#2e343f);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08),inset 0 1px 1px rgba(255,255,255,.2),
+    0 34px 56px -26px rgba(0,0,0,.92)}
+.pk .hw::before,.pk .hw::after{content:"";position:absolute;top:52px;bottom:52px;width:1.5px;border-radius:2px;
+  background:linear-gradient(180deg,transparent,rgba(255,255,255,.3),transparent)}
+.pk .hw::before{left:.5px} .pk .hw::after{right:.5px}
+.pk .key{position:absolute;right:-2.5px;width:3px;border-radius:3px;background:linear-gradient(180deg,#48505d,#2a2f39)}
+.pk .key.pw{top:116px;height:46px} .pk .key.vol{top:176px;height:78px}
+.pk .glass{position:relative;border-radius:34px;overflow:hidden;background:var(--bg);width:280px;height:606px}
+.pk .cam{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:10px;height:10px;border-radius:50%;
+  background:#010204;z-index:40}
+.pk .grip{position:absolute;bottom:7px;left:50%;transform:translateX(-50%);width:96px;height:3px;border-radius:3px;
+  background:rgba(255,255,255,.26);z-index:40}
+.pk .pk-combiner{position:absolute;inset:0;pointer-events:none;z-index:32;
+  background:radial-gradient(140% 120% at 50% 50%,transparent 56%,rgba(0,0,0,.45) 100%)}
+.pk .pk-combiner::before{content:"";position:absolute;inset:0;
+  background:linear-gradient(103deg,transparent 40%,rgba(255,255,255,.035) 48%,
+    rgba(255,255,255,.06) 50%,rgba(255,255,255,.035) 52%,transparent 60%)}
+.pk .pk-sweep{position:absolute;inset:0 auto 0 0;width:0;pointer-events:none;z-index:30;
+  background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--primary) 40%,transparent));
+  border-right:1px solid var(--primary)}
+.pk .pk-sweep.go{animation:pk-swp .34s cubic-bezier(.4,0,.2,1)}
+@keyframes pk-swp{0%{width:0;opacity:1}92%{width:100%;opacity:1}100%{width:100%;opacity:0}}
+/* The application is drawn at a real phone's 390px and reduced optically,
+   rather than redrawn small — so what you see is the real geometry. */
+.pk .vp{position:absolute;top:0;left:0;width:390px;height:844px;transform:scale(.71795);
+  transform-origin:top left;opacity:0;transition:opacity .4s .2s}
+.pk .on .vp{opacity:1}
+
+/* ══ THE APPLICATION ON THE PHONE ══════════════════════════════════
+   mobileUi.tsx / MobileNow.tsx / MobileDiff.tsx, at their real sizes.
+   The only edit: position:fixed becomes absolute, because these live
+   inside a drawn phone rather than inside a viewport.                  */
+.pk .mb{--tap:44px;--nav:64px;
+  --mb-line:color-mix(in srgb,var(--border) 34%,transparent);
+  --mb-card:color-mix(in srgb,var(--bg2) 70%,transparent);
+  --mb-edge:inset 0 1px 0 color-mix(in srgb,var(--primary-hover) 15%,transparent);
+  --mb-drop:0 12px 28px -18px rgba(0,0,0,.9);
+  position:absolute;inset:0;overflow:hidden;background:var(--bg);
+  display:flex;flex-direction:column;font-family:var(--mono)}
+.pk .mb-sky{position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:radial-gradient(120% 55% at 50% -12%,color-mix(in srgb,var(--primary) 13%,transparent),transparent 62%),
+    radial-gradient(80% 40% at 100% 100%,color-mix(in srgb,var(--border) 18%,transparent),transparent 60%)}
+.pk .mb-fig{font-variant-numeric:tabular-nums;font-weight:700;letter-spacing:-.045em;line-height:1}
+.pk .mb-tnum{font-variant-numeric:tabular-nums}
+.pk .mb-eyebrow{font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--text3);font-weight:600}
+.pk .mb-press{transition:transform .09s cubic-bezier(.2,.9,.3,1),background .14s,border-color .14s,opacity .14s}
+.pk .mb-press.act{transform:scale(.972)}
+.pk .mb-btn{min-height:46px;padding:0 16px;border-radius:13px;font-size:13px;display:inline-flex;align-items:center;
+  justify-content:center;gap:7px;border:1px solid color-mix(in srgb,var(--border) 50%,transparent);
+  color:var(--text2);background:transparent}
+.pk .mb-btn.sm{min-height:42px;padding:0 13px;font-size:11.5px;border-radius:11px}
+.pk .mb-btn.acc{background:var(--primary-hover);border-color:var(--primary-hover);color:var(--bg);font-weight:700;
+  box-shadow:0 6px 20px -8px var(--primary)}
+.pk .mb-btn.ok{background:var(--success);border-color:var(--success);color:#06231a;font-weight:700}
+.pk .mb-btn.no{color:var(--error);background:color-mix(in srgb,var(--error) 12%,transparent);
+  border-color:color-mix(in srgb,var(--error) 42%,transparent)}
+.pk .mb-btn.busy{opacity:.72}
+.pk .mb-row{display:flex;align-items:center;gap:12px;width:100%;padding:13px;border-radius:15px;min-height:58px;
+  background:var(--mb-card);border:1px solid color-mix(in srgb,var(--border) 32%,transparent);
+  box-shadow:var(--mb-edge);text-align:left}
+.pk .mb-row .i{min-width:0;flex:1}
+.pk .mb-row .i b{display:block;font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pk .mb-row .i span{display:block;font-size:10.5px;color:var(--text3);margin-top:3px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pk .mb-row .r{flex:none;font-size:11px;color:var(--text3);text-align:right}
+.pk .mb-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.pk .mb-dot.pulse{animation:mb-dp 2s ease-out infinite}
+@keyframes mb-dp{0%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 55%,transparent)}
+  100%{box-shadow:0 0 0 8px transparent}}
+.pk .mb-chip{font-size:10px;padding:2px 8px;border-radius:20px;border:1px solid currentColor;white-space:nowrap}
+/* The real strip scrolls horizontally; a hard-sliced pill reads as a bug,
+   so the edge fades to say "there is more this way". */
+.pk .mb-seg{display:flex;gap:7px;overflow:hidden;
+  -webkit-mask-image:linear-gradient(90deg,#000 86%,transparent);
+  mask-image:linear-gradient(90deg,#000 86%,transparent)}
+.pk .mb-seg button{flex:none;min-height:40px;padding:0 15px;border-radius:22px;font-size:12px;color:var(--text3);
+  border:1px solid color-mix(in srgb,var(--border) 36%,transparent);display:flex;align-items:center;gap:6px;
+  transition:all .2s cubic-bezier(.3,1.2,.5,1);background:transparent}
+.pk .mb-seg button[aria-pressed="true"]{color:var(--bg);background:var(--primary-hover);
+  border-color:var(--primary-hover);font-weight:700;box-shadow:0 4px 16px -6px var(--primary)}
+.pk .mb-sw{position:relative;width:42px;height:25px;border-radius:14px;flex:none;
+  background:color-mix(in srgb,var(--border) 52%,transparent);transition:background .2s}
+.pk .mb-sw::after{content:"";position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;
+  background:var(--text3);transition:transform .24s cubic-bezier(.3,1.5,.5,1),background .2s}
+.pk .mb-sw[data-on="1"]{background:color-mix(in srgb,var(--success) 58%,transparent)}
+.pk .mb-sw[data-on="1"]::after{transform:translateX(17px);background:var(--success)}
+.pk .mb-spin{width:13px;height:13px;border-radius:50%;flex:none;display:inline-block;
+  border:1.8px solid color-mix(in srgb,currentColor 26%,transparent);border-top-color:currentColor;
+  animation:mb-sp .6s linear infinite}
+@keyframes mb-sp{to{transform:rotate(360deg)}}
+
+.pk .mb-hd{display:flex;align-items:center;gap:9px;padding:14px 15px 10px;flex:none;position:relative;z-index:1}
+.pk .mb-hd .lg{font-family:var(--sans);font-size:17px;font-weight:700;letter-spacing:-.02em}
+.pk .mb-hd .lg i{font-style:normal;color:var(--primary)}
+.pk .mb-hd .st{margin-left:auto;font-size:10.5px;color:var(--text3);display:flex;align-items:center;gap:6px}
+.pk .mb-hd .gear{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;font-size:15px;
+  color:var(--text3)}
+/* The tab bar is fixed and floats over the column, so the column has to
+   reserve its height — otherwise the chat composer sits underneath it,
+   exactly when the keyboard is up and it matters most. */
+.pk .mb-main{flex:1;min-height:0;position:relative;z-index:1;overflow:hidden;
+  padding:14px 15px calc(var(--nav) + 22px)}
+
+/* Now: hero + queue, from MobileNow.tsx */
+.pk .mb-hero{position:relative;border-radius:20px;overflow:hidden;margin-bottom:16px;
+  background:linear-gradient(165deg,color-mix(in srgb,var(--bg3) 60%,transparent),
+    color-mix(in srgb,var(--bg2) 72%,transparent));
+  border:1px solid color-mix(in srgb,var(--border) 46%,transparent);box-shadow:var(--mb-edge),var(--mb-drop)}
+.pk .mb-hero::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--primary) 7%,transparent),transparent 42%)}
+.pk .mb-hero .in{position:relative;z-index:1;padding:17px 17px 0;display:flex;align-items:flex-end;gap:12px}
+.pk .mb-hero .n{font-size:50px;color:var(--text)}
+.pk .mb-hero.calm .n{font-size:38px;color:var(--success)}
+.pk .mb-hero .w{padding-bottom:7px;min-width:0}
+.pk .mb-hero .w b{display:block;font-size:14px;font-weight:600;line-height:1.25}
+.pk .mb-hero .w span{display:block;font-size:11.5px;color:var(--text3);margin-top:2px}
+.pk .mb-vitals{display:flex;align-items:flex-end;gap:3px;height:46px;margin:16px 17px 0;padding-bottom:7px;
+  position:relative;z-index:1;border-bottom:1px solid color-mix(in srgb,var(--border) 40%,transparent)}
+.pk .mb-vitals i{flex:1;height:14%;border-radius:2px 2px 0 0;
+  background:linear-gradient(180deg,var(--primary-hover),color-mix(in srgb,var(--primary) 26%,transparent));
+  box-shadow:0 0 10px -2px color-mix(in srgb,var(--primary) 60%,transparent);
+  transition:height .45s cubic-bezier(.3,0,.2,1)}
+.pk .mb-vitals i.idle{background:color-mix(in srgb,var(--border) 48%,transparent);height:10%;box-shadow:none}
+.pk .mb-vlabel{display:flex;align-items:center;gap:8px;padding:11px 17px 16px;font-size:10.5px;color:var(--text3);
+  position:relative;z-index:1}
+.pk .mb-vlabel b{color:var(--text2);font-weight:500}
+.pk .mb-vlabel .sp{flex:1}
+
+.pk .mb-item{position:relative;border-radius:18px;overflow:hidden;background:var(--mb-card);
+  border:1px solid color-mix(in srgb,var(--border) 38%,transparent);
+  box-shadow:var(--mb-edge),var(--mb-drop);animation:mb-rise .42s cubic-bezier(.2,.85,.25,1) backwards}
+@keyframes mb-rise{from{opacity:0;transform:translateY(14px) scale(.985)}}
+.pk .mb-item.gone{animation:mb-gone .44s cubic-bezier(.4,0,.2,1) forwards}
+@keyframes mb-gone{to{opacity:0;transform:translateX(46px) scale(.97);margin-bottom:-100px;max-height:0}}
+.pk .mb-item::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--text3)}
+.pk .mb-item.crit{border-color:color-mix(in srgb,var(--warning) 52%,transparent);
+  background:color-mix(in srgb,var(--warning) 10%,var(--bg2));
+  box-shadow:var(--mb-edge),0 14px 34px -18px color-mix(in srgb,var(--warning) 55%,#000)}
+.pk .mb-item.crit::before{width:5px;background:var(--warning)}
+.pk .mb-item.bad::before{background:var(--error)}
+.pk .mb-item.good::before{background:var(--success)}
+.pk .mb-item .ih{display:flex;align-items:baseline;gap:9px;padding:13px 14px 0 17px}
+.pk .mb-item .k{font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--text3);font-weight:600}
+.pk .mb-item.crit .k{color:var(--warning)}
+.pk .mb-item.bad .k{color:var(--error)}
+.pk .mb-item.good .k{color:var(--success)}
+.pk .mb-item .at{margin-left:auto;font-size:10.5px;color:var(--text3);white-space:nowrap}
+.pk .mb-item .t{padding:6px 14px 0 17px;font-size:14.5px;line-height:1.38;color:var(--text);text-wrap:balance}
+.pk .mb-item .s{padding:6px 14px 0 17px;font-size:11.5px;color:var(--text3);line-height:1.5}
+.pk .mb-item .code{margin:9px 14px 0 17px;padding:9px 11px;border-radius:9px;font-size:11px;color:var(--warning);
+  background:color-mix(in srgb,#000 40%,transparent);overflow-wrap:anywhere;
+  border-left:2px solid color-mix(in srgb,var(--warning) 55%,transparent)}
+.pk .mb-item .acts{display:flex;gap:9px;padding:13px 14px 14px 17px}
+.pk .mb-item .acts>*{flex:1;min-height:50px;border-radius:13px}
+.pk .mb-stack{display:flex;flex-direction:column;gap:12px}
+.pk .mb-empty{border-radius:20px;padding:36px 22px;text-align:center;
+  border:1px dashed color-mix(in srgb,var(--border) 45%,transparent);
+  background:color-mix(in srgb,var(--bg2) 40%,transparent)}
+.pk .mb-empty .g{font-size:25px;opacity:.7;margin-bottom:9px}
+.pk .mb-empty b{display:block;font-size:15px;font-weight:600}
+.pk .mb-empty span{display:block;font-size:12px;color:var(--text2);margin-top:7px;line-height:1.6}
+
+/* nav */
+.pk .mb-nav{position:absolute;left:0;right:0;bottom:0;z-index:20;display:flex;
+  background:color-mix(in srgb,var(--bg2) 94%,var(--bg));
+  border-top:1px solid color-mix(in srgb,var(--border) 48%,transparent)}
+.pk .mb-nav button{flex:1;min-height:var(--nav);display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:4px;font-size:10.5px;color:var(--text3);position:relative}
+.pk .mb-nav button .g{font-size:17px;line-height:1;transition:transform .3s cubic-bezier(.3,1.4,.5,1)}
+.pk .mb-nav button.on{color:var(--primary-hover)}
+.pk .mb-nav button.on .g{transform:translateY(-2px) scale(1.12)}
+.pk .mb-nav button.on::before{content:"";position:absolute;top:0;width:30px;height:2px;border-radius:0 0 3px 3px;
+  background:var(--primary-hover);box-shadow:0 0 12px var(--primary)}
+.pk .mb-nav .badge{position:absolute;top:10px;right:calc(50% - 23px);min-width:17px;height:17px;border-radius:9px;
+  font-size:9.5px;display:grid;place-items:center;padding:0 5px;font-weight:700;font-variant-numeric:tabular-nums;
+  background:var(--warning);color:#2a1d02;box-shadow:0 0 0 2px color-mix(in srgb,var(--bg2) 88%,transparent)}
+
+/* toasts — what happened, in the past tense, after it happened */
+.pk .mb-toasts{position:absolute;left:14px;right:14px;z-index:35;display:flex;flex-direction:column;gap:9px;
+  pointer-events:none;bottom:calc(var(--nav) + 14px)}
+.pk .mb-toast{border-radius:14px;padding:12px 15px;font-size:12.5px;display:flex;align-items:center;gap:10px;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--bg3) 80%,var(--bg2)),var(--bg2));
+  border:1px solid color-mix(in srgb,var(--primary) 46%,transparent);
+  box-shadow:0 16px 40px -16px #000,var(--mb-edge);animation:mb-tin .3s cubic-bezier(.2,1.2,.3,1)}
+.pk .mb-toast.out{animation:mb-tout .3s ease forwards}
+@keyframes mb-tin{from{transform:translateY(18px) scale(.94);opacity:0}}
+@keyframes mb-tout{to{transform:translateY(10px) scale(.96);opacity:0}}
+.pk .mb-toast .g{font-weight:700;font-size:14px;flex:none;color:var(--success)}
+.pk .mb-toast.bad .g{color:var(--error)}
+
+/* chat */
+.pk .mb-chat{display:flex;flex-direction:column;gap:10px;height:100%;min-height:0}
+.pk .mb-chat .ch{display:flex;align-items:center;gap:9px;flex:none}
+.pk .mb-chat .ch .i{min-width:0;flex:1}
+.pk .mb-chat .ch .i b{display:block;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.pk .mb-chat .ch .i span{display:block;font-size:10.5px;color:var(--text3);margin-top:2px}
+.pk .mb-chat .met{display:flex;gap:12px;font-size:10.5px;color:var(--text3);flex:none;
+  font-variant-numeric:tabular-nums}
+.pk .mb-conv{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;gap:10px;
+  overflow:hidden;padding-bottom:2px}
+.pk .bub{display:flex}
+.pk .bub.me{justify-content:flex-end}
+.pk .bub .in{max-width:86%;border-radius:16px;padding:10px 14px;font-size:13.5px;line-height:1.35;
+  background:color-mix(in srgb,var(--bg2) 70%,transparent);
+  border:1px solid color-mix(in srgb,var(--border) 32%,transparent)}
+.pk .bub.me .in{background:color-mix(in srgb,var(--primary) 16%,transparent);
+  border-color:color-mix(in srgb,var(--border) 45%,transparent)}
+.pk .bub .tools{font-size:10.5px;color:var(--text3);display:flex;flex-direction:column;gap:2px;padding-bottom:6px}
+.pk .bub .car{display:inline-block;margin-left:2px;animation:blink 1s steps(2) infinite}
+@keyframes blink{50%{opacity:.15}}
+.pk .mb-comp{flex:none;display:flex;align-items:flex-end;gap:8px;padding-top:8px;
+  border-top:1px solid color-mix(in srgb,var(--border) 30%,transparent)}
+.pk .mb-comp .ta{flex:1;min-height:48px;border-radius:12px;padding:13px 12px;font-size:16px;color:var(--text);
+  background:color-mix(in srgb,var(--bg2) 80%,transparent);
+  border:1px solid color-mix(in srgb,var(--border) 50%,transparent)}
+.pk .mb-comp .ta.ph{color:var(--text3)}
+.pk .mb-comp .send{min-height:48px;padding:0 16px;border-radius:12px;font-size:14px;font-weight:500;
+  display:grid;place-items:center;color:var(--primary-hover);
+  background:color-mix(in srgb,var(--primary) 18%,transparent);
+  border:1px solid color-mix(in srgb,var(--primary) 45%,transparent)}
+.pk .mb-comp .send.stop{color:var(--error);background:color-mix(in srgb,var(--error) 14%,transparent);
+  border-color:color-mix(in srgb,var(--error) 40%,transparent)}
+
+/* pushed screens */
+.pk .mb-screen{position:absolute;inset:0;z-index:25;background:var(--bg);display:flex;flex-direction:column;
+  transform:translateX(100%);transition:transform .3s cubic-bezier(.32,.72,0,1)}
+.pk .mb-screen.on{transform:none}
+/* The app pads by env(safe-area-inset-top); a drawn phone has a drawn
+   camera, so the inset here is the room that leaves. */
+.pk .mb-screen .hd{display:flex;align-items:center;gap:10px;padding:24px 13px 10px;flex:none;
+  border-bottom:1px solid var(--mb-line);background:color-mix(in srgb,var(--bg) 84%,transparent)}
+.pk .mb-screen .hd .back{min-height:42px;min-width:42px;display:grid;place-items:center;font-size:20px;
+  color:var(--primary-hover);margin-left:-6px}
+.pk .mb-screen .hd .t{min-width:0;flex:1}
+.pk .mb-screen .hd .t b{display:block;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.pk .mb-screen .hd .t span{display:block;font-size:10.5px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.pk .mb-screen .bd{flex:1;overflow:hidden;padding:14px 15px 20px;display:flex;flex-direction:column;gap:10px}
+.pk .mb-screen .ft{border-top:1px solid var(--mb-line);flex:none;
+  background:color-mix(in srgb,var(--bg2) 88%,transparent);padding:11px 15px;display:flex;gap:9px;
+  align-items:center}
+
+/* the diff, from MobileDiff.tsx */
+.pk .mb-diff{font-size:11.5px;line-height:1.62;border-radius:14px;overflow:hidden;
+  border:1px solid color-mix(in srgb,var(--border) 32%,transparent);
+  background:color-mix(in srgb,#000 30%,transparent)}
+.pk .mb-dl{display:flex;width:100%;text-align:left;align-items:flex-start}
+.pk .mb-dl .g{flex:none;width:34px;padding:1px 7px 1px 0;text-align:right;color:var(--text4);opacity:.5;
+  user-select:none;font-size:10px;font-variant-numeric:tabular-nums}
+.pk .mb-dl .s{flex:none;width:12px;opacity:.9}
+.pk .mb-dl .c{flex:1;min-width:0;padding-right:9px;white-space:pre-wrap;overflow-wrap:break-word;
+  text-indent:-1.6ch;padding-left:1.6ch}
+.pk .mb-dl.add{background:color-mix(in srgb,var(--success) 13%,transparent)}
+.pk .mb-dl.add .g,.pk .mb-dl.add .s{color:var(--success);opacity:.95}
+.pk .mb-dl.del{background:color-mix(in srgb,var(--error) 12%,transparent)}
+.pk .mb-dl.del .g,.pk .mb-dl.del .s{color:var(--error);opacity:.95}
+.pk .mb-dl.hdr{background:color-mix(in srgb,var(--primary) 10%,transparent);color:var(--text4);
+  font-size:10.5px;padding:4px 0}
+.pk .kw{color:#f472b6} .pk .nm2{color:#fbbf24} .pk .fx{color:#a78bfa} .pk .ty{color:#c4b5fd}
+.pk .mb-note{font-size:10.5px;line-height:1.6;color:var(--text3)}
+.pk .mb-note b{color:var(--text2)}
+.pk .logs{border-radius:12px;padding:11px 12px;font-size:11px;line-height:1.7;white-space:pre-wrap;
+  background:color-mix(in srgb,#000 42%,transparent);
+  border:1px solid color-mix(in srgb,var(--border) 32%,transparent);color:var(--text3);flex:1;min-height:0;
+  overflow:hidden}
+.pk .logs .e{color:var(--error);font-weight:700} .pk .logs .w{color:var(--warning)}
+/* a tap, drawn where the thumb went */
+.pk .tap{position:absolute;width:34px;height:34px;border-radius:50%;pointer-events:none;z-index:36;
+  border:2px solid var(--primary-hover);transform:translate(-50%,-50%) scale(.4);opacity:0;
+  animation:tapring .55s ease-out}
+@keyframes tapring{0%{opacity:.9;transform:translate(-50%,-50%) scale(.4)}
+  100%{opacity:0;transform:translate(-50%,-50%) scale(1.5)}}
+
+/* ── option-select row + caption ──────────────────────────────────── */
+.pk .osb{display:grid;grid-template-columns:repeat(6,1fr);gap:7px;margin-top:38px}
+.pk .osb button{position:relative;padding:11px 8px 12px;text-align:center;clip-path:var(--cut6);
+  border:1px solid color-mix(in srgb,var(--primary) 26%,transparent);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--primary) 5%,transparent),transparent 62%);
+  transition:border-color .2s,background .2s}
+.pk .osb button:hover{border-color:color-mix(in srgb,var(--primary) 60%,transparent)}
+.pk .osb button:focus-visible{outline:none;border-color:var(--primary)}
+.pk .osb button b{display:block;font-size:13px;color:var(--primary);font-weight:700;margin-bottom:4px}
+.pk .osb button span{display:block;font-size:8.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--text4)}
+.pk .osb button[aria-selected="true"]{background:var(--primary);border-color:var(--primary);
+  box-shadow:0 0 18px -2px color-mix(in srgb,var(--primary) 70%,transparent)}
+.pk .osb button[aria-selected="true"] b,.pk .osb button[aria-selected="true"] span{color:var(--bg)}
+.pk .osb .dw{position:absolute;left:0;bottom:0;height:2px;width:0;background:var(--bg);opacity:.45}
+.pk .osb button[aria-selected="true"] .dw{animation:drain var(--dwell,6s) linear forwards}
+@keyframes drain{from{width:0}to{width:100%}}
+.pk.pk-halt .osb button[aria-selected="true"] .dw{animation-play-state:paused}
+
+.pk .cc{margin-top:22px;border-top:1px solid color-mix(in srgb,var(--primary) 16%,transparent);padding-top:18px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:28px;align-items:start}
+.pk .cc h3{font-family:var(--sans);font-size:19px;font-weight:650;letter-spacing:-.018em;margin-bottom:8px;
+  text-wrap:balance}
+.pk .cc p{font-size:13px;line-height:1.75;color:var(--text3);max-width:66ch}
+.pk .cc .pk-keys{color:var(--text4);white-space:nowrap;padding-top:4px}
+
+.pk .cc button{color:var(--primary);border:1px solid color-mix(in srgb,var(--primary) 34%,transparent);
+  padding:5px 10px;clip-path:var(--cut6);margin-left:10px}
+.pk .cc button:hover{background:color-mix(in srgb,var(--primary) 12%,transparent)}
+
+/* ── the power-up ─────────────────────────────────────────────────── */
+.pk .pk-rail{transform:scaleX(0);transform-origin:left;transition:transform .72s cubic-bezier(.3,0,.2,1)}
+.pk.pk-live .pk-rail{transform:none}
+.pk .pk-rail::before{opacity:0;transition:opacity .5s .5s}
+.pk.pk-live .pk-rail::before{opacity:1}
+.pk .wlab{opacity:0;transform:translate(-50%,6px);transition:opacity .45s .55s,transform .5s .55s}
+.pk.pk-live .wlab{opacity:1;transform:translateX(-50%)}
+.pk .stage{opacity:0;transform:translateY(9px)}
+.pk.pk-live .stage{opacity:1;transform:none;
+  transition:opacity .45s var(--d,0s),transform .5s var(--d,0s) cubic-bezier(.2,.9,.25,1)}
+.pk .phone{opacity:0;transform:translateY(14px) scale(.985);
+  transition:opacity .55s .5s,transform .6s .5s cubic-bezier(.2,.9,.25,1)}
+.pk.pk-live .phone{opacity:1;transform:none}
+.pk .osb button{opacity:0;transform:translateY(9px)}
+.pk.pk-live .osb button{opacity:1;transform:none;
+  transition:opacity .4s var(--in),transform .45s var(--in) cubic-bezier(.2,.9,.25,1),
+    border-color .2s,background .2s}
+.pk .cc{opacity:0;transform:translateY(8px);transition:opacity .5s 1.5s,transform .55s 1.5s}
+.pk.pk-live .cc{opacity:1;transform:none}
+
+@media(max-width:1180px){
+  .pk .rig{grid-template-columns:1fr;justify-items:center}
+  .pk .wire{height:110px;width:2px;justify-self:center}
+  .pk .pk-rail{left:50%;right:auto;top:0;bottom:0;height:auto;width:1px;transform:translateX(-50%) scaleY(0);
+    transform-origin:top;
+    background:linear-gradient(180deg,transparent,color-mix(in srgb,var(--primary) 42%,transparent) 15%,
+      color-mix(in srgb,var(--primary) 42%,transparent) 85%,transparent)}
+  .pk.pk-live .pk-rail{transform:translateX(-50%)}
+  .pk .pk-rail::before{display:none}
+  .pk .wlab{top:50%;left:24px;transform:translateY(-50%);text-align:left}
+  .pk.pk-live .wlab{transform:translateY(-50%)}
+  .pk .pkt,.pk .mote{left:50%;top:auto}
+  .pk .pkt.out{animation:crossv 1s cubic-bezier(.35,0,.3,1)}
+  .pk .pkt.back{animation:crossvback 1s cubic-bezier(.35,0,.3,1)}
+  .pk .mote{animation:motev 1.5s linear forwards}
+  .pk .mote.rev{animation:motevrev 1.4s linear forwards}
+  @keyframes crossv{0%{top:2%;opacity:0}12%{opacity:1}88%{opacity:1}100%{top:98%;opacity:0}}
+  @keyframes crossvback{0%{top:98%;opacity:0}12%{opacity:1}88%{opacity:1}100%{top:2%;opacity:0}}
+  @keyframes motev{0%{top:1%;opacity:0}12%{opacity:.72}82%{opacity:.72}100%{top:99%;opacity:0}}
+  @keyframes motevrev{0%{top:99%;opacity:0}12%{opacity:.72}82%{opacity:.72}100%{top:1%;opacity:0}}
+  .pk .end{width:100%;max-width:780px}
+  /* The fixed row track has to go with the fixed columns, or the stacked
+     panels inherit a height meant for a side-by-side cockpit. */
+  .pk .cockpit{grid-template-columns:1fr;grid-template-rows:auto}
+  .pk .rcol{grid-template-rows:300px}
+  .pk .fleetb{height:400px}
+  .pk .osb{grid-template-columns:repeat(3,1fr)}
+  .pk .cc{grid-template-columns:1fr}
+  .pk{padding:64px 18px 84px}
+}
+@media(max-width:620px){
+  .pk .kpirow{grid-template-columns:1fr}
+  /* Throughput and tool mix stack, so the track that held them side by side
+     has to hold both of them one above the other. */
+  .pk .rcol{grid-template-rows:300px}
+  .pk .fleetb{height:440px}
+}
+@media(prefers-reduced-motion:reduce){
+  .pk *{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+  .pk .pk-brk{opacity:.55;transform:none} .pk .vp{opacity:1}
+  .pk .pk-rail{transform:none} .pk .pk-rail::before,.pk .wlab,.pk .stage,.pk .phone,.pk .osb button,.pk .cc{opacity:1;transform:none}
+}
 </style>
 
 <div class="stagewrap">
@@ -1144,6 +1779,1063 @@
   <div class="c"><h3>Weapons free</h3><p>Not just a display. Diffs, commits, <b>pull requests merged</b>, docker, a real shell, chat. <b>One key each.</b></p></div>
   <div class="c"><h3>On your airframe</h3><p>SQLite on your disk. Loopback by default. <b>Nothing phones home.</b> The app ships its own server.</p></div>
 </div>
+
+<!-- ══════════════ AWAY FROM THE DESK ══════════════ -->
+<section class="pk rise" id="pkPocket">
+  <span class="eyebrow">Away from the desk</span>
+  <h2>Leave the desk. <em>Keep the controls.</em></h2>
+  <p class="lede">
+    The cockpit stays where it is — a terminal and a hunk-level diff are not things anybody drives with a thumb.
+    <b>The link comes with you.</b> Your machine keeps streaming: every tool call, every token, every dollar.
+    Most of it you never need to see. The part that stops and waits for a person leaves the desk, crosses, and
+    lands in your hand — and your answer crosses back.
+  </p>
+
+  <div class="rig" id="pkRig">
+    <!-- ── the desk ───────────────────────────────────────────────── -->
+    <div class="end" id="pkDeskEnd">
+      <span class="pk-brk tl"></span><span class="pk-brk tr"></span><span class="pk-brk bl"></span><span class="pk-brk br"></span>
+      <span class="cap up">The desk · localhost:4000</span>
+
+      <div class="deck">
+        <div class="kpirow stage" style="--d:.30s">
+          <div class="panel hero1">
+            <div class="grow">
+              <div class="panel-eyebrow">Spend · this window</div>
+              <div class="big" id="pkKSpend">$0.00</div>
+              <div class="sub" id="pkKTok">0 tokens · 0k cached</div>
+            </div>
+            <svg class="spark" viewBox="0 0 104 40" preserveAspectRatio="none" aria-hidden="true">
+              <polygon id="pkSpA" fill="color-mix(in srgb,var(--success) 16%,transparent)" points=""></polygon>
+              <polyline id="pkSpL" fill="none" stroke="var(--success)" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" points=""></polyline>
+              <circle id="pkSpD" r="2.4" fill="var(--success)" cx="0" cy="0"></circle>
+            </svg>
+            <span class="vrule"></span>
+            <div class="hring">
+              <svg class="pk-ring" viewBox="0 0 36 36" aria-hidden="true">
+                <circle class="bgc" cx="18" cy="18" r="15.5"></circle>
+                <circle class="fgc" id="pkRingArc" cx="18" cy="18" r="15.5" stroke-dasharray="97.4 97.4"></circle>
+                <text x="18" y="22.5" id="pkRingN">100</text>
+              </svg>
+              <span class="w">Health<b id="pkKHealth">All nominal</b></span>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="cellgrid p3">
+              <div class="cell"><div class="panel-eyebrow">Working</div>
+                <div class="n" id="pkKWorking" style="color:var(--success)">3</div>
+                <div class="u">Live agents</div></div>
+              <div class="cell"><div class="panel-eyebrow">Events / min</div>
+                <div class="n" id="pkKEpm" style="color:var(--info)">0</div>
+                <div class="u">Throughput</div></div>
+              <div class="cell"><div class="panel-eyebrow">Tools run</div>
+                <div class="n" id="pkKTools">0</div>
+                <div class="u" id="pkKEvents">0 events</div></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="cellgrid p2" style="flex:1">
+              <div class="scell" id="pkCFailed" style="--tone:var(--error)"><span class="d"></span>
+                <div><div class="panel-eyebrow">Failed</div><div class="n" id="pkKFailed">0</div></div></div>
+              <div class="scell" id="pkCWaiting" style="--tone:var(--warning)"><span class="d"></span>
+                <div><div class="panel-eyebrow">Waiting</div><div class="n" id="pkKWaiting">0</div></div></div>
+            </div>
+            <div class="uprow">Uptime <b id="pkKUp">04:12:00</b> · <span id="pkKTracked">4</span> sessions tracked</div>
+          </div>
+        </div>
+
+        <div class="cockpit stage" style="--d:.42s">
+          <section class="panel">
+            <div class="panel-h">
+              <div><div class="panel-eyebrow">Sessions</div><div class="panel-title">Every agent session</div></div>
+              <div class="rt"><span class="t-dim2" style="font-size:10px" id="pkKSess">4 live · 4 projects</span></div>
+            </div>
+            <div class="panel-b fleetb" id="pkDeskRows"></div>
+          </section>
+
+          <div class="rcol">
+            <div class="charts">
+              <section class="panel">
+                <div class="panel-h">
+                  <div><div class="panel-eyebrow">Throughput</div>
+                    <div class="panel-title">How busy the fleet is</div></div>
+                  <div class="rt"><div class="bigr" id="pkKPs">0.00</div>
+                    <div class="t-dim2" style="font-size:10px">events / sec · peak <span id="pkKPeak">0</span>/s</div></div>
+                </div>
+                <div class="panel-b tpw">
+                  <svg class="tp" id="pkTp" viewBox="0 0 240 96" preserveAspectRatio="none" aria-hidden="true">
+                    <defs><linearGradient id="pkTpg" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="var(--primary)" stop-opacity=".55"></stop>
+                      <stop offset="100%" stop-color="var(--primary)" stop-opacity="0"></stop>
+                    </linearGradient></defs>
+                    <polygon class="ar" id="pkTpA" points=""></polygon>
+                    <polyline class="ln" id="pkTpL" points=""></polyline>
+                    <line class="av" id="pkTpAvg" x1="0" x2="240" y1="80" y2="80"></line>
+                  </svg>
+                  <span class="tpn" id="pkTpNote">dashed = avg 0.00/s · last 60s</span>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-h">
+                  <div><div class="panel-eyebrow">Tool mix</div>
+                    <div class="panel-title">What the fleet is doing</div></div>
+                  <div class="rt t-dim2" style="font-size:10px"><span id="pkKRuns">0</span> runs</div>
+                </div>
+                <div class="panel-b mixw">
+                  <div class="mix" id="pkMix"></div>
+                  <div class="mixl" id="pkMixl"></div>
+                </div>
+              </section>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="feedwrap stage" style="--d:.6s">
+          <section class="panel">
+            <div class="panel-h">
+              <div><div class="panel-eyebrow">Live</div><div class="panel-title">Live events</div></div>
+              <div class="rt"><span class="chip t-dim" style="font-size:10px">⛶ Expand</span></div>
+            </div>
+            <div class="panel-b feedb">
+              <div class="fsearch">
+                <span class="box">Search events — type to filter (regex ok, e.g. tool.*fail)</span>
+                <span class="chip sel">All</span><span class="chip">Tools</span><span class="chip">Alerts</span>
+              </div>
+              <div class="frows" id="pkFeed"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── the wire ───────────────────────────────────────────────── -->
+    <div class="wire" id="pkWire">
+      <span class="pk-rail"></span>
+      <span class="wlab up"><b id="pkWireN">Link</b>
+        <span class="rate"><b id="pkWRate">0.0</b> ev/s · <b id="pkWTotal">0</b> today</span></span>
+      <span class="pkt" id="pkPkt"><i></i><span id="pkPktT"></span></span>
+    </div>
+
+    <!-- ── the hand ───────────────────────────────────────────────── -->
+    <div class="end" id="pkHandEnd">
+      <span class="pk-brk tl"></span><span class="pk-brk tr"></span><span class="pk-brk bl"></span><span class="pk-brk br"></span>
+      <span class="cap up" style="left:auto;right:20px">In your hand</span>
+      <div class="phone">
+        <div class="hw">
+          <span class="key pw"></span><span class="key vol"></span>
+          <div class="glass" id="pkGlass">
+            <span class="cam"></span><span class="grip"></span>
+            <!-- A drawn phone: its buttons are pictures of buttons. The prose
+                 under the controls carries the same information, and the OSB
+                 row below is the part that really is operable. -->
+            <div class="vp" aria-hidden="true"><div class="mb" id="pkMb"></div></div>
+            <span class="pk-sweep" id="pkSweep"></span><span class="pk-combiner"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="osb" id="pkOsb" role="tablist" aria-label="What crosses the link"></div>
+
+  <div class="cc">
+    <div><h3 id="pkCcT"></h3><p id="pkCcB"></p></div>
+    <div class="pk-keys up">
+      Press <span class="kk">1</span>–<span class="kk">6</span> or <span class="kk">←</span><span class="kk">→</span>
+      <button id="pkPp" class="up">Pause</button>
+    </div>
+  </div>
+</section>
+
+<script>
+(function(){
+"use strict";
+const pkEl = document.getElementById("pkPocket");
+if (!pkEl) return;
+/* ══ the stream ════════════════════════════════════════════════════
+   One emitter. The KPIs, the throughput chart, the session cards, the
+   tool-mix bar, the live feed, the motes on the wire and the phone's own
+   vitals are all views of it. Nothing runs on its own timer, because two
+   timers is how two instruments start disagreeing.                     */
+
+const SESSIONS = [
+  { app:"shop-api", model:"Opus", worktree:"pricing", st:"working", subs:2,
+    tools:212, tok:486000, cost:18.42, seen:3, errs:0,
+    files:["src/services/pricing.ts","src/lib/money.ts","test/pricing.test.ts","scripts/backfill_orders_2024.ts"],
+    cmds:["bun test","bun run typecheck","git diff --stat"],
+    finds:["applyCoupon","round2","MIGRATION_AT"] },
+  { app:"agentglass", model:"Sonnet", worktree:null, st:"working", subs:0,
+    tools:168, tok:402000, cost:11.07, seen:1, errs:0,
+    files:["web/src/mobile/MobileNow.tsx","web/src/mobile/nowQueue.ts","server/src/routes/prs.ts"],
+    cmds:["bun test web/test","bunx tsc --noEmit","bun run lint"],
+    finds:["containerIsWrong","prAssetUrl","QUIET_MS"] },
+  { app:"inventory-svc", model:"Opus", worktree:null, st:"working", subs:0,
+    tools:141, tok:297000, cost:9.86, seen:6, errs:0,
+    files:["app/reconcile.py","app/models/stock.py","tests/test_reconcile.py"],
+    cmds:["pytest -q","ruff check .","docker compose ps"],
+    finds:["reconcile_batch","OversoldError"] },
+  { app:"shop-web", model:"Haiku", worktree:null, st:"idle", subs:0,
+    tools:74, tok:118000, cost:2.31, seen:214, errs:0,
+    files:["app/cart/page.tsx","components/PriceTag.tsx"], cmds:["bun run build"], finds:["formatPrice"] },
+];
+SESSIONS.forEach((s) => { s.spark = Array.from({length:14}, () => Math.random()*.4+.15); });
+
+const TOOLS = [
+  { n:"Read", w:30 }, { n:"Edit", w:22 }, { n:"Bash", w:17 }, { n:"Grep", w:12 },
+  { n:"Write", w:8 }, { n:"Glob", w:6 }, { n:"Task", w:3 }, { n:"WebFetch", w:2 },
+];
+const RAMP = ["#a78bfa","#f472b6","#34d399","#60a5fa","#fbbf24","#22d3ee"];
+const OTHER = "color-mix(in srgb,var(--text4) 55%,transparent)";
+const TOP = 6;
+/** DOT_COLOR and the friendly verbs, from lib/labels.ts. */
+const VERB = { post:{v:"Tool finished",c:"#34d399",d:"#34d399"}, pre:{v:"Running a tool",c:"#a78bfa",d:"#a78bfa"},
+  fail:{v:"Tool failed",c:"#f87171",d:"#f87171"}, stop:{v:"Turn complete",c:"#94a3b8",d:"#64748b"},
+  perm:{v:"Needs your approval",c:"#fbbf24",d:"#fbbf24"} };
+
+const S = {
+  events:48210, tools:4812, errors:0, cost:591.4, tokens:1243000, cached:812000,
+  up:4*3600+12*60,
+  counts:new Map(TOOLS.map((t) => [t.n, Math.round(t.w*21)])),
+  tp:Array.from({length:60}, () => 1+Math.random()*2.6),
+  spend:Array.from({length:24}, (_,i) => .6+i*.11+Math.random()*.5),
+  sec:0, feed:[],
+};
+
+const pickW = (l) => { let r = Math.random()*l.reduce((a,x)=>a+x.w,0); for (const x of l){ r-=x.w; if (r<=0) return x; } return l[l.length-1]; };
+const rnd = (a) => a[Math.floor(Math.random()*a.length)];
+/** hashColor from lib/format.ts — the per-session lane colour. */
+function hashColor(s){ let h=0; for (let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))|0; return `hsl(${((h%360)+360)%360} 70% 65%)`; }
+
+function detailFor(sess, tool){
+  if (tool === "Bash") return rnd(sess.cmds);
+  if (tool === "Grep" || tool === "Glob") return rnd(sess.finds);
+  if (tool === "Task") return "explore subagent";
+  if (tool === "WebFetch") return "docs.anthropic.com/en/api";
+  return rnd(sess.files);
+}
+const clockStr = () => { const h = (1 + Math.floor(S.up/3600)) % 24;
+  return [h, Math.floor(S.up/60)%60, S.up%60].map((v)=>String(v).padStart(2,"0")).join(":"); };
+
+function emit(){
+  // Named `active`, not `live`: `live` is the module-level "the section has
+  // been acquired" flag that mote() reads, and shadowing it here is one
+  // careless edit away from a bug that only shows up off-screen.
+  const active = SESSIONS.filter((s) => s.st === "working");
+  if (!active.length) return;
+  const sess = pickW(active.map((s)=>({...s,w:s.tools,ref:s}))).ref;
+  const tool = pickW(TOOLS).n;
+  const tok = 300+Math.floor(Math.random()*2400);
+  const cost = tok*0.0000042*(sess.model==="Opus"?3.4:sess.model==="Sonnet"?1:.28);
+  const det = detailFor(sess, tool);
+
+  S.events += 2; S.tools += 1; S.tokens += tok; S.cached += Math.floor(tok*.62);
+  S.cost += cost; S.sec += 2; S.spend[S.spend.length-1] += cost;
+  S.counts.set(tool, (S.counts.get(tool)||0)+1);
+
+  sess.tools += 1; sess.tok += tok; sess.cost += cost; sess.seen = 0;
+  sess.act = tool + " · " + det;
+  sess.spark.shift(); sess.spark.push(.25+Math.random()*.75);
+
+  pushFeed({ k:"post", tool, det, app:sess.app, cost });
+  mote(false);
+}
+function emitError(sess, det){
+  S.events += 1; S.errors += 1; S.sec += 1;
+  if (sess) { sess.errs += 1; sess.seen = 0; }
+  pushFeed({ k:"fail", tool:"Bash", det:det||"exit status 1", app:sess?sess.app:"—", cost:0 });
+  mote(true);
+}
+/**
+ * Append one row; drop the oldest.
+ *
+ * Rebuilding the whole list on every event restarted all thirteen entry
+ * animations at once, so the feed sat permanently mid-fade — thirteen rows
+ * at 0.69 opacity, which reads as an empty panel. Only the new line is new,
+ * so only the new line animates.
+ */
+function pushFeed(r){
+  r.ts = clockStr();
+  S.feed.push(r);
+  if (S.feed.length > FEED_MAX) S.feed.shift();
+  if (!feedEl) return;
+  feedEl.insertAdjacentHTML("beforeend", feedRow(r));
+  while (feedEl.children.length > FEED_MAX) feedEl.removeChild(feedEl.firstElementChild);
+}
+const FEED_MAX = 13;
+
+/* ══ painting ═════════════════════════════════════════════════════ */
+const $ = (id) => document.getElementById(id);
+const mbEl = $("pkMb"), glassEl = $("pkGlass"), sweepEl = $("pkSweep");
+const rigEl = $("pkRig"), deskEnd = $("pkDeskEnd"), handEnd = $("pkHandEnd"), wireEl = $("pkWire");
+const deskRows = $("pkDeskRows"), feedEl = $("pkFeed"), osbEl = $("pkOsb");
+const pktEl = $("pkPkt"), pktT = $("pkPktT"), wireN = $("pkWireN");
+const ccT = $("pkCcT"), ccB = $("pkCcB"), ppEl = $("pkPp");
+
+const usd = (n) => "$" + n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const int = (n) => Math.round(n).toLocaleString("en-US");
+const ktok = (n) => n>=1e6 ? (n/1e6).toFixed(2)+"M" : Math.round(n/1000)+"k";
+const clock = (s) => [Math.floor(s/3600), Math.floor(s/60)%60, s%60].map((v)=>String(v).padStart(2,"0")).join(":");
+const ago = (s) => s<5 ? "now" : s<60 ? s+"s ago" : Math.floor(s/60)+"m ago";
+
+function paintKpis(){
+  $("pkKSpend").textContent = usd(S.cost);
+  $("pkKTok").textContent = int(S.tokens)+" tokens · "+ktok(S.cached)+" cached";
+  $("pkKTools").textContent = int(S.tools);
+  $("pkKEvents").textContent = int(S.events)+" events";
+
+  const working = SESSIONS.filter((s)=>s.st==="working").length;
+  const waiting = SESSIONS.filter((s)=>s.st==="waiting").length;
+  $("pkKWorking").textContent = working;
+  $("pkKFailed").textContent = int(S.errors);
+  $("pkKWaiting").textContent = waiting;
+  $("pkCFailed").classList.toggle("hot", S.errors>0);
+  $("pkCWaiting").classList.toggle("hot", waiting>0);
+  $("pkKEpm").textContent = int(S.tp.reduce((a,b)=>a+b,0));
+
+  const health = S.tools>0 ? Math.max(0, Math.round((1 - S.errors/S.tools)*100)) : 100;
+  const C = 2*Math.PI*15.5, arc = $("pkRingArc");
+  arc.setAttribute("stroke-dasharray", (C*health/100).toFixed(1)+" "+C.toFixed(1));
+  const hc = health>=80 ? "var(--success)" : health>=50 ? "var(--warning)" : "var(--error)";
+  arc.setAttribute("stroke", hc);
+  $("pkRingN").textContent = health;
+  const hl = $("pkKHealth");
+  hl.textContent = health>=80 ? "All nominal" : health>=50 ? "Degraded" : "Critical";
+  hl.style.color = hc;
+
+  $("pkKSess").textContent = working+" live · "+SESSIONS.length+" projects";
+  $("pkKTracked").textContent = SESSIONS.length;
+  $("pkKUp").textContent = clock(S.up);
+
+  const w=104,h=40,mx=Math.max(...S.spend,1e-9),step=w/(S.spend.length-1);
+  const pts = S.spend.map((v,i)=>[i*step, h-(v/mx)*(h-6)-3]);
+  const line = pts.map(([x,y])=>x.toFixed(1)+","+y.toFixed(1)).join(" ");
+  $("pkSpL").setAttribute("points", line);
+  $("pkSpA").setAttribute("points", line+" "+w+","+h+" 0,"+h);
+  $("pkSpD").setAttribute("cx", pts[pts.length-1][0].toFixed(1));
+  $("pkSpD").setAttribute("cy", pts[pts.length-1][1].toFixed(1));
+
+  // The phone's footer line is the same two numbers, from the same store.
+  const hw = q("#hWork"), hs = q("#hSpend");
+  if (hw) hw.textContent = working+" working";
+  if (hs) hs.textContent = usd(S.cost)+" today";
+}
+
+function paintThroughput(){
+  const W=240,H=96,n=S.tp.length;
+  const peak = Math.max(...S.tp,1), avg = S.tp.reduce((a,b)=>a+b,0)/n, step = W/(n-1);
+  const pts = S.tp.map((v,i)=>[i*step, H-(v/(peak*1.12))*(H-8)-4]);
+  const line = pts.map(([x,y])=>x.toFixed(1)+","+y.toFixed(1)).join(" ");
+  $("pkTpL").setAttribute("points", line);
+  $("pkTpA").setAttribute("points", line+" "+W+","+H+" 0,"+H);
+  const ay = H-(avg/(peak*1.12))*(H-8)-4;
+  $("pkTpAvg").setAttribute("y1", ay.toFixed(1)); $("pkTpAvg").setAttribute("y2", ay.toFixed(1));
+  $("pkKPs").textContent = (S.tp.slice(-3).reduce((a,b)=>a+b,0)/3).toFixed(2);
+  $("pkKPeak").textContent = Math.round(peak);
+  $("pkTpNote").textContent = "dashed = avg "+avg.toFixed(2)+"/s · last 60s";
+  $("pkWRate").textContent = (S.tp.slice(-3).reduce((a,b)=>a+b,0)/3).toFixed(1);
+  $("pkWTotal").textContent = int(S.events);
+
+  // The phone's vitals are this buffer, downsampled — one lit slot per live
+  // agent, and the lit count follows the fleet rather than the render that
+  // drew it, so a session waking up lights a bar.
+  const all = mbEl.querySelectorAll(".mb-vitals i");
+  if (all.length){
+    const wk = SESSIONS.filter((s)=>s.st==="working").length;
+    const k = Math.max(1, Math.floor(n/Math.max(1,wk)));
+    all.forEach((b,i)=>{
+      if (i >= wk){ b.classList.add("idle"); b.style.height = ""; return; }
+      b.classList.remove("idle");
+      const sl = S.tp.slice(i*k, i*k+k);
+      b.style.height = Math.max(14, Math.round((sl.reduce((a,x)=>a+x,0)/(sl.length||1)/peak)*100))+"%";
+    });
+  }
+}
+
+const RANK = { working:0, waiting:1, errored:2, idle:3 };
+
+/**
+ * Structure when it changes, values every tick.
+ *
+ * Rebuilding the whole list once a second restarted the working dot's 1.6s
+ * ping ring on every rebuild, so the pulse never got past its opening frame —
+ * and sorting on `seen`, which resets to zero on every event, reshuffled the
+ * cards continuously. The order is now status then name, so it only moves when
+ * a session's state actually moves, and the numbers are patched in place.
+ */
+let sessSig = "";
+const cardHtml = (s) => `
+    <div class="sc ${s.st}" data-app="${s.app}">
+      <span class="rl"></span>
+      <div class="t1">
+        <span class="dot"></span>
+        <span class="nm">${s.app}</span>
+        ${s.worktree ? `<span class="chip wt">⑂ ${s.worktree}</span>` : ""}
+        <span class="chip md">${s.model}</span>
+      </div>
+      <div class="t2">
+        <span class="act">${s.act || "—"}</span>
+        <span class="spk">${s.spark.map((v)=>`<i style="height:${Math.max(10,Math.round(v*100))}%"></i>`).join("")}</span>
+      </div>
+      ${s.subs ? `<div class="sub">⑃ <b class="mb-tnum">${s.subs} subagents</b>
+         <span class="t-dim2">explore ×2</span></div>` : ""}
+      <div class="t3"></div>
+    </div>`;
+
+function paintSessions(){
+  const rows = [...SESSIONS].sort((a,b)=>RANK[a.st]-RANK[b.st] || a.app.localeCompare(b.app));
+  const sig = rows.map((s)=>s.app+":"+s.st).join("|");
+  if (sig !== sessSig){
+    sessSig = sig;
+    deskRows.innerHTML =
+      `<div class="grp"><span class="t-dim2" style="font-size:10px">▾</span>
+         <span class="g">projects</span><span class="lv"></span>
+         <span class="r">${SESSIONS.length} sessions</span></div>` +
+      rows.map(cardHtml).join("");
+  }
+  for (const s of rows){
+    const el = deskRows.querySelector('.sc[data-app="' + s.app + '"]');
+    if (!el) continue;
+    const act = el.querySelector(".act");
+    if (act.textContent !== (s.act || "—")) act.textContent = s.act || "—";
+    const bars = el.querySelectorAll(".spk i");
+    bars.forEach((b,i)=>{ b.style.height = Math.max(10, Math.round(s.spark[i]*100)) + "%"; });
+    el.querySelector(".t3").innerHTML =
+      `<span>${s.tools} tools</span>` +
+      (s.errs ? `<span class="er">${s.errs} err</span>` : "") +
+      `<span class="t-dim2">${ktok(s.tok)} tok</span>` +
+      `<span class="ok">${usd(s.cost)}</span>` +
+      `<span class="ag">${ago(s.seen)}</span>`;
+  }
+}
+
+function feedRow(r, seed){
+  const v = VERB[r.k], lane = hashColor(r.app);
+  return `<div class="fr${seed ?" noanim" : ""}">
+    <span class="lane" style="background:color-mix(in srgb,${lane} 70%,transparent)"></span>
+    <span class="ts">${r.ts}</span>
+    <span class="d" style="background:${v.d};box-shadow:0 0 6px ${v.d}"></span>
+    <span class="vb" style="color:${v.c}">${v.v}</span>
+    <span class="chip tool">${r.tool}</span>
+    <span class="dt">${r.det}</span>
+    ${r.cost ? `<span class="cost">${usd(r.cost)}</span>` : ""}
+    <span class="who" style="color:color-mix(in srgb,${lane} 75%,var(--text4))">${r.app}</span>
+  </div>`;
+}
+/** Only used for the seed: history did not just happen, so it does not fly in. */
+function paintFeed(){ feedEl.innerHTML = S.feed.map((r)=>feedRow(r, true)).join(""); }
+
+/** Same rule as the session cards: rebuild only when the ranking changes, so
+ *  the bar's width transition is a transition rather than a fresh node that
+ *  was born at its final size. */
+let mixSig = "";
+function paintMix(){
+  const sorted = [...S.counts.entries()].sort((a,b)=>b[1]-a[1]);
+  const total = sorted.reduce((a,[,n])=>a+n,0)||1;
+  const seg = sorted.slice(0,TOP).map(([n,c],i)=>({n, pct:c/total*100, c:RAMP[i]}));
+  const rest = sorted.slice(TOP).reduce((a,[,c])=>a+c,0);
+  if (rest>0) seg.push({n:"Other", pct:rest/total*100, c:OTHER});
+  const sig = seg.map((m)=>m.n).join("|");
+  if (sig !== mixSig){
+    mixSig = sig;
+    $("pkMix").innerHTML = seg.map((m)=>`<i style="background:${m.c}"></i>`).join("");
+    $("pkMixl").innerHTML = seg.map((m)=>`<span><em style="background:${m.c}"></em>${m.n} <b></b></span>`).join("");
+  }
+  const bars = $("pkMix").children, labs = $("pkMixl").querySelectorAll("b");
+  seg.forEach((m,i)=>{
+    if (bars[i]) bars[i].style.width = m.pct.toFixed(1)+"%";
+    if (labs[i]) labs[i].textContent = m.pct.toFixed(0)+"%";
+  });
+  $("pkKRuns").textContent = int(total);
+}
+
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let live = false;
+function mote(isErr, rev){
+  if (!live || reduced) return;
+  const d = document.createElement("span");
+  d.className = "mote" + (isErr ? " err" : "") + (rev ? " rev" : "");
+  d.style.top = "calc(50% + " + (Math.random()*12-6).toFixed(1) + "px)";
+  d.style.animationDuration = (1.25+Math.random()*.5).toFixed(2)+"s";
+  wireEl.appendChild(d);
+  d.addEventListener("animationend", ()=>d.remove());
+}
+
+/* ══ the phone ════════════════════════════════════════════════════
+   Screens are strings so a step can rebuild one; everything after that
+   is a beat operating on real nodes — pressing a real button, spinning
+   a real spinner, raising a real toast.                                */
+
+/* `pushed` is a sibling of the main column, not a child of it: a pushed
+   screen covers the tab bar too, and `.mb-main` clips its own overflow —
+   put the screen inside it and the footer is sliced off at the nav. */
+const shell = (tab, main, badge, pushed) => `
+  <span class="mb-sky"></span>
+  <div class="mb-hd"><span class="lg">agent<i>glass</i></span>
+    <span class="st"><span class="mb-dot pulse" style="background:var(--success);color:var(--success)"></span>Live</span>
+    <span class="gear">⚙</span></div>
+  <div class="mb-main">${main}</div>
+  <nav class="mb-nav">
+    <button class="${tab===0?"on":""}"><span class="g">◎</span>Now${badge?`<span class="badge" id="navBadge">${badge}</span>`:""}</button>
+    <button class="${tab===1?"on":""}"><span class="g">▤</span>Chats</button>
+    <button class="${tab===2?"on":""}"><span class="g">◇</span>Repos</button>
+  </nav>
+  ${pushed || ""}
+  <div class="mb-toasts" id="toasts"></div>`;
+
+const hero = (n) => {
+  const working = SESSIONS.filter((s)=>s.st==="working").length;
+  return `
+  <div class="mb-hero" id="hero">
+    <div class="in"><span class="mb-fig n" id="heroN">${n}</span>
+      <span class="w"><b id="heroT">${n} thing${n>1?"s":""} want${n>1?"":"s"} you</b>
+        <span>Answer one and it leaves the queue</span></span></div>
+    <!-- One bar per live agent in fourteen fixed slots, so the strip reads as
+         capacity rather than as a bar chart that resizes. -->
+    <div class="mb-vitals">${Array.from({length:14},(_,i)=>i<working?"<i></i>":'<i class="idle"></i>').join("")}</div>
+    <div class="mb-vlabel">
+      <span class="mb-dot pulse" style="background:var(--success);color:var(--success)"></span>
+      <b id="hWork">${working} working</b><span>·</span><span id="hSpend">${usd(S.cost)} today</span>
+      <span class="sp"></span><span>shop-api, agentglass</span></div>
+  </div>`;
+};
+
+const GATE_ITEM = `
+  <div class="mb-item crit" id="itGate">
+    <div class="ih"><span class="k">Blocked · waiting on you</span><span class="at">now</span></div>
+    <div class="t">Run the database backfill against production</div>
+    <div class="s">shop-api · Bash · the agent is stopped until you answer</div>
+    <div class="code">bun scripts/backfill_orders_2024.ts --env=prod</div>
+    <div class="acts"><button class="mb-btn ok mb-press" id="bAllow">Allow</button>
+      <button class="mb-btn no mb-press">Deny</button></div>
+  </div>`;
+const CI_ITEM = `
+  <div class="mb-item bad" id="itCi">
+    <div class="ih"><span class="k">CI went red</span><span class="at">12m</span></div>
+    <div class="t">e2e (checkout) is failing on #482</div>
+    <div class="s">Round prices at the cart boundary · shop-api</div>
+    <div class="acts"><button class="mb-btn sm mb-press">See the log</button>
+      <button class="mb-btn acc mb-press">Re-run</button></div>
+  </div>`;
+const REVIEW_ITEM = `
+  <div class="mb-item">
+    <div class="ih"><span class="k">Review requested</span><span class="at">1d</span></div>
+    <div class="t">#461 Drop the legacy coupon table</div>
+    <div class="s">t-okafor asked you · +9 −604 across 8 files</div>
+    <div class="acts"><button class="mb-btn sm mb-press">Snooze</button>
+      <button class="mb-btn acc mb-press">Open</button></div>
+  </div>`;
+const MERGE_ITEM = `
+  <div class="mb-item good" id="itMerge">
+    <div class="ih"><span class="k">Ready to merge</span><span class="at">7h</span></div>
+    <div class="t">#465 Retry the charge before failing the order</div>
+    <div class="s">Approved by jkwan · 5 checks green · yours</div>
+    <div class="acts"><button class="mb-btn ok mb-press" id="bMerge">Squash &amp; merge</button>
+      <button class="mb-btn sm mb-press">Review</button></div>
+  </div>`;
+
+/* ── beats: the vocabulary every step is written in ───────────────── */
+const q = (sel) => mbEl.querySelector(sel);
+let beatTimers = [];
+const clearBeats = () => { beatTimers.forEach(clearTimeout); beatTimers = []; };
+const at = (ms, fn) => beatTimers.push(setTimeout(fn, ms));
+
+/** A press, drawn where the thumb went, then held for a frame. */
+function press(sel){
+  const el = q(sel); if (!el) return;
+  const r = el.getBoundingClientRect(), g = glassEl.getBoundingClientRect();
+  const t = document.createElement("span");
+  t.className = "tap";
+  t.style.left = (r.left + r.width/2 - g.left) + "px";
+  t.style.top = (r.top + r.height/2 - g.top) + "px";
+  glassEl.appendChild(t);
+  setTimeout(()=>t.remove(), 600);
+  el.classList.add("act");
+  setTimeout(()=>el.classList.remove("act"), 130);
+}
+/** The real Act button: it spins, and the label stays put so the row does
+ *  not jump under the thumb that pressed it. */
+function busy(sel){
+  const el = q(sel); if (!el) return;
+  el.classList.add("busy");
+  el.insertAdjacentHTML("afterbegin", '<span class="mb-spin"></span>');
+}
+function unbusy(sel){
+  const el = q(sel); if (!el) return;
+  el.classList.remove("busy");
+  el.querySelector(".mb-spin")?.remove();
+}
+function toast(msg, bad){
+  const box = q("#toasts"); if (!box) return;
+  const t = document.createElement("div");
+  t.className = "mb-toast" + (bad ? " bad" : "");
+  t.innerHTML = `<span class="g">${bad ? "✕" : "✓"}</span><span>${msg}</span>`;
+  box.appendChild(t);
+  setTimeout(()=>{ t.classList.add("out"); setTimeout(()=>t.remove(), 320); }, 2500);
+}
+/** Answering one takes it out of the list — the whole difference from a
+ *  dashboard. The hero and the tab badge follow it down. */
+function dequeue(sel, n){
+  const el = q(sel); if (el) el.classList.add("gone");
+  const hn = q("#heroN"), ht = q("#heroT"), bd = q("#navBadge");
+  if (hn) hn.textContent = n;
+  if (ht) ht.textContent = n + " thing" + (n>1?"s":"") + " want" + (n>1?"":"s") + " you";
+  if (bd) bd.textContent = n;
+  setTimeout(()=>el?.remove(), 460);
+}
+/** The acknowledgement crosses back, and only then does the desk move. */
+function ack(label, apply){
+  pktT.textContent = label;
+  wireN.textContent = "Inbound";
+  pktEl.classList.remove("out","back"); void pktEl.offsetWidth; pktEl.classList.add("back");
+  // Tracked, so a step change mid-flight cannot land an acknowledgement on the
+  // step that replaced it.
+  at(900, ()=>{ apply?.(); paintSessions(); paintKpis(); });
+}
+const sessOf = (app) => SESSIONS.find((s)=>s.app===app);
+
+/* ══ the six round trips ══════════════════════════════════════════ */
+const STEPS = [
+  {
+    key:"GATE", dwell:11000, tab:0,
+    title:"An agent asks before it does something it cannot undo",
+    body:"In yolo mode almost nothing stops. What does stop is worth a pocket: that session waits on one answer while the rest of the fleet keeps going — and the answer is a tap away rather than a walk away.",
+    out:"Gate · held",
+    before(){ const s = sessOf("shop-api"); s.st = "waiting"; s.act = "Bash · held on a permission";
+      pushFeed({k:"perm", tool:"Bash", det:"bun scripts/backfill_orders_2024.ts --env=prod", app:"shop-api", cost:0}); },
+    page:() => shell(0, hero(3) + `<div class="mb-stack">${GATE_ITEM}${CI_ITEM}${REVIEW_ITEM}</div>`, 3),
+    beats:[
+      [2600, ()=>press("#bAllow")],
+      [2740, ()=>busy("#bAllow")],
+      [4300, ()=>{ unbusy("#bAllow"); toast("Allowed — shop-api is running again");
+        dequeue("#itGate", 2);
+        ack("Allowed", ()=>{ const s = sessOf("shop-api"); s.st="working"; s.act="Bash · backfilling orders"; s.seen=0; }); }],
+    ],
+  },
+  {
+    key:"CHAT", dwell:13500, tab:1,
+    title:"An agent stops and wants direction",
+    body:"Send a turn and watch it happen: the bubble opens, the tools it runs are named as it runs them, the answer arrives a word at a time, and Send is a red Stop until it is done. The session lives on the server, so it is still the same conversation when you sit back down.",
+    out:"Stopped · idle 4m",
+    before(){ const s = sessOf("agentglass"); s.st = "waiting"; s.act = "Stop · waiting on a turn";
+      pushFeed({k:"stop", tool:"Stop", det:"turn complete", app:"agentglass", cost:0}); },
+    page:() => shell(1, `
+      <div class="mb-chat">
+        <div class="ch">
+          <span class="i"><b>Round prices at the cart boundary</b><span>shop-api · Opus · 4m ago</span></span>
+          <span class="mb-dot" id="chDot" style="background:var(--text3)"></span></div>
+        <div class="met"><span>212 tools</span><span>$18.42</span><span>6 files touched</span></div>
+        <div class="mb-conv" id="conv">
+          <div class="bub me"><div class="in">Prices are off by a cent on carts with a coupon. Round once, at the boundary.</div></div>
+          <div class="bub"><div class="in">Found it: every line item was rounded on its own, so the error compounded. Moving the rounding out.</div></div>
+          <div class="bub"><div class="in">Rounding moved to the cart boundary. <span class="ty">round2</span> now lives in <span class="ty">src/lib/money.ts</span>.</div></div>
+          <div class="bub"><div class="in">One test expects 14.99 and gets 15.00 — the coupon lands before the rounding. Guard the legacy carts, or backfill first?</div></div>
+        </div>
+        <div class="mb-comp">
+          <div class="ta ph" id="ta">Reply to this agent</div>
+          <div class="send" id="send">Send</div></div>
+      </div>`, null),
+    beats:[
+      [1500, ()=>typeInto("#ta", "Guard it, and drop the guard next release.")],
+      [4200, ()=>press("#send")],
+      [4380, ()=>{
+        q("#ta").className = "ta ph"; q("#ta").textContent = "Working…";
+        q("#send").className = "send stop"; q("#send").textContent = "Stop";
+        q("#chDot").style.background = "var(--success)";
+        addBub("me", "Guard it, and drop the guard next release.");
+        pktT.textContent = "Turn sent"; wireN.textContent = "Outbound";
+        pktEl.classList.remove("out","back"); void pktEl.offsetWidth; pktEl.classList.add("out");
+        const s = sessOf("agentglass"); s.st = "working"; s.act = "Edit · src/services/pricing.ts";
+        paintSessions(); paintKpis();
+      }],
+      [5300, ()=>{ startStream(); }],
+      [5400, ()=>addTool("Read src/services/pricing.ts")],
+      [6300, ()=>addTool("Edit src/services/pricing.ts · +12 −3")],
+      [7300, ()=>addTool("Bash bun test — 43 passed")],
+      [7600, ()=>streamText("Guarded. Carts created before MIGRATION_AT keep the old rounding; everything after it rounds at the boundary. 43 tests pass.")],
+      [11600, ()=>{
+        endStream();
+        q("#send").className = "send"; q("#send").textContent = "Send";
+        q("#ta").className = "ta ph"; q("#ta").textContent = "Reply to this agent";
+        toast("Turn finished · 43 passed");
+        ack("Turn done", ()=>{ const s = sessOf("agentglass"); s.act = "Edit · guarding legacy carts"; });
+      }],
+    ],
+  },
+  {
+    key:"MERGE", dwell:10000, tab:0,
+    title:"A pull request came back green",
+    body:"Approved, checks passed, nothing standing in the way. It is the one thing on this list that finishes work rather than starting it, and it does not need a laptop.",
+    out:"#465 · green",
+    before(){ const s = sessOf("shop-api"); s.act = "Bash · gh pr checks 465";
+      pushFeed({k:"post", tool:"Bash", det:"gh pr checks 465 — 5 green", app:"shop-api", cost:.014}); },
+    page:() => shell(0, hero(3) + `<div class="mb-stack">${MERGE_ITEM}${CI_ITEM}${REVIEW_ITEM}</div>`, 3),
+    beats:[
+      [2500, ()=>press("#bMerge")],
+      [2640, ()=>busy("#bMerge")],
+      [4600, ()=>{ unbusy("#bMerge"); toast("#465 squashed and merged");
+        dequeue("#itMerge", 2);
+        ack("Merged", ()=>{ const s = sessOf("shop-api"); s.act = "Bash · merged to main"; s.seen = 0; }); }],
+    ],
+  },
+  {
+    key:"DIFF", dwell:12500, tab:2,
+    title:"Read the diff before you say yes",
+    body:"Tap a file and the diff pushes in from the right, the way every screen here does. Unified, wrapped, with a + or − on every line as well as the colour — at this size, outdoors, in one hand, colour alone is not a thing to trust.",
+    out:"#482 · 6 files",
+    before(){ const s = sessOf("shop-api"); s.act = "Read · src/services/pricing.ts"; },
+    page:() => shell(2, `
+      <div class="mb-seg" style="margin-bottom:13px">
+        <button>Overview</button><button aria-pressed="true">Files 6</button><button>Checks 5</button></div>
+      <div class="mb-stack" style="gap:10px">
+        <div class="mb-row mb-press" id="rowFile">
+          <span class="i"><b>src/services/pricing.ts</b><span>modified · 1 thread</span></span>
+          <span class="r mb-tnum" style="color:var(--success)">+34<br><span style="color:var(--error)">−11</span></span>
+          <span class="mb-sw" data-on="0"></span></div>
+        <div class="mb-row"><span class="i"><b>src/lib/money.ts</b><span>added</span></span>
+          <span class="r mb-tnum" style="color:var(--success)">+22<br><span style="color:var(--error)">−0</span></span>
+          <span class="mb-sw" data-on="0"></span></div>
+        <div class="mb-row"><span class="i"><b>test/pricing.test.ts</b><span>modified</span></span>
+          <span class="r mb-tnum" style="color:var(--success)">+21<br><span style="color:var(--error)">−2</span></span>
+          <span class="mb-sw" data-on="1"></span></div>
+      </div>`, null, DIFF_SCREEN),
+    beats:[
+      [2200, ()=>press("#rowFile")],
+      [2400, ()=>q("#scDiff").classList.add("on")],
+      [6200, ()=>press("#swViewed")],
+      [6320, ()=>{ q("#swViewed").dataset.on = "1"; toast("Marked as viewed"); }],
+      [8600, ()=>press("#diffNext")],
+      [8800, ()=>{ q("#scTitle").textContent = "money.ts"; q("#scSub").textContent = "src/lib";
+        q("#diffCount").textContent = "File 2 of 6"; q("#swViewed").dataset.on = "0";
+        ack("Reviewed", ()=>{ const s = sessOf("shop-api"); s.act = "Read · #482 reviewed"; }); }],
+    ],
+  },
+  {
+    key:"PUSH", dwell:11500, tab:2,
+    title:"Stage it, commit it, push it",
+    body:"A switch per file, and the switch is the staging. Flip one, write the message, push — the row list goes clean and the desk says so. The absolute path is the part you already know, so on a 390px row it is the part that gets cut.",
+    out:"5 changed",
+    before(){ const s = sessOf("agentglass"); s.act = "Bash · git status --short"; },
+    page:() => shell(2, `
+      <div class="mb-seg" style="margin-bottom:13px">
+        <button aria-pressed="true">Changes 3</button><button>Pull requests 2</button><button>Containers 2</button></div>
+      <div class="mb-stack" style="gap:10px" id="chg">
+        <div class="mb-row"><span class="mb-dot" style="background:var(--primary)"></span>
+          <span class="i"><b>agentglass</b><span>main · ↑2 · 3 changed</span></span>
+          <span class="r mb-tnum">+77 −13</span></div>
+        <div class="mb-row"><span class="i"><b>web/src/mobile/MobileNow.tsx</b><span>modified</span></span>
+          <span class="r mb-tnum" style="color:var(--success)">+34<br><span style="color:var(--error)">−11</span></span>
+          <span class="mb-sw" data-on="1"></span></div>
+        <div class="mb-row"><span class="i"><b>web/src/mobile/nowQueue.ts</b><span>added</span></span>
+          <span class="r mb-tnum" style="color:var(--success)">+22<br><span style="color:var(--error)">−0</span></span>
+          <span class="mb-sw" data-on="1"></span></div>
+        <div class="mb-row"><span class="i"><b>web/test/now-queue.test.ts</b><span>modified</span></span>
+          <span class="r mb-tnum" style="color:var(--success)">+21<br><span style="color:var(--error)">−2</span></span>
+          <span class="mb-sw" data-on="0" id="swStage"></span></div>
+      </div>
+      <div class="mb-card" style="border-radius:16px;padding:13px;margin-top:12px;
+        background:var(--mb-card);border:1px solid color-mix(in srgb,var(--border) 38%,transparent)">
+        <div class="mb-eyebrow" style="margin-bottom:7px">Commit message</div>
+        <div style="font-size:13px" id="cmsg">Round at the cart boundary, not per line</div>
+        <div style="font-size:10.5px;color:var(--text3);margin-top:6px" id="cstage">2 files staged</div>
+        <div style="display:flex;gap:9px;margin-top:12px">
+          <button class="mb-btn sm mb-press" style="flex:1">Commit</button>
+          <button class="mb-btn acc mb-press" style="flex:1.4" id="bPush">Commit &amp; push</button></div>
+      </div>`, null),
+    beats:[
+      [2100, ()=>press("#swStage")],
+      [2240, ()=>{ q("#swStage").dataset.on = "1"; q("#cstage").textContent = "3 files staged"; }],
+      [3900, ()=>press("#bPush")],
+      [4040, ()=>busy("#bPush")],
+      [6600, ()=>{ unbusy("#bPush"); toast("Pushed 1 commit to origin/main");
+        q("#chg").innerHTML = `<div class="mb-row"><span class="mb-dot" style="background:var(--success)"></span>
+          <span class="i"><b>agentglass</b><span>main · up to date</span></span>
+          <span class="r">clean</span></div>
+          <div class="mb-empty"><div class="g">◇</div><b>Nothing to commit</b>
+            <span>The working tree is clean and origin/main has your commit.</span></div>`;
+        q("#cstage").textContent = "Pushed · working tree clean";
+        ack("Pushed", ()=>{ const s = sessOf("agentglass"); s.act = "Bash · clean · pushed"; s.seen = 0; }); }],
+    ],
+  },
+  {
+    key:"OPS", dwell:11500, tab:2,
+    title:"Something fell over at three in the morning",
+    body:"The log, and the button that fixes it. You should not need a laptop to restart a container — nor to work out which container it was, which is the part that actually costs you the night.",
+    out:"Container down",
+    before(){ const s = sessOf("inventory-svc"); s.st = "errored"; s.act = "Bash · otel-collector restarting";
+      emitError(s, "exporter otlphttp: connection refused"); emitError(s, "permanent error after 5 retries"); },
+    page:() => shell(2, `
+      <div class="mb-seg" style="margin-bottom:13px">
+        <button>Changes</button><button>Pull requests</button><button aria-pressed="true">Containers 2</button></div>
+      <div class="mb-stack" style="gap:10px;margin-bottom:12px">
+        <div class="mb-row"><span class="mb-dot pulse" id="ctrDot"
+            style="background:var(--warning);color:var(--warning)"></span>
+          <span class="i"><b>otel-collector</b><span id="ctrSub">Restarting (1) 8s ago</span></span>
+          <span class="r mb-tnum" id="ctrR">4× in 2m</span></div>
+        <div class="mb-row"><span class="mb-dot" style="background:var(--success)"></span>
+          <span class="i"><b>postgres-16</b><span>Up 4 hours · healthy</span></span>
+          <span class="r mb-tnum">5432</span></div>
+      </div>
+      <div class="mb-eyebrow" style="margin-bottom:7px">otel-collector · log · tailing</div>
+      <div class="logs" id="log">01:04:12 INFO  listening on :4317
+01:06:44 <span class="w">WARN</span>  queue is full, dropping spans
+01:07:19 <span class="w">WARN</span>  queue is full, dropping spans (×148)
+01:08:02 <span class="e">ERROR</span> exporter otlphttp: connection refused
+01:08:02 <span class="e">ERROR</span> permanent error, giving up after 5 retries
+01:08:03 INFO  exited with code 1</div>
+      <div style="display:flex;gap:9px;margin-top:12px">
+        <button class="mb-btn sm mb-press" style="flex:1">Ask Claude</button>
+        <button class="mb-btn acc mb-press" style="flex:1" id="bRestart">Restart</button></div>`, null),
+    beats:[
+      [2600, ()=>press("#bRestart")],
+      [2740, ()=>busy("#bRestart")],
+      [4200, ()=>{ q("#log").insertAdjacentHTML("beforeend", "\n01:08:14 INFO  restarting container"); }],
+      [5200, ()=>{
+        unbusy("#bRestart"); toast("otel-collector restarted");
+        q("#ctrDot").style.background = "var(--success)"; q("#ctrDot").style.color = "var(--success)";
+        q("#ctrSub").textContent = "Up 3 seconds · healthy";
+        q("#ctrR").textContent = "4317";
+        q("#log").insertAdjacentHTML("beforeend", "\n01:08:17 INFO  listening on :4317\n01:08:17 INFO  pipelines ready");
+        ack("Restarted", ()=>{ const s = sessOf("inventory-svc"); s.st = "working";
+          s.act = "Bash · otel-collector healthy"; s.errs = 0; S.errors = 0; }); }],
+    ],
+  },
+];
+
+/** The pushed diff screen, kept out of the step so the markup stays readable. */
+const DIFF_SCREEN = `
+<div class="mb-screen" id="scDiff">
+  <div class="hd"><span class="back">‹</span>
+    <span class="t"><b id="scTitle">pricing.ts</b><span id="scSub">src/services</span></span>
+    <span class="mb-btn sm" style="border:0;color:var(--primary-hover)">Wrap</span></div>
+  <div class="bd">
+    <div class="mb-diff">
+      <div class="mb-dl hdr"><span class="g"></span><span class="s"></span><span class="c">@@ -56,10 +56,13 @@</span></div>
+      <div class="mb-dl del"><span class="g">57</span><span class="s">−</span><span class="c">  <span class="kw">const</span> subtotal = cart.items.<span class="fx">reduce</span>((s,i) =&gt; s + <span class="fx">round2</span>(i.price*i.qty), <span class="nm2">0</span>);</span></div>
+      <div class="mb-dl add"><span class="g">57</span><span class="s">+</span><span class="c">  <span class="kw">const</span> subtotal = cart.items.<span class="fx">reduce</span>((s,i) =&gt; s + i.price*i.qty, <span class="nm2">0</span>);</span></div>
+      <div class="mb-dl add"><span class="g">58</span><span class="s">+</span><span class="c">  <span class="fx">assertRounded</span>(subtotal);</span></div>
+      <div class="mb-dl"><span class="g">59</span><span class="s"> </span><span class="c">  <span class="kw">const</span> discount = cart.coupon ? <span class="fx">applyCoupon</span>(subtotal) : <span class="nm2">0</span>;</span></div>
+      <div class="mb-dl del"><span class="g">60</span><span class="s">−</span><span class="c">  <span class="kw">return</span> <span class="fx">applyCoupon</span>(subtotal, cart.coupon);</span></div>
+      <div class="mb-dl add"><span class="g">60</span><span class="s">+</span><span class="c">  <span class="kw">return</span> <span class="fx">round2</span>(<span class="ty">Math</span>.<span class="fx">max</span>(<span class="nm2">0</span>, subtotal - discount));</span></div>
+      <div class="mb-dl"><span class="g">61</span><span class="s"> </span><span class="c">}</span></div>
+      <div class="mb-dl hdr"><span class="g"></span><span class="s"></span><span class="c">⋯ 24 unchanged lines</span></div>
+      <div class="mb-dl hdr"><span class="g"></span><span class="s"></span><span class="c">@@ -84,6 +87,11 @@</span></div>
+      <div class="mb-dl"><span class="g">85</span><span class="s"> </span><span class="c"><span class="kw">export function</span> <span class="fx">cartTotal</span>(cart: <span class="ty">Cart</span>) {</span></div>
+      <div class="mb-dl add"><span class="g">87</span><span class="s">+</span><span class="c"><span class="kw">export const</span> <span class="fx">isLegacy</span> = (c: <span class="ty">Cart</span>) =&gt; c.createdAt &lt; <span class="ty">MIGRATION_AT</span>;</span></div>
+      <div class="mb-dl add"><span class="g">88</span><span class="s">+</span><span class="c"></span></div>
+      <div class="mb-dl add"><span class="g">89</span><span class="s">+</span><span class="c"><span class="fx">// Carts opened before the migration keep the old rounding until the</span></span></div>
+      <div class="mb-dl add"><span class="g">90</span><span class="s">+</span><span class="c"><span class="fx">// backfill has run. Drop this guard with the next release.</span></span></div>
+      <div class="mb-dl add"><span class="g">91</span><span class="s">+</span><span class="c">  <span class="kw">if</span> (<span class="fx">isLegacy</span>(cart)) <span class="kw">return</span> <span class="fx">legacyTotal</span>(cart);</span></div>
+      <div class="mb-dl del"><span class="g">92</span><span class="s">−</span><span class="c">  <span class="kw">return</span> subtotal;</span></div>
+      <div class="mb-dl add"><span class="g">92</span><span class="s">+</span><span class="c">  <span class="kw">return</span> <span class="fx">round2</span>(subtotal);</span></div>
+      <div class="mb-dl"><span class="g">93</span><span class="s"> </span><span class="c">}</span></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <span class="mb-note" style="flex:1"><b>Viewed</b> — keeps your place across the review.</span>
+      <span class="mb-sw mb-press" data-on="0" id="swViewed"></span></div>
+    <p class="mb-note">Tap a line to comment on it. <b>Wrap</b> trades sideways scrolling for taller lines.</p>
+  </div>
+  <div class="ft"><span class="mb-btn sm">‹ Prev</span>
+    <span class="mb-tnum" style="flex:1;text-align:center;font-size:10.5px;color:var(--text3)" id="diffCount">File 1 of 6</span>
+    <span class="mb-btn sm mb-press" id="diffNext">Next ›</span></div>
+</div>`;
+
+/* ── chat helpers: a turn that actually streams ───────────────────── */
+let streamTimer = null;
+function typeInto(sel, text){
+  const el = q(sel); if (!el) return;
+  el.className = "ta"; el.textContent = "";
+  let i = 0;
+  const tick = () => {
+    if (!q(sel)) return;
+    el.textContent = text.slice(0, ++i);
+    if (i < text.length) beatTimers.push(setTimeout(tick, 34));
+  };
+  tick();
+}
+function addBub(who, text){
+  const c = q("#conv"); if (!c) return;
+  c.insertAdjacentHTML("beforeend", `<div class="bub ${who==="me"?"me":""}"><div class="in">${text}</div></div>`);
+  trimConv();
+}
+function startStream(){
+  const c = q("#conv"); if (!c) return;
+  c.insertAdjacentHTML("beforeend",
+    `<div class="bub" id="liveBub"><div class="in"><div class="tools" id="liveTools"></div><span id="liveTxt"></span><span class="car">▍</span></div></div>`);
+  trimConv();
+}
+function addTool(line){
+  const t = q("#liveTools"); if (!t) return;
+  t.insertAdjacentHTML("beforeend", `<span>· ${line}</span>`);
+  // Tokens coming back down the wire while the turn runs.
+  for (let i=0;i<3;i++) at(i*180, ()=>mote(false,true));
+  trimConv();
+}
+function streamText(text){
+  const el = q("#liveTxt"); if (!el) return;
+  const words = text.split(" ");
+  let i = 0;
+  const tick = () => {
+    const e = q("#liveTxt"); if (!e) return;
+    e.textContent = words.slice(0, ++i).join(" ");
+    trimConv();
+    if (i % 3 === 0) mote(false, true);
+    if (i < words.length) { streamTimer = setTimeout(tick, 105); beatTimers.push(streamTimer); }
+  };
+  tick();
+}
+function endStream(){
+  clearTimeout(streamTimer);
+  q("#liveBub")?.querySelector(".car")?.remove();
+}
+/** The conversation is pinned to the newest line; older bubbles fall off the
+ *  top rather than pushing the composer off the bottom. */
+function trimConv(){
+  const c = q("#conv"); if (!c) return;
+  while (c.scrollHeight > c.clientHeight + 4 && c.children.length > 1) c.removeChild(c.firstElementChild);
+}
+
+/* ══ the loop ═════════════════════════════════════════════════════ */
+let cur = -1, timer = null, playing = true, onScreen = false;
+
+osbEl.innerHTML = STEPS.map((s,i)=>`
+  <button role="tab" data-i="${i}" aria-selected="${i===0}" style="--dwell:${s.dwell}ms;--in:${1.2+i*.07}s">
+    <b>${i+1}</b><span>${s.key}</span><span class="dw"></span>
+  </button>`).join("");
+
+function show(i){
+  clearBeats();
+  cur = i;
+  const s = STEPS[i];
+  [...osbEl.children].forEach((b,j)=>b.setAttribute("aria-selected", String(j===i)));
+  ccT.textContent = s.title; ccB.textContent = s.body;
+
+  // Put the fleet back, then let this step disturb exactly one session.
+  SESSIONS.forEach((x)=>{ if (x.st !== "idle") x.st = "working"; x.errs = 0; });
+  S.errors = 0;
+  s.before?.();
+  paintSessions(); paintKpis();
+
+  // 1 — the event crosses, above the telemetry that never stopped.
+  wireN.textContent = "Outbound";
+  pktT.textContent = s.out;
+  pktEl.classList.remove("out","back"); void pktEl.offsetWidth; pktEl.classList.add("out");
+
+  // 2 — the glass wipes to the page it brought.
+  at(820, ()=>{
+    sweepEl.classList.remove("go"); void sweepEl.offsetWidth; sweepEl.classList.add("go");
+    setTimeout(()=>{
+      if (cur !== i) return;
+      mbEl.innerHTML = s.page();
+      // aria-hidden must not contain anything focusable, and a button that
+      // does nothing is a trap for a keyboard user either way.
+      mbEl.querySelectorAll("button").forEach((el)=>{ el.tabIndex = -1; });
+      paintThroughput(); paintKpis();
+    }, 110);
+  });
+
+  // 3 — and then the phone is used, beat by beat.
+  if (!reduced) s.beats.forEach(([ms, fn]) => at(1000 + ms, () => { if (cur === i) fn(); }));
+}
+
+function schedule(){
+  clearTimeout(timer);
+  // `cur` is -1 until the acquire finishes. Pressing Play in that window read
+  // STEPS[-1].dwell and threw.
+  if (!playing || !live || cur < 0) return;
+  // Asked for less motion: the section stops advancing on its own and waits
+  // to be driven. Six screens swapping every eleven seconds is exactly the
+  // kind of thing the preference is about.
+  if (reduced) return;
+  timer = setTimeout(()=>{ show((cur+1)%STEPS.length); schedule(); }, STEPS[cur].dwell);
+}
+function setPlaying(on){
+  playing = on;
+  pkEl.classList.toggle("pk-halt", !on);
+  ppEl.textContent = on ? "Pause" : "Play";
+  if (on) schedule(); else clearTimeout(timer);
+}
+function pick(i){ setPlaying(false); show(i); }
+
+osbEl.addEventListener("click", (e)=>{ const b = e.target.closest("button"); if (b) pick(Number(b.dataset.i)); });
+glassEl.addEventListener("click", ()=>pick((cur+1)%STEPS.length));
+ppEl.addEventListener("click", ()=>setPlaying(!playing));
+
+addEventListener("keydown", (e)=>{
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  if (!onScreen) return;
+  if (e.key >= "1" && e.key <= String(STEPS.length)) { e.preventDefault(); pick(Number(e.key)-1); return; }
+  if (e.key === "ArrowRight") { e.preventDefault(); pick((cur+1)%STEPS.length); return; }
+  if (e.key === "ArrowLeft") { e.preventDefault(); pick((cur-1+STEPS.length)%STEPS.length); }
+});
+
+let emitT = null, secT = null, paintT = null;
+function startClocks(){
+  stopClocks();
+  emitT = setInterval(()=>{ if (Math.random() < .86) emit(); }, 620);
+  secT = setInterval(()=>{
+    S.tp.shift(); S.tp.push(S.sec); S.sec = 0; S.up += 1;
+    SESSIONS.forEach((s)=>{ s.seen += 1; });
+    if (S.up % 3 === 0) { S.spend.shift(); S.spend.push(.02); }
+    paintThroughput(); paintSessions();
+  }, 1000);
+  paintT = setInterval(()=>{ paintKpis(); paintMix(); }, 400);
+}
+function stopClocks(){ [emitT, secT, paintT].forEach(clearInterval); emitT = secT = paintT = null; }
+
+const io = new IntersectionObserver((es)=>{
+  for (const e of es){
+    if (e.isIntersecting){
+      onScreen = true;
+      if (!live){
+        live = true;
+        pkEl.classList.add("pk-live");
+        startClocks();
+        setTimeout(()=>deskEnd.classList.add("on"), 620);
+        setTimeout(()=>handEnd.classList.add("on"), 860);
+        setTimeout(()=>{
+          wireN.textContent = "Handshake"; pktT.textContent = "Link up";
+          pktEl.classList.remove("out","back"); void pktEl.offsetWidth; pktEl.classList.add("out");
+        }, 940);
+        setTimeout(()=>{ show(0); schedule(); }, 2100);
+      } else {
+        // Scrolling away cancels the step's beats; coming back has to restart
+        // it, or the phone sits frozen wherever it was interrupted.
+        startClocks();
+        if (cur >= 0) show(cur);
+        if (playing) schedule();
+      }
+    } else { onScreen = false; clearTimeout(timer); clearBeats(); stopClocks(); }
+  }
+}, { threshold:.15 });
+io.observe(rigEl);
+
+document.addEventListener("visibilitychange", ()=>{
+  if (document.visibilityState === "visible"){
+    if (live){ startClocks(); if (cur >= 0) show(cur); if (playing) schedule(); }
+  }
+  else { clearTimeout(timer); clearBeats(); stopClocks(); }
+});
+
+// Something on screen before the acquire, so the frame is never empty.
+SESSIONS.forEach((s)=>{ s.act = "Read · " + s.files[0]; });
+sessOf("shop-web").act = "Stop · finished, nothing trailing";
+for (let i=0;i<FEED_MAX;i++) { const s = SESSIONS[i%3];
+  S.feed.push({k:"post", tool:rnd(TOOLS).n, det:detailFor(s,"Read"), app:s.app, cost:.004+Math.random()*.03, ts:clockStr()}); }
+paintFeed();
+paintSessions(); paintKpis(); paintMix(); paintThroughput();
+mbEl.innerHTML = STEPS[0].page();
+mbEl.querySelectorAll("button").forEach((el)=>{ el.tabIndex = -1; });
+paintThroughput();
+ccT.textContent = STEPS[0].title; ccB.textContent = STEPS[0].body;
+})();
+</script>
 
 <!-- ══════════════ START-UP CHECKLIST ══════════════ -->
 <section class="ck-wrap rise" id="start">
