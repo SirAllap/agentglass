@@ -2,7 +2,7 @@
   "name": "agentglass",
   "version": "0.6.0",
   "private": true,
-  "description": "Real-time observability dashboard for Claude Code multi-agent workflows — cost, tokens, tool latency, error rates, and session timelines.",
+  "description": "Every AI coding agent on your machine, on one screen — live cost, tokens and tool calls across every provider, and a hold on anything dangerous until you say go. From your desk or your phone.",
   "license": "MIT",
   "type": "module",
   "workspaces": ["server", "web", "electron"],
