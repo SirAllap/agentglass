@@ -331,6 +331,7 @@ async function ingestFile(
   scope: string | null
 ): Promise<{ lines: number; ingested: number; source_app: string; project_path: string; session_id: string; skipped?: boolean }> {
   const text = await Bun.file(path).text();
+  const readSize = Buffer.byteLength(text);
   const lines = completeJsonlLines(text);
   const toolCalls = new Map<string, { name: string; input: unknown }>();
   // Claude Code splits one API response across several transcript lines (one
@@ -416,6 +417,15 @@ async function ingestFile(
         ingested++;
       }
     }
+    putFile.run({
+      $path: path,
+      $sid: session_id,
+      $src: source_app,
+      $proj: project_path,
+      $lines: lines.length,
+      $size: readSize,
+      $mtime: Math.floor(fileMtime),
+    });
   });
   run();
   for (const r of emitted) onLive?.(r);
@@ -492,15 +502,6 @@ async function scanOnce(onLive: ((r: InsertResult) => void) | null): Promise<num
           // pick it up, and the hook path isn't blocked for a session we skipped.
           if (r.skipped) continue;
           owned.add(r.session_id);
-          putFile.run({
-            $path: path,
-            $sid: r.session_id,
-            $src: r.source_app,
-            $proj: r.project_path,
-            $lines: r.lines,
-            $size: st.size,
-            $mtime: Math.floor(st.mtimeMs),
-          });
           total += r.ingested;
         } catch (e) {
           console.error(`[scan] ${path}: ${e instanceof Error ? e.message : e}`);
