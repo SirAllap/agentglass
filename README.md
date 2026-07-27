@@ -741,7 +741,10 @@ The provider and model are **auto-detected from the spans** (`gen_ai.system`,
 
 Some agents (OpenAI Codex CLI) export OpenTelemetry **logs** rather than traces —
 those go to **`/v1/logs`**, which maps each GenAI log record (tool decision/result,
-inference, prompt) to an event the same way.
+inference, prompt) to an event the same way. Codex's native `event.kind`,
+`input_token_count`, `output_token_count`, `cached_token_count`, and
+`cache_write_token_count` fields are recognized directly; cached input is kept
+in its own buckets rather than charged again as ordinary input.
 
 > Non-GenAI spans/records are ignored — this is an agent-observability lens, not a
 > general trace or log store.
@@ -821,7 +824,7 @@ cannot be configured by `export` at all.
 
 | Route | Description |
 |---|---|
-| `POST /ingest` | Ingest an event `{source_app, session_id, hook_event_type, payload?, chat?, model_name?}`. |
+| `POST /ingest` | Ingest an event `{source_app, session_id, hook_event_type, event_id?, reported_cost_usd?, payload?, chat?, model_name?}`. A high-entropy `event_id` makes retries idempotent; reported cost (maximum `$100,000`) overrides estimated cost for that event. |
 | `POST /v1/traces` | OTLP/HTTP (JSON + protobuf) — maps OpenTelemetry `gen_ai.*` spans to events (any provider). |
 | `POST /v1/logs` | OTLP/HTTP (JSON + protobuf) — maps OpenTelemetry GenAI log records to events (e.g. Codex CLI). |
 | `GET /events/recent?limit=` | Latest events. |

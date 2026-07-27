@@ -2,9 +2,13 @@
 import type { IngestBody } from "../../shared/types.ts";
 import { costUsd, type TokenUsage } from "./pricing.ts";
 
+const MAX_FIELD = 64 * 1024;
+export const MAX_REPORTED_COST_USD = 100_000;
+
 export interface NormalizedEvent {
   source_app: string;
   session_id: string;
+  event_id: string | null;
   hook_event_type: string;
   tool_name: string | null;
   tool_use_id: string | null;
@@ -28,6 +32,8 @@ export interface NormalizedEvent {
    * right rates rather than the whole delta at the current model. Null otherwise.
    */
   cost_cumulative: number | null;
+  /** Sender-authoritative per-event cost; null falls back to local pricing. */
+  reported_cost_usd: number | null;
   summary: string | null;
   timestamp: number;
   payload: Record<string, unknown>;
@@ -36,6 +42,37 @@ export interface NormalizedEvent {
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.length ? v : null;
+}
+
+/** Validate fields that only the public POST /ingest boundary accepts. */
+export function externalIngestError(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return "request body must be an object";
+  }
+  const fields = body as Record<string, unknown>;
+  for (const name of ["source_app", "session_id", "hook_event_type"] as const) {
+    const value = fields[name];
+    if (typeof value !== "string" || value.length === 0 || value.length > MAX_FIELD) {
+      return `${name} must be a non-empty string no longer than ${MAX_FIELD} characters`;
+    }
+  }
+  const eventId = fields.event_id;
+  if (eventId !== undefined && (typeof eventId !== "string" || eventId.length === 0 || eventId.length > 512)) {
+    return "event_id must be a non-empty string no longer than 512 characters";
+  }
+  const reportedCost = fields.reported_cost_usd;
+  if (
+    reportedCost !== undefined
+    && (
+      typeof reportedCost !== "number"
+      || !Number.isFinite(reportedCost)
+      || reportedCost < 0
+      || reportedCost > MAX_REPORTED_COST_USD
+    )
+  ) {
+    return `reported_cost_usd must be a finite number from 0 to ${MAX_REPORTED_COST_USD}`;
+  }
+  return null;
 }
 
 /** Read a nested key from an object safely. */
@@ -183,7 +220,6 @@ export function sumTranscriptCost(chat: unknown[] | undefined, fallbackModel: st
   return cost;
 }
 
-const MAX_FIELD = 64 * 1024;
 // Deep enough for the nested shapes hooks actually send (tool_input.content,
 // tool_response.stdout, a chat turn's content blocks) without letting a
 // pathological payload recurse without end.
@@ -295,6 +331,7 @@ export function normalize(body: IngestBody): NormalizedEvent {
   return {
     source_app: capField(String(body.source_app ?? "unknown")),
     session_id: capField(String(body.session_id ?? "unknown")),
+    event_id: typeof body.event_id === "string" ? body.event_id : null,
     hook_event_type: capField(type),
     tool_name: capField(tool_name),
     tool_use_id: capField(tool_use_id),
@@ -308,6 +345,7 @@ export function normalize(body: IngestBody): NormalizedEvent {
     // Only the cumulative (transcript-summed) path can span models; the per-turn
     // payload path is already one turn at one model, so it prices as before.
     cost_cumulative: hasPayloadUsage ? null : sumTranscriptCost(chat ?? undefined, model_name),
+    reported_cost_usd: typeof body.reported_cost_usd === "number" ? body.reported_cost_usd : null,
     summary: capField(str(body.summary)),
     timestamp: typeof body.timestamp === "number" ? body.timestamp : Date.now(),
     payload,
