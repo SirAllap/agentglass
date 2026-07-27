@@ -753,7 +753,10 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
  * running /code-review actually cost?".
  */
 export function skillUsageDetail(since = 0, bucketCount = 12, provider?: string): SkillUsage[] {
-  const { clause: pf, args: pa } = providerScope(provider);
+  const { clause: prov, args: pa } = providerScope(provider);
+  const { clause: sc, args: sa } = scopeClause();
+  const pf = prov + sc;
+  const args = [...pa, ...sa];
   const invocations = db
     .query<{ session_id: string; timestamp: number; skill: string }, any[]>(
       `SELECT session_id, timestamp, json_extract(payload, '$.tool_input.skill') AS skill
@@ -762,7 +765,7 @@ export function skillUsageDetail(since = 0, bucketCount = 12, provider?: string)
          AND json_extract(payload, '$.tool_input.skill') IS NOT NULL AND timestamp >= ?${pf}
        ORDER BY session_id, timestamp`
     )
-    .all(since, ...pa);
+    .all(since, ...args);
   if (!invocations.length) return [];
 
   const bySession = new Map<string, { timestamp: number; skill: string }[]>();
@@ -794,19 +797,20 @@ export function skillUsageDetail(since = 0, bucketCount = 12, provider?: string)
 
   // Charge each cost-bearing event to the running skill at that moment.
   const costRows = db
-    .query<{ session_id: string; timestamp: number; cost_usd: number }, [number]>(
-      `SELECT session_id, timestamp, cost_usd FROM events WHERE cost_usd > 0 AND timestamp >= ?`
+    .query<{ session_id: string; timestamp: number; cost_usd: number }, any[]>(
+      `SELECT session_id, timestamp, cost_usd FROM events
+       WHERE cost_usd > 0 AND timestamp >= ?${pf}
+       ORDER BY session_id, timestamp`
     )
-    .all(since);
+    .all(since, ...args);
+  const positions = new Map<string, number>();
   for (const c of costRows) {
     const invs = bySession.get(c.session_id);
     if (!invs) continue;
-    let owner: string | null = null;
-    for (const inv of invs) {
-      if (inv.timestamp <= c.timestamp) owner = inv.skill;
-      else break;
-    }
-    if (owner) get(owner).cost_usd += c.cost_usd;
+    let pos = positions.get(c.session_id) ?? -1;
+    while (pos + 1 < invs.length && invs[pos + 1].timestamp <= c.timestamp) pos++;
+    positions.set(c.session_id, pos);
+    if (pos >= 0) get(invs[pos].skill).cost_usd += c.cost_usd;
   }
 
   return [...acc.entries()]
