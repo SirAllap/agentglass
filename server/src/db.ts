@@ -449,13 +449,19 @@ function upsertSession(
   return row;
 }
 
+const STATS_CACHE_MS = 3000;
+const STATS_CACHE_MAX = 64;
+const statsCache = new Map<string, { at: number; value: StatsSummary }>();
+
 const insertEventTx = db.transaction(insertEventCore);
 
 /** Keep an event, its FTS row, and its session rollup in one write unit. Bun's
  * nested transactions become savepoints when transcript ingestion already owns
  * an outer file transaction. */
 export function insertEvent(n: NormalizedEvent): InsertResult {
-  return insertEventTx(n);
+  const result = insertEventTx(n);
+  statsCache.clear();
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +571,7 @@ function percentile(sorted: number[], p: number): number {
 /** Full analytics summary over a rolling window (default 24h), optionally scoped
  *  to a single provider (Anthropic / OpenAI / Google / …). Always scoped to the
  *  open project, so spend, tool mix and the radar describe that project alone. */
-export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): StatsSummary {
+function computeStatsSummary(windowMs = 24 * 3600 * 1000, provider?: string): StatsSummary {
   const since = Date.now() - windowMs;
   const { clause: prov, args: pa } = providerScope(provider);
   const { clause: sc, args: sa } = scopeClause();
@@ -743,6 +749,22 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
     heatmap,
     window_ms: windowMs,
   };
+}
+
+/** A dashboard polls repeatedly and several windows may be open at once. Reuse
+ * identical summaries briefly, while committed ingestion invalidates them so a
+ * new event never waits for the TTL. */
+export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): StatsSummary {
+  const key = JSON.stringify([windowMs, provider ?? "", workspaceRoot() ?? ""]);
+  const cached = statsCache.get(key);
+  if (cached && Date.now() - cached.at < STATS_CACHE_MS) return cached.value;
+  const value = computeStatsSummary(windowMs, provider);
+  if (!statsCache.has(key) && statsCache.size >= STATS_CACHE_MAX) {
+    const oldest = statsCache.keys().next().value;
+    if (oldest !== undefined) statsCache.delete(oldest);
+  }
+  statsCache.set(key, { at: Date.now(), value });
+  return value;
 }
 
 /**
