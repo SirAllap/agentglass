@@ -12,7 +12,7 @@ export const HiliteCtx = createContext<Hilite>({ hl: null, lang: null, theme: nu
 export const THEME_KEY = "agentglass.diffTheme";
 export const BOLD_KEY = "agentglass.diffBold";
 
-export function useDiffHighlight(filePath?: string) {
+export function useDiffHighlight(filePath?: string, enabled = true) {
   const [hl, setHl] = useState<Highlighter | null>(null);
   const [loadedLangs, setLoadedLangs] = useState<Set<string>>(() => new Set());
   const [themePref, setThemePref] = useState<string>(() => { try { return localStorage.getItem(THEME_KEY) || "auto"; } catch { return "auto"; } });
@@ -28,20 +28,21 @@ export function useDiffHighlight(filePath?: string) {
   // monochrome diff. Swallowing any of them is what made this bug take three
   // separate reports to pin down, so all three now surface on the picker.
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     getHighlighter()
       .then((h) => { if (alive) { setHl(h); setCoreError(null); } })
       .catch(() => { if (alive) setCoreError("Syntax highlighting couldn't start — the highlighter failed to load."); });
     return () => { alive = false; };
-  }, []);
+  }, [enabled]);
   useEffect(() => {
-    if (!hl || !lang || loadedLangs.has(lang)) return;
+    if (!enabled || !hl || !lang || loadedLangs.has(lang)) return;
     let alive = true;
     hl.loadLanguage(lang as never)
       .then(() => { if (alive) { setLoadedLangs((s) => new Set(s).add(lang)); setLangError(null); } })
       .catch(() => { if (alive) setLangError(`The ${lang} grammar couldn't be loaded — this file is shown as plain text.`); });
     return () => { alive = false; };
-  }, [hl, lang, loadedLangs]);
+  }, [enabled, hl, lang, loadedLangs]);
   // Resolve "auto" to the app's light/dark, then register the chosen theme
   // (boldified when `bold`) and keep the previous one until the new one is ready.
   // Memoized so we don't run getComputedStyle on every render (e.g. every
@@ -50,7 +51,7 @@ export function useDiffHighlight(filePath?: string) {
   useEffect(() => { try { localStorage.setItem(THEME_KEY, themePref); } catch { /* ignore */ } }, [themePref]);
   useEffect(() => { try { localStorage.setItem(BOLD_KEY, bold ? "1" : "0"); } catch { /* ignore */ } }, [bold]);
   useEffect(() => {
-    if (!hl) return;
+    if (!enabled || !hl) return;
     let alive = true;
     // A theme that won't load is reported rather than swallowed: without this
     // the diff just renders monochrome and the picker keeps claiming the theme
@@ -62,7 +63,7 @@ export function useDiffHighlight(filePath?: string) {
         : `${themeLabel(failed)} couldn't be loaded — ${name ? `showing ${themeLabel(name)} instead` : "syntax highlighting is off"}.`);
     }).catch(() => { if (alive) setThemeError("The syntax theme couldn't be loaded."); });
     return () => { alive = false; };
-  }, [hl, resolvedTheme, bold]);
+  }, [enabled, hl, resolvedTheme, bold]);
 
   // Stable context object so <HiliteCtx.Provider> doesn't re-render every
   // memoized <Code> whenever an unrelated parent state changes.

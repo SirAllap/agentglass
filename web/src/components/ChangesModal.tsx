@@ -636,7 +636,7 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
   const commitPaths = useMemo(() => [...new Set(all.map((c) => c.file_path))], [all]);
   const walkSig = useMemo(() => changesetSig(all), [all]);
   // Shiki highlighter + theme/bold controls (shared with the git panel).
-  const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(selected?.file_path);
+  const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(selected?.file_path, open);
   // Restore a cached walkthrough for the current changeset (on open / when the
   // changeset changes) so it persists across close/reopen and never re-runs.
   useEffect(() => {
