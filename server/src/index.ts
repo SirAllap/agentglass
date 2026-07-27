@@ -1448,9 +1448,12 @@ repairThemeArtifacts();
 // Retention: prune at boot and hourly so the DB stays lean but the 7d window
 // always has full history (see AGENTGLASS_RETENTION_DAYS in db.ts).
 function prune() {
-  const { events, sessions } = pruneOldRows();
+  const { events, sessions, rolled } = pruneOldRows();
   if (events || sessions) {
-    console.log(`🧹 pruned ${events} events / ${sessions} sessions older than ${RETENTION_DAYS}d`);
+    // `rolled` counts day-rows written, not events summarised. The point it
+    // makes is that the numbers outlived the rows they came from.
+    const folded = rolled ? ` → folded into ${rolled} rollup days` : "";
+    console.log(`🧹 pruned ${events} events / ${sessions} sessions older than ${RETENTION_DAYS}d${folded}`);
   }
 }
 prune();

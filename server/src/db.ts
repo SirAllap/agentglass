@@ -343,6 +343,54 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_pat
 //
 // `decision` NULL means still pending. `resolution` records *who* decided:
 // human, timeout, or restart (expired while the server was down).
+/**
+ * What survives the prune.
+ *
+ * Raw events are deleted at AGENTGLASS_RETENTION_DAYS, which is right for
+ * rows carrying prompts and command lines, and silently caps every question
+ * worth asking: what a project cost last month, this sprint against the last,
+ * whether a budget is being kept. The only escape was raising retention and
+ * paying for it in database size and query time.
+ *
+ * So expiring events are folded into a day-grained summary before they are
+ * deleted. One row per (day, project, session, model, provider) is small
+ * enough to keep for years — a busy month of one project is a few thousand
+ * rows against a few hundred thousand events.
+ *
+ * What does NOT survive, and cannot: percentiles. p50 and p95 do not
+ * aggregate — an average of percentiles is not a percentile of anything. The
+ * total duration and the number of timed calls are carried instead, which
+ * gives an honest mean and nothing it cannot support.
+ *
+ * The key columns COALESCE to '' rather than allowing NULL, because NULLs are
+ * distinct from each other in a UNIQUE index and the upsert would insert a
+ * new row every night instead of accumulating.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS daily_rollup (
+  day TEXT NOT NULL,            -- YYYY-MM-DD, UTC
+  project_path TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  source_app TEXT NOT NULL,
+  model_name TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  events INTEGER NOT NULL DEFAULT 0,
+  tool_calls INTEGER NOT NULL DEFAULT 0,
+  tool_errors INTEGER NOT NULL DEFAULT 0,
+  errors INTEGER NOT NULL DEFAULT 0,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  duration_ms_total INTEGER NOT NULL DEFAULT 0,
+  timed_calls INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, project_path, session_id, model_name, provider)
+);
+CREATE INDEX IF NOT EXISTS idx_rollup_day ON daily_rollup(day);
+CREATE INDEX IF NOT EXISTS idx_rollup_project_day ON daily_rollup(project_path, day);
+`);
+
 // ---------------------------------------------------------------------------
 db.exec(`
 CREATE TABLE IF NOT EXISTS gates (
@@ -696,16 +744,131 @@ const isTerminal = (t: string) => t === "Stop" || t === "SessionEnd";
 // ---------------------------------------------------------------------------
 export const RETENTION_DAYS = Math.max(0, Number(process.env.AGENTGLASS_RETENTION_DAYS ?? 8));
 
-export function pruneOldRows(): { events: number; sessions: number } {
-  if (!RETENTION_DAYS) return { events: 0, sessions: 0 };
+/**
+ * Fold every event older than `cutoff` into daily_rollup.
+ *
+ * Runs inside the prune transaction, immediately before the DELETE, so a
+ * crash between the two cannot lose a day: either both happened or neither
+ * did. Accumulating rather than replacing, because a day is folded once when
+ * it expires and must not be double-counted if a prune is run twice — the
+ * DELETE that follows is what guarantees each event is folded exactly once.
+ */
+function foldExpiringEvents(cutoff: number): number {
+  const r = db.run(
+    `INSERT INTO daily_rollup (
+       day, project_path, session_id, source_app, model_name, provider,
+       events, tool_calls, tool_errors, errors,
+       input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+       cost_usd, duration_ms_total, timed_calls
+     )
+     SELECT date(timestamp / 1000, 'unixepoch'),
+            COALESCE(project_path, ''), session_id, COALESCE(source_app, ''),
+            COALESCE(model_name, ''), COALESCE(provider, ''),
+            COUNT(*),
+            SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END),
+            SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END),
+            SUM(is_error),
+            SUM(COALESCE(input_tokens, 0)), SUM(COALESCE(output_tokens, 0)),
+            SUM(COALESCE(cache_creation_tokens, 0)), SUM(COALESCE(cache_read_tokens, 0)),
+            SUM(COALESCE(cost_usd, 0)),
+            SUM(COALESCE(duration_ms, 0)),
+            SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END)
+     FROM events WHERE timestamp < ?
+     GROUP BY 1, 2, 3, 4, 5, 6
+     ON CONFLICT(day, project_path, session_id, model_name, provider) DO UPDATE SET
+       events = events + excluded.events,
+       tool_calls = tool_calls + excluded.tool_calls,
+       tool_errors = tool_errors + excluded.tool_errors,
+       errors = errors + excluded.errors,
+       input_tokens = input_tokens + excluded.input_tokens,
+       output_tokens = output_tokens + excluded.output_tokens,
+       cache_creation_tokens = cache_creation_tokens + excluded.cache_creation_tokens,
+       cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+       cost_usd = cost_usd + excluded.cost_usd,
+       duration_ms_total = duration_ms_total + excluded.duration_ms_total,
+       timed_calls = timed_calls + excluded.timed_calls`,
+    [cutoff]
+  );
+  return r.changes;
+}
+
+export function pruneOldRows(): { events: number; sessions: number; rolled: number } {
+  if (!RETENTION_DAYS) return { events: 0, sessions: 0, rolled: 0 };
   const cutoff = Date.now() - RETENTION_DAYS * 86_400_000;
-  db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
-  const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
-  const se = db.run(`DELETE FROM sessions WHERE last_seen < ?`, [cutoff]);
-  // Resolved gates only — a pending one is a live request, never retention's
-  // business no matter how old its row looks.
-  db.run(`DELETE FROM gates WHERE decision IS NOT NULL AND created < ?`, [cutoff]);
-  return { events: ev.changes, sessions: se.changes };
+  // One transaction: the fold and the delete are the same decision, and a
+  // crash between them would delete a day nobody had summarised.
+  return db.transaction(() => {
+    const rolled = foldExpiringEvents(cutoff);
+    db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
+    const ev = db.run(`DELETE FROM events WHERE timestamp < ?`, [cutoff]);
+    const se = db.run(`DELETE FROM sessions WHERE last_seen < ?`, [cutoff]);
+    // Resolved gates only — a pending one is a live request, never retention's
+    // business no matter how old its row looks.
+    db.run(`DELETE FROM gates WHERE decision IS NOT NULL AND created < ?`, [cutoff]);
+    return { events: ev.changes, sessions: se.changes, rolled };
+  })();
+}
+
+/** A day's totals, from the rollup. `null` bounds mean no bound. */
+export interface RollupDay {
+  day: string;
+  events: number;
+  tool_calls: number;
+  tool_errors: number;
+  errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+  sessions: number;
+  /** Mean tool duration. There is no p95 here and there cannot be — see the
+   *  daily_rollup comment. */
+  avg_ms: number;
+}
+
+/**
+ * Daily totals from the rollup, scoped like every other metric.
+ *
+ * This reads only what the prune has already folded, so it answers about the
+ * past — the live window is still the events table's job. A caller wanting a
+ * continuous series joins the two at the retention boundary.
+ */
+export function rollupDays(fromDay?: string, toDay?: string): RollupDay[] {
+  const roots = scopeRoots();
+  const where: string[] = [];
+  const args: any[] = [];
+  if (fromDay) { where.push('day >= ?'); args.push(fromDay); }
+  if (toDay) { where.push('day <= ?'); args.push(toDay); }
+  if (roots.length) {
+    where.push(`project_path IN (${roots.map(() => '?').join(',')})`);
+    args.push(...roots);
+  }
+  const clause = where.length ? ` WHERE ${where.join(' AND ')}` : '';
+  return db
+    .query<RollupDay, any[]>(
+      `SELECT day,
+              SUM(events) AS events, SUM(tool_calls) AS tool_calls,
+              SUM(tool_errors) AS tool_errors, SUM(errors) AS errors,
+              SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+              SUM(cache_creation_tokens) AS cache_creation_tokens,
+              SUM(cache_read_tokens) AS cache_read_tokens,
+              SUM(cost_usd) AS cost_usd,
+              COUNT(DISTINCT session_id) AS sessions,
+              CASE WHEN SUM(timed_calls) > 0
+                   THEN CAST(SUM(duration_ms_total) / SUM(timed_calls) AS INTEGER)
+                   ELSE 0 END AS avg_ms
+       FROM daily_rollup${clause}
+       GROUP BY day ORDER BY day`
+    )
+    .all(...args);
+}
+
+/** The oldest day the rollup can speak to, or null when it is empty. Lets a
+ *  panel state the real range instead of implying it has everything. */
+export function rollupEarliestDay(): string | null {
+  const r = db.query<{ day: string | null }, []>('SELECT MIN(day) AS day FROM daily_rollup').get();
+  return r?.day ?? null;
 }
 
 export interface InsertResult {
