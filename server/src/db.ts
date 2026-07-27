@@ -234,6 +234,27 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_model ON events(model_name)");
 // timestamp in the index, like the scope columns, because every provider-scoped
 // query also windows by time.
 try { db.exec("ALTER TABLE events ADD COLUMN provider TEXT"); } catch { /* already present */ }
+
+// A PreToolUse can be paired with exactly one Post.
+//
+// Pairing used to be a bare SELECT ... LIMIT 1 with nothing marking the row,
+// so a Pre could answer any number of Posts. Two concurrent calls to the same
+// tool both measured against the newest Pre — the second one's real duration
+// vanished — and a Post with no matching id fell back to *any* earlier Pre for
+// that tool with no age bound at all, which is how a 3,600,000 ms tool call
+// gets into the percentiles.
+//
+// Backfilled to 1 for every Pre that already has a Post, so the open-tool card
+// does not retroactively sprout a fleet of calls that finished last week.
+try {
+  db.exec("ALTER TABLE events ADD COLUMN paired INTEGER NOT NULL DEFAULT 0");
+  db.exec(`UPDATE events SET paired = 1
+           WHERE hook_event_type = 'PreToolUse' AND tool_use_id IS NOT NULL
+             AND EXISTS (SELECT 1 FROM events p
+                         WHERE p.tool_use_id = events.tool_use_id
+                           AND p.hook_event_type IN ('PostToolUse','PostToolUseFailure'))`);
+} catch { /* already present */ }
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_pre_open ON events(session_id, tool_name, paired, id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_provider_ts ON events(provider, timestamp)");
 
 // Covering indexes for /stats — the endpoint that freezes the terminal.
@@ -579,16 +600,40 @@ const insertStmt = db.query(`
 
 // Find the matching PreToolUse for a Post event: by tool_use_id when present,
 // otherwise the most recent unpaired Pre for the same session+tool.
-const findPreById = db.query<{ timestamp: number }, [string]>(
-  `SELECT timestamp FROM events
-   WHERE hook_event_type = 'PreToolUse' AND tool_use_id = ?
-   ORDER BY id DESC LIMIT 1`
+/**
+ * Claim a Pre, rather than merely finding one.
+ *
+ * UPDATE ... RETURNING marks and reads in one statement, so a Pre answers one
+ * Post and no more. Without the claim, two overlapping calls to the same tool
+ * both measured from the newest Pre and one of the two durations was simply
+ * lost.
+ */
+const claimPreById = db.query<{ timestamp: number }, [string]>(
+  `UPDATE events SET paired = 1
+   WHERE id = (SELECT id FROM events
+               WHERE hook_event_type = 'PreToolUse' AND tool_use_id = ? AND paired = 0
+               ORDER BY id DESC LIMIT 1)
+   RETURNING timestamp`
 );
-const findPreByTool = db.query<{ timestamp: number }, [string, string, number]>(
-  `SELECT timestamp FROM events
-   WHERE hook_event_type = 'PreToolUse' AND session_id = ? AND tool_name = ?
-     AND timestamp <= ?
-   ORDER BY id DESC LIMIT 1`
+/**
+ * The fallback, for sources with no usable tool_use_id — hook payloads that
+ * omit it, and the OTLP-logs path, which synthesises ids that never match.
+ *
+ * FIFO (`ORDER BY id ASC`), not LIFO: with three calls open, the Post that
+ * arrives first belongs to the Pre that opened first. Taking the newest meant
+ * interleaved calls reported the shortest possible duration each time.
+ *
+ * Bounded below as well as above. An orphaned Post used to reach back through
+ * all of history and pair with a Pre from hours ago; now it finds nothing and
+ * records NULL, which the percentiles already know how to skip.
+ */
+const claimPreByTool = db.query<{ timestamp: number }, [string, string, number, number]>(
+  `UPDATE events SET paired = 1
+   WHERE id = (SELECT id FROM events
+               WHERE hook_event_type = 'PreToolUse' AND session_id = ? AND tool_name = ?
+                 AND paired = 0 AND timestamp <= ? AND timestamp >= ?
+               ORDER BY id ASC LIMIT 1)
+   RETURNING timestamp`
 );
 
 interface SessionTokenRow {
@@ -715,8 +760,11 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
   let duration_ms: number | null = null;
   if (isToolPost(n.hook_event_type)) {
     let pre: { timestamp: number } | null = null;
-    if (n.tool_use_id) pre = findPreById.get(n.tool_use_id) ?? null;
-    if (!pre && n.tool_name) pre = findPreByTool.get(n.session_id, n.tool_name, n.timestamp) ?? null;
+    if (n.tool_use_id) pre = claimPreById.get(n.tool_use_id) ?? null;
+    if (!pre && n.tool_name) {
+      // Same ceiling the open-tool card uses to call a call lost.
+      pre = claimPreByTool.get(n.session_id, n.tool_name, n.timestamp, n.timestamp - OPEN_TOOL_MAX_MS) ?? null;
+    }
     if (pre) duration_ms = Math.max(0, n.timestamp - pre.timestamp);
   }
 
@@ -759,9 +807,14 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
     return { event, session, inserted: true };
   };
 
-  // A retry key makes the event row and its session rollup one atomic write.
-  // Existing no-key scanner/hook events keep their original fast path.
-  const result = n.event_id !== null ? db.transaction(write)() : write();
+  // One transaction on every path, not only the retry-key one.
+  //
+  // The Pre claim above is a write, and it has to commit or roll back with the
+  // row it is measuring — otherwise two concurrent Posts can each claim a Pre
+  // and then one of the inserts fails, leaving a Pre marked answered by an
+  // event that does not exist. It also has to be in the *same* transaction as
+  // the claim, which is why the claim is not lifted out of insertEvent.
+  const result = db.transaction(write)();
   if (!result.inserted) return result;
   const { event } = result;
 
@@ -1259,6 +1312,10 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
       return {
         tool_name,
         calls: count,
+        // The percentile sample, which is not the call count: a Post with no
+        // paired Pre is an invocation with no duration. Shipped so the panel
+        // can say when a p95 rests on two measurements.
+        timed: sorted.length,
         errors,
         p50_ms: percentile(sorted, 50),
         p95_ms: percentile(sorted, 95),
