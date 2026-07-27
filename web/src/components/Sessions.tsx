@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { motion } from "motion/react";
 import type { SessionRollup } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
+import { sessionIsLive } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
 import { fmtUsd, fmtMs, fmtTokens, modelColor, modelLabelOf } from "../lib/format.ts";
 
@@ -27,7 +28,7 @@ export const Sessions = memo(function Sessions({ provider = "" }: { provider?: s
           const start = ((s.started_at - min) / span) * 100;
           const end = (((s.ended_at ?? s.last_seen) - min) / span) * 100;
           const width = Math.max(2, end - start);
-          const live = s.ended_at == null;
+          const live = sessionIsLive(s, now);
           const dur = (s.ended_at ?? s.last_seen) - s.started_at;
           const model = modelLabelOf(s.model_name);
           return (
