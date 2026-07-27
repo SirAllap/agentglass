@@ -20,7 +20,7 @@ import {
   gateHistory,
 } from "./db.ts";
 import { maybeAlert, setAlertSink } from "./alerts.ts";
-import { getSkills, catalogMarkdown, catalogCsv } from "./skills.ts";
+import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getUsage } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
@@ -1216,7 +1216,7 @@ const server = Bun.serve<WsData>({
       });
       return out ? body(out) : json({ error: "not found" }, 404);
     }
-    if (pathname === "/skills") return json({ skills: await getSkills(), generated_at: Date.now() });
+    if (pathname === "/skills") return json({ skills: await getSkills(), usage_since: usageSince(), generated_at: Date.now() });
     if (pathname === "/skills/export") {
       const fmt = url.searchParams.get("format") || "md";
       const dl = (body: string, type: string, name: string) =>
@@ -1233,7 +1233,18 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/stats") {
       const windowMs = parseWindowMs(url.searchParams.get("window"));
-      return json({ ...statsSummary(windowMs, url.searchParams.get("provider") || undefined), server_started_at: STARTED_AT });
+      // tz is the viewer's IANA zone, which only the browser knows. The
+      // heatmap is a weekday × hour grid and those are properties of a clock,
+      // not of an epoch — without this it was drawn in the server's zone while
+      // the timeline beside it was drawn in the viewer's.
+      return json({
+        ...statsSummary(
+          windowMs,
+          url.searchParams.get("provider") || undefined,
+          url.searchParams.get("tz") || undefined,
+        ),
+        server_started_at: STARTED_AT,
+      });
     }
 
     // --- export ---

@@ -70,6 +70,10 @@ beforeAll(async () => {
   getSkills = (await import("../src/skills.ts")).getSkills;
   db.insertEvent(skillEvent("review", 0.0175) as any);
   db.insertEvent(skillEvent("ship", 0.0175) as any);
+  // One run of "deploy", older than the retention window. Seeded here so the
+  // catalogue TTL cache cannot let the assertion pass by accident.
+  const { RETENTION_DAYS } = await import("../src/db.ts");
+  db.insertEvent({ ...skillEvent("deploy", 0), timestamp: Date.now() - (RETENTION_DAYS + 2) * 86_400_000 } as any);
 });
 
 describe("a Skill invocation is charged to the skill, not to a same-named command", () => {
@@ -104,7 +108,35 @@ describe("a Skill invocation is charged to the skill, not to a same-named comman
     expect(find(all, "command", "ship").calls).toBe(1);
   });
 
-  test("an uncontested skill is unaffected", async () => {
+});
+
+// A count bounded by retention must not read as a lifetime total (#248 F15).
+//
+// getSkills() called skillUsageDetail() with the default since = 0, which asks
+// for all of history — but events are pruned at AGENTGLASS_RETENTION_DAYS (8
+// by default), so the answer was silently "in the last week". A skill run 40
+// times over three months reported "4×", and the understatement is largest for
+// the oldest, best-established skills — backwards for the question the panel
+// exists to answer ("which skills earn their keep?").
+//
+// It cannot be made lifetime without a table that survives the prune, so it is
+// made honest: the bound is computed, shipped, and stated by the UI.
+describe("the usage window is bounded and declared", () => {
+  test("usageSince is retention days back, not the beginning of time", async () => {
+    const { usageSince } = await import("../src/skills.ts");
+    const { RETENTION_DAYS } = await import("../src/db.ts");
+    const since = usageSince();
+    expect(RETENTION_DAYS).toBeGreaterThan(0); // default 8; the guard below assumes it
+    expect(since).toBeGreaterThan(0);
+    const days = (Date.now() - since) / 86_400_000;
+    expect(days).toBeCloseTo(RETENTION_DAYS, 1);
+  });
+
+  // "deploy" was invoked once, older than the retention window — seeded in
+  // beforeAll so the catalogue's TTL cache cannot make this pass by accident.
+  // Reading with since = 0 counts it and reports a lifetime "1×" for a run the
+  // events table is about to forget; reading the real window reports 0.
+  test("an invocation older than the window is not counted, so the number is true", async () => {
     const all = await getSkills();
     expect(find(all, "skill", "deploy").calls).toBe(0);
   });

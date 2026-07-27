@@ -123,6 +123,18 @@ function SkillCard({ s, isNew, isTop, expanded, onToggle }: { s: SkillInfo; isNe
 
 export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+  // The window the call counts actually cover. They are pruned at
+  // AGENTGLASS_RETENTION_DAYS (8 by default), so "used 3x" meant 3x in the
+  // last week while reading as a lifetime total — and the understatement is
+  // worst for the oldest, most-established skills, which is backwards for
+  // the question this panel exists to answer. Stated once here rather than
+  // on forty rows.
+  const [usageSince, setUsageSince] = useState<number | null>(null);
+  // usage_since === 0 means retention is disabled: the counts are genuinely
+  // lifetime and the caveat would be a lie of its own.
+  const usageWindow = usageSince
+    ? `the last ${Math.max(1, Math.round((Date.now() - usageSince) / 86_400_000))}d`
+    : null;
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<Kind>("all");
   const [usage, setUsage] = useState<Usage>("all");
@@ -132,7 +144,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
 
   useEffect(() => {
     if (!open) return;
-    api.skills().then((r) => setSkills(r.skills)).catch(() => setSkills([]));
+    api.skills().then((r) => { setSkills(r.skills); setUsageSince(r.usage_since ?? null); }).catch(() => setSkills([]));
     setQ("");
     setExpanded(null);
   }, [open]);
@@ -215,7 +227,7 @@ export function SkillsModal({ open, onClose }: { open: boolean; onClose: () => v
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Skills explorer</span>
                   {skills && (
                     <span className="text-[10px] t-dim2 tabular-nums">
-                      {all.length} available · {all.filter((s) => s.kind === "skill").length} skills · {all.filter((s) => s.kind === "command").length} commands · {used} used recently · {all.length - used} to discover
+                      {all.length} available · {all.filter((s) => s.kind === "skill").length} skills · {all.filter((s) => s.kind === "command").length} commands · {used} used recently · {all.length - used} to discover{usageWindow ? ` · usage over ${usageWindow}` : ""}
                     </span>
                   )}
                 </div>

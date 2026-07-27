@@ -6,7 +6,7 @@ import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import type { SkillInfo } from "../../shared/types.ts";
-import { skillUsageDetail } from "./db.ts";
+import { skillUsageDetail, RETENTION_DAYS } from "./db.ts";
 
 // Where to look for `.claude` roots: the user's own + every project checkout.
 const CODE_DIR = process.env.AGENTGLASS_CODE_DIR || join(homedir(), "code");
@@ -164,6 +164,12 @@ async function gitAddedDates(repo: string): Promise<Map<string, number>> {
   return map;
 }
 
+/** The oldest moment skill usage can be known from, or 0 when pruning is
+ *  disabled and the counts really are lifetime. */
+export function usageSince(): number {
+  return RETENTION_DAYS ? Date.now() - RETENTION_DAYS * 86_400_000 : 0;
+}
+
 export async function getSkills(): Promise<SkillInfo[]> {
   const now = Date.now();
   if (cache && now - cacheAt < TTL) return cache;
@@ -210,7 +216,22 @@ export async function getSkills(): Promise<SkillInfo[]> {
 
   // Join usage + attributed cost ("plugin:skill" invocations also count for "skill").
   const usage = new Map<string, { calls: number; cost_usd: number; last_used: number }>();
-  for (const u of skillUsageDetail()) {
+  /**
+   * Read the window that exists, rather than asking for all of history.
+   *
+   * skillUsageDetail() defaulted to since = 0, which reads every event in
+   * the table — but events are pruned at AGENTGLASS_RETENTION_DAYS (8 by
+   * default). So a lifetime figure was silently a retained-window one: a
+   * skill run 40 times over three months reported "4x". The error is
+   * largest for the oldest, best-established skills, which is exactly
+   * backwards for the question the panel exists to answer.
+   *
+   * The count cannot be made lifetime without a table that survives the
+   * prune, so it is made honest instead: the bound is computed here and
+   * shipped, and the UI states it. RETENTION_DAYS === 0 means pruning is
+   * off, and then it really is all time.
+   */
+  for (const u of skillUsageDetail(usageSince())) {
     for (const key of new Set([u.skill, u.skill.split(":").pop()!])) {
       const cur = usage.get(key) ?? { calls: 0, cost_usd: 0, last_used: 0 };
       cur.calls += u.calls;
