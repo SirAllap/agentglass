@@ -411,6 +411,7 @@ export function providerOf(model: string | null | undefined): string | null {
   if (/opus|sonnet|haiku|fable|claude|anthropic/.test(m)) return "Anthropic";
   if (/gpt|davinci|openai|\bo1\b|\bo3\b|\bo4\b/.test(m)) return "OpenAI";
   if (/gemini|palm|bison|flash|google|vertex/.test(m)) return "Google";
+  if (/kimi|moonshot/.test(m) || m === "k3" || m.startsWith("k3[")) return "Moonshot";
   if (/deepseek/.test(m)) return "DeepSeek";
   if (/grok|xai/.test(m)) return "xAI";
   if (/mistral|mixtral|codestral/.test(m)) return "Mistral";

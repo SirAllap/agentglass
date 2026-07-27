@@ -51,6 +51,81 @@ agentglass derives cost from token usage and its pricing table.
 If a Claude transcript scanner already owns the session id, the event is
 accepted but skipped (no double-count).
 
+### Kimi Code CLI and Kimi K3
+
+Kimi Code CLI's hook JSON already supplies `hook_event_name` and `session_id`,
+and Kimi runs the command in the session's project directory. Point Kimi at
+`hooks/send_event.py`; `--model-name` supplies the model because Kimi's hook
+payload does not include it.
+
+Add one block per event to `~/.kimi-code/config.toml` (or
+`$KIMI_CODE_HOME/config.toml`). Replace `/absolute/path/to/agentglass` with this
+checkout's real path:
+
+```toml
+[[hooks]]
+event = "SessionStart"
+command = "python3 \"/absolute/path/to/agentglass/hooks/send_event.py\" --model-name kimi-code/k3"
+
+[[hooks]]
+event = "UserPromptSubmit"
+command = "python3 \"/absolute/path/to/agentglass/hooks/send_event.py\" --model-name kimi-code/k3"
+
+[[hooks]]
+event = "PreToolUse"
+command = "python3 \"/absolute/path/to/agentglass/hooks/send_event.py\" --model-name kimi-code/k3"
+
+[[hooks]]
+event = "PostToolUse"
+command = "python3 \"/absolute/path/to/agentglass/hooks/send_event.py\" --model-name kimi-code/k3"
+
+[[hooks]]
+event = "PostToolUseFailure"
+command = "python3 \"/absolute/path/to/agentglass/hooks/send_event.py\" --model-name kimi-code/k3"
+
+[[hooks]]
+event = "Stop"
+command = "python3 \"/absolute/path/to/agentglass/hooks/send_event.py\" --model-name kimi-code/k3"
+
+[[hooks]]
+event = "SessionEnd"
+command = "python3 \"/absolute/path/to/agentglass/hooks/send_event.py\" --model-name kimi-code/k3"
+```
+
+The source app defaults to the current project directory's name. Pass
+`--source-app NAME` to override it. On Windows, use `py` or `python` instead of
+`python3`.
+
+Hooks provide the live lifecycle and tool stream. Kimi's hook payload currently
+does not include token usage. A Kimi/Moonshot adapter can add exact tokens and
+cost through `/ingest` using either supported API shape:
+
+```json
+{
+  "source_app": "my-project",
+  "session_id": "kimi-session-1",
+  "hook_event_type": "Stop",
+  "model_name": "kimi-k3",
+  "payload": {
+    "usage": {
+      "prompt_tokens": 1200,
+      "completion_tokens": 300,
+      "cached_tokens": 800
+    }
+  }
+}
+```
+
+The OpenAI-compatible nested form
+`prompt_tokens_details.cached_tokens` is supported too. Cached tokens are split
+out of `prompt_tokens` before cost math, so they are not charged twice.
+Agentglass recognizes `k3`, `kimi-k3`, and `kimi-code/k3` as **Moonshot / K3**.
+The built-in K3 API rate follows
+[Kimi's published pricing](https://www.kimi.com/help/kimi-api/api-pricing):
+$3 / MTok input, $15 / MTok output, and $0.30 / MTok cache reads. Use
+`reported_cost_usd` for Kimi Code subscription usage or whenever the provider
+reports the exact charge.
+
 ### OTLP (any provider)
 
 Point an OTLP/HTTP exporter at the same port. Both **protobuf** (SDK default)

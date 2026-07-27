@@ -13,6 +13,7 @@
 
 export interface ModelPrice {
   match: string[]; // substrings matched against lowercased model_name
+  exact?: string[]; // exact lowercased model names that are unsafe as substrings
   label: string;
   input: number;
   output: number;
@@ -57,6 +58,10 @@ export const PRICE_TABLE: ModelPrice[] = [
   { match: ["flash-lite"], label: "Gemini Flash-Lite", input: 0.075, output: 0.3, cache_write: 0, cache_read: 0.01875 },
   { match: ["gemini", "flash"], label: "Gemini Flash", input: 0.15, output: 0.6, cache_write: 0, cache_read: 0.0375 },
 
+  // --- Moonshot AI (Kimi) ---
+  // K3: cache misses use the normal input rate; cache hits are discounted 90%.
+  { match: ["kimi-code/k3", "kimi-k3", "moonshot/k3"], exact: ["k3", "k3[1m]"], label: "K3", input: 3, output: 15, cache_write: 3, cache_read: 0.3 },
+
   // --- others (approx) ---
   { match: ["deepseek"], label: "DeepSeek", input: 0.27, output: 1.1, cache_write: 0, cache_read: 0.07 },
   { match: ["grok"], label: "Grok", input: 2, output: 10, cache_write: 0, cache_read: 0 },
@@ -84,7 +89,7 @@ export function priceFor(modelName: string | null | undefined): ModelPrice | nul
   if (!modelName) return null;
   const m = modelName.toLowerCase();
   for (const p of table) {
-    if (p.match.some((frag) => m.includes(frag))) return p;
+    if (p.exact?.includes(m) || p.match.some((frag) => m.includes(frag))) return p;
   }
   return null;
 }

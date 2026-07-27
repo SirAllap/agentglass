@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """agentglass event forwarder.
 
-Reads a Claude Code hook payload on stdin and POSTs a normalized event to the
-agentglass server. Zero third-party deps (stdlib only).
+Reads a Claude Code or Kimi Code CLI hook payload on stdin and POSTs a
+normalized event to the agentglass server. Zero third-party deps (stdlib only).
 
 Usage (from a Claude Code hook command):
     send_event.py --source-app my-project --event-type PreToolUse
     send_event.py --source-app my-project --event-type Stop --add-chat
+    send_event.py --model-name kimi-code/k3
 
 Env:
     AGENTGLASS_SERVER   server base url (default http://localhost:4000)
@@ -66,6 +67,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--source-app", default=os.path.basename(os.getcwd()))
     ap.add_argument("--event-type", default=None)
+    ap.add_argument("--model-name", default=None,
+                    help="fallback model when the hook payload omits it")
     ap.add_argument("--server", default=DEFAULT_SERVER)
     ap.add_argument("--add-chat", action="store_true",
                     help="attach the transcript so tokens/cost can be computed")
@@ -80,7 +83,7 @@ def main():
 
     session_id = payload.get("session_id") or payload.get("sessionId") or "unknown"
     event_type = args.event_type or payload.get("hook_event_name") or "Unknown"
-    model_name = payload.get("model") or payload.get("model_name")
+    model_name = payload.get("model") or payload.get("model_name") or args.model_name
 
     chat = None
     if args.add_chat:
