@@ -34,6 +34,7 @@ gate. No install, no server. *(Everything there is fake; it's a showcase.)*
 
 - [Every project, one cockpit](#every-project-one-cockpit)
 - [More than a dashboard — a workspace](#more-than-a-dashboard--a-workspace)
+- [Away from the desk — the phone companion](#away-from-the-desk--the-phone-companion)
 - [Why](#why) · [Themes](#themes)
 - [Quickstart](#quickstart) · [Requirements](#requirements-what-agentglass-expects-to-find)
 - [Desktop app](#desktop-app) · [Updating](#updating)
@@ -231,6 +232,73 @@ discoverable).
 ---
 
 ![chat panel](.github/assets/chat.png)
+
+---
+
+## Away from the desk — the phone companion
+
+The cockpit stays at the desk. A terminal, a hunk-level diff and a docker table
+are not things anybody drives with a thumb, and a narrower version of them is
+not a phone app — it is the wrong app, smaller. So **a phone gets a different
+application**, not a different stylesheet: `main.tsx` chooses one tree or the
+other before React mounts. That is also what keeps the phone build honest —
+nothing heavy can leak into it. No terminal, no charts, no radar; the fleet's
+pulse is fourteen CSS-animated bars rather than a canvas, which on a phone is a
+battery decision as much as a layout one.
+
+**What decides.** Width under 768px, or a coarse pointer up to 900px — that
+second rule catches the phone held sideways, where the width alone would say
+"small laptop". A tablet in landscape is a perfectly good desk and keeps the
+cockpit. An explicit choice, stored per device, always wins over both.
+
+### The home screen is a queue, not a dashboard
+
+That is the whole difference: a dashboard is something you re-read, and this is
+something you can **empty**. Every card is one decision carrying its own action,
+and answering it takes the card out of the list.
+
+| Card | What it is, and what you can do about it |
+|---|---|
+| **Blocked · waiting on you** | A gate. The agent is stopped dead until you answer, so this outranks everything: allow or deny, with the command it wants to run in front of you. |
+| **Container down** | A container that exited non-zero, is restarting, or is dead. Tail the log, restart it, or hand it to Claude. |
+| **CI went red** | The failing check on one of your pull requests. Open the log, or re-run it. |
+| **Ready to merge** | Approved, checks green, nothing in the way. The one card that finishes work rather than starting it. |
+| **Review requested** | Somebody asked for your eyes. Opens the pull request, diff and all. |
+| **Stopped · wants direction** | A session that ended its turn and has gone quiet — between four minutes and twelve hours. Under four it is probably still thinking; over twelve it is yesterday's problem, not tonight's. |
+
+Ordered by what it costs you to be away: blocking a person first, then broken,
+then finished-and-waiting, then everything else — and within a rank, newest
+first. A card you are not going to deal with tonight can be snoozed, and it
+comes back when it changes.
+
+### Three tabs, and no more
+
+- **Now** — the queue above.
+- **Chats** — say something back. The same conversation you left at the desk,
+  and still the same one when you sit back down: the session lives on the
+  server, not in a browser tab. Turns stream in as they happen, with the tools
+  the agent runs named as it runs them.
+- **Repos** — for when you want to look rather than need to. Pick a repository,
+  then the facet: **Changes** (a switch per file *is* the staging, then commit
+  and push), **Pull requests**, **Containers**. It opens on whatever is wrong.
+
+The diff is unified, wrapped, with a `+` or `−` glyph on every line as well as
+the tint — at 11.5px, outdoors, in one hand, colour alone is not a signal to
+rely on, and for a good number of people it is not a signal at all.
+
+### Getting it onto your phone
+
+**Settings ▸ Remote access**, one switch. It prints a QR code, because the URL
+is an IP, a port and a 32-character secret and nobody is typing that. Scan it
+and the phone remembers the code; the link only carries it once.
+
+It is **your network only** — the server binds to the LAN, the code is required,
+and a phone that scanned it once keeps working until you rotate it. The same
+pane will tell you when a host firewall is dropping the packets, because
+otherwise the phone shows a white page and nothing anywhere says why.
+
+The page ships a web manifest, so **Add to home screen** gives you an icon that
+opens without browser chrome.
 
 ## Why
 
