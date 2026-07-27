@@ -326,12 +326,41 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
       },
     };
   }
+  // Asked before the lifecycle patterns below, which match on loose words:
+  // "notification.idle_prompt" contains "prompt" and was read as a user
+  // prompt. Nothing in this set matches a genuine prompt or session name, so
+  // the stricter question is safe to ask first.
+  // An OTel source that really is asking for a human. Kept, because losing
+  // it would be the opposite failure — a genuine hold going unannounced.
+  if (/notification|permission|approval|awaiting|blocked|input.?required|needs.?(input|approval)/.test(eventName)) {
+    return { ...base, hook_event_type: "Notification", payload: { message: bodyText || eventName, event: eventName || undefined } };
+  }
+
   // Recognizable lifecycle events.
   if (/prompt|user.?message|user.?input/.test(eventName)) return { ...base, hook_event_type: "UserPromptSubmit", payload: { prompt: bodyText } };
   if (/session.?start|thread.?init|conversation.?start/.test(eventName)) return { ...base, hook_event_type: "SessionStart", payload: { message: bodyText } };
   if (/session.?end|thread.?end|turn.?complete|response.?complete/.test(eventName)) return { ...base, hook_event_type: "Turn complete", payload: { message: bodyText } };
-  // Any other GenAI-tagged record → a notification carrying its body.
-  if (bodyText || eventName) return { ...base, hook_event_type: "Notification", payload: { message: bodyText || eventName, event: eventName || undefined } };
+  /**
+   * Everything else GenAI-tagged: telemetry, not a request.
+   *
+   * This used to fall through to Notification, and Notification is not a
+   * neutral bucket — it is the vocabulary's word for "the agent wants you".
+   * Three consumers act on it:
+   *
+   *   web/lib/derive.ts:337  the fleet card turns to `waiting`
+   *   web/lib/derive.ts:399  the outcome ladder counts it `unanswered`
+   *   server/alerts.ts:119   a desktop notification fires, and the webhook
+   *
+   * So a Codex heartbeat, a rollout debug line, any vendor record this
+   * mapper had not learned yet, told the operator an agent was blocked on
+   * them — on their desk, on their phone, and in whatever Slack channel
+   * AGENTGLASS_WEBHOOK points at. A false "needs you" is the most expensive
+   * signal this product can emit, because the queue is the product.
+   *
+   * Telemetry is deliberately not in any of those three lists: it counts as
+   * an event and keeps its body, and claims nothing about a human.
+   */
+  if (bodyText || eventName) return { ...base, hook_event_type: "Telemetry", payload: { message: bodyText || eventName, event: eventName || undefined } };
   return null;
 }
 
