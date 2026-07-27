@@ -154,6 +154,7 @@ export default function App() {
   useAlertSound(alerts.length, sound);
 
   const clearFilters = useCallback(() => setFilter({ app: "", type: "", provider: "" }), []);
+  const closeTerminal = useCallback(() => setTerminalOpen(false), []);
 
   // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, single-letter panels, Esc closes
   useEffect(() => {
@@ -305,7 +306,7 @@ export default function App() {
       <ChangesModal open={changesOpen} onClose={() => setChangesOpen(false)} />
       <GitPanel open={gitOpen} onClose={() => setGitOpen(false)} />
       <DockerPanel open={dockerOpen} onClose={() => setDockerOpen(false)} />
-      <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+      <TerminalPanel open={terminalOpen} onClose={closeTerminal} />
       <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} focusId={chatFocus} />
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
       <SettingsModal

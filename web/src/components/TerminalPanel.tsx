@@ -259,7 +259,10 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   const [cmds, setCmds] = useState<TerminalCommands | null>(null);
   const [cmdsOpen, setCmdsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
   const [, force] = useReducer((x: number) => x + 1, 0);
+
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -306,7 +309,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   // scrollback and running jobs intact across splits and reopens.
   useEffect(() => {
     if (!open || IS_DEMO) return;
-    panelClose = onClose;
+    panelClose = () => onCloseRef.current();
     const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver }[] = [];
     paneIds.forEach((id, i) => {
       const s = sessions.get(id);
@@ -323,8 +326,6 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
       ro.observe(el);
       mounted.push({ s, el, ro });
     });
-    const focused = sessions.get(paneIds[focusIdx] ?? "");
-    if (focused) requestAnimationFrame(() => focused.term.focus());
     return () => {
       panelClose = () => {};
       for (const { s, el, ro } of mounted) {
@@ -333,7 +334,14 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
         if (s.holder.parentElement === el) el.removeChild(s.holder);
       }
     };
-  }, [open, paneIds, focusIdx, onClose]);
+  }, [open, paneIds]);
+
+  // Moving focus between panes must not detach and remount every xterm DOM tree.
+  useEffect(() => {
+    if (!open || IS_DEMO) return;
+    const focused = sessions.get(paneIds[focusIdx] ?? "");
+    if (focused) requestAnimationFrame(() => focused.term.focus());
+  }, [open, paneIds, focusIdx]);
 
   const sess = sessions.get(paneIds[focusIdx] ?? "");
   const status: SessStatus = sess?.status ?? "idle";
