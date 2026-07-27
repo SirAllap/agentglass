@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ChatStreamError } from "../lib/api.ts";
 import { toolTarget } from "../lib/chatStore.ts";
 import { fmtUsd, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
+import { MODELS, resumeModel } from "./resumeModel.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
 
 /**
@@ -21,11 +22,10 @@ import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/t
  * when you sit back down.
  */
 
-const MODELS = [
-  { id: "claude-opus-5", label: "Opus 5" },
-  { id: "claude-sonnet-5", label: "Sonnet 5" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5" },
-];
+/** How long a stream may say nothing before we stop trusting it and let the
+ *  transcript speak again. Long enough for a slow tool call, short enough that
+ *  a connection that died quietly does not leave you watching a dead screen. */
+const STALL_MS = 45_000;
 
 /** A turn being streamed right now, before the transcript catches up. */
 type Live = { text: string; tools: string[]; error: string | null };
@@ -82,19 +82,50 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
   const [live, setLive] = useState<Live | null>(null);
   const [sent, setSent] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
+  const handover = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foot = useRef<HTMLDivElement | null>(null);
+
+  // Leaving mid-turn must not leave a request or a timer running behind the
+  // screen you just left.
+  useEffect(() => () => {
+    abort.current?.abort();
+    if (handover.current) clearTimeout(handover.current);
+  }, []);
 
   const load = useCallback(() => {
     api.session(id).then(setDetail).catch(() => { /* keep what is on screen */ });
   }, [id]);
 
+  /**
+   * Whether a turn of ours is streaming, readable from the interval without
+   * being a dependency of it.
+   *
+   * This was `live` itself, in the effect's dependency array — which meant
+   * every token that arrived tore the interval down, re-ran the effect, and
+   * called `load()` on the way in. A long answer fired one full transcript
+   * fetch per streamed chunk, which is the opposite of the "do not poll while
+   * streaming" the guard inside was written to achieve, and it is what made
+   * replying from the phone crawl.
+   */
+  const streaming = useRef(false);
+  /** When the stream last said anything. A turn that has gone silent for a
+   *  long time may have died in a way the socket never reported, so the
+   *  transcript takes back over rather than leaving you on a dead screen. */
+  const lastEvent = useRef(0);
+  const [stalled, setStalled] = useState(false);
+
   useEffect(() => {
     load();
-    // While a turn of ours is streaming the transcript is behind by a scan, so
-    // polling then would show a stale copy of what is already on screen.
-    const t = setInterval(() => { if (!live) load(); }, 5000);
+    const t = setInterval(() => {
+      // While our own turn is streaming the transcript is a scan behind, so
+      // polling would paint a stale copy of what is already on screen. Once it
+      // has gone quiet past the threshold that stops being true.
+      const quiet = streaming.current && Date.now() - lastEvent.current > STALL_MS;
+      if (!streaming.current || quiet) load();
+      if (streaming.current) setStalled(quiet);
+    }, 5000);
     return () => clearInterval(t);
-  }, [load, live]);
+  }, [load]);
 
   useEffect(() => { foot.current?.scrollIntoView({ block: "end" }); }, [detail?.conversation.length, live?.text, sent]);
 
@@ -107,24 +138,34 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
     setDraft("");
     setSent(message);
     setLive({ text: "", tools: [], error: null });
+    setStalled(false);
+    streaming.current = true;
+    lastEvent.current = Date.now();
     const ac = new AbortController();
     abort.current = ac;
     try {
       await api.chatStream(
-        { cwd, message, model: detail?.model_name && MODELS.some((m) => detail.model_name!.includes(m.id.split("-")[1]!)) ? MODELS[0]!.id : MODELS[0]!.id, mode: "default", resumeId: id },
-        (o) => setLive((prev) => reduce(prev, o)),
+        { cwd, message, model: resumeModel(detail?.model_name), mode: "default", resumeId: id },
+        (o) => { lastEvent.current = Date.now(); setStalled(false); setLive((prev) => reduce(prev, o)); },
         ac.signal
       );
     } catch (e) {
       if (!(e instanceof DOMException && e.name === "AbortError")) {
+        // A dropped connection is not a failed turn: the agent is very likely
+        // still working, and telling someone their message failed when it did
+        // not is how they end up sending it twice.
         const why = e instanceof ChatStreamError ? e.message : String(e);
         setLive((p) => ({ text: p?.text ?? "", tools: p?.tools ?? [], error: why }));
       }
     } finally {
+      streaming.current = false;
       abort.current = null;
+      setStalled(false);
       // Let the transcript take over: it is the same turn, written by the
-      // scanner, and keeping our copy as well would show it twice.
-      setTimeout(() => { setLive(null); setSent(null); load(); }, 1200);
+      // scanner, and keeping our copy as well would show it twice. Held in a
+      // ref so leaving the conversation cancels it rather than waking a
+      // component that is gone.
+      handover.current = setTimeout(() => { setLive(null); setSent(null); load(); }, 1200);
     }
   };
 
@@ -154,6 +195,14 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
         {sent && <Bubble role="user" text={sent} />}
         {live && (
           <Bubble role="assistant" text={live.text || "…"} streaming tools={live.tools} error={live.error} />
+        )}
+        {stalled && !live?.error && (
+          // Silence is ambiguous — a long tool call and a dead socket look
+          // identical. Say which one we cannot tell rather than leaving a
+          // spinner turning over nothing.
+          <div className="text-[11px] px-1" style={{ color: "var(--warning)" }}>
+            Nothing for a while. The turn may still be running — the transcript below is live again.
+          </div>
         )}
         <div ref={foot} />
       </div>

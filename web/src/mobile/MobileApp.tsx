@@ -1,319 +1,341 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.ts";
 import { useStats } from "../lib/useStats.ts";
-import { fmtUsd, fmtTokens, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
+import { fmtUsd, fmtTokens } from "../lib/format.ts";
 import { MobileChats } from "./MobileChats.tsx";
-import type { PendingGate, SessionRollup } from "../../../shared/types.ts";
+import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act } from "./mobileUi.tsx";
+import { DIFF_CSS } from "./MobileDiff.tsx";
+import { NOW_CSS, NowHero, NowStream, type NowAction } from "./MobileNow.tsx";
+import { RepoList, RepoScreen, type RepoSummary } from "./MobileRepo.tsx";
+import { MobilePr } from "./MobilePr.tsx";
+import { buildQueue, type NowItem } from "./nowQueue.ts";
+import type {
+  PendingGate, SessionRollup, DockerContainer, DockerStat, PrSummary, GitRepoRef,
+} from "../../../shared/types.ts";
 
 /**
- * agentglass on a phone.
+ * agentglass away from the desk.
  *
- * Deliberately a different application, not a reflow of the cockpit. The
- * desktop UI is six workspace views around a real terminal, hunk-level staging
- * and a docker table — none of which anyone wants to drive with a thumb, and
- * the terminal in particular is unusable there however it is styled. Shrinking
- * it produces something that technically renders and practically cannot be
- * used, which is worse than saying no.
+ * Not a smaller cockpit, and not a dashboard: a companion. The first pass at
+ * this was three tabs, two of which you could only read. The obvious next move
+ * was to add git, docker and pull requests as three more tabs — but a tab bar
+ * claims its entries are equal and independent, and those three are neither.
+ * They are facets of a repository, and none of them is somewhere you browse
+ * to: you arrive at them because something happened.
  *
- * So this is the part of agentglass that is genuinely better from the sofa:
+ * So the home is a queue of things that want a decision, each carrying its own
+ * action, and answering one takes it out of the list. That is the whole
+ * difference from a dashboard — a dashboard is something you re-read, and this
+ * is something you can empty.
  *
- *   Needs you — approve or deny what an agent is blocked on. The one thing
- *               that is time-critical and takes one tap.
- *   Chats     — read what an agent has been doing, reply to it, take over a
- *               session started at the desk, or start a new one. Monitoring
- *               without this is only half a companion: seeing that an agent
- *               stopped and being unable to say "carry on" is the same as not
- *               knowing.
- *   Fleet     — is it running, is it burning money, is anything failing.
+ *   Now    — what wants you, in order. Allow, reply, merge, restart.
+ *   Chats  — say something back. This part was already right.
+ *   Repos  — go looking, for when you want to rather than need to.
  *
- * Everything else is absent rather than broken, and there is deliberately no
- * way back to the desktop layout from here: it does not work on this screen,
- * so offering it would only be a route to a worse version of the same thing.
- *
- * Nothing heavy mounts here: no xterm, no charts, no radar. On a phone that is
- * a battery decision as much as a layout one.
+ * Nothing heavy mounts: no xterm, no charts, no radar. On a phone that is a
+ * battery decision as much as a layout one, and it is why the fleet's pulse is
+ * fourteen CSS-animated bars rather than a canvas.
  */
 
-type Tab = "gates" | "chats" | "fleet";
+type Tab = "now" | "chats" | "repos";
 
-const WINDOWS: { label: string; ms: number }[] = [
-  { label: "1h", ms: 3_600_000 },
-  { label: "24h", ms: 86_400_000 },
-  { label: "7d", ms: 7 * 86_400_000 },
-];
+/** A gate is the only thing here that has an agent stopped dead, so it gets
+ *  the fastest poll. Everything else moves on human timescales. */
+const GATE_MS = 4_000;
+const TREE_MS = 30_000;
+const DOCKER_MS = 15_000;
+const PR_MS = 60_000;
 
 export function MobileApp() {
-  const [tab, setTab] = useState<Tab>("gates");
-  const [windowMs, setWindowMs] = useState(WINDOWS[1]!.ms);
-  const { stats } = useStats(windowMs);
-  const [sessions, setSessions] = useState<SessionRollup[]>([]);
-  const [gates, setGates] = useState<PendingGate[]>([]);
-  const [reachable, setReachable] = useState(true);
+  const [tab, setTab] = useState<Tab>("now");
+  const { toasts, toast } = useToasts();
+  const { stats } = useStats(86_400_000);
 
-  // Polled rather than streamed. The live socket exists and works, but a phone
-  // spends most of its life with the screen off, and a reconnecting socket in
-  // the background is a worse deal than two small requests when you look at it.
-  const load = useCallback(() => {
-    api.gatePending()
-      .then((r) => { setGates(r.gates); setReachable(true); })
-      .catch(() => setReachable(false));
+  const [gates, setGates] = useState<PendingGate[]>([]);
+  const [sessions, setSessions] = useState<SessionRollup[]>([]);
+  const [reachable, setReachable] = useState(true);
+  const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  const [trees, setTrees] = useState<Record<string, { branch: string; dirty: number; ahead: number; behind: number }>>({});
+  const [containers, setContainers] = useState<DockerContainer[]>([]);
+  const [dstats, setDstats] = useState<DockerStat[]>([]);
+  const [prs, setPrs] = useState<{ root: string; repo: string; pr: PrSummary; scope: "mine" | "review" }[]>([]);
+  const [me, setMe] = useState("");
+
+  const [openRepo, setOpenRepo] = useState<RepoSummary | null>(null);
+  const [openPr, setOpenPr] = useState<{ root: string; number: number } | null>(null);
+  const [settings, setSettings] = useState(false);
+  const [dismissed, setDismissed] = useState<string[]>([]);
+
+  // ── polling ──────────────────────────────────────────────────────────
+  // Polled rather than streamed, deliberately. The live socket exists and
+  // works, but a phone spends most of its life with the screen off, and a
+  // socket reconnecting in the background is a worse deal than a few small
+  // requests at the moment you look at it.
+  const loadFast = useCallback(() => {
+    api.gatePending().then((r) => { setGates(r.gates); setReachable(true); }).catch(() => setReachable(false));
     api.sessions(40).then(setSessions).catch(() => { /* the gate poll reports reachability */ });
   }, []);
 
+  const loadDocker = useCallback(() => {
+    api.dockerOverview().then((o) => setContainers(o.available ? o.containers : [])).catch(() => setContainers([]));
+    api.dockerStats().then((r) => setDstats(r.stats)).catch(() => setDstats([]));
+  }, []);
+
+  const loadTrees = useCallback((list: GitRepoRef[]) => {
+    for (const r of list) {
+      api.gitTree(r.root).then((t) => setTrees((cur) => ({
+        ...cur,
+        [r.root]: {
+          branch: t.branch.name,
+          // A file part-staged appears in both lists; counting it twice would
+          // report more work outstanding than there is.
+          dirty: new Set([...t.staged, ...t.unstaged].map((f) => f.file_path)).size,
+          ahead: t.branch.ahead, behind: t.branch.behind,
+        },
+      }))).catch(() => { /* a repo that will not open is not worth a toast on a poll */ });
+    }
+  }, []);
+
+  const loadPrs = useCallback((list: GitRepoRef[]) => {
+    Promise.all(list.flatMap((r) => (["mine", "review"] as const).map((scope) =>
+      api.prList(r.root, scope, "open")
+        .then((res) => res.prs.map((pr) => ({ root: r.root, repo: repoName(r), pr, scope })))
+        .catch(() => [] as { root: string; repo: string; pr: PrSummary; scope: "mine" | "review" }[])
+    ))).then((groups) => setPrs(groups.flat()));
+  }, []);
+
   useEffect(() => {
-    load();
-    const t = setInterval(load, 4000);
+    loadFast();
+    const t = setInterval(loadFast, GATE_MS);
     // Catching up the moment the screen comes back is what makes a poll feel
     // live: a phone returning from sleep would otherwise show the last frame it
-    // painted before it slept.
-    const wake = () => { if (document.visibilityState === "visible") load(); };
+    // managed to paint before it slept.
+    const wake = () => { if (document.visibilityState === "visible") loadFast(); };
     document.addEventListener("visibilitychange", wake);
     return () => { clearInterval(t); document.removeEventListener("visibilitychange", wake); };
-  }, [load]);
+  }, [loadFast]);
 
+  useEffect(() => {
+    api.prCapability().then((c) => setMe(c.login || "")).catch(() => {});
+    api.gitRepos().then(({ repos: list }) => { setRepos(list); loadTrees(list); loadPrs(list); }).catch(() => {});
+    loadDocker();
+  }, [loadDocker, loadTrees, loadPrs]);
+
+  useEffect(() => {
+    if (!repos.length) return;
+    const a = setInterval(() => loadTrees(repos), TREE_MS);
+    const b = setInterval(() => loadPrs(repos), PR_MS);
+    const c = setInterval(loadDocker, DOCKER_MS);
+    return () => { clearInterval(a); clearInterval(b); clearInterval(c); };
+  }, [repos, loadTrees, loadPrs, loadDocker]);
+
+  const refreshAll = useCallback(() => {
+    loadFast(); loadDocker();
+    if (repos.length) { loadTrees(repos); loadPrs(repos); }
+  }, [loadFast, loadDocker, loadTrees, loadPrs, repos]);
+
+  // ── derived ──────────────────────────────────────────────────────────
   const live = useMemo(
     () => sessions.filter((s) => !s.ended_at && Date.now() - s.last_seen < 120_000),
     [sessions]
   );
 
+  const queue = useMemo(
+    () => buildQueue({ gates, sessions, prs, containers, me, now: Date.now() })
+      .filter((i) => !dismissed.includes(i.id)),
+    [gates, sessions, prs, containers, me, dismissed]
+  );
+
+  const repoSummaries: RepoSummary[] = useMemo(() => repos.map((r) => {
+    const t = trees[r.root];
+    const name = repoName(r);
+    return {
+      ref: r, name,
+      branch: t?.branch ?? "—",
+      dirty: t?.dirty ?? 0, ahead: t?.ahead ?? 0, behind: t?.behind ?? 0,
+      prs: prs.filter((p) => p.root === r.root).length,
+      down: containers.filter((c) => (c.project ?? "") === name && c.state !== "running" && c.state !== "created").length,
+    };
+  }), [repos, trees, prs, containers]);
+
+  /** An answered item leaves the queue at once, before the next poll confirms
+   *  it. Waiting four seconds to watch your own tap take effect is what makes
+   *  a companion feel like a web page. */
+  const drop = (id: string) => setDismissed((d) => [...d, id]);
+
+  const decide = async (id: string, d: "allow" | "deny", itemId: string) => {
+    try {
+      await api.gateDecide(id, d);
+      drop(itemId);
+      toast(d === "allow" ? "Allowed — the agent is moving again" : "Denied — the agent was told no");
+    } catch {
+      // An answer that did not arrive must not look like one that did: the
+      // agent is still blocked, and saying otherwise is the worst outcome here.
+      toast("That did not reach the server — the agent is still waiting", true);
+    }
+  };
+  const settle = async (label: string, run: () => Promise<{ ok: boolean; error?: string }>, itemId?: string) => {
+    const r = await run();
+    toast(r.ok ? label : (r.error || `${label} failed`), !r.ok);
+    if (r.ok) { if (itemId) drop(itemId); refreshAll(); }
+  };
+  /** A container belongs to a repo, so open its repo rather than inventing a
+   *  second route to the same screen. */
+  const openContainerRepo = (c: DockerContainer) => {
+    const r = repoSummaries.find((x) => x.name === (c.project ?? ""));
+    if (r) setOpenRepo(r); else toast("That container is not in a repo agentglass knows", true);
+  };
+
+  const actionsFor = (it: NowItem): NowAction[] => {
+    const o = it.origin;
+    switch (o.t) {
+      case "gate":
+        return [
+          { label: "Allow", kind: "ok", run: () => decide(o.gate.id, "allow", it.id) },
+          { label: "Deny", kind: "no", run: () => decide(o.gate.id, "deny", it.id) },
+        ];
+      case "session":
+        return [
+          { label: "Open chat", kind: "acc", run: () => { setTab("chats"); drop(it.id); } },
+          { label: "Later", run: () => { drop(it.id); toast("Snoozed"); } },
+        ];
+      case "pr-red":
+        return [
+          { label: "See the log", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
+          { label: "Re-run", kind: "acc", run: () => settle("Re-running the failed checks", () => api.prRerun(o.root, o.pr.number)) },
+        ];
+      case "pr-ready":
+        return [
+          {
+            label: "Squash & merge", kind: "ok",
+            run: () => settle(`Merged #${o.pr.number}`, () => api.prMerge(o.root, o.pr.number, "squash", { deleteBranch: true }), it.id),
+          },
+          { label: "Review", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
+        ];
+      case "pr-review":
+        return [{ label: "Review", kind: "acc", run: () => setOpenPr({ root: o.root, number: o.pr.number }) }];
+      case "container":
+        return [
+          { label: "Logs", run: () => openContainerRepo(o.container) },
+          { label: "Restart", kind: "acc", run: () => settle(`Restarted ${o.container.name}`, () => api.dockerRestart(o.container.id)) },
+        ];
+    }
+  };
+
+  const openItem = (it: NowItem) => {
+    const o = it.origin;
+    if (o.t === "pr-red" || o.t === "pr-ready" || o.t === "pr-review") setOpenPr({ root: o.root, number: o.pr.number });
+    else if (o.t === "container") openContainerRepo(o.container);
+    else if (o.t === "session") setTab("chats");
+  };
+
+  const stacked = !!openRepo || !!openPr;
+  const spend = stats?.totals ? fmtUsd(stats.totals.cost_usd) : "—";
+
   return (
-    <div className="min-h-[100dvh] flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>
-      <header className="sticky top-0 z-10 px-4 pt-3 pb-2 flex items-center gap-2"
-        style={{ background: "color-mix(in srgb, var(--bg) 92%, transparent)", backdropFilter: "blur(8px)", borderBottom: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
-        <span className="text-[17px] font-semibold tracking-tight">
+    <div className="mb min-h-[100dvh] flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>
+      <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}</style>
+      <div className="mb-sky" />
+
+      <header className="sticky top-0 z-40 flex items-center gap-2 px-4"
+        style={{
+          paddingTop: "calc(env(safe-area-inset-top) + 11px)", paddingBottom: 10,
+          background: "color-mix(in srgb, var(--bg) 80%, transparent)", backdropFilter: "blur(16px) saturate(1.4)",
+          borderBottom: "1px solid var(--mb-line)",
+        }}>
+        <span className="text-[17.5px] font-bold tracking-tight">
           agent<span style={{ color: "var(--primary-hover)" }}>glass</span>
         </span>
-        <span className="ml-auto flex items-center gap-1.5 text-[11px]" style={{ color: reachable ? "var(--success)" : "var(--error)" }}>
-          <span className="inline-block rounded-full" style={{ width: 7, height: 7, background: "currentColor" }} />
+        <span className="flex-1" />
+        <span className="flex items-center gap-1.5 text-[11px]" style={{ color: reachable ? "var(--success)" : "var(--error)" }}>
+          <span className="mb-dot pulse" style={{ background: "currentColor", color: "currentColor" }} />
           {reachable ? "Live" : "Offline"}
         </span>
+        <button className="mb-press grid place-items-center" aria-label="Settings"
+          style={{ minHeight: 40, minWidth: 40, borderRadius: 11, fontSize: 15, color: "var(--text3)", background: "transparent" }}
+          onClick={() => setSettings(true)}>⚙</button>
       </header>
 
-      <main className="flex-1 px-4 pb-24 pt-3">
-        {tab === "gates" && <GatesTab gates={gates} onDecided={(id) => setGates((g) => g.filter((x) => x.id !== id))} />}
-        {tab === "fleet" && (
-          <FleetTab
-            stats={stats}
-            live={live.length}
-            windowMs={windowMs}
-            onWindow={setWindowMs}
-            sessions={live}
-          />
+      <main className="flex-1 relative" style={{ zIndex: 1, padding: "14px 15px calc(var(--nav) + env(safe-area-inset-bottom) + 22px)" }}>
+        {tab === "now" && (
+          <>
+            <NowHero
+              pending={queue.length} working={live.length}
+              // The bars breathe at rates derived from each agent's own tool
+              // count, so the strip reads as several things working rather than
+              // one animation looping.
+              rates={live.map((s) => 1 + ((s.tool_count % 5) * 0.35))}
+              spend={spend}
+              repos={[...new Set(live.map((s) => (s.project_path || "").split("/").filter(Boolean).pop() || s.source_app))]}
+            />
+            <NowStream items={queue} actionsFor={actionsFor} onOpen={openItem} />
+          </>
         )}
-        {tab === "chats" && <MobileChats sessions={sessions} onRefresh={load} />}
+        {tab === "chats" && <MobileChats sessions={sessions} onRefresh={loadFast} />}
+        {tab === "repos" && <RepoList repos={repoSummaries} onOpen={setOpenRepo} />}
       </main>
 
-      {/* Fixed, thumb-height, and out of the way of the home indicator. */}
-      <nav className="fixed bottom-0 left-0 right-0 flex z-20"
-        style={{ background: "color-mix(in srgb, var(--bg2) 94%, transparent)", backdropFilter: "blur(10px)", borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", paddingBottom: "env(safe-area-inset-bottom)" }}>
-        <TabButton id="gates" tab={tab} onPick={setTab} label="Needs you" badge={gates.length} />
-        <TabButton id="chats" tab={tab} onPick={setTab} label="Chats" badge={live.length} subtle />
-        <TabButton id="fleet" tab={tab} onPick={setTab} label="Fleet" />
+      <nav className="fixed left-0 right-0 bottom-0 z-40 flex"
+        style={{
+          background: "color-mix(in srgb, var(--bg2) 84%, transparent)", backdropFilter: "blur(20px) saturate(1.5)",
+          borderTop: "1px solid color-mix(in srgb, var(--border) 48%, transparent)",
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}>
+        <TabBtn id="now" tab={tab} onPick={setTab} glyph="◎" label="Now" badge={queue.length} />
+        <TabBtn id="chats" tab={tab} onPick={setTab} glyph="▤" label="Chats" />
+        <TabBtn id="repos" tab={tab} onPick={setTab} glyph="◇" label="Repos" />
       </nav>
+
+      <RepoScreen open={!!openRepo && !openPr} repo={openRepo} containers={containers} stats={dstats}
+        onBack={() => setOpenRepo(null)} toast={toast} onRefresh={refreshAll} />
+
+      <MobilePr open={!!openPr} root={openPr?.root ?? ""} number={openPr?.number ?? null}
+        onBack={() => { setOpenPr(null); refreshAll(); }} toast={toast} />
+
+      <Sheet open={settings} title="Settings" sub="This device only." onClose={() => setSettings(false)}>
+        <div className="flex flex-col gap-2.5">
+          <Row title="Spend today" sub={stats?.totals ? `${fmtTokens(stats.totals.input_tokens + stats.totals.output_tokens)} tokens` : "—"} right={spend} />
+          <Row title="Sessions" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.sessions) : "—"} />
+          <Row title="Tool errors" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.errors) : "—"} />
+        </div>
+        <div className="mb-eyebrow" style={{ margin: "16px 0 9px" }}>Queue</div>
+        <Row title="Snoozed" sub={dismissed.length ? `${dismissed.length} hidden until they change` : "Nothing snoozed"}
+          right={dismissed.length
+            ? <Act small onAct={() => { setDismissed([]); toast("Queue restored"); }}>Restore</Act>
+            : undefined} />
+        <p className="text-[10.5px] mt-4 leading-relaxed" style={{ color: "var(--text3)" }}>
+          The cockpit stays at the desk. This is the part of agentglass worth having in a pocket.
+        </p>
+      </Sheet>
+
+      <Toasts toasts={toasts} raised={stacked} />
     </div>
   );
 }
 
-function TabButton({ id, tab, onPick, label, badge, subtle }: {
-  id: Tab; tab: Tab; onPick: (t: Tab) => void; label: string; badge?: number; subtle?: boolean;
+function TabBtn({ id, tab, onPick, glyph, label, badge }: {
+  id: Tab; tab: Tab; onPick: (t: Tab) => void; glyph: string; label: string; badge?: number;
 }) {
   const on = tab === id;
   return (
     <button onClick={() => onPick(id)} aria-current={on}
-      className="flex-1 flex flex-col items-center justify-center gap-0.5 py-3 text-[12px]"
-      style={{ color: on ? "var(--primary-hover)" : "var(--text2)", minHeight: 56 }}>
-      <span className="flex items-center gap-1.5">
-        {label}
-        {!!badge && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full tabular-nums" style={{
-            color: subtle ? "var(--text2)" : "var(--bg)",
-            background: subtle ? "color-mix(in srgb, var(--border) 60%, transparent)" : "var(--primary-hover)",
-          }}>{badge}</span>
-        )}
-      </span>
-      <span className="rounded-full" style={{ width: 18, height: 2, background: on ? "var(--primary-hover)" : "transparent" }} />
-    </button>
-  );
-}
-
-/** The reason to have this on a phone at all. */
-function GatesTab({ gates, onDecided }: { gates: PendingGate[]; onDecided: (id: string) => void }) {
-  if (!gates.length) {
-    return (
-      <Empty
-        title="Nothing is waiting on you"
-        body="When an agent asks permission to run something, it appears here and the fleet waits until you answer."
-      />
-    );
-  }
-  return (
-    <div className="flex flex-col gap-3">
-      {gates.map((g) => <GateCard key={g.id} gate={g} onDecided={onDecided} />)}
-    </div>
-  );
-}
-
-function GateCard({ gate, onDecided }: { gate: PendingGate; onDecided: (id: string) => void }) {
-  const [busy, setBusy] = useState<"allow" | "deny" | null>(null);
-  const [failed, setFailed] = useState(false);
-
-  const decide = async (decision: "allow" | "deny") => {
-    setBusy(decision);
-    setFailed(false);
-    try {
-      await api.gateDecide(gate.id, decision);
-      onDecided(gate.id);
-    } catch {
-      // An answer that did not arrive must not look like one that did: the
-      // agent is still blocked, and saying otherwise is the worst outcome here.
-      setFailed(true);
-      setBusy(null);
-    }
-  };
-
-  return (
-    <section className="rounded-2xl p-4 flex flex-col gap-3" style={{
-      background: "color-mix(in srgb, var(--bg2) 70%, transparent)",
-      border: "1px solid color-mix(in srgb, var(--warning) 35%, transparent)",
-    }}>
-      <div className="flex items-baseline gap-2">
-        <span className="text-[15px] font-semibold">{gate.tool_name}</span>
-        <span className="text-[11px] ml-auto" style={{ color: "var(--text2)" }}>{fmtAgo(gate.created)}</span>
-      </div>
-      <p className="text-[13px] leading-snug break-words" style={{ color: "var(--text)" }}>{gate.summary}</p>
-      <div className="text-[11px] t-mono break-all" style={{ color: "var(--text3)" }}>{gate.source_app}</div>
-      {failed && (
-        <div className="text-[11.5px]" style={{ color: "var(--error)" }}>
-          That did not reach the server. The agent is still waiting — try again.
-        </div>
-      )}
-      {/* Big, far apart, and deny is not the one under your thumb by accident. */}
-      <div className="flex gap-2.5 pt-0.5">
-        <button onClick={() => decide("allow")} disabled={!!busy}
-          className="flex-1 rounded-xl text-[15px] font-medium"
-          style={{ minHeight: 52, color: "var(--success)", background: "color-mix(in srgb, var(--success) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 45%, transparent)", opacity: busy ? 0.6 : 1 }}>
-          {busy === "allow" ? "Allowing…" : "Allow"}
-        </button>
-        <button onClick={() => decide("deny")} disabled={!!busy}
-          className="flex-1 rounded-xl text-[15px] font-medium"
-          style={{ minHeight: 52, color: "var(--error)", background: "color-mix(in srgb, var(--error) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)", opacity: busy ? 0.6 : 1 }}>
-          {busy === "deny" ? "Denying…" : "Deny"}
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function FleetTab({ stats, live, windowMs, onWindow, sessions }: {
-  stats: ReturnType<typeof useStats>["stats"];
-  live: number;
-  windowMs: number;
-  onWindow: (ms: number) => void;
-  sessions: SessionRollup[];
-}) {
-  const t = stats?.totals;
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex gap-1.5">
-        {WINDOWS.map((w) => (
-          <button key={w.label} onClick={() => onWindow(w.ms)}
-            className="px-3 py-1.5 rounded-lg text-[12px]"
-            style={{
-              minHeight: 38,
-              color: windowMs === w.ms ? "var(--primary-hover)" : "var(--text2)",
-              background: windowMs === w.ms ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
-              border: `1px solid color-mix(in srgb, var(--border) ${windowMs === w.ms ? 60 : 30}%, transparent)`,
-            }}>
-            {w.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="rounded-2xl p-4" style={{ background: "color-mix(in srgb, var(--bg2) 65%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
-        <div className="panel-eyebrow">Spend · this window</div>
-        <div className="text-[34px] font-semibold tabular-nums leading-tight" style={{ color: "var(--success)" }}>
-          {t ? fmtUsd(t.cost_usd) : "—"}
-        </div>
-        <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
-          {t ? `${fmtTokens(t.input_tokens + t.output_tokens)} tokens · ${fmtTokens(t.cache_read_tokens)} cached` : "…"}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2.5">
-        <Tile label="Working" value={String(live)} hint="Live agents" tone={live ? "var(--success)" : undefined} />
-        <Tile label="Tools run" value={t ? String(t.tool_calls) : "—"} hint={t ? `${t.events} events` : ""} />
-        <Tile label="Sessions" value={t ? String(t.sessions) : "—"} hint="In this window" />
-        <Tile label="Failed" value={t ? String(t.errors) : "—"} hint="Tool errors" tone={t?.errors ? "var(--error)" : undefined} />
-      </div>
-
-      <div>
-        <div className="panel-eyebrow px-1 pb-1.5">What the fleet is doing</div>
-        {sessions.length ? (
-          <div className="flex flex-col gap-2">{sessions.slice(0, 6).map((s) => <SessionRow key={s.session_id} s={s} />)}</div>
-        ) : (
-          <Empty title="Nothing running" body="No agent has reported in the last two minutes." compact />
-        )}
-      </div>
-
-    </div>
-  );
-}
-
-function SessionRow({ s, open, onToggle }: { s: SessionRollup; open?: boolean; onToggle?: () => void }) {
-  const running = !s.ended_at && Date.now() - s.last_seen < 120_000;
-  return (
-    <button onClick={onToggle} disabled={!onToggle}
-      className="w-full text-left rounded-xl px-3.5 py-3 flex flex-col gap-1.5"
-      style={{ background: "color-mix(in srgb, var(--bg2) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
-      <div className="flex items-center gap-2">
-        <span className="inline-block rounded-full shrink-0" style={{
-          width: 8, height: 8,
-          background: running ? "var(--success)" : s.error_count ? "var(--error)" : "var(--text3)",
-        }} />
-        <span className="text-[13.5px] leading-tight truncate">{sessionTitle(s)}</span>
-      </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] tabular-nums" style={{ color: "var(--text2)" }}>
-        <span>{modelLabelOf(s.model_name)}</span>
-        <span>{s.tool_count} tools</span>
-        {!!s.error_count && <span style={{ color: "var(--error)" }}>{s.error_count} err</span>}
-        <span>{fmtUsd(s.cost_usd)}</span>
-        <span className="ml-auto">{fmtAgo(s.last_seen)}</span>
-      </div>
-      {open && (
-        <div className="pt-1.5 mt-1 flex flex-col gap-1 text-[11.5px]" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", color: "var(--text2)" }}>
-          <Line k="Project" v={s.project_path || s.source_app} mono />
-          <Line k="Tokens" v={`${fmtTokens(s.input_tokens + s.output_tokens)} · ${fmtTokens(s.cache_read_tokens)} cached`} />
-          <Line k="Events" v={String(s.event_count)} />
-          <Line k="Started" v={fmtAgo(s.started_at)} />
-        </div>
+      className="flex-1 flex flex-col items-center justify-center gap-1 relative"
+      style={{ minHeight: "var(--nav)", fontSize: 10.5, color: on ? "var(--primary-hover)" : "var(--text3)", background: "transparent" }}>
+      <span style={{ fontSize: 17, lineHeight: 1, transform: on ? "translateY(-2px) scale(1.12)" : undefined, transition: "transform .3s cubic-bezier(.3,1.4,.5,1)" }}>{glyph}</span>
+      {label}
+      {on && <span style={{ position: "absolute", top: 0, width: 30, height: 2, borderRadius: "0 0 3px 3px", background: "var(--primary-hover)", boxShadow: "0 0 12px var(--primary)" }} />}
+      {!!badge && (
+        <span className="mb-tnum" style={{
+          position: "absolute", top: 10, right: "calc(50% - 23px)", minWidth: 17, height: 17, borderRadius: 9,
+          fontSize: 9.5, display: "grid", placeItems: "center", padding: "0 5px", fontWeight: 700,
+          background: "var(--warning)", color: "#2a1d02", boxShadow: "0 0 0 2px color-mix(in srgb, var(--bg2) 88%, transparent)",
+        }}>{badge}</span>
       )}
     </button>
   );
 }
 
-const Line = ({ k, v, mono }: { k: string; v: string; mono?: boolean }) => (
-  <div className="flex gap-2">
-    <span className="shrink-0" style={{ color: "var(--text3)" }}>{k}</span>
-    <span className={`min-w-0 break-all text-right ml-auto ${mono ? "t-mono text-[10.5px]" : ""}`} style={{ color: "var(--text)" }}>{v}</span>
-  </div>
-);
-
-function Tile({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: string }) {
-  return (
-    <div className="rounded-xl px-3.5 py-3" style={{ background: "color-mix(in srgb, var(--bg2) 60%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
-      <div className="panel-eyebrow">{label}</div>
-      <div className="text-[26px] font-semibold tabular-nums leading-tight" style={{ color: tone ?? "var(--text)" }}>{value}</div>
-      {hint && <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>{hint}</div>}
-    </div>
-  );
-}
-
-function Empty({ title, body, compact }: { title: string; body: string; compact?: boolean }) {
-  return (
-    <div className={`rounded-2xl text-center ${compact ? "px-4 py-6" : "px-5 py-12"}`}
-      style={{ background: "color-mix(in srgb, var(--bg2) 45%, transparent)", border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)" }}>
-      <div className="text-[14px]" style={{ color: "var(--text)" }}>{title}</div>
-      <div className="text-[12px] mt-1.5 leading-snug" style={{ color: "var(--text2)" }}>{body}</div>
-    </div>
-  );
+/** The last path segment is what anybody calls a repo. */
+function repoName(r: GitRepoRef): string {
+  return r.root.split("/").filter(Boolean).pop() || r.root;
 }
