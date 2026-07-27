@@ -65,6 +65,7 @@ test("OpenCode emits one Stop for a completed assistant turn", async () => {
     await plugin.event({ event: { type: "message.updated", properties: { sessionID: "session-1", info } } });
     await plugin.event({ event: { type: "session.idle", properties: { sessionID: "session-1" } } });
     assert.equal(sent.filter((body) => body.hook_event_type === "Stop").length, 1);
+    assert.equal(sent.filter((body) => body.hook_event_type === "Notification").length, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

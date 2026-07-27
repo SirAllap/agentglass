@@ -107,10 +107,9 @@ export const AgentGlassPlugin = async ({ directory, worktree }) => {
   const childSessions = new Set();
   const pendingPreTool = new Map();
   const completedMessages = new Map();
-  const completedSinceIdle = new Set();
+  const completingMessages = new Set();
   const clearSession = (id) => {
     childSessions.delete(id);
-    completedSinceIdle.delete(id);
     for (const [callID, pre] of pendingPreTool) if (pre.sessionID === id) pendingPreTool.delete(callID);
     for (const [messageID, sessionID] of completedMessages) if (sessionID === id) completedMessages.delete(messageID);
   };
@@ -247,13 +246,9 @@ export const AgentGlassPlugin = async ({ directory, worktree }) => {
         case "message.updated": {
           if (!info || info.role !== "assistant") break;
           if (!info.finish && !info.time?.completed) break;
-          if (info.id && completedMessages.has(info.id)) break;
+          if (info.id && (completedMessages.has(info.id) || completingMessages.has(info.id))) break;
           const completedSession = info.sessionID || sessionID;
-          if (info.id) {
-            completedMessages.set(info.id, completedSession);
-            if (completedMessages.size > 1000) completedMessages.delete(completedMessages.keys().next().value);
-          }
-          if (completedSession) completedSinceIdle.add(completedSession);
+          if (info.id) completingMessages.add(info.id);
 
           const usage = usageFromAssistant(info);
           const msgPayload = {
@@ -263,22 +258,27 @@ export const AgentGlassPlugin = async ({ directory, worktree }) => {
           if (usage) msgPayload.usage = usage;
           if (info.cost != null) msgPayload.cost_usd = info.cost;
 
-          await postEvent({
+          const posted = await postEvent({
             source_app: sourceApp,
             session_id: info.sessionID || sessionID || "unknown",
-            hook_event_type: "Stop",
+            hook_event_type: "Notification",
             payload: msgPayload,
             model_name: info.modelID
               ? `${info.providerID || "unknown"}/${info.modelID}`
               : modelLabel(info),
             session_name: sessionNameFromInfo(info),
           });
+          if (info.id) {
+            completingMessages.delete(info.id);
+            if (posted) {
+              completedMessages.set(info.id, completedSession);
+              if (completedMessages.size > 1000) completedMessages.delete(completedMessages.keys().next().value);
+            }
+          }
           break;
         }
 
         case "session.idle": {
-          if (sessionID && completedSinceIdle.delete(sessionID)) break;
-
           await postEvent({
             source_app: sourceApp,
             session_id: sessionID || "unknown",
