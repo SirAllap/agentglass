@@ -16,6 +16,7 @@ import type {
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel } from "./pricing.ts";
+import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
 import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
 
 /**
@@ -405,19 +406,19 @@ export function gateHistory(limit = 50): GateRow[] {
 /** Coarse vendor for a model name — the provider dimension. Returns null for an
  *  unknown/absent model so a session's known provider is never overwritten.
  *  Kept in sync with the web's providerOf() in web/src/lib/format.ts. */
+/**
+ * The vendor behind a model name, as this tier wants it.
+ *
+ * The rules live in shared/models.ts, shared with the web copy — they were two
+ * hand-kept transcriptions of each other, which #282 pinned with a test after
+ * they drifted. The only difference that survives is the miss value: the web
+ * needs a string to put in a filter option, this tier writes NULL into the
+ * `provider` column, and UNKNOWN_PROVIDER below is what makes the two
+ * correspond.
+ */
 export function providerOf(model: string | null | undefined): string | null {
-  if (!model) return null;
-  const m = model.toLowerCase();
-  if (/opus|sonnet|haiku|fable|claude|anthropic/.test(m)) return "Anthropic";
-  if (/gpt|davinci|openai|\bo1\b|\bo3\b|\bo4\b/.test(m)) return "OpenAI";
-  if (/gemini|palm|bison|flash|google|vertex/.test(m)) return "Google";
-  if (/kimi|moonshot/.test(m) || m === "k3" || m.startsWith("k3[")) return "Moonshot";
-  if (/deepseek/.test(m)) return "DeepSeek";
-  if (/grok|xai/.test(m)) return "xAI";
-  if (/mistral|mixtral|codestral/.test(m)) return "Mistral";
-  if (/llama|meta-/.test(m)) return "Meta";
-  if (/command|cohere/.test(m)) return "Cohere";
-  return null;
+  const p = sharedProviderOf(model);
+  return p === UNKNOWN_MODEL ? null : p;
 }
 
 /**
@@ -1173,15 +1174,54 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
        GROUP BY model_name`
     )
     .all(...A);
-  const by_model: CostByModel[] = modelRows.map((r) => ({
-    model_name: modelLabel(r.model_name),
-    input_tokens: r.input_tokens ?? 0,
-    output_tokens: r.output_tokens ?? 0,
-    cache_creation_tokens: r.cache_creation_tokens ?? 0,
-    cache_read_tokens: r.cache_read_tokens ?? 0,
-    cost_usd: r.cost_usd ?? 0,
-    sessions: r.sessions ?? 0,
-  }));
+  /**
+   * Fold the raw ids into their labels before the panel sees them.
+   *
+   * The SQL groups by `model_name`, which is the raw id, and the label is
+   * applied after — so two ids that share a label ("claude-opus-4-1" and
+   * "claude-opus-4-5" both being Opus) arrived as two rows reading "Opus",
+   * each carrying part of that model's spend, under the same name and the
+   * same colour. The donut's centre was right and no legend row was.
+   *
+   * `sessions` is the one column that cannot be summed: it is a
+   * COUNT(DISTINCT session_id) per raw id, so a session that switched model
+   * version mid-run counts once in each row and twice in the fold. It is
+   * counted over distinct pairs instead, below.
+   */
+  const sessionRows = db
+    .query<{ model_name: string | null; session_id: string }, any[]>(
+      `SELECT DISTINCT model_name, session_id FROM events
+       WHERE timestamp >= ? AND model_name IS NOT NULL${pf}`
+    )
+    .all(...A);
+  const sessionsByLabel = new Map<string, Set<string>>();
+  for (const r of sessionRows) {
+    const label = modelLabel(r.model_name);
+    const set = sessionsByLabel.get(label) ?? new Set<string>();
+    set.add(r.session_id);
+    sessionsByLabel.set(label, set);
+  }
+
+  const modelFold = new Map<string, CostByModel>();
+  for (const r of modelRows) {
+    const label = modelLabel(r.model_name);
+    const e = modelFold.get(label) ?? {
+      model_name: label,
+      input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0,
+      cost_usd: 0, sessions: 0,
+    };
+    e.input_tokens += r.input_tokens ?? 0;
+    e.output_tokens += r.output_tokens ?? 0;
+    e.cache_creation_tokens += r.cache_creation_tokens ?? 0;
+    e.cache_read_tokens += r.cache_read_tokens ?? 0;
+    e.cost_usd += r.cost_usd ?? 0;
+    modelFold.set(label, e);
+  }
+  for (const [label, e] of modelFold) e.sessions = sessionsByLabel.get(label)?.size ?? 0;
+  // Ordered on the way out: the query has no ORDER BY, and the panel renders
+  // the array in the order it arrives, so without this the donut's slices
+  // reshuffle between refreshes for no reason the viewer can see.
+  const by_model: CostByModel[] = [...modelFold.values()].sort((a, b) => b.cost_usd - a.cost_usd);
 
   // Tool latency — pull durations per tool and compute percentiles in JS.
   const durRows = db

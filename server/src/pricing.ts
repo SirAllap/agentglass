@@ -117,7 +117,19 @@ export function costUsd(usage: TokenUsage, modelName: string | null | undefined)
   );
 }
 
-export function modelLabel(modelName: string | null | undefined): string {
-  const p = priceFor(modelName);
-  return p?.label ?? (modelName ? modelName : "unknown");
-}
+/**
+ * What to call a model on screen.
+ *
+ * This used to return `priceFor(m)?.label`, which welded display naming to
+ * price bucketing — and those two want opposite things. A price row groups
+ * several ids on purpose, because they share a rate; a name identifies one
+ * model. So a GPT-5 session was labelled "GPT-4.1" by every server-rendered
+ * surface (the cost donut) while the client-rendered ones (fleet card, session
+ * chip, phone) called it "GPT-5", and modelColor() — which hashes the label —
+ * drew the same model in two colours.
+ *
+ * Naming lives in shared/models.ts now, alongside providerOf, so both tiers
+ * answer it identically. `ModelPrice.label` survives as the name of a *rate
+ * row*, which is what it always really was: it names a bucket, not a model.
+ */
+export { modelLabelOf as modelLabel } from "../../shared/models.ts";
