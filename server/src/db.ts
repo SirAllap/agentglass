@@ -330,7 +330,7 @@ export interface InsertResult {
  *  - PostToolUse latency via pre→post pairing
  *  - the updated session rollup (authoritative token/cost totals)
  */
-export function insertEvent(n: NormalizedEvent): InsertResult {
+function insertEventCore(n: NormalizedEvent): InsertResult {
   const model = n.model_name;
 
   // --- token delta computation -------------------------------------------
@@ -449,6 +449,15 @@ function upsertSession(
     $cost: cost,
   }) as SessionRollup;
   return row;
+}
+
+const insertEventTx = db.transaction(insertEventCore);
+
+/** Keep an event, its FTS row, and its session rollup in one write unit. Bun's
+ * nested transactions become savepoints when transcript ingestion already owns
+ * an outer file transaction. */
+export function insertEvent(n: NormalizedEvent): InsertResult {
+  return insertEventTx(n);
 }
 
 // ---------------------------------------------------------------------------
