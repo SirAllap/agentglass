@@ -43,6 +43,28 @@ def reset_signals() -> None:
             pass  # unresettable here — better a stray ignore than no shell
 
 
+def write_all(fd: int, data: bytes) -> None:
+    """Write every byte, or raise.
+
+    `os.write` returns how many bytes it actually took, and it is allowed to
+    take fewer than it was given. Both ends of this bridge can do that: a pty
+    master's input buffer is a few KB while the reads above ask for 64, and a
+    write that has already moved some bytes when a signal lands returns that
+    short count rather than EINTR — so Python's own EINTR retry cannot help,
+    and this process installs a SIGWINCH handler, which is exactly the signal
+    that arrives while somebody is dragging the panel wider.
+
+    A bare `os.write` discards the remainder silently. There is no error and
+    nothing in the log: the paste is simply missing its tail, or a repainting
+    full-screen program comes back with a hole in the middle of its frame.
+    """
+    while data:
+        n = os.write(fd, data)
+        if n <= 0:  # nothing moved and no exception — nothing left to try
+            break
+        data = data[n:]
+
+
 def main() -> int:
     cmd = sys.argv[1:] or [os.environ.get("SHELL", "bash"), "-i"]
     size_file = os.environ.get("AGENTGLASS_PTY_SIZE_FILE", "")
@@ -99,7 +121,7 @@ def main() -> int:
                 break
             if not data:
                 break
-            os.write(1, data)
+            write_all(1, data)
         if 0 in ready:
             try:
                 data = os.read(0, 65536)
@@ -107,7 +129,7 @@ def main() -> int:
                 data = b""
             if not data:  # server hung up — tear down
                 break
-            os.write(fd, data)
+            write_all(fd, data)
 
     try:
         os.close(fd)
