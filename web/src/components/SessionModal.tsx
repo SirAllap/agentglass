@@ -43,7 +43,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
   // you instead of flickering through an empty state every few seconds.
   usePoll(!!sessionId, () => {
     if (!sessionId) return;
-    api.session(sessionId).then((s) => {
+    return api.session(sessionId).then((s) => {
       // last_seen advances on every new event, so it is the cheap way to tell a
       // genuinely changed session from an idle poll and skip the re-render.
       setD((prev) => (prev && s && prev.last_seen === s.last_seen && prev.events === s.events ? prev : s));

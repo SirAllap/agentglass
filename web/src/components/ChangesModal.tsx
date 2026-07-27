@@ -602,7 +602,7 @@ export function ChangesModal({ open, onClose, onBack, backLabel, presetChanges, 
   // Not polled for a preset changeset — those are one session's changes, handed
   // in already resolved, and re-fetching would replace them with the fleet's.
   usePoll(open && !presetChanges, () => {
-    api.changes(200).then((r) => {
+    return api.changes(200).then((r) => {
       setChanges((prev) => {
         // Same ids in the same order → keep the old array so nothing downstream
         // re-renders or re-highlights on an unchanged poll.

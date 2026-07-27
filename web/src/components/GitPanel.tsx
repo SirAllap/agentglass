@@ -169,10 +169,10 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
   // load the data a non-Changes view needs when it (or the repo) becomes active
   const loadView = useCallback(() => {
     if (!open || !root) return;
-    if (view === "branches") api.gitBranches(root).then(setBranchData).catch(() => {});
-    else if (view === "log") api.gitGraph(root, 500).then((r) => setGraph(r.lines)).catch(() => {});
-    else if (view === "stashes") api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
-    else if (view === "worktrees") api.gitWorktrees(root).then((r) => setWorktrees(r.worktrees)).catch(() => {});
+    if (view === "branches") return api.gitBranches(root).then(setBranchData).catch(() => {});
+    if (view === "log") return api.gitGraph(root, 500).then((r) => setGraph(r.lines)).catch(() => {});
+    if (view === "stashes") return api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
+    if (view === "worktrees") return api.gitWorktrees(root).then((r) => setWorktrees(r.worktrees)).catch(() => {});
   }, [open, root, view]);
   useEffect(() => { loadView(); }, [loadView]);
 
@@ -181,7 +181,7 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
   // could listen for, so an open panel would otherwise sit on whatever it read
   // when it opened. Not while a write is in flight: refreshing mid-stage would
   // fight the optimistic selection the action is about to set.
-  usePoll(open && !!root && !busy, () => { loadTree(root); loadView(); });
+  usePoll(open && !!root && !busy, () => Promise.all([loadTree(root), loadView()]));
 
   const act = async (fn: () => Promise<{ ok: boolean; error?: string; output?: string }>, okMsg?: string) => {
     if (busy) return false;
