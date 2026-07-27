@@ -40,11 +40,18 @@ describe("external ingest extensions", () => {
   });
 
   test("rejects malformed ids and costs at the HTTP boundary", () => {
+    expect(ingest.externalIngestError(null)).toContain("object");
+    expect(ingest.externalIngestError(body({ source_app: ["external-harness"] }) as any)).toContain("source_app");
+    expect(ingest.externalIngestError(body({ session_id: "x".repeat(64 * 1024 + 1) }) as any)).toContain("session_id");
+    expect(ingest.externalIngestError(body({ hook_event_type: {} }) as any)).toContain("hook_event_type");
     expect(ingest.externalIngestError(body({ event_id: "" }) as any)).toContain("event_id");
     expect(ingest.externalIngestError(body({ event_id: "x".repeat(513) }) as any)).toContain("event_id");
     expect(ingest.externalIngestError(body({ event_id: 42 }) as any)).toContain("event_id");
     expect(ingest.externalIngestError(body({ reported_cost_usd: -1 }) as any)).toContain("reported_cost_usd");
     expect(ingest.externalIngestError(body({ reported_cost_usd: Infinity }) as any)).toContain("reported_cost_usd");
+    expect(ingest.externalIngestError(body({ reported_cost_usd: ingest.MAX_REPORTED_COST_USD }) as any)).toBeNull();
+    expect(ingest.externalIngestError(body({ reported_cost_usd: ingest.MAX_REPORTED_COST_USD + 1 }) as any)).toContain("reported_cost_usd");
+    expect(ingest.externalIngestError(body({ reported_cost_usd: Number.MAX_VALUE }) as any)).toContain("reported_cost_usd");
     expect(ingest.externalIngestError(body({ reported_cost_usd: "0.12" }) as any)).toContain("reported_cost_usd");
   });
 });
@@ -138,5 +145,33 @@ describe("reported cost precedence", () => {
     expect(exact.session.input_tokens).toBe(2_000);
     expect(exact.session.output_tokens).toBe(200);
     expect(exact.session.cost_usd).toBeCloseTo(0.456789, 10);
+  });
+
+  test("keeps cumulative local pricing independent from earlier reported costs", () => {
+    const firstBody = body({
+      event_id: "mixed-cost-reported",
+      session_id: "mixed-cost-session",
+      reported_cost_usd: 7,
+    });
+    const first = db.insertEvent(ingest.normalize(firstBody as any));
+    const second = db.insertEvent(ingest.normalize({
+      ...firstBody,
+      event_id: "mixed-cost-cumulative",
+      reported_cost_usd: undefined,
+      payload: { project_path: root, message: "cumulative follow-up" },
+      chat: [{
+        type: "assistant",
+        message: {
+          model: "gpt-5.1",
+          usage: { input_tokens: 2_000, output_tokens: 200 },
+        },
+      }],
+    } as any));
+
+    const firstLocalEstimate = pricing.costUsd({ input_tokens: 1_000, output_tokens: 100 }, "gpt-5.1");
+    const fullLocalEstimate = pricing.costUsd({ input_tokens: 2_000, output_tokens: 200 }, "gpt-5.1");
+    expect(first.event.cost_usd).toBe(7);
+    expect(second.event.cost_usd).toBeCloseTo(fullLocalEstimate - firstLocalEstimate, 10);
+    expect(second.session.cost_usd).toBeCloseTo(7 + fullLocalEstimate - firstLocalEstimate, 10);
   });
 });

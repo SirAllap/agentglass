@@ -559,9 +559,6 @@ const server = Bun.serve<WsData>({
       } catch {
         return json({ error: "invalid json" }, 400);
       }
-      if (!body?.source_app || !body?.session_id || !body?.hook_event_type) {
-        return json({ error: "source_app, session_id, hook_event_type required" }, 400);
-      }
       const ingestError = externalIngestError(body);
       if (ingestError) return json({ error: ingestError }, 400);
       // A Claude Code session with a transcript on disk is already covered by

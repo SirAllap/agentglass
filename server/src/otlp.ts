@@ -216,10 +216,16 @@ function bodyToString(body: AnyVal | undefined): string {
 
 function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>): IngestBody | null {
   const a = flatten(rec.attributes);
+  const serviceName = String(resAttrs["service.name"] ?? "").toLowerCase();
+  const hasCodexEvidence =
+    serviceName.includes("codex")
+    || Object.keys(a).some((k) => k.startsWith("codex."))
+    || ["input_token_count", "output_token_count", "cached_token_count", "cache_write_token_count"]
+      .some((k) => a[k] !== undefined);
   const isGenAI =
     Object.keys(a).some((k) => k.startsWith("gen_ai.") || k.startsWith("codex.") || k.startsWith("llm.")) ||
     a["gen_ai.system"] !== undefined || a["event.name"] !== undefined
-    || a["event.kind"] !== undefined || rec.eventName !== undefined;
+    || (a["event.kind"] !== undefined && hasCodexEvidence) || rec.eventName !== undefined;
   if (!isGenAI) return null;
 
   const system = firstStr(a, ["gen_ai.system", "gen_ai.provider.name"]);
@@ -246,14 +252,17 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
     "gen_ai.usage.cache_creation_tokens",
     "cache_write_token_count",
   ]);
-  // Codex reports input_token_count as the whole input, including cache reads
-  // and writes. Agentglass stores those buckets separately, so subtract them
-  // only for that Codex-specific field. Standard gen_ai input is already the
-  // non-cached bucket and keeps its existing semantics.
-  const codexInput = a["input_token_count"] !== undefined;
-  const input = codexInput
-    ? Math.max(0, firstNum(a, ["input_token_count"]) - cacheRead - cacheCreation)
-    : firstNum(a, ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "input_tokens", "prompt_tokens"]);
+  // Both Codex and the OpenTelemetry GenAI conventions report total input
+  // including cached tokens. Agentglass stores cache reads/writes separately,
+  // so remove both buckets from ordinary input to avoid charging them twice.
+  const totalInput = firstNum(a, [
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.prompt_tokens",
+    "input_token_count",
+    "input_tokens",
+    "prompt_tokens",
+  ]);
+  const input = Math.max(0, totalInput - cacheRead - cacheCreation);
   const output = firstNum(a, [
     "gen_ai.usage.output_tokens",
     "gen_ai.usage.completion_tokens",
@@ -271,7 +280,7 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
     return { ...base, hook_event_type: "PostToolUse", payload: { tool_name, tool_use_id, ...(isError ? { is_error: true, error: bodyText } : {}) } };
   }
   // Token-bearing record → a costed turn.
-  if (input + output > 0) {
+  if (input + output + cacheRead + cacheCreation > 0) {
     return {
       ...base,
       hook_event_type: "Turn complete",

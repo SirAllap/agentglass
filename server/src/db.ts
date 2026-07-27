@@ -134,7 +134,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_usd REAL NOT NULL DEFAULT 0
+  cost_usd REAL NOT NULL DEFAULT 0,
+  pricing_baseline_usd REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_seen ON sessions(last_seen);
 
@@ -147,6 +148,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(text);
 // pre-existing sessions table, so ALTER it in before any statement referencing
 // it is prepared. Harmless (throws "duplicate column") once it already exists.
 try { db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT"); } catch { /* already present */ }
+
+// Keep local pricing state separate from the authoritative cost shown to the
+// user. Existing databases predate reported per-event costs, so their current
+// total is the correct starting baseline. The backfill runs only when ALTER
+// actually adds the column; later startups leave legitimate zero baselines
+// alone.
+try {
+  db.exec("ALTER TABLE sessions ADD COLUMN pricing_baseline_usd REAL NOT NULL DEFAULT 0");
+  db.exec("UPDATE sessions SET pricing_baseline_usd = cost_usd");
+} catch { /* already present */ }
 
 // Optional idempotency key for external harnesses. Scoped to the sender and
 // session so independent agents can use the same local counter safely.
@@ -579,10 +590,12 @@ interface SessionTokenRow {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   cost_usd: number;
+  pricing_baseline_usd: number;
   model_name: string | null;
 }
 const getSessionTokens = db.query<SessionTokenRow, [string]>(
-  `SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, model_name
+  `SELECT input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+          cost_usd, pricing_baseline_usd, model_name
    FROM sessions WHERE session_id = ?`
 );
 
@@ -674,23 +687,17 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
     dCw = Math.max(0, dCw - prior.cache_creation_tokens);
     dCr = Math.max(0, dCr - prior.cache_read_tokens);
   }
-  // The token delta above still feeds the token counters, but its COST is priced
-  // from the transcript when we have one. cost_cumulative is the whole
-  // transcript priced per message at its own model, so charging its difference
-  // against the session's recorded cost bills a mid-run model switch at the
-  // right rates — the plain delta would put the whole thing on the current
-  // event's model. The per-turn (payload usage) path is already one model, so it
-  // keeps pricing the delta directly.
-  const eventCost =
-    n.reported_cost_usd
-    ?? (
-      n.usage_is_cumulative && n.cost_cumulative != null
-        ? Math.max(0, n.cost_cumulative - (prior?.cost_usd ?? 0))
-        : costUsd(
-            { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
-            model
-          )
-    );
+  // Track what local pricing has already accounted for separately from what
+  // the provider actually charged. Otherwise one exact reported cost changes
+  // the baseline used by the next cumulative transcript and corrupts its delta.
+  const estimatedEventCost =
+    n.usage_is_cumulative && n.cost_cumulative != null
+      ? Math.max(0, n.cost_cumulative - (prior?.pricing_baseline_usd ?? 0))
+      : costUsd(
+          { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
+          model
+        );
+  const eventCost = n.reported_cost_usd ?? estimatedEventCost;
 
   // --- latency pairing ----------------------------------------------------
   let duration_ms: number | null = null;
@@ -736,7 +743,7 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
 
     const event = parseEventRow(rowToEvent.get(inserted.id));
     try { ftsInsert.run({ $id: inserted.id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
-    const session = upsertSession(n, dIn, dOut, dCw, dCr, eventCost);
+    const session = upsertSession(n, dIn, dOut, dCw, dCr, eventCost, estimatedEventCost);
     return { event, session, inserted: true };
   };
 
@@ -765,11 +772,12 @@ const upsertStmt = db.query(`
   INSERT INTO sessions (
     session_id, source_app, model_name, provider, project_path, cwd_path, started_at, ended_at, last_seen,
     event_count, tool_count, error_count,
-    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd
+    input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+    cost_usd, pricing_baseline_usd
   ) VALUES (
     $sid, $src, $model, $provider, $project, $cwd, $ts, $ended, $ts,
     1, $tool, $err,
-    $in, $out, $cw, $cr, $cost
+    $in, $out, $cw, $cr, $cost, $estimated
   )
   ON CONFLICT(session_id) DO UPDATE SET
     source_app = excluded.source_app,
@@ -796,7 +804,8 @@ const upsertStmt = db.query(`
     output_tokens = sessions.output_tokens + $out,
     cache_creation_tokens = sessions.cache_creation_tokens + $cw,
     cache_read_tokens = sessions.cache_read_tokens + $cr,
-    cost_usd = sessions.cost_usd + $cost
+    cost_usd = sessions.cost_usd + $cost,
+    pricing_baseline_usd = sessions.pricing_baseline_usd + $estimated
   RETURNING *
 `);
 
@@ -806,7 +815,8 @@ function upsertSession(
   dOut: number,
   dCw: number,
   dCr: number,
-  cost: number
+  cost: number,
+  estimatedCost: number
 ): SessionRollup {
   // cost is the event's cost computed once in insertEvent (transcript-priced for
   // the cumulative path); the session total must add exactly that, not a second,
@@ -832,6 +842,7 @@ function upsertSession(
     $cw: dCw,
     $cr: dCr,
     $cost: cost,
+    $estimated: estimatedCost,
   }) as SessionRollup;
   return row;
 }
@@ -1049,7 +1060,11 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
     .query<SessionRollup, any[]>(
       `SELECT * FROM sessions WHERE 1=1${prov.clause}${s.clause} ORDER BY last_seen DESC LIMIT ?`
     )
-    .all(...prov.args, ...s.args, limit);
+    .all(...prov.args, ...s.args, limit)
+    .map((row) => {
+      const { pricing_baseline_usd: _internal, ...session } = row as SessionRollup & { pricing_baseline_usd: number };
+      return session;
+    });
   sessionsCache.set(key, { at: Date.now(), data });
   // One entry per (limit, provider, scope); the limit set is tiny and scope
   // rarely changes, so prune stale entries anyway so a long-lived server cannot

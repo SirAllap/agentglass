@@ -9,9 +9,9 @@ const kv = (key: string, value: string | number) => ({
   value: typeof value === "number" ? { intValue: value } : { stringValue: value },
 });
 
-const logs = (attributes: ReturnType<typeof kv>[]) => ({
+const logs = (attributes: ReturnType<typeof kv>[], serviceName = "codex_cli_rs") => ({
   resourceLogs: [{
-    resource: { attributes: [kv("service.name", "codex_cli_rs")] },
+    resource: { attributes: [kv("service.name", serviceName)] },
     scopeLogs: [{
       logRecords: [{
         timeUnixNano: "1700000000000000000",
@@ -56,7 +56,7 @@ describe("Codex OTLP logs", () => {
     expect((event.payload?.usage as Record<string, number>).input_tokens).toBe(0);
   });
 
-  test("leaves standard gen_ai input semantics unchanged", () => {
+  test("separates cached input from standard gen_ai totals", () => {
     const [event] = otlpLogsToEvents(logs([
       kv("event.name", "gen_ai.response.completed"),
       kv("gen_ai.system", "openai"),
@@ -64,7 +64,29 @@ describe("Codex OTLP logs", () => {
       kv("gen_ai.usage.output_tokens", 120),
       kv("gen_ai.usage.cache_read_tokens", 600),
     ]));
-    expect((event.payload?.usage as Record<string, number>).input_tokens).toBe(1_000);
+    expect((event.payload?.usage as Record<string, number>).input_tokens).toBe(400);
     expect((event.payload?.usage as Record<string, number>).cache_read_tokens).toBe(600);
+  });
+
+  test("keeps a fully cached response with zero output", () => {
+    const [event] = otlpLogsToEvents(logs([
+      kv("event.kind", "response.completed"),
+      kv("input_token_count", 600),
+      kv("output_token_count", 0),
+      kv("cached_token_count", 600),
+    ]));
+    expect(event.hook_event_type).toBe("Turn complete");
+    expect(event.payload?.usage).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 600,
+      cache_creation_tokens: 0,
+    });
+  });
+
+  test("ignores a generic event.kind log without Codex or GenAI evidence", () => {
+    expect(otlpLogsToEvents(logs([
+      kv("event.kind", "job.completed"),
+    ], "background-worker"))).toEqual([]);
   });
 });

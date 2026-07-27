@@ -2,6 +2,9 @@
 import type { IngestBody } from "../../shared/types.ts";
 import { costUsd, type TokenUsage } from "./pricing.ts";
 
+const MAX_FIELD = 64 * 1024;
+export const MAX_REPORTED_COST_USD = 100_000;
+
 export interface NormalizedEvent {
   source_app: string;
   session_id: string;
@@ -41,18 +44,33 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.length ? v : null;
 }
 
-/** Validate optional fields that only the public POST /ingest boundary accepts. */
-export function externalIngestError(body: IngestBody): string | null {
-  const eventId = (body as { event_id?: unknown }).event_id;
+/** Validate fields that only the public POST /ingest boundary accepts. */
+export function externalIngestError(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return "request body must be an object";
+  }
+  const fields = body as Record<string, unknown>;
+  for (const name of ["source_app", "session_id", "hook_event_type"] as const) {
+    const value = fields[name];
+    if (typeof value !== "string" || value.length === 0 || value.length > MAX_FIELD) {
+      return `${name} must be a non-empty string no longer than ${MAX_FIELD} characters`;
+    }
+  }
+  const eventId = fields.event_id;
   if (eventId !== undefined && (typeof eventId !== "string" || eventId.length === 0 || eventId.length > 512)) {
     return "event_id must be a non-empty string no longer than 512 characters";
   }
-  const reportedCost = (body as { reported_cost_usd?: unknown }).reported_cost_usd;
+  const reportedCost = fields.reported_cost_usd;
   if (
     reportedCost !== undefined
-    && (typeof reportedCost !== "number" || !Number.isFinite(reportedCost) || reportedCost < 0)
+    && (
+      typeof reportedCost !== "number"
+      || !Number.isFinite(reportedCost)
+      || reportedCost < 0
+      || reportedCost > MAX_REPORTED_COST_USD
+    )
   ) {
-    return "reported_cost_usd must be a finite non-negative number";
+    return `reported_cost_usd must be a finite number from 0 to ${MAX_REPORTED_COST_USD}`;
   }
   return null;
 }
@@ -202,7 +220,6 @@ export function sumTranscriptCost(chat: unknown[] | undefined, fallbackModel: st
   return cost;
 }
 
-const MAX_FIELD = 64 * 1024;
 // Deep enough for the nested shapes hooks actually send (tool_input.content,
 // tool_response.stdout, a chat turn's content blocks) without letting a
 // pathological payload recurse without end.
