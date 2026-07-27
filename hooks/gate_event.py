@@ -175,13 +175,13 @@ def main():
 
     if out is None:
         if FAIL_CLOSED:
-            emit("deny", "agentglass unreachable (fail-closed)")
+            emit("deny", "agentglass could not be reached and is configured fail-closed, so this call was blocked without a human seeing it. This is an infrastructure problem, not a judgement about the call — report it rather than working around it.")
         allow_silently()  # unreachable / error → never block (default)
 
     decision = out.get("decision", "allow")
     reason = out.get("reason", "")
     if decision == "deny":
-        emit("deny", reason or "denied from agentglass")
+        emit("deny", reason or "A human denied this call in agentglass. Do not retry the same call — take a different approach, or ask them what they would prefer.")
     if decision == "allow" and reason:
         emit("allow", reason)  # explicit approval (skips the normal prompt)
     allow_silently()

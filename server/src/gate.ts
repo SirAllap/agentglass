@@ -42,7 +42,16 @@ export function onGateChange(fn: () => void) { onChange = fn; }
 
 /** What a timeout resolves to, under the configured policy. */
 function timeoutOutcome(): GateOutcome {
-  if (FAIL_CLOSED) return { decision: "deny", reason: "gate timeout — no decision (fail-closed)" };
+  // Same audience as defaultReason(): a model deciding what to do next. This
+  // one is emphatically NOT a judgement about the call — nobody looked at it —
+  // and an agent that treats it as one will start avoiding a perfectly fine
+  // approach for the rest of the session.
+  if (FAIL_CLOSED) {
+    return {
+      decision: "deny",
+      reason: "Nobody answered this request in time and agentglass is configured fail-closed, so it was blocked without a human seeing it. This is not a judgement about the call. Say that you were blocked waiting for approval rather than assuming the approach was wrong.",
+    };
+  }
   // Empty reason so the hook falls through to Claude Code's own permission
   // prompt instead of force-allowing — an auto-allow shouldn't silently
   // skip the human it was meant to ask.
@@ -127,12 +136,33 @@ export function awaitGate(id: string): Promise<GateOutcome> | GateOutcome | null
   return { decision: row.decision, reason: row.reason || "" };
 }
 
+/**
+ * What the agent is told when a human decides without typing anything.
+ *
+ * This string is not a log line. It travels to the hook, which hands it to
+ * Claude Code as `permissionDecisionReason` — so it is read by a model that
+ * has just been stopped and now has to choose what to do next.
+ *
+ * "denied from dashboard" told it nothing it could act on. The only moves it
+ * leaves are retrying the identical call, which will be denied again, or
+ * stalling — and both waste a turn and the human's next interruption. So the
+ * default says what happened, that retrying is pointless, and what to do
+ * instead.
+ *
+ * A reason typed by the human always wins; this is only the empty case.
+ */
+export function defaultReason(decision: GateDecision): string {
+  return decision === "deny"
+    ? "A human reviewed this call in agentglass and denied it. Do not retry the same call — it will be denied again. Take a different approach, or ask them what they would prefer."
+    : "A human reviewed this call in agentglass and approved it.";
+}
+
 export function decideGate(id: string, decision: GateDecision, reason: string): boolean {
   const row = getGate(id);
   // Decidable while pending, whether or not a connection is currently held: a
   // restored request has no waiter and must still take the operator's answer.
   if (!row || row.decision) return false;
-  finish(id, { decision, reason: reason || (decision === "deny" ? "denied from dashboard" : "approved from dashboard") }, "human");
+  finish(id, { decision, reason: reason || defaultReason(decision) }, "human");
   return true;
 }
 
