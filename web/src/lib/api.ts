@@ -264,7 +264,11 @@ const realApi = {
     get<{ source_apps: string[]; hook_event_types: string[]; models: string[] }>(
       `/events/filter-options`
     ),
-  exportUrl: (fmt: "csv" | "json") => withToken(`${SERVER}/export?format=${fmt}`),
+  // `kind`: "events" is the raw rows, bounded by retention; "daily" is the
+  // day series, which reads the rollup too and so goes back as far as the
+  // fold does rather than as far as the events table happens to.
+  exportUrl: (fmt: "csv" | "json", kind: "events" | "daily" = "events") =>
+    withToken(`${SERVER}/export?format=${fmt}${kind === "daily" ? "&kind=daily" : ""}`),
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   usage: () => get<UsagePayload>(`/usage`),
   // usage_since: the epoch the call counts are known from. They are bounded
@@ -575,7 +579,8 @@ const demoApi: typeof realApi = {
   usageDaily: (days = 90) => D(demo.usageDaily(days)),
   sessions: (_limit?: number, provider?: string) => D(demo.sessions(provider)),
   filterOptions: () => D(demo.filterOptions()),
-  exportUrl: (fmt: "csv" | "json") => demo.eventsExportUri(fmt),
+  exportUrl: (fmt: "csv" | "json", kind: "events" | "daily" = "events") =>
+    kind === "daily" ? demo.dailyExportUri(fmt) : demo.eventsExportUri(fmt),
   skillsExportUrl: () => demo.skillsExportUri(),
   usage: () => D(demo.usage() as UsagePayload),
   skills: () => D(demo.skills()),

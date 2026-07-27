@@ -81,6 +81,9 @@ export function CommandPalette({
     for (const t of THEMES) list.push({ id: "theme:" + t.id, group: "Theme", label: t.name, run: () => { pickTheme(t.id); onTheme(t.id); } });
     list.push({ id: "csv", group: "Export", label: "Download CSV", run: () => window.open(api.exportUrl("csv")) });
     list.push({ id: "json", group: "Export", label: "Download JSON", run: () => window.open(api.exportUrl("json")) });
+    // Day totals rather than events, and the only one that reaches past the
+    // retention window — see /export?kind=daily.
+    list.push({ id: "daily-csv", group: "Export", label: "Download daily totals (CSV)", run: () => window.open(api.exportUrl("csv", "daily")) });
     return list;
   }, [apps, types, onFilter, onWindow, onTheme, onStats, onSkills, onChanges, onGit, onPr, onDocker, onTerminal, onChat, onSearch, onClear, onZoom]);
 

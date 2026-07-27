@@ -174,6 +174,29 @@ describe("the rollup is scoped by what the rollup knows", () => {
   });
 });
 
+describe("the export goes as far back as the chart does", () => {
+  // /export?kind=daily serialises exactly this, so what the CSV can contain is
+  // decided here: a month already pruned has to survive leaving the building,
+  // which was the last part of #292 the events-only export could not do.
+  test("every column the CSV writes is present and numeric", () => {
+    const d = byDay(db.dailyUsage(), OLD)!;
+    for (const col of [
+      "events", "tool_calls", "tool_errors", "errors",
+      "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+      "cost_usd", "sessions", "avg_ms",
+    ] as const) {
+      expect(typeof d[col]).toBe("number");
+      expect(Number.isFinite(d[col])).toBe(true);
+    }
+  });
+
+  test("an unbounded call really is unbounded — that is what the export sends", () => {
+    // No arguments: the export takes the whole series rather than a window,
+    // so a day older than any default `days=` bound still has to come out.
+    expect(db.dailyUsage().map((x) => x.day)).toContain(OLD);
+  });
+});
+
 describe("saying where the seam is", () => {
   test("the boundary is reported as a day the chart can mark", () => {
     // A gap before this day means "not kept in that detail"; a gap after it

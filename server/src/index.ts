@@ -1273,6 +1273,48 @@ const server = Bun.serve<WsData>({
     }
 
     // --- export ---
+    /*
+     * The daily series as a file.
+     *
+     * /export below hands out raw events, which retention deletes — so the
+     * export inherited the same eight-day ceiling as the charts did, and the
+     * one number people actually take out of here (what did this cost) could
+     * not be exported for a month that had ended. This one reads the rollup
+     * too, so what leaves the building goes back as far as the fold does.
+     *
+     * A separate `kind` rather than a new route, so a caller already pointed
+     * at /export keeps working unchanged and switches grain with a parameter.
+     */
+    if (pathname === "/export" && url.searchParams.get("kind") === "daily") {
+      const fmt = url.searchParams.get("format") || "json";
+      const days = dailyUsage();
+      if (fmt === "csv") {
+        const cols = [
+          "day", "events", "tool_calls", "tool_errors", "errors",
+          "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+          "cost_usd", "sessions", "avg_ms",
+        ];
+        const lines = [cols.join(",")];
+        for (const d of days) lines.push(cols.map((c) => csvEscape((d as any)[c])).join(","));
+        return new Response(lines.join("\n"), {
+          headers: {
+            "content-type": "text/csv",
+            "content-disposition": 'attachment; filename="agentglass-daily.csv"',
+            ...cors,
+          },
+        });
+      }
+      return new Response(
+        JSON.stringify({ days, seam_day: retentionSeamDay(), retention_days: RETENTION_DAYS }, null, 2),
+        {
+          headers: {
+            "content-type": "application/json",
+            "content-disposition": 'attachment; filename="agentglass-daily.json"',
+            ...cors,
+          },
+        },
+      );
+    }
     if (pathname === "/export") {
       const fmt = url.searchParams.get("format") || "json";
       const rows = exportRows();

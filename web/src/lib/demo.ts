@@ -614,6 +614,19 @@ export function eventsExportUri(fmt: "csv" | "json"): string {
   return dataUri("text/csv", [cols.join(","), ...rows].join("\n"));
 }
 
+/** The same daily series the chart draws, as a downloadable file. */
+export function dailyExportUri(fmt: "csv" | "json"): string {
+  const h = usageDaily(120);
+  if (fmt === "json") return dataUri("application/json", JSON.stringify(h, null, 2));
+  const cols: (keyof UsageDay)[] = [
+    "day", "events", "tool_calls", "tool_errors", "errors",
+    "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+    "cost_usd", "sessions", "avg_ms",
+  ];
+  const rows = h.days.map((d) => cols.map((c) => String(d[c])).join(","));
+  return dataUri("text/csv", [cols.join(","), ...rows].join("\n"));
+}
+
 export function skillsExportUri(): string {
   const { skills: list } = skills();
   const out = ["# Skills catalog", "", `_${list.length} skills · agentglass demo (sample data)_`, ""];
