@@ -22,12 +22,32 @@ export const Latency = memo(function Latency({ stats }: { stats: StatsSummary | 
                 <span style={{ color: "var(--text2)" }}>
                   {t.tool_name}
                   {t.errors > 0 && <span className="ml-1.5" style={{ color: "var(--error)" }}>{t.errors}✕</span>}
-                  <span className="ml-1.5 t-dim2">· {t.calls} calls</span>
+                  {/* The percentile sample, said out loud when it is not the
+                      call count. A Post with no paired Pre is an invocation
+                      with no duration, so "200 calls · p95 5ms" could be five
+                      milliseconds measured twice. `timed` is absent from an
+                      older server, and unknown is not the same as zero. */}
+                  <span className="ml-1.5 t-dim2">
+                    · {t.calls} calls
+                    {t.timed !== undefined && t.timed < t.calls && (
+                      <span title={`percentiles from ${t.timed} of ${t.calls} calls — the rest arrived without a paired start`}>
+                        {" "}· {t.timed} timed
+                      </span>
+                    )}
+                  </span>
                 </span>
                 <span className="tabular-nums">
-                  <span style={{ color: "var(--info)" }}>{fmtMs(t.p50_ms)}</span>
-                  <span className="t-dim2"> / </span>
-                  <span style={{ color: "var(--warning)" }}>{fmtMs(t.p95_ms)}</span>
+                  {t.timed === 0 ? (
+                    // Nothing was measured. fmtMs(0) reads "0ms", which claims
+                    // the tool is instant rather than unmeasured.
+                    <span className="t-dim2" title="no call had a paired start, so there is nothing to measure">—</span>
+                  ) : (
+                    <>
+                      <span style={{ color: "var(--info)" }}>{fmtMs(t.p50_ms)}</span>
+                      <span className="t-dim2"> / </span>
+                      <span style={{ color: "var(--warning)" }}>{fmtMs(t.p95_ms)}</span>
+                    </>
+                  )}
                 </span>
               </div>
               <div className="h-2 rounded-full relative overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 30%, transparent)" }}>

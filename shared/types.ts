@@ -103,7 +103,20 @@ export interface CostByModel {
 
 export interface ToolLatencyStat {
   tool_name: string;
+  /** Every invocation — the count the totals row and the per-app rollup
+   *  also use, so the panels agree. */
   calls: number;
+  /**
+   * How many of those calls the percentiles were actually computed from.
+   *
+   * A percentile is only as good as its sample, and a Post without a paired
+   * Pre contributes a call but no duration — normal for the OTLP-logs path
+   * and for hook payloads with no tool_use_id. So "200 calls · p95 5ms"
+   * could be five milliseconds measured twice, and nothing on the wire said
+   * so. Optional: an older server does not send it, and a missing value
+   * means unknown, not zero.
+   */
+  timed?: number;
   errors: number;
   p50_ms: number;
   p95_ms: number;
