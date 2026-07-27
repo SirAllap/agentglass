@@ -20,4 +20,35 @@ describe("payload usage detection", () => {
     const ev = normalize(body({ payload: { prompt: "hi" } }));
     expect(ev.usage_is_cumulative).toBe(true);
   });
+
+  test("Kimi's direct cached_tokens are split out of prompt_tokens", () => {
+    const ev = normalize(body({
+      model_name: "kimi-k3",
+      payload: { usage: { prompt_tokens: 1_200, completion_tokens: 300, cached_tokens: 800 } },
+    }));
+    expect(ev.usage).toEqual({
+      input_tokens: 400,
+      output_tokens: 300,
+      cache_creation_tokens: 0,
+      cache_read_tokens: 800,
+    });
+    expect(ev.usage_is_cumulative).toBe(false);
+  });
+
+  test("Kimi's OpenAI-compatible nested cached tokens are split out too", () => {
+    const ev = normalize(body({
+      model_name: "kimi-code/k3",
+      payload: {
+        usage: {
+          prompt_tokens: 1_200,
+          completion_tokens: 300,
+          prompt_tokens_details: { cached_tokens: 800 },
+        },
+      },
+    }));
+    expect(ev.usage.input_tokens).toBe(400);
+    expect(ev.usage.output_tokens).toBe(300);
+    expect(ev.usage.cache_read_tokens).toBe(800);
+    expect(ev.usage_is_cumulative).toBe(false);
+  });
 });

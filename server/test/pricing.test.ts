@@ -33,6 +33,18 @@ describe("priceFor", () => {
     expect(priceFor("gemini-2.0-flash")?.label).toBe("Gemini Flash");
   });
 
+  test("Kimi K3 aliases use Moonshot's published API rates", () => {
+    for (const model of ["k3", "kimi-k3", "kimi-code/k3"]) {
+      expect(priceFor(model)).toMatchObject({
+        label: "K3",
+        input: 3,
+        output: 15,
+        cache_read: 0.3,
+      });
+    }
+    expect(priceFor("task3-custom-model")).toBeNull();
+  });
+
   test("unknown and empty model names return null", () => {
     expect(priceFor(null)).toBeNull();
     expect(priceFor(undefined)).toBeNull();
@@ -55,6 +67,19 @@ describe("costUsd", () => {
       "claude-3-5-haiku",
     );
     expect(cost).toBeCloseTo(1.25 + 0.1, 10);
+  });
+
+  test("prices Kimi cache misses, cache hits, and output separately", () => {
+    const cost = costUsd(
+      {
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_creation_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+      },
+      "kimi-k3",
+    );
+    expect(cost).toBeCloseTo(3 + 15 + 3 + 0.3, 10);
   });
 
   test("unknown model falls back to DEFAULT_PRICE, never NaN", () => {

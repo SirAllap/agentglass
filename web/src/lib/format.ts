@@ -101,6 +101,7 @@ export const typeColor = (t: string) => TYPE_COLORS[t] ?? "#64748b";
 // "claude-sonnet-5" → "Sonnet", "gpt-4o-2024-08-06" → "GPT-4o", "gemini-2.0-flash" → "Gemini Flash".
 // First substring hit wins, so order specific → general. Unknown names pass through.
 const MODEL_LABELS: [string, string][] = [
+  ["kimi-code/k3", "K3"], ["kimi-k3", "K3"], ["moonshot/k3", "K3"],
   ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"], ["fable", "Fable"],
   ["gpt-4o-mini", "GPT-4o mini"], ["gpt-4o", "GPT-4o"], ["gpt-4.1", "GPT-4.1"],
   ["gpt-4", "GPT-4"], ["gpt-3.5", "GPT-3.5"], ["gpt-5-mini", "GPT-5 mini"], ["gpt-5", "GPT-5"],
@@ -112,6 +113,7 @@ const MODEL_LABELS: [string, string][] = [
 export function modelLabelOf(raw: string | null | undefined): string {
   if (!raw) return "unknown";
   const m = raw.toLowerCase();
+  if (m === "k3" || m.startsWith("k3[")) return "K3";
   for (const [frag, label] of MODEL_LABELS) if (m.includes(frag)) return label;
   return raw;
 }
@@ -124,6 +126,7 @@ export function providerOf(raw: string | null | undefined): string {
   if (/opus|sonnet|haiku|fable|claude|anthropic/.test(m)) return "Anthropic";
   if (/gpt|davinci|openai|\bo1\b|\bo3\b|\bo4\b/.test(m)) return "OpenAI";
   if (/gemini|palm|bison|flash|google|vertex/.test(m)) return "Google";
+  if (/kimi|moonshot/.test(m) || m === "k3" || m.startsWith("k3[")) return "Moonshot";
   if (/deepseek/.test(m)) return "DeepSeek";
   if (/grok|xai/.test(m)) return "xAI";
   if (/mistral|mixtral|codestral/.test(m)) return "Mistral";

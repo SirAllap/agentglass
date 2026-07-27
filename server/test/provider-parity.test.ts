@@ -18,10 +18,13 @@ process.env.AGENTGLASS_DB = join(mkdtempSync(join(tmpdir(), "agx-prov-")), "p.db
 
 let serverProviderOf: (m: string | null | undefined) => string | null;
 let webProviderOf: (m: string | null | undefined) => string;
+let webModelLabelOf: (m: string | null | undefined) => string;
 
 beforeAll(async () => {
   serverProviderOf = (await import("../src/db.ts")).providerOf;
-  webProviderOf = (await import("../../web/src/lib/format.ts")).providerOf;
+  const format = await import("../../web/src/lib/format.ts");
+  webProviderOf = format.providerOf;
+  webModelLabelOf = format.modelLabelOf;
 });
 
 // One real id per branch of the mapping, plus the ones that must fall through.
@@ -31,6 +34,7 @@ const MODELS = [
   "gemini-2.5-pro", "models/gemini-1.5-flash", "text-bison", "palm-2", "vertex_ai/gemini",
   "deepseek-chat", "grok-2", "xai/grok", "mistral-large", "mixtral-8x7b", "codestral",
   "llama-3.1-70b", "meta-llama/Llama-3", "command-r-plus", "cohere.command",
+  "k3", "kimi-k3", "kimi-code/k3", "moonshot-v1-128k",
   // fall-through cases — must be the miss bucket on both sides
   "some-unknown-model", "qwen-2.5", "", "   ", "MODEL-WITH-NO-MATCH",
 ];
@@ -47,5 +51,13 @@ describe("providerOf agrees between the server and the web copy", () => {
   test("null / undefined agree (the miss bucket)", () => {
     expect(norm(serverProviderOf(null))).toBe(webProviderOf(null));
     expect(norm(serverProviderOf(undefined))).toBe(webProviderOf(undefined));
+  });
+
+  test("Kimi K3 aliases resolve to Moonshot and the K3 display label", () => {
+    for (const model of ["k3", "kimi-k3", "kimi-code/k3"]) {
+      expect(serverProviderOf(model)).toBe("Moonshot");
+      expect(webProviderOf(model)).toBe("Moonshot");
+      expect(webModelLabelOf(model)).toBe("K3");
+    }
   });
 });

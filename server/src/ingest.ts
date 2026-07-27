@@ -87,11 +87,23 @@ function pick(obj: Record<string, unknown> | undefined, ...keys: string[]): unkn
 /** Extract token usage from a single message/usage-like object (tolerant of shapes). */
 function usageFrom(u: Record<string, unknown> | undefined): TokenUsage {
   if (!u || typeof u !== "object") return {};
+  const details = pick(u, "prompt_tokens_details");
+  const nestedCached =
+    details && typeof details === "object" && !Array.isArray(details)
+      ? pick(details as Record<string, unknown>, "cached_tokens")
+      : undefined;
+  const cacheRead = num(
+    pick(u, "cache_read_input_tokens", "cache_read_tokens", "cached_tokens") ?? nestedCached,
+  );
+  const explicitInput = pick(u, "input_tokens");
+  const promptInput = num(pick(u, "prompt_tokens"));
   return {
-    input_tokens: num(pick(u, "input_tokens", "prompt_tokens")),
+    // OpenAI-compatible APIs (including Kimi/Moonshot) include cache hits in
+    // prompt_tokens. Split them out so the same tokens are not priced twice.
+    input_tokens: explicitInput == null ? Math.max(0, promptInput - cacheRead) : num(explicitInput),
     output_tokens: num(pick(u, "output_tokens", "completion_tokens")),
     cache_creation_tokens: num(pick(u, "cache_creation_input_tokens", "cache_creation_tokens")),
-    cache_read_tokens: num(pick(u, "cache_read_input_tokens", "cache_read_tokens")),
+    cache_read_tokens: cacheRead,
   };
 }
 
