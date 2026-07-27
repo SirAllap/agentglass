@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.ts";
 import { parseUnifiedDiff } from "../lib/prBody.ts";
-import { Screen, Sheet, Seg, Empty, Act } from "./mobileUi.tsx";
+import { Screen, Sheet, Seg, Empty, Act, useConfirm } from "./mobileUi.tsx";
 import { MobileDiff, FileRow } from "./MobileDiff.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import type { PrDetail, PrCheck } from "../../../shared/types.ts";
@@ -73,12 +73,14 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
       if (r.ok) reload();
     } catch (e) { toast(String(e), true); }
   };
+  const { confirm, sheet: confirmSheet } = useConfirm();
 
   const canMerge = d?.mergeState === "CLEAN";
   const openThreads = d?.threads.filter((t) => !t.isResolved).length ?? 0;
 
   return (
     <>
+      {confirmSheet}
       <Screen
         open={open && diffAt == null}
         title={d ? `#${d.number} · ${d.author}` : number != null ? `#${number}` : ""}
@@ -100,7 +102,11 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
             </Act>
             <Act kind="acc" full disabled={!canMerge}
               title={canMerge ? undefined : MERGE_WHY[d.mergeState]}
-              onAct={() => act(`Merged #${d.number}`, () => api.prMerge(root, d.number, "squash", { deleteBranch: true }))}>
+              onAct={() => confirm({
+                verb: "Squash & merge", subject: `#${d.number}`,
+                warn: "Every commit becomes one, and the head branch is deleted straight after. Neither step is reversible from here.",
+                run: () => act(`Merged #${d.number}`, () => api.prMerge(root, d.number, "squash", { deleteBranch: true })),
+              })}>
               {canMerge ? "Squash & merge" : "Blocked"}
             </Act>
           </>
@@ -243,8 +249,12 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
                 () => api.prDraft(root, d.number, !d.isDraft)).then(() => setMore(false))}>
                 {d.isDraft ? "Mark ready for review" : "Convert to draft"}
               </Act>
-              <Act full small kind="dang" onAct={() => act("Pull request closed",
-                () => api.prClose(root, d.number)).then(() => { setMore(false); onBack(); })}>
+              <Act full small kind="dang" onAct={() => confirm({
+                verb: "Close", subject: `#${d.number}`,
+                warn: "It stops being reviewable and drops off the queue. Reopening it means going to GitHub.",
+                run: () => act("Pull request closed", () => api.prClose(root, d.number))
+                  .then(() => { setMore(false); onBack(); }),
+              })}>
                 Close pull request
               </Act>
             </>

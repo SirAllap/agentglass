@@ -290,6 +290,60 @@ export function Act({ children, onAct, kind, small, disabled, title, full }: {
   );
 }
 
+/**
+ * What a destructive action has to say before a thumb can do it.
+ *
+ * `subject` is the part that matters and the part a desktop dialog can get
+ * away with omitting. On a phone the thing being acted on is usually not on
+ * screen when the button is — the file is behind a diff, the container behind
+ * a stats card, the branch not shown at all — so "Discard?" asks a question
+ * the person cannot answer. Naming it is the confirmation.
+ */
+export type ConfirmSpec = {
+  /** The verb, worded the way the button will repeat it. */
+  verb: string;
+  /** What it happens to, named: a path, a container, `#381`. */
+  subject: string;
+  /** The one sentence about what does not come back. */
+  warn: string;
+  run: () => Promise<string | void> | string | void;
+};
+
+/**
+ * A confirm step for the actions that cannot be undone.
+ *
+ * Deliberately not a `window.confirm`: that is a desktop dialog on a phone —
+ * it lands under the thumb with its buttons in the platform's order, not the
+ * app's, and its "OK" cannot say what it is about to do. This reuses the same
+ * bottom sheet the rest of the phone uses, so the destructive button sits
+ * where every other primary action on this screen sits.
+ */
+export function useConfirm(): { confirm: (spec: ConfirmSpec) => void; sheet: React.ReactNode } {
+  const [spec, setSpec] = useState<ConfirmSpec | null>(null);
+  const close = useCallback(() => setSpec(null), []);
+  const sheet = (
+    <Sheet
+      open={!!spec}
+      title={spec ? `${spec.verb} ${spec.subject}?` : ""}
+      sub={spec?.warn}
+      onClose={close}
+    >
+      {spec && (
+        <div className="flex flex-col gap-2">
+          {/* Destructive first, because it is the one being asked about — and
+              the sheet is dismissed by the scrim, the back gesture and Cancel,
+              so the safe way out is never more than the nearest edge. */}
+          <Act full kind="dang" onAct={async () => { await spec.run(); close(); }}>
+            {spec.verb} {spec.subject}
+          </Act>
+          <Act full onAct={close}>Cancel</Act>
+        </div>
+      )}
+    </Sheet>
+  );
+  return { confirm: setSpec, sheet };
+}
+
 export function Switch({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
   return (
     <button className="mb-sw mb-press" data-on={on ? "1" : "0"}
