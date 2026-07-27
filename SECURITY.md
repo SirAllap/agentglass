@@ -43,6 +43,14 @@ complement, rather than replace, the private reporting path below.
   prints one.
 - **Intake is rate-limited** rather than authenticated: `AGENTGLASS_RATE_MAX`
   requests per source-address+route inside `AGENTGLASS_RATE_WINDOW_MS`.
+- **Hooks refuse to send anywhere but this machine.** The hook and seed scripts
+  post full session transcripts, and their destination — `AGENTGLASS_SERVER` —
+  is attacker-influenceable: a repo-local `settings.json` can set it, so cloning
+  a repository could otherwise redirect your prompts and file contents to
+  somebody else's host. Anything that is not `localhost` / `127.0.0.1` / `::1`
+  is refused with a message on stderr, and the script exits 0 so a hostile
+  setting cannot break the agent either. `AGENTGLASS_ALLOW_REMOTE=1` is the
+  explicit opt-out, for the case where the server genuinely runs elsewhere.
 - **Desktop-only routes.** The self-update route executes arbitrary code and is
   reachable from the packaged shell's own origin and nothing else — not from a
   browser, not from another machine.
