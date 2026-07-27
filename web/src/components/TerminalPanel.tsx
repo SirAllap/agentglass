@@ -62,6 +62,7 @@ type Sess = {
   subs: Set<() => void>;
 };
 const sessions = new Map<string, Sess>();
+const mountedSessions = new Set<string>();
 let seq = 0;
 /** Shells for one repo, in creation order. */
 const sessionsFor = (root: string) => [...sessions.values()].filter((s) => s.root === root).sort((a, b) => a.createdAt - b.createdAt);
@@ -78,7 +79,7 @@ function makeRoom(): boolean {
   if (sessions.size < MAX_CLIENT_SESSIONS) return true;
   let lru: Sess | null = null;
   for (const s of sessions.values()) {
-    if (s.status === "live" || s.status === "connecting") continue;
+    if (mountedSessions.has(s.id) || !["idle", "exited", "unauthorized"].includes(s.status)) continue;
     if (!lru || s.lastUsed < lru.lastUsed) lru = s;
   }
   if (!lru) return false;
@@ -327,6 +328,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
       if (!s.opened) { s.term.open(s.holder); s.opened = true; }
       s.term.options.theme = themeFromCss(); // pick up theme switches between opens
       s.subs.add(force);
+      mountedSessions.add(s.id);
       const doFit = () => { try { s.fit.fit(); } catch { /* not measurable yet */ } };
       doFit();
       if (s.status === "idle") connect(s);
@@ -339,6 +341,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
       for (const { s, el, ro } of mounted) {
         ro.disconnect();
         s.subs.delete(force);
+        mountedSessions.delete(s.id);
         if (s.holder.parentElement === el) el.removeChild(s.holder);
       }
     };
