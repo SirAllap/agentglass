@@ -75,8 +75,21 @@ export const DEFAULT_MODE = "default";
 // tears the tree down. The list is rebuilt on emit instead, which is exactly
 // when it can differ.
 let snapshot: Chat[] = [];
+let emitTimer: ReturnType<typeof setTimeout> | null = null;
 function rebuild() { snapshot = [...chats.values()].sort((a, b) => a.createdAt - b.createdAt); }
-function emit() { rebuild(); subs.forEach((fn) => fn()); }
+function emit() {
+  if (emitTimer) { clearTimeout(emitTimer); emitTimer = null; }
+  rebuild();
+  subs.forEach((fn) => fn());
+}
+function emitDeferred() {
+  if (emitTimer) return;
+  emitTimer = setTimeout(() => {
+    emitTimer = null;
+    rebuild();
+    subs.forEach((fn) => fn());
+  }, 50);
+}
 export function subscribe(fn: () => void): () => void { subs.add(fn); return () => subs.delete(fn); }
 
 export const listChats = (): Chat[] => snapshot;
@@ -175,6 +188,15 @@ export function update(id: string, fn: (c: Chat) => void) {
   emit();
 }
 
+/** Streaming chunks may arrive much faster than a browser can usefully paint.
+ * Mutate immediately so no data is lost, but notify React at a bounded cadence. */
+function updateStream(id: string, fn: (c: Chat) => void) {
+  const c = chats.get(id);
+  if (!c) return;
+  fn(c);
+  emitDeferred();
+}
+
 const titleOf = (s: string) => {
   const t = s.trim().split("\n")[0].slice(0, 48);
   return t.length ? t : "new chat";
@@ -219,7 +241,7 @@ export async function send(id: string, text: string, isActive: () => boolean, al
     }
     if (t === "assistant") {
       const blocks = (((o.message as Record<string, unknown>)?.content) ?? []) as Array<Record<string, unknown>>;
-      update(id, (c) => {
+      updateStream(id, (c) => {
         const last = c.messages[c.messages.length - 1];
         if (!last || last.role !== "assistant") return;
         for (const b of blocks) {
