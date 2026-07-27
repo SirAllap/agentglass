@@ -224,6 +224,17 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+/** The viewer's IANA zone, or null if the runtime cannot say. Memoized: this
+ *  is asked on every stats poll and resolvedOptions() is not free. */
+let tzMemo: string | null | undefined;
+function viewerTz(): string | null {
+  if (tzMemo === undefined) {
+    try { tzMemo = Intl.DateTimeFormat().resolvedOptions().timeZone || null; }
+    catch { tzMemo = null; }
+  }
+  return tzMemo;
+}
+
 const D = <T,>(v: T) => Promise.resolve(v); // demo helper
 const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is read-only" });
 
@@ -232,8 +243,17 @@ const realApi = {
   /** Scope + discovered projects. `workspace` is set when this instance was
    *  opened for a single project. */
   projects: () => get<{ projects: { source_app: string; path: string }[]; scanning: boolean; workspace: string | null }>("/projects"),
+  // tz: the heatmap is a weekday × hour grid, and only this end knows which
+  // clock those mean. Sent on every call rather than negotiated once, because
+  // a laptop can cross a timezone between two polls and the server caches per
+  // zone anyway. Resolving it can throw on an exotic runtime; the server falls
+  // back to its own clock when it is absent.
   stats: (windowMs: number, provider?: string) =>
-    get<StatsSummary>(`/stats?window=${windowMs}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}`),
+    get<StatsSummary>(
+      `/stats?window=${windowMs}`
+      + (provider ? `&provider=${encodeURIComponent(provider)}` : "")
+      + (viewerTz() ? `&tz=${encodeURIComponent(viewerTz()!)}` : ""),
+    ),
   sessions: (limit = 100, provider?: string) =>
     get<SessionRollup[]>(`/sessions?limit=${limit}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}`),
   filterOptions: () =>
@@ -243,7 +263,10 @@ const realApi = {
   exportUrl: (fmt: "csv" | "json") => withToken(`${SERVER}/export?format=${fmt}`),
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   usage: () => get<UsagePayload>(`/usage`),
-  skills: () => get<{ skills: SkillInfo[]; generated_at: number }>(`/skills`),
+  // usage_since: the epoch the call counts are known from. They are bounded
+  // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
+  // and is not. 0 means pruning is off and it really is all time.
+  skills: () => get<{ skills: SkillInfo[]; usage_since?: number; generated_at: number }>(`/skills`),
   changes: (limit = 200) => get<{ changes: FileChange[] }>(`/changes?limit=${limit}`),
   session: (id: string) => get<SessionDetail>(`/session?id=${encodeURIComponent(id)}`),
   insights: () => get<{ insights: Insight[] }>(`/insights`),

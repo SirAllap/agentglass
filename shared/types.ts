@@ -175,7 +175,15 @@ export interface StatsSummary {
     events: number;
     sessions: number;
     tool_calls: number;
+    /** Every errored event, whatever kind — the honest "how much went wrong". */
     errors: number;
+    /**
+     * Errors that were a tool call failing. The only numerator `tool_calls` is
+     * a legitimate denominator for: `errors` also counts LLM spans and
+     * notifications, which never enter `tool_calls`. Optional so an older
+     * server's payload still renders — treat a missing value as unknown, not 0.
+     */
+    tool_errors?: number;
     cost_usd: number;
     input_tokens: number;
     output_tokens: number;

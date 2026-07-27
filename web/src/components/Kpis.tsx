@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import type { AgentCard } from "../lib/derive.ts";
 import { useTicker, fmtClock } from "../lib/motion.ts";
+import { fmtUsd, usdDigits } from "../lib/format.ts";
 import { HealthRing } from "./HealthRing.tsx";
 
 const enter = { initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 } };
@@ -79,10 +80,16 @@ export function Kpis({
   const waiting = agents.filter((a) => a.status === "waiting").length;
   const failed = t?.errors ?? 0;
   const tools = t?.tool_calls ?? 0;
+  // Health is a *tool* failure rate, so its numerator has to be tool failures.
+  // `errors` counts every errored event — an LLM span or a notification can
+  // carry one — and none of those are in `tool_calls`, so dividing by it drove
+  // the ring below zero on a fleet where no tool had failed at all. Falls back
+  // to the old field so a server that predates tool_errors still renders.
+  const toolFailed = t?.tool_errors ?? failed;
   const cost = t?.cost_usd ?? 0;
   const tokens = (t?.input_tokens ?? 0) + (t?.output_tokens ?? 0);
   const cached = t?.cache_read_tokens ?? 0;
-  const health = tools > 0 ? Math.max(0, Math.round((1 - failed / Math.max(tools, 1)) * 100)) : 100;
+  const health = tools > 0 ? Math.max(0, Math.round((1 - toolFailed / Math.max(tools, 1)) * 100)) : 100;
   const spark = (stats?.timeline ?? []).slice(-24).map((b) => b.cost_usd);
   const healthLabel = health >= 80 ? "All nominal" : health >= 50 ? "Degraded" : "Critical";
   const healthColor = health >= 80 ? "var(--success)" : health >= 50 ? "var(--warning)" : "var(--error)";
@@ -96,7 +103,24 @@ export function Kpis({
         <div className="min-w-0 grow">
           <div className="panel-eyebrow">Spend · this window</div>
           <div className="text-[32px] font-semibold leading-none tabular-nums" style={{ color: "var(--success)" }}>
-            <NumberFlow value={cost} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2 }} />
+            {/* The one currency site in the app not routed through fmtUsd —
+                NumberFlow animates a number and takes Intl options, not a
+                formatted string. So it takes fmtUsd's decision instead.
+                minimumFractionDigits alone did not do it: with
+                style:"currency" the maximum defaults to the currency's two
+                digits and is not raised by the minimum, so $0.004 rendered
+                "$0.00" here while the panel beside it and the phone shell,
+                reading the same field, said "$0.004". Both must be set, and
+                min may never exceed max or Intl throws.
+                Below a hundredth of a cent even four digits round to zero, so
+                that range falls back to fmtUsd's "<$0.0001" — no animation,
+                but a true statement. */}
+            {cost > 0 && cost < 0.0001
+              ? <span>{fmtUsd(cost)}</span>
+              : <NumberFlow value={cost} format={{
+                  style: "currency", currency: "USD",
+                  minimumFractionDigits: usdDigits(cost), maximumFractionDigits: usdDigits(cost),
+                }} />}
           </div>
           <div className="text-[11px] t-dim2 mt-1.5 tabular-nums">
             <NumberFlow value={tokens} /> tokens · {(cached / 1000).toFixed(0)}k cached

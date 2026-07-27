@@ -1,4 +1,4 @@
-import type { WatchEvent, OpenToolCall, Liveness } from "../../../shared/types.ts";
+import type { WatchEvent, OpenToolCall, Liveness, SessionRollup } from "../../../shared/types.ts";
 import { agentKey, fmtMs, sessionTitle } from "./format.ts";
 import { sessionWorktree } from "./worktree.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -39,6 +39,9 @@ export interface AgentCard {
   events: number;
   tools: number;
   errors: number;
+  /** The subset of `errors` that was a tool call failing. The only numerator
+   *  `tools` is a legitimate denominator for — see the rate rule below. */
+  toolErrors: number;
   cost: number;
   tokens: number;
   lastSeen: number;
@@ -105,6 +108,7 @@ function blankCard(key: string, source_app: string, session_id: string, model_na
     events: 0,
     tools: 0,
     errors: 0,
+    toolErrors: 0,
     cost: 0,
     tokens: 0,
     lastSeen: 0,
@@ -146,7 +150,33 @@ export function buildTitles(sessions: { session_id: string; source_app?: string;
   return m;
 }
 
-export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [], titles?: TitleLookup): AgentCard[] {
+/**
+ * Lifetime totals per session, from the server.
+ *
+ * The card used to sum cost and tokens over the live event buffer, and that
+ * buffer is a window, not a history: it is capped at MAX_EVENTS (2000) across
+ * the whole fleet, and a fresh page load starts from the 300 events the
+ * initial frame carries. So a session that had produced five thousand events
+ * showed the cost of whichever handful of them survived the trim — a real
+ * spend of dollars rendering as $0.00 right after a reload, against a /stats
+ * total that was correct all along.
+ *
+ * The sessions poll already runs for the titles; these are the same rows.
+ */
+export type RollupLookup = ReadonlyMap<string, Pick<SessionRollup, "cost_usd" | "input_tokens" | "output_tokens" | "tool_count">>;
+
+export function buildRollups(sessions: SessionRollup[]): RollupLookup {
+  const m = new Map<string, Pick<SessionRollup, "cost_usd" | "input_tokens" | "output_tokens" | "tool_count">>();
+  for (const s of sessions) {
+    m.set(s.session_id, {
+      cost_usd: s.cost_usd, input_tokens: s.input_tokens,
+      output_tokens: s.output_tokens, tool_count: s.tool_count,
+    });
+  }
+  return m;
+}
+
+export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [], titles?: TitleLookup, rollups?: RollupLookup): AgentCard[] {
   const now = Date.now();
   const map = new Map<string, AgentCard>();
   // Subagents fold into their parent session_id but carry agent_id/agent_type,
@@ -198,8 +228,13 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
       if (e.agent_type || !prev) m.set(e.agent_id, e.agent_type || prev || "subagent");
     }
     a.events++;
-    if (e.hook_event_type === "PostToolUse" || e.hook_event_type === "PostToolUseFailure") a.tools++;
-    if (e.is_error) { a.errors++; if (e.timestamp >= a.lastErrorTs) a.lastErrorTs = e.timestamp; }
+    const isTool = e.hook_event_type === "PostToolUse" || e.hook_event_type === "PostToolUseFailure";
+    if (isTool) a.tools++;
+    if (e.is_error) {
+      a.errors++;
+      if (isTool) a.toolErrors++;
+      if (e.timestamp >= a.lastErrorTs) a.lastErrorTs = e.timestamp;
+    }
     a.cost += e.cost_usd;
     a.tokens += e.input_tokens + e.output_tokens;
     if (e.timestamp >= a.lastSeen) {
@@ -262,6 +297,22 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
   }
 
   for (const a of map.values()) {
+    // Server-authoritative lifetime totals win over the buffer sum wherever
+    // the poll has seen this session. Math.max rather than a plain assignment:
+    // the poll is every 30s and caps at 200 sessions, so a burst of spend
+    // arriving mid-interval is in the buffer before it is in the roll-up, and
+    // a headline number must never read backwards while you watch it.
+    //
+    // Deliberately not applied to errors/lastErrorTs. The rate rule below
+    // divides by a.tools, and swapping a lifetime tool count under a windowed
+    // error count would fire "high failure rate" on long-dead history. spark
+    // stays buffer-derived too — it is a picture of the recent window by design.
+    const r = rollups?.get(a.session_id);
+    if (r) {
+      a.cost = Math.max(a.cost, r.cost_usd);
+      a.tokens = Math.max(a.tokens, r.input_tokens + r.output_tokens);
+      a.tools = Math.max(a.tools, r.tool_count);
+    }
     const since = now - a.lastSeen;
     // A session that ended can't still be running a tool, whatever pair we
     // think is open; and an open pair past the ceiling is lost, not long.
@@ -390,7 +441,10 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
         out.push({ id: "long:" + a.key, level: "warn", agent: a.key, ts: a.runningSince,
           text: `${a.runningTool} running ${openFor} — nothing local to check, so this could be either` });
     }
-    const rate = a.tools > 3 ? a.errors / a.tools : 0;
+    // toolErrors, not errors: the denominator is tool calls, and an errored
+    // LLM span or notification never enters it. With the all-events count this
+    // read "high failure rate 150%" on a session whose every tool succeeded.
+    const rate = a.tools > 3 ? a.toolErrors / a.tools : 0;
     if (rate > 0.25)
       out.push({ id: "rate:" + a.key, level: "error", agent: a.key, text: `high failure rate ${(rate * 100).toFixed(0)}%`, ts: a.lastSeen });
   }

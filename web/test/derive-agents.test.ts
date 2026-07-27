@@ -5,7 +5,7 @@
 // and keep well clear of the thresholds (STALL 20s, IDLE 5m) so a few ms of
 // drift between the two Date.now() reads can never flip a case.
 import { test, expect } from "bun:test";
-import { deriveAgents, buildTitles } from "../src/lib/derive.ts";
+import { deriveAgents, deriveAlerts, buildTitles, buildRollups } from "../src/lib/derive.ts";
 import type { WatchEvent } from "../../shared/types.ts";
 
 const now = Date.now();
@@ -121,4 +121,95 @@ test("buildTitles prefers a custom title over an ai title, and omits sessions wi
   // A session with no title is left out entirely, so the UI falls back to the
   // uuid rather than being handed an empty string.
   expect(t.get("s-none")).toBeUndefined();
+});
+
+// A failure rate needs a numerator and denominator drawn from the same
+// population (#248 F6). `errors` counts every errored event — an OTLP source
+// flags "Turn complete" spans, and any event carrying a top-level error string
+// gets it — while the denominator is tool calls only. So a session whose every
+// tool call succeeded raised "high failure rate 150%".
+test("a failure rate counts tool failures, not every errored event", () => {
+  const events = [
+    ...Array.from({ length: 4 }, (_, i) =>
+      ev({ hook_event_type: "PostToolUse", is_error: 0, timestamp: now - 5000 - i })),
+    ...Array.from({ length: 6 }, (_, i) =>
+      ev({ hook_event_type: "Turn complete", tool_name: null, is_error: 1, timestamp: now - 4000 - i })),
+  ];
+  const card = only(events);
+  expect(card.tools).toBe(4);
+  expect(card.errors).toBe(6);   // still the honest "how much went wrong"
+  expect(card.toolErrors).toBe(0); // ...but no tool failed
+  expect(deriveAlerts([card]).filter((a) => a.id.startsWith("rate:"))).toEqual([]);
+});
+
+test("a real tool failure still raises the rate alert", () => {
+  const events = [
+    ...Array.from({ length: 2 }, (_, i) =>
+      ev({ hook_event_type: "PostToolUse", is_error: 0, timestamp: now - 5000 - i })),
+    ...Array.from({ length: 3 }, (_, i) =>
+      ev({ hook_event_type: "PostToolUseFailure", is_error: 1, timestamp: now - 4000 - i })),
+  ];
+  const card = only(events);
+  expect(card.toolErrors).toBe(3);
+  const rate = deriveAlerts([card]).filter((a) => a.id.startsWith("rate:"));
+  expect(rate.length).toBe(1);
+  expect(rate[0].text).toBe("high failure rate 60%");
+});
+
+// The card's cost and tokens must not come from a window (#248 F8).
+//
+// deriveAgents summed them over the live event buffer, which is capped at
+// MAX_EVENTS (2000) across the whole fleet and seeded with just 300 events on
+// a fresh load. A long-running session therefore showed the cost of whichever
+// handful of its events survived the trim — dollars of real spend rendering as
+// cents right after a reload, while /stats had it right the whole time.
+const rollup = (over: Partial<import("../../shared/types.ts").SessionRollup> = {}) => ({
+  session_id: "s1", source_app: "app", model_name: "claude-opus-4-8",
+  started_at: now - 60_000, ended_at: null, last_seen: now - 1000,
+  event_count: 5000, tool_count: 900, error_count: 0,
+  input_tokens: 900_000, output_tokens: 100_000,
+  cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 12.34,
+  ...over,
+} as import("../../shared/types.ts").SessionRollup);
+
+test("a server roll-up beats the truncated buffer", () => {
+  // Two events survive the trim; the session really produced five thousand.
+  const events = [ev({ cost_usd: 0.01 }), ev({ cost_usd: 0.01 })];
+  const buffered = only(events);
+  expect(buffered.cost).toBeCloseTo(0.02, 6); // what the card used to show
+
+  const card = deriveAgents(events, [], undefined, buildRollups([rollup()]))[0];
+  expect(card.cost).toBeCloseTo(12.34, 6);
+  expect(card.tokens).toBe(1_000_000);
+  expect(card.tools).toBe(900);
+});
+
+test("a burst that beat the 30s poll is not rounded back down", () => {
+  // The buffer has more than the roll-up knows about yet. A headline number
+  // must never read backwards while you are watching it.
+  const events = Array.from({ length: 3 }, () => ev({ cost_usd: 10 }));
+  const card = deriveAgents(events, [], undefined, buildRollups([rollup({ cost_usd: 12.34 })]))[0];
+  expect(card.cost).toBeCloseTo(30, 6);
+});
+
+test("a session the poll has not returned still falls back to the buffer", () => {
+  const events = [ev({ session_id: "unseen", cost_usd: 0.25 })];
+  const card = deriveAgents(events, [], undefined, buildRollups([rollup()]))[0];
+  expect(card.cost).toBeCloseTo(0.25, 6);
+});
+
+// The rate rule divides by a.tools. Moving a lifetime tool count under a
+// windowed error count would fire "high failure rate" on long-dead history.
+test("the roll-up does not leak into the failure-rate inputs", () => {
+  const events = [
+    ...Array.from({ length: 2 }, () => ev({ hook_event_type: "PostToolUse", is_error: 0 })),
+    ...Array.from({ length: 3 }, () => ev({ hook_event_type: "PostToolUseFailure", is_error: 1 })),
+  ];
+  const card = deriveAgents(events, [], undefined, buildRollups([rollup({ tool_count: 900 })]))[0];
+  expect(card.errors).toBe(3);
+  expect(card.toolErrors).toBe(3);
+  // tools took the roll-up, so the rate falls — that is the honest reading of
+  // a lifetime denominator, and it must not be able to invent a failure.
+  expect(card.tools).toBe(900);
+  expect(deriveAlerts([card]).filter((a) => a.id.startsWith("rate:"))).toEqual([]);
 });

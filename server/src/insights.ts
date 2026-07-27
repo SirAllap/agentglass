@@ -66,7 +66,13 @@ export function getInsights(): Insight[] {
   // 3) High failure rate — errors relative to tool calls in the last hour.
   const fails = db
     .query<{ source_app: string; session_id: string; errs: number; tools: number; last: number }, any[]>(
-      `SELECT source_app, session_id, SUM(is_error) errs,
+      // errs counts only tool failures, because tools is the denominator. It
+      // used to be SUM(is_error) over every event — and an errored LLM span or
+      // notification never enters `tools`, so the rate was unbounded: a session
+      // with 6 non-tool errors and 4 tool calls announced "High failure rate ·
+      // 150%" and, underneath it, "6 of 4 tool calls failed".
+      `SELECT source_app, session_id,
+              SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END) errs,
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) tools,
               MAX(timestamp) last
        FROM events WHERE timestamp > ?${sc} GROUP BY session_id

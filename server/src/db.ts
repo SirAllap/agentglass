@@ -1113,11 +1113,16 @@ const statsCache = new Map<string, { at: number; data: StatsSummary }>();
 /** Full analytics summary over a rolling window (default 24h), optionally scoped
  *  to a single provider (Anthropic / OpenAI / Google / …). Always scoped to the
  *  open project, so spend, tool mix and the radar describe that project alone. */
-export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): StatsSummary {
-  const key = `${windowMs}|${provider ?? ""}|${workspaceRoot() ?? ""}`;
+export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string, tz?: string): StatsSummary {
+  // tz belongs in the key, not only the arguments. The heatmap buckets by
+  // weekday and hour, which are only defined relative to a clock — and the
+  // viewer is often not on the server (remote access, the phone companion).
+  // Without it here, one viewer's grid is served to another in a different
+  // zone for the whole TTL.
+  const key = `${windowMs}|${provider ?? ""}|${workspaceRoot() ?? ""}|${tz ?? ""}`;
   const hit = statsCache.get(key);
   if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
-  const data = computeStatsSummary(windowMs, provider);
+  const data = computeStatsSummary(windowMs, provider, tz);
   // One entry per (window, provider, scope). The window set is fixed and small
   // (the header's chips) and scope rarely changes, so this never grows unbounded
   // in practice; prune stale entries anyway so a long-lived server can't leak.
@@ -1126,7 +1131,7 @@ export function statsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
   return data;
 }
 
-function computeStatsSummary(windowMs: number, provider?: string): StatsSummary {
+function computeStatsSummary(windowMs: number, provider?: string, tz?: string): StatsSummary {
   const since = Date.now() - windowMs;
   const { clause: prov, args: pa } = providerScope(provider);
   const { clause: sc, args: sa } = scopeClause();
@@ -1148,6 +1153,14 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
       `SELECT COUNT(*) AS events,
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) AS tool_calls,
               SUM(is_error) AS errors,
+              -- Errors that were actually a tool failing, which is the only
+              -- numerator tool_calls can honestly serve as a denominator for.
+              -- The errors column counts every errored event, and an LLM span
+              -- or a notification can carry is_error too (otlp.ts sets it on
+              -- "Turn complete") — dividing that by tool calls produced a
+              -- health ring below zero, and insights reading "6 of 4 tool
+              -- calls failed". Both ship; each answers its own question.
+              SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END) AS tool_errors,
               COUNT(DISTINCT session_id) AS sessions,
               SUM(input_tokens) AS input_tokens,
               SUM(output_tokens) AS output_tokens,
@@ -1157,7 +1170,7 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
        FROM events WHERE timestamp >= ?${pf}`
     )
     .get(...A)!;
-  const evtTotals = totals as { events: number; tool_calls: number; errors: number };
+  const evtTotals = totals as { events: number; tool_calls: number; errors: number; tool_errors: number };
   const tokTotals = totals;
 
   // Per-model breakdown (from events so it respects the window).
@@ -1303,7 +1316,39 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
       `SELECT timestamp, is_error, cost_usd, input_tokens, output_tokens FROM events WHERE timestamp >= ?${pf}`
     )
     .all(...A);
+  /**
+   * The heatmap is a weekday x hour grid, and neither exists without a clock.
+   *
+   * It used to bucket with getDay()/getHours(), which read the *server*
+   * process's zone, while the timeline beside it buckets UTC epochs and is
+   * rendered in the viewer's. So the cell labelled "Tue 14:00" and the tick
+   * labelled 14:00 described different real hours whenever the two clocks
+   * differed — shifted by the offset, with whole day columns moving when it
+   * crossed midnight. Remote access and the phone companion exist precisely
+   * so that the viewer is not on the server, so this was reachable rather
+   * than theoretical.
+   *
+   * The formatter is built once: formatToParts per event over a wide window
+   * is thousands of calls. An absent or unknown zone falls back to the old
+   * behaviour rather than throwing — the server's clock is still better than
+   * a 500.
+   */
   const heatmap = new Array(168).fill(0);
+  const WEEKDAY: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  let fmt: Intl.DateTimeFormat | null = null;
+  if (tz) {
+    try {
+      fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", hour12: false });
+    } catch { fmt = null; }
+  }
+  const cellOf = (ms: number): number => {
+    if (!fmt) { const d = new Date(ms); return d.getDay() * 24 + d.getHours(); }
+    const parts = fmt.formatToParts(ms);
+    const wd = WEEKDAY[parts.find((x) => x.type === "weekday")?.value ?? "Sun"] ?? 0;
+    // hour12:false spells midnight "24" in some locales.
+    const hr = Number(parts.find((x) => x.type === "hour")?.value ?? 0) % 24;
+    return wd * 24 + hr;
+  };
   for (const r of tlRows) {
     const t = Math.min(lastKey, Math.floor(r.timestamp / bucketMs) * bucketMs);
     const b = buckets.get(t);
@@ -1313,8 +1358,7 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
       b.cost_usd += r.cost_usd ?? 0;
       b.tokens += (r.input_tokens ?? 0) + (r.output_tokens ?? 0);
     }
-    const d = new Date(r.timestamp);
-    heatmap[d.getDay() * 24 + d.getHours()]++;
+    heatmap[cellOf(r.timestamp)]++;
   }
 
   return {
@@ -1323,6 +1367,7 @@ function computeStatsSummary(windowMs: number, provider?: string): StatsSummary 
       sessions: tokTotals.sessions ?? 0,
       tool_calls: evtTotals.tool_calls ?? 0,
       errors: evtTotals.errors ?? 0,
+      tool_errors: evtTotals.tool_errors ?? 0,
       cost_usd: tokTotals.cost_usd ?? 0,
       input_tokens: tokTotals.input_tokens ?? 0,
       output_tokens: tokTotals.output_tokens ?? 0,
