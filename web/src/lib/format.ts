@@ -1,15 +1,29 @@
 // Every formatter guards non-finite/nullish input: a single bad numeric field
 // upstream (a divide-by-zero rate, a forged event) otherwise leaks "$NaN" or
 // "Infinitys" straight into the UI.
+/**
+ * How many decimals a dollar figure needs to stop lying.
+ *
+ * Two cents needs two; four hundredths of a cent needs four, or it renders as
+ * "$0.00" and the panel claims nothing was spent. Exported because the hero
+ * KPI cannot use fmtUsd — it feeds a NumberFlow, which animates a *number* and
+ * takes Intl options rather than a formatted string — and the two renderings
+ * of the same field disagreeing is the bug this exists to prevent.
+ */
+export function usdDigits(n: number): number {
+  const a = Math.abs(n);
+  return a === 0 || a >= 1 ? 2 : a >= 0.01 ? 3 : 4;
+}
+
+// Every formatter guards non-finite/nullish input: a single bad numeric field
+// upstream (a divide-by-zero rate, a forged event) otherwise leaks "$NaN".
 export function fmtUsd(n: number | null | undefined): string {
   if (n == null || !isFinite(n)) return "—";
   const neg = n < 0 ? "-" : "";
   const a = Math.abs(n);
   if (a === 0) return "$0.00";
   if (a < 0.0001) return `${neg}<$0.0001`; // real spend that would round to $0.0000
-  if (a >= 1) return `${neg}$${a.toFixed(2)}`;
-  if (a >= 0.01) return `${neg}$${a.toFixed(3)}`;
-  return `${neg}$${a.toFixed(4)}`;
+  return `${neg}$${a.toFixed(usdDigits(a))}`;
 }
 
 // Platform-aware modifier label: ⌘ only on actual Macs, Ctrl+ elsewhere.

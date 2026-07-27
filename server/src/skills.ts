@@ -222,7 +222,25 @@ export async function getSkills(): Promise<SkillInfo[]> {
 
   cache = [...merged.values()]
     .map((s) => {
-      const u = usage.get(s.name);
+      /**
+       * One invocation charges one catalog entry.
+       *
+       * The catalog is keyed by `kind:name` — a project may hold both
+       * `.claude/skills/review/SKILL.md` and `.claude/commands/review.md` —
+       * but the usage bucket is keyed by name alone, so both entries read it.
+       * A single $0.0175 run of the *skill* was reported as 2 calls and
+       * $0.035 across the catalogue, and the never-used command inherited the
+       * skill's `last_used`, its per-run cost, and a place in the "top 3 most
+       * used" badge it had never earned.
+       *
+       * The bucket only ever contains Skill-tool invocations (db.ts reads
+       * `tool_name = 'Skill'`), so where a skill of that name exists it is the
+       * one that ran. A command of the same name is charged only when no such
+       * skill exists — which keeps a genuine command invocation attributed if
+       * the Skill tool is ever what runs a slash command.
+       */
+      const skillOwns = s.kind === "skill" || !merged.has(`skill:${s.name}`);
+      const u = skillOwns ? usage.get(s.name) : undefined;
       const clean = { ...s } as SkillInfo & { mtime?: number };
       delete clean.mtime;
       return {

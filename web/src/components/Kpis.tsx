@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import type { AgentCard } from "../lib/derive.ts";
 import { useTicker, fmtClock } from "../lib/motion.ts";
+import { fmtUsd, usdDigits } from "../lib/format.ts";
 import { HealthRing } from "./HealthRing.tsx";
 
 const enter = { initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 } };
@@ -102,7 +103,24 @@ export function Kpis({
         <div className="min-w-0 grow">
           <div className="panel-eyebrow">Spend · this window</div>
           <div className="text-[32px] font-semibold leading-none tabular-nums" style={{ color: "var(--success)" }}>
-            <NumberFlow value={cost} format={{ style: "currency", currency: "USD", minimumFractionDigits: 2 }} />
+            {/* The one currency site in the app not routed through fmtUsd —
+                NumberFlow animates a number and takes Intl options, not a
+                formatted string. So it takes fmtUsd's decision instead.
+                minimumFractionDigits alone did not do it: with
+                style:"currency" the maximum defaults to the currency's two
+                digits and is not raised by the minimum, so $0.004 rendered
+                "$0.00" here while the panel beside it and the phone shell,
+                reading the same field, said "$0.004". Both must be set, and
+                min may never exceed max or Intl throws.
+                Below a hundredth of a cent even four digits round to zero, so
+                that range falls back to fmtUsd's "<$0.0001" — no animation,
+                but a true statement. */}
+            {cost > 0 && cost < 0.0001
+              ? <span>{fmtUsd(cost)}</span>
+              : <NumberFlow value={cost} format={{
+                  style: "currency", currency: "USD",
+                  minimumFractionDigits: usdDigits(cost), maximumFractionDigits: usdDigits(cost),
+                }} />}
           </div>
           <div className="text-[11px] t-dim2 mt-1.5 tabular-nums">
             <NumberFlow value={tokens} /> tokens · {(cached / 1000).toFixed(0)}k cached
