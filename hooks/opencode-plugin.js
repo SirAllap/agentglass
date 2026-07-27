@@ -23,9 +23,13 @@ export function resolveServer(env = process.env) {
 const SERVER = resolveServer();
 const INGEST_PATH = "/ingest";
 
-const childSessions = new Set();
-
 const DEFAULT_SESSION_RE = /^(New session - |Child session - )\d{4}-\d{2}-\d{2}T/;
+const MAX_TOOL_OUTPUT = 256 * 1024;
+
+export function limitToolOutput(value) {
+  if (typeof value !== "string" || value.length <= MAX_TOOL_OUTPUT) return value;
+  return `${value.slice(0, MAX_TOOL_OUTPUT)}\n[output truncated by agentglass]`;
+}
 
 export function isAllowedServer(url, allowRemote = false) {
   if (allowRemote) return true;
@@ -96,26 +100,20 @@ function usageFromAssistant(info) {
   return usage;
 }
 
-async function fetchLastAssistantUsage(client, sessionID) {
-  if (!client || !sessionID) return undefined;
-  try {
-    const messages = await client.session.listMessages(sessionID);
-    if (!Array.isArray(messages)) return undefined;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg?.role === "assistant") {
-        return usageFromAssistant(msg);
-      }
-    }
-  } catch {}
-  return undefined;
-}
-
-export const AgentGlassPlugin = async ({ client, directory, worktree }) => {
+export const AgentGlassPlugin = async ({ directory, worktree }) => {
   if (process.env.AGENTGLASS_INTERNAL) return {};
 
   const sourceApp = sourceAppFromDir(worktree || directory);
+  const childSessions = new Set();
   const pendingPreTool = new Map();
+  const completedMessages = new Map();
+  const completedSinceIdle = new Set();
+  const clearSession = (id) => {
+    childSessions.delete(id);
+    completedSinceIdle.delete(id);
+    for (const [callID, pre] of pendingPreTool) if (pre.sessionID === id) pendingPreTool.delete(callID);
+    for (const [messageID, sessionID] of completedMessages) if (sessionID === id) completedMessages.delete(messageID);
+  };
 
   return {
     "chat.message": async ({ sessionID, agent, model }) => {
@@ -170,7 +168,7 @@ export const AgentGlassPlugin = async ({ client, directory, worktree }) => {
         tool_input: args,
       };
       if (output?.output != null) {
-        payload.tool_response = { content: output.output };
+        payload.tool_response = { content: limitToolOutput(output.output) };
       }
       if (output?.title) payload.tool_title = output.title;
       if (pre) payload.duration_ms = Date.now() - pre.timestamp;
@@ -224,6 +222,9 @@ export const AgentGlassPlugin = async ({ client, directory, worktree }) => {
               payload: agentPayload,
             });
             break;
+          case "session.deleted":
+            clearSession(sessionID);
+            break;
         }
         return;
       }
@@ -246,6 +247,13 @@ export const AgentGlassPlugin = async ({ client, directory, worktree }) => {
         case "message.updated": {
           if (!info || info.role !== "assistant") break;
           if (!info.finish && !info.time?.completed) break;
+          if (info.id && completedMessages.has(info.id)) break;
+          const completedSession = info.sessionID || sessionID;
+          if (info.id) {
+            completedMessages.set(info.id, completedSession);
+            if (completedMessages.size > 1000) completedMessages.delete(completedMessages.keys().next().value);
+          }
+          if (completedSession) completedSinceIdle.add(completedSession);
 
           const usage = usageFromAssistant(info);
           const msgPayload = {
@@ -269,19 +277,21 @@ export const AgentGlassPlugin = async ({ client, directory, worktree }) => {
         }
 
         case "session.idle": {
-          const usage = await fetchLastAssistantUsage(client, sessionID);
-          const idlePayload = { ...basePayload };
-          if (usage) idlePayload.usage = usage;
+          if (sessionID && completedSinceIdle.delete(sessionID)) break;
 
           await postEvent({
             source_app: sourceApp,
             session_id: sessionID || "unknown",
             hook_event_type: "Stop",
-            payload: idlePayload,
+            payload: basePayload,
             session_name: sessionNameFromInfo(info),
           });
           break;
         }
+
+        case "session.deleted":
+          if (sessionID) clearSession(sessionID);
+          break;
 
         case "session.updated":
           await postEvent({
