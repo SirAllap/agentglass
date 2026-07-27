@@ -53,86 +53,8 @@ const GIF_W = 1100, GIF_FPS = 12;
 /** How a still goes from a 3840px CDP capture to the asset the README shows —
  *  see scripts/still.ts for why that step exists at all. */
 import { finishStill, STILL_W, THEME_W } from "./still.ts";
-
-/** The demo build is based at /agentglass/demo/ so it can be served from
- *  GitHub Pages, so its asset URLs carry that prefix. Serving it at the root
- *  gives a page whose scripts all 404 and a #root that never fills. */
-const BASE = "/agentglass/demo";
-
-function serveDist() {
-  return Bun.serve({
-    port: 0,
-    async fetch(req) {
-      let path = new URL(req.url).pathname;
-      if (path.startsWith(BASE)) path = path.slice(BASE.length) || "/";
-      const file = Bun.file(join(DIST, path === "/" ? "index.html" : path));
-      if (await file.exists()) return new Response(file);
-      if (!path.split("/").pop()!.includes("."))
-        return new Response(Bun.file(join(DIST, "index.html")), { headers: { "content-type": "text/html" } });
-      return new Response("not found", { status: 404 });
-    },
-  });
-}
-
-const CHROME = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "/usr/bin/google-chrome"];
-function findChrome(): string {
-  const pinned = process.env.CHROME_PATH?.trim();
-  if (pinned) return pinned;
-  for (const c of CHROME) {
-    const r = Bun.spawnSync(["which", c]);
-    if (r.exitCode === 0) return r.stdout.toString().trim();
-  }
-  throw new Error("no Chrome found — set CHROME_PATH");
-}
-
-type CDP = {
-  send: (m: string, p?: unknown) => Promise<any>;
-  ev: (expr: string) => Promise<any>;
-  shot: () => Promise<Buffer>;
-  close: () => void;
-};
-
-async function connect(port: number): Promise<CDP> {
-  let targets: any[] = [];
-  for (let i = 0; i < 60; i++) {
-    try { targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json(); if (targets.length) break; }
-    catch { /* not up yet */ }
-    await Bun.sleep(250);
-  }
-  const page = targets.find((t) => t.type === "page");
-  if (!page) throw new Error("no page target");
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
-  let id = 1;
-  const pending = new Map<number, (v: any) => void>();
-  await new Promise((r) => ws.addEventListener("open", r as any));
-  ws.addEventListener("message", (e: any) => {
-    const m = JSON.parse(String(e.data));
-    if (m.id && pending.has(m.id)) { pending.get(m.id)!(m.result ?? m.error); pending.delete(m.id); }
-  });
-  const send = (method: string, params: unknown = {}) =>
-    new Promise<any>((res) => { const i = id++; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
-  await send("Page.enable");
-  await send("Runtime.enable");
-  const ev = async (expr: string) =>
-    (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.value;
-  const shot = async () => Buffer.from((await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false })).data, "base64");
-  return { send, ev, shot, close: () => ws.close() };
-}
-
-/** Wait for a condition rather than a guessed delay — a fixed sleep either
- *  wastes seconds or captures a half-painted frame, and which one depends on
- *  the machine. */
-async function until(cdp: CDP, expr: string, what: string, ms = 15_000) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < ms) {
-    if (await cdp.ev(`!!(${expr})`)) return;
-    await Bun.sleep(120);
-  }
-  throw new Error(`timed out waiting for ${what}`);
-}
-
-const key = (cdp: CDP, k: string, mods: Record<string, boolean> = {}) =>
-  cdp.ev(`(()=>{window.dispatchEvent(new KeyboardEvent("keydown",Object.assign({key:${JSON.stringify(k)},bubbles:true,cancelable:true},${JSON.stringify(mods)})));return 1})()`);
+/** Chrome, the protocol and the static server for the demo build. */
+import { connect, findChrome, key, serveDist, until, DEMO_BASE } from "./cdp.ts";
 
 async function main() {
   if (!existsSync(join(DIST, "index.html"))) {
@@ -140,8 +62,8 @@ async function main() {
     process.exit(1);
   }
   mkdirSync(OUT, { recursive: true });
-  const server = serveDist();
-  const url = `http://127.0.0.1:${server.port}${BASE}/`;
+  const server = serveDist(DIST);
+  const url = `http://127.0.0.1:${server.port}${DEMO_BASE}/`;
   const profile = mkdtempSync(join(tmpdir(), "agx-capture-"));
   const port = 9400 + Math.floor(Math.random() * 200);
 

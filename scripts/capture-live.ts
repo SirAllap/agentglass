@@ -29,51 +29,9 @@ const W = 1920, SCALE = 2;
 const H_PROBE = 1000;
 const PANEL_H = 1080;
 
-const CHROME = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"];
-function findChrome(): string {
-  const pinned = process.env.CHROME_PATH?.trim();
-  if (pinned) return pinned;
-  for (const c of CHROME) {
-    const r = Bun.spawnSync(["which", c]);
-    if (r.exitCode === 0) return r.stdout.toString().trim();
-  }
-  throw new Error("no Chrome found — set CHROME_PATH");
-}
-
-async function connect(port: number) {
-  let targets: any[] = [];
-  for (let i = 0; i < 80; i++) {
-    try { targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json(); if (targets.length) break; }
-    catch { /* not up yet */ }
-    await Bun.sleep(250);
-  }
-  const page = targets.find((t) => t.type === "page");
-  if (!page) throw new Error("no page target");
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
-  let id = 1;
-  const pending = new Map<number, (v: any) => void>();
-  await new Promise((r) => ws.addEventListener("open", r as any));
-  ws.addEventListener("message", (e: any) => {
-    const m = JSON.parse(String(e.data));
-    if (m.id && pending.has(m.id)) { pending.get(m.id)!(m.result ?? m.error); pending.delete(m.id); }
-  });
-  const send = (method: string, params: unknown = {}) =>
-    new Promise<any>((res) => { const i = id++; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })); });
-  await send("Page.enable"); await send("Runtime.enable");
-  const ev = async (expr: string) =>
-    (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true })).result?.value;
-  const shot = async () => Buffer.from((await send("Page.captureScreenshot", { format: "png" })).data, "base64");
-  return { send, ev, shot, close: () => ws.close() };
-}
-
-async function until(cdp: any, expr: string, what: string, ms = 25_000) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < ms) { if (await cdp.ev(`!!(${expr})`)) return; await Bun.sleep(150); }
-  throw new Error(`timed out waiting for ${what}`);
-}
-
-const key = (cdp: any, k: string, mods: Record<string, boolean> = {}) =>
-  cdp.ev(`(()=>{window.dispatchEvent(new KeyboardEvent("keydown",Object.assign({key:${JSON.stringify(k)},bubbles:true,cancelable:true},${JSON.stringify(mods)})));return 1})()`);
+/** Chrome and the protocol — the same helpers capture.ts and capture-phone.ts
+ *  drive, so a fix to the connect retry loop reaches all three. */
+import { connect, findChrome, key, until } from "./cdp.ts";
 
 async function main() {
   if (!existsSync(join(REPO, ".git"))) { console.error(`no scratch repo at ${REPO}`); process.exit(1); }
@@ -124,7 +82,7 @@ async function main() {
     });
 
     const cdp = await connect(dport);
-    await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount");
+    await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount", 25_000);
     await Bun.sleep(2500);
     // 16:9, matching the other workspace panels in capture.ts — the terminal
     // fills its height, so the dashboard's taller viewport would only add floor.
@@ -132,7 +90,7 @@ async function main() {
     await Bun.sleep(1200);
 
     await key(cdp, "\\", { ctrlKey: true });
-    await until(cdp, `document.querySelector('[role="tablist"][aria-label="Workspace views"]')`, "the workspace");
+    await until(cdp, `document.querySelector('[role="tablist"][aria-label="Workspace views"]')`, "the workspace", 25_000);
     await Bun.sleep(1000);
 
     // The terminal sits wherever the rail puts it; find it by its tooltip
