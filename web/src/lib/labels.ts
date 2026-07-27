@@ -19,6 +19,11 @@ export function friendly(e: WatchEvent): Friendly {
       return { verb: "Needs your approval", color: "#fbbf24", dot: "warn" };
     case "Notification":
       return { verb: "Notification", color: "#fbbf24", dot: "warn" };
+    // A GenAI record from an OTel source that carries no lifecycle meaning —
+    // a heartbeat, a debug line, a vendor event the mapper has not learned.
+    // Rendered as the ambient thing it is, never as attention.
+    case "Telemetry":
+      return { verb: "Telemetry", color: "#94a3b8", dot: "idle" };
     case "UserPromptSubmit":
       return { verb: "New prompt", color: "#c4b5fd", dot: "run" };
     case "SessionStart":
