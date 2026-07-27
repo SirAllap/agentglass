@@ -3,17 +3,26 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { motion } from "motion/react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
+import { Select } from "./Select.tsx";
 import { fmtUsd, fmtTokens, modelColor, repoColor } from "../lib/format.ts";
 
 type View = "model" | "repo";
+type Sort = "cost-desc" | "cost-asc" | "tokens-desc" | "tokens-asc";
+const SORT_OPTIONS = [
+  { value: "cost-desc", label: "Cost ↓" },
+  { value: "cost-asc", label: "Cost ↑" },
+  { value: "tokens-desc", label: "Tokens ↓" },
+  { value: "tokens-asc", label: "Tokens ↑" },
+];
 type Item = { key: string; label: string; color: string; cost: number; tokens: number };
 
 const repoName = (p: string) => p.split(/[/\\]/).filter(Boolean).pop() || p;
 
 export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSummary | null }) {
   const [view, setView] = useState<View>("model");
+  const [sort, setSort] = useState<Sort>("cost-desc");
 
-  const items: Item[] =
+  const raw: Item[] =
     view === "model"
       ? (stats?.by_model ?? [])
           .filter((m) => m.cost_usd > 0 || m.input_tokens > 0)
@@ -25,6 +34,10 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
             return { key: r.project_path ?? "—", label, color: repoColor(i), cost: r.cost_usd, tokens: r.input_tokens + r.output_tokens };
           });
 
+  const dir = sort.endsWith("asc") ? 1 : -1;
+  const sortKey = sort.startsWith("cost") ? "cost" : "tokens";
+  const items = [...raw].sort((a, b) => (a[sortKey] - b[sortKey]) * dir);
+
   const total = items.reduce((s, m) => s + m.cost, 0);
   const data = items.map((m) => ({ name: m.key, value: Math.max(m.cost, 0.0001) }));
   // Hovering a slice updates the centre label instead of a floating tooltip —
@@ -32,23 +45,26 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
   const [hi, setHi] = useState<number | null>(null);
   const active = hi != null ? items[hi] : null;
 
-  const toggle = (
-    <div className="flex gap-0.5 text-[10px]">
-      {(["model", "repo"] as const).map((v) => (
-        <button
-          key={v}
-          onClick={() => { setView(v); setHi(null); }}
-          className="rounded px-1.5 py-0.5 t-dim2"
-          style={{ background: view === v ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: view === v ? "var(--text2)" : undefined }}
-        >
-          by {v}
-        </button>
-      ))}
+  const right = (
+    <div className="flex items-center gap-2">
+      <div className="flex gap-0.5 text-[10px]">
+        {(["model", "repo"] as const).map((v) => (
+          <button
+            key={v}
+            onClick={() => { setView(v); setHi(null); }}
+            className="rounded px-1.5 py-0.5 t-dim2"
+            style={{ background: view === v ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: view === v ? "var(--text2)" : undefined }}
+          >
+            by {v}
+          </button>
+        ))}
+      </div>
+      <Select value={sort} options={SORT_OPTIONS} onChange={(v) => { setSort(v as Sort); setHi(null); }} align="right" title="Sort items" />
     </div>
   );
 
   return (
-    <Panel eyebrow="Cost" title="Where the money goes" right={toggle}>
+    <Panel eyebrow="Cost" title="Where the money goes" right={right}>
       <div className="flex gap-4 h-full items-center overflow-hidden">
         <div className="relative h-36 w-36 shrink-0">
           <ResponsiveContainer width="100%" height="100%">
