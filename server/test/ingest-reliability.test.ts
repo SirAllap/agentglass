@@ -77,6 +77,8 @@ describe("idempotent event writes", () => {
     expect(retry.inserted).toBe(false);
     expect(retry.event.id).toBe(first.event.id);
     expect(retry.event.cost_usd).toBeCloseTo(0.1234, 10);
+    expect((first.session as any).pricing_baseline_usd).toBeUndefined();
+    expect((retry.session as any).pricing_baseline_usd).toBeUndefined();
     const session = db.getSession("reliable-session")!;
     expect(session.events).toBe(1);
     expect(session.input_tokens).toBe(1_000);
@@ -85,6 +87,7 @@ describe("idempotent event writes", () => {
     expect(db.getRecent(100).filter((e) => e.event_id === "retry-safe-1")).toHaveLength(1);
     expect(db.searchEvents("firstwriteuniquemarker")).toHaveLength(1);
     expect(db.searchEvents("retryonlyuniquemarker")).toHaveLength(0);
+    expect((db.getSessions().find((s) => s.session_id === "reliable-session") as any).pricing_baseline_usd).toBeUndefined();
   });
 
   test("scopes an event id to its source and session", () => {

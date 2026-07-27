@@ -37,7 +37,7 @@ Invalid JSON, missing required fields, an empty / over-512-character `event_id`,
 or a cost outside the finite `$0`–`$100,000` range returns `400`.
 
 `event_id` is an opaque retry key, unique within one `source_app` + `session_id`.
-Generate it with at least 128 bits of randomness (a UUID is a good default);
+Generate it with at least 128 bits of randomness (UUIDv4 is a good default);
 `/ingest` is a local telemetry endpoint, so predictable keys can be claimed by
 another local process before the real event arrives. The first write wins.
 Reposting it returns the original event id as

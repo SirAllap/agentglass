@@ -151,13 +151,18 @@ try { db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT"); } catch { /* alr
 
 // Keep local pricing state separate from the authoritative cost shown to the
 // user. Existing databases predate reported per-event costs, so their current
-// total is the correct starting baseline. The backfill runs only when ALTER
-// actually adds the column; later startups leave legitimate zero baselines
-// alone.
-try {
-  db.exec("ALTER TABLE sessions ADD COLUMN pricing_baseline_usd REAL NOT NULL DEFAULT 0");
-  db.exec("UPDATE sessions SET pricing_baseline_usd = cost_usd");
-} catch { /* already present */ }
+// total is the correct starting baseline. ALTER and backfill are one transaction:
+// a crash cannot leave the column present with every old baseline still zero.
+const hasPricingBaseline = db
+  .query<{ name: string }, []>("PRAGMA table_info(sessions)")
+  .all()
+  .some((column) => column.name === "pricing_baseline_usd");
+if (!hasPricingBaseline) {
+  db.transaction(() => {
+    db.exec("ALTER TABLE sessions ADD COLUMN pricing_baseline_usd REAL NOT NULL DEFAULT 0");
+    db.exec("UPDATE sessions SET pricing_baseline_usd = cost_usd");
+  })();
+}
 
 // Optional idempotency key for external harnesses. Scoped to the sender and
 // session so independent agents can use the same local counter safely.
@@ -603,13 +608,18 @@ const rowToEvent = db.query<any, [number]>(`SELECT * FROM events WHERE id = ?`);
 const eventByExternalId = db.query<any, [string, string, string]>(
   `SELECT * FROM events WHERE source_app = ? AND session_id = ? AND event_id = ? LIMIT 1`
 );
-const sessionById = db.query<SessionRollup, [string]>(`SELECT * FROM sessions WHERE session_id = ?`);
+const sessionById = db.query<Record<string, unknown>, [string]>(`SELECT * FROM sessions WHERE session_id = ?`);
 
 function parseEventRow(r: any): WatchEvent {
   return {
     ...r,
     payload: safeJson(r.payload),
   } as WatchEvent;
+}
+
+function parseSessionRow(r: Record<string, unknown>): SessionRollup {
+  const { pricing_baseline_usd: _internal, ...session } = r;
+  return session as unknown as SessionRollup;
 }
 
 function safeJson(s: string): Record<string, unknown> {
@@ -659,9 +669,9 @@ export interface InsertResult {
 
 function duplicateResult(row: any): InsertResult {
   const event = parseEventRow(row);
-  const session = sessionById.get(event.session_id);
-  if (!session) throw new Error(`event ${event.id} exists without session ${event.session_id}`);
-  return { event, session, inserted: false };
+  const sessionRow = sessionById.get(event.session_id);
+  if (!sessionRow) throw new Error(`event ${event.id} exists without session ${event.session_id}`);
+  return { event, session: parseSessionRow(sessionRow), inserted: false };
 }
 
 /**
@@ -843,8 +853,8 @@ function upsertSession(
     $cr: dCr,
     $cost: cost,
     $estimated: estimatedCost,
-  }) as SessionRollup;
-  return row;
+  }) as Record<string, unknown>;
+  return parseSessionRow(row);
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,14 +1067,11 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
       ? { clause: " AND session_id IN (SELECT session_id FROM events WHERE provider IS NULL)", args: [] as string[] }
       : { clause: " AND session_id IN (SELECT session_id FROM events WHERE provider = ?)", args: [provider] };
   const data = db
-    .query<SessionRollup, any[]>(
+    .query<Record<string, unknown>, any[]>(
       `SELECT * FROM sessions WHERE 1=1${prov.clause}${s.clause} ORDER BY last_seen DESC LIMIT ?`
     )
     .all(...prov.args, ...s.args, limit)
-    .map((row) => {
-      const { pricing_baseline_usd: _internal, ...session } = row as SessionRollup & { pricing_baseline_usd: number };
-      return session;
-    });
+    .map(parseSessionRow);
   sessionsCache.set(key, { at: Date.now(), data });
   // One entry per (limit, provider, scope); the limit set is tiny and scope
   // rarely changes, so prune stale entries anyway so a long-lived server cannot

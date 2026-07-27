@@ -2,7 +2,7 @@
 // gen_ai.* aliases used by traces. Keep a real response.completed fixture here
 // so a telemetry rename cannot silently make Codex sessions disappear.
 import { describe, expect, test } from "bun:test";
-import { otlpLogsToEvents } from "../src/otlp.ts";
+import { otlpLogsToEvents, otlpTracesToEvents } from "../src/otlp.ts";
 
 const kv = (key: string, value: string | number) => ({
   key,
@@ -62,10 +62,44 @@ describe("Codex OTLP logs", () => {
       kv("gen_ai.system", "openai"),
       kv("gen_ai.usage.input_tokens", 1_000),
       kv("gen_ai.usage.output_tokens", 120),
-      kv("gen_ai.usage.cache_read_tokens", 600),
+      kv("gen_ai.usage.cache_read.input_tokens", 600),
+      kv("gen_ai.usage.cache_creation.input_tokens", 50),
     ]));
-    expect((event.payload?.usage as Record<string, number>).input_tokens).toBe(400);
-    expect((event.payload?.usage as Record<string, number>).cache_read_tokens).toBe(600);
+    expect(event.payload?.usage).toEqual({
+      input_tokens: 350,
+      output_tokens: 120,
+      cache_read_tokens: 600,
+      cache_creation_tokens: 50,
+    });
+  });
+
+  test("separates official cache buckets from standard GenAI traces", () => {
+    const [event] = otlpTracesToEvents({
+      resourceSpans: [{
+        resource: { attributes: [kv("service.name", "openai-sdk")] },
+        scopeSpans: [{
+          spans: [{
+            name: "chat",
+            startTimeUnixNano: "1000000",
+            endTimeUnixNano: "2000000",
+            attributes: [
+              kv("gen_ai.system", "openai"),
+              kv("gen_ai.operation.name", "chat"),
+              kv("gen_ai.usage.input_tokens", 1_000),
+              kv("gen_ai.usage.output_tokens", 120),
+              kv("gen_ai.usage.cache_read.input_tokens", 600),
+              kv("gen_ai.usage.cache_creation.input_tokens", 50),
+            ],
+          }],
+        }],
+      }],
+    });
+    expect(event.payload?.usage).toEqual({
+      input_tokens: 350,
+      output_tokens: 120,
+      cache_read_tokens: 600,
+      cache_creation_tokens: 50,
+    });
   });
 
   test("keeps a fully cached response with zero output", () => {

@@ -95,6 +95,42 @@ const LLM_OPS = new Set(["chat", "text_completion", "completion", "generate_cont
 // because index.ts must stay out of this batch's shape.
 export const MAX_OTLP_EVENTS_PER_REQUEST = 10_000;
 
+function tokenUsageFromAttributes(a: Record<string, unknown>) {
+  const cacheRead = firstNum(a, [
+    "gen_ai.usage.cache_read.input_tokens",
+    "gen_ai.usage.cache_read_input_tokens",
+    "gen_ai.usage.cache_read_tokens",
+    "cached_token_count",
+  ]);
+  const cacheCreation = firstNum(a, [
+    "gen_ai.usage.cache_creation.input_tokens",
+    "gen_ai.usage.cache_creation_input_tokens",
+    "gen_ai.usage.cache_creation_tokens",
+    "cache_write_token_count",
+  ]);
+  const totalInput = firstNum(a, [
+    "gen_ai.usage.input_tokens",
+    "gen_ai.usage.prompt_tokens",
+    "input_token_count",
+    "input_tokens",
+    "prompt_tokens",
+    "llm.usage.prompt_tokens",
+  ]);
+  return {
+    input_tokens: Math.max(0, totalInput - cacheRead - cacheCreation),
+    output_tokens: firstNum(a, [
+      "gen_ai.usage.output_tokens",
+      "gen_ai.usage.completion_tokens",
+      "output_token_count",
+      "output_tokens",
+      "completion_tokens",
+      "llm.usage.completion_tokens",
+    ]),
+    cache_read_tokens: cacheRead,
+    cache_creation_tokens: cacheCreation,
+  };
+}
+
 function spanToEvents(span: OtlpSpan, resAttrs: Record<string, unknown>): IngestBody[] {
   const a = flatten(span.attributes);
   const isGenAI =
@@ -131,12 +167,7 @@ function spanToEvents(span: OtlpSpan, resAttrs: Record<string, unknown>): Ingest
   }
 
   // LLM inference — one event carrying per-call token usage.
-  const usage = {
-    input_tokens: firstNum(a, ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "llm.usage.prompt_tokens"]),
-    output_tokens: firstNum(a, ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "llm.usage.completion_tokens"]),
-    cache_read_tokens: firstNum(a, ["gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_read_tokens"]),
-    cache_creation_tokens: firstNum(a, ["gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_creation_tokens"]),
-  };
+  const usage = tokenUsageFromAttributes(a);
   return [
     {
       ...base,
@@ -242,34 +273,14 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
 
   const toolName = firstStr(a, ["gen_ai.tool.name", "tool.name", "tool_name"]);
   const toolCallId = firstStr(a, ["gen_ai.tool.call.id", "tool.call.id", "tool_call_id", "call_id"]);
-  const cacheRead = firstNum(a, [
-    "gen_ai.usage.cache_read_input_tokens",
-    "gen_ai.usage.cache_read_tokens",
-    "cached_token_count",
-  ]);
-  const cacheCreation = firstNum(a, [
-    "gen_ai.usage.cache_creation_input_tokens",
-    "gen_ai.usage.cache_creation_tokens",
-    "cache_write_token_count",
-  ]);
   // Both Codex and the OpenTelemetry GenAI conventions report total input
-  // including cached tokens. Agentglass stores cache reads/writes separately,
-  // so remove both buckets from ordinary input to avoid charging them twice.
-  const totalInput = firstNum(a, [
-    "gen_ai.usage.input_tokens",
-    "gen_ai.usage.prompt_tokens",
-    "input_token_count",
-    "input_tokens",
-    "prompt_tokens",
-  ]);
-  const input = Math.max(0, totalInput - cacheRead - cacheCreation);
-  const output = firstNum(a, [
-    "gen_ai.usage.output_tokens",
-    "gen_ai.usage.completion_tokens",
-    "output_token_count",
-    "output_tokens",
-    "completion_tokens",
-  ]);
+  // including cached tokens. The shared mapper keeps traces and logs on the
+  // same official semantics and stores cached input in its own buckets.
+  const usage = tokenUsageFromAttributes(a);
+  const input = usage.input_tokens;
+  const output = usage.output_tokens;
+  const cacheRead = usage.cache_read_tokens;
+  const cacheCreation = usage.cache_creation_tokens;
 
   // Tool decision/result → a tool event (Pre if a call, else Post so it counts).
   if (toolName || eventName.includes("tool")) {
@@ -285,12 +296,7 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
       ...base,
       hook_event_type: "Turn complete",
       payload: {
-        usage: {
-          input_tokens: input,
-          output_tokens: output,
-          cache_read_tokens: cacheRead,
-          cache_creation_tokens: cacheCreation,
-        },
+        usage,
         gen_ai_system: system,
         event: eventName || undefined,
         ...(isError ? { is_error: true, error: bodyText } : {}),
