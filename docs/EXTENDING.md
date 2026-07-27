@@ -22,16 +22,30 @@ curl -sS http://localhost:4000/ingest \
   -d '{
     "source_app": "my-harness",
     "session_id": "sess-001",
+    "event_id": "sess-001:tool-42:result",
     "hook_event_type": "PostToolUse",
     "payload": { "tool_name": "Bash", "tool_response": "ok" },
-    "model_name": "gpt-4.1-mini"
+    "model_name": "gpt-4.1-mini",
+    "reported_cost_usd": 0.00042
   }'
 ```
 
 Required fields: `source_app`, `session_id`, `hook_event_type`.
-Optional: `payload`, `chat`, `model_name`. Invalid JSON returns `400`; missing
-required fields returns `400`. If a Claude transcript scanner already owns the
-session id, the event is accepted but skipped (no double-count).
+Optional: `payload`, `chat`, `model_name`, `event_id`, `reported_cost_usd`.
+Invalid JSON, missing required fields, an empty / over-512-character `event_id`,
+or a negative / non-finite cost returns `400`.
+
+`event_id` is an opaque retry key, unique within one `source_app` + `session_id`.
+The first write wins. Reposting it returns the original event id as
+`{"ok":true,"id":123,"duplicate":true}` without changing session totals,
+search, alerts, or the live stream.
+
+`reported_cost_usd` is an authoritative cost for this one event. Use it when the
+harness already knows what the provider charged; `0` is valid. Without it,
+agentglass derives cost from token usage and its pricing table.
+
+If a Claude transcript scanner already owns the session id, the event is
+accepted but skipped (no double-count).
 
 ### OTLP (any provider)
 

@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from "bun";
 import type { IngestBody, WsFrame, WorkingTree } from "../../shared/types.ts";
-import { normalize, detectError, clampIngestTimestamp } from "./ingest.ts";
+import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { db } from "./db.ts";
 import {
   insertEvent,
@@ -394,7 +394,11 @@ function ingestBody(body: IngestBody) {
   // Live seam only: a skewed sender's clock must not decide which time window
   // its events land in. Backfill inserts elsewhere and keeps its real times.
   n.timestamp = clampIngestTimestamp(n.timestamp, Date.now());
-  const { event, session } = insertEvent(n);
+  const result = insertEvent(n);
+  // A retry returns the first event. Nothing downstream should run twice:
+  // no cache invalidation, WebSocket frame, open-tool push, or alert.
+  if (!result.inserted) return result;
+  const { event, session } = result;
   // The session just grew, so its cached detail is stale — drop it so a live
   // session refreshes on the next open, while static sessions keep serving from
   // cache. Cheap: one Map delete on a path already doing a DB write.
@@ -406,7 +410,7 @@ function ingestBody(body: IngestBody) {
   // moment a tool starts is exactly when the card should say so.
   if (event.hook_event_type === "PreToolUse" || event.hook_event_type.startsWith("PostToolUse")) pushOpenTools();
   maybeAlert(event);
-  return event;
+  return result;
 }
 
 function csvEscape(v: unknown): string {
@@ -558,12 +562,18 @@ const server = Bun.serve<WsData>({
       if (!body?.source_app || !body?.session_id || !body?.hook_event_type) {
         return json({ error: "source_app, session_id, hook_event_type required" }, 400);
       }
+      const ingestError = externalIngestError(body);
+      if (ingestError) return json({ error: ingestError }, 400);
       // A Claude Code session with a transcript on disk is already covered by
       // the scanner, which reads the same turns in richer form. Taking the hook
       // copy too would count every tool call and every token twice.
       if (ownsSession(body.session_id)) return json({ ok: true, skipped: "scanner owns this session" });
-      const event = ingestBody(body);
-      return json({ ok: true, id: event.id });
+      const result = ingestBody(body);
+      return json({
+        ok: true,
+        id: result.event.id,
+        ...(!result.inserted ? { duplicate: true } : {}),
+      });
     }
 
     // --- OpenTelemetry OTLP/HTTP (JSON) trace receiver ---

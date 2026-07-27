@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_app TEXT NOT NULL,
   session_id TEXT NOT NULL,
+  event_id TEXT,
   hook_event_type TEXT NOT NULL,
   tool_name TEXT,
   tool_use_id TEXT,
@@ -146,6 +147,15 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(text);
 // pre-existing sessions table, so ALTER it in before any statement referencing
 // it is prepared. Harmless (throws "duplicate column") once it already exists.
 try { db.exec("ALTER TABLE sessions ADD COLUMN provider TEXT"); } catch { /* already present */ }
+
+// Optional idempotency key for external harnesses. Scoped to the sender and
+// session so independent agents can use the same local counter safely.
+try { db.exec("ALTER TABLE events ADD COLUMN event_id TEXT"); } catch { /* already present */ }
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_events_ingest_idempotency
+  ON events(source_app, session_id, event_id)
+  WHERE event_id IS NOT NULL
+`);
 
 // What this session is *called*. Claude Code writes both into the transcript:
 // `custom-title` when you rename a session by hand, `ai-title` for the one it
@@ -534,16 +544,19 @@ const ftsInsert = db.query("INSERT INTO events_fts(rowid, text) VALUES ($id, $te
 
 const insertStmt = db.query(`
   INSERT INTO events (
-    source_app, session_id, hook_event_type, tool_name, tool_use_id,
+    source_app, session_id, event_id, hook_event_type, tool_name, tool_use_id,
     agent_id, agent_type, model_name, provider, is_error, error_text, duration_ms,
     input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
     cost_usd, summary, payload, timestamp
   ) VALUES (
-    $source_app, $session_id, $hook_event_type, $tool_name, $tool_use_id,
+    $source_app, $session_id, $event_id, $hook_event_type, $tool_name, $tool_use_id,
     $agent_id, $agent_type, $model_name, $provider, $is_error, $error_text, $duration_ms,
     $input_tokens, $output_tokens, $cache_creation_tokens, $cache_read_tokens,
     $cost_usd, $summary, $payload, $timestamp
-  ) RETURNING id
+  )
+  ON CONFLICT(source_app, session_id, event_id) WHERE event_id IS NOT NULL
+  DO NOTHING
+  RETURNING id
 `);
 
 // Find the matching PreToolUse for a Post event: by tool_use_id when present,
@@ -574,6 +587,10 @@ const getSessionTokens = db.query<SessionTokenRow, [string]>(
 );
 
 const rowToEvent = db.query<any, [number]>(`SELECT * FROM events WHERE id = ?`);
+const eventByExternalId = db.query<any, [string, string, string]>(
+  `SELECT * FROM events WHERE source_app = ? AND session_id = ? AND event_id = ? LIMIT 1`
+);
+const sessionById = db.query<SessionRollup, [string]>(`SELECT * FROM sessions WHERE session_id = ?`);
 
 function parseEventRow(r: any): WatchEvent {
   return {
@@ -624,6 +641,14 @@ export function pruneOldRows(): { events: number; sessions: number } {
 export interface InsertResult {
   event: WatchEvent;
   session: SessionRollup;
+  inserted: boolean;
+}
+
+function duplicateResult(row: any): InsertResult {
+  const event = parseEventRow(row);
+  const session = sessionById.get(event.session_id);
+  if (!session) throw new Error(`event ${event.id} exists without session ${event.session_id}`);
+  return { event, session, inserted: false };
 }
 
 /**
@@ -634,11 +659,6 @@ export interface InsertResult {
  */
 export function insertEvent(n: NormalizedEvent): InsertResult {
   const model = n.model_name;
-  // A path nobody has recorded before means the scope set is stale — a new
-  // worktree must appear in a scoped dashboard on its first event, not on the
-  // first event after a cache expiry.
-  notePath(n.payload?.project_path);
-  notePath((n.payload as { cwd?: unknown } | undefined)?.cwd);
 
   // --- token delta computation -------------------------------------------
   let dIn = n.usage.input_tokens ?? 0;
@@ -662,12 +682,15 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
   // event's model. The per-turn (payload usage) path is already one model, so it
   // keeps pricing the delta directly.
   const eventCost =
-    n.usage_is_cumulative && n.cost_cumulative != null
-      ? Math.max(0, n.cost_cumulative - (prior?.cost_usd ?? 0))
-      : costUsd(
-          { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
-          model
-        );
+    n.reported_cost_usd
+    ?? (
+      n.usage_is_cumulative && n.cost_cumulative != null
+        ? Math.max(0, n.cost_cumulative - (prior?.cost_usd ?? 0))
+        : costUsd(
+            { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
+            model
+          )
+    );
 
   // --- latency pairing ----------------------------------------------------
   let duration_ms: number | null = null;
@@ -678,39 +701,64 @@ export function insertEvent(n: NormalizedEvent): InsertResult {
     if (pre) duration_ms = Math.max(0, n.timestamp - pre.timestamp);
   }
 
-  const { id } = insertStmt.get({
-    $source_app: n.source_app,
-    $session_id: n.session_id,
-    $hook_event_type: n.hook_event_type,
-    $tool_name: n.tool_name,
-    $tool_use_id: n.tool_use_id,
-    $agent_id: n.agent_id,
-    $agent_type: n.agent_type,
-    $model_name: model,
-    $provider: providerOf(model),
-    $is_error: n.is_error,
-    $error_text: n.error_text,
-    $duration_ms: duration_ms,
-    $input_tokens: dIn,
-    $output_tokens: dOut,
-    $cache_creation_tokens: dCw,
-    $cache_read_tokens: dCr,
-    $cost_usd: eventCost,
-    $summary: n.summary,
-    $payload: JSON.stringify(n.payload ?? {}),
-    $timestamp: n.timestamp,
-  }) as { id: number };
+  const write = (): InsertResult => {
+    const inserted = insertStmt.get({
+      $source_app: n.source_app,
+      $session_id: n.session_id,
+      $event_id: n.event_id,
+      $hook_event_type: n.hook_event_type,
+      $tool_name: n.tool_name,
+      $tool_use_id: n.tool_use_id,
+      $agent_id: n.agent_id,
+      $agent_type: n.agent_type,
+      $model_name: model,
+      $provider: providerOf(model),
+      $is_error: n.is_error,
+      $error_text: n.error_text,
+      $duration_ms: duration_ms,
+      $input_tokens: dIn,
+      $output_tokens: dOut,
+      $cache_creation_tokens: dCw,
+      $cache_read_tokens: dCr,
+      $cost_usd: eventCost,
+      $summary: n.summary,
+      $payload: JSON.stringify(n.payload ?? {}),
+      $timestamp: n.timestamp,
+    }) as { id: number } | null;
 
-  const event = parseEventRow(rowToEvent.get(id));
-  try { ftsInsert.run({ $id: id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
-  const session = upsertSession(n, dIn, dOut, dCw, dCr, eventCost);
+    if (!inserted) {
+      const existing = n.event_id
+        ? eventByExternalId.get(n.source_app, n.session_id, n.event_id)
+        : null;
+      if (!existing) throw new Error("event insert returned no row");
+      return duplicateResult(existing);
+    }
+
+    const event = parseEventRow(rowToEvent.get(inserted.id));
+    try { ftsInsert.run({ $id: inserted.id, $text: ftsText({ ...n, payload: n.payload }) }); } catch { /* fts best-effort */ }
+    const session = upsertSession(n, dIn, dOut, dCw, dCr, eventCost);
+    return { event, session, inserted: true };
+  };
+
+  // A retry key makes the event row and its session rollup one atomic write.
+  // Existing no-key scanner/hook events keep their original fast path.
+  const result = n.event_id !== null ? db.transaction(write)() : write();
+  if (!result.inserted) return result;
+  const { event } = result;
+
+  // A path nobody has recorded before means the scope set is stale — a new
+  // worktree must appear in a scoped dashboard on its first event, not on the
+  // first event after a cache expiry. This stays after the successful insert so
+  // an idempotent retry has no cache side effects.
+  notePath(n.payload?.project_path);
+  notePath((n.payload as { cwd?: unknown } | undefined)?.cwd);
   // A Pre opens a call and a Post closes one, so the open-tool memo the fleet
   // draws from just went stale. Drop it here, the single write chokepoint, so
   // the next read — the push that fires right after this returns — is fresh,
   // while an idle machine with no tool traffic never invalidates and so never
   // re-runs that scoped scan on the tick.
   if (n.hook_event_type === "PreToolUse" || isToolPost(n.hook_event_type)) invalidateOpenTools();
-  return { event, session };
+  return result;
 }
 
 const upsertStmt = db.query(`

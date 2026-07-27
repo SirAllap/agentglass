@@ -5,6 +5,7 @@ import { costUsd, type TokenUsage } from "./pricing.ts";
 export interface NormalizedEvent {
   source_app: string;
   session_id: string;
+  event_id: string | null;
   hook_event_type: string;
   tool_name: string | null;
   tool_use_id: string | null;
@@ -28,6 +29,8 @@ export interface NormalizedEvent {
    * right rates rather than the whole delta at the current model. Null otherwise.
    */
   cost_cumulative: number | null;
+  /** Sender-authoritative per-event cost; null falls back to local pricing. */
+  reported_cost_usd: number | null;
   summary: string | null;
   timestamp: number;
   payload: Record<string, unknown>;
@@ -36,6 +39,22 @@ export interface NormalizedEvent {
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v.length ? v : null;
+}
+
+/** Validate optional fields that only the public POST /ingest boundary accepts. */
+export function externalIngestError(body: IngestBody): string | null {
+  const eventId = (body as { event_id?: unknown }).event_id;
+  if (eventId !== undefined && (typeof eventId !== "string" || eventId.length === 0 || eventId.length > 512)) {
+    return "event_id must be a non-empty string no longer than 512 characters";
+  }
+  const reportedCost = (body as { reported_cost_usd?: unknown }).reported_cost_usd;
+  if (
+    reportedCost !== undefined
+    && (typeof reportedCost !== "number" || !Number.isFinite(reportedCost) || reportedCost < 0)
+  ) {
+    return "reported_cost_usd must be a finite non-negative number";
+  }
+  return null;
 }
 
 /** Read a nested key from an object safely. */
@@ -295,6 +314,7 @@ export function normalize(body: IngestBody): NormalizedEvent {
   return {
     source_app: capField(String(body.source_app ?? "unknown")),
     session_id: capField(String(body.session_id ?? "unknown")),
+    event_id: typeof body.event_id === "string" ? body.event_id : null,
     hook_event_type: capField(type),
     tool_name: capField(tool_name),
     tool_use_id: capField(tool_use_id),
@@ -308,6 +328,7 @@ export function normalize(body: IngestBody): NormalizedEvent {
     // Only the cumulative (transcript-summed) path can span models; the per-turn
     // payload path is already one turn at one model, so it prices as before.
     cost_cumulative: hasPayloadUsage ? null : sumTranscriptCost(chat ?? undefined, model_name),
+    reported_cost_usd: typeof body.reported_cost_usd === "number" ? body.reported_cost_usd : null,
     summary: capField(str(body.summary)),
     timestamp: typeof body.timestamp === "number" ? body.timestamp : Date.now(),
     payload,

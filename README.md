@@ -821,7 +821,7 @@ cannot be configured by `export` at all.
 
 | Route | Description |
 |---|---|
-| `POST /ingest` | Ingest an event `{source_app, session_id, hook_event_type, payload?, chat?, model_name?}`. |
+| `POST /ingest` | Ingest an event `{source_app, session_id, hook_event_type, event_id?, reported_cost_usd?, payload?, chat?, model_name?}`. `event_id` makes retries idempotent; reported cost overrides estimated cost for that event. |
 | `POST /v1/traces` | OTLP/HTTP (JSON + protobuf) — maps OpenTelemetry `gen_ai.*` spans to events (any provider). |
 | `POST /v1/logs` | OTLP/HTTP (JSON + protobuf) — maps OpenTelemetry GenAI log records to events (e.g. Codex CLI). |
 | `GET /events/recent?limit=` | Latest events. |

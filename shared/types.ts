@@ -20,6 +20,10 @@ export interface IngestBody {
   source_app: string;
   session_id: string;
   hook_event_type: HookEventType | string;
+  /** Opaque retry key, unique within one source_app + session_id. */
+  event_id?: string;
+  /** Authoritative cost for this event when the sender already knows it. */
+  reported_cost_usd?: number;
   payload?: Record<string, unknown>;
   /** Optional transcript array (assistant/user messages with `usage`). */
   chat?: unknown[];
@@ -33,6 +37,7 @@ export interface WatchEvent {
   id: number;
   source_app: string;
   session_id: string;
+  event_id?: string | null;
   hook_event_type: string;
   tool_name: string | null;
   tool_use_id: string | null;
