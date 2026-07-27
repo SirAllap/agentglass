@@ -300,6 +300,10 @@ otherwise the phone shows a white page and nothing anywhere says why.
 The page ships a web manifest, so **Add to home screen** gives you an icon that
 opens without browser chrome.
 
+---
+
+![the phone companion — the queue, a repository's changes, and the chat list](.github/assets/mobile.png)
+
 ## Why
 
 agentglass is a **visibility layer, not a harness**: it doesn't run your agents
