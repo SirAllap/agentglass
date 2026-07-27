@@ -23,7 +23,7 @@ export function Logo({ size = 22, className, style, title }: {
     >
       {title ? <title>{title}</title> : null}
       {/* handle (drawn first so the rim sits on top of it) */}
-      <line x1="20.2" y1="20.2" x2="27" y2="27" stroke="currentColor" strokeWidth="3.1" strokeLinecap="round" />
+      <line x1="21.1" y1="21.1" x2="27" y2="27" stroke="currentColor" strokeWidth="3.1" strokeLinecap="round" />
       {/* glass */}
       <circle cx="13.5" cy="13.5" r="9" fill="currentColor" fillOpacity="0.1" />
       {/* scope rings + crosshair */}
