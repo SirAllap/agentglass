@@ -1,0 +1,68 @@
+name: Snapshot repository traffic
+
+# GitHub's traffic figures only go back 14 days and are never rolled up, so a
+# launch week is unrecoverable two weeks after it happens. This runs daily and
+# merges the rolling window into CSVs, turning the window into a history.
+#
+# The data lives on its own `traffic-data` branch rather than on main, for two
+# reasons: main's history stays free of a commit a day forever, and a push to
+# main redeploys the site — a daily rebuild of the landing page to record that
+# eleven people looked at it would be a silly thing to do.
+
+on:
+  schedule:
+    # Well away from the hour, where every other cron on GitHub is queued.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: traffic
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # A shallow clone of the data branch, or an empty orphan if this is the
+      # first run. Cloning separately keeps the checkout above untouched.
+      - name: Check out the data branch, or start it
+        env:
+          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN || github.token }}
+        run: |
+          url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git clone --depth 1 --branch traffic-data --quiet "$url" data 2>/dev/null; then
+            echo "data branch found"
+          else
+            echo "no data branch yet — starting one"
+            mkdir data
+            git -C data init --quiet
+            git -C data checkout --quiet --orphan traffic-data
+            git -C data remote add origin "$url"
+          fi
+
+      - name: Read the rolling window
+        env:
+          TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN || github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bun scripts/traffic-snapshot.mjs data
+
+      - name: Commit today, if anything moved
+        run: |
+          cd data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing changed today"
+            exit 0
+          fi
+          git commit -qm "traffic: $(date -u +%Y-%m-%d)"
+          git push -u origin traffic-data

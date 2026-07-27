@@ -51,6 +51,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: bun scripts/landing-release.mjs site/index.html
+      # Counts visits to the page, and nothing else — the app never phones home.
+      # No variable set means no counter ships, so a fork stays clean.
+      - name: Stamp the page counter, if one is configured
+        env:
+          GOATCOUNTER_CODE: ${{ vars.GOATCOUNTER_CODE }}
+          CLOUDFLARE_ANALYTICS_TOKEN: ${{ vars.CLOUDFLARE_ANALYTICS_TOKEN }}
+        run: bun scripts/landing-analytics.mjs site/index.html
       - uses: actions/upload-pages-artifact@v5
         with:
           path: site
