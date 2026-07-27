@@ -40,7 +40,7 @@ gate. No install, no server. *(Everything there is fake; it's a showcase.)*
 - [Desktop app](#desktop-app) · [Updating](#updating)
 - [Security model — read this before installing](#security-model--read-this-before-installing)
 - [Control plane — approve / deny remotely](#control-plane--approve--deny-tool-calls-remotely-opt-in)
-- [Any provider — via OpenTelemetry](#any-provider--via-opentelemetry-openai-gemini-bedrock-)
+- [Any provider — Kimi, OpenAI, Gemini, Bedrock …](#any-provider--kimi-openai-gemini-bedrock-)
 - [Configuration](#configuration-env) · [API](#api) · [Architecture](#architecture)
 - [Extending / make it yours](docs/EXTENDING.md)
 - [Roadmap](#roadmap) · [Contributing](#contributing) · [License](#license)
@@ -695,9 +695,12 @@ proceeding, and remember agentglass being down then blocks every gated call.
 
 ---
 
-## Any provider — via OpenTelemetry (OpenAI, Gemini, Bedrock, …)
+## Any provider — Kimi, OpenAI, Gemini, Bedrock, …
 
-### Kimi Code CLI and Kimi K3
+Two ways in: an agent with hooks can post through the bundled forwarder, and
+anything that speaks OpenTelemetry can point its exporter here.
+
+### Kimi Code CLI and Kimi K3 — via hooks
 
 [Kimi Code CLI hooks](https://moonshotai.github.io/kimi-code/en/customization/hooks)
 can stream its session and tool lifecycle through the bundled hook forwarder.

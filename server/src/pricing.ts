@@ -13,7 +13,11 @@
 
 export interface ModelPrice {
   match: string[]; // substrings matched against lowercased model_name
-  exact?: string[]; // exact lowercased model names that are unsafe as substrings
+  // Whole model names, for ids too short to be safe as substrings ("k3" would
+  // otherwise price "task3-custom-model"). A context suffix still counts as the
+  // same model: "k3" matches `k3[1m]` too, the way providerOf and modelLabelOf
+  // already treat it, so a new window never has to be added in three places.
+  exact?: string[];
   label: string;
   input: number;
   output: number;
@@ -60,7 +64,8 @@ export const PRICE_TABLE: ModelPrice[] = [
 
   // --- Moonshot AI (Kimi) ---
   // K3: cache misses use the normal input rate; cache hits are discounted 90%.
-  { match: ["kimi-code/k3", "kimi-k3", "moonshot/k3"], exact: ["k3", "k3[1m]"], label: "K3", input: 3, output: 15, cache_write: 3, cache_read: 0.3 },
+  // Flat across the whole 1M window — there is no long-context tier to add.
+  { match: ["kimi-code/k3", "kimi-k3", "moonshot/k3"], exact: ["k3"], label: "K3", input: 3, output: 15, cache_write: 3, cache_read: 0.3 },
 
   // --- others (approx) ---
   { match: ["deepseek"], label: "DeepSeek", input: 0.27, output: 1.1, cache_write: 0, cache_read: 0.07 },
@@ -89,7 +94,8 @@ export function priceFor(modelName: string | null | undefined): ModelPrice | nul
   if (!modelName) return null;
   const m = modelName.toLowerCase();
   for (const p of table) {
-    if (p.exact?.includes(m) || p.match.some((frag) => m.includes(frag))) return p;
+    const exact = p.exact?.some((id) => m === id || m.startsWith(`${id}[`));
+    if (exact || p.match.some((frag) => m.includes(frag))) return p;
   }
   return null;
 }

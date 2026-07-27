@@ -45,6 +45,17 @@ describe("priceFor", () => {
     expect(priceFor("task3-custom-model")).toBeNull();
   });
 
+  // K3's rate is flat across its whole window, so a context suffix is the same
+  // model at the same price. It used to be spelled out one window at a time
+  // here while providerOf and modelLabelOf already took any suffix, so a name
+  // could read "Moonshot / K3" in the UI and still be billed at the fallback.
+  test("a K3 context suffix is the same model, not an unknown one", () => {
+    for (const model of ["k3[1m]", "k3[512k]", "K3[1M]"]) {
+      expect(priceFor(model)?.label).toBe("K3");
+      expect(priceFor(model)).toBe(priceFor("k3"));
+    }
+  });
+
   test("unknown and empty model names return null", () => {
     expect(priceFor(null)).toBeNull();
     expect(priceFor(undefined)).toBeNull();
