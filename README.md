@@ -741,7 +741,10 @@ The provider and model are **auto-detected from the spans** (`gen_ai.system`,
 
 Some agents (OpenAI Codex CLI) export OpenTelemetry **logs** rather than traces —
 those go to **`/v1/logs`**, which maps each GenAI log record (tool decision/result,
-inference, prompt) to an event the same way.
+inference, prompt) to an event the same way. Codex's native `event.kind`,
+`input_token_count`, `output_token_count`, `cached_token_count`, and
+`cache_write_token_count` fields are recognized directly; cached input is kept
+in its own buckets rather than charged again as ordinary input.
 
 > Non-GenAI spans/records are ignored — this is an agent-observability lens, not a
 > general trace or log store.

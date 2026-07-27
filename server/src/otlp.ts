@@ -218,7 +218,8 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
   const a = flatten(rec.attributes);
   const isGenAI =
     Object.keys(a).some((k) => k.startsWith("gen_ai.") || k.startsWith("codex.") || k.startsWith("llm.")) ||
-    a["gen_ai.system"] !== undefined || a["event.name"] !== undefined || rec.eventName !== undefined;
+    a["gen_ai.system"] !== undefined || a["event.name"] !== undefined
+    || a["event.kind"] !== undefined || rec.eventName !== undefined;
   if (!isGenAI) return null;
 
   const system = firstStr(a, ["gen_ai.system", "gen_ai.provider.name"]);
@@ -229,14 +230,37 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
   );
   const ms = nanoToMs(rec.timeUnixNano) ?? nanoToMs(rec.observedTimeUnixNano) ?? Date.now();
   const isError = typeof rec.severityNumber === "number" && rec.severityNumber >= 17; // ERROR range
-  const eventName = String(a["event.name"] ?? rec.eventName ?? "").toLowerCase();
+  const eventName = String(a["event.name"] ?? a["event.kind"] ?? rec.eventName ?? "").toLowerCase();
   const bodyText = bodyToString(rec.body);
   const base = { source_app, session_id, model_name: model, timestamp: ms } as const;
 
   const toolName = firstStr(a, ["gen_ai.tool.name", "tool.name", "tool_name"]);
   const toolCallId = firstStr(a, ["gen_ai.tool.call.id", "tool.call.id", "tool_call_id", "call_id"]);
-  const input = firstNum(a, ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "input_tokens", "prompt_tokens"]);
-  const output = firstNum(a, ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "output_tokens", "completion_tokens"]);
+  const cacheRead = firstNum(a, [
+    "gen_ai.usage.cache_read_input_tokens",
+    "gen_ai.usage.cache_read_tokens",
+    "cached_token_count",
+  ]);
+  const cacheCreation = firstNum(a, [
+    "gen_ai.usage.cache_creation_input_tokens",
+    "gen_ai.usage.cache_creation_tokens",
+    "cache_write_token_count",
+  ]);
+  // Codex reports input_token_count as the whole input, including cache reads
+  // and writes. Agentglass stores those buckets separately, so subtract them
+  // only for that Codex-specific field. Standard gen_ai input is already the
+  // non-cached bucket and keeps its existing semantics.
+  const codexInput = a["input_token_count"] !== undefined;
+  const input = codexInput
+    ? Math.max(0, firstNum(a, ["input_token_count"]) - cacheRead - cacheCreation)
+    : firstNum(a, ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "input_tokens", "prompt_tokens"]);
+  const output = firstNum(a, [
+    "gen_ai.usage.output_tokens",
+    "gen_ai.usage.completion_tokens",
+    "output_token_count",
+    "output_tokens",
+    "completion_tokens",
+  ]);
 
   // Tool decision/result → a tool event (Pre if a call, else Post so it counts).
   if (toolName || eventName.includes("tool")) {
@@ -255,8 +279,8 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
         usage: {
           input_tokens: input,
           output_tokens: output,
-          cache_read_tokens: firstNum(a, ["gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_read_tokens"]),
-          cache_creation_tokens: firstNum(a, ["gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_creation_tokens"]),
+          cache_read_tokens: cacheRead,
+          cache_creation_tokens: cacheCreation,
         },
         gen_ai_system: system,
         event: eventName || undefined,
