@@ -6,7 +6,7 @@ agentglass server. Zero third-party deps (stdlib only).
 
 Usage (from a Claude Code hook command):
     send_event.py --source-app my-project --event-type PreToolUse
-    send_event.py --source-app my-project --event-type Stop --add-chat
+    send_event.py --source-app my-project --event-type Stop --add-usage
 
 Env:
     AGENTGLASS_SERVER   server base url (default http://localhost:4000)
@@ -36,26 +36,42 @@ def _agentglass_local_only(url):
 
 
 
-def read_transcript(path):
-    """Return (chat_lines, model_name) from a Claude Code transcript JSONL."""
-    chat, model = [], None
+def reverse_lines(path, block_size=64 * 1024):
+    """Yield binary lines newest-first without loading the transcript."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        pending = b""
+        while pos:
+            size = min(block_size, pos)
+            pos -= size
+            f.seek(pos)
+            parts = (f.read(size) + pending).split(b"\n")
+            pending = parts[0]
+            for line in reversed(parts[1:]):
+                if line.strip():
+                    yield line
+        if pending.strip():
+            yield pending
+
+
+def read_latest_usage(path):
+    """Return the newest assistant turn's usage and model without retaining chat."""
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                chat.append(obj)
-                msg = obj.get("message") or {}
-                if isinstance(msg, dict) and msg.get("model"):
-                    model = msg["model"]
+        for raw in reverse_lines(path):
+            try:
+                obj = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            msg = obj.get("message") or {}
+            if not isinstance(msg, dict):
+                continue
+            usage = msg.get("usage")
+            if isinstance(usage, dict):
+                return usage, msg.get("model")
     except OSError:
         pass
-    return chat, model
+    return None, None
 
 
 def main():
@@ -67,8 +83,10 @@ def main():
     ap.add_argument("--source-app", default=os.path.basename(os.getcwd()))
     ap.add_argument("--event-type", default=None)
     ap.add_argument("--server", default=DEFAULT_SERVER)
-    ap.add_argument("--add-chat", action="store_true",
-                    help="attach the transcript so tokens/cost can be computed")
+    ap.add_argument("--add-usage", action="store_true",
+                    help="attach only the latest turn's usage for token/cost computation")
+    # Existing installations may still invoke the old flag until setup is rerun.
+    ap.add_argument("--add-chat", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
     _agentglass_local_only(getattr(args, "server", None) or DEFAULT_SERVER)
 
@@ -82,12 +100,14 @@ def main():
     event_type = args.event_type or payload.get("hook_event_name") or "Unknown"
     model_name = payload.get("model") or payload.get("model_name")
 
-    chat = None
-    if args.add_chat:
+    usage = None
+    if args.add_usage or args.add_chat:
         tpath = payload.get("transcript_path") or payload.get("transcriptPath")
         if tpath:
-            chat, tmodel = read_transcript(tpath)
+            usage, tmodel = read_latest_usage(tpath)
             model_name = model_name or tmodel
+            if usage:
+                payload["usage"] = usage
 
     body = {
         "source_app": args.source_app,
@@ -96,9 +116,6 @@ def main():
         "payload": payload,
         "model_name": model_name,
     }
-    if chat is not None:
-        body["chat"] = chat
-
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         args.server.rstrip("/") + "/ingest",

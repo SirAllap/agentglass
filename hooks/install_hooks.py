@@ -32,17 +32,17 @@ HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
 SEND_EVENT = os.path.join(HOOKS_DIR, "send_event.py")
 MARKER = "send_event.py"  # substring that identifies a hook command as ours
 
-# event -> (matcher or None, attach transcript for token/cost)
+# event -> (matcher or None, attach latest-turn usage for token/cost)
 EVENTS = {
     "SessionStart":     (None, False),
     "UserPromptSubmit": (None, False),
     "PreToolUse":       ("*",  False),
     "PostToolUse":      ("*",  False),
     "Notification":     (None, False),
-    "SubagentStop":     (None, True),
+    "SubagentStop":     (None, False),
     "Stop":             (None, True),
     "PreCompact":       (None, False),
-    "SessionEnd":       (None, True),
+    "SessionEnd":       (None, False),
 }
 
 
@@ -90,7 +90,7 @@ def do_install(cfg):
         # on every platform, not just Windows.
         cmd = f'{python} "{SEND_EVENT}" --event-type {event}'
         if add_chat:
-            cmd += " --add-chat"
+            cmd += " --add-usage"
         entry = {"hooks": [{"type": "command", "command": cmd}]}
         if matcher is not None:
             entry["matcher"] = matcher
