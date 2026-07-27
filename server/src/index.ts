@@ -1248,6 +1248,7 @@ const server = Bun.serve<WsData>({
           url.searchParams.get("tz") || undefined,
         ),
         server_started_at: STARTED_AT,
+        retention_days: RETENTION_DAYS,
       });
     }
     /*

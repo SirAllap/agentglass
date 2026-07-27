@@ -274,6 +274,9 @@ export function stats(windowMs: number, provider?: string): StatsSummary {
     by_type: [["PreToolUse", 4069], ["PostToolUse", 4057], ["SessionStart", 1402], ["UserPromptSubmit", 436], ["Stop", 395], ["SubagentStop", 336], ["Notification", 216], ["SessionEnd", 42]].map(([hook_event_type, count]) => ({ hook_event_type: hook_event_type as string, count: si(count as number) })),
     heatmap,
     window_ms: windowMs,
+    // The showcase runs the default retention, so the long-window chips carry
+    // their asterisk here exactly as they would on a real install.
+    retention_days: 8,
   };
   for (const m of summary.by_model) {
     const extra = streamed.byModel.get(m.model_name);

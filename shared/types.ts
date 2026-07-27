@@ -260,6 +260,15 @@ export interface StatsSummary {
   /** Wall-clock ms when the server process started — what the header's
    *  uptime counts from. Absent in demo mode, where nothing is "up". */
   server_started_at?: number;
+  /**
+   * AGENTGLASS_RETENTION_DAYS, so the window chips can tell the truth.
+   *
+   * Every number in this object comes from the events table, which is pruned
+   * at that many days — so a window longer than it is answered with less data
+   * than its own label claims. 0 means nothing is pruned and every window is
+   * exactly what it says. Absent in demo mode's older payloads.
+   */
+  retention_days?: number;
 }
 
 /** One tmux window, as tmux itself reports it. The panel renders these as its
