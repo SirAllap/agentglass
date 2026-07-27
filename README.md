@@ -686,7 +686,10 @@ resolved by your configured policy and **says so** in "What needs you", because
 an outcome nobody chose is the one worth showing.
 
 Scope it with the `matcher` (e.g. `Bash` only, or a specific tool) so you're not
-gating every call. Denying returns a `PreToolUse` deny with your reason.
+gating every call. Denying returns a `PreToolUse` deny with your reason — and
+when you just press Deny without typing one, the agent is told a human stopped
+it, that retrying the same call is pointless, and to try another approach or ask
+you. That sentence is read by the model, not by you, so it is written for it.
 
 Want the opposite trade-off? Set `AGENTGLASS_GATE_FAILCLOSED=1` and a timeout or
 an unreachable control plane **denies** instead of allows — the fleet stops

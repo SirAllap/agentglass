@@ -96,8 +96,8 @@ describe("re-attaching after the connection drops", () => {
     gate.submitGate(req({ id }), 60_000); // the original connection, now "dropped"
     const again = gate.awaitGate(id) as Promise<{ decision: string; reason: string }>;
     expect(again).toBeInstanceOf(Promise);
-    gate.decideGate(id, "allow", "approved from dashboard");
-    await expect(again).resolves.toEqual({ decision: "allow", reason: "approved from dashboard" });
+    gate.decideGate(id, "allow", "go ahead, it's a scratch dir");
+    await expect(again).resolves.toEqual({ decision: "allow", reason: "go ahead, it's a scratch dir" });
   });
 
   test("a decision made while the hook was away is replayed, not lost", async () => {
