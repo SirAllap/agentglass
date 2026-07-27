@@ -18,7 +18,7 @@
  */
 
 import { spawn } from "bun";
-import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -277,6 +277,11 @@ async function main() {
       run(["-framerate", String(GIF_FPS), "-i", join(framesDir, "f%04d.png"), "-i", pal,
         "-lavfi", `scale=${GIF_W}:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle`,
         "-loop", "0", join(OUT, "hero.gif")]);
+      // The landing page shows the same clip, and its copy had silently gone
+      // a release stale — it was still the pre-satellite mark long after the
+      // README's was not. Written here rather than left to whoever remembers.
+      copyFileSync(join(OUT, "hero.gif"), join(ROOT, "landing", "hero.gif"));
+      console.log("  landing/hero.gif");
     }
     rmSync(framesDir, { recursive: true, force: true });
     cleanup();
