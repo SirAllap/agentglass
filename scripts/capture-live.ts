@@ -16,6 +16,9 @@ import { spawn } from "bun";
 import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+/** Same finishing as the demo stills, so the terminal shot sits beside them in
+ *  the README at the same width, density and weight. */
+import { finishStill } from "./still.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
 const OUT = join(ROOT, ".github", "assets");
@@ -159,7 +162,9 @@ async function main() {
       await Bun.sleep(1600);
     }
     await Bun.sleep(2000);
-    writeFileSync(join(OUT, "terminal.png"), await cdp.shot());
+    const file = join(OUT, "terminal.png");
+    writeFileSync(file, await cdp.shot());
+    finishStill(file);
     console.log("  terminal.png");
     cdp.close();
   } finally {
