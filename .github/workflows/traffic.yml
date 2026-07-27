@@ -15,8 +15,16 @@ on:
     - cron: "17 4 * * *"
   workflow_dispatch:
 
+# Two tokens doing two jobs, deliberately not one doing both.
+#
+# Reading traffic needs push access, which the Actions token does not carry, so
+# it needs a PAT. Writing the branch needs write access to contents, which the
+# Actions token has and a read-only PAT does not. Pointing both at the PAT
+# meant the API call succeeded and the push was refused; pointing both at the
+# Actions token meant the reverse. Each does the half it is entitled to, and
+# the PAT stays read-only, which is the whole reason to scope it that way.
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: traffic
@@ -35,7 +43,8 @@ jobs:
       # first run. Cloning separately keeps the checkout above untouched.
       - name: Check out the data branch, or start it
         env:
-          GH_TOKEN: ${{ secrets.TRAFFIC_TOKEN || github.token }}
+          # The Actions token, not the PAT: this half is git, not the API.
+          GH_TOKEN: ${{ github.token }}
         run: |
           url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           if git clone --depth 1 --branch traffic-data --quiet "$url" data 2>/dev/null; then
