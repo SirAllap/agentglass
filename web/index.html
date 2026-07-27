@@ -75,14 +75,28 @@
   <body>
     <div id="root">
       <div id="ag-boot">
-        <svg class="ag-mark" viewBox="0 0 32 32" aria-hidden="true">
-          <line x1="20.2" y1="20.2" x2="27" y2="27" stroke="#7c3aed" stroke-width="3.4" stroke-linecap="round"/>
-          <circle cx="13.5" cy="13.5" r="9" fill="#a78bfa" fill-opacity="0.14"/>
-          <circle cx="13.5" cy="13.5" r="5.6" fill="none" stroke="#a78bfa" stroke-opacity="0.35" stroke-width="1"/>
-          <path d="M13.5 13.5 L13.5 4.6 A8.9 8.9 0 0 1 19.7 7 Z" fill="#a78bfa" fill-opacity="0.28"/>
-          <line x1="13.5" y1="13.5" x2="19.7" y2="7" stroke="#c4b5fd" stroke-width="1"/>
-          <circle cx="9" cy="16.4" r="1.9" fill="#34d399"/>
+        <!-- logo:start -->
+        <svg class="ag-mark" viewBox="0 0 64 64" aria-hidden="true">
+          <defs>
+          <radialGradient id="boot" cx=".34" cy=".28" r=".82">
+          <stop offset="0" stop-color="#fff" stop-opacity=".72"/>
+          <stop offset=".5" stop-color="#fff" stop-opacity=".15"/>
+          <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+          </radialGradient>
+          </defs>
+          <path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="#a78bfa" stroke-opacity=".4" stroke-width="3.2" stroke-linecap="round"/>
+          <circle cx="30" cy="34" r="12.5" fill="#a78bfa"/>
+          <circle cx="30" cy="34" r="12.5" fill="url(#boot)"/>
+          <g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1.1">
+          <ellipse cx="30" cy="34" rx="12.5" ry="4.5"/>
+          <ellipse cx="30" cy="34" rx="6" ry="12.1"/>
+          </g>
+          <path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17.0 17.0 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/>
+          <path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="#a78bfa" stroke-width="3.2" stroke-linecap="round"/>
+          <circle cx="50.8" cy="10.7" r="6.8" fill="#34d399" fill-opacity=".18"/>
+          <circle cx="50.8" cy="10.7" r="3.6" fill="#34d399"/>
         </svg>
+        <!-- logo:end -->
         <div class="ag-name">agentglass</div>
         <div class="ag-status"><span class="ag-spin"></span><span id="ag-boot-msg">starting…</span></div>
       </div>

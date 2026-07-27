@@ -15,6 +15,12 @@ jobs:
           bun-version: latest
       - name: Install
         run: bun install
+      # The mark lives in seven places — a standalone SVG, the favicon, a React
+      # component, the boot splash and three inlines in the landing page. They
+      # drifted once and a fix shipped to six of them while the seventh kept
+      # the bug, so they are generated now and this is what catches a hand-edit.
+      - name: The mark is in sync
+        run: bun scripts/logo.mjs --check
       - name: Typecheck web
         run: cd web && bunx tsc --noEmit
       - name: Typecheck server
