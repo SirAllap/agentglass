@@ -3,7 +3,7 @@ import { api } from "../lib/api.ts";
 import { useStats } from "../lib/useStats.ts";
 import { fmtUsd, fmtTokens } from "../lib/format.ts";
 import { MobileChats } from "./MobileChats.tsx";
-import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useConfirm } from "./mobileUi.tsx";
+import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobileUi.tsx";
 import { DIFF_CSS } from "./MobileDiff.tsx";
 import { NOW_CSS, NowHero, NowStream, type NowAction } from "./MobileNow.tsx";
 import { RepoList, RepoScreen, type RepoSummary } from "./MobileRepo.tsx";
@@ -49,7 +49,7 @@ const PR_MS = 60_000;
 export function MobileApp() {
   const [tab, setTab] = useState<Tab>("now");
   const { toasts, toast } = useToasts();
-  const { confirm, sheet: confirmSheet } = useConfirm();
+  const { ask, dialog: askDialog } = useAsk();
   const { stats } = useStats(86_400_000);
 
   const [gates, setGates] = useState<PendingGate[]>([]);
@@ -212,11 +212,13 @@ export function MobileApp() {
             // re-runs, snoozes or opens something; this rewrites history and
             // deletes a branch, from a card the thumb is already scrolling past.
             label: "Squash & merge", kind: "ok",
-            run: () => confirm({
-              verb: "Squash & merge", subject: `#${o.pr.number}`,
-              warn: "Every commit becomes one, and the head branch is deleted straight after. Neither step is reversible from here.",
-              run: () => settle(`Merged #${o.pr.number}`, () => api.prMerge(o.root, o.pr.number, "squash", { deleteBranch: true }), it.id),
-            }),
+            run: async () => {
+              if (!(await ask({
+                title: `Squash & merge #${o.pr.number}?`, danger: true, confirmLabel: "Squash & merge",
+                body: "Every commit becomes one, and the head branch is deleted straight after. Neither step is reversible from here.",
+              }))) return;
+              await settle(`Merged #${o.pr.number}`, () => api.prMerge(o.root, o.pr.number, "squash", { deleteBranch: true }), it.id);
+            },
           },
           { label: "Review", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
         ];
@@ -243,7 +245,7 @@ export function MobileApp() {
   return (
     <div className="mb min-h-[100dvh] flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>
       <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}</style>
-      {confirmSheet}
+      {askDialog}
       <div className="mb-sky" />
 
       <header className="sticky top-0 z-40 flex items-center gap-2 px-4"
