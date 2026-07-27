@@ -699,11 +699,12 @@ proceeding, and remember agentglass being down then blocks every gated call.
 
 ### Kimi Code CLI and Kimi K3
 
-Kimi Code CLI can stream its session and tool lifecycle through the bundled
-hook forwarder. Agentglass recognizes the real K3 names (`k3`, `kimi-k3`, and
-`kimi-code/k3`) as **Moonshot / K3**, understands both Moonshot cache-token
-formats, and applies K3's input, output, and cache-hit rates without counting
-cached prompt tokens twice.
+[Kimi Code CLI hooks](https://moonshotai.github.io/kimi-code/en/customization/hooks)
+can stream its session and tool lifecycle through the bundled hook forwarder.
+Agentglass recognizes the real K3 names (`k3`, `kimi-k3`, and `kimi-code/k3`)
+as **Moonshot / K3**, understands both Moonshot cache-token formats, and applies
+K3's input, output, and cache-hit rates without counting cached prompt tokens
+twice.
 
 Kimi's hook payload does not carry token usage, so hooks populate the live
 session/tool views; a Kimi/Moonshot adapter can send its final `usage` object to
