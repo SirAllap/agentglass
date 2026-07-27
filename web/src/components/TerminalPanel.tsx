@@ -74,14 +74,14 @@ let panelClose: () => void = () => {};
 // never touches a shell that is still connected — closing a live job to make
 // room for a new tab would lose work the user can't see.
 const MAX_CLIENT_SESSIONS = 60;
-function evictLru(exceptRoot: string) {
-  if (sessions.size < MAX_CLIENT_SESSIONS) return;
+function makeRoom(): boolean {
+  if (sessions.size < MAX_CLIENT_SESSIONS) return true;
   let lru: Sess | null = null;
   for (const s of sessions.values()) {
-    if (s.root === exceptRoot || s.status === "live" || s.status === "connecting") continue;
+    if (s.status === "live" || s.status === "connecting") continue;
     if (!lru || s.lastUsed < lru.lastUsed) lru = s;
   }
-  if (!lru) return;
+  if (!lru) return false;
   const ws = lru.ws;
   lru.ws = null; // detach first so its handlers see a stale socket and stay quiet
   // An evicted session must not resurrect itself from a pending retry.
@@ -90,6 +90,7 @@ function evictLru(exceptRoot: string) {
   try { lru.term.dispose(); } catch { /* already disposed */ }
   lru.holder.remove();
   sessions.delete(lru.id);
+  return true;
 }
 
 function connect(s: Sess) {
@@ -194,8 +195,8 @@ function reconnected(s: Sess) {
 }
 
 /** A brand-new shell for `root`. Repos hold as many as you open. */
-function createSession(root: string): Sess {
-  evictLru(root);
+function createSession(root: string): Sess | null {
+  if (!makeRoom()) return null;
   const term = new Terminal({
     fontFamily: readVar(rootStyle(), "--font-mono", "") ? `var(--font-mono), ${TERM_FONT}` : TERM_FONT,
     fontSize: 13,
@@ -258,6 +259,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   const [repoQuery, setRepoQuery] = useState("");
   const [cmds, setCmds] = useState<TerminalCommands | null>(null);
   const [cmdsOpen, setCmdsOpen] = useState(false);
+  const [capacityError, setCapacityError] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   const [, force] = useReducer((x: number) => x + 1, 0);
@@ -297,6 +299,12 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
     if (!open || !root || IS_DEMO) return;
     const live = sessionsFor(root);
     const first = live[0] ?? createSession(root);
+    if (!first) {
+      setPaneIds([]);
+      setCapacityError(`All ${MAX_CLIENT_SESSIONS} terminal sessions are still active. Close one before opening another.`);
+      return;
+    }
+    setCapacityError("");
     setPaneIds((prev) => {
       const kept = prev.filter((id) => sessions.get(id)?.root === root);
       return kept.length ? kept : [first.id];
@@ -349,6 +357,11 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   const addShell = useCallback(() => {
     if (!root || IS_DEMO) return;
     const s = createSession(root);
+    if (!s) {
+      setCapacityError(`All ${MAX_CLIENT_SESSIONS} terminal sessions are still active. Close one before opening another.`);
+      return;
+    }
+    setCapacityError("");
     setPaneIds([s.id]);
     setFocusIdx(0);
   }, [root]);
@@ -356,12 +369,15 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   /** Show one more shell beside the current one (new if there isn't a spare). */
   const splitPane = useCallback(() => {
     if (!root || IS_DEMO) return;
-    setPaneIds((prev) => {
-      if (prev.length >= 4) return prev; // beyond four a pane is too small to use
-      const spare = sessionsFor(root).find((s) => !prev.includes(s.id)) ?? createSession(root);
-      return [...prev, spare.id];
-    });
-  }, [root]);
+    if (paneIds.length >= 4) return; // beyond four a pane is too small to use
+    const spare = sessionsFor(root).find((s) => !paneIds.includes(s.id)) ?? createSession(root);
+    if (!spare) {
+      setCapacityError(`All ${MAX_CLIENT_SESSIONS} terminal sessions are still active. Close one before opening another.`);
+      return;
+    }
+    setCapacityError("");
+    setPaneIds([...paneIds, spare.id]);
+  }, [root, paneIds]);
 
   const showOnly = useCallback((id: string) => { setPaneIds([id]); setFocusIdx(0); }, []);
 
@@ -370,11 +386,12 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
     if (!s) return;
     const r = s.root;
     killSession(s);
+    setCapacityError("");
     setPaneIds((prev) => {
       const kept = prev.filter((x) => x !== id);
       if (kept.length) return kept;
       const next = sessionsFor(r)[0] ?? createSession(r);
-      return [next.id];
+      return next ? [next.id] : [];
     });
     setFocusIdx(0);
   }, []);
@@ -382,6 +399,11 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   const run = useCallback((cmd: string) => {
     if (!root || IS_DEMO) return;
     const s = sessions.get(paneIds[focusIdx] ?? "") ?? createSession(root);
+    if (!s) {
+      setCapacityError(`All ${MAX_CLIENT_SESSIONS} terminal sessions are still active. Close one before running a command.`);
+      return;
+    }
+    setCapacityError("");
     runInShell(s, cmd);
     setCmdsOpen(false);
   }, [root, paneIds, focusIdx]);
@@ -545,6 +567,11 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                   {(IS_DEMO || disabled) && (
                     <div className="absolute inset-0 flex items-center justify-center text-[12px] t-dim2" style={{ background: "color-mix(in srgb, var(--bg) 80%, transparent)" }}>
                       {IS_DEMO ? "the terminal is disabled in the demo — run agentglass locally for a real shell" : "terminal disabled (AGENTGLASS_TERMINAL_DISABLED=1)"}
+                    </div>
+                  )}
+                  {capacityError && !IS_DEMO && !disabled && (
+                    <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-[12px]" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--bg) 92%, transparent)" }}>
+                      {capacityError}
                     </div>
                   )}
                 </div>
