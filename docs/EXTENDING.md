@@ -277,7 +277,7 @@ hooks / OTLP / POST /ingest
 ## Dashboard vs harness (one paragraph)
 
 agentglass does **not** replace Claude Code, Codex, Gemini CLI, LangChain, or
-your custom runner. Those remain the harness. agentglass is the loupe and the
-optional remote control: ingest telemetry, render the fleet, and (if you wire
-it) hold tool calls until a human clicks allow/deny. Point things at it; keep
-shipping with whatever you already run.
+your custom runner. Those remain the harness. agentglass is the glass in front
+of them and the optional remote control: ingest telemetry, render the fleet,
+and (if you wire it) hold tool calls until a human clicks allow/deny. Point
+things at it; keep shipping with whatever you already run.
