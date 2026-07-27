@@ -36,6 +36,15 @@ const PROJECTS_DIRS = [
 const POLL_MS = Math.max(500, Number(process.env.AGENTGLASS_SCAN_INTERVAL_MS || 3000));
 export const SCAN_ENABLED = process.env.AGENTGLASS_SCAN_DISABLED !== "1";
 
+/** Return only newline-terminated JSONL records. Claude can be interrupted
+ * halfway through its final write; checkpointing that fragment would skip the
+ * completed record forever on the next sweep. */
+export function completeJsonlLines(text: string): string[] {
+  const lines = text.split("\n");
+  lines.pop();
+  return lines;
+}
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS transcript_files (
   path TEXT PRIMARY KEY,
@@ -322,12 +331,7 @@ async function ingestFile(
   scope: string | null
 ): Promise<{ lines: number; ingested: number; source_app: string; project_path: string; session_id: string; skipped?: boolean }> {
   const text = await Bun.file(path).text();
-  const lines = text.split("\n");
-  // JSONL ends with a newline, so split() leaves a phantom empty element. Left
-  // in, lines_done ends up one past the real record count and the next sweep
-  // skips the first line appended after it — which is *every* live line, since
-  // sessions grow one record at a time.
-  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  const lines = completeJsonlLines(text);
   const toolCalls = new Map<string, { name: string; input: unknown }>();
   // Claude Code splits one API response across several transcript lines (one
   // per content block) and repeats the identical `message.usage` on each. Only
