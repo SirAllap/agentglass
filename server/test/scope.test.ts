@@ -88,6 +88,8 @@ describe("scoped reads", () => {
     const s = db.statsSummary(24 * 3600 * 1000) as any;
     // 3 scoped events + the worktree turn; the two out-of-scope ones are gone.
     expect(s.totals.events).toBe(4);
+    expect(s.timeline.reduce((n: number, b: { events: number }) => n + b.events, 0)).toBe(4);
+    expect(s.heatmap.reduce((n: number, count: number) => n + count, 0)).toBe(4);
   });
 
   test("stats merge Windows slash variants into one repo", () => {

@@ -572,7 +572,8 @@ function percentile(sorted: number[], p: number): number {
  *  to a single provider (Anthropic / OpenAI / Google / …). Always scoped to the
  *  open project, so spend, tool mix and the radar describe that project alone. */
 function computeStatsSummary(windowMs = 24 * 3600 * 1000, provider?: string): StatsSummary {
-  const since = Date.now() - windowMs;
+  const now = Date.now();
+  const since = now - windowMs;
   const { clause: prov, args: pa } = providerScope(provider);
   const { clause: sc, args: sa } = scopeClause();
   // Every query below appends `pf` and binds `A` in this order, so folding the
@@ -702,7 +703,7 @@ function computeStatsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
   // Timeline buckets.
   const bucketCount = 60;
   const bucketMs = Math.max(1000, Math.floor(windowMs / bucketCount));
-  const start = Math.floor(since / bucketMs) * bucketMs;
+  const start = Math.floor(now / bucketMs) * bucketMs - (bucketCount - 1) * bucketMs;
   const buckets = new Map<number, TimeBucket>();
   for (let i = 0; i < bucketCount; i++) {
     const t = start + i * bucketMs;
@@ -710,21 +711,27 @@ function computeStatsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
   }
   const tlRows = db
     .query<any, any[]>(
-      `SELECT timestamp, is_error, cost_usd, input_tokens, output_tokens FROM events WHERE timestamp >= ?${pf}`
+      `SELECT CAST(timestamp / ? AS INTEGER) * ? AS t,
+              CAST(strftime('%w', timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) * 24
+                + CAST(strftime('%H', timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) AS slot,
+              COUNT(*) AS events,
+              SUM(is_error) AS errors,
+              SUM(cost_usd) AS cost_usd,
+              SUM(input_tokens + output_tokens) AS tokens
+       FROM events WHERE timestamp >= ?${pf}
+       GROUP BY t, slot`
     )
-    .all(...A);
+    .all(bucketMs, bucketMs, ...A);
   const heatmap = new Array(168).fill(0);
   for (const r of tlRows) {
-    const t = Math.floor(r.timestamp / bucketMs) * bucketMs;
-    const b = buckets.get(t);
+    const b = buckets.get(r.t);
     if (b) {
-      b.events++;
-      b.errors += r.is_error;
+      b.events += r.events;
+      b.errors += r.errors ?? 0;
       b.cost_usd += r.cost_usd ?? 0;
-      b.tokens += (r.input_tokens ?? 0) + (r.output_tokens ?? 0);
+      b.tokens += r.tokens ?? 0;
     }
-    const d = new Date(r.timestamp);
-    heatmap[d.getDay() * 24 + d.getHours()]++;
+    if (r.slot >= 0 && r.slot < heatmap.length) heatmap[r.slot] += r.events;
   }
 
   return {
