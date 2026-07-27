@@ -16,15 +16,6 @@ export const DOCKER_WRITE_ENABLED = process.env.AGENTGLASS_DOCKER_WRITE_DISABLED
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
 type Res = { code: number; stdout: string; stderr: string };
-function docker(args: string[], timeoutMs = 8000): Res {
-  try {
-    const proc = Bun.spawnSync(["docker", ...args], { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
-    return { code: proc.exitCode ?? 1, stdout: proc.stdout?.toString() ?? "", stderr: proc.stderr?.toString() ?? "" };
-  } catch (e) {
-    return { code: 1, stdout: "", stderr: String(e) };
-  }
-}
-
 /** Awaited variant, so independent queries can run at once. Each `docker`
  *  invocation pays the CLI's own startup before it talks to the daemon, and
  *  the overview needs five of them — serially that cost is paid five times
@@ -250,8 +241,8 @@ export async function overview(): Promise<DockerOverview> {
 const pct = (s?: string) => { const n = parseFloat((s || "").replace("%", "")); return Number.isFinite(n) ? n : 0; };
 
 /** Live-ish resource stats (a single --no-stream sample). Can take ~1-2s. */
-export function stats(): DockerStat[] {
-  const r = docker(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"], 12000);
+export async function stats(): Promise<DockerStat[]> {
+  const r = await dockerAsync(["stats", "--no-stream", "--no-trunc", "--format", "{{json .}}"], 12000);
   if (r.code !== 0) return [];
   return jsonLines(r.stdout).map((s) => ({
     id: (s.ID || "").slice(0, 12),
@@ -265,10 +256,10 @@ export function stats(): DockerStat[] {
 }
 
 /** Last `tail` log lines for a container (bounded). Docker writes logs to stderr. */
-export function logs(id: string, tail = 400): { ok: boolean; text: string; error?: string } {
+export async function logs(id: string, tail = 400): Promise<{ ok: boolean; text: string; error?: string }> {
   if (!ID_RE.test(id)) return { ok: false, text: "", error: "invalid container id" };
   const n = Math.max(1, Math.min(5000, tail | 0));
-  const r = docker(["logs", "--tail", String(n), "--timestamps", id], 10000);
+  const r = await dockerAsync(["logs", "--tail", String(n), "--timestamps", id], 10000);
   // A container writes its own logs to stderr with exit 0; a non-zero exit is a
   // real failure (e.g. "No such container") — surface it as an error, not logs.
   if (r.code !== 0) return { ok: false, text: "", error: r.stderr.trim() || "docker logs failed" };
@@ -281,9 +272,9 @@ function guard(id: string): DockerActionResult | null {
   if (!ID_RE.test(id)) return { ok: false, error: "invalid container id" };
   return null;
 }
-function action(verb: string, id: string, extra: string[] = []): DockerActionResult {
+async function action(verb: string, id: string, extra: string[] = []): Promise<DockerActionResult> {
   const g = guard(id); if (g) return g;
-  const r = docker([verb, ...extra, id], 20000);
+  const r = await dockerAsync([verb, ...extra, id], 20000);
   // The panel refetches right after acting; without dropping the cache it gets
   // the pre-action snapshot back and the container looks unchanged, as though
   // the button did nothing.

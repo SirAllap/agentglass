@@ -467,11 +467,11 @@ const server = Bun.serve<WsData>({
 
     // --- live docker panel (lazydocker-style) ---
     if (pathname === "/docker/overview") return json(await dockerOverview());
-    if (pathname === "/docker/stats") return json({ stats: dockerStats() });
+    if (pathname === "/docker/stats") return json({ stats: await dockerStats() });
     if (pathname === "/docker/logs") {
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);
-      return json(dockerLogs(id, tail));
+      return json(await dockerLogs(id, tail));
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
@@ -480,10 +480,10 @@ const server = Bun.serve<WsData>({
       const id = String(b.id || "");
       let res;
       switch (pathname) {
-        case "/docker/start": res = startContainer(id); break;
-        case "/docker/stop": res = stopContainer(id); break;
-        case "/docker/restart": res = restartContainer(id); break;
-        case "/docker/rm": res = removeContainer(id); break;
+        case "/docker/start": res = await startContainer(id); break;
+        case "/docker/stop": res = await stopContainer(id); break;
+        case "/docker/restart": res = await restartContainer(id); break;
+        case "/docker/rm": res = await removeContainer(id); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);
