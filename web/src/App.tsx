@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
 import { useStats } from "./lib/useStats.ts";
-import { deriveAgents, deriveAlerts, buildTitles } from "./lib/derive.ts";
+import { deriveAgents, deriveAlerts, buildTitles, buildRollups } from "./lib/derive.ts";
 import { publishFleet } from "./lib/demoBridge.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
@@ -241,7 +241,11 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
   const titles = useMemo(() => buildTitles(sessions), [sessions]);
-  const agentsAll = useMemo(() => deriveAgents(events, openTools, titles), [events, openTools, titles, tick]);
+  // Same rows, second question: the buffer the cards sum over is a capped
+  // window, so cost/tokens/tools come from the session roll-up where there is
+  // one. See buildRollups.
+  const rollups = useMemo(() => buildRollups(sessions), [sessions]);
+  const agentsAll = useMemo(() => deriveAgents(events, openTools, titles, rollups), [events, openTools, titles, rollups, tick]);
   // Kept identical across renders while its *contents* are. `agentsAll` is
   // rebuilt on every socket flush and every tick, so a plain useMemo handed out
   // a new Map several times a second — and everything downstream that depends
@@ -280,7 +284,7 @@ export default function App() {
   const agents = useMemo(
     () =>
       filter.provider
-        ? deriveAgents(visibleEvents, openTools.filter((s) => sessionProvider.get(s.session_id) === filter.provider), titles)
+        ? deriveAgents(visibleEvents, openTools.filter((s) => sessionProvider.get(s.session_id) === filter.provider), titles, rollups)
         : agentsAll,
     [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider, titles]
   );
