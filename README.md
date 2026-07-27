@@ -12,7 +12,7 @@
 
 ![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20pr%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Electron%20app-47848f) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
 
-![agentglass in action — the live cockpit, then the workspace: source control, diff review, Docker and chat, one keystroke away](.github/assets/hero.gif)
+![agentglass in action — the live cockpit, then the workspace: source control, diff review, pull requests, Docker and chat, one keystroke away](.github/assets/hero.gif)
 
 ![the cockpit — every session, spend, throughput, tool mix and what needs you](.github/assets/dashboard.png)
 

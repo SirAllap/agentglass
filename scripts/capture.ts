@@ -50,6 +50,9 @@ const PANEL_H = 1080;
 /** The GIF is emitted at 1× and this width; 2× frames are downscaled into it,
  *  which is what makes text legible at a small file size. */
 const GIF_W = 1100, GIF_FPS = 12;
+/** How a still goes from a 3840px CDP capture to the asset the README shows —
+ *  see scripts/still.ts for why that step exists at all. */
+import { finishStill, STILL_W, THEME_W } from "./still.ts";
 
 /** The demo build is based at /agentglass/demo/ so it can be served from
  *  GitHub Pages, so its asset URLs carry that prefix. Serving it at the root
@@ -177,10 +180,16 @@ async function main() {
     const TALL = Math.min(2200, need + 8);
     console.log(`dashboard needs ${need}px; panels shot at ${W}x${PANEL_H}`);
 
-    /** Take a still, and optionally hold it in the GIF for `beats` frames. */
-    const capture = async (name: string | null, beats = 0) => {
+    /** Take a still, and optionally hold it in the GIF for `beats` frames.
+     *  The GIF keeps the full-resolution frame; only the file on disk shrinks. */
+    const capture = async (name: string | null, beats = 0, width = STILL_W) => {
       const png = await cdp.shot();
-      if (name) { writeFileSync(join(OUT, `${name}.png`), png); console.log(`  ${name}.png`); }
+      if (name) {
+        const file = join(OUT, `${name}.png`);
+        writeFileSync(file, png);
+        finishStill(file, width);
+        console.log(`  ${name}.png`);
+      }
       for (let i = 0; i < beats; i++) writeFileSync(join(framesDir, `f${String(n++).padStart(4, "0")}.png`), png);
     };
 
@@ -203,15 +212,28 @@ async function main() {
     // hand out a shell — so capturing it yields an empty pane, and a second and
     // a half of nothing in the middle of the hero GIF. `capture-live.ts` shoots
     // the real one against a throwaway repo instead.
-    const views: [string, string][] = [["git", "1"], ["diff", "2"], ["docker", "3"], ["chat", "5"]];
+    // Picked by view id, not by Ctrl+<n>. The rail's order is the user's — it
+    // is drag-reorderable and persisted — and it gained the pull-request view
+    // in the middle, which silently turned Ctrl+3 from Docker into PRs and
+    // Ctrl+5 from Chat into the terminal. Two README assets were captured
+    // under the wrong name because of it. An id cannot drift.
+    const views = ["git", "diff", "pr", "docker", "chat"];
     await key(cdp, "\\", { ctrlKey: true });
     await until(cdp, `document.querySelector('[role="tablist"][aria-label="Workspace views"]')`, "the workspace");
     await Bun.sleep(1200);
 
-    for (const [name, k] of views) {
-      await key(cdp, k, { ctrlKey: true });
-      await Bun.sleep(1400);
-      await capture(name, STILLS_ONLY ? 0 : 16);
+    for (const id of views) {
+      const ok = await cdp.ev(`(()=>{const b=document.querySelector('[data-view=${JSON.stringify(id)}]');b?.click();return !!b})()`);
+      if (!ok) { console.warn(`  ! no "${id}" view in the rail — skipped`); continue; }
+      await Bun.sleep(1600);
+      // The PR panel opens on Overview; Files is the view worth showing, and
+      // it is what the README's caption describes.
+      if (id === "pr") {
+        await cdp.ev(`(()=>{const b=[...document.querySelectorAll('button')]
+          .find(b=>/^Files\\b/.test(b.textContent.trim()));b?.click();return !!b})()`);
+        await Bun.sleep(1800);
+      }
+      await capture(id, STILLS_ONLY ? 0 : 16);
     }
 
     // Settings, which is where today's shortcuts and About live.
@@ -226,16 +248,19 @@ async function main() {
     await key(cdp, "Escape");
     await Bun.sleep(600);
 
-    // Themes, each on the dashboard so they are comparable.
-    const themes = ["forest", "ember", "deep-sea", "light"];
-    for (const t of themes) {
+    // Themes, each on the dashboard so they are comparable. The first three
+    // share a 3-column table in the README; light gets a row of its own.
+    const themes: [string, number][] = [
+      ["forest", THEME_W], ["ember", THEME_W], ["deep-sea", THEME_W], ["light", STILL_W],
+    ];
+    for (const [t, tw] of themes) {
       const ok = await cdp.ev(`(()=>{try{localStorage.setItem('agentglass.theme',${JSON.stringify(t)});window.dispatchEvent(new StorageEvent('storage',{key:'agentglass.theme'}));return 1}catch{return 0}})()`);
       if (!ok) continue;
       await cdp.ev(`location.reload()`);
       await until(cdp, `document.querySelector('#root')?.children.length`, `the ${t} theme`);
       await setViewport(PANEL_H);
       await Bun.sleep(2200);
-      await capture(`theme-${t}`, 0);
+      await capture(`theme-${t}`, 0, tw);
     }
 
     cdp.close();
