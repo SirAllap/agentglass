@@ -4,7 +4,15 @@
 // (the `gen_ai.*` semantic conventions) into agentglass ingest events. This is
 // what makes agentglass provider-agnostic: anything that emits OTel GenAI spans
 // — the OpenAI / Google / Bedrock SDK instrumentations, LangChain, LiteLLM,
-// OpenLLMetry, even Claude Code's own OTel export — can feed the dashboard.
+// OpenLLMetry, Arize Phoenix and the other OpenInference instrumentors — can
+// feed the dashboard.
+//
+// NOT Claude Code's own OTel export, which this used to claim. That export is
+// METRICS, and the only OTLP routes registered are /v1/traces and /v1/logs
+// (server/src/index.ts) — point OTEL_EXPORTER_OTLP_ENDPOINT here from Claude
+// Code and its metrics get a 404. Nothing breaks, because Claude Code is
+// already covered properly by the hooks, but the sentence sent anyone
+// extending this mapper looking for a metrics receiver that is not here.
 //
 // Mapping strategy:
 //   • a TOOL span (operation "execute_tool" or carrying gen_ai.tool.name) becomes
@@ -101,6 +109,13 @@ function tokenUsageFromAttributes(a: Record<string, unknown>) {
     "gen_ai.usage.cache_read_input_tokens",
     "gen_ai.usage.cache_read_tokens",
     "cached_token_count",
+    // OpenInference. `prompt_details` is a breakdown OF the prompt, so this
+    // is treated as a subset of it — the same contract every other alias in
+    // this list already has, and what the subtraction below assumes. If that
+    // turns out to be wrong for some instrumentor, the test named
+    // "cache reads are a subset of the prompt count" is the one to change,
+    // and it says so.
+    "llm.token_count.prompt_details.cache_read",
   ]);
   const cacheCreation = firstNum(a, [
     "gen_ai.usage.cache_creation.input_tokens",
@@ -115,6 +130,13 @@ function tokenUsageFromAttributes(a: Record<string, unknown>) {
     "input_tokens",
     "prompt_tokens",
     "llm.usage.prompt_tokens",
+    // OpenInference — the convention Arize Phoenix and its instrumentors
+    // emit. Missing this was silent rather than loud: the span is still
+    // recognised as GenAI (the check below accepts any `llm.` key), so the
+    // session landed, the model resolved and tool spans paired up — only the
+    // numbers were absent, which reads as "agentglass cannot price my
+    // provider" rather than "one attribute name is missing".
+    "llm.token_count.prompt",
   ]);
   return {
     input_tokens: Math.max(0, totalInput - cacheRead - cacheCreation),
@@ -125,6 +147,7 @@ function tokenUsageFromAttributes(a: Record<string, unknown>) {
       "output_tokens",
       "completion_tokens",
       "llm.usage.completion_tokens",
+      "llm.token_count.completion",
     ]),
     cache_read_tokens: cacheRead,
     cache_creation_tokens: cacheCreation,
