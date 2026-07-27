@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import type { StatsSummary } from "../../../shared/types.ts";
+import type { StatsSummary, UsageHistory } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
+import { api } from "../lib/api.ts";
 import { fmtUsd, fmtTokens, typeColor } from "../lib/format.ts";
 
 const WINDOW_LABELS: [number, string][] = [
@@ -44,6 +46,86 @@ function Heatmap({ data }: { data: number[] }) {
             })}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Daily spend, further back than the events table goes.
+ *
+ * Every other widget here reads /stats, which reads the events table, which
+ * retention trims to eight days by default — so picking "30d" or "all time"
+ * showed eight days of data under a longer label. The retention fold has kept
+ * the day totals all along (#292); this is the panel that finally reads them.
+ *
+ * The seam is drawn rather than hidden. Left of it the bars are day summaries
+ * of rows that no longer exist; right of it they are still whole events. A
+ * chart that blurred the two would make "we stopped keeping that" look
+ * identical to "we spent nothing", which is the one confusion this feature has
+ * to avoid.
+ */
+function SpendHistory({ history }: { history: UsageHistory | null }) {
+  if (!history) return <div className="t-dim2 text-[11px] py-3">Loading…</div>;
+  const days = history.days;
+  if (!days.length) return <div className="t-dim2 text-[11px] py-3">No history yet — this fills in as the fleet runs</div>;
+
+  const max = Math.max(0.0001, ...days.map((d) => d.cost_usd));
+  const total = days.reduce((n, d) => n + d.cost_usd, 0);
+  const seam = history.seam_day;
+  const folded = seam ? days.filter((d) => d.day < seam) : [];
+  // The seam is only worth drawing when there is something on both sides of it.
+  const showSeam = folded.length > 0 && folded.length < days.length;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-end gap-[2px] h-28">
+        {days.map((d) => {
+          const summarised = !!seam && d.day < seam;
+          // A day with spend never renders as nothing: a 1px floor keeps a
+          // quiet day visually distinct from a day with no data at all.
+          const h = d.cost_usd > 0 ? Math.max(2, (d.cost_usd / max) * 100) : 0;
+          return (
+            <div
+              key={d.day}
+              className="flex-1 min-w-[2px] h-full flex items-end"
+              title={`${d.day} · ${fmtUsd(d.cost_usd)} · ${d.events.toLocaleString()} events · ${d.sessions} session${d.sessions === 1 ? "" : "s"}${summarised ? " (day summary)" : ""}`}
+            >
+              <div
+                className="w-full rounded-[2px]"
+                style={{
+                  height: `${h}%`,
+                  // Same hue either side — this is one series, not two — with
+                  // the folded half held back so the eye reads it as older and
+                  // coarser rather than as a different measurement.
+                  background: h
+                    ? summarised
+                      ? "color-mix(in srgb, var(--primary) 38%, transparent)"
+                      : "var(--primary)"
+                    : "transparent",
+                }}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center justify-between gap-3 text-[9.5px] t-dim2 flex-wrap">
+        <span className="tabular-nums">{days[0]!.day} → {days[days.length - 1]!.day}</span>
+        {showSeam && (
+          <span className="flex items-center gap-3">
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-[2px]" style={{ background: "color-mix(in srgb, var(--primary) 38%, transparent)" }} />
+              day summaries
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-[2px]" style={{ background: "var(--primary)" }} />
+              full events {history.retention_days ? `(last ${history.retention_days}d)` : ""}
+            </span>
+          </span>
+        )}
+        {!history.retention_days && <span>nothing is pruned — every day here is still whole events</span>}
+        <span className="tabular-nums" style={{ color: "var(--text2)" }}>{fmtUsd(total)} total</span>
       </div>
     </div>
   );
@@ -132,6 +214,18 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
   const apps = (stats?.by_app ?? []).slice(0, 10);
   const types = (stats?.by_type ?? []).slice(0, 10);
 
+  // Fetched here rather than lifted into the poller: it is day-grained and
+  // changes at most once a day, so re-reading it on the /stats cadence would
+  // be a scan of the whole rollup every few seconds for a chart that cannot
+  // have moved. Once per opening is the right frequency.
+  const [history, setHistory] = useState<UsageHistory | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    api.usageDaily(90).then((h) => { if (alive) setHistory(h); }).catch(() => {});
+    return () => { alive = false; };
+  }, [open]);
+
   return (
     <Portal>
       <AnimatePresence>
@@ -163,8 +257,15 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                   </motion.div>
 
                 <div className="flex flex-col gap-6">
+                {/* First, because it is the only widget here that is not bound
+                    by the window chip above — and the one that answers the
+                    question the chip cannot: what did the last quarter cost. */}
+                <Widget title="spend per day · past the retention line" i={0} full>
+                  <SpendHistory history={history} />
+                </Widget>
+
                 {stats?.heatmap && stats.heatmap.some((n) => n > 0) && (
-                  <Widget title="when the fleet works · day × hour" i={0} full>
+                  <Widget title="when the fleet works · day × hour" i={6} full>
                     <Heatmap data={stats.heatmap} />
                   </Widget>
                 )}

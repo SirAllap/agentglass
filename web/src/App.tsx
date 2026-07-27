@@ -528,6 +528,7 @@ export default function App() {
         conn={conn}
         windowMs={windowMs}
         onWindow={setWindowMs}
+        retentionDays={stats?.retention_days}
         apps={opts.source_apps}
         types={opts.hook_event_types}
         providers={providers}

@@ -12,6 +12,7 @@ import type {
   WalkthroughResult, WalkthroughInputFile, GitRepoRef, WorkingTree, GitFileChange, GitActionResult,
   GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult,
   PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
+  UsageDay, UsageHistory,
 } from "../../../shared/types.ts";
 import { modelLabelOf, providerOf } from "./format.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -273,12 +274,57 @@ export function stats(windowMs: number, provider?: string): StatsSummary {
     by_type: [["PreToolUse", 4069], ["PostToolUse", 4057], ["SessionStart", 1402], ["UserPromptSubmit", 436], ["Stop", 395], ["SubagentStop", 336], ["Notification", 216], ["SessionEnd", 42]].map(([hook_event_type, count]) => ({ hook_event_type: hook_event_type as string, count: si(count as number) })),
     heatmap,
     window_ms: windowMs,
+    // The showcase runs the default retention, so the long-window chips carry
+    // their asterisk here exactly as they would on a real install.
+    retention_days: 8,
   };
   for (const m of summary.by_model) {
     const extra = streamed.byModel.get(m.model_name);
     if (extra) m.cost_usd = Number((m.cost_usd + extra).toFixed(2));
   }
   return provider ? scopeStats(summary, provider) : summary;
+}
+
+/**
+ * A daily series with a seam in it, because the seam is the point.
+ *
+ * The showcase's retention is the default 8 days, so days before that are what
+ * the fold kept and days after are still whole events — and the chart is only
+ * worth having if it shows the first group at all.
+ */
+export function usageDaily(days = 90): UsageHistory {
+  const DAY = 86_400_000;
+  const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+  const retention = 8;
+  const series: UsageDay[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const at = Date.now() - i * DAY;
+    const dow = new Date(at).getUTCDay();
+    // Weekends are quiet; the fleet ramps up over the quarter.
+    const busy = (dow === 0 || dow === 6 ? 0.18 : 1) * (0.45 + 0.55 * ((days - i) / days));
+    const events = rint(0, Math.round(900 * busy));
+    const tool_calls = Math.round(events * 0.48);
+    series.push({
+      day: utcDay(at),
+      events,
+      tool_calls,
+      tool_errors: Math.round(tool_calls * rnd(0, 0.02)),
+      errors: Math.round(events * rnd(0, 0.01)),
+      input_tokens: Math.round(events * rnd(400, 900)),
+      output_tokens: Math.round(events * rnd(40, 90)),
+      cache_creation_tokens: Math.round(events * rnd(20, 60)),
+      cache_read_tokens: Math.round(events * rnd(3000, 7000)),
+      cost_usd: Number((events * rnd(0.04, 0.09)).toFixed(2)),
+      sessions: Math.max(events ? 1 : 0, Math.round(events / rnd(90, 180))),
+      avg_ms: rint(140, 900),
+    });
+  }
+  return {
+    days: series,
+    seam_day: utcDay(Date.now() - retention * DAY),
+    retention_days: retention,
+    rollup_from: series[0]?.day ?? null,
+  };
 }
 
 export function sessions(provider?: string): SessionRollup[] {
@@ -565,6 +611,19 @@ export function eventsExportUri(fmt: "csv" | "json"): string {
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const rows = evs.map((e) => cols.map((c) => cell((e as unknown as Record<string, unknown>)[c])).join(","));
+  return dataUri("text/csv", [cols.join(","), ...rows].join("\n"));
+}
+
+/** The same daily series the chart draws, as a downloadable file. */
+export function dailyExportUri(fmt: "csv" | "json"): string {
+  const h = usageDaily(120);
+  if (fmt === "json") return dataUri("application/json", JSON.stringify(h, null, 2));
+  const cols: (keyof UsageDay)[] = [
+    "day", "events", "tool_calls", "tool_errors", "errors",
+    "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+    "cost_usd", "sessions", "avg_ms",
+  ];
+  const rows = h.days.map((d) => cols.map((c) => String(d[c])).join(","));
   return dataUri("text/csv", [cols.join(","), ...rows].join("\n"));
 }
 

@@ -140,6 +140,44 @@ export interface TimeBucket {
   tokens: number;
 }
 
+/**
+ * One UTC day of the fleet, from the retention rollup, the live events, or
+ * both — the day the prune's cutoff falls in is split across the two and is
+ * only whole once they are added.
+ *
+ * Day-grained on purpose. Everything here survives being folded into a daily
+ * summary; a percentile does not (a mean of p95s is a p95 of nothing), so the
+ * mean is the only latency this shape can honestly carry.
+ */
+export interface UsageDay {
+  /** YYYY-MM-DD, UTC. */
+  day: string;
+  events: number;
+  tool_calls: number;
+  tool_errors: number;
+  errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+  sessions: number;
+  /** Mean tool duration, ms. */
+  avg_ms: number;
+}
+
+/** The daily series plus what it is honest about: where day summaries end and
+ *  whole events begin, and how long events are kept in the first place. */
+export interface UsageHistory {
+  days: UsageDay[];
+  /** UTC day the retention boundary falls in; null when nothing is pruned. */
+  seam_day: string | null;
+  /** AGENTGLASS_RETENTION_DAYS. 0 means events are never pruned. */
+  retention_days: number;
+  /** Oldest day the rollup holds, or null when it is empty. */
+  rollup_from: string | null;
+}
+
 export interface SkillUsage {
   skill: string;
   calls: number;
@@ -222,6 +260,15 @@ export interface StatsSummary {
   /** Wall-clock ms when the server process started — what the header's
    *  uptime counts from. Absent in demo mode, where nothing is "up". */
   server_started_at?: number;
+  /**
+   * AGENTGLASS_RETENTION_DAYS, so the window chips can tell the truth.
+   *
+   * Every number in this object comes from the events table, which is pruned
+   * at that many days — so a window longer than it is answered with less data
+   * than its own label claims. 0 means nothing is pruned and every window is
+   * exactly what it says. Absent in demo mode's older payloads.
+   */
+  retention_days?: number;
 }
 
 /** One tmux window, as tmux itself reports it. The panel renders these as its

@@ -95,13 +95,15 @@ function MoreMenu({ onOpen }: { onOpen: () => void }) {
 }
 
 export function Header({
-  conn, windowMs, onWindow, apps, types, providers, filter, onFilter, theme, onTheme,
+  conn, windowMs, onWindow, retentionDays, apps, types, providers, filter, onFilter, theme, onTheme,
   sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenWorkspace, onOpenSettings, onClear, showUsage,
   workspace, onOpenProject,
 }: {
   conn: ConnState;
   windowMs: number;
   onWindow: (ms: number) => void;
+  /** AGENTGLASS_RETENTION_DAYS. 0 (or undefined) → nothing is pruned. */
+  retentionDays?: number;
   apps: string[];
   types: string[];
   providers: string[];
@@ -186,12 +188,30 @@ export function Header({
           right-side controls get pushed off-screen and become unreachable. */}
       <div className="flex items-center gap-2 grow min-w-0 overflow-x-auto agw-noscrollbar order-3 basis-full sm:order-none sm:basis-0">
       <div className="flex items-center gap-0.5 p-0.5 rounded-lg shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 35%, transparent)" }}>
-        {WINDOWS.map((w) => (
-          <button key={w.label} onClick={() => onWindow(w.ms)} className="px-2 py-1 rounded-md text-[11px] transition-all"
-            style={windowMs === w.ms ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--primary-hover)" } : { color: "var(--text4)" }}>
-            {w.label}
-          </button>
-        ))}
+        {WINDOWS.map((w) => {
+          /*
+           * A window longer than retention cannot be answered in full.
+           *
+           * Every panel behind these chips reads the events table, which is
+           * pruned at AGENTGLASS_RETENTION_DAYS (8 by default) — so "30d" was
+           * eight days of data under a thirty-day label, and there was no way
+           * to tell that from a quiet month. The chip now says so rather than
+           * the dashboard implying otherwise, and points at the one view that
+           * does go further back.
+           *
+           * Nothing marked when retention is off (the desktop default), where
+           * every window really is what it claims.
+           */
+          const beyond = !!retentionDays && w.ms > retentionDays * 86_400_000;
+          return (
+            <button key={w.label} onClick={() => onWindow(w.ms)} className="px-2 py-1 rounded-md text-[11px] transition-all"
+              title={beyond ? `Events are kept for ${retentionDays} days, so this window is answered from the last ${retentionDays}d. Statistics (s) → “spend per day” goes further back.` : undefined}
+              style={windowMs === w.ms ? { background: "color-mix(in srgb, var(--primary) 22%, transparent)", color: "var(--primary-hover)" } : { color: "var(--text4)" }}>
+              {w.label}
+              {beyond && <sup className="ml-[1px] text-[8px] opacity-70" aria-hidden>*</sup>}
+            </button>
+          );
+        })}
       </div>
 
       {/* max-w keeps long worktree names (e.g. feature-branch-…) from blowing the header open */}

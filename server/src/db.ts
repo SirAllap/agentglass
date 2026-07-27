@@ -13,6 +13,7 @@ import type {
   AppUsage,
   TypeCount,
   OpenToolCall,
+  UsageDay,
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
 import { costUsd, modelLabel, hasPrice } from "./pricing.ts";
@@ -797,6 +798,9 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   const cutoff = Date.now() - RETENTION_DAYS * 86_400_000;
   // One transaction: the fold and the delete are the same decision, and a
   // crash between them would delete a day nobody had summarised.
+  // The fold is the only thing that writes daily_rollup, so this is the only
+  // place its path set can change.
+  rollupPathCache = null;
   return db.transaction(() => {
     const rolled = foldExpiringEvents(cutoff);
     db.run(`DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE timestamp < ?)`, [cutoff]);
@@ -809,59 +813,148 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
   })();
 }
 
-/** A day's totals, from the rollup. `null` bounds mean no bound. */
-export interface RollupDay {
-  day: string;
-  events: number;
-  tool_calls: number;
-  tool_errors: number;
-  errors: number;
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_tokens: number;
-  cache_read_tokens: number;
-  cost_usd: number;
-  sessions: number;
-  /** Mean tool duration. There is no p95 here and there cannot be — see the
-   *  daily_rollup comment. */
-  avg_ms: number;
+/**
+ * Every project path the rollup itself contains.
+ *
+ * Deliberately not recordedPaths(): that reads the events table, and the whole
+ * point of the rollup is that those rows are gone. A project last touched a
+ * month ago has no path left in events at all, so scoping rollup queries by
+ * what events still remembers would hide precisely the history the rollup was
+ * built to keep — the further back you look, the more of it disappears.
+ *
+ * The prune is the only writer, so the cache is dropped there rather than
+ * timed out.
+ */
+let rollupPathCache: string[] | null = null;
+function rollupPaths(): string[] {
+  if (rollupPathCache) return rollupPathCache;
+  const rows = db.query<{ p: string }, []>("SELECT DISTINCT project_path AS p FROM daily_rollup").all();
+  return (rollupPathCache = rows.map((r) => r.p).filter(Boolean));
 }
 
 /**
- * Daily totals from the rollup, scoped like every other metric.
+ * Scope fragment for a `daily_rollup` query — the counterpart of scopeClause().
+ *
+ * Two differences from the events version, both forced by what the fold keeps.
+ * It tests `isWithin` rather than equality against the scope roots, because
+ * `project_path` is the path the event carried and that is often a directory
+ * *inside* a checkout (a monorepo package) — an exact IN against the roots
+ * matched none of those and reported a scoped project as having no history.
+ * And there is no `cwd_path` to fall back on: the fold does not carry one, so
+ * a row whose only in-scope path was the cwd cannot be recovered here.
+ */
+function rollupScopeClause(scope: string | null = workspaceRoot()): { clause: string; args: string[] } {
+  if (!scope) return { clause: "", args: [] };
+  const roots = scopeRoots(scope);
+  const inScope = rollupPaths().filter((p) => roots.some((r) => isWithin(p, r)));
+  // Same honest answer as scopeClause: nothing folded for this project yet.
+  if (!inScope.length) return { clause: " AND 0", args: [] };
+  return { clause: ` AND project_path IN (${inScope.map(() => "?").join(",")})`, args: inScope };
+}
+
+/** The per-day aggregate shared by rollupDays() and dailyUsage(), so the two
+ *  cannot drift into answering the same question differently. */
+const DAY_TOTALS = `SELECT day,
+        SUM(events) AS events, SUM(tool_calls) AS tool_calls,
+        SUM(tool_errors) AS tool_errors, SUM(errors) AS errors,
+        SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+        SUM(cache_creation_tokens) AS cache_creation_tokens,
+        SUM(cache_read_tokens) AS cache_read_tokens,
+        SUM(cost_usd) AS cost_usd,
+        COUNT(DISTINCT session_id) AS sessions,
+        CASE WHEN SUM(timed_calls) > 0
+             THEN CAST(SUM(duration_ms_total) / SUM(timed_calls) AS INTEGER)
+             ELSE 0 END AS avg_ms`;
+
+/**
+ * Daily totals from the rollup alone, scoped like every other metric.
  *
  * This reads only what the prune has already folded, so it answers about the
- * past — the live window is still the events table's job. A caller wanting a
- * continuous series joins the two at the retention boundary.
+ * past and stops at the retention boundary. Callers wanting a series that runs
+ * up to now want dailyUsage() instead — it is this plus the live events.
  */
-export function rollupDays(fromDay?: string, toDay?: string): RollupDay[] {
-  const roots = scopeRoots();
+export function rollupDays(fromDay?: string, toDay?: string): UsageDay[] {
+  const scope = rollupScopeClause();
   const where: string[] = [];
   const args: any[] = [];
-  if (fromDay) { where.push('day >= ?'); args.push(fromDay); }
-  if (toDay) { where.push('day <= ?'); args.push(toDay); }
-  if (roots.length) {
-    where.push(`project_path IN (${roots.map(() => '?').join(',')})`);
-    args.push(...roots);
-  }
-  const clause = where.length ? ` WHERE ${where.join(' AND ')}` : '';
+  if (fromDay) { where.push("day >= ?"); args.push(fromDay); }
+  if (toDay) { where.push("day <= ?"); args.push(toDay); }
+  const clause = ` WHERE 1${where.length ? ` AND ${where.join(" AND ")}` : ""}${scope.clause}`;
   return db
-    .query<RollupDay, any[]>(
-      `SELECT day,
-              SUM(events) AS events, SUM(tool_calls) AS tool_calls,
-              SUM(tool_errors) AS tool_errors, SUM(errors) AS errors,
-              SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
-              SUM(cache_creation_tokens) AS cache_creation_tokens,
-              SUM(cache_read_tokens) AS cache_read_tokens,
-              SUM(cost_usd) AS cost_usd,
-              COUNT(DISTINCT session_id) AS sessions,
-              CASE WHEN SUM(timed_calls) > 0
-                   THEN CAST(SUM(duration_ms_total) / SUM(timed_calls) AS INTEGER)
-                   ELSE 0 END AS avg_ms
-       FROM daily_rollup${clause}
-       GROUP BY day ORDER BY day`
+    .query<UsageDay, any[]>(`${DAY_TOTALS} FROM daily_rollup${clause} GROUP BY day ORDER BY day`)
+    .all(...args, ...scope.args);
+}
+
+/**
+ * One continuous daily series, across the retention boundary.
+ *
+ * The rollup holds the days the prune has folded; `events` holds the days it
+ * has not. Neither alone can answer "what did this project cost this month" on
+ * a default install — retention is 8 days, so a 30d window read from events is
+ * eight days of data wearing a thirty-day label.
+ *
+ * The two sources are summed, not preferred, because the boundary is a
+ * *timestamp*, not a midnight: the prune folds `timestamp < now - N days`, so
+ * the day the cutoff lands in is split between the tables and is only whole
+ * when both halves are added. Every other day is in exactly one of them, where
+ * adding is the identity.
+ *
+ * Sessions are the one column that cannot be summed — a session that ran
+ * across the cutoff has a row on both sides — so the union is counted distinct
+ * over (day, session_id) instead of adding two counts that both include it.
+ *
+ * Days are UTC, matching what the fold wrote. The heatmap is the panel that
+ * needs a viewer's local clock; a day-grained cost series does not, and
+ * shifting it would put spend on a different day than the rollup recorded it.
+ */
+export function dailyUsage(fromDay?: string, toDay?: string): UsageDay[] {
+  const rs = rollupScopeClause();
+  const es = scopeClause();
+  const rWhere: string[] = [];
+  const rArgs: any[] = [];
+  const eWhere: string[] = [];
+  const eArgs: any[] = [];
+  if (fromDay) {
+    rWhere.push("day >= ?"); rArgs.push(fromDay);
+    // Bounded on `timestamp` rather than on date(timestamp), so the events half
+    // can use the timestamp index instead of computing a date per row. With
+    // retention disabled this table holds everything, and "all time" is exactly
+    // when that matters.
+    eWhere.push("timestamp >= CAST(strftime('%s', ?) AS INTEGER) * 1000"); eArgs.push(fromDay);
+  }
+  if (toDay) {
+    rWhere.push("day <= ?"); rArgs.push(toDay);
+    eWhere.push("timestamp < (CAST(strftime('%s', ?) AS INTEGER) + 86400) * 1000"); eArgs.push(toDay);
+  }
+  const rc = ` WHERE 1${rWhere.length ? ` AND ${rWhere.join(" AND ")}` : ""}${rs.clause}`;
+  const ec = ` WHERE 1${eWhere.length ? ` AND ${eWhere.join(" AND ")}` : ""}${es.clause}`;
+  return db
+    .query<UsageDay, any[]>(
+      `WITH merged AS (
+         SELECT day, session_id, events, tool_calls, tool_errors, errors,
+                input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+                cost_usd, duration_ms_total, timed_calls
+         FROM daily_rollup${rc}
+         UNION ALL
+         -- Folded the same way foldExpiringEvents() folds, down to the date
+         -- expression: a day that is half here and half in the rollup has to
+         -- land on the same key in both halves or it splits into two days.
+         SELECT date(timestamp / 1000, 'unixepoch') AS day, session_id,
+                COUNT(*),
+                SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END),
+                SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') AND is_error = 1 THEN 1 ELSE 0 END),
+                SUM(COALESCE(is_error, 0)),
+                SUM(COALESCE(input_tokens, 0)), SUM(COALESCE(output_tokens, 0)),
+                SUM(COALESCE(cache_creation_tokens, 0)), SUM(COALESCE(cache_read_tokens, 0)),
+                SUM(COALESCE(cost_usd, 0)),
+                SUM(COALESCE(duration_ms, 0)),
+                SUM(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END)
+         FROM events${ec}
+         GROUP BY 1, 2
+       )
+       ${DAY_TOTALS} FROM merged GROUP BY day ORDER BY day`
     )
-    .all(...args);
+    .all(...rArgs, ...rs.args, ...eArgs, ...es.args);
 }
 
 /** The oldest day the rollup can speak to, or null when it is empty. Lets a
@@ -869,6 +962,18 @@ export function rollupDays(fromDay?: string, toDay?: string): RollupDay[] {
 export function rollupEarliestDay(): string | null {
   const r = db.query<{ day: string | null }, []>('SELECT MIN(day) AS day FROM daily_rollup').get();
   return r?.day ?? null;
+}
+
+/**
+ * The UTC day the retention boundary currently falls in, or null when nothing
+ * is pruned. Days before it are day-grained summaries; the boundary day itself
+ * and everything after are still whole events — which is worth saying on a
+ * chart, because it is the difference between "no spend" and "no longer known
+ * in that detail".
+ */
+export function retentionSeamDay(): string | null {
+  if (!RETENTION_DAYS) return null;
+  return new Date(Date.now() - RETENTION_DAYS * 86_400_000).toISOString().slice(0, 10);
 }
 
 export interface InsertResult {

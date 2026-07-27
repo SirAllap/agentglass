@@ -903,6 +903,13 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       href={api.exportUrl("csv")} download="agentglass-events.csv" />
                     <Row label="Events — JSON" hint="Full payloads, for scripting"
                       href={api.exportUrl("json")} download="agentglass-events.json" />
+                    {/* The only export that outlives retention: it reads the
+                        daily rollup as well as the live events, so a month
+                        that has already been pruned still comes out. */}
+                    <Row label="Daily totals — CSV" hint="One row per day, back past the retention window"
+                      href={api.exportUrl("csv", "daily")} download="agentglass-daily.csv" />
+                    <Row label="Daily totals — JSON" hint="The same series, with where the retention seam falls"
+                      href={api.exportUrl("json", "daily")} download="agentglass-daily.json" />
                     <Row label="Skills catalog — Markdown" hint="Every skill the fleet has available"
                       href={api.skillsExportUrl()} download="agentglass-skills.md" />
                   </Section>

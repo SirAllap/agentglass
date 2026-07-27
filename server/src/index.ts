@@ -18,6 +18,9 @@ import {
   ftsText,
   providerOf,
   gateHistory,
+  dailyUsage,
+  rollupEarliestDay,
+  retentionSeamDay,
 } from "./db.ts";
 import { maybeAlert, setAlertSink } from "./alerts.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
@@ -1245,10 +1248,73 @@ const server = Bun.serve<WsData>({
           url.searchParams.get("tz") || undefined,
         ),
         server_started_at: STARTED_AT,
+        retention_days: RETENTION_DAYS,
+      });
+    }
+    /*
+     * The daily series, across the retention boundary.
+     *
+     * /stats reads the events table, which retention keeps at 8 days by
+     * default — so its 30d and all-time windows were eight days of data
+     * wearing a longer label. This one adds the folded days back, at the day
+     * granularity they were folded to, and says where the seam is instead of
+     * pretending there isn't one.
+     */
+    if (pathname === "/usage/daily") {
+      const days = Math.max(1, Math.min(3650, Number(url.searchParams.get("days")) || 90));
+      // Inclusive of today, so `days=1` means today rather than nothing.
+      const from = new Date(Date.now() - (days - 1) * 86_400_000).toISOString().slice(0, 10);
+      return json({
+        days: dailyUsage(from),
+        seam_day: retentionSeamDay(),
+        retention_days: RETENTION_DAYS,
+        rollup_from: rollupEarliestDay(),
       });
     }
 
     // --- export ---
+    /*
+     * The daily series as a file.
+     *
+     * /export below hands out raw events, which retention deletes — so the
+     * export inherited the same eight-day ceiling as the charts did, and the
+     * one number people actually take out of here (what did this cost) could
+     * not be exported for a month that had ended. This one reads the rollup
+     * too, so what leaves the building goes back as far as the fold does.
+     *
+     * A separate `kind` rather than a new route, so a caller already pointed
+     * at /export keeps working unchanged and switches grain with a parameter.
+     */
+    if (pathname === "/export" && url.searchParams.get("kind") === "daily") {
+      const fmt = url.searchParams.get("format") || "json";
+      const days = dailyUsage();
+      if (fmt === "csv") {
+        const cols = [
+          "day", "events", "tool_calls", "tool_errors", "errors",
+          "input_tokens", "output_tokens", "cache_creation_tokens", "cache_read_tokens",
+          "cost_usd", "sessions", "avg_ms",
+        ];
+        const lines = [cols.join(",")];
+        for (const d of days) lines.push(cols.map((c) => csvEscape((d as any)[c])).join(","));
+        return new Response(lines.join("\n"), {
+          headers: {
+            "content-type": "text/csv",
+            "content-disposition": 'attachment; filename="agentglass-daily.csv"',
+            ...cors,
+          },
+        });
+      }
+      return new Response(
+        JSON.stringify({ days, seam_day: retentionSeamDay(), retention_days: RETENTION_DAYS }, null, 2),
+        {
+          headers: {
+            "content-type": "application/json",
+            "content-disposition": 'attachment; filename="agentglass-daily.json"',
+            ...cors,
+          },
+        },
+      );
+    }
     if (pathname === "/export") {
       const fmt = url.searchParams.get("format") || "json";
       const rows = exportRows();

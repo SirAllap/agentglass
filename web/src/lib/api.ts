@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, UsageHistory } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -254,13 +254,21 @@ const realApi = {
       + (provider ? `&provider=${encodeURIComponent(provider)}` : "")
       + (viewerTz() ? `&tz=${encodeURIComponent(viewerTz()!)}` : ""),
     ),
+  // No tz, unlike /stats: these days are UTC because that is the grain the
+  // retention fold wrote them at, and re-slicing a day-summary by a viewer's
+  // clock would move spend onto a day it was never recorded on.
+  usageDaily: (days = 90) => get<UsageHistory>(`/usage/daily?days=${days}`),
   sessions: (limit = 100, provider?: string) =>
     get<SessionRollup[]>(`/sessions?limit=${limit}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}`),
   filterOptions: () =>
     get<{ source_apps: string[]; hook_event_types: string[]; models: string[] }>(
       `/events/filter-options`
     ),
-  exportUrl: (fmt: "csv" | "json") => withToken(`${SERVER}/export?format=${fmt}`),
+  // `kind`: "events" is the raw rows, bounded by retention; "daily" is the
+  // day series, which reads the rollup too and so goes back as far as the
+  // fold does rather than as far as the events table happens to.
+  exportUrl: (fmt: "csv" | "json", kind: "events" | "daily" = "events") =>
+    withToken(`${SERVER}/export?format=${fmt}${kind === "daily" ? "&kind=daily" : ""}`),
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   usage: () => get<UsagePayload>(`/usage`),
   // usage_since: the epoch the call counts are known from. They are bounded
@@ -568,9 +576,11 @@ const demoApi: typeof realApi = {
   // The demo is a showcase of the whole fleet, so it is never scoped.
   projects: () => D({ projects: [], scanning: false, workspace: null }),
   stats: (windowMs: number, provider?: string) => D(demo.stats(windowMs, provider)),
+  usageDaily: (days = 90) => D(demo.usageDaily(days)),
   sessions: (_limit?: number, provider?: string) => D(demo.sessions(provider)),
   filterOptions: () => D(demo.filterOptions()),
-  exportUrl: (fmt: "csv" | "json") => demo.eventsExportUri(fmt),
+  exportUrl: (fmt: "csv" | "json", kind: "events" | "daily" = "events") =>
+    kind === "daily" ? demo.dailyExportUri(fmt) : demo.eventsExportUri(fmt),
   skillsExportUrl: () => demo.skillsExportUri(),
   usage: () => D(demo.usage() as UsagePayload),
   skills: () => D(demo.skills()),
