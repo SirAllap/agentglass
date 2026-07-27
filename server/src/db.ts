@@ -15,7 +15,7 @@ import type {
   OpenToolCall,
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
-import { costUsd, modelLabel } from "./pricing.ts";
+import { costUsd, modelLabel, hasPrice } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
 import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
 
@@ -1437,8 +1437,11 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
     const e = modelFold.get(label) ?? {
       model_name: label,
       input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0,
-      cost_usd: 0, sessions: 0,
+      cost_usd: 0, sessions: 0, unpriced: false,
     };
+    // Any contributing id without a rate makes the whole row's cost partly a
+    // fallback — the honest reading, since the row is one number.
+    if (!hasPrice(r.model_name)) e.unpriced = true;
     e.input_tokens += r.input_tokens ?? 0;
     e.output_tokens += r.output_tokens ?? 0;
     e.cache_creation_tokens += r.cache_creation_tokens ?? 0;

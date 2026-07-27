@@ -93,6 +93,13 @@ export interface SessionRollup {
 
 export interface CostByModel {
   model_name: string;
+  /**
+   * True when at least one raw model id folded into this row has no rate in
+   * the price table, so any cost here the provider did not report exactly is
+   * a fallback at DEFAULT_PRICE. Optional — an older server does not send it,
+   * and absent means unknown rather than false.
+   */
+  unpriced?: boolean;
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens: number;
