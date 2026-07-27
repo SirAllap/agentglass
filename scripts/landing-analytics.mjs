@@ -64,8 +64,21 @@ if (goat) {
   }
 }
 
+// Said as a workflow annotation, not just a log line. A deploy that quietly
+// ships no counter looks identical to one that ships a working counter nobody
+// is visiting, and telling those apart by reading the log means scrolling past
+// every asset the demo build lists. This puts the answer on the run itself.
+const say = (level, text) => console.log(`::${level}::${text}`);
+
 if (!snippet) {
-  console.log("analytics: no counter configured — the page ships without one");
+  say(
+    "warning",
+    "analytics: no counter configured, the page ships without one. " +
+      "Set GOATCOUNTER_CODE or CLOUDFLARE_ANALYTICS_TOKEN as a repository " +
+      "*variable* (Settings > Secrets and variables > Actions > Variables). " +
+      "A value set as a secret, or on the account rather than the repository, " +
+      "does not reach this step.",
+  );
   process.exit(0);
 }
 
@@ -79,4 +92,10 @@ if (from === -1 || to === -1 || to < from) {
 }
 
 writeFileSync(file, html.slice(0, from + START.length) + snippet + html.slice(to));
-console.log(`analytics: ${goat ? "goatcounter" : "cloudflare"} counter stamped into ${file}`);
+say(
+  "notice",
+  `analytics: ${goat ? `goatcounter (${goat})` : "cloudflare"} counter stamped into ${file}. ` +
+    "If the counter still reports nothing after this deploy, the page has the " +
+    "tag and something between the visitor and the counter is dropping it, " +
+    "which for these vendors is usually an ad blocker or a filtering resolver.",
+);
