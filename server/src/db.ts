@@ -703,9 +703,12 @@ function computeStatsSummary(windowMs = 24 * 3600 * 1000, provider?: string): St
   // Timeline buckets.
   const bucketCount = 60;
   const bucketMs = Math.max(1000, Math.floor(windowMs / bucketCount));
-  const start = Math.floor(now / bucketMs) * bucketMs - (bucketCount - 1) * bucketMs;
+  const start = Math.floor(since / bucketMs) * bucketMs;
   const buckets = new Map<number, TimeBucket>();
-  for (let i = 0; i < bucketCount; i++) {
+  // An exact rolling window can touch 61 aligned buckets: partial buckets at
+  // both ends plus 59 complete ones. Keep both edges rather than dropping fresh
+  // or oldest-window events to force an artificial 60-row result.
+  for (let i = 0; i <= bucketCount; i++) {
     const t = start + i * bucketMs;
     buckets.set(t, { t, events: 0, errors: 0, cost_usd: 0, tokens: 0 });
   }
