@@ -26,7 +26,7 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
     view === "model"
       ? (stats?.by_model ?? [])
           .filter((m) => m.cost_usd > 0 || m.input_tokens > 0)
-          .map((m) => ({ key: m.model_name, label: m.model_name, color: modelColor(m.model_name), cost: m.cost_usd, tokens: m.input_tokens + m.output_tokens }))
+          .map((m) => ({ key: m.model_name, label: m.is_estimated ? `~${m.model_name}` : m.model_name, color: modelColor(m.model_name), cost: m.cost_usd, tokens: m.input_tokens + m.output_tokens }))
       : (stats?.by_repo ?? [])
           .filter((r) => r.cost_usd > 0 || r.input_tokens > 0)
           .map((r, i) => {

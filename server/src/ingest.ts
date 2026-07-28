@@ -45,10 +45,10 @@ function pick(obj: Record<string, unknown> | undefined, ...keys: string[]): unkn
 function usageFrom(u: Record<string, unknown> | undefined): TokenUsage {
   if (!u || typeof u !== "object") return {};
   return {
-    input_tokens: num(pick(u, "input_tokens", "prompt_tokens")),
-    output_tokens: num(pick(u, "output_tokens", "completion_tokens")),
+    input_tokens: num(pick(u, "input_tokens", "prompt_tokens", "llm.token_count.prompt")),
+    output_tokens: num(pick(u, "output_tokens", "completion_tokens", "llm.token_count.completion")),
     cache_creation_tokens: num(pick(u, "cache_creation_input_tokens", "cache_creation_tokens")),
-    cache_read_tokens: num(pick(u, "cache_read_input_tokens", "cache_read_tokens")),
+    cache_read_tokens: num(pick(u, "cache_read_input_tokens", "cache_read_tokens", "cached_prompt_tokens")),
   };
 }
 
@@ -197,7 +197,9 @@ export function normalize(body: IngestBody): NormalizedEvent {
     usage_is_cumulative: !hasPayloadUsage,
     summary: str(body.summary),
     session_name: str(body.session_name),
-    timestamp: typeof body.timestamp === "number" ? body.timestamp : Date.now(),
+    timestamp: typeof body.timestamp === "number"
+      ? (Math.abs(body.timestamp - Date.now()) > 300_000 ? Date.now() : body.timestamp)
+      : Date.now(),
     payload,
     chat,
   };

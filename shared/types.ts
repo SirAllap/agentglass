@@ -81,6 +81,7 @@ export interface CostByModel {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   cost_usd: number;
+  is_estimated?: boolean;
   sessions: number;
 }
 

@@ -16,7 +16,7 @@ import type {
   OpenToolCall,
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
-import { costUsd, modelLabel } from "./pricing.ts";
+import { costUsd, modelLabel, priceFor } from "./pricing.ts";
 import { workspaceRoot } from "./config.ts";
 
 /**
@@ -144,6 +144,7 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_path)")
 try { db.exec("ALTER TABLE sessions ADD COLUMN project_path TEXT"); } catch { /* already present */ }
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)");
 try { db.exec("ALTER TABLE sessions ADD COLUMN session_name TEXT"); } catch { /* already present */ }
+try { db.exec("ALTER TABLE events ADD COLUMN is_estimated INTEGER NOT NULL DEFAULT 0"); } catch { /* already present */ }
 db.exec(`
   UPDATE sessions SET project_path = (
     SELECT e.project_path FROM events e
@@ -165,6 +166,7 @@ export function providerOf(model: string | null | undefined): string | null {
   if (/mistral|mixtral|codestral/.test(m)) return "Mistral";
   if (/llama|meta-/.test(m)) return "Meta";
   if (/command|cohere/.test(m)) return "Cohere";
+  if (/kimi|moonshot/.test(m)) return "Moonshot";
   if (/glm/.test(m)) return "Intility";
   return null;
 }
@@ -244,12 +246,12 @@ const insertStmt = db.query(`
     source_app, session_id, hook_event_type, tool_name, tool_use_id,
     agent_id, agent_type, model_name, is_error, error_text, duration_ms,
     input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
-    cost_usd, summary, payload, timestamp
+    cost_usd, is_estimated, summary, payload, timestamp
   ) VALUES (
     $source_app, $session_id, $hook_event_type, $tool_name, $tool_use_id,
     $agent_id, $agent_type, $model_name, $is_error, $error_text, $duration_ms,
     $input_tokens, $output_tokens, $cache_creation_tokens, $cache_read_tokens,
-    $cost_usd, $summary, $payload, $timestamp
+    $cost_usd, $is_estimated, $summary, $payload, $timestamp
   ) RETURNING *
 `);
 
@@ -345,7 +347,7 @@ function insertEventCore(n: NormalizedEvent): InsertResult {
     dCw = Math.max(0, dCw - prior.cache_creation_tokens);
     dCr = Math.max(0, dCr - prior.cache_read_tokens);
   }
-  const eventCost = costUsd(
+  const { cost: eventCost, estimated: costEstimated } = costUsd(
     { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
     model
   );
@@ -376,6 +378,7 @@ function insertEventCore(n: NormalizedEvent): InsertResult {
     $cache_creation_tokens: dCw,
     $cache_read_tokens: dCr,
     $cost_usd: eventCost,
+    $is_estimated: costEstimated ? 1 : 0,
     $summary: n.summary,
     $payload: JSON.stringify(n.payload ?? {}),
     $timestamp: n.timestamp,
@@ -426,7 +429,7 @@ function upsertSession(
   const cost = costUsd(
     { input_tokens: dIn, output_tokens: dOut, cache_creation_tokens: dCw, cache_read_tokens: dCr },
     n.model_name
-  );
+  ).cost;
   const row = upsertStmt.get({
     $sid: n.session_id,
     $src: n.source_app,
