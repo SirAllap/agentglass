@@ -7,6 +7,7 @@ import { sessionIsLive } from "../lib/derive.ts";
 import { scopeSessions, openingScope, type ChatScope } from "./chatList.ts";
 import { MODELS, resumeModel } from "./resumeModel.ts";
 import { useBackClose } from "./mobileUi.tsx";
+import { baseName } from "../../../shared/projectKey.ts";
 import { recentTurns, buildFeed, summariseRuns, shortTarget, type FeedEntry, type FeedItem, type FeedTool } from "./transcript.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
 
@@ -725,4 +726,3 @@ function reduce(prev: Live | null, o: Record<string, unknown>): Live {
   return cur;
 }
 
-const baseName = (p: string) => (p ? p.split("/").filter(Boolean).pop() || p : "");

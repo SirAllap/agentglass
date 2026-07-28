@@ -477,7 +477,7 @@ export function gitStashes(): { stashes: GitStash[] } {
 // --- docker panel (demo is read-only) ---
 export function dockerOverview(): DockerOverview {
   const c = (id: string, name: string, image: string, state: string, status: string, service: string, ports = "") =>
-    ({ id, name, image, state, status, ports, project: "shop", service, runningFor: status, size: "" });
+    ({ id, name, image, state, status, ports, project: "shop", service, workingDir: "/home/demo/code/shop", runningFor: status, size: "" });
   return {
     available: true, writeEnabled: false, version: "27.0.3",
     containers: [

@@ -10,8 +10,9 @@ import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobile
 import { pollWhileVisible } from "../lib/poll.ts";
 import { DIFF_CSS } from "./MobileDiff.tsx";
 import { NOW_CSS, NowHero, NowStream, type NowAction, type LiveCall } from "./MobileNow.tsx";
-import { RepoList, RepoScreen, type RepoSummary } from "./MobileRepo.tsx";
+import { RepoList, RepoScreen, ContainerScreen, type RepoSummary } from "./MobileRepo.tsx";
 import { projectRows } from "./projects.ts";
+import { baseName, ownerOf } from "../../../shared/projectKey.ts";
 import { MobilePr } from "./MobilePr.tsx";
 import { buildQueue, type NowItem } from "./nowQueue.ts";
 import type {
@@ -96,6 +97,9 @@ export function MobileApp() {
    *  separate projects. */
   const [openCheckouts, setOpenCheckouts] = useState<RepoSummary[]>([]);
   const [openPr, setOpenPr] = useState<{ root: string; number: number } | null>(null);
+  /** A container opened from anywhere — the queue, a project, the fleet. It
+   *  needs no repo context, so it does not have to have one. */
+  const [openCtr, setOpenCtr] = useState<DockerContainer | null>(null);
   /**
    * The chat destinations, held here so anything can name one.
    *
@@ -160,7 +164,7 @@ export function MobileApp() {
   const loadPrs = useCallback((list: GitRepoRef[]) => {
     Promise.all(list.flatMap((r) => (["mine", "review"] as const).map((scope) =>
       api.prList(r.root, scope, "open")
-        .then((res) => res.prs.map((pr) => ({ root: r.root, repo: repoName(r), pr, scope })))
+        .then((res) => res.prs.map((pr) => ({ root: r.root, repo: baseName(r.root), pr, scope })))
         .catch(() => [] as { root: string; repo: string; pr: PrSummary; scope: "mine" | "review" }[])
     ))).then((groups) => setPrs(groups.flat()));
   }, []);
@@ -263,17 +267,29 @@ export function MobileApp() {
     [gates, sessions, prs, containers, me, dismissed]
   );
 
+  /**
+   * Which checkout each container belongs to, decided once by the rule the
+   * server uses rather than by comparing a compose project name to a directory
+   * basename. Null is a real answer and gets a real screen.
+   */
+  const roots = useMemo(() => repos.map((r) => r.root), [repos]);
+  const ownerByContainer = useMemo(() => {
+    const m = new Map<string, string | null>();
+    for (const c of containers) m.set(c.id, ownerOf(c, roots));
+    return m;
+  }, [containers, roots]);
+
   const repoSummaries: RepoSummary[] = useMemo(() => repos.map((r) => {
     const t = trees[r.root];
-    const name = repoName(r);
     return {
-      ref: r, name,
+      ref: r, name: baseName(r.root),
       branch: t?.branch ?? "—",
       dirty: t?.dirty ?? 0, ahead: t?.ahead ?? 0, behind: t?.behind ?? 0,
       prs: prs.filter((p) => p.root === r.root).length,
-      down: containers.filter((c) => (c.project ?? "") === name && c.state !== "running" && c.state !== "created").length,
+      down: containers.filter((c) =>
+        ownerByContainer.get(c.id) === r.root && c.state !== "running" && c.state !== "created").length,
     };
-  }), [repos, trees, prs, containers]);
+  }), [repos, trees, prs, containers, ownerByContainer]);
 
   /** An answered item leaves the queue at once, before the next poll confirms
    *  it. Waiting four seconds to watch your own tap take effect is what makes
@@ -329,10 +345,16 @@ export function MobileApp() {
     setTab("chats");
   }, []);
 
-  const openContainerRepo = (c: DockerContainer) => {
-    const r = repoSummaries.find((x) => x.name === (c.project ?? ""));
-    if (r) openProject(r); else toast("That container is not in a repo agentglass knows", true);
-  };
+  /**
+   * Open a container, whatever agentglass does or does not know about it.
+   *
+   * This used to look for a repo whose directory basename equalled the compose
+   * project name and, failing that, raise a toast — so a container compose had
+   * renamed (`My.App` → `myapp`), or one started with plain `docker run`, had
+   * no screen at all. The queue offered it a "Logs" button that did nothing.
+   * A container agentglass cannot place is still yours and still running.
+   */
+  const openContainer = useCallback((c: DockerContainer) => setOpenCtr(c), []);
 
   const actionsFor = (it: NowItem): NowAction[] => {
     const o = it.origin;
@@ -377,7 +399,7 @@ export function MobileApp() {
         return [{ label: "Review", kind: "acc", run: () => setOpenPr({ root: o.root, number: o.pr.number }) }];
       case "container":
         return [
-          { label: "Logs", run: () => openContainerRepo(o.container) },
+          { label: "Logs", run: () => openContainer(o.container) },
           { label: "Restart", kind: "acc", run: () => settle(`Restarted ${o.container.name}`, () => api.dockerRestart(o.container.id)) },
         ];
     }
@@ -386,7 +408,7 @@ export function MobileApp() {
   const openItem = (it: NowItem) => {
     const o = it.origin;
     if (o.t === "pr-red" || o.t === "pr-ready" || o.t === "pr-review") setOpenPr({ root: o.root, number: o.pr.number });
-    else if (o.t === "container") openContainerRepo(o.container);
+    else if (o.t === "container") openContainer(o.container);
     else if (o.t === "session") openSession(o.session);
   };
 
@@ -463,9 +485,14 @@ export function MobileApp() {
 
       <RepoScreen open={!!openRepo && !openPr} repo={openRepo}
         checkouts={openCheckouts} onPickCheckout={setOpenRepo}
-        containers={containers} stats={dstats}
+        containers={containers.filter((c) => ownerByContainer.get(c.id) === openRepo?.ref.root)} stats={dstats}
+        onOpenContainer={openContainer}
         onBack={() => setOpenRepo(null)} toast={toast} onRefresh={refreshAll}
         onOpenChatWith={openChatWith} />
+
+      <ContainerScreen open={!!openCtr} c={openCtr} stat={dstats.find((s) => s.id === openCtr?.id)}
+        project={openCtr ? ownerByContainer.get(openCtr.id) ?? null : null}
+        onBack={() => setOpenCtr(null)} toast={toast} onRefresh={refreshAll} />
 
       <MobilePr open={!!openPr} root={openPr?.root ?? ""} number={openPr?.number ?? null}
         onBack={() => { setOpenPr(null); refreshAll(); }} toast={toast}
@@ -514,7 +541,5 @@ function TabBtn({ id, tab, onPick, glyph, label, badge }: {
   );
 }
 
-/** The last path segment is what anybody calls a repo. */
-function repoName(r: GitRepoRef): string {
-  return r.root.split("/").filter(Boolean).pop() || r.root;
-}
+/** Naming a project is shared/projectKey.ts's job now — see baseName. This was
+ *  one of three copies of it on the phone, and they did not agree. */
