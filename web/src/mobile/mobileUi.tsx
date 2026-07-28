@@ -118,6 +118,24 @@ export const MOBILE_CSS = `
   backdrop-filter:blur(16px);padding:11px 15px calc(env(safe-area-inset-bottom) + 11px);
   display:flex;gap:9px;align-items:center}
 
+/* ── conversation ─────────────────────────────────────────────────── */
+/* A chat screen, sized to the viewport that is actually visible.
+   inset:0 measures the LARGE viewport, the one that assumes the browser's URL
+   bar is hidden — so on Chrome for Android, whose bar sits at the bottom and
+   comes back on every upward scroll, the composer spent half its life
+   underneath it. 100dvh is the viewport as it stands right now, which also
+   means the keyboard opening shortens the thread rather than pushing the
+   composer off the screen. */
+.mb-chat{bottom:auto;height:100dvh}
+/* The thread is the only thing that scrolls, and it is chained: flicking past
+   the last message must not start dragging the page behind it. */
+.mb-chat .bd{display:flex;flex-direction:column;gap:10px;overscroll-behavior:contain;
+  padding:14px 15px 10px}
+.mb-jump{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 84px);
+  z-index:2;font-size:11.5px;font-weight:600;padding:7px 14px;border-radius:999px;
+  color:#150c28;background:color-mix(in srgb,var(--primary) 90%,#000);
+  box-shadow:0 8px 20px -10px #000;border:none}
+
 /* ── sheet ────────────────────────────────────────────────────────── */
 .mb-scrim{position:fixed;inset:0;z-index:70;background:rgba(4,1,10,.66);opacity:0;pointer-events:none;
   transition:opacity .24s;backdrop-filter:blur(3px)}
