@@ -32,6 +32,17 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v.length ? v : null;
 }
 
+/** A label, bounded. `session_name` is the one caller-supplied string that ends
+ *  up in a display label rather than a capped payload field — it is persisted,
+ *  broadcast to every socket, and interpolated into the alert webhook body. An
+ *  unbounded one lets any local process (/ingest is tokenless by design) push a
+ *  megabyte through all three. Nothing legible is longer than this. */
+const MAX_LABEL = 120;
+function label(v: unknown): string | null {
+  const s = str(v);
+  return s === null ? null : s.slice(0, MAX_LABEL);
+}
+
 /** Read a nested key from an object safely. */
 function pick(obj: Record<string, unknown> | undefined, ...keys: string[]): unknown {
   if (!obj) return undefined;
@@ -198,7 +209,7 @@ export function normalize(body: IngestBody, opts?: { skipClockClamp?: boolean })
     usage,
     usage_is_cumulative: !hasPayloadUsage,
     summary: str(body.summary),
-    session_name: str(body.session_name),
+    session_name: label(body.session_name),
     timestamp: clampTimestamp(body.timestamp, opts?.skipClockClamp),
     payload,
     chat,
