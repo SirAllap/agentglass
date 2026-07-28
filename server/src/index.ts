@@ -668,6 +668,17 @@ function backfillProvider() {
 }
 backfillProvider();
 
+const WATCHDOG_MS = 100;
+const WATCHDOG_WARN_MS = 50;
+setInterval(() => {
+  const drift = performance.now() - (watchdogExpected as number);
+  if (drift > WATCHDOG_WARN_MS) {
+    console.warn(`⚠  event loop blocked for ~${Math.round(drift)}ms`);
+  }
+  watchdogExpected = performance.now() + WATCHDOG_MS;
+}, WATCHDOG_MS);
+let watchdogExpected = performance.now() + WATCHDOG_MS;
+
 // Retention: prune at boot and hourly so the DB stays lean but the 7d window
 // always has full history (see AGENTGLASS_RETENTION_DAYS in db.ts).
 function prune() {
