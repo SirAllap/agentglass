@@ -8,7 +8,7 @@
 // was to compare two themes side by side.
 import { expect, test } from "bun:test";
 import { bundledThemes } from "shiki";
-import { getHighlighter, ensureTheme, langFromPath, THEMES, themeLabel } from "../src/lib/highlight.ts";
+import { getHighlighter, ensureTheme, ensureLanguage, langFromPath, THEMES, themeLabel } from "../src/lib/highlight.ts";
 
 const CODE = 'const greeting = "hello"; // note';
 
@@ -36,6 +36,44 @@ for (const k of ["Instance", "Module"] as const) {
   };
 }
 
+/**
+ * The first render of a language is as good as the tenth.
+ *
+ * shiki's JavaScript engine — the one this module uses on purpose, because
+ * Oniguruma is wasm and the desktop CSP forbids it — initialises a grammar
+ * lazily on the first `codeToTokens`, and the first call's OUTPUT is what pays
+ * for it. On a cold process this very line came back as ONE token, then eight,
+ * then ten. A diff tokenizes line by line, so the visible symptom was the first
+ * line of the first file of that language rendering under-highlighted, all
+ * session, with nothing logged.
+ *
+ * This is also why this file used to fail intermittently: the warm state lives
+ * in the engine for the life of the process, so whichever test file tokenized
+ * first paid it, and bun does not fix the order.
+ *
+ * Deliberately NOT typescript, and deliberately the first test in the file:
+ * three tests below tokenize typescript, so by the time any of them has run the
+ * grammar is warm and a guard written against it would pass about nothing. This
+ * has to be the call that finds the grammar cold.
+ */
+const HS = 'main = putStrLn "hi" -- note';
+test("a grammar tokenizes correctly on its very first call, not its third", async () => {
+  const hl = await getHighlighter();
+  await ensureLanguage(hl, "haskell");
+  const { name } = await ensureTheme(hl, "github-dark", false);
+  const run = () => hl.codeToTokens(HS, { lang: "haskell" as never, theme: name! }).tokens.flat().length;
+
+  const first = run();
+  // Let it converge the way the old code only did after several renders.
+  let settled = first;
+  for (let i = 0; i < 5; i++) settled = run();
+
+  expect(`first=${first} settled=${settled}`).toBe(`first=${settled} settled=${settled}`);
+  // And the settled answer is a real tokenization, not one dull token that
+  // happens to be stable.
+  expect(settled).toBeGreaterThan(5);
+});
+
 test("every theme the picker offers is a real shiki bundled id", () => {
   // A typo, or an id shiki renames or drops in a future major, would otherwise
   // only ever show up as one entry in the menu quietly doing nothing.
@@ -54,7 +92,7 @@ test("the picker's light/dark grouping matches the theme's own type", async () =
 
 test("every offered theme tokenizes, in both plain and bold mode", async () => {
   const hl = await getHighlighter();
-  await hl.loadLanguage("typescript" as never);
+  await ensureLanguage(hl, "typescript");
   for (const bold of [false, true]) {
     for (const t of THEMES) {
       const { name, failed } = await ensureTheme(hl, t.id, bold);
@@ -63,14 +101,18 @@ test("every offered theme tokenizes, in both plain and bold mode", async () => {
       // does not throw and every token comes out with a colour.
       const tokens = hl.codeToTokens(CODE, { lang: "typescript" as never, theme: name! }).tokens.flat();
       expect(tokens.every((x) => !!x.color)).toBe(true);
-      expect(new Set(tokens.map((x) => x.color)).size).toBeGreaterThan(1);
+      // Named, because "Expected > 1, Received 1" over a 44-iteration loop says
+      // nothing about which theme produced it — that cost an afternoon once.
+      const colours = new Set(tokens.map((x) => x.color)).size;
+      expect(`${t.id} bold=${bold} colours=${colours > 1 ? "many" : "one"} tokens=${tokens.length}`)
+        .toBe(`${t.id} bold=${bold} colours=many tokens=${tokens.length}`);
     }
   }
 });
 
 test("bold mode bolds keywords the theme itself leaves plain", async () => {
   const hl = await getHighlighter();
-  await hl.loadLanguage("typescript" as never);
+  await ensureLanguage(hl, "typescript");
   const count = async (bold: boolean) => {
     const { name } = await ensureTheme(hl, "github-dark", bold);
     return hl.codeToTokens(CODE, { lang: "typescript" as never, theme: name! })
@@ -81,7 +123,7 @@ test("bold mode bolds keywords the theme itself leaves plain", async () => {
 
 test("a theme that cannot load falls back to one that is actually registered", async () => {
   const hl = await getHighlighter();
-  await hl.loadLanguage("typescript" as never);
+  await ensureLanguage(hl, "typescript");
   // An id shiki does not bundle stands in for the runtime failure we cannot
   // stage here — a theme chunk that 404s or never arrives.
   const { name, failed } = await ensureTheme(hl, "no-such-theme", true);
@@ -92,7 +134,7 @@ test("a theme that cannot load falls back to one that is actually registered", a
 
 test("the highlighter tokenizes without instantiating any WebAssembly", async () => {
   const hl = await getHighlighter();
-  await hl.loadLanguage("typescript" as never);
+  await ensureLanguage(hl, "typescript");
   const { name, failed } = await ensureTheme(hl, "gruvbox-dark-medium", true);
   expect(failed).toBeUndefined();
   const tokens = hl.codeToTokens(CODE, { lang: "typescript" as never, theme: name! }).tokens.flat();

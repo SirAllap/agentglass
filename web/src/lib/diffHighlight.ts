@@ -4,7 +4,7 @@
 // value to drop into <HiliteCtx.Provider>.
 import { createContext, useEffect, useMemo, useState } from "react";
 import type { Highlighter } from "shiki";
-import { getHighlighter, langFromPath, shikiTheme, ensureTheme, themeLabel } from "./highlight.ts";
+import { getHighlighter, langFromPath, shikiTheme, ensureTheme, ensureLanguage, themeLabel } from "./highlight.ts";
 
 export type Hilite = { hl: Highlighter | null; lang: string | null; theme: string | null };
 export const HiliteCtx = createContext<Hilite>({ hl: null, lang: null, theme: null });
@@ -37,7 +37,7 @@ export function useDiffHighlight(filePath?: string) {
   useEffect(() => {
     if (!hl || !lang || loadedLangs.has(lang)) return;
     let alive = true;
-    hl.loadLanguage(lang as never)
+    ensureLanguage(hl, lang)
       .then(() => { if (alive) { setLoadedLangs((s) => new Set(s).add(lang)); setLangError(null); } })
       .catch(() => { if (alive) setLangError(`The ${lang} grammar couldn't be loaded — this file is shown as plain text.`); });
     return () => { alive = false; };

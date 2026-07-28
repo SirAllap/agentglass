@@ -38,7 +38,7 @@ import { stepFileIndex } from "../lib/prNav.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { parseQuery, sortRows, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
-import { getHighlighter, shikiTheme } from "../lib/highlight.ts";
+import { getHighlighter, shikiTheme, ensureLanguage } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
 
 type Filter = "mine" | "review" | "all";
@@ -366,7 +366,9 @@ function CodeBlock({ text, lang }: { text: string; lang?: string }) {
     (async () => {
       try {
         const hl = await getHighlighter();
-        await hl.loadLanguage(id as never).catch(() => {});
+        // ensureLanguage, not loadLanguage: the grammar is warmed so the first
+        // line of the first file of this language is tokenized properly.
+        await ensureLanguage(hl, id).catch(() => {});
         if (!hl.getLoadedLanguages().includes(id)) return;
         const out = hl.codeToHtml(text, { lang: id as never, theme: shikiTheme() });
         if (live) setHtml(out);
