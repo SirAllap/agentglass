@@ -143,6 +143,9 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_path)")
 // at upsert and backfilled from the session's events for rows that predate it.
 try { db.exec("ALTER TABLE sessions ADD COLUMN project_path TEXT"); } catch { /* already present */ }
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_scope_ts ON events(project_path, timestamp)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_scope_ts ON sessions(project_path, last_seen)");
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_tool_open ON events(hook_event_type, tool_use_id, timestamp)");
 try { db.exec("ALTER TABLE sessions ADD COLUMN session_name TEXT"); } catch { /* already present */ }
 db.exec(`
   UPDATE sessions SET project_path = (
@@ -295,7 +298,7 @@ function safeJson(s: string): Record<string, unknown> {
 }
 
 const isToolPost = (t: string) => t === "PostToolUse" || t === "PostToolUseFailure";
-const isTerminal = (t: string) => t === "Stop" || t === "SessionEnd" || t === "SubagentStop";
+const isTerminal = (t: string) => t === "Stop" || t === "SessionEnd";
 
 // Tools that block on a human response — their Pre→Post gap measures human
 // reaction time, not tool execution time, so we never pair/aggregate it.

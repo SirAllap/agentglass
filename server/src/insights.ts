@@ -2,7 +2,7 @@
 // runaway loops, fast burn, high failure rates, overall spend velocity.
 // Computed from the full event history (better than the live buffer for loops).
 import type { Insight } from "../../shared/types.ts";
-import { db, sessionNameOf } from "./db.ts";
+import { db, scopeClause, sessionNameOf } from "./db.ts";
 
 const label = (app: string, sid: string) => {
   const name = sessionNameOf(sid);
@@ -16,18 +16,19 @@ export function getInsights(): Insight[] {
 
   // 1) Loops — the SAME command run over and over (real waste). Restricted to
   //    Bash on an identical command; iterative Edits to a file aren't a loop.
+  const { clause: scopeClause_sql, args: scopeArgs } = scopeClause();
   const loops = db
-    .query<{ source_app: string; session_id: string; cmd: string; n: number; last: number }, [number]>(
+    .query<{ source_app: string; session_id: string; cmd: string; n: number; last: number }, [number, ...string[]]>(
       `SELECT source_app, session_id, json_extract(payload,'$.tool_input.command') AS cmd,
               COUNT(*) n, MAX(timestamp) last
        FROM events
        WHERE hook_event_type = 'PreToolUse' AND tool_name = 'Bash'
-             AND cmd IS NOT NULL AND timestamp > ?
+             AND cmd IS NOT NULL AND timestamp > ?${scopeClause_sql}
        GROUP BY session_id, cmd
        HAVING n >= 6
        ORDER BY n DESC LIMIT 6`
     )
-    .all(now - 30 * 60_000);
+    .all(now - 30 * 60_000, ...scopeArgs);
   for (const l of loops) {
     out.push({
       id: `loop:${l.session_id}:${l.cmd}`,
@@ -42,12 +43,12 @@ export function getInsights(): Insight[] {
 
   // 2) Fast burn — a session spending a lot in the last 15 minutes.
   const spend = db
-    .query<{ source_app: string; session_id: string; cost: number; last: number }, [number]>(
+    .query<{ source_app: string; session_id: string; cost: number; last: number }, [number, ...string[]]>(
       `SELECT source_app, session_id, ROUND(SUM(cost_usd),2) cost, MAX(timestamp) last
-       FROM events WHERE timestamp > ? GROUP BY session_id
+       FROM events WHERE timestamp > ?${scopeClause_sql} GROUP BY session_id
        HAVING cost >= 15 ORDER BY cost DESC LIMIT 4`
     )
-    .all(now - 15 * 60_000);
+    .all(now - 15 * 60_000, ...scopeArgs);
   for (const s of spend) {
     out.push({
       id: `spend:${s.session_id}`,
@@ -62,15 +63,15 @@ export function getInsights(): Insight[] {
 
   // 3) High failure rate — errors relative to tool calls in the last hour.
   const fails = db
-    .query<{ source_app: string; session_id: string; errs: number; tools: number; last: number }, [number]>(
+    .query<{ source_app: string; session_id: string; errs: number; tools: number; last: number }, [number, ...string[]]>(
       `SELECT source_app, session_id, SUM(is_error) errs,
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) tools,
               MAX(timestamp) last
-       FROM events WHERE timestamp > ? GROUP BY session_id
+       FROM events WHERE timestamp > ?${scopeClause_sql} GROUP BY session_id
        HAVING tools >= 4 AND errs * 1.0 / tools > 0.3
        ORDER BY errs DESC LIMIT 4`
     )
-    .all(now - 60 * 60_000);
+    .all(now - 60 * 60_000, ...scopeArgs);
   for (const f of fails) {
     const pct = Math.round((f.errs / f.tools) * 100);
     out.push({
@@ -86,10 +87,10 @@ export function getInsights(): Insight[] {
 
   // 4) Spend velocity — overall $/hr over the last hour (context, info-level).
   const burn = db
-    .query<{ cost: number; toks: number }, [number]>(
-      `SELECT SUM(cost_usd) cost, SUM(input_tokens + output_tokens) toks FROM events WHERE timestamp > ?`
+    .query<{ cost: number; toks: number }, [number, ...string[]]>(
+      `SELECT SUM(cost_usd) cost, SUM(input_tokens + output_tokens) toks FROM events WHERE timestamp > ?${scopeClause_sql}`
     )
-    .get(now - 60 * 60_000);
+    .get(now - 60 * 60_000, ...scopeArgs);
   if (burn && burn.cost > 1) {
     out.push({
       id: "burn:hourly",
