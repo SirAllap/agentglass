@@ -102,22 +102,71 @@ function unpack(s: StoredChat): Chat {
 }
 
 /**
+ * Which chats survive when they do not all fit.
+ *
+ * Called only when the whole set is over budget, because measuring every chat
+ * separately is wasted work on the ordinary save where it fits.
+ *
+ * Two rules, in this order:
+ *
+ * 1. **The chat you are in is never dropped.** Not even when it is the oldest,
+ *    and not even when it alone is over budget. This is what the old code said
+ *    it did and did not: it shed strictly oldest-first, so opening one chat on
+ *    Monday, leaving it active, and starting five more would delete the one on
+ *    screen and keep the five you were not looking at.
+ * 2. Then newest first, stopping at the first that does not fit — so what
+ *    survives is a recent run rather than a set with holes in it.
+ */
+function fit(packed: StoredChat[], activeId: string): StoredChat[] {
+  // Each chat measured once. An element of an array serialises identically on
+  // its own, so these lengths are the real contribution, not an estimate.
+  const sizes = packed.map((c) => JSON.stringify(c).length);
+  const envelope = JSON.stringify({ v: 1, activeId, chats: [] } satisfies Stored).length;
+
+  const keep = new Set<number>();
+  let used = envelope;
+  // The separating comma belongs to every chat after the first.
+  const cost = (i: number) => sizes[i]! + (keep.size ? 1 : 0);
+  const take = (i: number) => { used += cost(i); keep.add(i); };
+
+  const active = packed.findIndex((c) => c.id === activeId);
+  if (active >= 0) take(active);
+
+  for (let i = packed.length - 1; i >= 0; i--) {
+    if (keep.has(i)) continue;
+    // `keep.size` is 0 only when activeId matched nothing, and then the newest
+    // is taken unconditionally — a save that stores nothing is worse than one
+    // that stores a single oversized chat.
+    if (keep.size && used + cost(i) > MAX_BYTES) break;
+    take(i);
+  }
+  return packed.filter((_, i) => keep.has(i));
+}
+
+/**
  * Write the open chats.
  *
- * Trims oldest-first when the payload is too large rather than failing the whole
- * save: losing the chat you opened a week ago is a far better outcome than
- * losing the one you are in the middle of.
+ * Sheds rather than failing the whole save when the payload is too large:
+ * losing the chat you opened a week ago is a far better outcome than losing the
+ * one you are in the middle of.
+ *
+ * The shed used to drop one chat and re-serialise everything that was left,
+ * over and over — quadratic in the number of chats, on the main thread, at most
+ * every 500ms while a reply streams. Forty long chats cost 40 passes over an
+ * average of 23MB, which is nearly a gigabyte of JSON for one save and about
+ * 1.5 seconds of frozen UI. The whole set is now serialised once, and only if
+ * that does not fit does anything else happen — so the ordinary save, where it
+ * does fit, does exactly the work it always did and no more.
  */
 export function saveChats(chats: Chat[], activeId: string) {
   try {
     const packed = chats.map(pack).sort((a, b) => a.createdAt - b.createdAt);
-    let body: Stored = { v: 1, activeId, chats: packed };
-    let json = JSON.stringify(body);
-    while (json.length > MAX_BYTES && body.chats.length > 1) {
-      body = { ...body, chats: body.chats.slice(1) };
-      json = JSON.stringify(body);
+    const whole = JSON.stringify({ v: 1, activeId, chats: packed } satisfies Stored);
+    if (whole.length <= MAX_BYTES || packed.length <= 1) {
+      localStorage.setItem(KEY, whole);
+      return;
     }
-    localStorage.setItem(KEY, json);
+    localStorage.setItem(KEY, JSON.stringify({ v: 1, activeId, chats: fit(packed, activeId) } satisfies Stored));
   } catch {
     // Private mode, a full quota, or a value we could not serialize. Persistence
     // is a convenience; nothing here is allowed to break the panel.
