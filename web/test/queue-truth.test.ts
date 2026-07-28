@@ -119,6 +119,10 @@ describe("the mark a snooze is keyed on", () => {
     ...base,
     sessions: [session()],
     containers: [ctr()],
+    // A halted checkout is in here so the time-invariance rule below covers it
+    // too: this card has no timestamp of its own and takes `now` as its sort
+    // key, which is exactly the shape that leaks a clock into a mark.
+    trees: { "/w/shop-api": { state: "merging", conflicts: ["/w/shop-api/a.ts"] } },
     prs: [{ root: "/r", repo: "shop-api", scope: "mine", pr: pr({ checks: rollup({ failure: 1, failing: [{ name: "test" }] as PrSummary["checks"]["failing"] }) }) }],
   };
 
@@ -158,6 +162,17 @@ describe("the mark a snooze is keyed on", () => {
       prs: [{ root: "/r", repo: "shop-api", scope: "mine", pr: pr({ checks: rollup({ failure: 1, failing: [{ name }] as PrSummary["checks"]["failing"] }) }) }],
     })[0]!;
     expect(red("unit").mark).not.toBe(red("e2e").mark);
+  });
+
+  it("moves when a conflict is resolved, so progress is not hidden", () => {
+    // Two of three resolved is news: the card should come back saying so rather
+    // than staying put because it is "the same repository".
+    const m = (n: number) => buildQueue({
+      ...base,
+      trees: { "/w/a": { state: "merging", conflicts: Array.from({ length: n }, (_, i) => `f${i}`) } },
+    })[0]!.mark;
+    expect(m(3)).not.toBe(m(1));
+    expect(m(3)).toBe(m(3));
   });
 
   it("moves when a container's exit code changes but not when its age does", () => {

@@ -39,6 +39,51 @@ const ctr = (over: Partial<DockerContainer> = {}): DockerContainer => ({
   runningFor: "2 hours", size: "0B", ...over,
 });
 
+describe("a repository git stopped part-way", () => {
+  // `treeState()` has reported this from the server since the beginning and the
+  // phone read `branch.name` and nothing else, so a checkout sitting on a
+  // half-finished rebase was indistinguishable from a clean one — on the one
+  // surface whose whole job is telling you something needs a person.
+  it("reaches the queue at all", () => {
+    const q = buildQueue({ ...base, trees: { "/w/shop-api": { state: "merging", conflicts: ["/w/shop-api/a.ts"] } } });
+    expect(q).toHaveLength(1);
+    expect(q[0]!.id).toBe("halt:/w/shop-api");
+    expect(q[0]!.origin.t).toBe("halt");
+  });
+
+  it("outranks everything except a blocked agent", () => {
+    // Nothing in that checkout moves again — not a commit, not a branch switch,
+    // not an agent working in it — until somebody decides.
+    const q = buildQueue({
+      ...base,
+      gates: [gate()],
+      containers: [ctr({ state: "exited", status: "Exited (1) 3 hours ago" })],
+      trees: { "/w/shop-api": { state: "rebasing", conflicts: [] } },
+    });
+    expect(q[0]!.origin.t).toBe("gate");
+    expect(q[1]!.origin.t).toBe("halt");
+  });
+
+  it("draws no age, because git does not record when it stopped", () => {
+    // `ts: now` made the header read "now" forever and, inside the band, made
+    // this item beat everything that had a real moment.
+    const q = buildQueue({ ...base, trees: { "/w/a": { state: "merging", conflicts: [] } } });
+    expect(q[0]!.ts).toBeUndefined();
+  });
+
+  it("names the repository, because the queue spans all of them", () => {
+    const q = buildQueue({ ...base, trees: { "/w/shop-api": { state: "merging", conflicts: [] } } });
+    expect(q[0]!.title).toContain("shop-api");
+  });
+
+  it("says nothing about clean checkouts, or about none at all", () => {
+    expect(buildQueue({ ...base, trees: { "/w/a": { state: "clean", conflicts: [] } } })).toHaveLength(0);
+    expect(buildQueue({ ...base, trees: { "/w/a": { conflicts: [] } } })).toHaveLength(0);
+    expect(buildQueue({ ...base, trees: {} })).toHaveLength(0);
+    expect(buildQueue(base)).toHaveLength(0);
+  });
+});
+
 describe("buildQueue", () => {
   it("puts a blocked agent above everything else", () => {
     const q = buildQueue({

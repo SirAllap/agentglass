@@ -1443,6 +1443,11 @@ export function mergeAbort(rootIn: unknown): GitActionResult {
   if (state === "rebasing") return run(root, ["rebase", "--abort"]);
   if (state === "cherry-picking") return run(root, ["cherry-pick", "--abort"]);
   if (state === "reverting") return run(root, ["revert", "--abort"]);
+  // A bisect is not a merge, and the fallthrough treated it as one: this ran
+  // `git merge --abort` and came back with "There is no merge to abort", so a
+  // repository left mid-bisect was a dead end on every surface — treeState()
+  // named the state, the header showed it, and nothing could leave it.
+  if (state === "bisecting") return run(root, ["bisect", "reset"]);
   return run(root, ["merge", "--abort"]);
 }
 

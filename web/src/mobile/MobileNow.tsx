@@ -170,7 +170,7 @@ export function NowStream({ items, actionsFor, onOpen }: {
         <div key={it.id} className={`mb-item ${toneClass(it.tone)}`} style={{ animationDelay: `${i * 55}ms` }}>
           <div className="ih">
             <span className="k">{it.kind}</span>
-            <span className="at">{fmtAgo(it.ts)}</span>
+            {it.ts != null && <span className="at">{fmtAgo(it.ts)}</span>}
           </div>
           {/* Title and subtitle are one target, not a 26px line of text with
               dead space under it. A queue card's whole point is that you can

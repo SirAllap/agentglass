@@ -68,6 +68,25 @@ describe("merge conflicts", () => {
     expect(gw.conflicts(repo).state).toBe("clean");
   });
 
+  it("gets a repository out of a bisect", () => {
+    // The fallthrough treated every state that was not a rebase, a cherry-pick
+    // or a revert as a merge, so this ran `git merge --abort` and came back
+    // with "There is no merge to abort". treeState() named the state and the
+    // header showed it; nothing could leave it.
+    const head = run(repo, "rev-parse", "HEAD").stdout.trim();
+    run(repo, "bisect", "start");
+    run(repo, "bisect", "bad", "HEAD");
+    run(repo, "bisect", "good", "HEAD~2");
+    expect(gw.conflicts(repo).state).toBe("bisecting");
+
+    const r = gw.mergeAbort(repo);
+    expect(r.ok).toBe(true);
+    expect(gw.conflicts(repo).state).toBe("clean");
+    // And back on the commit you started from, not on whichever one the search
+    // had checked out.
+    expect(run(repo, "rev-parse", "HEAD").stdout.trim()).toBe(head);
+  });
+
   it("aborts a merge and leaves the tree as it was", () => {
     const before = readFileSync(join(repo, "shared.txt"), "utf8");
     run(repo, "checkout", "-q", "-b", "second", "HEAD~1");

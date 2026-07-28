@@ -6,6 +6,7 @@ import { MobileDiff, FileRow } from "./MobileDiff.tsx";
 import { MobilePr } from "./MobilePr.tsx";
 import { projectRows } from "./projects.ts";
 import { listState, dockerState } from "./listState.ts";
+import { halt, type Halt } from "./haltState.ts";
 import type {
   GitRepoRef, WorkingTree, GitBranch, DockerContainer, DockerStat, PrSummary, GitFileChange,
   PrListResponse,
@@ -127,20 +128,42 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   const mine = containers;
   const ctrList = useMemo(() => dockerState(docker, mine.length), [docker, mine.length]);
 
+  /**
+   * What git is in the middle of, and what is in the way of finishing it.
+   *
+   * The tree already carried `branch.state` and this screen ignored it, so a
+   * checkout stopped half-way through a rebase rendered as "Nothing to commit —
+   * the working tree is clean", which is both wrong and the most confident
+   * possible way to be wrong. The conflicted paths need a second request, made
+   * only when there is actually something to say.
+   */
+  const [stopped, setStopped] = useState<Halt | null>(null);
+
   // Open on whatever is wrong: a container down beats uncommitted work beats
   // the pull request list. Landing on an empty tab is a wasted screen.
   useEffect(() => {
     if (!repo) return;
     setFacet(repo.down ? "containers" : repo.dirty ? "changes" : "prs");
-    setTree(null); setPrState(null); setMsg(""); setBranches(null);
+    setTree(null); setStopped(null); setPrState(null); setMsg(""); setBranches(null);
   }, [repo]);
 
   const loadTree = useCallback(() => {
     if (!root) return;
-    api.gitTree(root).then(setTree).catch(() => setTree(null));
+    api.gitTree(root).then(async (t) => {
+      setTree(t);
+      const state = t.branch.state;
+      const conflicts = state && state !== "clean"
+        ? await api.gitConflicts(root).then((c) => c.files).catch(() => [] as string[])
+        : [];
+      setStopped(halt({ state, conflicts }));
+    }).catch(() => { setTree(null); setStopped(null); });
   }, [root]);
 
-  useEffect(() => { if (open && facet === "changes") loadTree(); }, [open, facet, loadTree]);
+  // Whenever the screen is open, not only on the Changes facet. The banner sits
+  // above the tabs and has to be there whichever one you land on — a repository
+  // stopped part-way through a rebase would otherwise be invisible from the
+  // pull request list, which is exactly where a clean-looking checkout opens.
+  useEffect(() => { if (open) loadTree(); }, [open, facet, loadTree]);
   useEffect(() => {
     if (!open || facet !== "prs" || !root) return;
     setPrsLoading(true);
@@ -225,6 +248,23 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
           </div>
         )}
 
+        {stopped && (
+          <HaltBanner halt={stopped} rel={rel}
+            onAbort={async () => {
+              if (!(await ask({
+                title: stopped.abortLabel + "?", danger: true, confirmLabel: "Abandon",
+                body: stopped.state === "bisecting"
+                  ? "The search ends and the tree goes back to the commit you started from."
+                  : "The tree goes back to exactly how it was before this started. Anything already resolved is lost.",
+              }))) return;
+              await act("Abandoned — the tree is back where it was", () => api.gitMergeAbort(root));
+            }}
+            onContinue={() => act("Finished — the tree is clean", () => api.gitMergeContinue(root))}
+            onResolve={(path, side) => act(
+              `Kept ${side === "ours" ? "this branch's" : "the other side's"} version`,
+              () => api.gitResolve(root, [path], side))} />
+        )}
+
         <Seg sticky value={facet} onPick={setFacet} options={[
           { id: "changes", label: "Changes", n: repo?.dirty || null },
           { id: "prs", label: "Pull requests", n: prs.length || null },
@@ -233,8 +273,16 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
 
         {facet === "changes" && (
           changed.length === 0 ? (
+            // "The working tree is clean" is a false sentence in the middle of
+            // a rebase, and it is the confident kind of false: it is exactly
+            // what someone reads to decide it is safe to walk away.
+            stopped ? (
+              <Empty glyph="⚠" title="Nothing to commit yet"
+                body="Git is part-way through the operation above. Finish it or abandon it, and this becomes a normal working tree again." />
+            ) : (
             <Empty glyph="◈" title="Nothing to commit"
               body={`The working tree is clean${repo?.ahead ? ` — but you are ${repo.ahead} commit${repo.ahead > 1 ? "s" : ""} ahead of the remote.` : " and level with the remote."}`} />
+            )
           ) : (
             <>
               <div className="flex gap-2 mb-3">
@@ -471,3 +519,72 @@ export function ContainerScreen({ open, c, stat, project, onBack, toast, onRefre
     </>
   );
 }
+
+/**
+ * A repository git stopped half-way through, and the two ways out.
+ *
+ * Loud on purpose. This is not a status line: nothing in this checkout moves
+ * again — not a commit, not a branch switch, not an agent working in it — until
+ * somebody finishes or abandons, and the screen said "the working tree is
+ * clean" instead.
+ *
+ * Conflicts are listed with the two resolutions that need no editor and cover
+ * most of them: a lockfile, a generated migration, a file the other side
+ * deleted. Anything needing real judgement is a job for the desk, and saying so
+ * is better than a text box in a card.
+ */
+function HaltBanner({ halt: h, rel, onAbort, onContinue, onResolve }: {
+  halt: Halt;
+  rel: (abs: string) => string;
+  onAbort: () => void;
+  onContinue: () => void;
+  onResolve: (path: string, side: "ours" | "theirs") => void;
+}) {
+  return (
+    <div className="mb-halt">
+      <div className="hh">
+        <b>{h.title}</b>
+        <span>{h.sub}</span>
+      </div>
+      {h.conflicts.length > 0 && (
+        <div className="hc">
+          {h.conflicts.map((p) => (
+            <div className="cr" key={p}>
+              <span className="p" title={rel(p)}>{rel(p)}</span>
+              <Act small onAct={() => onResolve(p, "ours")}>Keep ours</Act>
+              <Act small onAct={() => onResolve(p, "theirs")}>Keep theirs</Act>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="ha">
+        <Act small full kind="no" onAct={onAbort}>{h.abortLabel}</Act>
+        {h.continueLabel && (
+          <Act small full kind="ok" disabled={!h.canContinue}
+            title={h.canContinue ? undefined : "Resolve everything above first"}
+            onAct={onContinue}>{h.continueLabel}</Act>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export const HALT_CSS = `
+.mb-halt{border-radius:16px;margin-bottom:13px;overflow:hidden;
+  background:color-mix(in srgb,var(--warning) 11%,var(--bg2));
+  border:1px solid color-mix(in srgb,var(--warning) 46%,transparent);
+  box-shadow:var(--mb-edge),0 12px 30px -18px color-mix(in srgb,var(--warning) 55%,#000)}
+.mb-halt .hh{padding:13px 15px 0}
+.mb-halt .hh b{display:block;font-size:13.5px;color:var(--warning);font-weight:650}
+.mb-halt .hh span{display:block;font-size:11.5px;color:var(--text3);margin-top:3px}
+.mb-halt .hc{margin:11px 15px 0;padding-top:9px;display:flex;flex-direction:column;gap:7px;
+  border-top:1px solid color-mix(in srgb,var(--border) 40%,transparent)}
+.mb-halt .cr{display:flex;align-items:center;gap:7px;min-width:0}
+/* The path shrinks and the two verbs do not: a long path must not push
+   "Keep theirs" off the right edge, which is where it ends up when every child
+   of a flex row is allowed to size itself. */
+.mb-halt .cr .p{flex:1;min-width:0;font-size:11px;color:var(--text2);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr}
+.mb-halt .cr .mb-btn{flex:none}
+.mb-halt .ha{display:flex;gap:9px;padding:13px 15px 14px}
+`;
