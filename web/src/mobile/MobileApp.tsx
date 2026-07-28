@@ -88,6 +88,10 @@ export function MobileApp() {
   const [trees, setTrees] = useState<Record<string, { branch: string; dirty: number; ahead: number; behind: number }>>({});
   const [containers, setContainers] = useState<DockerContainer[]>([]);
   const [dstats, setDstats] = useState<DockerStat[]>([]);
+  /** Whether docker answered at all, and what it said if not. The server
+   *  distinguishes "not installed" from "daemon down" from "no answer yet"; the
+   *  phone used to collapse all three into an empty list. */
+  const [docker, setDocker] = useState<{ available: boolean; error: string | null }>({ available: true, error: null });
   const [prs, setPrs] = useState<{ root: string; repo: string; pr: PrSummary; scope: "mine" | "review" }[]>([]);
   const [me, setMe] = useState("");
 
@@ -147,7 +151,13 @@ export function MobileApp() {
   }, []);
 
   const loadDocker = useCallback(() => {
-    api.dockerOverview().then((o) => setContainers(o.available ? o.containers : [])).catch(() => setContainers([]));
+    // `available` and `error` were dropped, so "docker is not running on this
+    // machine" and "this project has no containers" rendered as the same
+    // sentence — and only one of them is something you can act on.
+    api.dockerOverview().then((o) => {
+      setContainers(o.available ? o.containers : []);
+      setDocker({ available: o.available, error: o.error ?? null });
+    }).catch((e) => { setContainers([]); setDocker({ available: false, error: String(e) }); });
     api.dockerStats().then((r) => setDstats(r.stats)).catch(() => setDstats([]));
   }, []);
 
@@ -491,7 +501,7 @@ export function MobileApp() {
       <RepoScreen open={!!openRepo && !openPr} repo={openRepo}
         checkouts={openCheckouts} onPickCheckout={setOpenRepo}
         containers={containers.filter((c) => ownerByContainer.get(c.id) === openRepo?.ref.root)} stats={dstats}
-        onOpenContainer={openContainer}
+        onOpenContainer={openContainer} docker={docker}
         onBack={() => setOpenRepo(null)} toast={toast} onRefresh={refreshAll}
         onOpenChatWith={openChatWith} />
 
