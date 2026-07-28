@@ -10,6 +10,14 @@
 // Cache pricing: `cache_write` = 5m cache creation, `cache_read` = cache hits.
 // These drift — verify current numbers with each provider before trusting cost
 // (Anthropic, OpenAI, Google …), or point AGENTGLASS_PRICING at your own table.
+//
+// The OpenAI rows were last checked on 2026-07-28 against two independent
+// sources that agreed on every value: OpenAI's own per-model pages under
+// developers.openai.com/api/docs/models/, and BerriAI/litellm's
+// model_prices_and_context_window.json, which is the table a large number of
+// deployments already bill against. Where a value could not be corroborated it
+// was left alone — a guess that looks authoritative is worse than the honest
+// `unpriced` mark the UI already carries for a model with no row at all.
 
 export interface ModelPrice {
   match: string[]; // substrings matched against lowercased model_name
@@ -44,14 +52,49 @@ export const PRICE_TABLE: ModelPrice[] = [
   { match: ["fable"], label: "Fable", input: 10, output: 50, cache_write: 12.5, cache_read: 1.0 },
   { match: ["mythos"], label: "Mythos", input: 10, output: 50, cache_write: 12.5, cache_read: 1.0 },
 
-  // --- OpenAI (approx; verify at openai.com/pricing) ---
+  // --- OpenAI ---
+  //
+  // GPT-5 used to sit in the GPT-4.1 row, which meant every GPT-5 session was
+  // billed at 2/8 instead of 1.25/10 — input 60% too high, output 20% too low,
+  // cache reads 4x too high — and no 5.x variant existed at all, so a 5.6 or a
+  // 5-pro run fell into DEFAULT_PRICE, which is Sonnet's rate.
+  //
+  // ORDER IS LOAD-BEARING here, more than anywhere else in this table: `match`
+  // is a substring test and "gpt-5" is a substring of every one of these. The
+  // specific rows have to come first or they are unreachable.
+  //
+  // CACHE WRITES. OpenAI did not charge for them at all until the 5.6 family,
+  // which bills cache creation at 1.25x the uncached input rate. So a zero here
+  // is a fact about the model, not a gap in the table — see the test.
+  { match: ["gpt-5.6-luna"], label: "GPT-5.6 Luna", input: 1, output: 6, cache_write: 1.25, cache_read: 0.1 },
+  { match: ["gpt-5.6-terra"], label: "GPT-5.6 Terra", input: 2.5, output: 15, cache_write: 3.125, cache_read: 0.25 },
+  { match: ["gpt-5.6"], label: "GPT-5.6", input: 5, output: 30, cache_write: 6.25, cache_read: 0.5 },
+  { match: ["gpt-5.5-pro", "gpt-5.4-pro"], label: "GPT-5.5 Pro", input: 30, output: 180, cache_write: 0, cache_read: 3 },
+  { match: ["gpt-5.5"], label: "GPT-5.5", input: 5, output: 30, cache_write: 0, cache_read: 0.5 },
+  { match: ["gpt-5.4-nano"], label: "GPT-5.4 nano", input: 0.2, output: 1.25, cache_write: 0, cache_read: 0.02 },
+  { match: ["gpt-5.4-mini"], label: "GPT-5.4 mini", input: 0.75, output: 4.5, cache_write: 0, cache_read: 0.075 },
+  { match: ["gpt-5.4"], label: "GPT-5.4", input: 2.5, output: 15, cache_write: 0, cache_read: 0.25 },
+  { match: ["gpt-5.2-pro"], label: "GPT-5.2 Pro", input: 21, output: 168, cache_write: 0, cache_read: 0 },
+  { match: ["gpt-5.3", "gpt-5.2"], label: "GPT-5.2", input: 1.75, output: 14, cache_write: 0, cache_read: 0.175 },
+  { match: ["gpt-5.1-codex-mini"], label: "GPT-5.1 Codex mini", input: 0.25, output: 2, cache_write: 0, cache_read: 0.025 },
+  { match: ["gpt-5.1"], label: "GPT-5.1", input: 1.25, output: 10, cache_write: 0, cache_read: 0.125 },
+  { match: ["gpt-5-pro"], label: "GPT-5 Pro", input: 15, output: 120, cache_write: 0, cache_read: 0 },
+  { match: ["gpt-5-nano"], label: "GPT-5 nano", input: 0.05, output: 0.4, cache_write: 0, cache_read: 0.005 },
+  { match: ["gpt-5-mini"], label: "GPT-5 mini", input: 0.25, output: 2, cache_write: 0, cache_read: 0.025 },
+  // Catches gpt-5, gpt-5-codex, gpt-5-chat-latest — all one rate.
+  { match: ["gpt-5"], label: "GPT-5", input: 1.25, output: 10, cache_write: 0, cache_read: 0.125 },
   { match: ["gpt-4o-mini", "4o-mini"], label: "GPT-4o mini", input: 0.15, output: 0.6, cache_write: 0, cache_read: 0.075 },
   { match: ["gpt-4o", "chatgpt-4o", "4o"], label: "GPT-4o", input: 2.5, output: 10, cache_write: 0, cache_read: 1.25 },
   { match: ["gpt-4.1-nano", "4.1-nano"], label: "GPT-4.1 nano", input: 0.1, output: 0.4, cache_write: 0, cache_read: 0.025 },
   { match: ["gpt-4.1-mini", "4.1-mini"], label: "GPT-4.1 mini", input: 0.4, output: 1.6, cache_write: 0, cache_read: 0.1 },
-  { match: ["gpt-4.1", "gpt-5", "gpt-4.5"], label: "GPT-4.1", input: 2, output: 8, cache_write: 0, cache_read: 0.5 },
-  { match: ["o4-mini", "o3-mini", "o1-mini"], label: "o-mini", input: 1.1, output: 4.4, cache_write: 0, cache_read: 0.275 },
+  { match: ["gpt-4.1", "gpt-4.5"], label: "GPT-4.1", input: 2, output: 8, cache_write: 0, cache_read: 0.5 },
+  // o3-mini reads cache at half its input rate; o4-mini and o1-mini at a
+  // quarter. They shared a row and the difference was averaged away.
+  { match: ["o3-mini"], label: "o3-mini", input: 1.1, output: 4.4, cache_write: 0, cache_read: 0.55 },
+  { match: ["o4-mini", "o1-mini"], label: "o-mini", input: 1.1, output: 4.4, cache_write: 0, cache_read: 0.275 },
   { match: ["o1"], label: "o1", input: 15, output: 60, cache_write: 0, cache_read: 7.5 },
+  { match: ["o3-deep-research"], label: "o3 deep research", input: 10, output: 40, cache_write: 0, cache_read: 2.5 },
+  { match: ["o3-pro"], label: "o3-pro", input: 20, output: 80, cache_write: 0, cache_read: 0 },
   { match: ["o3"], label: "o3", input: 2, output: 8, cache_write: 0, cache_read: 0.5 },
   { match: ["gpt-4-turbo"], label: "GPT-4 Turbo", input: 10, output: 30, cache_write: 0, cache_read: 0 },
   { match: ["gpt-4"], label: "GPT-4", input: 30, output: 60, cache_write: 0, cache_read: 0 },
