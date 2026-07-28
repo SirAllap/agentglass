@@ -197,17 +197,18 @@ export const AgentGlassPlugin = async ({ directory, worktree }) => {
       }
 
       if (sessionID && childSessions.has(sessionID)) {
+        const parentSessionID = info?.parentID;
         const agentPayload = {
           agent_id: sessionID,
           agent_type: "subagent",
         };
-        if (info?.parentID) agentPayload.parent_session_id = info.parentID;
+        if (parentSessionID) agentPayload.parent_session_id = parentSessionID;
 
         switch (type) {
           case "session.created":
             await postEvent({
               source_app: sourceApp,
-              session_id: sessionID,
+              session_id: parentSessionID || sessionID,
               hook_event_type: "SubagentStart",
               payload: agentPayload,
               model_name: modelLabel(info),
@@ -216,7 +217,7 @@ export const AgentGlassPlugin = async ({ directory, worktree }) => {
           case "session.idle":
             await postEvent({
               source_app: sourceApp,
-              session_id: sessionID,
+              session_id: parentSessionID || sessionID,
               hook_event_type: "SubagentStop",
               payload: agentPayload,
             });

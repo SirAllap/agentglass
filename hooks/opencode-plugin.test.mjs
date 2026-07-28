@@ -70,3 +70,31 @@ test("OpenCode emits one Stop for a completed assistant turn", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("OpenCode subagent lifecycle events report the parent session_id", async () => {
+  const originalFetch = globalThis.fetch;
+  const sent = [];
+  globalThis.fetch = async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    return new Response("", { status: 200 });
+  };
+  try {
+    const plugin = await AgentGlassPlugin({ directory: "/tmp/project" });
+    const childInfo = { id: "child-1", parentID: "parent-1" };
+    await plugin.event({
+      event: { type: "session.created", properties: { sessionID: "child-1", info: childInfo } },
+    });
+    await plugin.event({
+      event: { type: "session.idle", properties: { sessionID: "child-1", info: childInfo } },
+    });
+
+    const start = sent.find((body) => body.hook_event_type === "SubagentStart");
+    const stop = sent.find((body) => body.hook_event_type === "SubagentStop");
+    assert.equal(start.session_id, "parent-1");
+    assert.equal(start.payload.agent_id, "child-1");
+    assert.equal(stop.session_id, "parent-1");
+    assert.equal(stop.payload.agent_id, "child-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
