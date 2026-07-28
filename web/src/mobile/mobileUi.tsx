@@ -143,12 +143,19 @@ export const MOBILE_CSS = `
 .mb-sheet{position:fixed;left:0;right:0;bottom:0;z-index:71;border-radius:24px 24px 0 0;
   background:linear-gradient(180deg,color-mix(in srgb,var(--bg3) 50%,var(--bg2)),var(--bg2));
   border-top:1px solid color-mix(in srgb,var(--primary) 38%,transparent);transform:translateY(100%);
-  transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:88vh;display:flex;flex-direction:column;
+  transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:88dvh;display:flex;flex-direction:column;
   box-shadow:0 -20px 50px -20px #000}
 .mb-sheet.on{transform:none}
 .mb-sheet .grab{width:40px;height:4px;border-radius:3px;flex:none;margin:10px auto 5px;
   background:color-mix(in srgb,var(--border) 72%,transparent)}
-.mb-sheet .in{padding:7px 16px calc(env(safe-area-inset-bottom) + 18px);overflow-y:auto}
+/* min-height:0 is what lets this scroll. A flex child will not shrink below its
+   content without it, so the sheet grew past its own max-height instead of
+   scrolling inside it — and the last rows were simply unreachable, which is
+   most obvious in landscape where there is half the height to work with.
+   The cap is dvh, not vh: vh measures the viewport as if the browser's URL bar
+   were hidden, which it usually is not. */
+.mb-sheet .in{padding:7px 16px calc(env(safe-area-inset-bottom) + 18px);overflow-y:auto;
+  min-height:0;flex:1;overscroll-behavior:contain}
 .mb-sheet h3{font-size:16px;font-weight:600}
 
 /* ── toasts ───────────────────────────────────────────────────────── */

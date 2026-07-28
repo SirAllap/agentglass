@@ -73,6 +73,29 @@ const texts = (cdp: CDP, sel: string) =>
   cdp.ev(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(sel)})].map(e=>e.textContent.trim()).slice(0,40))`)
     .then((s: string) => JSON.parse(s || "[]") as string[]);
 
+/**
+ * The screen the user is looking at.
+ *
+ * Parent screens stay mounted and open underneath their children (that is what
+ * stopped the diff closing itself), so "the screen that is on" is the LAST one
+ * in the document, not the first. Reading the first is how this harness came to
+ * compare a diff's title with the repository's and report a working Next button
+ * as broken.
+ */
+const TOP = `[...document.querySelectorAll(".mb-screen.on")].pop()`;
+
+/** Click inside the topmost screen only. */
+const tapTop = async (cdp: CDP, sel: string, needle?: string) => {
+  const hit = await cdp.ev(`(()=>{const s=${TOP}; if(!s) return false;
+    const els=[...s.querySelectorAll(${JSON.stringify(sel)})];
+    const el = ${needle ? `els.find(e=>e.textContent.includes(${JSON.stringify(needle)}))` : "els[0]"};
+    if(!el) return false; el.click(); return true;})()`);
+  await Bun.sleep(700);
+  return !!hit;
+};
+
+const topTitle = (cdp: CDP) => cdp.ev(`(${TOP})?.querySelector(".hd .t b")?.textContent || ""`);
+
 const tap = async (cdp: CDP, sel: string, needle?: string) => {
   const hit = await cdp.ev(`(()=>{const els=[...document.querySelectorAll(${JSON.stringify(sel)})];
     const el = ${needle ? `els.find(e=>e.textContent.includes(${JSON.stringify(needle)}))` : "els[0]"};
@@ -132,6 +155,20 @@ async function main() {
     const rows = await cdp.ev(`document.querySelectorAll("main button.w-full").length`);
     note("chats", "list is not the whole archive", rows < 40, `${rows} rows on the opening scope`);
     await shot(cdp, "02-chats");
+
+    // Each scope has to actually change the list, and All has to be the widest.
+    await tap(cdp, "main button", "All");
+    await Bun.sleep(900);
+    const allRows = await cdp.ev(`document.querySelectorAll("main button.w-full").length`);
+    note("chats", "All widens the list", allRows >= rows, `${rows} → ${allRows}`);
+    await tap(cdp, "main button", "Working");
+    await Bun.sleep(900);
+    const liveRows = await cdp.ev(`document.querySelectorAll("main button.w-full").length`);
+    note("chats", "Working narrows it", liveRows <= allRows, `${allRows} → ${liveRows}`);
+    note("chats", "an empty scope explains itself",
+      liveRows > 0 || await cdp.ev(`document.body.textContent.includes("Try a wider range")`));
+    await tap(cdp, "main button", "Today");
+    await Bun.sleep(900);
     await drain(cdp, "chats");
 
     // ---- a conversation ---------------------------------------------
@@ -162,6 +199,20 @@ async function main() {
       note("conversation", "composer offers a way to reply",
         await cdp.ev(`(()=>{const f=document.querySelector(".mb-chat .ft");if(!f)return false;
           return !!f.querySelector("textarea") && !f.textContent.includes("did not record where it ran");})()`));
+      // Reading history must not be interrupted by a poll landing, and there
+      // has to be a way back down again.
+      await cdp.ev(`(()=>{const b=document.querySelector(".mb-chat .bd");if(b) b.scrollTop = 0;})()`);
+      await Bun.sleep(400);
+      note("conversation", "scrolling up stays where you put it",
+        await cdp.ev(`(()=>{const b=document.querySelector(".mb-chat .bd");
+          return !!b && b.scrollTop < 40;})()`));
+      await Bun.sleep(6000);
+      note("conversation", "a poll does not yank you back down",
+        await cdp.ev(`(()=>{const b=document.querySelector(".mb-chat .bd");
+          return !!b && b.scrollTop < 200;})()`));
+      await shot(cdp, "03b-scrolled-up");
+      await cdp.ev(`(()=>{const b=document.querySelector(".mb-chat .bd");if(b) b.scrollTop = b.scrollHeight;})()`);
+      await Bun.sleep(500);
       note("conversation", "thread is scrolled to the newest turn",
         await cdp.ev(`(()=>{const b=document.querySelector(".mb-chat .bd");if(!b)return false;
           return b.scrollHeight - b.scrollTop - b.clientHeight < 80;})()`));
@@ -203,13 +254,34 @@ async function main() {
       // looks exactly like a click that did nothing.
       if (files.length && await tap(cdp, ".mb-screen.on .mb-row button")) {
         await Bun.sleep(2200);
-        note("diff", "the diff screen opens",
-          await cdp.ev(`[...document.querySelectorAll(".mb-screen.on .hd .t b")]
-            .some(b=>b.textContent.includes("."))`));
+        note("diff", "the diff screen opens", (await topTitle(cdp)).includes("."), await topTitle(cdp));
         const lines = await cdp.ev(`document.querySelectorAll(".mb-dl, .mb-diff-line, .mb-hunk").length`);
         const said = await cdp.ev(`(document.querySelector(".mb-screen.on")?.textContent || "")
           .includes("Nothing to show") ? "empty" : ""`);
         note("diff", "the diff renders lines", lines > 0 && !said, `${lines} line nodes ${said}`);
+        // Walking files from inside the diff, when there is more than one to
+        // walk — with a single changed file the footer correctly has no
+        // Prev/Next to press.
+        if (files.length > 1) {
+          const firstTitle = await topTitle(cdp);
+          await tapTop(cdp, ".ft button", "Next");
+          await Bun.sleep(1400);
+          const secondTitle = await topTitle(cdp);
+          note("diff", "Next moves to another file", !!secondTitle && secondTitle !== firstTitle,
+            `${firstTitle} → ${secondTitle}`);
+          note("diff", "the new file has content",
+            await cdp.ev(`(${TOP})?.querySelectorAll(".bd *").length > 5`));
+        } else {
+          note("diff", "a single changed file offers no Prev/Next",
+            await cdp.ev(`!(${TOP})?.querySelector(".ft")`), `${files.length} file`);
+        }
+        await tapTop(cdp, ".hd button", "Wrap");
+        await Bun.sleep(600);
+        note("diff", "the wrap toggle answers",
+          await cdp.ev(`[...(${TOP})?.querySelectorAll(".hd button")]
+            .some(b=>b.textContent.trim() === "Scroll")`));
+        await tapTop(cdp, ".ft button", "Prev");
+        await Bun.sleep(1200);
         await shot(cdp, "06-diff");
         await drain(cdp, "diff");
 
@@ -218,8 +290,7 @@ async function main() {
         await cdp.ev("history.back()");
         await Bun.sleep(900);
         note("back gesture", "closes the diff and keeps the repo",
-          await cdp.ev(`[...document.querySelectorAll(".mb-screen.on .hd .t b")]
-            .some(b=>b.textContent.trim() === ${JSON.stringify(process.env.AUDIT_REPO || "")} || !b.textContent.includes("."))`));
+          !(await topTitle(cdp)).includes("."), await topTitle(cdp));
         await drain(cdp, "back gesture");
       }
 
@@ -264,10 +335,18 @@ async function main() {
       note("settings", "sheet opens", await cdp.ev(`!!document.querySelector(".mb-sheet.on")`));
       note("settings", "reports what this machine spent",
         await cdp.ev(`(document.querySelector(".mb-sheet.on")?.textContent || "").includes("Spend today")`));
+      note("settings", "the sheet scrolls rather than running off the screen",
+        await cdp.ev(`(()=>{const s=document.querySelector(".mb-sheet.on");if(!s)return false;
+          const r=s.getBoundingClientRect();
+          return r.bottom<=innerHeight+1 && r.top>=-1;})()`));
       await shot(cdp, "08-settings");
       await drain(cdp, "settings");
-      await cdp.ev(`document.querySelector(".mb-scrim")?.click()`);
-      await Bun.sleep(600);
+      // The scrim that is actually up: every sheet keeps one mounted, and the
+      // first in the document belongs to a sheet that is closed.
+      await cdp.ev(`document.querySelector(".mb-scrim.on")?.click()`);
+      await Bun.sleep(700);
+      note("settings", "tapping outside closes it",
+        !(await cdp.ev(`!!document.querySelector(".mb-sheet.on")`)));
     }
 
     // ---- new chat form (opened, never sent) --------------------------
@@ -308,6 +387,35 @@ async function main() {
     note("offline", "comes back on its own",
       await cdp.ev(`(document.querySelector("header")?.textContent || "").includes("Live")`));
     await drain(cdp, "offline");
+
+    // ---- landscape ----------------------------------------------------
+    // A phone turned sideways is 915x412: the same app, half the height, and
+    // the composer still has to be reachable.
+    await tap(cdp, "nav button", "Chats");
+    await Bun.sleep(800);
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      width: 915, height: 412, deviceScaleFactor: PHONE.scale, mobile: true,
+    });
+    await Bun.sleep(900);
+    note("landscape", "still the phone application",
+      (await cdp.ev(`document.documentElement.dataset.layout`)) === "phone");
+    note("landscape", "nothing spills off the side",
+      await cdp.ev(`document.documentElement.scrollWidth <= innerWidth + 2`));
+    await shot(cdp, "13-landscape");
+    if (await tap(cdp, "main button.w-full")) {
+      await Bun.sleep(1400);
+      note("landscape", "the composer is still on screen",
+        await cdp.ev(`(()=>{const f=document.querySelector(".mb-chat .ft");if(!f)return false;
+          const r=f.getBoundingClientRect();return r.bottom<=innerHeight+1&&r.top>0;})()`));
+      await shot(cdp, "14-landscape-chat");
+      await cdp.ev("history.back()");
+      await Bun.sleep(700);
+    }
+    await drain(cdp, "landscape");
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      width: PHONE.w, height: PHONE.h, deviceScaleFactor: PHONE.scale, mobile: true,
+    });
+    await Bun.sleep(700);
 
     console.log(`\nscreenshots → ${SHOTS}`);
   } finally {
