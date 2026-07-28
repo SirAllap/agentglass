@@ -66,7 +66,7 @@ import {
 } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
-import { chatSend, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
+import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
@@ -1237,6 +1237,13 @@ const server = Bun.serve<WsData>({
         return json({ available: true, reviewFocus: "", files: [], error: String(e?.message || e) });
       }
     }
+    // Which sessions have a turn running right now. Read by any surface before
+    // it sends: a message into a session that is mid-turn interrupts it and is
+    // lost, and nothing else a client can poll answers this — the transcript
+    // arrives late and "seen recently" is equally true of a session that
+    // finished ten seconds ago. Deliberately outside the session cache: it
+    // changes on process lifetimes, not on events.
+    if (pathname === "/chat/active") return json({ ids: activeTurns() });
     if (pathname === "/session") {
       const id = url.searchParams.get("id") || "";
       if (!id) return json({ error: "not found" }, 404);

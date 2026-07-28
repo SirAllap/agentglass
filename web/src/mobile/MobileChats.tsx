@@ -31,6 +31,17 @@ import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/t
  *  a connection that died quietly does not leave you watching a dead screen. */
 const STALL_MS = 45_000;
 
+/**
+ * How long a session must be silent before its turn counts as finished.
+ *
+ * An agent mid-turn writes hook events all the way through — a tool starting,
+ * a tool finishing, a message. Thirty seconds of nothing is a turn that ended
+ * or a session waiting on a person, and in both cases the next message is ours
+ * to send. Short enough not to strand you behind your own last reply, long
+ * enough to sit through a slow build without deciding the agent has stopped.
+ */
+const IDLE_MS = 30_000;
+
 /** The three ranges the list offers, narrowest first. */
 const SCOPES: [ChatScope, string][] = [["live", "Working"], ["today", "Today"], ["all", "All"]];
 
@@ -203,6 +214,27 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
   const lastEvent = useRef(0);
   const [stalled, setStalled] = useState(false);
 
+  /**
+   * Whether the server has a turn running for this session.
+   *
+   * Asked rather than inferred. The transcript cannot answer it — it is written
+   * by the scanner and arrives a poll late, and a session that finished ten
+   * seconds ago looks exactly like one that is still thinking. The server
+   * spawned the process, so it knows, and this is the difference between
+   * queueing a message and interrupting a turn with it.
+   */
+  const [turnRunning, setTurnRunning] = useState(false);
+  const readActive = useCallback(() => {
+    api.chatActive()
+      .then((r) => setTurnRunning(r.ids.includes(id)))
+      .catch(() => { /* keep the last answer rather than guessing a new one */ });
+  }, [id]);
+
+  useEffect(() => {
+    readActive();
+    return pollWhileVisible(readActive, 3000);
+  }, [readActive]);
+
   useEffect(() => {
     load();
     return pollWhileVisible(() => {
@@ -273,21 +305,20 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
   const running = !!detail && sessionIsLive(detail);
 
   /**
-   * Whether this agent has a writer other than us right now.
+   * Whether a turn is in flight, and therefore whether sending would collide.
    *
-   * A session has exactly one writer. Sending into one that is already running
-   * — in a terminal, or from the desktop app — puts a second `claude` on the
-   * same transcript, and what comes back is the turn being interrupted: the
-   * reply is cut off and the message is lost. The desktop has refused to resume
-   * a live session since it learned this; the phone was still doing it.
+   * A session has exactly one writer. Sending into one that is mid-turn — from
+   * a terminal, from the desktop, or from this phone a moment ago — puts a
+   * second `claude` on the same transcript, and what comes back is the running
+   * turn interrupted: the reply cut off, the message lost.
    *
-   * `owned` is what keeps that from freezing the composer for two minutes after
-   * every reply: once a turn of ours has completed, the session is only "live"
-   * because of the events we just caused, and the next turn is ours to send.
+   * `turnRunning` is the server's own answer and the one that decides. Recent
+   * activity is kept as a second opinion for the seconds before the first
+   * answer arrives, and for a writer the server did not spawn — a session being
+   * driven from a terminal, which is exactly the case that used to eat replies.
    */
-  const owned = useRef(false);
-  const busyElsewhere = running && !owned.current && !live;
-  const busy = !!live || busyElsewhere;
+  const workingNow = !!detail && !detail.ended_at && Date.now() - detail.last_seen < IDLE_MS;
+  const busy = !!live || turnRunning || workingNow;
 
   const deliver = async (message: string) => {
     if (!cwd) return;
@@ -306,19 +337,26 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
       );
     } catch (e) {
       if (!(e instanceof DOMException && e.name === "AbortError")) {
+        const why = e instanceof ChatStreamError ? e.message : String(e);
+        // The server refused because a turn is already in flight. That is not a
+        // failure to report, it is a "not yet": put the message back at the
+        // front of the queue and let the drain send it when the agent is free.
+        if (/mid-turn|turn_in_flight/.test(why)) {
+          setTurnRunning(true);
+          setQueued((q) => [message, ...q]);
+          setSent(null);
+          setLive(null);
+          return;
+        }
         // A dropped connection is not a failed turn: the agent is very likely
         // still working, and telling someone their message failed when it did
         // not is how they end up sending it twice.
-        const why = e instanceof ChatStreamError ? e.message : String(e);
         setLive((p) => ({ text: p?.text ?? "", tools: p?.tools ?? [], error: why }));
       }
     } finally {
       streaming.current = false;
       abort.current = null;
       setStalled(false);
-      // We have now written to this session, so its liveness from here on is
-      // our own echo rather than someone else holding it. See `owned`.
-      owned.current = true;
       // Let the transcript take over: it is the same turn, written by the
       // scanner, and keeping our copy as well would show it twice. Held in a
       // ref so leaving the conversation cancels it rather than waking a
@@ -374,6 +412,15 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
 
       <div className="bd mb-thread" ref={scroller} onScroll={onScroll}>
         {!detail && <div className="text-[12px] py-6 text-center" style={{ color: "var(--text3)" }}>Loading the conversation…</div>}
+        {/* A chat started a moment ago: the first turn is running but the
+            transcript that carries it is written by the scanner and lands a
+            poll later. An empty thread here reads as a chat that failed to
+            start, which is what it looked like. */}
+        {detail && !turns.length && !live && !sent && (
+          <div className="text-[12px] py-6 text-center" style={{ color: "var(--text3)" }}>
+            {workingNow ? "Working on the first turn…" : "Nothing said yet."}
+          </div>
+        )}
 
         {turns.map((m, i) => <Bubble key={`${m.ts}-${i}`} role={m.role} text={m.text} ts={m.ts} />)}
         {sent && <Bubble role="user" text={sent} />}
@@ -401,9 +448,9 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
       )}
 
       <div className="ft" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
-        {busyElsewhere && (
+        {busy && !live && (
           <div className="text-[10.5px]" style={{ color: "var(--warning)" }}>
-            This agent is running somewhere else. What you send waits until it stops.
+            Working. What you send goes out when this turn ends.
           </div>
         )}
         {detail && !cwd ? (

@@ -284,6 +284,31 @@ async function main() {
       await Bun.sleep(500);
     }
 
+    // ---- the Now tab, and what it offers to do -----------------------
+    await tap(cdp, "nav button", "Now");
+    await Bun.sleep(1400);
+    note("now", "the queue lists something or says it is empty",
+      await cdp.ev(`(document.querySelector("main")?.textContent || "").trim().length > 40`));
+    const actions = await texts(cdp, "main button");
+    note("now", "offers an action per item, or none at all",
+      !actions.some((a) => a === ""), `${actions.length} buttons`);
+    await shot(cdp, "11-now-queue");
+    await drain(cdp, "now");
+
+    // ---- the server going away ---------------------------------------
+    // A companion that silently shows stale numbers when the machine it is
+    // watching has gone is worse than one that says so.
+    await cdp.ev(`window.__origFetch = window.fetch; window.fetch = () => Promise.reject(new Error("offline"))`);
+    await Bun.sleep(6000);
+    note("offline", "says the connection is gone",
+      await cdp.ev(`(document.querySelector("header")?.textContent || "").includes("Offline")`));
+    await shot(cdp, "12-offline");
+    await cdp.ev(`window.fetch = window.__origFetch; window.__audit = { errors: [], net: [] }`);
+    await Bun.sleep(5000);
+    note("offline", "comes back on its own",
+      await cdp.ev(`(document.querySelector("header")?.textContent || "").includes("Live")`));
+    await drain(cdp, "offline");
+
     console.log(`\nscreenshots → ${SHOTS}`);
   } finally {
     cdp.close();
