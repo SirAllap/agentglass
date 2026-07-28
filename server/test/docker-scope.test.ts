@@ -96,10 +96,23 @@ describe("applyScope", () => {
     expect(r.scope).toMatchObject({ matched: 0, showingAll: true });
   });
 
-  test("the working-dir label never reaches the wire shape", () => {
-    // It's a matching input, not something the panel renders.
+  test("the working-dir label travels with the container", () => {
+    /*
+     * This asserted the opposite until the companion needed it, and the old
+     * reason was sound as far as it went: the label is a matching input, not
+     * something the panel renders, so serving it was waste.
+     *
+     * What changed is who matches. The server is no longer the only one
+     * deciding which project a container belongs to — the phone groups by
+     * project as well, and with the label stripped it was left comparing a
+     * compose project name to a raw directory basename. Compose lowercases and
+     * drops punctuation, so `~/code/My.App` runs as `myapp` and no basename
+     * ever equals it; meanwhile two unrelated repositories both called `web`
+     * DO compare equal and claim each other's containers. That is the bug the
+     * owner hit, and this field is what closes it.
+     */
     const [only] = applyScope([c({ workingDir: "/home/x/code/myapp" })], key).containers;
-    expect(only).not.toHaveProperty("workingDir");
+    expect(only.workingDir).toBe("/home/x/code/myapp");
   });
 });
 

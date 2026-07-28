@@ -1,5 +1,6 @@
 import type { PendingGate, SessionRollup, PrSummary, DockerContainer } from "../../../shared/types.ts";
 import { sessionTitle } from "../lib/format.ts";
+import { baseName } from "../../../shared/projectKey.ts";
 
 /**
  * "What wants me right now", for a phone.
@@ -166,7 +167,9 @@ export function containerIsWrong(c: DockerContainer): boolean {
   return code == null ? true : code !== "0";
 }
 
+/** One rule for naming a project — see shared/projectKey.ts. This was the
+ *  third copy of it on the phone, and the three did not agree on separators or
+ *  on what to do when a path was empty. */
 function projectName(s: SessionRollup): string {
-  const p = s.project_path || "";
-  return p.split("/").filter(Boolean).pop() || s.source_app || "unknown";
+  return s.project_path ? baseName(s.project_path) : (s.source_app || "unknown");
 }

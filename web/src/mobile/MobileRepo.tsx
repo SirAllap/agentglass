@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { baseName } from "../../../shared/projectKey.ts";
 import { api } from "../lib/api.ts";
 import { Screen, Sheet, Seg, Empty, Row, Act, useAsk } from "./mobileUi.tsx";
 import { MobileDiff, FileRow } from "./MobileDiff.tsx";
@@ -66,7 +67,7 @@ export function RepoList({ repos, onOpen }: { repos: RepoSummary[]; onOpen: (r: 
   );
 }
 
-export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, containers, stats, onBack, toast, onRefresh, onOpenChatWith }: {
+export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, containers, stats, onBack, toast, onRefresh, onOpenContainer, onOpenChatWith }: {
   open: boolean;
   repo: RepoSummary | null;
   /** Every checkout of this project — the repo itself and its linked
@@ -78,6 +79,9 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   onBack: () => void;
   toast: (m: string, bad?: boolean) => void;
   onRefresh: () => void;
+  /** Opening a container is the shell's job: it needs no repo context, and one
+   *  that belongs to no project must still have a screen. */
+  onOpenContainer: (c: DockerContainer) => void;
   onOpenChatWith?: (cwd: string, prompt: string) => void;
 }) {
   const root = repo?.ref.root ?? "";
@@ -88,7 +92,6 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   const [msg, setMsg] = useState("");
   const [branches, setBranches] = useState<GitBranch[] | null>(null);
   const [openPr, setOpenPr] = useState<number | null>(null);
-  const [ctr, setCtr] = useState<DockerContainer | null>(null);
   const [diffAt, setDiffAt] = useState<number | null>(null);
 
   /** The project's name, which is the main checkout's — a worktree is the same
@@ -98,13 +101,10 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
     ? (checkouts.find((c) => !c.ref.worktreeOf)?.name ?? repo?.name ?? "")
     : (repo?.name ?? "");
 
-  // Containers belong to the project, not to the checkout you happen to be
-  // looking at: compose names them after the repository, so matching on a
-  // worktree's directory name finds nothing at all.
-  const mine = useMemo(
-    () => containers.filter((c) => (c.project ?? "") === projectName),
-    [containers, projectName]
-  );
+  // Already scoped by the shell, using the same rule the server uses. This
+  // used to compare a compose project name to a directory basename here, which
+  // is how one project's containers ended up under another's.
+  const mine = containers;
 
   // Open on whatever is wrong: a container down beats uncommitted work beats
   // the pull request list. Landing on an empty tab is a wasted screen.
@@ -291,7 +291,7 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
                       title={c.service || c.name}
                       sub={`${c.status}${c.ports ? " · " + c.ports : ""}`}
                       right={up && st ? `${Math.round(st.cpu)}% cpu` : c.state}
-                      onClick={() => setCtr(c)} />
+                      onClick={() => onOpenContainer(c)} />
                   );
                 })}
               </div>
@@ -320,9 +320,6 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
       <MobilePr open={openPr != null} root={root} number={openPr} onBack={() => setOpenPr(null)}
         toast={toast} onOpenChatWith={onOpenChatWith} />
 
-      <ContainerScreen open={!!ctr} c={ctr} stat={stats.find((s) => s.id === ctr?.id)}
-        onBack={() => setCtr(null)} toast={toast} onRefresh={onRefresh} />
-
       <Sheet open={!!branches} title="Switch branch" sub="Uncommitted changes come with you."
         onClose={() => setBranches(null)}>
         <div className="flex flex-col gap-2.5">
@@ -345,8 +342,11 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
 
 /** One container: how hard it is working, what it has been saying, and the two
  *  or three things you would actually do to it from a phone. */
-function ContainerScreen({ open, c, stat, onBack, toast, onRefresh }: {
+export function ContainerScreen({ open, c, stat, project, onBack, toast, onRefresh }: {
   open: boolean; c: DockerContainer | null; stat?: DockerStat;
+  /** The checkout this container belongs to, or null when agentglass cannot
+   *  place it — which it says rather than guessing. */
+  project?: string | null;
   onBack: () => void; toast: (m: string, bad?: boolean) => void; onRefresh: () => void;
 }) {
   const [logs, setLogs] = useState("");
@@ -372,7 +372,13 @@ function ContainerScreen({ open, c, stat, onBack, toast, onRefresh }: {
   return (
     <>
       {askDialog}
-    <Screen open={open} title={c?.name ?? ""} sub={c ? `${c.image} · ${c.status}` : undefined} onBack={onBack}
+    {/* The subtitle names the project, because a container screen you reached
+        from a queue card gives you no other way to know which one it is — and
+        when agentglass cannot place it, it says so rather than leaving the
+        question open. */}
+    <Screen open={open} title={c?.name ?? ""}
+      sub={c ? `${project ? baseName(project) : "no project"} · ${c.image} · ${c.status}` : undefined}
+      onBack={onBack}
       foot={c ? (up ? (
         <>
           <Act small full onAct={() => run(`Restarted ${c.name}`, () => api.dockerRestart(c.id))}>Restart</Act>

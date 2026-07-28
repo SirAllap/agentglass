@@ -5,6 +5,7 @@
 // they reach the CLI.
 
 import { basename } from "node:path";
+import { projectKey, inProject, type ProjectKey } from "../../shared/projectKey.ts";
 import type {
   DockerContainer, DockerStat, DockerImage, DockerVolume, DockerNetwork,
   DockerOverview, DockerScope, DockerActionResult, DockerCapability,
@@ -276,46 +277,36 @@ export function __expireDockerVersionForTest(): void {
 // for containers that carry just that.
 const WORKING_DIR_LABEL = "com.docker.compose.project.working_dir";
 
-// Compose lowercases the project name and drops everything outside [a-z0-9_-],
-// so a checkout at ~/code/My.App runs as project "myapp". Comparing the raw
-// basename would miss exactly those repos, which is the confusing half of the
-// bug rather than the obvious half.
-const normalizeProject = (s: string) => s.toLowerCase().replace(/[^a-z0-9_-]/g, "");
-
-export interface DockerScopeKey { dir: string; project: string }
-const trimSlash = (p: string) => p.replace(/\/+$/, "");
+/**
+ * The scope key and the matching rule live in shared/projectKey.ts now.
+ *
+ * They were correct here and copied nowhere — which was the problem. The phone
+ * needed the same answer and had no way to import it, so it grew three
+ * approximations of its own out of directory basenames, and those are what mix
+ * one project's containers into another's. One implementation, both surfaces.
+ */
+export type DockerScopeKey = ProjectKey;
 
 /** The open project expressed the way container labels express it, or null when
  *  this instance is machine-wide. */
 export function dockerScopeKey(root: string | null): DockerScopeKey | null {
-  if (!root) return null;
-  const dir = trimSlash(root);
-  return { dir, project: normalizeProject(basename(dir)) };
+  return root ? projectKey(root) : null;
 }
+
+export const containerInScope = inProject;
 
 /**
- * Whether a container belongs to the open project.
+ * The working-dir label travels with the container now.
  *
- * Either signal is enough. A directory match is authoritative — that stack was
- * literally launched from inside this checkout, whatever it named itself. A
- * name match is looser (two checkouts of the same repo in different directories
- * both answer to "myapp") but it is the only thing older compose versions give
- * us, and showing a sibling checkout's container is a far smaller failure than
- * showing none of them.
+ * It used to be stripped before serving, on the reasoning that it is a matching
+ * input rather than something the panel renders. That held while the server was
+ * the only thing matching. It is not: the companion has to decide which project
+ * a container belongs to as well, and without this it was left comparing a
+ * compose project name to a raw directory basename — which is how a container
+ * ends up filed under the wrong project, or under none.
  */
-export function containerInScope(c: { project: string | null; workingDir: string | null }, s: DockerScopeKey): boolean {
-  const wd = trimSlash(c.workingDir || "");
-  if (wd && (wd === s.dir || wd.startsWith(s.dir + "/"))) return true;
-  return !!s.project && normalizeProject(c.project || "") === s.project;
-}
-
-// Carries the working-dir label alongside the wire shape; it is a matching
-// input, not something the panel renders, so it is stripped before serving.
-type ScopedContainer = DockerContainer & { workingDir: string | null };
-const strip = (c: ScopedContainer): DockerContainer => {
-  const { workingDir: _wd, ...rest } = c;
-  return rest;
-};
+type ScopedContainer = DockerContainer;
+const strip = (c: ScopedContainer): DockerContainer => c;
 
 /**
  * Apply the scope to a container list.

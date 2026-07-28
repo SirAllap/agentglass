@@ -892,6 +892,19 @@ export interface DockerContainer {
   ports: string;
   project: string | null; // compose project
   service: string | null; // compose service
+  /**
+   * The directory the stack was brought up from, off compose's own
+   * `working_dir` label. Null when the container carries no such label.
+   *
+   * On the wire because deciding which project a container belongs to is not
+   * only the server's job any more — the companion has to group by project too,
+   * and without this it was left comparing a compose project name to a raw
+   * directory basename. Compose lowercases and strips punctuation, so
+   * `~/code/My.App` runs as `myapp` and no basename ever matches it, while two
+   * unrelated repositories both called `web` match each other. See
+   * shared/projectKey.ts, which is the one rule both surfaces use.
+   */
+  workingDir: string | null;
   runningFor: string;
   size: string;
 }
