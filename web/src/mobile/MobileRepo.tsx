@@ -5,8 +5,10 @@ import { Screen, Sheet, Seg, Empty, Row, Act, useAsk } from "./mobileUi.tsx";
 import { MobileDiff, FileRow } from "./MobileDiff.tsx";
 import { MobilePr } from "./MobilePr.tsx";
 import { projectRows } from "./projects.ts";
+import { listState, dockerState } from "./listState.ts";
 import type {
   GitRepoRef, WorkingTree, GitBranch, DockerContainer, DockerStat, PrSummary, GitFileChange,
+  PrListResponse,
 } from "../../../shared/types.ts";
 
 /**
@@ -67,7 +69,7 @@ export function RepoList({ repos, onOpen }: { repos: RepoSummary[]; onOpen: (r: 
   );
 }
 
-export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, containers, stats, onBack, toast, onRefresh, onOpenContainer, onOpenChatWith }: {
+export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, containers, stats, onBack, toast, onRefresh, onOpenContainer, docker, onOpenChatWith }: {
   open: boolean;
   repo: RepoSummary | null;
   /** Every checkout of this project — the repo itself and its linked
@@ -82,17 +84,35 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   /** Opening a container is the shell's job: it needs no repo context, and one
    *  that belongs to no project must still have a screen. */
   onOpenContainer: (c: DockerContainer) => void;
+  /** Whether docker answered, and why not. */
+  docker?: { available: boolean; error: string | null };
   onOpenChatWith?: (cwd: string, prompt: string) => void;
 }) {
   const root = repo?.ref.root ?? "";
   const [facet, setFacet] = useState<Facet>("changes");
   const [tree, setTree] = useState<WorkingTree | null>(null);
-  const [prs, setPrs] = useState<PrSummary[]>([]);
+  /**
+   * The pull request list, and everything the server said about it.
+   *
+   * This kept `.prs` and threw the rest away, so three completely different
+   * situations all rendered as "No open pull requests": `gh` missing or logged
+   * out (which the response calls out as `needsAuth` — its own type says "a
+   * first-class state, not an error toast"), a request that failed, and a cache
+   * that had not warmed yet. The app said a calm, confident, false thing in all
+   * three, and offered nothing to do about any of them.
+   */
+  const [prState, setPrState] = useState<PrListResponse | null>(null);
+  const prs = prState?.prs ?? [];
   const [prsLoading, setPrsLoading] = useState(false);
+  const prList = useMemo(
+    () => listState(prsLoading && !prState ? null : prState),
+    [prState, prsLoading]
+  );
   const [msg, setMsg] = useState("");
   const [branches, setBranches] = useState<GitBranch[] | null>(null);
   const [openPr, setOpenPr] = useState<number | null>(null);
   const [diffAt, setDiffAt] = useState<number | null>(null);
+  const [prNonce, setPrNonce] = useState(0);
 
   /** The project's name, which is the main checkout's — a worktree is the same
    *  project on another branch, and titling the screen with the worktree's
@@ -105,13 +125,14 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   // used to compare a compose project name to a directory basename here, which
   // is how one project's containers ended up under another's.
   const mine = containers;
+  const ctrList = useMemo(() => dockerState(docker, mine.length), [docker, mine.length]);
 
   // Open on whatever is wrong: a container down beats uncommitted work beats
   // the pull request list. Landing on an empty tab is a wasted screen.
   useEffect(() => {
     if (!repo) return;
     setFacet(repo.down ? "containers" : repo.dirty ? "changes" : "prs");
-    setTree(null); setPrs([]); setMsg(""); setBranches(null);
+    setTree(null); setPrState(null); setMsg(""); setBranches(null);
   }, [repo]);
 
   const loadTree = useCallback(() => {
@@ -123,9 +144,25 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   useEffect(() => {
     if (!open || facet !== "prs" || !root) return;
     setPrsLoading(true);
-    api.prList(root, "all", "open").then((r) => setPrs(r.prs)).catch(() => setPrs([]))
+    api.prList(root, "all", "open")
+      .then(setPrState)
+      .catch((e) => setPrState({ ok: false, repo: null, prs: [], fetchedAt: Date.now(), stale: false, loading: false, error: String(e) }))
       .finally(() => setPrsLoading(false));
-  }, [open, facet, root]);
+  }, [open, facet, root, prNonce]);
+
+  /**
+   * A cold cache is not an empty list.
+   *
+   * The server answers immediately with `loading: true` and no rows while it
+   * fetches behind the response, and this was a one-shot call that treated that
+   * as "none" and never asked again — so opening the tab a second too early
+   * meant no pull requests until you left the screen and came back.
+   */
+  useEffect(() => {
+    if (!open || facet !== "prs" || !prState?.loading) return;
+    const t = setTimeout(() => setPrNonce((n) => n + 1), 1_500);
+    return () => clearTimeout(t);
+  }, [open, facet, prState?.loading]);
 
   // The tree hands staged and unstaged back separately; the phone shows one
   // list with a switch per row, so they are merged and deduplicated here —
@@ -261,8 +298,17 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
         )}
 
         {facet === "prs" && (
-          prsLoading && !prs.length ? <div className="text-[11.5px] p-3" style={{ color: "var(--text3)" }}>Loading pull requests…</div>
-          : prs.length === 0 ? <Empty glyph="⑂" title="No open pull requests" body={`Nothing is waiting to land on ${repo?.name}.`} />
+          // Four different answers, and only one of them is "there are none".
+          // Which one is a decision about data, so listState() makes it.
+          prList.kind === "needs-auth"
+            ? <Empty glyph="⑂" title="GitHub is not signed in"
+                body={`agentglass reads pull requests through the gh CLI, and it is missing or logged out on this machine. Run \`gh auth login\` there and this fills in — it is not that ${repo?.name} has none.`} />
+          : prList.kind === "error"
+            ? <Empty glyph="⑂" title="Could not read pull requests" body={prList.message} />
+          : prList.kind === "loading"
+            ? <div className="text-[11.5px] p-3" style={{ color: "var(--text3)" }}>Reading pull requests from GitHub…</div>
+          : prList.kind === "empty"
+            ? <Empty glyph="⑂" title="No open pull requests" body={`Nothing is waiting to land on ${repo?.name}.`} />
           : (
             <div className="flex flex-col gap-2.5">
               {prs.map((p) => (
@@ -273,12 +319,21 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
                   right={`+${p.additions} −${p.deletions}`}
                   onClick={() => setOpenPr(p.number)} />
               ))}
+              {/* Only the first page arrived. Saying so beats a list that looks
+                  complete and is not. */}
+              {prList.kind === "rows" && prList.truncated && (
+                <div className="text-[10.5px] px-1 pt-1" style={{ color: "var(--text3)" }}>
+                  Showing {prs.length}{prState?.total ? ` of ${prState.total}` : ""} — open the repository on the desktop for the rest.
+                </div>
+              )}
             </div>
           )
         )}
 
         {facet === "containers" && (
-          mine.length === 0
+          ctrList.kind === "unavailable"
+            ? <Empty glyph="▣" title="Docker is not answering" body={ctrList.message} />
+          : ctrList.kind === "empty"
             ? <Empty glyph="▣" title="No containers" body={`Nothing from ${repo?.name} is running under Docker.`} />
             : (
               <div className="flex flex-col gap-2.5">
