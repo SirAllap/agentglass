@@ -137,6 +137,24 @@ export const MOBILE_CSS = `
    the last message must not start dragging the page behind it. */
 .mb-chat .bd{display:flex;flex-direction:column;gap:10px;overscroll-behavior:contain;
   padding:14px 15px 10px}
+/* Markdown inside a bubble. The renderer is the desktop's; what it needs here
+   is a code block that scrolls sideways rather than one that reflows a command
+   into prose, and a bubble that does not go wider than the thread because of
+   one long line. */
+.mb-md pre{overflow-x:auto;max-width:100%;border-radius:9px;padding:9px 11px;margin:7px 0;
+  font-size:11px;line-height:1.6;background:color-mix(in srgb,#000 40%,var(--bg2));
+  border:1px solid color-mix(in srgb,var(--border) 34%,transparent)}
+.mb-md code{font-size:11.5px;word-break:break-word}
+.mb-md :not(pre) > code{padding:1px 5px;border-radius:5px;
+  background:color-mix(in srgb,var(--primary) 15%,transparent);color:var(--primary-hover)}
+.mb-md ul,.mb-md ol{padding-left:18px;margin:5px 0}
+.mb-md li{margin:2px 0}
+.mb-md a{color:var(--primary-hover);word-break:break-word}
+.mb-md h1,.mb-md h2,.mb-md h3{font-size:13.5px;font-weight:650;margin:8px 0 4px}
+.mb-md blockquote{border-left:2px solid color-mix(in srgb,var(--border) 60%,transparent);
+  padding-left:9px;margin:6px 0;color:var(--text3)}
+.mb-md table{display:block;overflow-x:auto;max-width:100%}
+
 .mb-jump{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 84px);
   z-index:2;font-size:11.5px;font-weight:600;padding:7px 14px;border-radius:999px;
   color:#150c28;background:color-mix(in srgb,var(--primary) 90%,#000);

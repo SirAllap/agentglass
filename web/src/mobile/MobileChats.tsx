@@ -4,12 +4,13 @@ import { toolTarget } from "../lib/chatStore.ts";
 import { pollWhileVisible } from "../lib/poll.ts";
 import { fmtUsd, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
 import { sessionIsLive } from "../lib/derive.ts";
-import { scopeSessions, openingScope, type ChatScope } from "./chatList.ts";
+import { scopeSessions, openingScope, searchSessions, canResume, type ChatScope } from "./chatList.ts";
 import { MODELS, resumeModel } from "./resumeModel.ts";
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, asPermissionMode, permissionModeLabel,
   type PermissionModeId } from "./permissionMode.ts";
 import { useBackClose, Sheet } from "./mobileUi.tsx";
 import { baseName } from "../../../shared/projectKey.ts";
+import { Markdown } from "../lib/markdown.tsx";
 import { recentTurns, buildFeed, summariseRuns, shortTarget, type FeedEntry, type FeedItem, type FeedTool } from "./transcript.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
 
@@ -98,9 +99,21 @@ export function MobileChats({ sessions, onRefresh, onImmersive, openChat, onOpen
   /** Null until the first list arrives, so the opening scope is chosen from
    *  real sessions rather than from the empty array of the first render. */
   const [picked, setPicked] = useState<ChatScope | null>(null);
+  const [query, setQuery] = useState("");
   const scope = picked ?? openingScope(sessions);
   const setScope = (s: ChatScope) => setPicked(s);
-  const shown = useMemo(() => scopeSessions(sessions, scope), [sessions, scope]);
+  /**
+   * Searching looks at everything, not at the open scope.
+   *
+   * Someone typing a name is asking "where is that chat", and answering only
+   * out of the twenty rows already on screen is the least useful reading of the
+   * question — it is also the one that makes search feel broken, because the
+   * thing you are looking for is precisely the thing not in front of you.
+   */
+  const shown = useMemo(
+    () => (query.trim() ? searchSessions(sessions, query) : scopeSessions(sessions, scope)),
+    [sessions, scope, query]
+  );
   const liveCount = useMemo(() => scopeSessions(sessions, "live").length, [sessions]);
 
   const closeConversation = useCallback(() => { onOpenChat(null); onRefresh(); }, [onOpenChat, onRefresh]);
@@ -139,10 +152,27 @@ export function MobileChats({ sessions, onRefresh, onImmersive, openChat, onOpen
         + New chat
       </button>
 
+      {/* There was no search, and the list only ever held forty rows, so a chat
+          from three days ago was not reachable by any route at all. */}
+      <div className="flex items-center gap-2 rounded-xl px-3"
+        style={{ minHeight: 46, background: "color-mix(in srgb, var(--bg2) 78%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+        <span className="text-[14px] shrink-0" style={{ color: "var(--text3)" }}>⌕</span>
+        <input value={query} onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search every chat" autoComplete="off" aria-label="Search chats"
+          className="flex-1 min-w-0 bg-transparent outline-none"
+          style={{ fontSize: 16, color: "var(--text)" }} />
+        {!!query && (
+          <button onClick={() => setQuery("")} aria-label="Clear search"
+            className="shrink-0 grid place-items-center"
+            style={{ minWidth: 34, minHeight: 44, color: "var(--text3)", fontSize: 13 }}>✕</button>
+        )}
+      </div>
+
       {/* Working, today, everything. The tab opens on the narrowest of these
           that has anything in it, so the first screen is the agents you could
-          speak to rather than a scroll through the archive. */}
-      <div className="flex gap-1.5">
+          speak to rather than a scroll through the archive. Hidden while
+          searching: a scope would only narrow an answer you asked for in full. */}
+      <div className="flex gap-1.5" hidden={!!query.trim()}>
         {SCOPES.map(([id, label]) => {
           const on = scope === id;
           return (
@@ -162,9 +192,13 @@ export function MobileChats({ sessions, onRefresh, onImmersive, openChat, onOpen
 
       {!shown.length && (
         <div className="rounded-2xl px-5 py-12 text-center" style={{ background: "color-mix(in srgb, var(--bg2) 45%, transparent)", border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)" }}>
-          <div className="text-[14px]">{sessions.length ? "Nothing here" : "No agents yet"}</div>
+          <div className="text-[14px]">
+            {query.trim() ? "No chat matches that" : sessions.length ? "Nothing here" : "No agents yet"}
+          </div>
           <div className="text-[12px] mt-1.5" style={{ color: "var(--text2)" }}>
-            {sessions.length ? "Try a wider range above." : "Start one and it keeps running on your machine."}
+            {query.trim()
+              ? "Search looks at every chat, not just the range above."
+              : sessions.length ? "Try a wider range above." : "Start one and it keeps running on your machine."}
           </div>
         </div>
       )}
@@ -182,6 +216,9 @@ export function MobileChats({ sessions, onRefresh, onImmersive, openChat, onOpen
             </div>
             <div className="flex items-center gap-x-3 text-[11px] tabular-nums" style={{ color: "var(--text2)" }}>
               <span className="truncate">{baseName(s.cwd_path || s.project_path || s.source_app)}</span>
+              {/* It cannot be picked up in place — a fact about the record, not
+                  a reason to leave you to discover it by opening it. */}
+              {!canResume(s) && <span className="shrink-0" style={{ color: "var(--text3)" }}>read-only</span>}
               <span className="ml-auto shrink-0">{modelLabelOf(s.model_name)}</span>
               <span className="shrink-0">{fmtUsd(s.cost_usd)}</span>
             </div>
@@ -691,7 +728,14 @@ function Bubble({ role, text, ts, streaming, tools, error, pending }: {
             {tools.slice(-4).map((t, i) => <span key={i} className="truncate">· {t}</span>)}
           </div>
         )}
-        <div className="text-[13.5px] leading-snug whitespace-pre-wrap break-words">{text}</div>
+        {/* Half of what an agent says is code. Rendered as plain text, a
+            fenced block arrived as literal backticks reflowed in a proportional
+            font — unreadable exactly where being readable matters. The desktop
+            has had this renderer all along; the phone simply never used it.
+            A message you typed stays verbatim: your own text is not markup. */}
+        <div className="text-[13.5px] leading-snug break-words mb-md">
+          {mine ? <span className="whitespace-pre-wrap">{text}</span> : <Markdown text={text} />}
+        </div>
         {streaming && <span className="inline-block ml-0.5 animate-pulse">▍</span>}
         {error && <div className="text-[11px] pt-1" style={{ color: "var(--error)" }}>{error}</div>}
         {ts && <div className="text-[9.5px] pt-1" style={{ color: "var(--text3)" }}>{fmtAgo(ts)}</div>}

@@ -1,7 +1,7 @@
 // The phone's Chats tab listed every session ever recorded, which on a real
 // machine is a hundred rows of yesterday. These pin the narrowing.
 import { describe, expect, test } from "bun:test";
-import { scopeSessions, openingScope, isTalkable } from "../src/mobile/chatList.ts";
+import { scopeSessions, openingScope, canResume, searchSessions } from "../src/mobile/chatList.ts";
 
 const NOW = 1_800_000_000_000;
 const s = (id: string, agoMs: number, extra: Record<string, unknown> = {}) => ({
@@ -38,12 +38,31 @@ describe("scopeSessions", () => {
       .toEqual(["working", "ended", "an-hour-ago", "yesterday"]);
   });
 
-  test("synthetic rollups are not conversations and never listed", () => {
+  test("a synthetic model name no longer hides a session", () => {
+    /*
+     * This asserted the opposite, and the reasoning behind it was half right:
+     * some rows really are telemetry rollups with no transcript behind them,
+     * and listing those is noise.
+     *
+     * The half that was wrong is how it spotted one. `model_name` is the last
+     * model-bearing line in the transcript, and Claude Code writes
+     * `<synthetic>` for an injected or interrupted turn — so a real
+     * conversation that happened to end on one vanished from EVERY scope,
+     * including "all", with nothing anywhere to say it had. A list you cannot
+     * trust to contain your chat is worse than a longer list, and the wall of
+     * rows this was aimed at is what search and the two narrower scopes are
+     * for.
+     */
     const withSynthetic = [...fleet, s("telemetry", 10_000, { model_name: "<synthetic>" })];
-    expect(isTalkable(withSynthetic[4]!)).toBe(false);
-    for (const scope of ["live", "today", "all"] as const) {
-      expect(scopeSessions(withSynthetic, scope, NOW).some((x) => x.session_id === "telemetry")).toBe(false);
-    }
+    expect(scopeSessions(withSynthetic, "all", NOW).some((x) => x.session_id === "telemetry")).toBe(true);
+  });
+
+  test("a session with nowhere to run is listed, and marked", () => {
+    // It cannot be resumed in place; that is a fact about the record, not a
+    // reason to hide the transcript.
+    expect(canResume(s("orphan", 10_000))).toBe(false);
+    expect(canResume(s("placed", 10_000, { cwd_path: "/home/x/code/app" }))).toBe(true);
+    expect(scopeSessions([s("orphan", 10_000)], "all", NOW)).toHaveLength(1);
   });
 });
 
