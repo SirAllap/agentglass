@@ -67,12 +67,29 @@ export const WEB_UI_ENABLED = DIST !== null;
  *  conventional :4000 — see SERVER in web/src/lib/api.ts. */
 const MARKER = "<script>window.__AGENTGLASS_SAME_ORIGIN__=true</script>";
 
-/** Plant the marker in index.html on its way out. Injected at serve time, not
+/**
+ * The off-box marker: this page is leaving the machine.
+ *
+ * Which application a device gets used to be decided in the browser, from
+ * viewport width and pointer type (web/src/lib/viewport.ts). That reads the
+ * wrong thing. A phone asking for the desktop site, a saved layout override, a
+ * tablet-width window — any of them widens the measurement, and the cockpit
+ * mounts on a device that reached us over the network: a terminal, git write
+ * access and docker control, behind a link that was scanned off a screen.
+ *
+ * The connection knows what the viewport cannot. A request that did not come
+ * from loopback is remote, whatever the browser says about itself, and the
+ * bundle cannot argue with a marker that was never sent.
+ */
+const REMOTE_MARKER = "<script>window.__AGENTGLASS_REMOTE__=true</script>";
+
+/** Plant the markers in index.html on its way out. Injected at serve time, not
  *  build time, so the SAME build still works under vite preview or the desktop
  *  shell's static server — pages those serve never carry the marker. */
-export function injectSameOrigin(html: string): string {
+export function injectSameOrigin(html: string, remote = false): string {
+  const planted = MARKER + (remote ? REMOTE_MARKER : "");
   const head = html.indexOf("</head>");
-  return head >= 0 ? html.slice(0, head) + MARKER + html.slice(head) : MARKER + html;
+  return head >= 0 ? html.slice(0, head) + planted + html.slice(head) : planted + html;
 }
 
 /** Map a request path to a real file under dist, or null. Clamped the same way
@@ -99,20 +116,21 @@ export function resolveAsset(pathname: string, dist: string | null = DIST): stri
 
 /** index.html, marker planted. Never cached: it's the one file whose content
  *  names the (hashed) assets, so a stale copy pins a whole stale UI. */
-function indexResponse(dist: string, cors: Record<string, string>): Response {
-  const html = injectSameOrigin(readFileSync(resolve(dist, "index.html"), "utf8"));
+function indexResponse(dist: string, cors: Record<string, string>, remote: boolean): Response {
+  const html = injectSameOrigin(readFileSync(resolve(dist, "index.html"), "utf8"), remote);
   return new Response(html, {
     headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", ...cors },
   });
 }
 
 /** Serve `pathname` as a static UI file, or null when it maps to none (an API
- *  route, a WS upgrade — anything that isn't a real file under web/dist). */
-export function serveWeb(pathname: string, cors: Record<string, string>): Response | null {
+ *  route, a WS upgrade — anything that isn't a real file under web/dist).
+ *  `remote` says the request came from off-box; only index.html cares. */
+export function serveWeb(pathname: string, cors: Record<string, string>, remote = false): Response | null {
   if (!DIST) return null;
   const abs = resolveAsset(pathname);
   if (!abs) return null;
-  if (abs === resolve(DIST, "index.html")) return indexResponse(DIST, cors);
+  if (abs === resolve(DIST, "index.html")) return indexResponse(DIST, cors, remote);
   // Bun.file knows the MIME from the extension. Vite content-hashes everything
   // under assets/, which is what makes the far-future cache safe; the rest
   // (favicon and friends) revalidates.
@@ -124,7 +142,7 @@ export function serveWeb(pathname: string, cors: Record<string, string>): Respon
 
 /** The SPA fallback: index.html for a UI deep-link. The caller has already let
  *  every API route decline, and only calls this for a GET that accepts html. */
-export function serveIndex(cors: Record<string, string>): Response | null {
+export function serveIndex(cors: Record<string, string>, remote = false): Response | null {
   if (!DIST) return null;
-  return indexResponse(DIST, cors);
+  return indexResponse(DIST, cors, remote);
 }

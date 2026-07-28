@@ -82,7 +82,9 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
     <>
       {askDialog}
       <Screen
-        open={open && diffAt == null}
+        // Stays open under its own file diff, which is drawn on top of it —
+        // closing it here made the diff open and shut in the same frame.
+        open={open}
         title={d ? `#${d.number} · ${d.author}` : number != null ? `#${number}` : ""}
         sub={d ? `${d.headRefName} → ${d.baseRefName}` : undefined}
         onBack={onBack}

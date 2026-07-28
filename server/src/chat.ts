@@ -299,9 +299,60 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   return chatStreamPlanned(plan);
 }
 
+/**
+ * Sessions with a turn running right now, and how many runs are on each.
+ *
+ * A session has exactly one writer, and nothing a client can read tells it
+ * whether that writer is busy. The transcript is written by the scanner and
+ * arrives late; "last seen recently" is true of a session that finished ten
+ * seconds ago as well as one that is mid-thought. Guessing from that is how the
+ * phone came to send a second `claude -p --resume` into a session that was
+ * already answering, which interrupts the running turn and loses the reply.
+ *
+ * We spawned the process, so we simply know. Counted rather than flagged
+ * because the desktop and the phone can both be talking to the same session,
+ * and the first one to finish must not clear the flag for the other.
+ */
+const ACTIVE = new Map<string, number>();
+
+function markActive(id: string, on: boolean): void {
+  if (!id) return;
+  const n = (ACTIVE.get(id) ?? 0) + (on ? 1 : -1);
+  if (n > 0) ACTIVE.set(id, n);
+  else ACTIVE.delete(id);
+}
+
+/** Is a turn in flight for this session? */
+export const turnActive = (id: string): boolean => ACTIVE.has(id);
+
+/** Every session with a turn in flight. */
+export const activeTurns = (): string[] => [...ACTIVE.keys()];
+
+/** The session id `claude` reports in its opening frame, if this chunk carries
+ *  one. A new chat has no id until then — and it is the id the client will use
+ *  to resume, so it is the one that has to be marked busy. */
+export function sessionIdIn(chunk: string): string | null {
+  const at = chunk.indexOf('"session_id"');
+  if (at < 0) return null;
+  const m = /"session_id"\s*:\s*"([0-9a-fA-F-]{8,})"/.exec(chunk);
+  return m ? m[1]! : null;
+}
+
 function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
   const bin = claudeBin()!;
   const { dir, text: msgText, model: m, mode: pm, resumeId: rid, images: imgs } = plan;
+
+  // The guard itself, not just the advice. A client that asks anyway — an old
+  // build, a stale tab, a retry — would otherwise put a second `claude` on a
+  // transcript that is being written, and the visible result is the running
+  // turn interrupted and both answers lost. Refusing costs one message that
+  // has to be sent again; allowing it costs the conversation.
+  if (rid && turnActive(rid)) {
+    return new Response(JSON.stringify({
+      error: "that session is mid-turn — wait for it to finish, or your message will interrupt it",
+      code: "turn_in_flight",
+    }), { status: 409, headers: { "content-type": "application/json", ...CORS } });
+  }
 
   const args = [bin, "-p", "--output-format", "stream-json", "--verbose", "--model", m];
   // Same flag both engines use. Verified it applies to `-p` as well as to an
@@ -341,6 +392,14 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
 
   const enc = new TextEncoder();
   let cancelled = false;
+  // A resumed turn is busy on a known session from this moment; a new chat
+  // becomes busy on the id its first frame announces. `released` keeps the
+  // bookkeeping balanced however the stream ends — finished, errored, or
+  // cancelled from the browser.
+  let busyId = rid;
+  let released = false;
+  const release = () => { if (!released) { released = true; markActive(busyId, false); } };
+  if (busyId) markActive(busyId, true);
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
@@ -377,16 +436,29 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
           else proc.kill();
         } catch { /* gone */ }
       }, STARTUP_TIMEOUT_MS);
+      const dec = new TextDecoder();
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (value) { firstByte = true; clearTimeout(watchdog); controller.enqueue(value); }
+          if (value) {
+            firstByte = true;
+            clearTimeout(watchdog);
+            // A chat with no resume id learns its session from the first frame.
+            // Until that lands nobody can address this session, so there is
+            // nothing to collide with; from here on there is.
+            if (!busyId) {
+              const found = sessionIdIn(dec.decode(value, { stream: true }));
+              if (found) { busyId = found; markActive(busyId, true); }
+            }
+            controller.enqueue(value);
+          }
         }
       } catch { /* closed */ }
       clearTimeout(watchdog);
       stopKeepalive();
       const code = await proc.exited;
+      release();
       // The reader loop ends on cancel too, and a cancelled controller throws
       // on enqueue/close — which would surface as an unhandled rejection on
       // every "stop" the user presses.
@@ -399,6 +471,7 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
     },
     cancel() {
       cancelled = true;
+      release();
       try {
         if (setsid) process.kill(-proc.pid, "SIGTERM"); // the group, not just claude
         else proc.kill();

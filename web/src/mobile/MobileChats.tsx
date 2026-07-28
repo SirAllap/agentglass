@@ -3,7 +3,10 @@ import { api, ChatStreamError } from "../lib/api.ts";
 import { toolTarget } from "../lib/chatStore.ts";
 import { pollWhileVisible } from "../lib/poll.ts";
 import { fmtUsd, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
+import { sessionIsLive } from "../lib/derive.ts";
+import { scopeSessions, openingScope, type ChatScope } from "./chatList.ts";
 import { MODELS, resumeModel } from "./resumeModel.ts";
+import { recentTurns, buildFeed, summariseRuns, shortTarget, type FeedEntry, type FeedItem, type FeedTool } from "./transcript.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
 
 /**
@@ -28,15 +31,69 @@ import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/t
  *  a connection that died quietly does not leave you watching a dead screen. */
 const STALL_MS = 45_000;
 
+/**
+ * How long a session must be silent before its turn counts as finished.
+ *
+ * An agent mid-turn writes hook events all the way through — a tool starting,
+ * a tool finishing, a message. Thirty seconds of nothing is a turn that ended
+ * or a session waiting on a person, and in both cases the next message is ours
+ * to send. Short enough not to strand you behind your own last reply, long
+ * enough to sit through a slow build without deciding the agent has stopped.
+ */
+const IDLE_MS = 30_000;
+
+/** The three ranges the list offers, narrowest first. */
+const SCOPES: [ChatScope, string][] = [["live", "Working"], ["today", "Today"], ["all", "All"]];
+
 /** A turn being streamed right now, before the transcript catches up. */
 type Live = { text: string; tools: string[]; error: string | null };
 
-export function MobileChats({ sessions, onRefresh }: { sessions: SessionRollup[]; onRefresh: () => void }) {
+export function MobileChats({ sessions, onRefresh, onImmersive }: {
+  sessions: SessionRollup[];
+  onRefresh: () => void;
+  /**
+   * Tell the shell a conversation has the screen.
+   *
+   * Not decoration: `main` carries `z-index: 1`, which makes it a stacking
+   * context, and a conversation rendered inside it cannot rise above the app
+   * header however high its own z-index goes. The header painted straight over
+   * the chat's bar, and the tab bar sat on top of the composer. A chat takes
+   * the whole screen, so the shell puts its own chrome away rather than
+   * fighting it.
+   */
+  onImmersive?: (on: boolean) => void;
+}) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
+  /**
+   * Where the open conversation runs, as far as this screen already knows.
+   *
+   * The session detail carries the same thing, but it takes a fetch to arrive,
+   * and a chat started here is seconds old — the row the scanner writes may not
+   * have a directory yet. Without this the composer replaced itself with "this
+   * session did not record where it ran", which is a claim about the session
+   * when the truth was "the answer has not come back yet". We picked the repo,
+   * so we can simply say so.
+   */
+  const [openCwd, setOpenCwd] = useState("");
+  /** Null until the first list arrives, so the opening scope is chosen from
+   *  real sessions rather than from the empty array of the first render. */
+  const [picked, setPicked] = useState<ChatScope | null>(null);
+  const scope = picked ?? openingScope(sessions);
+  const setScope = (s: ChatScope) => setPicked(s);
+  const shown = useMemo(() => scopeSessions(sessions, scope), [sessions, scope]);
+  const liveCount = useMemo(() => scopeSessions(sessions, "live").length, [sessions]);
 
-  if (composing) return <NewChat onCancel={() => setComposing(false)} onStarted={(id) => { setComposing(false); setOpenId(id); onRefresh(); }} />;
-  if (openId) return <Conversation id={openId} onBack={() => { setOpenId(null); onRefresh(); }} />;
+  const open = (id: string, cwd: string) => { setOpenCwd(cwd); setOpenId(id); };
+
+  // Leaving the tab, or the app, must give the chrome back.
+  useEffect(() => {
+    onImmersive?.(!!openId);
+    return () => onImmersive?.(false);
+  }, [openId, onImmersive]);
+
+  if (composing) return <NewChat onCancel={() => setComposing(false)} onStarted={(id, cwd) => { setComposing(false); open(id, cwd); onRefresh(); }} />;
+  if (openId) return <Conversation id={openId} knownCwd={openCwd} onBack={() => { setOpenId(null); onRefresh(); }} />;
 
   return (
     <div className="flex flex-col gap-2">
@@ -46,17 +103,40 @@ export function MobileChats({ sessions, onRefresh }: { sessions: SessionRollup[]
         + New chat
       </button>
 
-      {!sessions.length && (
+      {/* Working, today, everything. The tab opens on the narrowest of these
+          that has anything in it, so the first screen is the agents you could
+          speak to rather than a scroll through the archive. */}
+      <div className="flex gap-1.5">
+        {SCOPES.map(([id, label]) => {
+          const on = scope === id;
+          return (
+            <button key={id} onClick={() => setScope(id)}
+              className="flex-1 rounded-lg text-[12px]"
+              style={{
+                minHeight: 38,
+                color: on ? "var(--primary-hover)" : "var(--text3)",
+                background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
+                border: `1px solid color-mix(in srgb, var(--border) ${on ? 55 : 26}%, transparent)`,
+              }}>
+              {label}{id === "live" && liveCount ? ` ${liveCount}` : ""}
+            </button>
+          );
+        })}
+      </div>
+
+      {!shown.length && (
         <div className="rounded-2xl px-5 py-12 text-center" style={{ background: "color-mix(in srgb, var(--bg2) 45%, transparent)", border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)" }}>
-          <div className="text-[14px]">No agents yet</div>
-          <div className="text-[12px] mt-1.5" style={{ color: "var(--text2)" }}>Start one above and it keeps running on your machine.</div>
+          <div className="text-[14px]">{sessions.length ? "Nothing here" : "No agents yet"}</div>
+          <div className="text-[12px] mt-1.5" style={{ color: "var(--text2)" }}>
+            {sessions.length ? "Try a wider range above." : "Start one and it keeps running on your machine."}
+          </div>
         </div>
       )}
 
-      {sessions.map((s) => {
+      {shown.map((s) => {
         const running = !s.ended_at && Date.now() - s.last_seen < 120_000;
         return (
-          <button key={s.session_id} onClick={() => setOpenId(s.session_id)}
+          <button key={s.session_id} onClick={() => open(s.session_id, s.cwd_path || s.project_path || "")}
             className="w-full text-left rounded-xl px-3.5 py-3 flex flex-col gap-1.5"
             style={{ background: "color-mix(in srgb, var(--bg2) 60%, transparent)", border: `1px solid color-mix(in srgb, var(--border) ${running ? 55 : 32}%, transparent)` }}>
             <div className="flex items-center gap-2">
@@ -76,15 +156,34 @@ export function MobileChats({ sessions, onRefresh }: { sessions: SessionRollup[]
   );
 }
 
-/** One session: what it has done, and a box to answer it. */
-function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
+/**
+ * One session: what it has done, and a box to answer it.
+ *
+ * Laid out like every other chat application on the phone, because that is what
+ * it is: one bar at the top carrying back, title and status, the thread filling
+ * everything below it, the composer at the bottom. No app header above it and
+ * no tab bar under it — inside a conversation neither is doing anything, and
+ * between them they were taking 130 of 660 pixels and colliding while they did
+ * it. The screen is its own scroll container rather than a slice of a scrolling
+ * page, which is what stops the composer from drifting off when the browser's
+ * URL bar collapses.
+ */
+function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; onBack: () => void }) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [draft, setDraft] = useState("");
   const [live, setLive] = useState<Live | null>(null);
   const [sent, setSent] = useState<string | null>(null);
+  /** Typed while the agent was busy, waiting its turn. See `deliver`. */
+  const [queued, setQueued] = useState<string[]>([]);
+  /** Turns that arrived while you were reading further up. */
+  const [behind, setBehind] = useState(0);
   const abort = useRef<AbortController | null>(null);
   const handover = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foot = useRef<HTMLDivElement | null>(null);
+  const scroller = useRef<HTMLDivElement | null>(null);
+  /** Whether the thread is parked at the bottom. While it is, new turns follow
+   *  the conversation down; while it is not, they must not move the page. */
+  const pinned = useRef(true);
 
   // Leaving mid-turn must not leave a request or a timer running behind the
   // screen you just left.
@@ -115,6 +214,27 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
   const lastEvent = useRef(0);
   const [stalled, setStalled] = useState(false);
 
+  /**
+   * Whether the server has a turn running for this session.
+   *
+   * Asked rather than inferred. The transcript cannot answer it — it is written
+   * by the scanner and arrives a poll late, and a session that finished ten
+   * seconds ago looks exactly like one that is still thinking. The server
+   * spawned the process, so it knows, and this is the difference between
+   * queueing a message and interrupting a turn with it.
+   */
+  const [turnRunning, setTurnRunning] = useState(false);
+  const readActive = useCallback(() => {
+    api.chatActive()
+      .then((r) => setTurnRunning(r.ids.includes(id)))
+      .catch(() => { /* keep the last answer rather than guessing a new one */ });
+  }, [id]);
+
+  useEffect(() => {
+    readActive();
+    return pollWhileVisible(readActive, 3000);
+  }, [readActive]);
+
   useEffect(() => {
     load();
     return pollWhileVisible(() => {
@@ -127,15 +247,96 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
     }, 5000);
   }, [load]);
 
-  useEffect(() => { foot.current?.scrollIntoView({ block: "end" }); }, [detail?.conversation.length, live?.text, sent]);
+  /**
+   * What this agent said AND what it did, oldest first.
+   *
+   * The phone used to draw messages only, so a session that spent twenty
+   * minutes reading files, running tests and editing code looked like three
+   * sentences of commentary. The desktop has always shown the work; the
+   * companion has to show the same thing or the two are not the same product.
+   *
+   * `timeline` carries both. `conversation` is the fallback for a server older
+   * than that field.
+   */
+  const feed = useMemo(() => {
+    const built = buildFeed(detail?.timeline as FeedEntry[] | undefined);
+    if (built.length) return built;
+    return recentTurns(detail?.conversation).map((m): FeedItem =>
+      ({ kind: "message", ts: m.ts, role: m.role, text: m.text }));
+  }, [detail?.timeline, detail?.conversation]);
+  const turns = feed;
 
-  const cwd = detail?.cwd_path || detail?.project_path || "";
-  const running = !!detail && !detail.ended_at && Date.now() - detail.last_seen < 120_000;
+  /** Jump the thread to the newest turn. */
+  const toBottom = useCallback((smooth = false) => {
+    const el = scroller.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    pinned.current = true;
+    setBehind(0);
+  }, []);
 
-  const send = async () => {
-    const message = draft.trim();
-    if (!message || !cwd) return;
-    setDraft("");
+  /** Track whether you are reading the bottom of the thread or somewhere above
+   *  it. 60px of slack: a thumb rarely lands exactly at the end. */
+  const onScroll = () => {
+    const el = scroller.current;
+    if (!el) return;
+    pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    if (pinned.current) setBehind(0);
+  };
+
+  /**
+   * Follow the conversation down, unless you are reading further up.
+   *
+   * Both halves matter. A chat that does not follow leaves you looking at an
+   * old turn while the answer you are waiting for lands off-screen; one that
+   * always follows snatches the page away mid-sentence whenever a poll brings
+   * something in. So: pinned to the bottom, stay pinned; scrolled up, count
+   * what arrived and offer it as a tap.
+   *
+   * Keyed on the newest timestamp as well as the count, because the transcript
+   * is capped by a size budget on the server — a long session can gain a turn
+   * and drop its oldest in the same poll without ever changing length.
+   */
+  const newestTs = turns.length ? turns[turns.length - 1]!.ts : 0;
+  useEffect(() => {
+    if (!newestTs) return;
+    if (pinned.current) toBottom();
+    else setBehind((n) => n + 1);
+  }, [newestTs, turns.length, toBottom]);
+
+  // Your own turn, streaming: always follow it. You just sent this.
+  useEffect(() => { if (pinned.current) toBottom(); }, [live?.text, sent, queued.length, toBottom]);
+
+  // The transcript's first arrival: land at the bottom with no animation, the
+  // way opening a chat should.
+  const landed = useRef(false);
+  useEffect(() => {
+    if (landed.current || !detail) return;
+    landed.current = true;
+    requestAnimationFrame(() => toBottom());
+  }, [detail, toBottom]);
+
+  const cwd = detail?.cwd_path || detail?.project_path || knownCwd;
+  const running = !!detail && sessionIsLive(detail);
+
+  /**
+   * Whether a turn is in flight, and therefore whether sending would collide.
+   *
+   * A session has exactly one writer. Sending into one that is mid-turn — from
+   * a terminal, from the desktop, or from this phone a moment ago — puts a
+   * second `claude` on the same transcript, and what comes back is the running
+   * turn interrupted: the reply cut off, the message lost.
+   *
+   * `turnRunning` is the server's own answer and the one that decides. Recent
+   * activity is kept as a second opinion for the seconds before the first
+   * answer arrives, and for a writer the server did not spawn — a session being
+   * driven from a terminal, which is exactly the case that used to eat replies.
+   */
+  const workingNow = !!detail && !detail.ended_at && Date.now() - detail.last_seen < IDLE_MS;
+  const busy = !!live || turnRunning || workingNow;
+
+  const deliver = async (message: string) => {
+    if (!cwd) return;
     setSent(message);
     setLive({ text: "", tools: [], error: null });
     setStalled(false);
@@ -151,10 +352,20 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
       );
     } catch (e) {
       if (!(e instanceof DOMException && e.name === "AbortError")) {
+        const why = e instanceof ChatStreamError ? e.message : String(e);
+        // The server refused because a turn is already in flight. That is not a
+        // failure to report, it is a "not yet": put the message back at the
+        // front of the queue and let the drain send it when the agent is free.
+        if (/mid-turn|turn_in_flight/.test(why)) {
+          setTurnRunning(true);
+          setQueued((q) => [message, ...q]);
+          setSent(null);
+          setLive(null);
+          return;
+        }
         // A dropped connection is not a failed turn: the agent is very likely
         // still working, and telling someone their message failed when it did
         // not is how they end up sending it twice.
-        const why = e instanceof ChatStreamError ? e.message : String(e);
         setLive((p) => ({ text: p?.text ?? "", tools: p?.tools ?? [], error: why }));
       }
     } finally {
@@ -169,33 +380,71 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
     }
   };
 
+  // `deliver` closes over this render's state, and the queue drains from an
+  // effect that must not re-run every time any of it changes. A ref keeps the
+  // effect stable and the call current.
+  const deliverRef = useRef(deliver);
+  deliverRef.current = deliver;
+
+  /**
+   * Send, or get in line.
+   *
+   * The CLI queues what you type while it is working and sends it when the turn
+   * ends; typing at a busy agent should not mean losing the message, and it
+   * certainly should not mean interrupting it.
+   */
+  const send = () => {
+    const message = draft.trim();
+    if (!message || !cwd) return;
+    setDraft("");
+    if (busy) { setQueued((q) => [...q, message]); return; }
+    void deliverRef.current(message);
+  };
+
+  /** Drain the queue as soon as the agent is free, one turn at a time. */
+  useEffect(() => {
+    if (busy || !cwd || !queued.length) return;
+    const next = queued[0]!;
+    setQueued((q) => q.slice(1));
+    void deliverRef.current(next);
+  }, [busy, cwd, queued]);
+
   return (
-    <div className="flex flex-col gap-3">
-      <div className="sticky top-11 z-10 flex items-center gap-2 -mx-4 px-4 py-1.5"
-        style={{ background: "var(--bg)", borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-        <button onClick={onBack} className="text-[13px] px-2 py-2" style={{ color: "var(--text2)", minHeight: 44 }}>← Chats</button>
-        <div className="min-w-0 flex-1 text-right">
-          <div className="text-[12.5px] truncate">{detail ? sessionTitle(detail) : "…"}</div>
-          <div className="text-[10.5px] truncate" style={{ color: "var(--text3)" }}>{baseName(cwd)}</div>
+    <div className="mb-screen mb-chat on">
+      <div className="hd">
+        <button className="back" onClick={onBack} aria-label="Back to chats">←</button>
+        <div className="t">
+          <b>{detail ? sessionTitle(detail) : "…"}</b>
+          <span>
+            {baseName(cwd) || "…"}
+            {detail ? ` · ${detail.tools} tools · ${fmtUsd(detail.cost_usd)}` : ""}
+            {detail?.errors ? ` · ${detail.errors} errors` : ""}
+          </span>
         </div>
-        <span className="inline-block rounded-full shrink-0" style={{ width: 8, height: 8, background: running ? "var(--success)" : "var(--text3)" }} />
+        <span className="inline-block rounded-full shrink-0" title={running ? "Working" : "Idle"}
+          style={{ width: 9, height: 9, background: running ? "var(--success)" : "var(--text3)" }} />
       </div>
 
-      {detail && (
-        <div className="flex items-center gap-x-3 text-[10.5px] tabular-nums px-0.5" style={{ color: "var(--text3)" }}>
-          <span>{detail.tools} tools</span>
-          {!!detail.errors && <span style={{ color: "var(--error)" }}>{detail.errors} errors</span>}
-          <span>{fmtUsd(detail.cost_usd)}</span>
-          {!!detail.changes.length && <span>{detail.changes.length} files touched</span>}
-        </div>
-      )}
+      <div className="bd mb-thread" ref={scroller} onScroll={onScroll}>
+        {!detail && <div className="text-[12px] py-6 text-center" style={{ color: "var(--text3)" }}>Loading the conversation…</div>}
+        {/* A chat started a moment ago: the first turn is running but the
+            transcript that carries it is written by the scanner and lands a
+            poll later. An empty thread here reads as a chat that failed to
+            start, which is what it looked like. */}
+        {detail && !turns.length && !live && !sent && (
+          <div className="text-[12px] py-6 text-center" style={{ color: "var(--text3)" }}>
+            {workingNow ? "Working on the first turn…" : "Nothing said yet."}
+          </div>
+        )}
 
-      <div className="flex flex-col gap-2.5 pb-2">
-        {detail?.conversation.slice(-40).map((m, i) => <Bubble key={`${m.ts}-${i}`} role={m.role} text={m.text} ts={m.ts} />)}
+        {turns.map((item, i) => item.kind === "message"
+          ? <Bubble key={`${item.ts}-${i}`} role={item.role} text={item.text} ts={item.ts} />
+          : <ToolBlock key={`${item.ts}-${i}`} runs={item.runs} errors={item.errors} />)}
         {sent && <Bubble role="user" text={sent} />}
         {live && (
           <Bubble role="assistant" text={live.text || "…"} streaming tools={live.tools} error={live.error} />
         )}
+        {queued.map((q, i) => <Bubble key={`q${i}`} role="user" text={q} pending />)}
         {stalled && !live?.error && (
           // Silence is ambiguous — a long tool call and a dead socket look
           // identical. Say which one we cannot tell rather than leaving a
@@ -207,22 +456,29 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
         <div ref={foot} />
       </div>
 
-      {/* Sticky, thumb-height, 16px type so iOS does not zoom the page when it
-          takes focus. */}
-      {/* Sits directly on top of the tab bar rather than under it: the nav is
-          fixed, so a composer at bottom-0 would be hidden behind it exactly
-          when the keyboard is open and it matters most. */}
-      <div className="sticky -mx-4 px-4 pt-2 pb-2 z-10"
-        style={{ bottom: "calc(56px + env(safe-area-inset-bottom))", background: "var(--bg)", borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-        {!cwd ? (
-          <div className="text-[11px] px-1 pb-2" style={{ color: "var(--text3)" }}>
+      {/* Only while you are reading further up: the thread stays where you put
+          it, and this says what you would otherwise have been yanked to. */}
+      {behind > 0 && (
+        <button className="mb-jump" onClick={() => toBottom(true)}>
+          ↓ {behind} newer
+        </button>
+      )}
+
+      <div className="ft" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+        {busy && !live && (
+          <div className="text-[10.5px]" style={{ color: "var(--warning)" }}>
+            Working. What you send goes out when this turn ends.
+          </div>
+        )}
+        {detail && !cwd ? (
+          <div className="text-[11px]" style={{ color: "var(--text3)" }}>
             This session did not record where it ran, so it cannot be resumed from here.
           </div>
         ) : (
           <div className="flex items-end gap-2">
             <textarea
               value={draft} onChange={(e) => setDraft(e.target.value)}
-              placeholder={live ? "Working…" : "Reply to this agent"}
+              placeholder={busy ? "Send when it is free…" : "Reply to this agent"}
               rows={1}
               className="flex-1 rounded-xl px-3 py-2.5 resize-none"
               style={{ fontSize: 16, minHeight: 48, maxHeight: 140, color: "var(--text)", background: "color-mix(in srgb, var(--bg2) 80%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}
@@ -237,7 +493,7 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
               <button onClick={send} disabled={!draft.trim()}
                 className="rounded-xl px-4 text-[14px] font-medium"
                 style={{ minHeight: 48, opacity: draft.trim() ? 1 : 0.4, color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
-                Send
+                {busy ? "Queue" : "Send"}
               </button>
             )}
           </div>
@@ -247,16 +503,59 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
   );
 }
 
-function Bubble({ role, text, ts, streaming, tools, error }: {
+/**
+ * The work between two things the agent said.
+ *
+ * Collapsed by default and one line high: a turn is routinely twenty tool runs,
+ * and twenty rows of "Read" on a 412px screen buries the sentence they belong
+ * to. Open it and every run is there with what it acted on — the same trade the
+ * terminal makes, and the same one the desktop panel makes.
+ */
+function ToolBlock({ runs, errors }: { runs: FeedTool[]; errors: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="self-stretch">
+      <button onClick={() => setOpen((o) => !o)}
+        className="w-full text-left flex items-center gap-2 px-2.5 py-2 rounded-xl"
+        style={{
+          minHeight: 40,
+          background: "color-mix(in srgb, var(--bg2) 45%, transparent)",
+          border: `1px solid color-mix(in srgb, ${errors ? "var(--error)" : "var(--border)"} 30%, transparent)`,
+          color: "var(--text3)",
+        }}>
+        <span className="text-[10px] shrink-0" style={{ opacity: 0.8 }}>{open ? "▾" : "▸"}</span>
+        <span className="text-[11px] truncate flex-1">{summariseRuns(runs)}</span>
+        {!!errors && <span className="text-[10px] shrink-0" style={{ color: "var(--error)" }}>{errors} failed</span>}
+        <span className="text-[10px] shrink-0 tabular-nums" style={{ opacity: 0.7 }}>{runs.length}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-1 px-2.5 pt-1.5">
+          {runs.map((r, i) => (
+            <div key={i} className="flex items-baseline gap-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
+              <span className="shrink-0" style={{ color: r.is_error ? "var(--error)" : "var(--text4)" }}>{r.tool || "tool"}</span>
+              <span className="truncate" style={{ opacity: 0.85 }}>{shortTarget(r.note || r.target)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Bubble({ role, text, ts, streaming, tools, error, pending }: {
   role: "user" | "assistant"; text: string; ts?: number; streaming?: boolean; tools?: string[]; error?: string | null;
+  /** Typed, accepted, not sent yet: waiting for the agent to be free. */
+  pending?: boolean;
 }) {
   const mine = role === "user";
   return (
     <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
       <div className="max-w-[86%] rounded-2xl px-3.5 py-2.5" style={{
         background: mine ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "color-mix(in srgb, var(--bg2) 70%, transparent)",
-        border: `1px solid color-mix(in srgb, var(--border) ${mine ? 45 : 32}%, transparent)`,
+        border: `1px ${pending ? "dashed" : "solid"} color-mix(in srgb, var(--border) ${mine ? 45 : 32}%, transparent)`,
+        opacity: pending ? 0.66 : 1,
       }}>
+        {pending && <div className="text-[9.5px] pb-1" style={{ color: "var(--warning)" }}>Queued</div>}
         {/* Tool runs are named, not expanded: on a phone the useful signal is
             "it is editing files / running commands", not the diff. */}
         {!!tools?.length && (
@@ -274,7 +573,7 @@ function Bubble({ role, text, ts, streaming, tools, error }: {
 }
 
 /** Start something new: a repo and a first message is the whole form. */
-function NewChat({ onCancel, onStarted }: { onCancel: () => void; onStarted: (sessionId: string) => void }) {
+function NewChat({ onCancel, onStarted }: { onCancel: () => void; onStarted: (sessionId: string, cwd: string) => void }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [cwd, setCwd] = useState("");
   const [model, setModel] = useState(MODELS[0]!.id);
@@ -301,7 +600,10 @@ function NewChat({ onCancel, onStarted }: { onCancel: () => void; onStarted: (se
         // resumes, on this phone or at the desk.
         if (!started.current && o.type === "system" && typeof o.session_id === "string") {
           started.current = true;
-          onStarted(o.session_id);
+          // Hand the directory over with the id. The session row does not have
+          // it yet, and the conversation screen would otherwise announce that
+          // this brand new chat cannot be resumed.
+          onStarted(o.session_id, cwd);
         }
         setLive((prev) => reduce(prev, o));
       });

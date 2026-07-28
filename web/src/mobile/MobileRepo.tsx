@@ -3,6 +3,7 @@ import { api } from "../lib/api.ts";
 import { Screen, Sheet, Seg, Empty, Row, Act, useAsk } from "./mobileUi.tsx";
 import { MobileDiff, FileRow } from "./MobileDiff.tsx";
 import { MobilePr } from "./MobilePr.tsx";
+import { projectRows } from "./projects.ts";
 import type {
   GitRepoRef, WorkingTree, GitBranch, DockerContainer, DockerStat, PrSummary, GitFileChange,
 } from "../../../shared/types.ts";
@@ -30,7 +31,8 @@ export interface RepoSummary {
   down: number;
 }
 
-export function RepoList({ repos, onOpen }: { repos: RepoSummary[]; onOpen: (r: RepoSummary) => void }) {
+export function RepoList({ repos, onOpen }: { repos: RepoSummary[]; onOpen: (r: RepoSummary, siblings: RepoSummary[]) => void }) {
+  const groups = useMemo(() => projectRows(repos), [repos]);
   if (!repos.length) {
     return <Empty glyph="◇" title="No repositories yet"
       body="agentglass finds these from the projects your agents have worked in. Run one, and it appears here." />;
@@ -38,26 +40,39 @@ export function RepoList({ repos, onOpen }: { repos: RepoSummary[]; onOpen: (r: 
   return (
     <div className="flex flex-col gap-2.5">
       <div className="mb-eyebrow">Repositories</div>
-      {repos.map((r) => (
-        <Row key={r.ref.root}
-          tint={r.down ? "var(--error)" : r.dirty || r.ahead ? "var(--warning)" : "var(--success)"}
-          title={r.name}
-          sub={`${r.branch}${r.ahead ? ` · ↑${r.ahead}` : ""}${r.behind ? ` ↓${r.behind}` : ""}`}
-          right={[
-            r.dirty ? `${r.dirty} changed` : "",
-            r.prs ? `${r.prs} PR${r.prs > 1 ? "s" : ""}` : "",
-            r.down ? `${r.down} down` : "",
-          ].filter(Boolean).join(" · ") || "clean"}
-          onClick={() => onOpen(r)}
-        />
-      ))}
+      {groups.map(({ main, checkouts }) => {
+        // The project's state is every checkout's state: work sitting in a
+        // worktree is still work you have not committed.
+        const dirty = checkouts.reduce((n, c) => n + c.dirty, 0);
+        const prs = checkouts.reduce((n, c) => n + c.prs, 0);
+        const down = checkouts.reduce((n, c) => n + c.down, 0);
+        const others = checkouts.length - 1;
+        return (
+          <Row key={main.ref.root}
+            tint={down ? "var(--error)" : dirty || main.ahead ? "var(--warning)" : "var(--success)"}
+            title={main.name}
+            sub={`${main.branch}${main.ahead ? ` · ↑${main.ahead}` : ""}${main.behind ? ` ↓${main.behind}` : ""}`
+              + (others ? ` · ${others} worktree${others > 1 ? "s" : ""}` : "")}
+            right={[
+              dirty ? `${dirty} changed` : "",
+              prs ? `${prs} PR${prs > 1 ? "s" : ""}` : "",
+              down ? `${down} down` : "",
+            ].filter(Boolean).join(" · ") || "clean"}
+            onClick={() => onOpen(main, checkouts)}
+          />
+        );
+      })}
     </div>
   );
 }
 
-export function RepoScreen({ open, repo, containers, stats, onBack, toast, onRefresh, onOpenChatWith }: {
+export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, containers, stats, onBack, toast, onRefresh, onOpenChatWith }: {
   open: boolean;
   repo: RepoSummary | null;
+  /** Every checkout of this project — the repo itself and its linked
+   *  worktrees. One project, several places the work can be. */
+  checkouts?: RepoSummary[];
+  onPickCheckout?: (r: RepoSummary) => void;
   containers: DockerContainer[];
   stats: DockerStat[];
   onBack: () => void;
@@ -76,7 +91,20 @@ export function RepoScreen({ open, repo, containers, stats, onBack, toast, onRef
   const [ctr, setCtr] = useState<DockerContainer | null>(null);
   const [diffAt, setDiffAt] = useState<number | null>(null);
 
-  const mine = useMemo(() => containers.filter((c) => (c.project ?? "") === repo?.name), [containers, repo]);
+  /** The project's name, which is the main checkout's — a worktree is the same
+   *  project on another branch, and titling the screen with the worktree's
+   *  directory name is what made them look like separate repositories. */
+  const projectName = checkouts.length > 1
+    ? (checkouts.find((c) => !c.ref.worktreeOf)?.name ?? repo?.name ?? "")
+    : (repo?.name ?? "");
+
+  // Containers belong to the project, not to the checkout you happen to be
+  // looking at: compose names them after the repository, so matching on a
+  // worktree's directory name finds nothing at all.
+  const mine = useMemo(
+    () => containers.filter((c) => (c.project ?? "") === projectName),
+    [containers, projectName]
+  );
 
   // Open on whatever is wrong: a container down beats uncommitted work beats
   // the pull request list. Landing on an empty tab is a wasted screen.
@@ -119,7 +147,12 @@ export function RepoScreen({ open, repo, containers, stats, onBack, toast, onRef
     try {
       const r = await run();
       toast(r.ok ? label : (r.error || `${label} failed`), !r.ok);
-      if (r.ok) { loadTree(); onRefresh(); }
+      // Reload either way. A refused action leaves the repo as it was, and the
+      // switches on screen were drawn from the state before it — re-reading is
+      // what stops a failure from leaving a row showing something that never
+      // happened.
+      loadTree();
+      if (r.ok) onRefresh();
     } catch (e) { toast(String(e), true); }
   };
   const { ask, dialog: askDialog } = useAsk();
@@ -127,7 +160,34 @@ export function RepoScreen({ open, repo, containers, stats, onBack, toast, onRef
   return (
     <>
       {askDialog}
-      <Screen open={open && !openPr && !ctr && diffAt == null} title={repo?.name ?? ""} sub={repo?.branch} onBack={onBack}>
+      {/* Stays open under whatever is stacked on top of it. The screens that
+          cover it are drawn later in this tree, so they paint over it anyway,
+          and closing it here made it push and pop history entries every time a
+          file was tapped — see useBackClose. */}
+      <Screen open={open} title={projectName} sub={repo?.branch} onBack={onBack}>
+        {/* Which checkout of this project you are looking at. Only drawn when
+            there is a choice: one repo with no worktrees needs no picker, and
+            a row of one chip is furniture. */}
+        {checkouts.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto pb-2.5 -mx-1 px-1" style={{ scrollbarWidth: "none" }}>
+            {checkouts.map((c) => {
+              const on = c.ref.root === repo?.ref.root;
+              return (
+                <button key={c.ref.root} onClick={() => onPickCheckout?.(c)}
+                  className="rounded-lg text-[11.5px] px-3 shrink-0"
+                  style={{
+                    minHeight: 36,
+                    color: on ? "var(--primary-hover)" : "var(--text3)",
+                    background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
+                    border: `1px solid color-mix(in srgb, var(--border) ${on ? 55 : 26}%, transparent)`,
+                  }}>
+                  {c.branch}{c.dirty ? ` · ${c.dirty}` : ""}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         <Seg sticky value={facet} onPick={setFacet} options={[
           { id: "changes", label: "Changes", n: repo?.dirty || null },
           { id: "prs", label: "Pull requests", n: prs.length || null },

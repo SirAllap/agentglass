@@ -54,12 +54,19 @@ function inRepo(root: string, rel: string): string | null {
   return abs;
 }
 
-// Strip a/ b/ prefixes, /dev/null, and C-style git quoting from a diff path.
+// Strip the diff prefix, /dev/null, and C-style git quoting from a diff path.
+//
+// The prefix is normally `a/` and `b/`, and git.ts pins the config that decides
+// so on every call. This also accepts the mnemonic set — `c/` commit, `i/`
+// index, `w/` worktree, `o/` object — because that is what a repo with
+// `diff.mnemonicPrefix` emits, and a path that keeps its prefix does not merely
+// look wrong: it is passed back to `git add`, which then fails with "did not
+// match any files" on a file that is sitting right there.
 function pathFrom(s: string): string {
   s = s.trim().replace(/\t.*$/, "");
   if (s === "/dev/null") return "/dev/null";
   if (s.startsWith('"') && s.endsWith('"')) { try { s = JSON.parse(s); } catch { /* keep raw */ } }
-  if (s.startsWith("a/") || s.startsWith("b/")) s = s.slice(2);
+  if (/^[abciwo]\//.test(s)) s = s.slice(2);
   return s;
 }
 

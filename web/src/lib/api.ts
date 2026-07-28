@@ -277,6 +277,9 @@ const realApi = {
   skills: () => get<{ skills: SkillInfo[]; usage_since?: number; generated_at: number }>(`/skills`),
   changes: (limit = 200) => get<{ changes: FileChange[] }>(`/changes?limit=${limit}`),
   session: (id: string) => get<SessionDetail>(`/session?id=${encodeURIComponent(id)}`),
+  /** Sessions with a turn running right now. The only honest answer to "can I
+   *  send to this without interrupting it" — see server/src/chat.ts. */
+  chatActive: () => get<{ ids: string[] }>(`/chat/active`),
   insights: () => get<{ insights: Insight[] }>(`/insights`),
   search: (q: string) => get<{ hits: SearchHit[] }>(`/search?q=${encodeURIComponent(q)}`),
   gatePending: () => get<{ gates: PendingGate[] }>(`/gate/pending`),
@@ -590,6 +593,8 @@ const demoApi: typeof realApi = {
   skills: () => D(demo.skills()),
   changes: () => D(demo.changes()),
   session: (id: string) => D(demo.session(id)),
+  // Nothing spawns anything in the demo, so nothing is ever mid-turn.
+  chatActive: () => D({ ids: [] as string[] }),
   insights: () => D(demo.insights()),
   search: (q: string) => D(demo.search(q)),
   gatePending: () => D(demo.gatePending()),

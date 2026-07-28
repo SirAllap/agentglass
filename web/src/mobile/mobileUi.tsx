@@ -90,16 +90,22 @@ export const MOBILE_CSS = `
 
 /* A switch, not a tick: viewed and staged are states you keep for the length
    of a review, and a checkbox does not say that. */
-/* Drawn 42x25 and hit at 44px tall: a switch this size is comfortable to read
-   and uncomfortable to hit, so the target grows without the shape growing. */
-.mb-sw{position:relative;width:42px;height:25px;border-radius:14px;flex:none;
-  background:color-mix(in srgb,var(--border) 52%,transparent);transition:background .2s;
-  box-sizing:content-box;border-top:10px solid transparent;border-bottom:9px solid transparent;
-  background-clip:padding-box}
-.mb-sw::after{content:"";position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;
+/* Drawn 42x25, hit at 44px tall: a switch that size is comfortable to read and
+   uncomfortable to hit, so the target grows without the shape growing.
+
+   The track is drawn, not painted onto the element. The first version grew the
+   target with transparent top and bottom borders and clipped the background to
+   the padding box — which also clipped the 14px radius against the border box,
+   so the pill came out with flattened, chopped-looking ends. A button that is
+   purely a hit area with the shape inside it cannot do that. */
+.mb-sw{position:relative;width:42px;height:44px;flex:none;padding:0;border:0;background:transparent}
+.mb-sw::before{content:"";position:absolute;left:0;top:9px;width:42px;height:25px;border-radius:999px;
+  background:color-mix(in srgb,var(--border) 52%,transparent);transition:background .2s}
+.mb-sw::after{content:"";position:absolute;top:12px;left:3px;width:19px;height:19px;border-radius:50%;
   background:var(--text3);transition:transform .24s cubic-bezier(.3,1.5,.5,1),background .2s}
-.mb-sw[data-on="1"]{background:color-mix(in srgb,var(--success) 58%,transparent)}
+.mb-sw[data-on="1"]::before{background:color-mix(in srgb,var(--success) 58%,transparent)}
 .mb-sw[data-on="1"]::after{transform:translateX(17px);background:var(--success)}
+.mb-sw:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:999px}
 
 /* ── screens ──────────────────────────────────────────────────────── */
 .mb-screen{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;
@@ -118,6 +124,24 @@ export const MOBILE_CSS = `
   backdrop-filter:blur(16px);padding:11px 15px calc(env(safe-area-inset-bottom) + 11px);
   display:flex;gap:9px;align-items:center}
 
+/* ── conversation ─────────────────────────────────────────────────── */
+/* A chat screen, sized to the viewport that is actually visible.
+   inset:0 measures the LARGE viewport, the one that assumes the browser's URL
+   bar is hidden — so on Chrome for Android, whose bar sits at the bottom and
+   comes back on every upward scroll, the composer spent half its life
+   underneath it. 100dvh is the viewport as it stands right now, which also
+   means the keyboard opening shortens the thread rather than pushing the
+   composer off the screen. */
+.mb-chat{bottom:auto;height:100dvh}
+/* The thread is the only thing that scrolls, and it is chained: flicking past
+   the last message must not start dragging the page behind it. */
+.mb-chat .bd{display:flex;flex-direction:column;gap:10px;overscroll-behavior:contain;
+  padding:14px 15px 10px}
+.mb-jump{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 84px);
+  z-index:2;font-size:11.5px;font-weight:600;padding:7px 14px;border-radius:999px;
+  color:#150c28;background:color-mix(in srgb,var(--primary) 90%,#000);
+  box-shadow:0 8px 20px -10px #000;border:none}
+
 /* ── sheet ────────────────────────────────────────────────────────── */
 .mb-scrim{position:fixed;inset:0;z-index:70;background:rgba(4,1,10,.66);opacity:0;pointer-events:none;
   transition:opacity .24s;backdrop-filter:blur(3px)}
@@ -125,12 +149,19 @@ export const MOBILE_CSS = `
 .mb-sheet{position:fixed;left:0;right:0;bottom:0;z-index:71;border-radius:24px 24px 0 0;
   background:linear-gradient(180deg,color-mix(in srgb,var(--bg3) 50%,var(--bg2)),var(--bg2));
   border-top:1px solid color-mix(in srgb,var(--primary) 38%,transparent);transform:translateY(100%);
-  transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:88vh;display:flex;flex-direction:column;
+  transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:88dvh;display:flex;flex-direction:column;
   box-shadow:0 -20px 50px -20px #000}
 .mb-sheet.on{transform:none}
 .mb-sheet .grab{width:40px;height:4px;border-radius:3px;flex:none;margin:10px auto 5px;
   background:color-mix(in srgb,var(--border) 72%,transparent)}
-.mb-sheet .in{padding:7px 16px calc(env(safe-area-inset-bottom) + 18px);overflow-y:auto}
+/* min-height:0 is what lets this scroll. A flex child will not shrink below its
+   content without it, so the sheet grew past its own max-height instead of
+   scrolling inside it — and the last rows were simply unreachable, which is
+   most obvious in landscape where there is half the height to work with.
+   The cap is dvh, not vh: vh measures the viewport as if the browser's URL bar
+   were hidden, which it usually is not. */
+.mb-sheet .in{padding:7px 16px calc(env(safe-area-inset-bottom) + 18px);overflow-y:auto;
+  min-height:0;flex:1;overscroll-behavior:contain}
 .mb-sheet h3{font-size:16px;font-weight:600}
 
 /* ── toasts ───────────────────────────────────────────────────────── */
@@ -196,26 +227,69 @@ export function Toasts({ toasts, raised }: { toasts: Toast[]; raised?: boolean }
  * Without it, back leaves agentglass entirely from a diff three levels deep,
  * which is the fastest way to make a companion feel broken.
  */
+/**
+ * One stack for every screen, and one history entry that serves whichever is
+ * on top.
+ *
+ * The first version of this gave each screen its own entry, and closing one by
+ * button called `history.back()` to tidy that entry up. `history.back()` fires
+ * a popstate, and every *other* open screen was listening for popstate as its
+ * own cue to close. Opening a diff from the repo screen therefore did this:
+ * the repo screen's `open` went false (its condition excludes an open diff), it
+ * called back(), and the popstate landed on the diff that had just opened,
+ * which closed itself immediately. The file you tapped flashed and vanished,
+ * every time, and the app looked like it could not load a diff at all.
+ *
+ * So: the screens form a stack, only the top one answers a back gesture, and
+ * the entry a programmatic close consumes is ignored by everyone rather than
+ * broadcast to all of them.
+ */
+type ScreenEntry = { close: () => void };
+const screenStack: ScreenEntry[] = [];
+let entryOwned = false;
+let ignoreNextPop = false;
+
+function ensureEntry() {
+  if (entryOwned || typeof history === "undefined") return;
+  history.pushState({ mbScreen: true }, "");
+  entryOwned = true;
+}
+
+function onPopState() {
+  // Our own tidy-up, not a person pressing back.
+  if (ignoreNextPop) { ignoreNextPop = false; return; }
+  entryOwned = false;
+  const top = screenStack.pop();
+  top?.close();
+  // Still somewhere below the surface: keep an entry so the next press closes
+  // the next screen instead of leaving the app.
+  if (screenStack.length) ensureEntry();
+}
+
+if (typeof window !== "undefined") window.addEventListener("popstate", onPopState);
+
 export function useBackClose(open: boolean, close: () => void) {
-  const armed = useRef(false);
-  useEffect(() => {
-    if (open && !armed.current) {
-      armed.current = true;
-      history.pushState({ mb: true }, "");
-    }
-    if (!open && armed.current) {
-      armed.current = false;
-      // Closed by a button rather than by the gesture: drop the entry we added
-      // so the next back press does not have to be pressed twice.
-      if (history.state?.mb) history.back();
-    }
-  }, [open]);
+  // The latest close, without re-registering the entry on every render.
+  const latest = useRef(close);
+  latest.current = close;
+
   useEffect(() => {
     if (!open) return;
-    const pop = () => { armed.current = false; close(); };
-    window.addEventListener("popstate", pop);
-    return () => window.removeEventListener("popstate", pop);
-  }, [open, close]);
+    const entry: ScreenEntry = { close: () => latest.current() };
+    screenStack.push(entry);
+    ensureEntry();
+    return () => {
+      const at = screenStack.lastIndexOf(entry);
+      if (at >= 0) screenStack.splice(at, 1);
+      // Only when nothing is left is the entry ours to give back, and the
+      // popstate it causes is ours to swallow.
+      if (!screenStack.length && entryOwned) {
+        ignoreNextPop = true;
+        entryOwned = false;
+        history.back();
+      }
+    };
+  }, [open]);
 }
 
 export function Screen({ open, title, sub, onBack, right, foot, children }: {
