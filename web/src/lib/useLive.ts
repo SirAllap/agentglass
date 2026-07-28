@@ -3,6 +3,7 @@ import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts
 import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
+import { sessionChanged } from "./sessionBus.ts";
 import { emitControl } from "./controlBus.ts";
 import { recordNote, fireDesktopAlert } from "./sysNotify.ts";
 
@@ -28,8 +29,21 @@ export interface LiveData {
  * Single WebSocket with auto-reconnect. Incoming events are BUFFERED and
  * flushed on a timer (not per-message) so a busy fleet causes a few renders a
  * second instead of dozens. Rendering pauses entirely while the tab is hidden.
+ *
+ * `keepEvents` is what makes this usable on a phone. The event buffer is the
+ * expensive part — up to two thousand rows, re-set every 220ms — and it exists
+ * for the cockpit's event stream, which the companion does not draw. Everything
+ * the phone *does* need rides the same socket: `openTools` (what each agent has
+ * open right now), the connection state, and the git / control / alert frames
+ * that arrive as side effects. Turning the buffer off is not a smaller feature
+ * set, it is the same subscription without the one part nobody is looking at.
+ *
+ * A second socket for the phone was the alternative and would have been worse:
+ * the reconnect, the backoff, the give-up window and the auth probe below are
+ * subtle, and a copy of them would drift from this one the first time either
+ * was touched.
  */
-export function useLive(paused = false): LiveData {
+export function useLive(paused = false, keepEvents = true): LiveData {
   const [events, setEvents] = useState<WatchEvent[]>([]);
   const [conn, setConn] = useState<ConnState>("connecting");
   const [lastEvent, setLastEvent] = useState<WatchEvent | null>(null);
@@ -59,6 +73,8 @@ export function useLive(paused = false): LiveData {
   // without the callback being rebuilt on each toggle.
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const keepRef = useRef(keepEvents);
+  keepRef.current = keepEvents;
 
   const flush = useCallback(() => {
     flushScheduled.current = false;
@@ -174,12 +190,15 @@ export function useLive(paused = false): LiveData {
         return;
       }
       if (frame.type === "initial") {
+        // openTools is taken either way: it is the whole reason a phone opens
+        // this socket, and it rides on the same first frame.
+        setOpenTools(frame.openTools ?? []);
+        if (!keepRef.current) return;
         const initial = frame.data.slice(-MAX_EVENTS);
         seen.current = new Set(initial.map((e) => e.id));
         pending.current = [];
         setEvents(initial);
         setLastEvent(initial[initial.length - 1] ?? null);
-        setOpenTools(frame.openTools ?? []);
       } else if (frame.type === "openTools") {
         // The whole list, re-read with fresh evidence. Replaces rather than
         // merges: the server's answer is authoritative about what is open, and
@@ -188,10 +207,21 @@ export function useLive(paused = false): LiveData {
       } else if (frame.type === "event") {
         if (seen.current.has(frame.data.id)) return; // duplicate delivery
         seen.current.add(frame.data.id);
-        pending.current.push(frame.data);
-        scheduleFlush();
+        if (keepRef.current) {
+          pending.current.push(frame.data);
+          scheduleFlush();
+        } else if (seen.current.size > MAX_EVENTS) {
+          // Without the buffer nothing else ever trims this, so it would grow one
+          // id per event for as long as the phone is open. Ids arrive ascending,
+          // so keeping the newest half still catches every re-delivery that is
+          // close enough in time to matter.
+          seen.current = new Set([...seen.current].slice(-MAX_EVENTS / 2));
+        }
         // A Post closes its tool: drop the matching seed so it can't keep a
         // finished tool marked "running" after its Post later evicts the buffer.
+        // This runs whether or not the buffer is kept — a phone that draws only
+        // the open call needs the close more than the cockpit does, because it
+        // has no event list underneath to contradict a stale one.
         const ev = frame.data;
         if (ev.hook_event_type === "PostToolUse" || ev.hook_event_type === "PostToolUseFailure") {
           setOpenTools((cur) =>
@@ -200,8 +230,14 @@ export function useLive(paused = false): LiveData {
               : cur
           );
         }
+      } else if (frame.type === "session") {
+        // The cockpit's Sessions panel fetches its own roll-ups on its own
+        // clock and does not need this. The companion does: a phone poll costs
+        // a radio wake, so its interval was tuned for battery rather than for
+        // truth. Announced rather than handled, so each surface decides how
+        // much of a several-a-second frame it actually wants.
+        sessionChanged(frame.data.session_id);
       }
-      // "session" frames are ignored — the Sessions panel fetches its own roll-ups.
     };
   }, [scheduleFlush]);
 

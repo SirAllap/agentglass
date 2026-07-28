@@ -26,17 +26,19 @@ export const NOW_CSS = `
 .mb-hero .w b{display:block;font-size:14px;font-weight:600;line-height:1.25}
 .mb-hero .w span{display:block;font-size:11.5px;color:var(--text3);margin-top:2px}
 
-/* Vitals: one bar per live agent, each on its own period, so the strip reads
-   as several things working rather than as one animation looping. */
-.mb-vitals{display:flex;align-items:flex-end;gap:3px;height:46px;margin:16px 17px 0;padding-bottom:7px;
-  position:relative;z-index:1;border-bottom:1px solid color-mix(in srgb,var(--border) 40%,transparent)}
-.mb-vitals i{flex:1;height:100%;border-radius:2px 2px 0 0;transform-origin:bottom;
-  background:linear-gradient(180deg,var(--primary-hover),color-mix(in srgb,var(--primary) 26%,transparent));
-  animation:mb-vit var(--p) ease-in-out infinite;animation-delay:var(--d);
-  box-shadow:0 0 10px -2px color-mix(in srgb,var(--primary) 60%,transparent)}
-@keyframes mb-vit{0%,100%{transform:scaleY(.14)}50%{transform:scaleY(1)}}
-.mb-vitals i.idle{background:color-mix(in srgb,var(--border) 48%,transparent);animation:none;
-  transform:scaleY(.1);box-shadow:none}
+/* What is open right now: one row per running tool call, from the socket. Not
+   a chart — the useful facts are which tool, what it is touching, and how long
+   it has been at it, and none of those is a magnitude. */
+.mb-open{position:relative;z-index:1;margin:15px 17px 0;padding-bottom:9px;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 40%,transparent);
+  display:flex;flex-direction:column;gap:6px}
+.mb-open .r{display:flex;align-items:center;gap:8px;font-size:11px;min-width:0}
+.mb-open .r b{color:var(--primary-hover);font-weight:700;flex:none}
+.mb-open .r .t{color:var(--text2);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;direction:rtl;text-align:left}
+.mb-open .r .o{flex:none;color:var(--text3);font-variant-numeric:tabular-nums;font-size:10px}
+.mb-open .r .o.long{color:var(--warning)}
+.mb-open .more{font-size:10px;color:var(--text3)}
 .mb-vlabel{display:flex;align-items:center;gap:8px;padding:11px 17px 16px;font-size:10.5px;
   color:var(--text3);position:relative;z-index:1}
 .mb-vlabel b{color:var(--text2);font-weight:500}
@@ -74,13 +76,24 @@ export interface NowAction {
   run: () => Promise<string | void> | string | void;
 }
 
-export function NowHero({ pending, working, rates, spend, repos }: {
-  pending: number; working: number; rates: number[]; spend: string; repos: string[];
+/**
+ * The hero, and under it what the fleet is actually doing.
+ *
+ * This used to draw fourteen bars animated at rates derived from each session's
+ * tool *count* — `1 + ((s.tool_count % 5) * 0.35)`. They were `aria-hidden`
+ * decoration presented in the position telemetry would occupy, on an app that
+ * had no live connection and therefore nothing to tell you. Someone glancing at
+ * a phone to see whether an agent was moving was reading an animation.
+ *
+ * The socket carries the real answer: `openTools` is the server's authoritative
+ * list of calls still running, with what each one is touching and when that
+ * session last showed evidence of being alive. So the strip is now one row per
+ * open call, and when nothing is open it says so instead of pulsing.
+ */
+export function NowHero({ pending, working, live, spend, repos }: {
+  pending: number; working: number; live: LiveCall[]; spend: string; repos: string[];
 }) {
   const calm = pending === 0;
-  // A fixed number of slots, so the strip has the same shape whether one agent
-  // is running or six — it reads as capacity, not as a bar chart that resizes.
-  const SLOTS = 14;
   return (
     <div className={`mb-hero${calm ? " calm" : ""}`}>
       <div className="in">
@@ -90,14 +103,20 @@ export function NowHero({ pending, working, rates, spend, repos }: {
           <span>{calm ? "The fleet is running clean" : "Answer one and it leaves the queue"}</span>
         </span>
       </div>
-      <div className="mb-vitals" aria-hidden="true">
-        {Array.from({ length: SLOTS }, (_, i) => {
-          const r = rates[i];
-          return r == null
-            ? <i key={i} className="idle" />
-            : <i key={i} style={{ ["--p" as string]: `${(1.6 / r).toFixed(2)}s`, ["--d" as string]: `${(i * 0.23).toFixed(2)}s` }} />;
-        })}
-      </div>
+      {live.length > 0 && (
+        <div className="mb-open">
+          {live.slice(0, 3).map((c) => (
+            <div className="r" key={c.key}>
+              <b>{c.tool}</b>
+              <span className="t">{c.target || c.app}</span>
+              {/* How long it has been open is the difference between thinking
+                  and stuck, and it is the one number a count cannot give you. */}
+              <span className={`o${c.openMs > 60_000 ? " long" : ""}`}>{fmtAgo(Date.now() - c.openMs)}</span>
+            </div>
+          ))}
+          {live.length > 3 && <div className="more">+{live.length - 3} more open</div>}
+        </div>
+      )}
       <div className="mb-vlabel">
         <span className="mb-dot pulse" style={{ background: working ? "var(--success)" : "var(--text3)", color: "var(--success)" }} />
         <b>{working} working</b><span>·</span><span>{spend} today</span>
@@ -106,6 +125,16 @@ export function NowHero({ pending, working, rates, spend, repos }: {
       </div>
     </div>
   );
+}
+
+/** One open tool call, reduced to what the strip draws. */
+export interface LiveCall {
+  key: string;
+  tool: string;
+  target: string | null;
+  app: string;
+  /** How long the call has been open, in ms. */
+  openMs: number;
 }
 
 export function NowStream({ items, actionsFor, onOpen }: {
