@@ -138,7 +138,12 @@ export function MobileApp() {
   // here — they are what covers the gap between the socket dying and noticing.
   const loadFast = useCallback(() => {
     api.gatePending().then((r) => { setGates(r.gates); setReachable(true); }).catch(() => setReachable(false));
-    api.sessions(40).then(setSessions).catch(() => { /* the gate poll reports reachability */ });
+    // 40 was the page size while the list had no search, and it made the scope
+    // called "All" mean "the newest forty" — a chat from three days ago was
+    // unreachable by any route. The desktop has always taken 200; a rollup row
+    // is small and this arrives once on the socket's nudge rather than on a
+    // four-second poll.
+    api.sessions(200).then(setSessions).catch(() => { /* the gate poll reports reachability */ });
   }, []);
 
   const loadDocker = useCallback(() => {
