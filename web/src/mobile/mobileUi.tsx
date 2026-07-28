@@ -214,26 +214,69 @@ export function Toasts({ toasts, raised }: { toasts: Toast[]; raised?: boolean }
  * Without it, back leaves agentglass entirely from a diff three levels deep,
  * which is the fastest way to make a companion feel broken.
  */
+/**
+ * One stack for every screen, and one history entry that serves whichever is
+ * on top.
+ *
+ * The first version of this gave each screen its own entry, and closing one by
+ * button called `history.back()` to tidy that entry up. `history.back()` fires
+ * a popstate, and every *other* open screen was listening for popstate as its
+ * own cue to close. Opening a diff from the repo screen therefore did this:
+ * the repo screen's `open` went false (its condition excludes an open diff), it
+ * called back(), and the popstate landed on the diff that had just opened,
+ * which closed itself immediately. The file you tapped flashed and vanished,
+ * every time, and the app looked like it could not load a diff at all.
+ *
+ * So: the screens form a stack, only the top one answers a back gesture, and
+ * the entry a programmatic close consumes is ignored by everyone rather than
+ * broadcast to all of them.
+ */
+type ScreenEntry = { close: () => void };
+const screenStack: ScreenEntry[] = [];
+let entryOwned = false;
+let ignoreNextPop = false;
+
+function ensureEntry() {
+  if (entryOwned || typeof history === "undefined") return;
+  history.pushState({ mbScreen: true }, "");
+  entryOwned = true;
+}
+
+function onPopState() {
+  // Our own tidy-up, not a person pressing back.
+  if (ignoreNextPop) { ignoreNextPop = false; return; }
+  entryOwned = false;
+  const top = screenStack.pop();
+  top?.close();
+  // Still somewhere below the surface: keep an entry so the next press closes
+  // the next screen instead of leaving the app.
+  if (screenStack.length) ensureEntry();
+}
+
+if (typeof window !== "undefined") window.addEventListener("popstate", onPopState);
+
 export function useBackClose(open: boolean, close: () => void) {
-  const armed = useRef(false);
-  useEffect(() => {
-    if (open && !armed.current) {
-      armed.current = true;
-      history.pushState({ mb: true }, "");
-    }
-    if (!open && armed.current) {
-      armed.current = false;
-      // Closed by a button rather than by the gesture: drop the entry we added
-      // so the next back press does not have to be pressed twice.
-      if (history.state?.mb) history.back();
-    }
-  }, [open]);
+  // The latest close, without re-registering the entry on every render.
+  const latest = useRef(close);
+  latest.current = close;
+
   useEffect(() => {
     if (!open) return;
-    const pop = () => { armed.current = false; close(); };
-    window.addEventListener("popstate", pop);
-    return () => window.removeEventListener("popstate", pop);
-  }, [open, close]);
+    const entry: ScreenEntry = { close: () => latest.current() };
+    screenStack.push(entry);
+    ensureEntry();
+    return () => {
+      const at = screenStack.lastIndexOf(entry);
+      if (at >= 0) screenStack.splice(at, 1);
+      // Only when nothing is left is the entry ours to give back, and the
+      // popstate it causes is ours to swallow.
+      if (!screenStack.length && entryOwned) {
+        ignoreNextPop = true;
+        entryOwned = false;
+        history.back();
+      }
+    };
+  }, [open]);
 }
 
 export function Screen({ open, title, sub, onBack, right, foot, children }: {

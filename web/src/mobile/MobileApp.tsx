@@ -66,6 +66,8 @@ export function MobileApp() {
   const [openRepo, setOpenRepo] = useState<RepoSummary | null>(null);
   const [openPr, setOpenPr] = useState<{ root: string; number: number } | null>(null);
   const [settings, setSettings] = useState(false);
+  /** A conversation is open and owns the whole screen: no app header, no tabs. */
+  const [immersive, setImmersive] = useState(false);
   const [dismissed, setDismissed] = useState<string[]>([]);
 
   // ── polling ──────────────────────────────────────────────────────────
@@ -248,7 +250,7 @@ export function MobileApp() {
       {askDialog}
       <div className="mb-sky" />
 
-      <header className="sticky top-0 z-40 flex items-center gap-2 px-4"
+      {!immersive && <header className="sticky top-0 z-40 flex items-center gap-2 px-4"
         style={{
           paddingTop: "calc(env(safe-area-inset-top) + 11px)", paddingBottom: 10,
           background: "color-mix(in srgb, var(--bg) 80%, transparent)", backdropFilter: "blur(16px) saturate(1.4)",
@@ -265,9 +267,13 @@ export function MobileApp() {
         <button className="mb-press grid place-items-center" aria-label="Settings"
           style={{ minHeight: 40, minWidth: 40, borderRadius: 11, fontSize: 15, color: "var(--text3)", background: "transparent" }}
           onClick={() => setSettings(true)}>⚙</button>
-      </header>
+      </header>}
 
-      <main className="flex-1 relative" style={{ zIndex: 1, padding: "14px 15px calc(var(--nav) + env(safe-area-inset-bottom) + 22px)" }}>
+      {/* No padding while a conversation owns the screen: it is a fixed
+          full-height surface of its own, and the reserve for a tab bar that is
+          not being drawn would only push its composer off the bottom. */}
+      <main className="flex-1 relative"
+        style={{ zIndex: 1, padding: immersive ? 0 : "14px 15px calc(var(--nav) + env(safe-area-inset-bottom) + 22px)" }}>
         {tab === "now" && (
           <>
             <NowHero
@@ -282,11 +288,11 @@ export function MobileApp() {
             <NowStream items={queue} actionsFor={actionsFor} onOpen={openItem} />
           </>
         )}
-        {tab === "chats" && <MobileChats sessions={sessions} onRefresh={loadFast} />}
+        {tab === "chats" && <MobileChats sessions={sessions} onRefresh={loadFast} onImmersive={setImmersive} />}
         {tab === "repos" && <RepoList repos={repoSummaries} onOpen={setOpenRepo} />}
       </main>
 
-      <nav className="fixed left-0 right-0 bottom-0 z-40 flex"
+      {!immersive && <nav className="fixed left-0 right-0 bottom-0 z-40 flex"
         style={{
           background: "color-mix(in srgb, var(--bg2) 84%, transparent)", backdropFilter: "blur(20px) saturate(1.5)",
           borderTop: "1px solid color-mix(in srgb, var(--border) 48%, transparent)",
@@ -295,7 +301,7 @@ export function MobileApp() {
         <TabBtn id="now" tab={tab} onPick={setTab} glyph="◎" label="Now" badge={queue.length} />
         <TabBtn id="chats" tab={tab} onPick={setTab} glyph="▤" label="Chats" />
         <TabBtn id="repos" tab={tab} onPick={setTab} glyph="◇" label="Repos" />
-      </nav>
+      </nav>}
 
       <RepoScreen open={!!openRepo && !openPr} repo={openRepo} containers={containers} stats={dstats}
         onBack={() => setOpenRepo(null)} toast={toast} onRefresh={refreshAll} />

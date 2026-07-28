@@ -23,12 +23,38 @@ export const COMMIT_ENABLED = process.env.AGENTGLASS_COMMIT_DISABLED !== "1";
 
 type GitResult = { code: number; stdout: string; stderr: string };
 
+/**
+ * Configuration this server sets on every git call, because it parses the
+ * output and the user's own config can change it.
+ *
+ * `diff.mnemonicPrefix` is the one that bit: with it on — and plenty of people
+ * have it on — git labels a diff `i/file` and `w/file` (index and worktree)
+ * instead of `a/file` and `b/file`. Our diff parser stripped `a/`/`b/` only, so
+ * every path came out as `w/web/src/…`. The panel then asked for a diff of a
+ * file by that name and got nothing, and staging one ran
+ * `git add -- w/web/src/…`, which fails with "did not match any files". A
+ * working repo looked like a broken app, and only for people with that setting.
+ *
+ * `diff.noprefix` is the same trap from the other side (no prefix at all),
+ * `core.quotepath` escapes non-ASCII names into `\303\251` octal, and
+ * `color.ui=always` would wrap everything we read in ANSI escapes.
+ *
+ * Passed as `-c` overrides rather than environment variables so they apply to
+ * exactly these calls and nothing the user runs themselves.
+ */
+const PINNED: string[] = [
+  "-c", "diff.mnemonicPrefix=false",
+  "-c", "diff.noprefix=false",
+  "-c", "core.quotepath=false",
+  "-c", "color.ui=false",
+];
+
 export function git(cwd: string, args: string[]): GitResult {
   const t0 = performance.now();
   try {
     // A hung git call (index.lock contention, a repo on a stalled mount) would
     // otherwise freeze the whole single-threaded server indefinitely.
-    const proc = Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+    const proc = Bun.spawnSync(["git", ...PINNED, "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
     const r = {
       code: proc.exitCode ?? 1,
       stdout: proc.stdout?.toString() ?? "",
@@ -126,7 +152,7 @@ async function runGit(cwd: string, args: string[]): Promise<GitResult> {
   // arrive in the meantime. See loopwatch.
   const owner = currentLabel();
   try {
-    const proc = Bun.spawn(["git", "-C", cwd, ...args], {
+    const proc = Bun.spawn(["git", ...PINNED, "-C", cwd, ...args], {
       stdout: "pipe",
       stderr: "pipe",
       // A git that never returns used to cost one hung request: bad, bounded,

@@ -37,7 +37,21 @@ const SCOPES: [ChatScope, string][] = [["live", "Working"], ["today", "Today"], 
 /** A turn being streamed right now, before the transcript catches up. */
 type Live = { text: string; tools: string[]; error: string | null };
 
-export function MobileChats({ sessions, onRefresh }: { sessions: SessionRollup[]; onRefresh: () => void }) {
+export function MobileChats({ sessions, onRefresh, onImmersive }: {
+  sessions: SessionRollup[];
+  onRefresh: () => void;
+  /**
+   * Tell the shell a conversation has the screen.
+   *
+   * Not decoration: `main` carries `z-index: 1`, which makes it a stacking
+   * context, and a conversation rendered inside it cannot rise above the app
+   * header however high its own z-index goes. The header painted straight over
+   * the chat's bar, and the tab bar sat on top of the composer. A chat takes
+   * the whole screen, so the shell puts its own chrome away rather than
+   * fighting it.
+   */
+  onImmersive?: (on: boolean) => void;
+}) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [composing, setComposing] = useState(false);
   /**
@@ -60,6 +74,12 @@ export function MobileChats({ sessions, onRefresh }: { sessions: SessionRollup[]
   const liveCount = useMemo(() => scopeSessions(sessions, "live").length, [sessions]);
 
   const open = (id: string, cwd: string) => { setOpenCwd(cwd); setOpenId(id); };
+
+  // Leaving the tab, or the app, must give the chrome back.
+  useEffect(() => {
+    onImmersive?.(!!openId);
+    return () => onImmersive?.(false);
+  }, [openId, onImmersive]);
 
   if (composing) return <NewChat onCancel={() => setComposing(false)} onStarted={(id, cwd) => { setComposing(false); open(id, cwd); onRefresh(); }} />;
   if (openId) return <Conversation id={openId} knownCwd={openCwd} onBack={() => { setOpenId(null); onRefresh(); }} />;

@@ -119,7 +119,12 @@ export function RepoScreen({ open, repo, containers, stats, onBack, toast, onRef
     try {
       const r = await run();
       toast(r.ok ? label : (r.error || `${label} failed`), !r.ok);
-      if (r.ok) { loadTree(); onRefresh(); }
+      // Reload either way. A refused action leaves the repo as it was, and the
+      // switches on screen were drawn from the state before it — re-reading is
+      // what stops a failure from leaving a row showing something that never
+      // happened.
+      loadTree();
+      if (r.ok) onRefresh();
     } catch (e) { toast(String(e), true); }
   };
   const { ask, dialog: askDialog } = useAsk();
@@ -127,7 +132,11 @@ export function RepoScreen({ open, repo, containers, stats, onBack, toast, onRef
   return (
     <>
       {askDialog}
-      <Screen open={open && !openPr && !ctr && diffAt == null} title={repo?.name ?? ""} sub={repo?.branch} onBack={onBack}>
+      {/* Stays open under whatever is stacked on top of it. The screens that
+          cover it are drawn later in this tree, so they paint over it anyway,
+          and closing it here made it push and pop history entries every time a
+          file was tapped — see useBackClose. */}
+      <Screen open={open} title={repo?.name ?? ""} sub={repo?.branch} onBack={onBack}>
         <Seg sticky value={facet} onPick={setFacet} options={[
           { id: "changes", label: "Changes", n: repo?.dirty || null },
           { id: "prs", label: "Pull requests", n: prs.length || null },
