@@ -14,7 +14,7 @@ const SORT_OPTIONS = [
   { value: "tokens-desc", label: "Tokens ↓" },
   { value: "tokens-asc", label: "Tokens ↑" },
 ];
-type Item = { key: string; label: string; color: string; cost: number; tokens: number };
+type Item = { key: string; label: string; estimated?: boolean; color: string; cost: number; tokens: number };
 
 const repoName = (p: string) => p.split(/[/\\]/).filter(Boolean).pop() || p;
 
@@ -26,12 +26,12 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
     view === "model"
       ? (stats?.by_model ?? [])
           .filter((m) => m.cost_usd > 0 || m.input_tokens > 0)
-          .map((m) => ({ key: m.model_name, label: m.model_name, color: modelColor(m.model_name), cost: m.cost_usd, tokens: m.input_tokens + m.output_tokens }))
+          .map((m) => ({ key: m.model_name, label: m.model_name, estimated: !!m.is_estimated, color: modelColor(m.model_name), cost: m.cost_usd, tokens: m.input_tokens + m.output_tokens }))
       : (stats?.by_repo ?? [])
           .filter((r) => r.cost_usd > 0 || r.input_tokens > 0)
           .map((r, i) => {
             const label = r.project_path ? repoName(r.project_path) : "no repo";
-            return { key: r.project_path ?? "—", label, color: repoColor(i), cost: r.cost_usd, tokens: r.input_tokens + r.output_tokens };
+            return { key: r.project_path ?? "—", label, estimated: false, color: repoColor(i), cost: r.cost_usd, tokens: r.input_tokens + r.output_tokens };
           });
 
   const dir = sort.endsWith("asc") ? 1 : -1;
@@ -95,7 +95,7 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
             {active ? (
               <>
                 <span className="text-[16px] font-semibold tabular-nums" style={{ color: active.color }}>{fmtUsd(active.cost)}</span>
-                <span className="text-[10px] t-dim2 truncate max-w-full">{active.label}</span>
+                <span className="text-[10px] t-dim2 truncate max-w-full">{active.estimated && <span title="estimated pricing" aria-label="estimated pricing">~</span>}{active.label}</span>
               </>
             ) : (
               <>
@@ -120,7 +120,7 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
             >
               <span className="flex items-center gap-1.5 t-dim min-w-0">
                 <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: m.color }} />
-                <span className="truncate">{m.label}</span>
+                <span className="truncate">{m.estimated && <span title="estimated pricing" aria-label="estimated pricing">~</span>}{m.label}</span>
               </span>
               <span className="flex items-center gap-3 tabular-nums shrink-0">
                 <span className="t-dim2">{fmtTokens(m.tokens)} tok</span>

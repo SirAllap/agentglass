@@ -63,6 +63,8 @@ export const PRICE_TABLE: ModelPrice[] = [
   { match: ["glm"], label: "GLM", input: 1.43, output: 5.24, cache_write: 0, cache_read: 0.29 },
 
   // --- others (approx) ---
+  { match: ["k3"], label: "Kimi K3", input: 3, output: 15, cache_write: 0, cache_read: 0.3 },
+  { match: ["kimi", "moonshot"], label: "Kimi/Moonshot", input: 0.55, output: 2.19, cache_write: 0, cache_read: 0.14 },
   { match: ["deepseek"], label: "DeepSeek", input: 0.27, output: 1.1, cache_write: 0, cache_read: 0.07 },
   { match: ["grok"], label: "Grok", input: 2, output: 10, cache_write: 0, cache_read: 0 },
   { match: ["mistral", "mixtral", "codestral"], label: "Mistral", input: 0.4, output: 2, cache_write: 0, cache_read: 0 },
@@ -101,20 +103,22 @@ export interface TokenUsage {
   cache_read_tokens?: number;
 }
 
-/** Cost in USD for a given usage + model. Unknown model → DEFAULT_PRICE. */
-export function costUsd(usage: TokenUsage, modelName: string | null | undefined): number {
-  const p = priceFor(modelName) ?? { ...DEFAULT_PRICE, match: [], label: "unknown" };
+export interface CostResult {
+  cost: number;
+  estimated: boolean;
+}
+
+export function costUsd(usage: TokenUsage, modelName: string | null | undefined): CostResult {
+  const known = priceFor(modelName);
+  const p = known ?? { ...DEFAULT_PRICE, match: [], label: "unknown" };
   const inTok = usage.input_tokens ?? 0;
   const outTok = usage.output_tokens ?? 0;
   const cw = usage.cache_creation_tokens ?? 0;
   const cr = usage.cache_read_tokens ?? 0;
-  return (
-    (inTok * p.input +
-      outTok * p.output +
-      cw * p.cache_write +
-      cr * p.cache_read) /
-    1_000_000
-  );
+  return {
+    cost: (inTok * p.input + outTok * p.output + cw * p.cache_write + cr * p.cache_read) / 1_000_000,
+    estimated: !known,
+  };
 }
 
 export function modelLabel(modelName: string | null | undefined): string {

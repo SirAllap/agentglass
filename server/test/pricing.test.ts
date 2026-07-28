@@ -46,13 +46,13 @@ describe("priceFor", () => {
 describe("costUsd", () => {
   test("uses matched model rates for input/output tokens", () => {
     // Sonnet: input 3 / output 15 per MTok
-    const cost = costUsd({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, "claude-sonnet-4");
+    const { cost } = costUsd({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, "claude-sonnet-4");
     expect(cost).toBe(3 + 15);
   });
 
   test("applies cache_write and cache_read rates", () => {
     // Haiku: cache_write 1.25, cache_read 0.1 per MTok
-    const cost = costUsd(
+    const { cost } = costUsd(
       { input_tokens: 0, output_tokens: 0, cache_creation_tokens: 1_000_000, cache_read_tokens: 1_000_000 },
       "claude-3-5-haiku",
     );
@@ -60,15 +60,21 @@ describe("costUsd", () => {
   });
 
   test("unknown model falls back to DEFAULT_PRICE, never NaN", () => {
-    const cost = costUsd({ input_tokens: 1_000_000, output_tokens: 0 }, "no-such-model");
-    expect(Number.isFinite(cost)).toBe(true);
-    expect(Number.isNaN(cost)).toBe(false);
-    expect(cost).toBe(DEFAULT_PRICE.input);
+    const result = costUsd({ input_tokens: 1_000_000, output_tokens: 0 }, "no-such-model");
+    expect(Number.isFinite(result.cost)).toBe(true);
+    expect(Number.isNaN(result.cost)).toBe(false);
+    expect(result.cost).toBe(DEFAULT_PRICE.input);
+    expect(result.estimated).toBe(true);
+  });
+
+  test("matched model has estimated=false", () => {
+    const result = costUsd({ input_tokens: 1_000_000, output_tokens: 0 }, "claude-sonnet-4");
+    expect(result.estimated).toBe(false);
   });
 
   test("missing usage fields count as zero", () => {
-    expect(costUsd({}, "claude-sonnet-4")).toBe(0);
-    expect(costUsd({ input_tokens: 0 }, null)).toBe(0);
+    expect(costUsd({}, "claude-sonnet-4").cost).toBe(0);
+    expect(costUsd({ input_tokens: 0 }, null).cost).toBe(0);
   });
 });
 
