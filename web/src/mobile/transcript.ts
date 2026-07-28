@@ -45,6 +45,18 @@ export interface FeedTool {
   target?: string | null;
   note?: string | null;
   is_error?: boolean;
+  /** What the tool answered. Seeing what an agent RAN and never what came back
+   *  is what still sends you to the terminal: a failing test and a passing one
+   *  look identical without it. It has been on the wire the whole time. */
+  output?: string | null;
+  /** True when `output` is only the head of a longer result, so the screen can
+   *  say so instead of implying the command was that quiet. */
+  output_clipped?: boolean;
+  /** Links an edit to its diff in `SessionDetail.changes`. */
+  tool_use_id?: string | null;
+  /** Which subagent produced this, when it was not the main thread. */
+  agent_id?: string | null;
+  agent_type?: string | null;
 }
 
 export interface FeedEntry extends FeedTool {
@@ -55,31 +67,98 @@ export interface FeedEntry extends FeedTool {
 
 export type FeedItem =
   | { kind: "message"; ts: number; role: "user" | "assistant"; text: string }
-  /** Consecutive tool runs, oldest first, as one openable block. */
-  | { kind: "tools"; ts: number; runs: FeedTool[]; errors: number };
+  /** A turn that was cut off. Not a message — see NOISE below. */
+  | { kind: "note"; ts: number; text: string }
+  /** Consecutive tool runs from one agent, oldest first, as one openable block. */
+  | { kind: "tools"; ts: number; runs: FeedTool[]; errors: number; agent?: string | null };
+
+/**
+ * Lines that are transcript bookkeeping rather than conversation.
+ *
+ * Claude Code writes these into the JSONL itself, the scanner ingests them like
+ * any other message, and the phone drew them as chat bubbles — so a session
+ * that had been interrupted twice read as an agent that had said
+ * "[Request interrupted by user]" to you, twice, in its own voice.
+ *
+ * Dropped outright would be worse: that a turn was cut off is a real fact about
+ * the session and losing it makes the gap in the conversation inexplicable. So
+ * they become a note — one thin centred line, not a thing anybody said.
+ */
+const NOISE: Record<string, string> = {
+  "[Request interrupted by user]": "You interrupted this turn",
+  "[Request interrupted by user for tool use]": "You interrupted this turn",
+  "No response requested.": "No reply was asked for",
+};
+
+/**
+ * How many messages survive no matter how hard the agent is working.
+ *
+ * The window used to be a flat count of timeline entries, and a tool run is an
+ * entry. So a turn that touched forty files spent the whole budget on tool rows
+ * and evicted every message — the harder the agent worked, the less of what it
+ * said you could see, which is exactly backwards and exactly the complaint.
+ * Messages and tools get separate budgets now.
+ */
+const MESSAGE_FLOOR = 50;
 
 /**
  * The conversation as a feed: messages and the work between them, in order.
  *
  * `timeline` arrives newest-first (the server's budget drops the oldest), so
- * this takes the newest `limit` entries and turns them back round.
+ * this walks from the newest end, spends the two budgets independently, and
+ * turns the result back round.
  */
-export function buildFeed(timeline: readonly FeedEntry[] | undefined, limit = 120): FeedItem[] {
-  const recent = (timeline ?? []).slice(0, limit).reverse();
+export function buildFeed(
+  timeline: readonly FeedEntry[] | undefined,
+  limit = 120,
+  messageFloor = MESSAGE_FLOOR,
+): FeedItem[] {
+  // The floor is a guarantee inside the window, never a way past it. A caller
+  // asking for ten entries must get ten, not fifty.
+  const floor = Math.min(messageFloor, limit);
+  const toolBudget = Math.max(0, limit - floor);
+  const kept: FeedEntry[] = [];
+  let messages = 0;
+  let tools = 0;
+  for (const e of timeline ?? []) {
+    if (e.kind === "message") {
+      if (messages >= floor) continue;
+      messages++;
+    } else {
+      if (tools >= toolBudget) continue;
+      tools++;
+    }
+    kept.push(e);
+    if (messages >= floor && tools >= toolBudget) break;
+  }
+  kept.reverse();
+
   const out: FeedItem[] = [];
-  for (const e of recent) {
+  for (const e of kept) {
     if (e.kind === "message") {
       if (!e.text) continue;
+      const note = NOISE[e.text.trim()];
+      if (note) { out.push({ kind: "note", ts: e.ts, text: note }); continue; }
       out.push({ kind: "message", ts: e.ts, role: e.role ?? "assistant", text: e.text });
       continue;
     }
     const last = out[out.length - 1];
-    const run: FeedTool = { ts: e.ts, tool: e.tool, target: e.target, note: e.note, is_error: e.is_error };
-    if (last && last.kind === "tools") {
+    const run: FeedTool = {
+      ts: e.ts, tool: e.tool, target: e.target, note: e.note, is_error: e.is_error,
+      output: e.output, output_clipped: e.output_clipped, tool_use_id: e.tool_use_id,
+      agent_id: e.agent_id, agent_type: e.agent_type,
+    };
+    // A block belongs to one agent. Merging a subagent's runs into the main
+    // thread's is how four agents working in parallel read as one very busy
+    // one, and the tag to keep them apart is already on every entry.
+    if (last && last.kind === "tools" && (last.runs[0]?.agent_id ?? null) === (e.agent_id ?? null)) {
       last.runs.push(run);
       if (e.is_error) last.errors++;
     } else {
-      out.push({ kind: "tools", ts: e.ts, runs: [run], errors: e.is_error ? 1 : 0 });
+      out.push({
+        kind: "tools", ts: e.ts, runs: [run], errors: e.is_error ? 1 : 0,
+        agent: e.agent_type ?? (e.agent_id ? "subagent" : null),
+      });
     }
   }
   return out;
