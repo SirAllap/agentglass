@@ -8,6 +8,8 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import type { GitRepoRef, ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
@@ -47,6 +49,7 @@ type Sess = {
   title: string;
   term: Terminal;
   fit: FitAddon;
+  search: SearchAddon;
   holder: HTMLDivElement; // xterm's home element — reparented into the panel
   ws: WebSocket | null;
   status: SessStatus;
@@ -69,6 +72,7 @@ const sessionsFor = (root: string) => [...sessions.values()].filter((s) => s.roo
 const notify = (s: Sess) => s.subs.forEach((fn) => fn());
 // Set by the mounted panel so the terminal itself can close it (Shift+Esc).
 let panelClose: () => void = () => {};
+let toggleSearch: () => void = () => {};
 
 // The panel is built to keep many shells open at once, so eviction is a last
 // resort rather than routine: it only runs at the server's own ceiling, and it
@@ -208,16 +212,19 @@ function createSession(root: string): Sess | null {
     macOptionIsMeta: true,
   });
   const fit = new FitAddon();
+  const search = new SearchAddon();
   term.loadAddon(fit);
-  // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
+  term.loadAddon(search);
+  term.loadAddon(new WebLinksAddon());
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === "keydown" && e.key === "Escape" && e.shiftKey) { panelClose(); return false; }
+    if (e.type === "keydown" && e.key === "f" && e.ctrlKey && e.shiftKey) { toggleSearch(); return false; }
     return true;
   });
   const holder = document.createElement("div");
   holder.style.cssText = "width:100%;height:100%";
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
     if (sess.status === "live" && sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(JSON.stringify({ t: "in", d }));
@@ -262,6 +269,9 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   const [cmdsOpen, setCmdsOpen] = useState(false);
   const [capacityError, setCapacityError] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const onCloseRef = useRef(onClose);
   const [, force] = useReducer((x: number) => x + 1, 0);
 
@@ -319,6 +329,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   useEffect(() => {
     if (!open || IS_DEMO) return;
     panelClose = () => onCloseRef.current();
+    toggleSearch = () => setSearchOpen((o) => !o);
     const mounted: { s: Sess; el: HTMLDivElement; ro: ResizeObserver }[] = [];
     paneIds.forEach((id, i) => {
       const s = sessions.get(id);
@@ -338,6 +349,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
     });
     return () => {
       panelClose = () => {};
+      toggleSearch = () => {};
       for (const { s, el, ro } of mounted) {
         ro.disconnect();
         s.subs.delete(force);
@@ -520,6 +532,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                     <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ split</button>
                     <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ restart</button>
                     <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>clear</button>
+                    <button onClick={() => { setSearchOpen((o) => !o); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 0); }} title="find in scrollback (Ctrl+Shift+F)" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: searchOpen ? "var(--primary)" : "var(--text2)", border: searchOpen ? "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" : undefined }}>🔍</button>
                     <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
                 </div>
@@ -550,6 +563,14 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
 
                 {/* the terminals — one slot per visible pane */}
                 <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}>
+                  {searchOpen && (
+                    <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2 py-1.5 rounded-lg shadow-lg" style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
+                      <input ref={searchInputRef} value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); if (e.target.value && sess) sess.search.findNext(e.target.value); }} onKeyDown={(e) => { if (!sess || !searchQuery) return; if (e.key === "Enter") { if (e.shiftKey) sess.search.findPrevious(searchQuery); else sess.search.findNext(searchQuery); } if (e.key === "Escape") { setSearchOpen(false); setSearchQuery(""); sess.search.clearDecorations(); } }} placeholder="find…" autoFocus className="text-[11px] px-2 py-1 rounded-md outline-none w-44" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                      <button onClick={() => { if (sess && searchQuery) sess.search.findPrevious(searchQuery); }} title="previous match (Shift+Enter)" className="text-[11px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>▲</button>
+                      <button onClick={() => { if (sess && searchQuery) sess.search.findNext(searchQuery); }} title="next match (Enter)" className="text-[11px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>▼</button>
+                      <button onClick={() => { setSearchOpen(false); setSearchQuery(""); if (sess) sess.search.clearDecorations(); }} className="text-[14px] leading-none px-1 t-dim2 hover:opacity-70">✕</button>
+                    </div>
+                  )}
                   <div className="absolute inset-0 p-1.5 grid gap-1.5"
                     style={{
                       gridTemplateColumns: paneIds.length > 1 ? "1fr 1fr" : "1fr",
