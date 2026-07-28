@@ -6,6 +6,7 @@ import { fmtUsd, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
 import { sessionIsLive } from "../lib/derive.ts";
 import { scopeSessions, openingScope, type ChatScope } from "./chatList.ts";
 import { MODELS, resumeModel } from "./resumeModel.ts";
+import { useBackClose } from "./mobileUi.tsx";
 import { recentTurns, buildFeed, summariseRuns, shortTarget, type FeedEntry, type FeedItem, type FeedTool } from "./transcript.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
 
@@ -48,9 +49,19 @@ const SCOPES: [ChatScope, string][] = [["live", "Working"], ["today", "Today"], 
 /** A turn being streamed right now, before the transcript catches up. */
 type Live = { text: string; tools: string[]; error: string | null };
 
-export function MobileChats({ sessions, onRefresh, onImmersive }: {
+/** A conversation somebody asked for by name. */
+export interface OpenChat { id: string; cwd: string }
+/** A chat to compose, optionally arriving with a directory and a prompt from
+ *  whoever handed it over. */
+export interface Compose { cwd?: string; prompt?: string }
+
+export function MobileChats({ sessions, onRefresh, onImmersive, openChat, onOpenChat, compose, onCompose }: {
   sessions: SessionRollup[];
   onRefresh: () => void;
+  openChat: OpenChat | null;
+  onOpenChat: (v: OpenChat | null) => void;
+  compose: Compose | null;
+  onCompose: (v: Compose | null) => void;
   /**
    * Tell the shell a conversation has the screen.
    *
@@ -63,19 +74,24 @@ export function MobileChats({ sessions, onRefresh, onImmersive }: {
    */
   onImmersive?: (on: boolean) => void;
 }) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [composing, setComposing] = useState(false);
   /**
-   * Where the open conversation runs, as far as this screen already knows.
+   * Which conversation is open, and any chat waiting to be composed.
    *
-   * The session detail carries the same thing, but it takes a fetch to arrive,
-   * and a chat started here is seconds old — the row the scanner writes may not
-   * have a directory yet. Without this the composer replaced itself with "this
-   * session did not record where it ran", which is a claim about the session
-   * when the truth was "the answer has not come back yet". We picked the repo,
-   * so we can simply say so.
+   * Both used to be private state here, and that is what made every route into
+   * this screen approximate. Nothing outside could say "open *this* chat", so
+   * the queue's own "Open chat" button degraded to `setTab("chats")` — you
+   * tapped the accent action on a stalled agent, landed on a list of other
+   * agents, and the card you tapped was gone. Same for the two hand-offs that
+   * pass a directory and a prompt: `onOpenChatWith` was declared by the pull
+   * request and repo screens and passed by nobody, so "Review locally with
+   * Claude" and "Ask Claude why" could never render at all.
+   *
+   * Controlled from the shell now. A destination the rest of the app can name
+   * is the difference between a route and a guess.
    */
-  const [openCwd, setOpenCwd] = useState("");
+  const openId = openChat?.id ?? null;
+  const openCwd = openChat?.cwd ?? "";
+  const composing = !!compose;
   /** Null until the first list arrives, so the opening scope is chosen from
    *  real sessions rather than from the empty array of the first render. */
   const [picked, setPicked] = useState<ChatScope | null>(null);
@@ -84,7 +100,21 @@ export function MobileChats({ sessions, onRefresh, onImmersive }: {
   const shown = useMemo(() => scopeSessions(sessions, scope), [sessions, scope]);
   const liveCount = useMemo(() => scopeSessions(sessions, "live").length, [sessions]);
 
-  const open = (id: string, cwd: string) => { setOpenCwd(cwd); setOpenId(id); };
+  const closeConversation = useCallback(() => { onOpenChat(null); onRefresh(); }, [onOpenChat, onRefresh]);
+  const closeCompose = useCallback(() => onCompose(null), [onCompose]);
+
+  /**
+   * The back gesture closes the screen, not the app.
+   *
+   * `Screen` and `Sheet` have joined the shared stack since the diff started
+   * closing itself; these two never did, because they are early returns rather
+   * than Screens. So the one surface a person sits in for minutes — mid-reply,
+   * with a queued message — was the one where swiping back the way every other
+   * app on the device works left agentglass entirely, and took the draft with
+   * it. Called unconditionally: hooks cannot live behind the returns below.
+   */
+  useBackClose(!!openId, closeConversation);
+  useBackClose(composing, closeCompose);
 
   // Leaving the tab, or the app, must give the chrome back.
   useEffect(() => {
@@ -92,12 +122,15 @@ export function MobileChats({ sessions, onRefresh, onImmersive }: {
     return () => onImmersive?.(false);
   }, [openId, onImmersive]);
 
-  if (composing) return <NewChat onCancel={() => setComposing(false)} onStarted={(id, cwd) => { setComposing(false); open(id, cwd); onRefresh(); }} />;
-  if (openId) return <Conversation id={openId} knownCwd={openCwd} onBack={() => { setOpenId(null); onRefresh(); }} />;
+  if (compose) {
+    return <NewChat preset={compose} onCancel={closeCompose}
+      onStarted={(id, cwd) => { onCompose(null); onOpenChat({ id, cwd }); onRefresh(); }} />;
+  }
+  if (openId) return <Conversation id={openId} knownCwd={openCwd} onBack={closeConversation} />;
 
   return (
     <div className="flex flex-col gap-2">
-      <button onClick={() => setComposing(true)}
+      <button onClick={() => onCompose({})}
         className="rounded-xl text-[15px] font-medium"
         style={{ minHeight: 52, color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
         + New chat
@@ -136,7 +169,7 @@ export function MobileChats({ sessions, onRefresh, onImmersive }: {
       {shown.map((s) => {
         const running = !s.ended_at && Date.now() - s.last_seen < 120_000;
         return (
-          <button key={s.session_id} onClick={() => open(s.session_id, s.cwd_path || s.project_path || "")}
+          <button key={s.session_id} onClick={() => onOpenChat({ id: s.session_id, cwd: s.cwd_path || s.project_path || "" })}
             className="w-full text-left rounded-xl px-3.5 py-3 flex flex-col gap-1.5"
             style={{ background: "color-mix(in srgb, var(--bg2) 60%, transparent)", border: `1px solid color-mix(in srgb, var(--border) ${running ? 55 : 32}%, transparent)` }}>
             <div className="flex items-center gap-2">
@@ -573,20 +606,27 @@ function Bubble({ role, text, ts, streaming, tools, error, pending }: {
 }
 
 /** Start something new: a repo and a first message is the whole form. */
-function NewChat({ onCancel, onStarted }: { onCancel: () => void; onStarted: (sessionId: string, cwd: string) => void }) {
+function NewChat({ preset, onCancel, onStarted }: {
+  preset: Compose;
+  onCancel: () => void;
+  onStarted: (sessionId: string, cwd: string) => void;
+}) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
-  const [cwd, setCwd] = useState("");
+  const [cwd, setCwd] = useState(preset.cwd ?? "");
   const [model, setModel] = useState(MODELS[0]!.id);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(preset.prompt ?? "");
   const [live, setLive] = useState<Live | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const started = useRef(false);
 
   useEffect(() => {
     api.gitRepos()
-      .then((r) => { setRepos(r.repos); if (r.repos[0]) setCwd(r.repos[0].root); })
+      // A handed-over chat already knows where it runs — the checkout the pull
+      // request was put in — and picking the first repo instead would silently
+      // run the review against the wrong tree.
+      .then((r) => { setRepos(r.repos); if (!preset.cwd && r.repos[0]) setCwd(r.repos[0].root); })
       .catch(() => setRepos([]));
-  }, []);
+  }, [preset.cwd]);
 
   const start = async () => {
     const text = message.trim();

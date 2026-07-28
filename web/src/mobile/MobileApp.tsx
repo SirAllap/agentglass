@@ -5,7 +5,7 @@ import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { subscribeSessionChanged } from "../lib/sessionBus.ts";
 import { useStats } from "../lib/useStats.ts";
 import { fmtUsd, fmtTokens } from "../lib/format.ts";
-import { MobileChats } from "./MobileChats.tsx";
+import { MobileChats, type OpenChat, type Compose } from "./MobileChats.tsx";
 import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobileUi.tsx";
 import { pollWhileVisible } from "../lib/poll.ts";
 import { DIFF_CSS } from "./MobileDiff.tsx";
@@ -96,6 +96,16 @@ export function MobileApp() {
    *  separate projects. */
   const [openCheckouts, setOpenCheckouts] = useState<RepoSummary[]>([]);
   const [openPr, setOpenPr] = useState<{ root: string; number: number } | null>(null);
+  /**
+   * The chat destinations, held here so anything can name one.
+   *
+   * They lived inside MobileChats, which is why every route into it was
+   * approximate: the queue's "Open chat" could only reach the chats *tab*, and
+   * the two hand-offs that carry a directory and a prompt had nowhere to put
+   * them, so they never rendered.
+   */
+  const [openChat, setOpenChat] = useState<OpenChat | null>(null);
+  const [compose, setCompose] = useState<Compose | null>(null);
   const [settings, setSettings] = useState(false);
   /** A conversation is open and owns the whole screen: no app header, no tabs. */
   const [immersive, setImmersive] = useState(false);
@@ -297,6 +307,28 @@ export function MobileApp() {
     setOpenRepo(r);
   }, [repoSummaries]);
 
+  /** Open one specific conversation, wherever the tap came from. */
+  const openSession = useCallback((s: SessionRollup) => {
+    setOpenChat({ id: s.session_id, cwd: s.cwd_path || s.project_path || "" });
+    setTab("chats");
+  }, []);
+
+  /**
+   * "Review locally with Claude" and "Ask Claude why".
+   *
+   * Both screens have offered these behind `onOpenChatWith &&` since they were
+   * written, and nothing ever passed one — so neither button has ever been on
+   * screen. They arrive with the checkout the server put the pull request in
+   * and the prompt to open with, which is why NewChat takes a preset rather
+   * than always starting on the first repo in the list.
+   */
+  const openChatWith = useCallback((cwd: string, prompt: string) => {
+    setOpenPr(null);
+    setOpenRepo(null);
+    setCompose({ cwd, prompt });
+    setTab("chats");
+  }, []);
+
   const openContainerRepo = (c: DockerContainer) => {
     const r = repoSummaries.find((x) => x.name === (c.project ?? ""));
     if (r) openProject(r); else toast("That container is not in a repo agentglass knows", true);
@@ -312,7 +344,11 @@ export function MobileApp() {
         ];
       case "session":
         return [
-          { label: "Open chat", kind: "acc", run: () => { setTab("chats"); drop(it.id); } },
+          // This used to be `setTab("chats")` and a drop — you tapped the accent
+          // action on a stalled agent, landed on a list that by construction
+          // could not contain it (the list opens on "working"; this card exists
+          // because the agent went quiet), and the card was gone from the queue.
+          { label: "Open chat", kind: "acc", run: () => openSession(o.session) },
           { label: "Later", run: () => { drop(it.id); toast("Snoozed"); } },
         ];
       case "pr-red":
@@ -351,7 +387,7 @@ export function MobileApp() {
     const o = it.origin;
     if (o.t === "pr-red" || o.t === "pr-ready" || o.t === "pr-review") setOpenPr({ root: o.root, number: o.pr.number });
     else if (o.t === "container") openContainerRepo(o.container);
-    else if (o.t === "session") setTab("chats");
+    else if (o.t === "session") openSession(o.session);
   };
 
   const stacked = !!openRepo || !!openPr;
@@ -409,7 +445,8 @@ export function MobileApp() {
             <NowStream items={queue} actionsFor={actionsFor} onOpen={openItem} />
           </>
         )}
-        {tab === "chats" && <MobileChats sessions={sessions} onRefresh={loadFast} onImmersive={setImmersive} />}
+        {tab === "chats" && <MobileChats sessions={sessions} onRefresh={loadFast} onImmersive={setImmersive}
+          openChat={openChat} onOpenChat={setOpenChat} compose={compose} onCompose={setCompose} />}
         {tab === "repos" && <RepoList repos={repoSummaries} onOpen={(r, siblings) => { setOpenCheckouts(siblings); setOpenRepo(r); }} />}
       </main>
 
@@ -427,10 +464,12 @@ export function MobileApp() {
       <RepoScreen open={!!openRepo && !openPr} repo={openRepo}
         checkouts={openCheckouts} onPickCheckout={setOpenRepo}
         containers={containers} stats={dstats}
-        onBack={() => setOpenRepo(null)} toast={toast} onRefresh={refreshAll} />
+        onBack={() => setOpenRepo(null)} toast={toast} onRefresh={refreshAll}
+        onOpenChatWith={openChatWith} />
 
       <MobilePr open={!!openPr} root={openPr?.root ?? ""} number={openPr?.number ?? null}
-        onBack={() => { setOpenPr(null); refreshAll(); }} toast={toast} />
+        onBack={() => { setOpenPr(null); refreshAll(); }} toast={toast}
+        onOpenChatWith={openChatWith} />
 
       <Sheet open={settings} title="Settings" sub="This device only." onClose={() => setSettings(false)}>
         <div className="flex flex-col gap-2.5">
