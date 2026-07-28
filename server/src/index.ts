@@ -123,6 +123,11 @@ function localOrigin(req: Request): boolean {
  * callers it turns away are the non-browser ones — which is exactly the
  * `websocat ws://host:4000/terminal/pty` case that otherwise hands a login
  * shell to anyone who can reach the port.
+ *
+ * Every route that executes or mutates uses this, not localOrigin: the shell,
+ * the event feed, git and docker writes, /chat/send, /gate/decide, and
+ * /workspace (which moves the scope boundary the others enforce). localOrigin
+ * is for reads, where a missing Origin costs nothing.
  */
 function trustedCaller(req: Request): boolean {
   const o = req.headers.get("origin");
@@ -337,7 +342,11 @@ const server = Bun.serve<WsData>({
     // Pick the project this cockpit is about (or null → the whole machine).
     // Applied live and persisted for the next launch.
     if (pathname === "/workspace" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      // trustedCaller, not localOrigin: this route rewrites the scope every
+      // other capability checks itself against (inScope in terminal.ts,
+      // chat.ts, gitwork.ts). A caller that can widen the scope to "/" has the
+      // blast radius of all of them, so it is gated like them.
+      if (!trustedCaller(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = setWorkspaceRoot(b.root == null ? null : String(b.root));
@@ -365,7 +374,7 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/gate/pending") return json({ gates: pendingGates() });
     if (pathname === "/gate/decide" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req)) return csrfBlocked(); // answers for the human at the gate
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false }); }
       const ok = decideGate(String(b.id), b.decision === "deny" ? "deny" : "allow", String(b.reason || ""));
@@ -390,7 +399,7 @@ const server = Bun.serve<WsData>({
       return json({ repos: statusForPaths(paths), commitEnabled: COMMIT_ENABLED });
     }
     if (pathname === "/git/commit" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = gitCommit(String(b.root || ""), Array.isArray(b.files) ? b.files : [], String(b.title || ""), String(b.body || ""));
@@ -430,7 +439,7 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
     if (pathname.startsWith("/git/") && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const root = String(b.root || "");
@@ -475,7 +484,7 @@ const server = Bun.serve<WsData>({
       return json(await dockerLogs(id, tail));
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const id = String(b.id || "");
@@ -498,7 +507,7 @@ const server = Bun.serve<WsData>({
     // server would silently downgrade — the downgrade itself stays server-side.
     if (pathname === "/chat/enabled") return json({ enabled: CHAT_ENABLED, bypass: CHAT_BYPASS_ALLOWED });
     if (pathname === "/chat/send" && req.method === "POST") {
-      if (!localOrigin(req)) return csrfBlocked();
+      if (!trustedCaller(req)) return csrfBlocked(); // spawns a real `claude` with tools
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       return chatStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images, b.effort);

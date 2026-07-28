@@ -1,7 +1,23 @@
 // Ingest pure helpers from #10 wishlist: detectError on tool_response shapes
 // and transcript token summing (usage_is_cumulative path).
 import { describe, expect, test } from "bun:test";
-import { detectError, sumTranscriptTokens } from "../src/ingest.ts";
+import { detectError, sumTranscriptTokens, normalize } from "../src/ingest.ts";
+
+describe("session_name", () => {
+  const body = (session_name: unknown) =>
+    normalize({ source_app: "a", session_id: "s", hook_event_type: "SessionStart", session_name } as never);
+
+  test("is capped — it reaches the UI label, the socket, and the webhook body", () => {
+    expect(body("x".repeat(500)).session_name).toHaveLength(120);
+  });
+
+  test("a normal name is untouched, a missing one stays null", () => {
+    expect(body("refactor the auth middleware").session_name).toBe("refactor the auth middleware");
+    expect(body(undefined).session_name).toBeNull();
+    expect(body("").session_name).toBeNull();
+    expect(body(123).session_name).toBeNull();
+  });
+});
 
 describe("detectError", () => {
   test("PostToolUseFailure is always an error", () => {
