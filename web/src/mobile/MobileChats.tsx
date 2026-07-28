@@ -4,6 +4,7 @@ import { toolTarget } from "../lib/chatStore.ts";
 import { pollWhileVisible } from "../lib/poll.ts";
 import { fmtUsd, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
 import { MODELS, resumeModel } from "./resumeModel.ts";
+import { recentTurns } from "./transcript.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
 
 /**
@@ -127,7 +128,21 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
     }, 5000);
   }, [load]);
 
-  useEffect(() => { foot.current?.scrollIntoView({ block: "end" }); }, [detail?.conversation.length, live?.text, sent]);
+  /** The newest turns, oldest at the top and the latest one last — see
+   *  transcript.ts for why the server's order is the other way round. */
+  const turns = useMemo(() => recentTurns(detail?.conversation), [detail?.conversation]);
+
+  /**
+   * Land on the newest turn, every time one arrives.
+   *
+   * Keyed on the newest timestamp rather than the count: the transcript is
+   * capped by a size budget on the server, so a long session can gain a turn
+   * and lose its oldest in the same poll and never change length. That is
+   * exactly the case where a message arrived and the view would have stayed
+   * where it was.
+   */
+  const newestTs = turns.length ? turns[turns.length - 1]!.ts : 0;
+  useEffect(() => { foot.current?.scrollIntoView({ block: "end" }); }, [newestTs, turns.length, live?.text, sent]);
 
   const cwd = detail?.cwd_path || detail?.project_path || "";
   const running = !!detail && !detail.ended_at && Date.now() - detail.last_seen < 120_000;
@@ -191,7 +206,7 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
       )}
 
       <div className="flex flex-col gap-2.5 pb-2">
-        {detail?.conversation.slice(-40).map((m, i) => <Bubble key={`${m.ts}-${i}`} role={m.role} text={m.text} ts={m.ts} />)}
+        {turns.map((m, i) => <Bubble key={`${m.ts}-${i}`} role={m.role} text={m.text} ts={m.ts} />)}
         {sent && <Bubble role="user" text={sent} />}
         {live && (
           <Bubble role="assistant" text={live.text || "…"} streaming tools={live.tools} error={live.error} />
