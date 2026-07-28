@@ -4,6 +4,7 @@ import { useStats } from "../lib/useStats.ts";
 import { fmtUsd, fmtTokens } from "../lib/format.ts";
 import { MobileChats } from "./MobileChats.tsx";
 import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobileUi.tsx";
+import { pollWhileVisible } from "../lib/poll.ts";
 import { DIFF_CSS } from "./MobileDiff.tsx";
 import { NOW_CSS, NowHero, NowStream, type NowAction } from "./MobileNow.tsx";
 import { RepoList, RepoScreen, type RepoSummary } from "./MobileRepo.tsx";
@@ -107,13 +108,10 @@ export function MobileApp() {
 
   useEffect(() => {
     loadFast();
-    const t = setInterval(loadFast, GATE_MS);
-    // Catching up the moment the screen comes back is what makes a poll feel
-    // live: a phone returning from sleep would otherwise show the last frame it
-    // managed to paint before it slept.
-    const wake = () => { if (document.visibilityState === "visible") loadFast(); };
-    document.addEventListener("visibilitychange", wake);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", wake); };
+    // Skipped while the tab is hidden and caught up on the way back — see
+    // pollWhileVisible. Nobody answers a gate they cannot see, and on a phone
+    // each tick costs a radio wake as well as a round trip.
+    return pollWhileVisible(loadFast, GATE_MS);
   }, [loadFast]);
 
   useEffect(() => {
@@ -124,10 +122,12 @@ export function MobileApp() {
 
   useEffect(() => {
     if (!repos.length) return;
-    const a = setInterval(() => loadTrees(repos), TREE_MS);
-    const b = setInterval(() => loadPrs(repos), PR_MS);
-    const c = setInterval(loadDocker, DOCKER_MS);
-    return () => { clearInterval(a); clearInterval(b); clearInterval(c); };
+    const stop = [
+      pollWhileVisible(() => loadTrees(repos), TREE_MS),
+      pollWhileVisible(() => loadPrs(repos), PR_MS),
+      pollWhileVisible(loadDocker, DOCKER_MS),
+    ];
+    return () => { for (const s of stop) s(); };
   }, [repos, loadTrees, loadPrs, loadDocker]);
 
   const refreshAll = useCallback(() => {

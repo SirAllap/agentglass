@@ -32,6 +32,7 @@ let snapshot: PendingGate[] = [];
 export const listGates = (): PendingGate[] => snapshot;
 
 export function subscribeGates(fn: () => void): () => void {
+  startPolling();
   subs.add(fn);
   return () => subs.delete(fn);
 }
@@ -51,6 +52,7 @@ function changed() {
 const arrivals = new Set<(g: PendingGate) => void>();
 
 export function subscribeNewGates(fn: (g: PendingGate) => void): () => void {
+  startPolling();
   arrivals.add(fn);
   return () => arrivals.delete(fn);
 }
@@ -208,7 +210,28 @@ async function tick() {
   timer = setTimeout(tick, POLL_MS);
 }
 
-if (typeof window !== "undefined") {
+let started = false;
+
+/**
+ * Begin polling. Idempotent, and once begun it never stops.
+ *
+ * Called from the two subscribe functions rather than at import, which is the
+ * whole point: `main.tsx` imports the desktop tree unconditionally so it can
+ * choose between it and the phone one, so on a phone this module was loaded,
+ * this poll was started, and `/gate/pending` was fetched every two seconds
+ * *for a store nothing on that device ever reads*. The phone keeps its own
+ * gate list in MobileApp and polls it separately, so the whole loop was waste
+ * — on the one device where it costs a battery.
+ *
+ * Never stopping is deliberate and is the property the module comment is about:
+ * tying the poll to a panel's lifetime meant agentglass stopped noticing new
+ * holds the moment you opened the workspace. Starting on the first subscriber
+ * and never stopping keeps that guarantee exactly — on the desktop the alerts
+ * panel mounts on the first paint, so the poll begins when it always did.
+ */
+function startPolling() {
+  if (started || typeof window === "undefined") return;
+  started = true;
   void tick();
   // Coming back to a hidden tab should not wait out the remaining interval:
   // a gate raised while you were away is exactly what you returned to answer.

@@ -117,3 +117,56 @@ test("a gate that resolves and is later reissued is announced again", () => {
   expect(gateNotes()).toHaveLength(2);
   unsub?.();
 });
+
+/**
+ * The poll is started by someone listening, not by the module being imported.
+ *
+ * `main.tsx` imports the desktop tree unconditionally so it can pick between it
+ * and the phone one. That meant loading this module on a phone — and starting
+ * a two-second `/gate/pending` poll there, feeding a store nothing on that
+ * device ever reads, since MobileApp keeps its own gate list. A whole loop of
+ * waste on the one device where it costs a battery.
+ *
+ * Driven through `fetch` rather than by mocking the api module: what matters is
+ * that no request leaves, and the request is the thing to count.
+ */
+test("importing the store does not start a poll; subscribing does", async () => {
+  const realFetch = globalThis.fetch;
+  const realWindow = (globalThis as any).window;
+  const realDocument = (globalThis as any).document;
+  let calls = 0;
+  (globalThis as any).fetch = (...args: unknown[]) => {
+    calls++;
+    void args;
+    return Promise.resolve(new Response(JSON.stringify({ gates: [] }), { headers: { "content-type": "application/json" } }));
+  };
+  // A window, so the poll is allowed to start at all — its absence is why the
+  // rest of this file can import the store without one running.
+  (globalThis as any).window = {};
+  (globalThis as any).document = { hidden: false, addEventListener() {} };
+
+  try {
+    // A second module instance: this file's own import happened without a
+    // window and can never start, so it cannot answer the question.
+    const fresh = "../src/lib/gateStore.ts?lazy=1";
+    const s = (await import(fresh)) as typeof import("../src/lib/gateStore.ts");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls, "the module polled merely because it was imported").toBe(0);
+
+    const off = s.subscribeGates(() => {});
+    await new Promise((r) => setTimeout(r, 30));
+    expect(calls, "nobody polled after a subscriber arrived").toBeGreaterThan(0);
+
+    // Unsubscribing does not stop it, and that is the point: tying the poll to
+    // a panel's lifetime is what made agentglass stop noticing new holds the
+    // moment you opened the workspace.
+    const afterOff = calls;
+    off();
+    await new Promise((r) => setTimeout(r, 2_100));
+    expect(calls, "the poll stopped when the last subscriber left").toBeGreaterThan(afterOff);
+  } finally {
+    globalThis.fetch = realFetch;
+    (globalThis as any).window = realWindow;
+    (globalThis as any).document = realDocument;
+  }
+}, 10_000);
