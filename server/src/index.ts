@@ -47,6 +47,7 @@ import { workspaceRoot, setWorkspaceRoot, CONFIG_PATH } from "./config.ts";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { rateOk } from "./ratelimit.ts";
+import { subprocessPool } from "./pool.ts";
 import { parseWindowMs } from "./params.ts";
 
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
@@ -466,8 +467,8 @@ const server = Bun.serve<WsData>({
     }
 
     // --- live docker panel (lazydocker-style) ---
-    if (pathname === "/docker/overview") return json(await dockerOverview());
-    if (pathname === "/docker/stats") return json({ stats: await dockerStats() });
+    if (pathname === "/docker/overview") return json(await subprocessPool.run(() => dockerOverview()));
+    if (pathname === "/docker/stats") return json({ stats: await subprocessPool.run(() => dockerStats()) });
     if (pathname === "/docker/logs") {
       const id = url.searchParams.get("id") || "";
       const tail = Number(url.searchParams.get("tail") || 400);
@@ -668,17 +669,6 @@ function backfillProvider() {
 }
 backfillProvider();
 
-const WATCHDOG_MS = 100;
-const WATCHDOG_WARN_MS = 50;
-setInterval(() => {
-  const drift = performance.now() - (watchdogExpected as number);
-  if (drift > WATCHDOG_WARN_MS) {
-    console.warn(`⚠  event loop blocked for ~${Math.round(drift)}ms`);
-  }
-  watchdogExpected = performance.now() + WATCHDOG_MS;
-}, WATCHDOG_MS);
-let watchdogExpected = performance.now() + WATCHDOG_MS;
-
 // Retention: prune at boot and hourly so the DB stays lean but the 7d window
 // always has full history (see AGENTGLASS_RETENTION_DAYS in db.ts).
 function prune() {
@@ -728,3 +718,21 @@ console.log(`   Stats API   → http://localhost:${server.port}/stats`);
 console.log(`   Retention   → ${RETENTION_DAYS ? `${RETENTION_DAYS} days` : "unlimited"}`);
 const ws = workspaceRoot();
 console.log(ws ? `   Project     → ${ws} (this project only)` : "   Project     → every project on this machine");
+
+export const loopWatchdog = {
+  _label: "" as string,
+  mark(label: string) { this._label = label; },
+  clear() { this._label = ""; },
+};
+
+const WATCHDOG_MS = 500;
+const WATCHDOG_WARN_MS = 100;
+let watchdogExpected = performance.now() + WATCHDOG_MS;
+setInterval(() => {
+  const drift = performance.now() - watchdogExpected;
+  if (drift > WATCHDOG_WARN_MS) {
+    const hint = loopWatchdog._label ? ` (near ${loopWatchdog._label})` : "";
+    console.warn(`⚠ event loop blocked for ${Math.round(drift)}ms${hint}`);
+  }
+  watchdogExpected = performance.now() + WATCHDOG_MS;
+}, WATCHDOG_MS);

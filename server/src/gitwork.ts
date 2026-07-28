@@ -9,9 +9,7 @@ import { statSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { git, gitAsync, safeAbs, repoRootOf, currentBranch } from "./git.ts";
 import { configuredRepoDirs, workspaceRoot, inScope } from "./config.ts";
-import { limiter } from "./limiter.ts";
-
-const repoLimit = limiter(8);
+import { subprocessPool } from "./pool.ts";
 import type {
   GitFileChange, GitBranchInfo, WorkingTree, GitRepoRef, GitActionResult, DiffHunk, GitFileStatus,
   GitBranch, GitCommit, GitStash, GitWorktree, GitGraphLine,
@@ -361,7 +359,7 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
     const found = self
       ? [self, ...worktrees(self).map((w) => w.path).filter((p) => p && p !== self)]
       : (sweep ? reposUnder(only1) : []); // a container-folder scope needs the walk to enumerate; no-sweep shows nothing until Scan
-    const refs = await Promise.all(found.map((r) => repoLimit(() => repoRef(r))));
+    const refs = await Promise.all(found.map((r) => subprocessPool.run(() => repoRef(r))));
     const scoped = refs.filter((r): r is GitRepoRef => !!r);
     scoped.sort((a, b) => b.dirty - a.dirty || a.name.localeCompare(b.name));
     repoCache.set(key, { at: Date.now(), repos: scoped });
@@ -401,7 +399,7 @@ export async function discoverRepos(paths: string[], knownRoots: string[] = [], 
   // asking separately doubled the process count for data already in hand.
   // ahead/behind stays 0 here; the header computes the real values for the
   // selected repo via workingTree().
-  const out = (await Promise.all([...roots].map((r) => repoLimit(() => repoRef(r))))).filter((r): r is GitRepoRef => !!r);
+  const out = (await Promise.all([...roots].map((r) => subprocessPool.run(() => repoRef(r))))).filter((r): r is GitRepoRef => !!r);
   const scoped = only.length ? within(out, only) : out;
   scoped.sort((a, b) => b.dirty - a.dirty || a.name.localeCompare(b.name));
   repoCache.set(key, { at: Date.now(), repos: scoped });
