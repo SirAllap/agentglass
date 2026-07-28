@@ -105,6 +105,49 @@ async function loadInto(hl: Highlighter, id: string, bold: boolean): Promise<str
   return name;
 }
 
+const loadedLangs = new Set<string>();
+
+/**
+ * Load a grammar and make it ready to tokenize *correctly on the first call*.
+ *
+ * The JavaScript engine above initialises a grammar lazily, on the first
+ * `codeToTokens` for that language — and the first call's OUTPUT is what pays
+ * for it. Measured on a fresh process: `const greeting = "hello"; // note`
+ * comes back as ONE token, then eight, then ten, converging only after several
+ * calls. The Oniguruma engine is right the first time; this is the price of not
+ * needing wasm, and it is not a price anyone chose to pay because nobody knew
+ * it was there.
+ *
+ * A diff tokenizes line by line, so what a user actually saw was the first line
+ * of the first file of that language they opened all session rendering
+ * under-highlighted, and every line after it fine. Nothing logged, nothing to
+ * report, and it looked like the file simply had a dull first line. Three of
+ * seventeen sampled languages were affected — typescript, css, haskell — and
+ * which three moves.
+ *
+ * So the initialisation is paid here, with a throwaway single character, before
+ * anything the user will look at goes through. It warms the grammar rather than
+ * the theme pairing: warming with one theme and rendering with another is fine,
+ * verified. The state lives in the engine for the life of the process, which is
+ * also why this only ever bites once.
+ */
+export async function ensureLanguage(hl: Highlighter, lang: string): Promise<void> {
+  if (loadedLangs.has(lang)) return;
+  await hl.loadLanguage(lang as never);
+  try {
+    // Any registered theme will do; register the dark fallback if the theme
+    // step has not run yet, which it may not have — the two load in parallel.
+    let theme = hl.getLoadedThemes()[0];
+    if (!theme) { await hl.loadTheme(FALLBACK.dark as never); theme = FALLBACK.dark; }
+    hl.codeToTokens("a", { lang: lang as never, theme });
+  } catch {
+    // A grammar that loaded but will not tokenize is the renderer's problem to
+    // report, not this one's. Never let warming turn a working load into a
+    // failed one.
+  }
+  loadedLangs.add(lang);
+}
+
 /** Whichever theme a diff surface should actually tokenize with. `name` is
  *  always a theme that is registered on the highlighter, or null when nothing
  *  could be registered at all; `failed` carries the id we were asked for when
