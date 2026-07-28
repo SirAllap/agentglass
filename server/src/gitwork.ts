@@ -513,6 +513,10 @@ export function push(rootIn: string): GitActionResult {
 export function pull(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
+  // Untracked files are safe — git refuses to clobber them on pull.
+  const dirty = git(root, ["status", "--porcelain"]).stdout
+    .split("\n").filter((l) => l.trim() && !l.startsWith("??")).join("\n").trim();
+  if (dirty) return { ok: false, error: "working tree has uncommitted changes — commit or stash before pulling" };
   return run(root, ["pull", "--ff-only"]);
 }
 export function fetch(rootIn: string): GitActionResult {
@@ -676,6 +680,19 @@ export function commitDiff(rootIn: unknown, hash: string): GitFileChange[] {
   // vs first parent (matches the comment) + UTF-8 paths.
   const r = git(root, ["-c", "core.quotePath=false", "show", hash, "--no-color", "--first-parent", "--format=", "--unified=3"]);
   return parseDiff(root, r.stdout, false);
+}
+
+export function undoMerge(rootIn: string): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const hasMergeHead = git(root, ["rev-parse", "--verify", "MERGE_HEAD"]).code === 0;
+  if (hasMergeHead) return run(root, ["merge", "--abort"]);
+  const hasOrigHead = git(root, ["rev-parse", "--verify", "ORIG_HEAD"]).code === 0;
+  if (!hasOrigHead) return { ok: false, error: "no merge to undo (ORIG_HEAD not found)" };
+  // HEAD^2 resolves only when HEAD has a second parent, i.e. it is a merge commit.
+  const isMerge = git(root, ["rev-parse", "--verify", "HEAD^2"]).code === 0;
+  if (!isMerge) return { ok: false, error: "last commit is not a merge" };
+  return run(root, ["reset", "--mixed", "ORIG_HEAD"]);
 }
 
 export function stashList(rootIn: unknown): GitStash[] {
