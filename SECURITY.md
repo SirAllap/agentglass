@@ -72,6 +72,65 @@ complement, rather than replace, the private reporting path below.
   agents. Set `AGENTGLASS_GATE_FAILCLOSED=1` if you would rather a timeout or an
   unreachable control plane denied the call.
 
+## What agentglass stores, and how to get rid of it
+
+Everything below is on your machine and nowhere else. There is no account, no
+sync, and no upload — the hooks refuse to post anywhere but this host (see
+`AGENTGLASS_ALLOW_REMOTE` above). But it is worth saying plainly what lands on
+disk, because **nothing in the app deletes it**: there is no route, no button
+and no menu item that removes recorded data. The `Clear ✕` in the header clears
+*filters*, not history.
+
+| Where | What is in it |
+|---|---|
+| `~/.local/share/agentglass/agentglass.db`<br><sub>or `$XDG_DATA_HOME/agentglass/`, or `./agentglass.db` if one is already there</sub> | Every event, with its `summary`, its `error_text` and the **raw hook payload** — which for a tool call is the command line, the file path, and the prompt. Plus session totals, the full-text search index, gate decisions, and the daily rollup. |
+| `~/.config/agentglass/token` | The shared secret, `0600`, when one has been minted. |
+| `~/.config/agentglass/config.json` | The active project scope and the UI switches. |
+
+Two things about retention are easy to get wrong:
+
+- **`AGENTGLASS_RETENTION_DAYS` bounds the raw events, not the history.** Expiring
+  events are folded into a daily rollup *before* they are deleted, so per-day
+  totals — cost, tokens, error counts, session counts — survive the prune and
+  keep accumulating. That is the point of the feature, and it means the default
+  8 days is not how long agentglass remembers you.
+- **The rollup has no expiry at all.** Nothing prunes it, and there is no path
+  in the product that removes a row from it. It is designed to be kept for
+  years.
+
+To get rid of any of it, delete the files. Stop the server first — SQLite is
+open while it runs:
+
+```sh
+rm -rf ~/.local/share/agentglass ~/.config/agentglass
+```
+
+Removing only the history and keeping your settings means deleting the `.db`
+alone. Nothing else in the app depends on it; the next event starts a new one.
+
+## Out of scope
+
+agentglass is a tool you point at your own machine, so the boundary is
+provenance, not symptom. **A surface you deliberately opened, doing something
+to the machine you opened it on, is the tool working.** In particular:
+
+- The terminal, the chat panes and the Docker controls run **as you**, with your
+  permissions. Filling the disk, killing a process, removing your own container
+  or running a destructive command through them is not a vulnerability — it is
+  the capability, and each one has a switch in the table below.
+- The gate is **fail-open by default and by design**. An agent proceeding
+  because nobody answered in time, or because agentglass was not running, is
+  documented behaviour; `AGENTGLASS_GATE_FAILCLOSED=1` inverts it.
+- Recorded data staying recorded (above) is a retention decision, not a leak.
+- Findings that require an attacker to already have a shell on the machine, or
+  to already hold the token, are not separate issues — at that point they have
+  what the token protects.
+
+What **is** in scope is anything that crosses a boundary without you: a webpage
+reaching the server, another machine reaching it without the token, a repository
+you cloned redirecting your transcripts, one project's scope reading another's
+data, or a path that escapes the active scope.
+
 ## Reporting a vulnerability
 
 Please **do not open a public issue** for security problems.
