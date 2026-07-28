@@ -1,6 +1,7 @@
 import type { PendingGate, SessionRollup, PrSummary, DockerContainer } from "../../../shared/types.ts";
 import { sessionTitle } from "../lib/format.ts";
 import { baseName } from "../../../shared/projectKey.ts";
+import { halt, type Halt, type HaltInput } from "./haltState.ts";
 
 /**
  * "What wants me right now", for a phone.
@@ -26,7 +27,8 @@ export type NowOrigin =
   | { t: "pr-red"; pr: PrSummary; root: string }
   | { t: "pr-ready"; pr: PrSummary; root: string }
   | { t: "pr-review"; pr: PrSummary; root: string }
-  | { t: "container"; container: DockerContainer };
+  | { t: "container"; container: DockerContainer }
+  | { t: "halt"; root: string; halt: Halt };
 
 export interface NowItem {
   id: string;
@@ -48,7 +50,16 @@ export interface NowItem {
   sub: string;
   /** A command or other verbatim string worth showing exactly as it is. */
   code?: string;
-  ts: number;
+  /**
+   * When this happened — absent when the item honestly has no moment.
+   *
+   * A halted repository and a stopped container both used `now`, which is not a
+   * timestamp: it made the card's header read "now" forever, and inside a band
+   * it made the item beat everything real, so a repository mid-rebase sorted
+   * above an agent that was blocked and waiting. Items without one sort last in
+   * their band and draw no age at all.
+   */
+  ts?: number;
   origin: NowOrigin;
 }
 
@@ -73,13 +84,38 @@ export interface NowInput {
    *  your review", so it is what that claim rests on rather than a guess. */
   prs: { root: string; repo: string; pr: PrSummary; scope: "mine" | "review" }[];
   containers: DockerContainer[];
+  /**
+   * Each checkout's git state, keyed by root. A repository stopped half-way
+   * through a rebase is the purest form of "something needs a person": nothing
+   * in it will move again until somebody decides, and until now the phone was
+   * the one place that could not even see it.
+   */
+  trees?: Record<string, HaltInput | undefined>;
   /** Logins the viewer answers to, for "is this mine". */
   me: string;
   now: number;
 }
 
-export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInput): NowItem[] {
+export function buildQueue({ gates, sessions, prs, containers, trees, me, now }: NowInput): NowItem[] {
   const out: NowItem[] = [];
+
+  for (const [root, tree] of Object.entries(trees ?? {})) {
+    const h = halt(tree);
+    if (!h) continue;
+    out.push({
+      id: `halt:${root}`,
+      // The state and how many files are still in the way. Resolving one of
+      // three is progress worth being told about; the clock is not in here.
+      mark: `halt:${root}:${h.state}:${h.conflicts.length}`,
+      tone: "crit",
+      kind: "Stopped part-way",
+      title: `${baseName(root)}: ${h.title.toLowerCase()}`,
+      sub: h.sub,
+      // No `ts`: git does not record when it stopped, and the only number to
+      // hand is the clock.
+      origin: { t: "halt", root, halt: h },
+    });
+  }
 
   for (const g of gates) {
     out.push({
@@ -168,12 +204,18 @@ export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInp
       tone: "bad",
       kind: "Container down",
       title: looping ? `${c.name} is restarting in a loop` : `${c.name} is ${c.state}`,
+      // Docker's own status carries the age — "Exited (1) 3 hours ago" — and
+      // it is already in the subtitle above. The header used to read "now" on
+      // every one of them.
       sub: `${c.project ? c.project + " · " : ""}${c.status}`,
-      ts: now, origin: { t: "container", container: c },
+      origin: { t: "container", container: c },
     });
   }
 
-  return out.sort((a, b) => RANK[a.tone] - RANK[b.tone] || b.ts - a.ts);
+  // Inside a band, newest first — and anything without a real moment after
+  // everything that has one, rather than ahead of all of it.
+  return out.sort((a, b) =>
+    RANK[a.tone] - RANK[b.tone] || (b.ts ?? -Infinity) - (a.ts ?? -Infinity));
 }
 
 /**

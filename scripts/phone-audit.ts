@@ -73,7 +73,7 @@ const drain = async (cdp: CDP, screen: string) => {
  * than only the ones someone thought to look at.
  */
 const HYGIENE = `(() => {
-  const bad = { overflow: [], tiny: [], clipped: [], covered: [] };
+  const bad = { overflow: [], tiny: [], clipped: [], covered: [], inert: [] };
   const vw = innerWidth, vh = innerHeight;
   // A screen that is closed is still mounted, parked one viewport to the right.
   // Everything inside it "overflows" by exactly that much and none of it is on
@@ -114,6 +114,15 @@ const HYGIENE = `(() => {
       || el.getAttribute("role") === "tab" || el.tagName === "A";
     if (tappable && (r.height < 36 || r.width < 24)) bad.tiny.push(name(el) + " " + Math.round(r.width) + "x" + Math.round(r.height));
 
+    // A control that will do nothing has to look like it will do nothing. The
+    // costly version of this is a filled, primary-coloured button that is the
+    // most prominent thing on the screen and is inert — "Finish the merge"
+    // before the conflicts are resolved. \`.mb-press:disabled\` dims to .38 and
+    // this is what stops a later rule from quietly out-specifying it.
+    if (el.tagName === "BUTTON" && el.disabled && Number(getComputedStyle(el).opacity) > 0.75) {
+      bad.inert.push(name(el) + " opacity=" + getComputedStyle(el).opacity);
+    }
+
     // Text cut off with no ellipsis and no way to scroll to it.
     const s = getComputedStyle(el);
     if (el.children.length === 0 && el.textContent && el.textContent.trim()
@@ -130,6 +139,7 @@ const hygiene = async (cdp: CDP, screen: string) => {
   note(screen, "nothing reaches past the right edge", !b.overflow?.length, b.overflow?.slice(0, 3).join(" | "));
   note(screen, "every control is big enough to hit", !b.tiny?.length, b.tiny?.slice(0, 3).join(" | "));
   note(screen, "no text is cut off without an ellipsis", !b.clipped?.length, b.clipped?.slice(0, 3).join(" | "));
+  note(screen, "a control that does nothing looks like it", !b.inert?.length, b.inert?.slice(0, 3).join(" | "));
 };
 
 const shot = async (cdp: CDP, name: string) => {
@@ -341,10 +351,42 @@ async function main() {
       await tap(cdp, ".mb-screen.on button", "Changes");
       await Bun.sleep(1600);
       const files = await texts(cdp, ".mb-screen .mb-row b");
-      note("changes", "lists the changed files", files.length > 0, `${files.length} rows`);
-      note("changes", "file paths carry no diff prefix",
-        files.length > 0 && !files.some((f) => /^[abciwo]\//.test(f)),
-        files.filter((f) => /^[abciwo]\//.test(f)).join(", ") || "(list was empty)");
+
+      // A checkout git stopped half-way through is a different repository to
+      // check. `git diff` emits a combined diff for an unmerged path and the
+      // tree parser does not turn that into a file row, so the one file you
+      // have to act on is the one the changes list omits — which is why the
+      // banner lists it itself. Assert what is true of the state the repo is
+      // actually in rather than lowering the bar for every repo.
+      const halted = await cdp.ev(`!!document.querySelector(".mb-screen.on .mb-halt")`);
+      if (halted) {
+        note("halt", "a stopped repository says so", true,
+          await cdp.ev(`document.querySelector(".mb-screen.on .mb-halt .hh b")?.textContent`));
+        note("halt", "and does not claim the tree is clean",
+          !(await cdp.ev(`(document.querySelector(".mb-screen.on")?.textContent||"").includes("The working tree is clean")`)));
+        note("halt", "lists what is in the way",
+          await cdp.ev(`document.querySelectorAll(".mb-screen.on .mb-halt .cr").length > 0`),
+          `${await cdp.ev(`document.querySelectorAll(".mb-screen.on .mb-halt .cr").length`)} conflicted`);
+        note("halt", "offers a way out",
+          await cdp.ev(`[...document.querySelectorAll(".mb-screen.on .mb-halt .ha button")]
+            .some(b=>/abandon|end the/i.test(b.textContent))`));
+        note("halt", "will not offer to finish while anything is conflicted",
+          await cdp.ev(`[...document.querySelectorAll(".mb-screen.on .mb-halt .ha button")]
+            .filter(b=>/finish|continue/i.test(b.textContent)).every(b=>b.disabled)`));
+        // A long path must not push the verbs off the right edge.
+        note("halt", "the path yields and the verbs do not",
+          await cdp.ev(`[...document.querySelectorAll(".mb-screen.on .mb-halt .cr")].every(r=>{
+            const rr=r.getBoundingClientRect();
+            return [...r.children].every(c=>c.getBoundingClientRect().right<=rr.right+1);})`));
+        await shot(cdp, "05b-halted");
+        await hygiene(cdp, "halt");
+        await drain(cdp, "halt");
+      } else {
+        note("changes", "lists the changed files", files.length > 0, `${files.length} rows`);
+        note("changes", "file paths carry no diff prefix",
+          files.length > 0 && !files.some((f) => /^[abciwo]\//.test(f)),
+          files.filter((f) => /^[abciwo]\//.test(f)).join(", ") || "(list was empty)");
+      }
       await shot(cdp, "05-changes");
       await drain(cdp, "changes");
       await hygiene(cdp, "changes");

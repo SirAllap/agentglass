@@ -10,7 +10,7 @@ import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobile
 import { pollWhileVisible } from "../lib/poll.ts";
 import { DIFF_CSS } from "./MobileDiff.tsx";
 import { NOW_CSS, NowHero, NowStream, type NowAction, type LiveCall } from "./MobileNow.tsx";
-import { RepoList, RepoScreen, ContainerScreen, type RepoSummary } from "./MobileRepo.tsx";
+import { RepoList, RepoScreen, ContainerScreen, HALT_CSS, type RepoSummary } from "./MobileRepo.tsx";
 import { projectRows } from "./projects.ts";
 import { baseName, ownerOf } from "../../../shared/projectKey.ts";
 import { MobilePr } from "./MobilePr.tsx";
@@ -18,7 +18,7 @@ import { buildQueue, type NowItem } from "./nowQueue.ts";
 import { dedupePrs, mainCheckouts } from "./prRows.ts";
 import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
 import type {
-  PendingGate, SessionRollup, DockerContainer, DockerStat, PrSummary, GitRepoRef,
+  PendingGate, SessionRollup, DockerContainer, DockerStat, PrSummary, GitRepoRef, GitTreeState,
 } from "../../../shared/types.ts";
 
 /**
@@ -104,7 +104,13 @@ export function MobileApp() {
   const [sessions, setSessions] = useState<SessionRollup[]>([]);
   const [reachable, setReachable] = useState(true);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
-  const [trees, setTrees] = useState<Record<string, { branch: string; dirty: number; ahead: number; behind: number }>>({});
+  const [trees, setTrees] = useState<Record<string, {
+    branch: string; dirty: number; ahead: number; behind: number;
+    /** What git is in the middle of, and what is in the way of finishing it.
+     *  Read from the tree the poll already fetches; the conflicted paths cost
+     *  a second request, made only for a checkout that is actually stopped. */
+    state?: GitTreeState; conflicts: string[];
+  }>>({});
   const [containers, setContainers] = useState<DockerContainer[]>([]);
   const [dstats, setDstats] = useState<DockerStat[]>([]);
   /** Whether docker answered at all, and what it said if not. The server
@@ -195,16 +201,30 @@ export function MobileApp() {
 
   const loadTrees = useCallback((list: GitRepoRef[]) => {
     for (const r of list) {
-      api.gitTree(r.root).then((t) => setTrees((cur) => ({
-        ...cur,
-        [r.root]: {
-          branch: t.branch.name,
-          // A file part-staged appears in both lists; counting it twice would
-          // report more work outstanding than there is.
-          dirty: new Set([...t.staged, ...t.unstaged].map((f) => f.file_path)).size,
-          ahead: t.branch.ahead, behind: t.branch.behind,
-        },
-      }))).catch(() => { /* a repo that will not open is not worth a toast on a poll */ });
+      api.gitTree(r.root).then(async (t) => {
+        const state = t.branch.state;
+        // Only a stopped checkout pays for the second request, and normally
+        // none of them are stopped — so the poll costs exactly what it did.
+        const conflicts = state && state !== "clean"
+          ? await api.gitConflicts(r.root).then((c) => c.files).catch(() => [] as string[])
+          : [];
+        setTrees((cur) => ({
+          ...cur,
+          [r.root]: {
+            branch: t.branch.name,
+            // A file part-staged appears in both lists; counting it twice would
+            // report more work outstanding than there is.
+            // Conflicted paths are counted too. `git diff` emits a combined
+            // diff for an unmerged file and the tree parser makes no row out of
+            // it, so a checkout whose only outstanding work is a conflict
+            // reported nothing dirty at all — the list row was silent about the
+            // one repository on the machine that could not move.
+            dirty: new Set([...t.staged, ...t.unstaged].map((f) => f.file_path).concat(conflicts)).size,
+            ahead: t.branch.ahead, behind: t.branch.behind,
+            state, conflicts,
+          },
+        }));
+      }).catch(() => { /* a repo that will not open is not worth a toast on a poll */ });
     }
   }, []);
 
@@ -333,9 +353,9 @@ export function MobileApp() {
 
   /** Everything that would be in the queue if nothing had been put away. */
   const pending = useMemo(
-    () => buildQueue({ gates, sessions, prs, containers, me, now: Date.now() })
+    () => buildQueue({ gates, sessions, prs, containers, trees, me, now: Date.now() })
       .filter((i) => !answered.includes(i.id)),
-    [gates, sessions, prs, containers, me, answered]
+    [gates, sessions, prs, containers, trees, me, answered]
   );
   const queue = useMemo(
     () => unsnoozed(snoozeStore, pending),
@@ -404,6 +424,12 @@ export function MobileApp() {
     setOpenCheckouts(group?.checkouts ?? [r]);
     setOpenRepo(r);
   }, [repoSummaries]);
+
+  /** The same screen, reached from a card that only knows a path. */
+  const openRoot = useCallback((root: string) => {
+    const r = repoSummaries.find((s) => s.ref.root === root);
+    if (r) openProject(r);
+  }, [repoSummaries, openProject]);
 
   /** Open one specific conversation, wherever the tap came from. */
   const openSession = useCallback((s: SessionRollup) => {
@@ -489,6 +515,39 @@ export function MobileApp() {
           { label: "Restart", kind: "acc", run: () => settle(`Restarted ${o.container.name}`, () => api.dockerRestart(o.container.id)) },
           { label: "Later", tight: true, run: () => later(it) },
         ];
+      case "halt": {
+        const h = o.halt;
+        return [
+          {
+            // Abandoning is the move that is always safe and the one people
+            // reach for first — but it throws away whatever was resolved, so
+            // from a phone it asks.
+            label: h.abortLabel, kind: "no",
+            run: async () => {
+              if (!(await ask({
+                title: h.abortLabel + "?", danger: true, confirmLabel: "Abandon",
+                body: h.state === "bisecting"
+                  ? "The search ends and the tree goes back to the commit you started from."
+                  : "The tree goes back to exactly how it was before this started. Anything already resolved is lost.",
+              }))) return;
+              await settle(`Abandoned — ${baseName(o.root)} is back where it was`,
+                () => api.gitMergeAbort(o.root), it.id);
+            },
+          },
+          ...(h.canContinue
+            ? [{
+                label: h.continueLabel!, kind: "ok" as const,
+                run: () => settle(`Finished — ${baseName(o.root)} is clean`,
+                  () => api.gitMergeContinue(o.root), it.id),
+              }]
+            : []),
+          // No "Later": a repository nothing can move until somebody decides is
+          // not a thing to put off, and hiding it is how you find it tomorrow.
+          ...(h.conflicts.length
+            ? [{ label: "Resolve", kind: "acc" as const, run: () => openRoot(o.root) }]
+            : []),
+        ];
+      }
     }
   };
 
@@ -497,6 +556,7 @@ export function MobileApp() {
     if (o.t === "pr-red" || o.t === "pr-ready" || o.t === "pr-review") setOpenPr({ root: o.root, number: o.pr.number });
     else if (o.t === "container") openContainer(o.container);
     else if (o.t === "session") openSession(o.session);
+    else if (o.t === "halt") openRoot(o.root);
   };
 
   const stacked = !!openRepo || !!openPr;
@@ -522,7 +582,7 @@ export function MobileApp() {
 
   return (
     <div className="mb min-h-[100dvh] flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>
-      <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}</style>
+      <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}{HALT_CSS}</style>
       {askDialog}
       <div className="mb-sky" />
 
