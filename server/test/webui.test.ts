@@ -74,6 +74,24 @@ describe("injectSameOrigin", () => {
   test("headless html still gets the marker (prepended)", () => {
     expect(injectSameOrigin("<div/>").startsWith("<script>")).toBe(true);
   });
+
+  // The off-box mark. It decides which application the device gets, so the one
+  // thing that must never happen is planting it by default: that would put the
+  // phone companion on the desk.
+  test("the remote mark is planted only when asked for", () => {
+    const local = injectSameOrigin("<html><head></head><body></body></html>");
+    expect(local).not.toContain("__AGENTGLASS_REMOTE__");
+
+    const remote = injectSameOrigin("<html><head></head><body></body></html>", true);
+    expect(remote).toContain("window.__AGENTGLASS_REMOTE__=true");
+    expect(remote.indexOf("__AGENTGLASS_REMOTE__")).toBeLessThan(remote.indexOf("</head>"));
+    // Both marks, and the same-origin one still first.
+    expect(remote.indexOf("__AGENTGLASS_SAME_ORIGIN__")).toBeLessThan(remote.indexOf("__AGENTGLASS_REMOTE__"));
+  });
+
+  test("headless html carries the remote mark too", () => {
+    expect(injectSameOrigin("<div/>", true)).toContain("__AGENTGLASS_REMOTE__");
+  });
 });
 
 // AGENTGLASS_WEB_DIR: the override that lets the packaged desktop sidecar find

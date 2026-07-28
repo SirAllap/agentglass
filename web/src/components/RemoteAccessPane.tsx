@@ -91,8 +91,9 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     <Wrap>
       <div className="px-3 py-2 flex flex-col gap-3">
         <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
-          Open this dashboard on a phone or tablet on the same network. Monitoring, sessions and gate
-          approvals, from the sofa.
+          Open agentglass on a phone or tablet on the same network. Monitoring, sessions and gate
+          approvals, from the sofa. A device that connects from off this machine always gets the
+          phone companion, never this dashboard.
         </div>
 
         {enabled === null ? (

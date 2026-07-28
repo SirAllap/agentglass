@@ -38,6 +38,22 @@ describe("wantsPhoneLayout", () => {
     expect(wantsPhoneLayout(1920, false, "mobile")).toBe(true);
     expect(wantsPhoneLayout(360, true, "desktop")).toBe(false);
   });
+
+  test("a page served off-box gets the phone application whatever it measures", () => {
+    // Chrome's "Desktop site" on a phone: 980px and a fine pointer reported by
+    // a device that is neither. This is the report that put the cockpit on a
+    // Pixel, and it must not be able to any more.
+    expect(wantsPhoneLayout(980, false, null, true)).toBe(true);
+    expect(wantsPhoneLayout(1440, false, null, true)).toBe(true);
+    // Beats the saved override too: the phone is the one browser that could set
+    // that for itself, so it cannot be the way back into the cockpit.
+    expect(wantsPhoneLayout(1440, false, "desktop", true)).toBe(true);
+  });
+
+  test("local pages are unaffected by the remote rule", () => {
+    expect(wantsPhoneLayout(1440, false, null, false)).toBe(false);
+    expect(wantsPhoneLayout(390, true, null, false)).toBe(true);
+  });
 });
 
 describe("readOverride", () => {

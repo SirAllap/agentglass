@@ -450,7 +450,13 @@ const server = Bun.serve<WsData>({
     // Proof of reachability for the remote-access panel: which off-box devices
     // have actually arrived. Loopback is ignored — it is every call the app
     // makes of itself and says nothing about whether a phone can get in.
-    noteClient(srv.requestIP(req)?.address);
+    const clientIp = srv.requestIP(req)?.address;
+    noteClient(clientIp);
+    // Same fact, put to a second use: a page served off-box gets the phone
+    // application, not the cockpit (see webui.ts). An address we cannot read is
+    // treated as local — it means the socket had no peer to report, which on
+    // this server is the app talking to itself.
+    const fromRemote = clientIp ? !isLoopback(clientIp) : false;
 
     // Per-request response helpers: `cors` reflects this caller's Origin, so it
     // has to be built here rather than shared as a module constant.
@@ -484,7 +490,7 @@ const server = Bun.serve<WsData>({
     // never collide here: none of them maps to a real file under web/dist, so
     // for them this falls straight through to the routes.
     if (req.method === "GET" || req.method === "HEAD") {
-      const asset = serveWeb(pathname, cors);
+      const asset = serveWeb(pathname, cors, fromRemote);
       if (asset) return asset;
     }
 
@@ -1392,7 +1398,7 @@ const server = Bun.serve<WsData>({
     // index.html and let the bundle take it from there. Anything else — curl,
     // fetch, an exporter probing a bad path — still gets the JSON 404.
     if (req.method === "GET" && (req.headers.get("accept") || "").includes("text/html")) {
-      const page = serveIndex(cors);
+      const page = serveIndex(cors, fromRemote);
       if (page) return page;
     }
 
