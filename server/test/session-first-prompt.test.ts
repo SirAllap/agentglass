@@ -105,6 +105,25 @@ describe("the rollup carries what the session was first asked to do", () => {
     expect(bySession().get("s4")?.first_prompt).toBeFalsy();
   });
 
+  test("the detail carries the name too, not just the list", () => {
+    /*
+     * The type declared custom_title, ai_title and first_prompt on
+     * SessionDetail since it was written, and getSession never filled any of
+     * them in — so sessionTitle(detail) had nothing to work with and every
+     * conversation header showed a uuid, next to a list row showing the real
+     * name. Nothing caught it because nothing asserted on the detail's title,
+     * and it took opening the app to see.
+     */
+    const named = db.getSession("s2");
+    expect(named?.custom_title).toBe("Nightly sweep");
+    // A titled session does not also carry a prompt: same rule as the list.
+    expect(named?.first_prompt).toBeFalsy();
+
+    const nameless = db.getSession("s1");
+    expect(nameless?.custom_title).toBeFalsy();
+    expect(nameless?.first_prompt).toBe("Rework the companion");
+  });
+
   test("every session still comes back", () => {
     // The lookup is a second query merged onto the page; a session missing a
     // prompt must not fall out of the list because of it.

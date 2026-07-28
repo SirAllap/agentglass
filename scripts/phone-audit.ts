@@ -173,6 +173,19 @@ const tap = async (cdp: CDP, sel: string, needle?: string) => {
   return !!hit;
 };
 
+/**
+ * Whether Chrome will refuse to start under its own sandbox.
+ *
+ * True for root, which is what CI and most containers run as. `AUDIT_NO_SANDBOX`
+ * forces it for the cases uid does not describe — an unprivileged user in a
+ * container without the right kernel namespaces.
+ */
+function needsNoSandbox(): boolean {
+  if (process.env.AUDIT_NO_SANDBOX === "1") return true;
+  if (process.env.AUDIT_NO_SANDBOX === "0") return false;
+  return typeof process.getuid === "function" && process.getuid() === 0;
+}
+
 async function main() {
   mkdirSync(SHOTS, { recursive: true });
   const profile = mkdtempSync(join(tmpdir(), "agx-audit-"));
@@ -184,6 +197,11 @@ async function main() {
     "--headless=new",
     "--hide-scrollbars",
     "--no-first-run",
+    // Chrome's sandbox needs privileges root does not have inside a container,
+    // and refuses to start without them — so in CI or a devcontainer this
+    // script died at "no page target" with nothing to say about why. Only
+    // where it is actually required: on a normal machine the sandbox stays on.
+    ...(needsNoSandbox() ? ["--no-sandbox", "--disable-dev-shm-usage"] : []),
     `--window-size=${PHONE.w},${PHONE.h}`,
     "about:blank",
   ], { stdout: "ignore", stderr: "ignore" });
