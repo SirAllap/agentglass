@@ -24,6 +24,7 @@ export interface ListedSession {
   project_path?: string | null;
   custom_title?: string | null;
   ai_title?: string | null;
+  first_prompt?: string | null;
 }
 
 /** Sessions with a running owner (same rule the rest of the app uses). */
@@ -102,7 +103,7 @@ export function searchSessions<T extends ListedSession>(sessions: readonly T[], 
   if (!terms.length) return [...sessions];
   return sessions.filter((s) => {
     const hay = [
-      s.custom_title, s.ai_title, s.cwd_path, s.project_path,
+      s.custom_title, s.ai_title, s.first_prompt, s.cwd_path, s.project_path,
       s.model_name, s.source_app, s.session_id,
     ].filter(Boolean).join(" ").toLowerCase();
     return terms.every((t) => hay.includes(t));

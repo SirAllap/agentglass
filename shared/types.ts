@@ -78,6 +78,16 @@ export interface SessionRollup {
    *  reading them directly — the precedence is the whole point. */
   custom_title?: string | null;
   ai_title?: string | null;
+  /**
+   * The first thing you asked this session to do.
+   *
+   * Only present when there is no title, because that is the only time it is
+   * needed — and it is what stops a list of thirty rows all reading
+   * `agentglass:cd3fa401`. Derived from the `UserPromptSubmit` event that is
+   * already in the database, so it names sessions recorded long before anyone
+   * thought to write a title.
+   */
+  first_prompt?: string | null;
   started_at: number;
   ended_at: number | null;
   last_seen: number;
@@ -410,6 +420,16 @@ export interface SessionDetail {
   /** See SessionRollup — same fields, same precedence. */
   custom_title?: string | null;
   ai_title?: string | null;
+  /**
+   * The first thing you asked this session to do.
+   *
+   * Only present when there is no title, because that is the only time it is
+   * needed — and it is what stops a list of thirty rows all reading
+   * `agentglass:cd3fa401`. Derived from the `UserPromptSubmit` event that is
+   * already in the database, so it names sessions recorded long before anyone
+   * thought to write a title.
+   */
+  first_prompt?: string | null;
   started_at: number;
   ended_at: number | null;
   last_seen: number;

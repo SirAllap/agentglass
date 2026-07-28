@@ -78,13 +78,47 @@ export const agentKey = (e: { source_app: string; session_id: string }) =>
  * every hook-only session (titles live in the transcript).
  */
 export const sessionTitle = (
-  s: { source_app?: string; session_id: string; custom_title?: string | null; ai_title?: string | null },
+  s: {
+    source_app?: string; session_id: string;
+    custom_title?: string | null; ai_title?: string | null; first_prompt?: string | null;
+  },
   max = 60
 ): string => {
   const t = (s.custom_title || s.ai_title || "").trim();
-  if (t) return t.length > max ? t.slice(0, max - 1) + "…" : t;
+  if (t) return clipTitle(t, max);
+  // What you first asked for, when nobody ever named it. A uuid identifies a
+  // session and describes nothing, and on a real machine most rows have no
+  // title at all — a list of thirty reading `agentglass:cd3fa401` cannot be
+  // scanned by eye, which is the same as not having a list.
+  const p = promptTitle(s.first_prompt);
+  if (p) return clipTitle(p, max);
   return s.source_app ? `${s.source_app}:${s.session_id.slice(0, 8)}` : s.session_id.slice(0, 8);
 };
+
+/**
+ * A prompt, reduced to something that reads as a name.
+ *
+ * The first line is almost always the ask; what follows is context, pasted
+ * output or a checklist, and none of it belongs in a row 300px wide. Fenced
+ * blocks and quoted material are skipped for the same reason — a prompt that
+ * opens with a stack trace would otherwise be titled with one.
+ */
+export function promptTitle(prompt: string | null | undefined): string {
+  if (!prompt) return "";
+  let inFence = false;
+  for (const raw of prompt.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("```")) { inFence = !inFence; continue; }
+    if (inFence || !line) continue;
+    // Slash commands, quotes and markup are not what the session is about.
+    if (line.startsWith(">") || line.startsWith("#") || line.startsWith("<")) continue;
+    return line.replace(/\s+/g, " ");
+  }
+  return "";
+}
+
+const clipTitle = (t: string, max: number): string =>
+  t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
 
 // Deterministic color from a string (agent lanes, model chips).
 export function hashColor(s: string): string {
