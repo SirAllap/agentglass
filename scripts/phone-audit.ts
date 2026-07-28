@@ -197,7 +197,11 @@ async function main() {
     await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: COLLECTOR });
 
-    await cdp.send("Page.navigate", { url: ORIGIN + "/" });
+    // A token is only needed against a server that is exposed — the desktop
+    // app's own sidecar mints one. The bundle takes it off the URL on first
+    // load and keeps it, exactly as the QR link does.
+    const token = process.env.AUDIT_TOKEN?.trim();
+    await cdp.send("Page.navigate", { url: ORIGIN + "/" + (token ? `?token=${encodeURIComponent(token)}` : "") });
     await until(cdp, `document.querySelector(".mb")`, "the phone shell", 25_000);
     await Bun.sleep(1200);
 
