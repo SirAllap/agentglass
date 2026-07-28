@@ -257,6 +257,10 @@ try {
 } catch { /* already present */ }
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_pre_open ON events(session_id, tool_name, paired, id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_events_provider_ts ON events(provider, timestamp)");
+// Finding a session's FIRST prompt: the list asks for up to two hundred of
+// them at once, and without this it is a scan of every UserPromptSubmit on the
+// machine per refresh. See firstPrompts().
+db.exec("CREATE INDEX IF NOT EXISTS idx_events_first_prompt ON events(hook_event_type, session_id, timestamp)");
 
 // Covering indexes for /stats — the endpoint that freezes the terminal.
 //
@@ -1454,6 +1458,41 @@ function computeFilterOptions() {
 const SESSIONS_TTL_MS = 1000;
 const sessionsCache = new Map<string, { at: number; data: SessionRollup[] }>();
 
+/**
+ * What each of these sessions was first asked to do.
+ *
+ * Most sessions have no name. `custom_title` is a rename by hand and `ai_title`
+ * is one the agent generated, and both come from lines Claude Code writes into
+ * the transcript — a session that never got one shows its own uuid forever,
+ * which is why a real machine's list reads `agentglass:cd3fa401` thirty times
+ * over and cannot be scanned by eye at all.
+ *
+ * The first thing you typed is a better name than a uuid and it has been in the
+ * database the whole time: every prompt is already ingested as a
+ * `UserPromptSubmit` event. So this is a query rather than a new column, an
+ * ingest change or a backfill — and it names sessions recorded long before the
+ * idea existed.
+ *
+ * One statement for the whole page rather than one per row. SQLite's
+ * bare-column rule makes `payload` come from the row that produced `MIN(...)`,
+ * which is exactly the first prompt.
+ */
+function firstPrompts(ids: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  const holes = ids.map(() => "?").join(",");
+  for (const r of db.query<{ session_id: string; payload: string }, string[]>(
+    `SELECT session_id, payload, MIN(timestamp) FROM events
+     WHERE hook_event_type = 'UserPromptSubmit' AND session_id IN (${holes})
+     GROUP BY session_id`).all(...ids)) {
+    try {
+      const p = JSON.parse(r.payload)?.prompt;
+      if (typeof p === "string" && p.trim()) out.set(r.session_id, p);
+    } catch { /* a payload we cannot read is not a name */ }
+  }
+  return out;
+}
+
 export function getSessions(limit = 100, provider?: string): SessionRollup[] {
   const key = `${limit}|${provider ?? ""}|${workspaceRoot() ?? ""}`;
   const hit = sessionsCache.get(key);
@@ -1473,6 +1512,16 @@ export function getSessions(limit = 100, provider?: string): SessionRollup[] {
     )
     .all(...prov.args, ...s.args, limit)
     .map(parseSessionRow);
+  // Only for the rows that need one: a session with a real title does not want
+  // its first prompt, and asking for it would be work thrown away.
+  const nameless = data.filter((d) => !d.custom_title && !d.ai_title).map((d) => d.session_id);
+  if (nameless.length) {
+    const prompts = firstPrompts(nameless);
+    for (const d of data) {
+      const p = prompts.get(d.session_id);
+      if (p) d.first_prompt = p;
+    }
+  }
   sessionsCache.set(key, { at: Date.now(), data });
   // One entry per (limit, provider, scope); the limit set is tiny and scope
   // rarely changes, so prune stale entries anyway so a long-lived server cannot
