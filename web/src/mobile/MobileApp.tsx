@@ -8,6 +8,7 @@ import { pollWhileVisible } from "../lib/poll.ts";
 import { DIFF_CSS } from "./MobileDiff.tsx";
 import { NOW_CSS, NowHero, NowStream, type NowAction } from "./MobileNow.tsx";
 import { RepoList, RepoScreen, type RepoSummary } from "./MobileRepo.tsx";
+import { projectRows } from "./projects.ts";
 import { MobilePr } from "./MobilePr.tsx";
 import { buildQueue, type NowItem } from "./nowQueue.ts";
 import type {
@@ -188,9 +189,18 @@ export function MobileApp() {
   };
   /** A container belongs to a repo, so open its repo rather than inventing a
    *  second route to the same screen. */
+  /** Open a project's screen with all of its checkouts, however you got there —
+   *  the list, a container, a queue item. Opening it without them would leave
+   *  the picker showing whichever project was opened last. */
+  const openProject = useCallback((r: RepoSummary) => {
+    const group = projectRows(repoSummaries).find((g) => g.checkouts.some((c) => c.ref.root === r.ref.root));
+    setOpenCheckouts(group?.checkouts ?? [r]);
+    setOpenRepo(r);
+  }, [repoSummaries]);
+
   const openContainerRepo = (c: DockerContainer) => {
     const r = repoSummaries.find((x) => x.name === (c.project ?? ""));
-    if (r) setOpenRepo(r); else toast("That container is not in a repo agentglass knows", true);
+    if (r) openProject(r); else toast("That container is not in a repo agentglass knows", true);
   };
 
   const actionsFor = (it: NowItem): NowAction[] => {
@@ -293,8 +303,7 @@ export function MobileApp() {
           </>
         )}
         {tab === "chats" && <MobileChats sessions={sessions} onRefresh={loadFast} onImmersive={setImmersive} />}
-        {tab === "repos" && <RepoList repos={repoSummaries}
-          onOpen={(r, siblings) => { setOpenCheckouts(siblings); setOpenRepo(r); }} />}
+        {tab === "repos" && <RepoList repos={repoSummaries} onOpen={(r, siblings) => { setOpenCheckouts(siblings); setOpenRepo(r); }} />}
       </main>
 
       {!immersive && <nav className="fixed left-0 right-0 bottom-0 z-40 flex"

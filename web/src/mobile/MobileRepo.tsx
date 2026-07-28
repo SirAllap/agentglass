@@ -91,14 +91,20 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   const [ctr, setCtr] = useState<DockerContainer | null>(null);
   const [diffAt, setDiffAt] = useState<number | null>(null);
 
-  const mine = useMemo(() => containers.filter((c) => (c.project ?? "") === repo?.name), [containers, repo]);
-
   /** The project's name, which is the main checkout's — a worktree is the same
    *  project on another branch, and titling the screen with the worktree's
    *  directory name is what made them look like separate repositories. */
   const projectName = checkouts.length > 1
     ? (checkouts.find((c) => !c.ref.worktreeOf)?.name ?? repo?.name ?? "")
     : (repo?.name ?? "");
+
+  // Containers belong to the project, not to the checkout you happen to be
+  // looking at: compose names them after the repository, so matching on a
+  // worktree's directory name finds nothing at all.
+  const mine = useMemo(
+    () => containers.filter((c) => (c.project ?? "") === projectName),
+    [containers, projectName]
+  );
 
   // Open on whatever is wrong: a container down beats uncommitted work beats
   // the pull request list. Landing on an empty tab is a wasted screen.
