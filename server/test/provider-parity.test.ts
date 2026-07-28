@@ -102,9 +102,30 @@ describe("modelLabel agrees between the server and the web copy", () => {
 
   // A price row may still bucket ids together — that is its job. What it may
   // no longer do is decide what they are called.
+  //
+  // This used to demonstrate the point with gpt-5 and gpt-4.1, which shared a
+  // row. They no longer do: GPT-5 got its own rates, which was the *other*
+  // half of that bug. So the property is stated over the table instead of
+  // through one pair, and cannot go stale the next time rates move.
   test("a shared rate row does not merge two models' names", async () => {
     const { priceFor } = await import("../src/pricing.ts");
-    expect(priceFor("gpt-5")?.input).toBe(priceFor("gpt-4.1")?.input);
-    expect(serverModelLabel("gpt-5")).not.toBe(serverModelLabel("gpt-4.1"));
+    // Pairs that are genuinely different models on one rate. Sharing a row is
+    // fine and often right — gpt-5 and gpt-5-codex share both a row and a name
+    // because they *are* one model — so the property is only about ids that
+    // differ, and it is asserted on ids picked for that.
+    const PAIRS: [string, string][] = [
+      ["o1-mini", "o4-mini"],
+      ["gpt-4.1", "gpt-4.5"],
+    ];
+    for (const [a, b] of PAIRS) {
+      // The premise, checked rather than assumed: this used to be demonstrated
+      // with gpt-5 and gpt-4.1, and stopped being true the day GPT-5 got its
+      // own rates. If a future split does the same here, fail loudly instead
+      // of passing about nothing.
+      expect(priceFor(a), `${a} and ${b} no longer share a rate row — pick another pair`)
+        .toBe(priceFor(b));
+      expect(serverModelLabel(a), `${a} and ${b} are named after their rate row`)
+        .not.toBe(serverModelLabel(b));
+    }
   });
 });
