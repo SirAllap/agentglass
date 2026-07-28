@@ -205,7 +205,7 @@ const realApi = {
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
   chatEnabled: () => get<{ enabled: boolean; bypass?: boolean }>("/chat/enabled"),
-  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[] }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
+  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; effort?: "max" | "xhigh" | "high" | "medium" | "low" }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     let res: Response;
     // A fetch that throws before a response has arrived never reached the
     // server, which is a different problem from one that dies mid-turn — the
@@ -306,7 +306,7 @@ const demoApi: typeof realApi = {
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
   chatEnabled: () => D({ enabled: false }),
-  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[] }, onEvent: (o: Record<string, unknown>) => void) => {
+  chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; effort?: "max" | "xhigh" | "high" | "medium" | "low" }, onEvent: (o: Record<string, unknown>) => void) => {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });
     onEvent({ type: "result", result: "" });
