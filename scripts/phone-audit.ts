@@ -476,6 +476,55 @@ async function main() {
     note("now", "offers an action per item, or none at all",
       !actions.some((a) => a === ""), `${actions.length} buttons`);
     await shot(cdp, "11-now-queue");
+    await hygiene(cdp, "now");
+
+    // "Later" has to mean what the Settings row says it means. This is the one
+    // place the audit changes anything, and what it changes is localStorage in
+    // a throwaway Chrome profile — nothing on the machine, nothing on GitHub,
+    // no agent touched.
+    if (await cdp.ev(`[...document.querySelectorAll("main .mb-item .acts button")].some(b=>b.textContent.trim()==="Later")`)) {
+      const before = await cdp.ev(`document.querySelectorAll("main .mb-item").length`);
+      const gone = await cdp.ev(`(()=>{const card=[...document.querySelectorAll("main .mb-item")]
+        .find(c=>[...c.querySelectorAll(".acts button")].some(b=>b.textContent.trim()==="Later"));
+        if(!card)return null;const t=card.querySelector(".t")?.textContent||"";
+        [...card.querySelectorAll(".acts button")].find(b=>b.textContent.trim()==="Later").click();return t})()`);
+      await Bun.sleep(700);
+      const after = await cdp.ev(`document.querySelectorAll("main .mb-item").length`);
+      note("later", "the card leaves the queue", after === before - 1, `${before} → ${after}`);
+
+      // The failure this replaces: the list was component state, so the queue
+      // you emptied was full again on the next load.
+      await cdp.send("Page.reload");
+      await until(cdp, `document.querySelector(".mb")`, "the shell after a reload", 25_000);
+      await Bun.sleep(2200);
+      await tap(cdp, "nav button", "Now");
+      await Bun.sleep(1600);
+      note("later", "and stays gone across a reload",
+        !(await cdp.ev(`document.body.textContent.includes(${JSON.stringify(String(gone).slice(0, 40))})`)),
+        `card was: ${gone}`);
+
+      // The count the Settings row shows has to be the store's, not a list in
+      // memory that a reload has already thrown away.
+      await tap(cdp, "header button", "⚙");
+      await Bun.sleep(700);
+      note("later", "Settings counts it as hidden",
+        await cdp.ev(`/1 hidden until they change/.test(document.body.textContent)`),
+        await cdp.ev(`(document.body.textContent.match(/Snoozed[^]{0,40}/)||[""])[0]`));
+      const restored = await tap(cdp, "button", "Restore");
+      note("later", "Restore is offered", restored);
+      await Bun.sleep(600);
+      await cdp.ev(`document.querySelector(".mb-scrim, [data-scrim]")?.click()`);
+      await Bun.sleep(700);
+      // The card itself, not the words in the sheet: "Nothing snoozed" is
+      // trivially true on a device where nothing was ever hidden, so on its own
+      // it cannot tell a working Restore from a Later that never took.
+      note("later", "and Restore actually brings the card back",
+        restored && await cdp.ev(`document.querySelectorAll("main .mb-item").length`) === before,
+        `queue is ${await cdp.ev(`document.querySelectorAll("main .mb-item").length`)}, was ${before}`);
+      await shot(cdp, "11b-later");
+      await hygiene(cdp, "later");
+      await drain(cdp, "later");
+    }
     await drain(cdp, "now");
 
     // ---- the server going away ---------------------------------------

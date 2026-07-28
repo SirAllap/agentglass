@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
 import { api, probeServer } from "../lib/api.ts";
 import { useLive } from "../lib/useLive.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
@@ -15,6 +15,8 @@ import { projectRows } from "./projects.ts";
 import { baseName, ownerOf } from "../../../shared/projectKey.ts";
 import { MobilePr } from "./MobilePr.tsx";
 import { buildQueue, type NowItem } from "./nowQueue.ts";
+import { dedupePrs, mainCheckouts } from "./prRows.ts";
+import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
 import type {
   PendingGate, SessionRollup, DockerContainer, DockerStat, PrSummary, GitRepoRef,
 } from "../../../shared/types.ts";
@@ -134,7 +136,20 @@ export function MobileApp() {
   const [settings, setSettings] = useState(false);
   /** A conversation is open and owns the whole screen: no app header, no tabs. */
   const [immersive, setImmersive] = useState(false);
-  const [dismissed, setDismissed] = useState<string[]>([]);
+  /**
+   * Two different things used to share one list.
+   *
+   * `answered` is a bridge: you allowed a gate or merged a pull request, and
+   * the card should go now rather than when the next poll confirms what you
+   * already know. It is per-mount on purpose — the underlying row is gone from
+   * the server too, so there is nothing to remember.
+   *
+   * "Later" is not that. It outlives the tab and it is keyed on what the card
+   * reports, so it lifts itself the moment there is news — see snooze.ts.
+   */
+  const [answered, setAnswered] = useState<string[]>([]);
+  const snoozeStore = useMemo(() => deviceStore(), []);
+  const [snoozeRev, bumpSnooze] = useReducer((n: number) => n + 1, 0);
 
   // ── the live channel ─────────────────────────────────────────────────
   //
@@ -193,12 +208,27 @@ export function MobileApp() {
     }
   }, []);
 
+  /**
+   * Pull requests, once per project rather than once per checkout.
+   *
+   * Three worktrees of one repository are three entries in this list and one
+   * repository on GitHub, so every open pull request was fetched three times
+   * and queued three times — the same card, three rows apart, and a count of
+   * three where there was one thing to do. `worktreeOf` names the checkout a
+   * worktree belongs to, so only the mains are asked.
+   *
+   * Deduplicated on the answer as well, because two projects can legitimately
+   * point at one GitHub repository (a fork and its upstream, a repo checked out
+   * twice) and folding by path would not catch that. "mine" wins over "review":
+   * a pull request that is both is one you have to fix, not one you have to
+   * look at.
+   */
   const loadPrs = useCallback((list: GitRepoRef[]) => {
-    Promise.all(list.flatMap((r) => (["mine", "review"] as const).map((scope) =>
+    Promise.all(mainCheckouts(list).flatMap((r) => (["mine", "review"] as const).map((scope) =>
       api.prList(r.root, scope, "open")
         .then((res) => res.prs.map((pr) => ({ root: r.root, repo: baseName(r.root), pr, scope })))
         .catch(() => [] as { root: string; repo: string; pr: PrSummary; scope: "mine" | "review" }[])
-    ))).then((groups) => setPrs(groups.flat()));
+    ))).then((groups) => setPrs(dedupePrs(groups.flat())));
   }, []);
 
   // Is the machine still there? Its own probe, so the answer is never as old as
@@ -301,10 +331,15 @@ export function MobileApp() {
       }));
   }, [openTools]);
 
-  const queue = useMemo(
+  /** Everything that would be in the queue if nothing had been put away. */
+  const pending = useMemo(
     () => buildQueue({ gates, sessions, prs, containers, me, now: Date.now() })
-      .filter((i) => !dismissed.includes(i.id)),
-    [gates, sessions, prs, containers, me, dismissed]
+      .filter((i) => !answered.includes(i.id)),
+    [gates, sessions, prs, containers, me, answered]
+  );
+  const queue = useMemo(
+    () => unsnoozed(snoozeStore, pending),
+    [pending, snoozeStore, snoozeRev]
   );
 
   /**
@@ -334,7 +369,14 @@ export function MobileApp() {
   /** An answered item leaves the queue at once, before the next poll confirms
    *  it. Waiting four seconds to watch your own tap take effect is what makes
    *  a companion feel like a web page. */
-  const drop = (id: string) => setDismissed((d) => [...d, id]);
+  const drop = (id: string) => setAnswered((d) => [...d, id]);
+
+  /** Put it away until it has something new to say. */
+  const later = (it: NowItem) => {
+    snooze(snoozeStore, it);
+    bumpSnooze();
+    toast("Snoozed — back when it changes");
+  };
 
   const decide = async (id: string, d: "allow" | "deny", itemId: string) => {
     try {
@@ -411,12 +453,13 @@ export function MobileApp() {
           // could not contain it (the list opens on "working"; this card exists
           // because the agent went quiet), and the card was gone from the queue.
           { label: "Open chat", kind: "acc", run: () => openSession(o.session) },
-          { label: "Later", run: () => { drop(it.id); toast("Snoozed"); } },
+          { label: "Later", tight: true, run: () => later(it) },
         ];
       case "pr-red":
         return [
           { label: "See the log", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
           { label: "Re-run", kind: "acc", run: () => settle("Re-running the failed checks", () => api.prRerun(o.root, o.pr.number)) },
+          { label: "Later", tight: true, run: () => later(it) },
         ];
       case "pr-ready":
         return [
@@ -436,11 +479,15 @@ export function MobileApp() {
           { label: "Review", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
         ];
       case "pr-review":
-        return [{ label: "Review", kind: "acc", run: () => setOpenPr({ root: o.root, number: o.pr.number }) }];
+        return [
+          { label: "Review", kind: "acc", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
+          { label: "Later", tight: true, run: () => later(it) },
+        ];
       case "container":
         return [
           { label: "Logs", run: () => openContainer(o.container) },
           { label: "Restart", kind: "acc", run: () => settle(`Restarted ${o.container.name}`, () => api.dockerRestart(o.container.id)) },
+          { label: "Later", tight: true, run: () => later(it) },
         ];
     }
   };
@@ -454,6 +501,16 @@ export function MobileApp() {
 
   const stacked = !!openRepo || !!openPr;
   const spend = stats?.totals ? fmtUsd(stats.totals.cost_usd) : "—";
+  /**
+   * How many cards the queue is hiding *right now*.
+   *
+   * Not the size of the store, which is the number I reached for first and is a
+   * different claim: a snoozed agent that has since ended is an entry nobody
+   * can restore, and counting it would put a Restore button on the sheet that
+   * changes nothing when you press it. The difference between the two lists is
+   * the only figure that survives being acted on.
+   */
+  const snoozed = pending.length - queue.length;
 
   /**
    * One word for the state of the link, and it distinguishes the three cases a
@@ -545,9 +602,9 @@ export function MobileApp() {
           <Row title="Tool errors" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.errors) : "—"} />
         </div>
         <div className="mb-eyebrow" style={{ margin: "16px 0 9px" }}>Queue</div>
-        <Row title="Snoozed" sub={dismissed.length ? `${dismissed.length} hidden until they change` : "Nothing snoozed"}
-          right={dismissed.length
-            ? <Act small onAct={() => { setDismissed([]); toast("Queue restored"); }}>Restore</Act>
+        <Row title="Snoozed" sub={snoozed ? `${snoozed} hidden until they change` : "Nothing snoozed"}
+          right={snoozed
+            ? <Act small onAct={() => { restoreAll(snoozeStore); bumpSnooze(); toast("Queue restored"); }}>Restore</Act>
             : undefined} />
         <p className="text-[10.5px] mt-4 leading-relaxed" style={{ color: "var(--text3)" }}>
           The cockpit stays at the desk. This is the part of agentglass worth having in a pocket.

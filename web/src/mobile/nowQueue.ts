@@ -30,6 +30,17 @@ export type NowOrigin =
 
 export interface NowItem {
   id: string;
+  /**
+   * What this card is reporting, as a string that stays put while the item does
+   * and differs the moment its state moves. It is what "Later" is keyed on, so
+   * a card comes back by itself once there is something new to say — see
+   * snooze.ts.
+   *
+   * Every kind writes its own, because only the kind knows which of its fields
+   * are the news and which merely tick. `idle 5m` and `Exited (1) 3 hours ago`
+   * are in the copy and are not in here.
+   */
+  mark: string;
   tone: NowTone;
   /** The eyebrow: what kind of thing this is, in the user's words. */
   kind: string;
@@ -72,7 +83,7 @@ export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInp
 
   for (const g of gates) {
     out.push({
-      id: `gate:${g.id}`, tone: "crit",
+      id: `gate:${g.id}`, mark: `gate:${g.id}`, tone: "crit",
       kind: "Blocked · waiting on you",
       title: g.summary || g.tool_name,
       sub: `${g.source_app} · the agent is stopped until you answer`,
@@ -86,7 +97,10 @@ export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInp
     const quiet = now - s.last_seen;
     if (quiet < QUIET_MS || quiet > STALE_MS) continue;
     out.push({
-      id: `session:${s.session_id}`, tone: "plain",
+      id: `session:${s.session_id}`,
+      // It spoke again: that is the change, even if it has since gone quiet.
+      mark: `session:${s.session_id}:${s.last_seen}`,
+      tone: "plain",
       kind: "Stopped · wants direction",
       title: sessionTitle(s),
       sub: `${projectName(s)} · idle ${Math.round(quiet / 60_000)}m`,
@@ -103,7 +117,11 @@ export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInp
     // Yours and broken: nobody else is going to fix it.
     if (mine && red) {
       out.push({
-        id: `red:${repo}#${pr.number}`, tone: "bad",
+        id: `red:${repo}#${pr.number}`,
+        // A push moves `updatedAt`; a re-run that fails somewhere else moves
+        // the failing set. Either is worth surfacing again.
+        mark: `red:${repo}#${pr.number}:${pr.updatedAt}:${pr.checks.failing.map((f) => f.name).sort().join(",")}`,
+        tone: "bad",
         kind: "CI went red",
         title: `${pr.checks.failing[0]?.name ?? "A check"} is failing on #${pr.number}`,
         sub: `${pr.title} · ${repo}`,
@@ -115,7 +133,9 @@ export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInp
     // here that finishes rather than starts work.
     if (mine && green && pr.reviewDecision === "APPROVED" && !pr.isDraft) {
       out.push({
-        id: `ready:${repo}#${pr.number}`, tone: "good",
+        id: `ready:${repo}#${pr.number}`,
+        mark: `ready:${repo}#${pr.number}:${pr.updatedAt}`,
+        tone: "good",
         kind: "Ready to merge",
         title: `#${pr.number} ${pr.title}`,
         sub: `Approved · ${pr.checks.total} checks green · ${repo}`,
@@ -126,7 +146,9 @@ export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInp
     // Somebody asked for your eyes.
     if (!mine && scope === "review") {
       out.push({
-        id: `review:${repo}#${pr.number}`, tone: "plain",
+        id: `review:${repo}#${pr.number}`,
+        mark: `review:${repo}#${pr.number}:${pr.updatedAt}`,
+        tone: "plain",
         kind: "Review requested",
         title: `#${pr.number} ${pr.title}`,
         sub: `${pr.author} asked you · +${pr.additions} −${pr.deletions} across ${pr.changedFiles} files`,
@@ -139,7 +161,11 @@ export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInp
     if (!containerIsWrong(c)) continue;
     const looping = c.state === "restarting";
     out.push({
-      id: `ctr:${c.id}`, tone: "bad",
+      id: `ctr:${c.id}`,
+      // Not the status line: docker rewrites that every minute ("Exited (1) 3
+      // hours ago"), and a mark that ticks is a snooze that never holds.
+      mark: `ctr:${c.id}:${c.state}:${exitCode(c) ?? "?"}`,
+      tone: "bad",
       kind: "Container down",
       title: looping ? `${c.name} is restarting in a loop` : `${c.name} is ${c.state}`,
       sub: `${c.project ? c.project + " · " : ""}${c.status}`,
@@ -162,9 +188,13 @@ export function buildQueue({ gates, sessions, prs, containers, me, now }: NowInp
 export function containerIsWrong(c: DockerContainer): boolean {
   if (c.state === "running" || c.state === "created") return false;
   if (c.state === "restarting" || c.state === "dead") return true;
-  // Docker writes the code into the status: "Exited (0) 3 hours ago".
-  const code = c.status.match(/\((\d+)\)/)?.[1];
+  const code = exitCode(c);
   return code == null ? true : code !== "0";
+}
+
+/** Docker writes the code into the status: "Exited (0) 3 hours ago". */
+function exitCode(c: DockerContainer): string | null {
+  return c.status.match(/\((\d+)\)/)?.[1] ?? null;
 }
 
 /** One rule for naming a project — see shared/projectKey.ts. This was the
