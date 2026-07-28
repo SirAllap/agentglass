@@ -133,6 +133,100 @@ test("too much to store drops the oldest, never the one you are in", () => {
   expect(stored().length).toBeLessThanOrEqual(2_100_000);
 });
 
+/**
+ * The chat on screen is not the one that gets dropped.
+ *
+ * The shed ran strictly oldest-first, so opening a chat on Monday, staying in
+ * it, and starting five more deleted the one you were looking at and kept the
+ * five you were not — while the function's own comment promised the opposite.
+ * Age decides who goes; being the active tab is a veto.
+ */
+test("the chat you are in survives even when it is the oldest", () => {
+  // Sized in *messages*, not characters: pack() clips each one to MAX_TEXT, so
+  // a single enormous message is not a large chat — sixty ordinary ones are.
+  const heavy = (id: string, createdAt: number, msgs: number) => chat({
+    id, createdAt, title: id,
+    messages: Array.from({ length: msgs }, (_, j) => ({ role: "assistant", text: "Y".repeat(20_000), tools: [], ts: j })),
+  });
+  // Monday's chat is the oldest and the biggest, and it is the one you are in.
+  const chats = [heavy("monday", 1, 60), ...Array.from({ length: 5 }, (_, i) => heavy(`new${i}`, 10 + i, 30))];
+
+  persist.saveChats(chats, "monday");
+  const ids = persist.loadChats().chats.map((c) => c.id);
+
+  expect(ids).toContain("monday");
+  // Something was still shed — otherwise this passes because nothing was over
+  // budget and the veto was never exercised.
+  expect(ids.length).toBeLessThan(chats.length);
+  // And what survived alongside it is the recent end, not an arbitrary set.
+  expect(ids).toContain(`new4`);
+});
+
+test("an activeId that matches nothing falls back to keeping the newest", () => {
+  // A stale id from a closed tab must not mean "protect nothing and then also
+  // fail the at-least-one rule".
+  const heavy = (id: string, createdAt: number) => chat({
+    id, createdAt, title: id,
+    messages: Array.from({ length: 60 }, (_, j) => ({ role: "assistant", text: "Y".repeat(20_000), tools: [], ts: j })),
+  });
+  persist.saveChats([heavy("a", 1), heavy("b", 2), heavy("c", 3)], "gone");
+  const ids = persist.loadChats().chats.map((c) => c.id);
+
+  expect(ids.length).toBeGreaterThan(0);
+  expect(ids[ids.length - 1]).toBe("c");
+});
+
+test("what is written is never over the budget it was measuring against", () => {
+  // The shed now adds up per-chat lengths rather than re-serialising, so the
+  // arithmetic — envelope, separating commas — is a thing that can be wrong.
+  // A single byte over is a thrown QuotaExceededError in a real browser.
+  const many = Array.from({ length: 12 }, (_, i) => chat({
+    id: `c${i}`, createdAt: i, title: `c${i}`,
+    messages: Array.from({ length: 10 }, (_, j) => ({ role: "assistant", text: "Y".repeat(23_000), tools: [], ts: j })),
+  }));
+  persist.saveChats(many, "c11");
+  expect(stored().length).toBeLessThanOrEqual(2_000_000);
+  // Exactly what JSON.stringify would produce for the surviving set — the
+  // lengths were counted, the string was not assembled by hand.
+  expect(() => JSON.parse(stored())).not.toThrow();
+});
+
+/**
+ * The shed used to re-serialise everything it had left after dropping each
+ * chat: quadratic, on the main thread, up to twice a second while a reply
+ * streams. Forty long chats moved nearly a gigabyte of JSON per save.
+ *
+ * Counted rather than timed. A duration assertion on shared CI is a flake
+ * generator — this very file was one, failing at 9s under load — while bytes
+ * through JSON.stringify is deterministic and is the quantity that was wrong.
+ */
+test("shedding does not re-serialise what it already measured", () => {
+  const many = Array.from({ length: 40 }, (_, i) => chat({
+    id: `c${i + 1}-x`, createdAt: 1000 + i, title: `chat ${i + 1}`,
+    messages: Array.from({ length: 60 }, (_, j) => ({ role: "assistant", text: "Y".repeat(19_000), tools: [], ts: j })),
+  }));
+
+  const real = JSON.stringify;
+  let chars = 0;
+  (JSON as any).stringify = (...args: unknown[]) => {
+    const out = (real as any)(...args);
+    if (typeof out === "string") chars += out.length;
+    return out;
+  };
+  try {
+    persist.saveChats(many, "c40-x");
+  } finally {
+    (JSON as any).stringify = real;
+  }
+
+  // The payload is ~46MB. One pass to find out it does not fit, one per chat to
+  // measure, one to write what survives — call it three passes' worth. The old
+  // loop moved 937MB here, so the bound is far below that and far above this.
+  expect(chars).toBeLessThan(200_000_000);
+  // And it did do the work: a bound that a no-op would also pass is not a test.
+  expect(chars).toBeGreaterThan(40_000_000);
+});
+
 test("a payload we cannot read costs the tabs, not the panel", () => {
   cell.set(KEY, "{not json");
   expect(persist.loadChats()).toEqual({ chats: [], activeId: "" });
