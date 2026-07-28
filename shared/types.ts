@@ -308,6 +308,27 @@ export interface GateRecord extends PendingGate {
   decided_at: number | null;
 }
 
+/**
+ * One write the cockpit performed, kept.
+ *
+ * `actor` is where the request came from, not who someone is: there are no
+ * accounts and the token is shared, so `local` means the loopback caller — this
+ * machine's dashboard — and anything else is the address it arrived from.
+ */
+export interface ActionRecord {
+  id: number;
+  at: number;
+  actor: string;
+  /** The route, which is the verb: `/git/discard`, `/docker/rm`, `/gate/deny`. */
+  action: string;
+  /** What it was done to, already shortened for a list. Empty when there is
+   *  nothing more specific than the route itself. */
+  target: string;
+  ok: boolean;
+  /** The server's error text when it failed. */
+  detail: string | null;
+}
+
 export interface SearchHit {
   id: number;
   timestamp: number;
