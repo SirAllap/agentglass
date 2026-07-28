@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ConfirmSpec } from "../components/ConfirmDialog.tsx";
 
 /**
  * The phone's own visual language, and the few primitives every screen needs.
@@ -288,6 +289,53 @@ export function Act({ children, onAct, kind, small, disabled, title, full }: {
       {children}
     </button>
   );
+}
+
+/**
+ * The phone's answer to `useDialogs()`.
+ *
+ * Same contract as the desktop's — `ConfirmSpec` in, `Promise<boolean>` out,
+ * render the node it hands back — so a call site reads identically on both:
+ *
+ *   if (!(await ask({ title: "Discard src/cart.ts?", danger: true }))) return;
+ *
+ * Different surface, because a centred modal on a phone is the same foreignness
+ * `ConfirmDialog` was written to avoid, one layer up: it ignores the back
+ * gesture, puts its buttons where nothing else on the screen puts them, and
+ * lands nowhere near the thumb. This is the sheet every other question on the
+ * phone already arrives in.
+ *
+ * The title is where the work is. On a phone the thing being acted on is
+ * usually not on screen when the button is — the file is behind a diff, the
+ * container behind a stats card, the branch not rendered at all — so "Discard?"
+ * asks a question the person cannot answer. Naming it is the confirmation.
+ */
+export function useAsk(): { ask: (spec: ConfirmSpec) => Promise<boolean>; dialog: React.ReactNode } {
+  const [pending, setPending] = useState<(ConfirmSpec & { resolve: (v: boolean) => void }) | null>(null);
+  const settle = useCallback((v: boolean) => {
+    setPending((p) => { p?.resolve(v); return null; });
+  }, []);
+
+  const ask = useCallback(
+    (spec: ConfirmSpec) => new Promise<boolean>((resolve) => setPending({ ...spec, resolve })),
+    [],
+  );
+
+  const dialog = (
+    // Dismissing by the scrim or the back gesture resolves false, exactly as
+    // the desktop's does — a question the person walked away from is a no.
+    <Sheet open={!!pending} title={pending?.title ?? ""} sub={pending?.body} onClose={() => settle(false)}>
+      {pending && (
+        <div className="flex flex-col gap-2">
+          <Act full kind={pending.danger ? "dang" : "acc"} onAct={() => settle(true)}>
+            {pending.confirmLabel ?? "Confirm"}
+          </Act>
+          <Act full onAct={() => settle(false)}>{pending.cancelLabel ?? "Cancel"}</Act>
+        </div>
+      )}
+    </Sheet>
+  );
+  return { ask, dialog };
 }
 
 export function Switch({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.ts";
-import { Screen, Sheet, Seg, Empty, Row, Act } from "./mobileUi.tsx";
+import { Screen, Sheet, Seg, Empty, Row, Act, useAsk } from "./mobileUi.tsx";
 import { MobileDiff, FileRow } from "./MobileDiff.tsx";
 import { MobilePr } from "./MobilePr.tsx";
 import type {
@@ -122,9 +122,11 @@ export function RepoScreen({ open, repo, containers, stats, onBack, toast, onRef
       if (r.ok) { loadTree(); onRefresh(); }
     } catch (e) { toast(String(e), true); }
   };
+  const { ask, dialog: askDialog } = useAsk();
 
   return (
     <>
+      {askDialog}
       <Screen open={open && !openPr && !ctr && diffAt == null} title={repo?.name ?? ""} sub={repo?.branch} onBack={onBack}>
         <Seg sticky value={facet} onPick={setFacet} options={[
           { id: "changes", label: "Changes", n: repo?.dirty || null },
@@ -244,7 +246,13 @@ export function RepoScreen({ open, repo, containers, stats, onBack, toast, onRef
         extra={diffAt != null && (
           <>
             <Act small onAct={() => act("Staged", () => api.gitStage(root, [paths[diffAt]!]))}>Stage this file</Act>
-            <Act small kind="dang" onAct={() => act("Discarded — back to HEAD", () => api.gitDiscard(root, [paths[diffAt]!]))}>Discard</Act>
+            <Act small kind="dang" onAct={async () => {
+              if (!(await ask({
+                title: `Discard ${rel(paths[diffAt]!)}?`, danger: true, confirmLabel: "Discard",
+                body: "Every change in this file goes back to HEAD. There is no undo, and it is not in git anywhere.",
+              }))) return;
+              await act("Discarded — back to HEAD", () => api.gitDiscard(root, [paths[diffAt]!]));
+            }}>Discard</Act>
           </>
         )}
       />
@@ -299,8 +307,11 @@ function ContainerScreen({ open, c, stat, onBack, toast, onRefresh }: {
     if (r.ok) onRefresh();
   };
   const up = c?.state === "running";
+  const { ask, dialog: askDialog } = useAsk();
 
   return (
+    <>
+      {askDialog}
     <Screen open={open} title={c?.name ?? ""} sub={c ? `${c.image} · ${c.status}` : undefined} onBack={onBack}
       foot={c ? (up ? (
         <>
@@ -310,7 +321,13 @@ function ContainerScreen({ open, c, stat, onBack, toast, onRefresh }: {
       ) : (
         <>
           <Act small full kind="ok" onAct={() => run(`Started ${c.name}`, () => api.dockerStart(c.id))}>Start</Act>
-          <Act small full kind="dang" onAct={() => run(`Removed ${c.name}`, () => api.dockerRm(c.id))}>Remove</Act>
+          <Act small full kind="dang" onAct={async () => {
+            if (!(await ask({
+              title: `Remove ${c.name}?`, danger: true, confirmLabel: "Remove",
+              body: "The container and anything written inside it that is not on a volume are gone.",
+            }))) return;
+            await run(`Removed ${c.name}`, () => api.dockerRm(c.id));
+          }}>Remove</Act>
         </>
       )) : undefined}>
       <div className="grid grid-cols-2 gap-2.5 mb-3">
@@ -330,5 +347,6 @@ function ContainerScreen({ open, c, stat, onBack, toast, onRefresh }: {
         {loading ? "Reading the log…" : logs || "Nothing logged."}
       </pre>
     </Screen>
+    </>
   );
 }

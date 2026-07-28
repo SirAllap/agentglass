@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.ts";
 import { parseUnifiedDiff } from "../lib/prBody.ts";
-import { Screen, Sheet, Seg, Empty, Act } from "./mobileUi.tsx";
+import { Screen, Sheet, Seg, Empty, Act, useAsk } from "./mobileUi.tsx";
 import { MobileDiff, FileRow } from "./MobileDiff.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import type { PrDetail, PrCheck } from "../../../shared/types.ts";
@@ -73,12 +73,14 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
       if (r.ok) reload();
     } catch (e) { toast(String(e), true); }
   };
+  const { ask, dialog: askDialog } = useAsk();
 
   const canMerge = d?.mergeState === "CLEAN";
   const openThreads = d?.threads.filter((t) => !t.isResolved).length ?? 0;
 
   return (
     <>
+      {askDialog}
       <Screen
         open={open && diffAt == null}
         title={d ? `#${d.number} · ${d.author}` : number != null ? `#${number}` : ""}
@@ -100,7 +102,13 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
             </Act>
             <Act kind="acc" full disabled={!canMerge}
               title={canMerge ? undefined : MERGE_WHY[d.mergeState]}
-              onAct={() => act(`Merged #${d.number}`, () => api.prMerge(root, d.number, "squash", { deleteBranch: true }))}>
+              onAct={async () => {
+                if (!(await ask({
+                  title: `Squash & merge #${d.number}?`, danger: true, confirmLabel: "Squash & merge",
+                  body: "Every commit becomes one, and the head branch is deleted straight after. Neither step is reversible from here.",
+                }))) return;
+                await act(`Merged #${d.number}`, () => api.prMerge(root, d.number, "squash", { deleteBranch: true }));
+              }}>
               {canMerge ? "Squash & merge" : "Blocked"}
             </Act>
           </>
@@ -243,8 +251,14 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
                 () => api.prDraft(root, d.number, !d.isDraft)).then(() => setMore(false))}>
                 {d.isDraft ? "Mark ready for review" : "Convert to draft"}
               </Act>
-              <Act full small kind="dang" onAct={() => act("Pull request closed",
-                () => api.prClose(root, d.number)).then(() => { setMore(false); onBack(); })}>
+              <Act full small kind="dang" onAct={async () => {
+                if (!(await ask({
+                  title: `Close #${d.number}?`, danger: true, confirmLabel: "Close it",
+                  body: "It stops being reviewable and drops off the queue. Reopening it means going to GitHub.",
+                }))) return;
+                await act("Pull request closed", () => api.prClose(root, d.number));
+                setMore(false); onBack();
+              }}>
                 Close pull request
               </Act>
             </>
