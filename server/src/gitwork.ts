@@ -512,7 +512,9 @@ export function push(rootIn: string): GitActionResult {
 export function pull(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
-  const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
+  // Untracked files are safe — git refuses to clobber them on pull.
+  const dirty = git(root, ["status", "--porcelain"]).stdout
+    .split("\n").filter((l) => l.trim() && !l.startsWith("??")).join("\n").trim();
   if (dirty) return { ok: false, error: "working tree has uncommitted changes — commit or stash before pulling" };
   return run(root, ["pull", "--ff-only"]);
 }
@@ -686,9 +688,10 @@ export function undoMerge(rootIn: string): GitActionResult {
   if (hasMergeHead) return run(root, ["merge", "--abort"]);
   const hasOrigHead = git(root, ["rev-parse", "--verify", "ORIG_HEAD"]).code === 0;
   if (!hasOrigHead) return { ok: false, error: "no merge to undo (ORIG_HEAD not found)" };
-  const lastCommit = git(root, ["log", "-1", "--format=%s"]).stdout.trim();
-  if (!lastCommit.startsWith("Merge")) return { ok: false, error: "last commit is not a merge" };
-  return run(root, ["reset", "--hard", "ORIG_HEAD"]);
+  // HEAD^2 resolves only when HEAD has a second parent, i.e. it is a merge commit.
+  const isMerge = git(root, ["rev-parse", "--verify", "HEAD^2"]).code === 0;
+  if (!isMerge) return { ok: false, error: "last commit is not a merge" };
+  return run(root, ["reset", "--mixed", "ORIG_HEAD"]);
 }
 
 export function stashList(rootIn: unknown): GitStash[] {
