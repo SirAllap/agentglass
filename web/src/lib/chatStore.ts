@@ -59,7 +59,7 @@ export type Chat = {
   renamed?: boolean;    // titled by hand, so the first message must not overwrite it
   blockedTool?: string;
   sentMessages: string[];
-  effort: "high" | "medium" | "low";
+  effort: "max" | "xhigh" | "high" | "medium" | "low";
 };
 
 const chats = new Map<string, Chat>();

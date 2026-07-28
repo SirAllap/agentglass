@@ -31,6 +31,8 @@ const MODELS = [
   { id: "claude-haiku-4-5", label: "Haiku 4.5" },
 ];
 const EFFORTS = [
+  { id: "max", label: "Max" },
+  { id: "xhigh", label: "X-High" },
   { id: "high", label: "High" },
   { id: "medium", label: "Medium" },
   { id: "low", label: "Low" },
@@ -275,8 +277,11 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   useEffect(() => { try { localStorage.setItem(ALLOW_KEY, allowed); } catch { /* private mode */ } }, [allowed]);
   const [query, setQuery] = useState("");
   const [resumeOpen, setResumeOpen] = useState(false);
-  const [foldedTools, setFoldedTools] = useState<Set<number>>(new Set());
+  // Keyed by `${message.ts}-${index}` — a bare index shifts as messages stream
+  // in, and a bare timestamp can collide when tool bursts land in the same ms.
+  const [foldedTools, setFoldedTools] = useState<Set<string>>(new Set());
   const [historyOffset, setHistoryOffset] = useState(0);
+  useEffect(() => { setHistoryOffset(0); }, [activeId]);
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -336,6 +341,8 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   // Only seeds a chat when the panel is opened with none — not on every change
   // to the count, which made closing the last chat instantly resurrect it.
   const seeded = useRef(false);
+  const creatingRef = useRef(false);
+  useEffect(() => { creatingRef.current = false; }, [activeId]);
   useEffect(() => {
     if (!open) { seeded.current = false; setResumeOpen(false); return; }
     if (!seeded.current && !chats.length && defaultCwd) {
@@ -563,7 +570,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                         </button>
                         <Select value={active.model} onChange={(v) => update(active.id, (c) => { c.model = v; })}
                           className={selCls} style={selStyle} options={MODELS.map((m) => ({ value: m.id, label: m.label }))} />
-                        <Select value={active.effort} onChange={(v) => update(active.id, (c) => { c.effort = v as "high" | "medium" | "low"; })}
+                        <Select value={active.effort} onChange={(v) => update(active.id, (c) => { c.effort = v as Chat["effort"]; })}
                           className={selCls} style={selStyle} options={EFFORTS.map((e) => ({ value: e.id, label: e.label }))} />
                         <Select value={active.mode} onChange={(v) => update(active.id, (c) => { c.mode = v; })}
                           className={selCls} style={selStyle} title="Permission mode for tool use"
@@ -638,12 +645,12 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                             {m.tools.length > 0 && (
                               <div className="flex flex-col gap-0.5 mb-1.5 pb-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
                                 {m.tools.length > 2 && (
-                                  <button onClick={() => setFoldedTools((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                                  <button onClick={() => setFoldedTools((s) => { const k = `${m.ts}-${i}`; const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; })}
                                     className="text-[9.5px] t-dim2 hover:opacity-70 self-start">
-                                    {foldedTools.has(i) ? `${m.tools.length} tools · click to expand` : `${m.tools.length} tools · click to collapse`}
+                                    {foldedTools.has(`${m.ts}-${i}`) ? `${m.tools.length} tools · click to expand` : `${m.tools.length} tools · click to collapse`}
                                   </button>
                                 )}
-                                {(m.tools.length <= 2 || !foldedTools.has(i)) && m.tools.map((t) => (
+                                {(m.tools.length <= 2 || !foldedTools.has(`${m.ts}-${i}`)) && m.tools.map((t) => (
                                   <ToolRow key={t.id} e={{ kind: "tool", ts: t.ts, tool: t.name, target: t.target, is_error: t.error, output: t.output }} />
                                 ))}
                               </div>
@@ -745,7 +752,13 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                        <textarea ref={inputRef} value={active?.draft ?? ""} disabled={!enabled} rows={2}
                          onChange={(e) => {
                            if (!active) {
-                             const c = newChat(defaultCwd || repos[0]?.root || "");
+                             // Guard against a burst of keystrokes creating one
+                             // chat per event before the re-render lands.
+                             if (creatingRef.current) return;
+                             const cwd = defaultCwd || repos[0]?.root || "";
+                             if (!cwd) return;
+                             creatingRef.current = true;
+                             const c = newChat(cwd);
                              setActiveId(c.id);
                              update(c.id, (cc) => { cc.draft = e.target.value; });
                              return;

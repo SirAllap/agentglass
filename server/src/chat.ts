@@ -24,6 +24,7 @@ const CORS = {
   "Access-Control-Allow-Headers": "content-type",
 };
 const MODES = new Set(["default", "plan", "acceptEdits", "bypassPermissions"]);
+const EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 // `bypassPermissions` launches `claude --dangerously-skip-permissions`: full
 // unattended autonomy driven straight from a browser request. That is too much
 // to hand out on the same-origin check alone, so it is off unless the operator
@@ -215,8 +216,8 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   const allow = pm === "bypassPermissions" ? [] : allowList(allowedTools);
   if (allow.length) args.push("--allowedTools", ...allow);
   if (rid) args.push("--resume", rid);
-  const eff = effort === "low" || effort === "medium" ? effort : null;
-  if (eff) args.push("--thinking-budget", eff);
+  const eff = typeof effort === "string" && EFFORTS.has(effort) ? effort : null;
+  if (eff) args.push("--effort", eff);
 
   // Its own process group, so stopping a turn reaches the whole job tree.
   // `claude` spawns tools of its own — a test run, a dev server — and killing
