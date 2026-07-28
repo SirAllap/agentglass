@@ -6,7 +6,9 @@ import { fmtUsd, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
 import { sessionIsLive } from "../lib/derive.ts";
 import { scopeSessions, openingScope, type ChatScope } from "./chatList.ts";
 import { MODELS, resumeModel } from "./resumeModel.ts";
-import { useBackClose } from "./mobileUi.tsx";
+import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, asPermissionMode, permissionModeLabel,
+  type PermissionModeId } from "./permissionMode.ts";
+import { useBackClose, Sheet } from "./mobileUi.tsx";
 import { baseName } from "../../../shared/projectKey.ts";
 import { recentTurns, buildFeed, summariseRuns, shortTarget, type FeedEntry, type FeedItem, type FeedTool } from "./transcript.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
@@ -203,6 +205,23 @@ export function MobileChats({ sessions, onRefresh, onImmersive, openChat, onOpen
  * URL bar collapses.
  */
 function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; onBack: () => void }) {
+  /**
+   * What this agent may do without asking.
+   *
+   * Hardcoded `"default"` until now, which under `claude -p` means every tool
+   * that would raise a permission dialog is refused — so an agent resumed from
+   * the phone could talk and could not write. Kept per device: it is a
+   * statement about how much you trust the thing you are holding, not about
+   * this one session.
+   */
+  const [mode, setMode] = useState<PermissionModeId>(() => asPermissionMode(
+    typeof localStorage !== "undefined" ? localStorage.getItem("mb.permissionMode") : null));
+  const [modeOpen, setModeOpen] = useState(false);
+  const pickMode = (m: PermissionModeId) => {
+    setMode(m);
+    try { localStorage.setItem("mb.permissionMode", m); } catch { /* private mode */ }
+    setModeOpen(false);
+  };
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [draft, setDraft] = useState("");
   const [live, setLive] = useState<Live | null>(null);
@@ -380,7 +399,7 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
     abort.current = ac;
     try {
       await api.chatStream(
-        { cwd, message, model: resumeModel(detail?.model_name), mode: "default", resumeId: id },
+        { cwd, message, model: resumeModel(detail?.model_name), mode, resumeId: id },
         (o) => { lastEvent.current = Date.now(); setStalled(false); setLive((prev) => reduce(prev, o)); },
         ac.signal
       );
@@ -471,9 +490,23 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
           </div>
         )}
 
-        {turns.map((item, i) => item.kind === "message"
-          ? <Bubble key={`${item.ts}-${i}`} role={item.role} text={item.text} ts={item.ts} />
-          : <ToolBlock key={`${item.ts}-${i}`} runs={item.runs} errors={item.errors} />)}
+        {turns.map((item, i) => {
+          if (item.kind === "message") {
+            return <Bubble key={`${item.ts}-${i}`} role={item.role} text={item.text} ts={item.ts} />;
+          }
+          if (item.kind === "note") {
+            // Transcript bookkeeping — "[Request interrupted by user]" and
+            // friends. Real, and not something anybody said, so it is a line
+            // rather than a bubble in an agent's voice.
+            return (
+              <div key={`${item.ts}-${i}`} className="text-[10.5px] text-center py-1"
+                style={{ color: "var(--text3)" }}>
+                {item.text}
+              </div>
+            );
+          }
+          return <ToolBlock key={`${item.ts}-${i}`} runs={item.runs} errors={item.errors} agent={item.agent} />;
+        })}
         {sent && <Bubble role="user" text={sent} />}
         {live && (
           <Bubble role="assistant" text={live.text || "…"} streaming tools={live.tools} error={live.error} />
@@ -510,6 +543,18 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
           </div>
         ) : (
           <div className="flex items-end gap-2">
+            {/* What it may do without asking, on the composer rather than in a
+                settings screen: it is a decision about the message you are
+                about to send, and it used to be made for you — always the
+                strictest setting, which under `claude -p` means every write is
+                refused. */}
+            <button onClick={() => setModeOpen(true)} aria-label="What it may do without asking"
+              className="rounded-xl shrink-0 grid place-items-center text-[15px]"
+              style={{
+                minWidth: 48, minHeight: 48,
+                color: mode === "default" ? "var(--text3)" : mode === "acceptEdits" ? "var(--warning)" : "var(--error)",
+                border: "1px solid color-mix(in srgb, currentColor 42%, transparent)",
+              }}>⚑</button>
             <textarea
               value={draft} onChange={(e) => setDraft(e.target.value)}
               placeholder={busy ? "Send when it is free…" : "Reply to this agent"}
@@ -533,6 +578,28 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
           </div>
         )}
       </div>
+
+      <Sheet open={modeOpen} title="What it may do without asking"
+        sub={`Applies from your next message. Currently: ${permissionModeLabel(mode).toLowerCase()}.`}
+        onClose={() => setModeOpen(false)}>
+        <div className="flex flex-col gap-2.5">
+          {PERMISSION_MODES.map((m) => (
+            <button key={m.id} onClick={() => pickMode(m.id)}
+              className="text-left rounded-xl px-3.5 py-3"
+              style={{
+                background: m.id === mode ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "color-mix(in srgb, var(--bg2) 60%, transparent)",
+                border: `1px solid color-mix(in srgb, ${m.id === mode ? "var(--primary)" : "var(--border)"} 45%, transparent)`,
+                minHeight: 56,
+              }}>
+              <div className="text-[13px] font-medium" style={{ color: m.id === mode ? "var(--primary-hover)" : "var(--text)" }}>
+                {m.label}
+                {m.guarded && <span className="text-[9.5px] ml-2" style={{ color: "var(--error)" }}>operator must enable</span>}
+              </div>
+              <div className="text-[10.5px] mt-1 leading-relaxed" style={{ color: "var(--text3)" }}>{m.detail}</div>
+            </button>
+          ))}
+        </div>
+      </Sheet>
     </div>
   );
 }
@@ -545,19 +612,28 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
  * to. Open it and every run is there with what it acted on — the same trade the
  * terminal makes, and the same one the desktop panel makes.
  */
-function ToolBlock({ runs, errors }: { runs: FeedTool[]; errors: number }) {
+function ToolBlock({ runs, errors, agent }: { runs: FeedTool[]; errors: number; agent?: string | null }) {
   const [open, setOpen] = useState(false);
+  const [shown, setShown] = useState<number | null>(null);
   return (
     <div className="self-stretch">
       <button onClick={() => setOpen((o) => !o)}
         className="w-full text-left flex items-center gap-2 px-2.5 py-2 rounded-xl"
         style={{
-          minHeight: 40,
-          background: "color-mix(in srgb, var(--bg2) 45%, transparent)",
-          border: `1px solid color-mix(in srgb, ${errors ? "var(--error)" : "var(--border)"} 30%, transparent)`,
+          minHeight: 44,
+          background: agent
+            ? "color-mix(in srgb, var(--primary) 8%, transparent)"
+            : "color-mix(in srgb, var(--bg2) 45%, transparent)",
+          border: `1px solid color-mix(in srgb, ${errors ? "var(--error)" : agent ? "var(--primary)" : "var(--border)"} 30%, transparent)`,
           color: "var(--text3)",
         }}>
         <span className="text-[10px] shrink-0" style={{ opacity: 0.8 }}>{open ? "▾" : "▸"}</span>
+        {/* Four agents working in parallel report on one timeline, so without
+            the tag they read as one very busy agent. */}
+        {agent && (
+          <span className="text-[9.5px] shrink-0 px-1.5 rounded-full"
+            style={{ color: "var(--primary-hover)", border: "1px solid currentColor" }}>{agent}</span>
+        )}
         <span className="text-[11px] truncate flex-1">{summariseRuns(runs)}</span>
         {!!errors && <span className="text-[10px] shrink-0" style={{ color: "var(--error)" }}>{errors} failed</span>}
         <span className="text-[10px] shrink-0 tabular-nums" style={{ opacity: 0.7 }}>{runs.length}</span>
@@ -565,9 +641,27 @@ function ToolBlock({ runs, errors }: { runs: FeedTool[]; errors: number }) {
       {open && (
         <div className="flex flex-col gap-1 px-2.5 pt-1.5">
           {runs.map((r, i) => (
-            <div key={i} className="flex items-baseline gap-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
-              <span className="shrink-0" style={{ color: r.is_error ? "var(--error)" : "var(--text4)" }}>{r.tool || "tool"}</span>
-              <span className="truncate" style={{ opacity: 0.85 }}>{shortTarget(r.note || r.target)}</span>
+            <div key={i}>
+              {/* What it RAN and what came back. Only the first half was ever
+                  drawn, which is why a failing test and a passing one looked
+                  identical here and you still had to go to the terminal. */}
+              <button onClick={() => setShown((s) => (s === i ? null : i))}
+                className="w-full text-left flex items-baseline gap-2 text-[10.5px]"
+                style={{ color: "var(--text3)", minHeight: 30 }}>
+                <span className="shrink-0" style={{ color: r.is_error ? "var(--error)" : "var(--text4)" }}>{r.tool || "tool"}</span>
+                <span className="truncate flex-1" style={{ opacity: 0.85 }}>{shortTarget(r.note || r.target)}</span>
+                {r.output && <span className="shrink-0 text-[9.5px]" style={{ opacity: 0.7 }}>{shown === i ? "hide" : "output"}</span>}
+              </button>
+              {shown === i && r.output && (
+                <pre className="text-[10px] leading-relaxed mt-1 mb-1 px-2.5 py-2 rounded-lg overflow-x-auto whitespace-pre-wrap break-words"
+                  style={{
+                    background: "color-mix(in srgb, #000 38%, var(--bg2))",
+                    border: "1px solid color-mix(in srgb, var(--border) 34%, transparent)",
+                    color: r.is_error ? "var(--error)" : "var(--text2)",
+                  }}>
+                  {r.output}{r.output_clipped ? "\n…" : ""}
+                </pre>
+              )}
             </div>
           ))}
         </div>
@@ -615,6 +709,8 @@ function NewChat({ preset, onCancel, onStarted }: {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [cwd, setCwd] = useState(preset.cwd ?? "");
   const [model, setModel] = useState(MODELS[0]!.id);
+  const [mode, setMode] = useState<PermissionModeId>(() => asPermissionMode(
+    typeof localStorage !== "undefined" ? localStorage.getItem("mb.permissionMode") : null));
   const [message, setMessage] = useState(preset.prompt ?? "");
   const [live, setLive] = useState<Live | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -635,7 +731,7 @@ function NewChat({ preset, onCancel, onStarted }: {
     setFailed(null);
     setLive({ text: "", tools: [], error: null });
     try {
-      await api.chatStream({ cwd, message: text, model, mode: "default", resumeId: "" }, (o) => {
+      await api.chatStream({ cwd, message: text, model, mode, resumeId: "" }, (o) => {
         // The first frame carries the session id claude assigned. That id is
         // the chat from here on: it is what the list shows and what a reply
         // resumes, on this phone or at the desk.
