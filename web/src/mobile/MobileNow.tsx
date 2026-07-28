@@ -73,11 +73,18 @@ export const NOW_CSS = `
   border-left:2px solid color-mix(in srgb,var(--warning) 55%,transparent)}
 .mb-item .acts{display:flex;gap:9px;padding:13px 14px 14px 17px}
 .mb-item .acts>*{flex:1;min-height:50px;border-radius:13px}
+/* "Later" sits beside the real answers rather than sharing their width: three
+   equal thirds put "See the log" on two lines, and putting something away is
+   not the same size of decision as re-running it. */
+.mb-item .acts>.tight{flex:none;display:flex}
+.mb-item .acts>.tight>.mb-btn{min-height:50px;border-radius:13px;padding:0 15px}
 `;
 
 export interface NowAction {
   label: string;
   kind?: "acc" | "ok" | "no" | "dang";
+  /** Sized to its own label instead of taking an equal share of the row. */
+  tight?: boolean;
   run: () => Promise<string | void> | string | void;
 }
 
@@ -176,8 +183,9 @@ export function NowStream({ items, actionsFor, onOpen }: {
           </button>
           {it.code && <div className="code">{it.code}</div>}
           <div className="acts">
-            {actionsFor(it).map((a) => (
-              <Act key={a.label} kind={a.kind} onAct={a.run}>{a.label}</Act>
+            {actionsFor(it).map((a) => (a.tight
+              ? <span className="tight" key={a.label}><Act kind={a.kind} onAct={a.run}>{a.label}</Act></span>
+              : <Act key={a.label} kind={a.kind} onAct={a.run}>{a.label}</Act>
             ))}
           </div>
         </div>
