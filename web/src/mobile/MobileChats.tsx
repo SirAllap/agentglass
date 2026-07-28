@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ChatStreamError } from "../lib/api.ts";
 import { toolTarget } from "../lib/chatStore.ts";
+import { pollWhileVisible } from "../lib/poll.ts";
 import { fmtUsd, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
 import { MODELS, resumeModel } from "./resumeModel.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
@@ -116,7 +117,7 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
 
   useEffect(() => {
     load();
-    const t = setInterval(() => {
+    return pollWhileVisible(() => {
       // While our own turn is streaming the transcript is a scan behind, so
       // polling would paint a stale copy of what is already on screen. Once it
       // has gone quiet past the threshold that stops being true.
@@ -124,7 +125,6 @@ function Conversation({ id, onBack }: { id: string; onBack: () => void }) {
       if (!streaming.current || quiet) load();
       if (streaming.current) setStalled(quiet);
     }, 5000);
-    return () => clearInterval(t);
   }, [load]);
 
   useEffect(() => { foot.current?.scrollIntoView({ block: "end" }); }, [detail?.conversation.length, live?.text, sent]);
