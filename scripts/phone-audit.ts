@@ -235,6 +235,12 @@ async function main() {
     if (await tap(cdp, "main .mb-row, main button.w-full", repo || undefined)) {
       await until(cdp, `document.querySelector(".mb-screen.on")`, "the repo screen", 12_000);
       await Bun.sleep(1200);
+      // A project can have several checkouts. Pick one with uncommitted work,
+      // or the changes list below is legitimately empty and proves nothing.
+      const switched = await cdp.ev(`(()=>{const s=${TOP}; if(!s) return "";
+        const chip=[...s.querySelectorAll("button")].find(b=>/·\\s*\\d+$/.test(b.textContent.trim()));
+        if(!chip) return ""; chip.click(); return chip.textContent.trim();})()`);
+      if (switched) { note("repos", "worktrees are offered inside the project", true, switched); await Bun.sleep(1600); }
       // The screen opens on whatever is wrong, which for a clean checkout is
       // the pull request list. Ask for Changes explicitly rather than reading
       // whichever facet happened to win.

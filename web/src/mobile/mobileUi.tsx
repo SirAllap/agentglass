@@ -90,16 +90,22 @@ export const MOBILE_CSS = `
 
 /* A switch, not a tick: viewed and staged are states you keep for the length
    of a review, and a checkbox does not say that. */
-/* Drawn 42x25 and hit at 44px tall: a switch this size is comfortable to read
-   and uncomfortable to hit, so the target grows without the shape growing. */
-.mb-sw{position:relative;width:42px;height:25px;border-radius:14px;flex:none;
-  background:color-mix(in srgb,var(--border) 52%,transparent);transition:background .2s;
-  box-sizing:content-box;border-top:10px solid transparent;border-bottom:9px solid transparent;
-  background-clip:padding-box}
-.mb-sw::after{content:"";position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;
+/* Drawn 42x25, hit at 44px tall: a switch that size is comfortable to read and
+   uncomfortable to hit, so the target grows without the shape growing.
+
+   The track is drawn, not painted onto the element. The first version grew the
+   target with transparent top and bottom borders and clipped the background to
+   the padding box — which also clipped the 14px radius against the border box,
+   so the pill came out with flattened, chopped-looking ends. A button that is
+   purely a hit area with the shape inside it cannot do that. */
+.mb-sw{position:relative;width:42px;height:44px;flex:none;padding:0;border:0;background:transparent}
+.mb-sw::before{content:"";position:absolute;left:0;top:9px;width:42px;height:25px;border-radius:999px;
+  background:color-mix(in srgb,var(--border) 52%,transparent);transition:background .2s}
+.mb-sw::after{content:"";position:absolute;top:12px;left:3px;width:19px;height:19px;border-radius:50%;
   background:var(--text3);transition:transform .24s cubic-bezier(.3,1.5,.5,1),background .2s}
-.mb-sw[data-on="1"]{background:color-mix(in srgb,var(--success) 58%,transparent)}
+.mb-sw[data-on="1"]::before{background:color-mix(in srgb,var(--success) 58%,transparent)}
 .mb-sw[data-on="1"]::after{transform:translateX(17px);background:var(--success)}
+.mb-sw:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:999px}
 
 /* ── screens ──────────────────────────────────────────────────────── */
 .mb-screen{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;

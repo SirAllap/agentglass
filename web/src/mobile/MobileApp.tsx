@@ -64,6 +64,10 @@ export function MobileApp() {
   const [me, setMe] = useState("");
 
   const [openRepo, setOpenRepo] = useState<RepoSummary | null>(null);
+  /** Every checkout of the open project — the repo and its linked worktrees —
+   *  so the screen can offer them instead of the list pretending they are
+   *  separate projects. */
+  const [openCheckouts, setOpenCheckouts] = useState<RepoSummary[]>([]);
   const [openPr, setOpenPr] = useState<{ root: string; number: number } | null>(null);
   const [settings, setSettings] = useState(false);
   /** A conversation is open and owns the whole screen: no app header, no tabs. */
@@ -289,7 +293,8 @@ export function MobileApp() {
           </>
         )}
         {tab === "chats" && <MobileChats sessions={sessions} onRefresh={loadFast} onImmersive={setImmersive} />}
-        {tab === "repos" && <RepoList repos={repoSummaries} onOpen={setOpenRepo} />}
+        {tab === "repos" && <RepoList repos={repoSummaries}
+          onOpen={(r, siblings) => { setOpenCheckouts(siblings); setOpenRepo(r); }} />}
       </main>
 
       {!immersive && <nav className="fixed left-0 right-0 bottom-0 z-40 flex"
@@ -303,7 +308,9 @@ export function MobileApp() {
         <TabBtn id="repos" tab={tab} onPick={setTab} glyph="◇" label="Repos" />
       </nav>}
 
-      <RepoScreen open={!!openRepo && !openPr} repo={openRepo} containers={containers} stats={dstats}
+      <RepoScreen open={!!openRepo && !openPr} repo={openRepo}
+        checkouts={openCheckouts} onPickCheckout={setOpenRepo}
+        containers={containers} stats={dstats}
         onBack={() => setOpenRepo(null)} toast={toast} onRefresh={refreshAll} />
 
       <MobilePr open={!!openPr} root={openPr?.root ?? ""} number={openPr?.number ?? null}
