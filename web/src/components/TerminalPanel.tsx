@@ -92,6 +92,7 @@ function makeRoom(): boolean {
   // An evicted session must not resurrect itself from a pending retry.
   if (lru.retryTimer) { clearTimeout(lru.retryTimer); lru.retryTimer = null; }
   try { ws?.close(); } catch { /* already gone */ }
+  try { lru.search.dispose(); } catch { /* already disposed */ }
   try { lru.term.dispose(); } catch { /* already disposed */ }
   lru.holder.remove();
   sessions.delete(lru.id);
@@ -245,6 +246,7 @@ function killSession(s: Sess) {
   const ws = s.ws;
   s.ws = null; // detach first so the close handler stays quiet
   try { ws?.close(); } catch { /* already gone */ }
+  try { s.search.dispose(); } catch { /* already disposed */ }
   try { s.term.dispose(); } catch { /* already disposed */ }
   s.holder.remove();
   sessions.delete(s.id);
@@ -272,7 +274,16 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const findTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onCloseRef = useRef(onClose);
+
+  // typing in the find box shouldn't re-scan the whole scrollback on every keystroke
+  const cancelFind = () => { if (findTimerRef.current) { clearTimeout(findTimerRef.current); findTimerRef.current = null; } };
+  const debouncedFind = (s: Sess, q: string) => {
+    cancelFind();
+    findTimerRef.current = setTimeout(() => { findTimerRef.current = null; try { s.search.findNext(q); } catch { /* terminal gone */ } }, 150);
+  };
+  useEffect(() => cancelFind, []);
   const [, force] = useReducer((x: number) => x + 1, 0);
 
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
@@ -565,7 +576,7 @@ export function TerminalPanel({ open, onClose }: { open: boolean; onClose: () =>
                 <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}>
                   {searchOpen && (
                     <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2 py-1.5 rounded-lg shadow-lg" style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>
-                      <input ref={searchInputRef} value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); if (e.target.value && sess) sess.search.findNext(e.target.value); }} onKeyDown={(e) => { if (!sess || !searchQuery) return; if (e.key === "Enter") { if (e.shiftKey) sess.search.findPrevious(searchQuery); else sess.search.findNext(searchQuery); } if (e.key === "Escape") { setSearchOpen(false); setSearchQuery(""); sess.search.clearDecorations(); } }} placeholder="find…" autoFocus className="text-[11px] px-2 py-1 rounded-md outline-none w-44" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                      <input ref={searchInputRef} value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); if (e.target.value && sess) debouncedFind(sess, e.target.value); else cancelFind(); }} onKeyDown={(e) => { if (!sess || !searchQuery) return; if (e.key === "Enter") { cancelFind(); if (e.shiftKey) sess.search.findPrevious(searchQuery); else sess.search.findNext(searchQuery); } if (e.key === "Escape") { cancelFind(); setSearchOpen(false); setSearchQuery(""); sess.search.clearDecorations(); } }} placeholder="find…" autoFocus className="text-[11px] px-2 py-1 rounded-md outline-none w-44" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                       <button onClick={() => { if (sess && searchQuery) sess.search.findPrevious(searchQuery); }} title="previous match (Shift+Enter)" className="text-[11px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>▲</button>
                       <button onClick={() => { if (sess && searchQuery) sess.search.findNext(searchQuery); }} title="next match (Enter)" className="text-[11px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>▼</button>
                       <button onClick={() => { setSearchOpen(false); setSearchQuery(""); if (sess) sess.search.clearDecorations(); }} className="text-[14px] leading-none px-1 t-dim2 hover:opacity-70">✕</button>
