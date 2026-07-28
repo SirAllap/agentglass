@@ -52,7 +52,7 @@ export const Sessions = memo(function Sessions({ provider = "" }: { provider?: s
           const model = modelLabelOf(s.model_name);
           return (
             <div key={s.session_id} className="flex items-center gap-2 text-[11px]">
-              <div className="w-24 shrink-0 truncate t-dim2" title={s.session_id}>
+              <div className="w-32 sm:w-40 lg:w-48 shrink-0 truncate t-dim2" title={`${agentLabel(s)} — ${s.session_id}`}>
                 {agentLabel(s)}
               </div>
               <div className="flex-1 relative h-5 rounded" style={{ background: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
