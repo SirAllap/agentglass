@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api.ts";
+import { useLive } from "../lib/useLive.ts";
+import { subscribeGitChanged } from "../lib/gitBus.ts";
+import { subscribeSessionChanged } from "../lib/sessionBus.ts";
 import { useStats } from "../lib/useStats.ts";
 import { fmtUsd, fmtTokens } from "../lib/format.ts";
 import { MobileChats } from "./MobileChats.tsx";
 import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobileUi.tsx";
 import { pollWhileVisible } from "../lib/poll.ts";
 import { DIFF_CSS } from "./MobileDiff.tsx";
-import { NOW_CSS, NowHero, NowStream, type NowAction } from "./MobileNow.tsx";
+import { NOW_CSS, NowHero, NowStream, type NowAction, type LiveCall } from "./MobileNow.tsx";
 import { RepoList, RepoScreen, type RepoSummary } from "./MobileRepo.tsx";
 import { projectRows } from "./projects.ts";
 import { MobilePr } from "./MobilePr.tsx";
@@ -35,16 +38,39 @@ import type {
  *   Repos  — go looking, for when you want to rather than need to.
  *
  * Nothing heavy mounts: no xterm, no charts, no radar. On a phone that is a
- * battery decision as much as a layout one, and it is why the fleet's pulse is
- * fourteen CSS-animated bars rather than a canvas.
+ * battery decision as much as a layout one.
+ *
+ * It is on the live socket, and that is what makes the rest of it honest. The
+ * first version polled and said so in a comment here — a reasonable-sounding
+ * trade that quietly gave up the product's whole premise, because a server with
+ * no channel to this device cannot tell it anything. What replaced the bars
+ * that used to stand in for telemetry is the server's own list of tool calls
+ * still open.
  */
 
 type Tab = "now" | "chats" | "repos";
 
-/** A gate is the only thing here that has an agent stopped dead, so it gets
- *  the fastest poll. Everything else moves on human timescales. */
-const GATE_MS = 4_000;
-const TREE_MS = 30_000;
+/** Live on the socket · reachable but not streaming · nothing answering. */
+type LinkState = "live" | "slow" | "offline";
+const LINK_WORD: Record<LinkState, string> = { live: "Live", slow: "Catching up", offline: "Offline" };
+const LINK_TONE: Record<LinkState, string> = {
+  live: "var(--success)", slow: "var(--warning)", offline: "var(--error)",
+};
+
+/**
+ * Fallback intervals, not the delivery mechanism.
+ *
+ * Everything below arrives on the socket now. These exist for the seconds
+ * between a socket dying and the reconnect landing, so they are set to what a
+ * *backstop* should cost rather than what a primary path has to be — a phone
+ * pays a radio wake for each one.
+ *
+ * Docker and pull requests keep real intervals because nothing pushes them:
+ * docker has no change feed we subscribe to, and GitHub has no route into this
+ * server.
+ */
+const GATE_MS = 20_000;
+const TREE_MS = 120_000;
 const DOCKER_MS = 15_000;
 const PR_MS = 60_000;
 
@@ -75,11 +101,27 @@ export function MobileApp() {
   const [immersive, setImmersive] = useState(false);
   const [dismissed, setDismissed] = useState<string[]>([]);
 
-  // ── polling ──────────────────────────────────────────────────────────
-  // Polled rather than streamed, deliberately. The live socket exists and
-  // works, but a phone spends most of its life with the screen off, and a
-  // socket reconnecting in the background is a worse deal than a few small
-  // requests at the moment you look at it.
+  // ── the live channel ─────────────────────────────────────────────────
+  //
+  // This used to be polling only, and the reasoning was written down here: a
+  // socket reconnecting behind a dark screen is a worse deal than a few small
+  // requests. The battery half of that is right and is kept — the socket closes
+  // with the screen and catches up on return, exactly as the polls did.
+  //
+  // What it got wrong is what it cost. Without a channel the server has no way
+  // to say anything, so nothing on this device could ever be current: a gate
+  // arrived up to four seconds late, a change made here took up to a minute to
+  // reach the desk, and "what is that agent doing right now" had no answer at
+  // all — which is why the home screen animated fourteen bars off a tool
+  // *count* and called them vitals.
+  //
+  // `keepEvents: false` is the phone's half of the bargain: the same socket,
+  // without the two-thousand-row event buffer the cockpit's stream needs and
+  // this app never draws.
+  const { conn, openTools } = useLive(false, false);
+
+  // The polls stay, slowed right down. They are no longer how anything gets
+  // here — they are what covers the gap between the socket dying and noticing.
   const loadFast = useCallback(() => {
     api.gatePending().then((r) => { setGates(r.gates); setReachable(true); }).catch(() => setReachable(false));
     api.sessions(40).then(setSessions).catch(() => { /* the gate poll reports reachability */ });
@@ -121,11 +163,52 @@ export function MobileApp() {
     return pollWhileVisible(loadFast, GATE_MS);
   }, [loadFast]);
 
+  /**
+   * The repository list, and everything gated on it.
+   *
+   * This was a single fetch on mount with an empty `catch`, and every other
+   * poll is gated on `repos.length` — so one failed request at boot (a sidecar
+   * still starting, a phone that woke on the wrong network) left the tree, the
+   * pull requests and docker permanently empty, with no refresh control
+   * anywhere on the phone to recover with. Killing the tab was the only way
+   * back.
+   *
+   * Now it retries, and it re-reads whenever git says something changed, which
+   * is also how a worktree created at the desk finally appears here.
+   */
+  const loadRepos = useCallback(() => {
+    api.gitRepos()
+      .then(({ repos: list }) => { setRepos(list); loadTrees(list); loadPrs(list); })
+      .catch(() => setRepos((cur) => cur));
+  }, [loadTrees, loadPrs]);
+
   useEffect(() => {
     api.prCapability().then((c) => setMe(c.login || "")).catch(() => {});
-    api.gitRepos().then(({ repos: list }) => { setRepos(list); loadTrees(list); loadPrs(list); }).catch(() => {});
+    loadRepos();
     loadDocker();
-  }, [loadDocker, loadTrees, loadPrs]);
+  }, [loadDocker, loadRepos]);
+
+  // Retry the one fetch everything else depends on until it lands.
+  useEffect(() => {
+    if (repos.length) return;
+    const t = setTimeout(loadRepos, 5_000);
+    return () => clearTimeout(t);
+  }, [repos.length, loadRepos]);
+
+  // ── pushed, not polled ───────────────────────────────────────────────
+  useEffect(() => subscribeGitChanged(() => { loadRepos(); }), [loadRepos]);
+
+  useEffect(() => {
+    // A `session` frame fires on every ingest — several a second under a busy
+    // fleet — and this list only needs to be right, not instantaneous. One
+    // trailing call per burst.
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const off = subscribeSessionChanged(() => {
+      if (t) return;
+      t = setTimeout(() => { t = null; loadFast(); }, 1_200);
+    });
+    return () => { off(); if (t) clearTimeout(t); };
+  }, [loadFast]);
 
   useEffect(() => {
     if (!repos.length) return;
@@ -147,6 +230,22 @@ export function MobileApp() {
     () => sessions.filter((s) => !s.ended_at && Date.now() - s.last_seen < 120_000),
     [sessions]
   );
+
+  /** The server's own list of calls still running, in the order that reads
+   *  worst-first: the one that has been open longest is the one most likely to
+   *  be stuck rather than thinking. */
+  const openCalls: LiveCall[] = useMemo(() => {
+    const now = Date.now();
+    return [...openTools]
+      .sort((a, b) => a.since - b.since)
+      .map((t) => ({
+        key: `${t.session_id}:${t.tool_name}:${t.since}`,
+        tool: t.tool_name,
+        target: t.target ?? null,
+        app: t.source_app,
+        openMs: Math.max(0, now - t.since),
+      }));
+  }, [openTools]);
 
   const queue = useMemo(
     () => buildQueue({ gates, sessions, prs, containers, me, now: Date.now() })
@@ -258,6 +357,14 @@ export function MobileApp() {
   const stacked = !!openRepo || !!openPr;
   const spend = stats?.totals ? fmtUsd(stats.totals.cost_usd) : "—";
 
+  /**
+   * One word for the state of the link, and it distinguishes the three cases a
+   * single boolean could not: the socket is carrying data, the socket is gone
+   * but the server still answers (so nothing is lost, only late), and nothing
+   * is reachable at all.
+   */
+  const link: LinkState = conn === "open" ? "live" : reachable ? "slow" : "offline";
+
   return (
     <div className="mb min-h-[100dvh] flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>
       <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}</style>
@@ -274,9 +381,12 @@ export function MobileApp() {
           agent<span style={{ color: "var(--primary-hover)" }}>glass</span>
         </span>
         <span className="flex-1" />
-        <span className="flex items-center gap-1.5 text-[11px]" style={{ color: reachable ? "var(--success)" : "var(--error)" }}>
+        {/* What this said before was that one four-second poll had succeeded,
+            on an app with no live connection — "Live" meant "the last request
+            came back". It is the socket now, so it can mean what it says. */}
+        <span className="flex items-center gap-1.5 text-[11px]" style={{ color: LINK_TONE[link] }}>
           <span className="mb-dot pulse" style={{ background: "currentColor", color: "currentColor" }} />
-          {reachable ? "Live" : "Offline"}
+          {LINK_WORD[link]}
         </span>
         <button className="mb-press grid place-items-center" aria-label="Settings"
           style={{ minHeight: 40, minWidth: 40, borderRadius: 11, fontSize: 15, color: "var(--text3)", background: "transparent" }}
@@ -292,10 +402,7 @@ export function MobileApp() {
           <>
             <NowHero
               pending={queue.length} working={live.length}
-              // The bars breathe at rates derived from each agent's own tool
-              // count, so the strip reads as several things working rather than
-              // one animation looping.
-              rates={live.map((s) => 1 + ((s.tool_count % 5) * 0.35))}
+              live={openCalls}
               spend={spend}
               repos={[...new Set(live.map((s) => (s.project_path || "").split("/").filter(Boolean).pop() || s.source_app))]}
             />
