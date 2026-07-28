@@ -63,7 +63,15 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Za-z0-9+]{40,}={0,2}\b/g, // long high-entropy blob (raw base64/hex secrets); no "/" so it never eats a path
 ];
 
-function stripSecrets(s: string): string {
+/**
+ * Redact credential-shaped text, leaving everything else alone.
+ *
+ * Exported separately from `redactText` because one caller needs exactly this
+ * half: the AI walkthrough sends real diffs to a model, so paths have to
+ * survive — a patch whose every path became `<path>` describes nothing — while
+ * a key on a changed line must not.
+ */
+export function stripSecrets(s: string): string {
   let out = s;
   for (const re of SECRET_PATTERNS) out = out.replace(re, "<redacted-secret>");
   return out;

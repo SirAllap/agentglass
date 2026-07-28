@@ -952,6 +952,12 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                     ) : (
                       <span style={{ color: "var(--warning)" }}>{walk?.error}</span>
                     )}
+                    {/* Named, not silently missing — see GitPanel. */}
+                    {!!walk?.withheld?.length && (
+                      <div className="mt-1 text-[10px] t-dim2">
+                        Not sent: {walk.withheld.join(", ")} — credential files are kept out of the prompt.
+                      </div>
+                    )}
                   </div>
                 )}
 

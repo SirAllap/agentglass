@@ -1800,6 +1800,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               {walk?.reviewFocus ? <><span className="t-dim2 uppercase tracking-wide text-[8.5px] mr-1">focus</span>{walk.reviewFocus}</> : walk?.error}
                             </div>
                           )}
+                          {/* Named, not silently missing: a summary that covers
+                              a different changeset than the one on screen is
+                              worse than none, because it is the one you trust. */}
+                          {!!walk?.withheld?.length && (
+                            <div className="mt-1 text-[9.5px] leading-snug t-dim2">
+                              Not sent: {walk.withheld.join(", ")} — credential files are kept out of the prompt.
+                            </div>
+                          )}
                         </div>
                       )}
                       {!tree?.clean && (

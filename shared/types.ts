@@ -981,6 +981,13 @@ export interface WalkthroughResult {
   reviewFocus: string;
   files: WalkthroughFile[];
   error?: string;
+  /**
+   * Files whose contents were deliberately not sent — `.env`, keys, credential
+   * files. Named rather than dropped: a summary that describes a different
+   * changeset from the one on screen is worse than no summary, because it is
+   * the one people trust.
+   */
+  withheld?: string[];
 }
 
 // --- chat attachments (images pasted into the composer) ----------------------
