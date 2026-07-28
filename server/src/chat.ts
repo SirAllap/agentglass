@@ -180,7 +180,7 @@ export function turnEnvelope(text: string, images: ChatImage[]): string {
   }) + "\n";
 }
 
-export function chatStream(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown): Response {
+export function chatStream(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown, effort?: unknown): Response {
   const bin = claudeBin();
   if (!bin) return err("no local `claude` CLI — install Claude Code to chat", 403);
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403);
@@ -215,6 +215,8 @@ export function chatStream(cwd: unknown, message: unknown, model: unknown, resum
   const allow = pm === "bypassPermissions" ? [] : allowList(allowedTools);
   if (allow.length) args.push("--allowedTools", ...allow);
   if (rid) args.push("--resume", rid);
+  const eff = effort === "low" || effort === "medium" ? effort : null;
+  if (eff) args.push("--thinking-budget", eff);
 
   // Its own process group, so stopping a turn reaches the whole job tree.
   // `claude` spawns tools of its own — a test run, a dev server — and killing

@@ -22,13 +22,18 @@ import { fmtAgo, fmtUsd, modelLabelOf, modelColor, providerOf, agentLabel } from
 import { sessionIsLive } from "../lib/derive.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, subscribe, chatResuming,
-  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, type Chat,
+  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, dropAttachment, renameChat, lastSent, type Chat,
 } from "../lib/chatStore.ts";
 
 const MODELS = [
   { id: "claude-opus-4-8", label: "Opus 4.8" },
   { id: "claude-sonnet-5", label: "Sonnet 5" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5" },
+];
+const EFFORTS = [
+  { id: "high", label: "High" },
+  { id: "medium", label: "Medium" },
+  { id: "low", label: "Low" },
 ];
 // These run through `claude -p`, which has no terminal to prompt from: a tool
 // that would raise a permission dialog is refused outright, and there is no
@@ -270,6 +275,8 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   useEffect(() => { try { localStorage.setItem(ALLOW_KEY, allowed); } catch { /* private mode */ } }, [allowed]);
   const [query, setQuery] = useState("");
   const [resumeOpen, setResumeOpen] = useState(false);
+  const [foldedTools, setFoldedTools] = useState<Set<number>>(new Set());
+  const [historyOffset, setHistoryOffset] = useState(0);
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -390,6 +397,7 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
   const submit = () => {
     if (!active) return;
     const text = active.draft;
+    setHistoryOffset(0);
     send(active.id, text, () => openRef.current && activeIdRef.current === active.id, allowed.split(/\s+/).filter(Boolean));
   };
   const [hint, setHint] = useState("");
@@ -445,6 +453,23 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
       if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
         e.preventDefault(); pickSkill(slashMatches[slashIdx].name); return;
       }
+    }
+    if (e.key === "ArrowUp" && active && !active.draft && !active.sending) {
+      const prev = lastSent(active.id, historyOffset);
+      if (prev) {
+        e.preventDefault();
+        setHistoryOffset((o) => o + 1);
+        update(active.id, (c) => { c.draft = prev; });
+      }
+      return;
+    }
+    if (e.key === "ArrowDown" && active && historyOffset > 0) {
+      e.preventDefault();
+      const newOff = historyOffset - 1;
+      setHistoryOffset(newOff);
+      const prev = lastSent(active.id, newOff);
+      update(active.id, (c) => { c.draft = prev ?? ""; });
+      return;
     }
     // A focused textarea can swallow Escape before it reaches the global
     // handler, stranding the panel open. Close it here instead.
@@ -538,6 +563,8 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                         </button>
                         <Select value={active.model} onChange={(v) => update(active.id, (c) => { c.model = v; })}
                           className={selCls} style={selStyle} options={MODELS.map((m) => ({ value: m.id, label: m.label }))} />
+                        <Select value={active.effort} onChange={(v) => update(active.id, (c) => { c.effort = v as "high" | "medium" | "low"; })}
+                          className={selCls} style={selStyle} options={EFFORTS.map((e) => ({ value: e.id, label: e.label }))} />
                         <Select value={active.mode} onChange={(v) => update(active.id, (c) => { c.mode = v; })}
                           className={selCls} style={selStyle} title="Permission mode for tool use"
                           options={MODES.filter((m) => bypassAllowed || m.id !== "bypassPermissions").map((m) => ({ value: m.id, label: m.label }))} />
@@ -610,7 +637,13 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                             </div>
                             {m.tools.length > 0 && (
                               <div className="flex flex-col gap-0.5 mb-1.5 pb-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                                {m.tools.map((t) => (
+                                {m.tools.length > 2 && (
+                                  <button onClick={() => setFoldedTools((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; })}
+                                    className="text-[9.5px] t-dim2 hover:opacity-70 self-start">
+                                    {foldedTools.has(i) ? `${m.tools.length} tools · click to expand` : `${m.tools.length} tools · click to collapse`}
+                                  </button>
+                                )}
+                                {(m.tools.length <= 2 || !foldedTools.has(i)) && m.tools.map((t) => (
                                   <ToolRow key={t.id} e={{ kind: "tool", ts: t.ts, tool: t.name, target: t.target, is_error: t.error, output: t.output }} />
                                 ))}
                               </div>
@@ -709,8 +742,16 @@ export function ChatPanel({ open, onClose, focusId }: { open: boolean; onClose: 
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
                         <ClipIcon />
                       </button>
-                      <textarea ref={inputRef} value={active?.draft ?? ""} disabled={!enabled || !active} rows={2}
-                        onChange={(e) => active && update(active.id, (c) => { c.draft = e.target.value; })}
+                       <textarea ref={inputRef} value={active?.draft ?? ""} disabled={!enabled} rows={2}
+                         onChange={(e) => {
+                           if (!active) {
+                             const c = newChat(defaultCwd || repos[0]?.root || "");
+                             setActiveId(c.id);
+                             update(c.id, (cc) => { cc.draft = e.target.value; });
+                             return;
+                           }
+                           update(active.id, (c) => { c.draft = e.target.value; });
+                         }}
                         onKeyDown={onKey}
                         onPaste={onPaste}
                         placeholder={!enabled ? "chat unavailable" : active?.sessionId ? "reply… (Enter to send, Shift+Enter newline)" : "message a new session… (Enter to send)"}

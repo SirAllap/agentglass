@@ -57,7 +57,9 @@ export type Chat = {
   abort: AbortController | null;
   unread: boolean;      // replied while you were looking at another chat
   renamed?: boolean;    // titled by hand, so the first message must not overwrite it
-  blockedTool?: string; // a tool the allowlist refused, so the UI can offer to add it
+  blockedTool?: string;
+  sentMessages: string[];
+  effort: "high" | "medium" | "low";
 };
 
 const chats = new Map<string, Chat>();
@@ -112,7 +114,7 @@ export function newChat(
     id, cwd, model, mode,
     title: resume?.title || "new chat",
     messages: [], sessionId: resume?.sessionId ?? "",
-    sending: false, draft: "", attachments: [], createdAt: Date.now(), abort: null, unread: false,
+    sending: false, draft: "", attachments: [], createdAt: Date.now(), abort: null, unread: false, sentMessages: [], effort: "high",
   };
   chats.set(id, chat);
   emit();
@@ -220,6 +222,7 @@ export async function send(id: string, text: string, isActive: () => boolean, al
     // A name you chose outranks one derived from the first message.
     if (c.messages.length === 0 && !c.renamed) c.title = titleOf(msg || `${images.length} image${images.length > 1 ? "s" : ""}`);
     c.messages.push({ role: "user", text: msg, tools: [], ts: Date.now(), images: images.length ? images : undefined });
+    if (msg && c.sentMessages[c.sentMessages.length - 1] !== msg) c.sentMessages.push(msg);
     c.messages.push({ role: "assistant", text: "", tools: [], ts: Date.now(), streaming: true });
     c.sending = true;
     c.draft = "";
@@ -304,7 +307,7 @@ export async function send(id: string, text: string, isActive: () => boolean, al
   };
 
   try {
-    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images }, onEvent, ac.signal);
+    await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId, allowedTools, images, effort: chat.effort }, onEvent, ac.signal);
   } catch (e) {
     if (!(e instanceof DOMException && e.name === "AbortError")) {
       // A ChatStreamError already carries a sentence written for this spot;
@@ -411,4 +414,11 @@ export function dropAttachment(id: string, attId: string) {
     if (a) URL.revokeObjectURL(a.url);
     c.attachments = c.attachments.filter((x) => x.id !== attId);
   });
+}
+
+export function lastSent(id: string, offset: number): string | null {
+  const c = chats.get(id);
+  if (!c || !c.sentMessages.length) return null;
+  const idx = c.sentMessages.length - 1 - offset;
+  return idx >= 0 ? c.sentMessages[idx] : null;
 }
