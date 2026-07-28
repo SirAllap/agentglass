@@ -512,6 +512,8 @@ export function push(rootIn: string): GitActionResult {
 export function pull(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
+  const dirty = git(root, ["status", "--porcelain"]).stdout.trim();
+  if (dirty) return { ok: false, error: "working tree has uncommitted changes — commit or stash before pulling" };
   return run(root, ["pull", "--ff-only"]);
 }
 export function fetch(rootIn: string): GitActionResult {
@@ -675,6 +677,18 @@ export function commitDiff(rootIn: unknown, hash: string): GitFileChange[] {
   // vs first parent (matches the comment) + UTF-8 paths.
   const r = git(root, ["-c", "core.quotePath=false", "show", hash, "--no-color", "--first-parent", "--format=", "--unified=3"]);
   return parseDiff(root, r.stdout, false);
+}
+
+export function undoMerge(rootIn: string): GitActionResult {
+  const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
+  const g = guard(root); if (g) return g;
+  const hasMergeHead = git(root, ["rev-parse", "--verify", "MERGE_HEAD"]).code === 0;
+  if (hasMergeHead) return run(root, ["merge", "--abort"]);
+  const hasOrigHead = git(root, ["rev-parse", "--verify", "ORIG_HEAD"]).code === 0;
+  if (!hasOrigHead) return { ok: false, error: "no merge to undo (ORIG_HEAD not found)" };
+  const lastCommit = git(root, ["log", "-1", "--format=%s"]).stdout.trim();
+  if (!lastCommit.startsWith("Merge")) return { ok: false, error: "last commit is not a merge" };
+  return run(root, ["reset", "--hard", "ORIG_HEAD"]);
 }
 
 export function stashList(rootIn: unknown): GitStash[] {

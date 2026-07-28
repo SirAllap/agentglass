@@ -32,7 +32,7 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktrees as gitWorktrees, addWorktree, removeWorktree,
+  worktrees as gitWorktrees, addWorktree, removeWorktree, undoMerge,
 } from "./gitwork.ts";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import {
@@ -460,6 +460,7 @@ const server = Bun.serve<WsData>({
         case "/git/reset": res = resetTo(root, String(b.ref || ""), b.mode); break;
         case "/git/worktree-add": res = addWorktree(root, b.path, String(b.branch || ""), !!b.newBranch); break;
         case "/git/worktree-remove": res = removeWorktree(root, b.path, !!b.force); break;
+        case "/git/undo-merge": res = undoMerge(root); break;
         default: res = null;
       }
       if (res) return json(res, res.ok ? 200 : 400);

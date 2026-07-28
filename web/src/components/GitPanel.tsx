@@ -2,7 +2,7 @@
 // (stage/unstage/discard/commit), branches (checkout/create/delete), log
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Fragment } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitStash, GitGraphLine, GitWorktree, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
@@ -31,6 +31,25 @@ const STATUS_LETTER: Record<string, string> = {
   copied: "C", unmerged: "!", "type-changed": "T",
 };
 const baseName = (p: string) => p.split("/").pop() || p;
+
+function DirGroupedFiles({ files, root, writeEnabled, descMap, selKey, setSelKey, action, onAction, onDiscard }: {
+  files: GitFileChange[]; root: string; writeEnabled: boolean; descMap: Map<string, WalkthroughFile>; selKey: string | null; setSelKey: (k: string) => void;
+  action: "stage" | "unstage"; onAction: (c: GitFileChange) => void; onDiscard?: (c: GitFileChange) => void;
+}) {
+  const sorted = [...files].sort((a, b) => dirName(a.file_path, root).localeCompare(dirName(b.file_path, root)));
+  let prevDir = "";
+  return sorted.map((c) => {
+    const dir = dirName(c.file_path, root);
+    const header = dir !== prevDir && sorted.filter((f) => dirName(f.file_path, root) === dir).length > 1;
+    prevDir = dir;
+    return (
+      <Fragment key={(action === "unstage" ? "s" : "u") + c.file_path}>
+        {header && dir && <div className="px-2 pt-1.5 pb-0.5 text-[9px] uppercase tracking-wider font-medium" style={{ color: "var(--text3)" }}>{dir}</div>}
+        <FileRow c={c} root={root} writeEnabled={writeEnabled} desc={descMap.get(c.file_path)?.description} active={selKey === keyOf(c)} onSelect={() => setSelKey(keyOf(c))} action={action} onAction={() => onAction(c)} onDiscard={onDiscard ? () => onDiscard(c) : undefined} />
+      </Fragment>
+    );
+  });
+}
 // a file can be in BOTH staged & unstaged after partial staging — key by side.
 const keyOf = (c: GitFileChange) => (c.staged ? "s:" : "u:") + c.file_path;
 function dirName(p: string, root: string) {
@@ -279,7 +298,7 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
   const ViewTab = ({ id, label, n }: { id: View; label: string; n?: number }) => (
     <button onClick={() => setView(id)} className="text-[10.5px] px-2 py-1 rounded-md transition-colors"
       style={{ background: view === id ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent", color: view === id ? "var(--text)" : "var(--text3)", border: `1px solid color-mix(in srgb, var(--border) ${view === id ? 40 : 15}%, transparent)` }}>
-      {label}{n != null && n > 0 && <span className="ml-1 tabular-nums opacity-70">{n}</span>}
+      {label}{n != null && n > 0 && <sup className="text-[8px] tabular-nums opacity-60 ml-0.5">{n}</sup>}
     </button>
   );
 
@@ -336,6 +355,7 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
                     <button disabled={!writeEnabled || busy} onClick={() => act(() => api.gitFetch(root), "fetched")} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: writeEnabled ? 1 : 0.5 }}>fetch</button>
                     <button disabled={!writeEnabled || busy} onClick={() => act(() => api.gitPull(root), "pulled")} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: writeEnabled ? 1 : 0.5 }}>↓ pull</button>
                     <button disabled={!writeEnabled || busy} onClick={() => act(() => api.gitPush(root), "pushed")} className="text-[11px] px-2.5 py-1 rounded-lg font-medium" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", opacity: writeEnabled ? 1 : 0.5 }}>↑ push{branch && branch.ahead > 0 ? ` (${branch.ahead})` : ""}</button>
+                    <button disabled={!writeEnabled || busy} onClick={() => act(() => api.gitUndoMerge(root), "merge undone")} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", opacity: writeEnabled ? 1 : 0.5 }}>↶ undo merge</button>
                     <button onClick={() => loadTree(root)} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
                     <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
                   </div>
@@ -360,12 +380,12 @@ export function GitPanel({ open, onClose }: { open: boolean; onClose: () => void
                         {tree?.clean && <div className="px-3 py-6 text-center t-dim2 text-[11px]">✓ nothing to commit, working tree clean</div>}
                         {!!tree?.staged.length && (
                           <Section title="Staged" count={tree.staged.length} tint="var(--success)" action="unstage all" onAll={writeEnabled ? () => act(() => api.gitUnstageAll(root)) : undefined}>
-                            {tree.staged.map((c) => <FileRow key={"s" + c.file_path} c={c} root={root} writeEnabled={writeEnabled} desc={descMap.get(c.file_path)?.description} active={selKey === keyOf(c)} onSelect={() => setSelKey(keyOf(c))} action="unstage" onAction={() => unstage(c)} />)}
+                            <DirGroupedFiles files={tree.staged} root={root} writeEnabled={writeEnabled} descMap={descMap} selKey={selKey} setSelKey={setSelKey} action="unstage" onAction={unstage} />
                           </Section>
                         )}
                         {!!tree?.unstaged.length && (
                           <Section title="Changes" count={tree.unstaged.length} tint="var(--warning)" action="stage all" onAll={writeEnabled ? () => act(() => api.gitStageAll(root)) : undefined}>
-                            {tree.unstaged.map((c) => <FileRow key={"u" + c.file_path} c={c} root={root} writeEnabled={writeEnabled} desc={descMap.get(c.file_path)?.description} active={selKey === keyOf(c)} onSelect={() => setSelKey(keyOf(c))} action="stage" onAction={() => stage(c)} onDiscard={() => discard(c)} />)}
+                            <DirGroupedFiles files={tree.unstaged} root={root} writeEnabled={writeEnabled} descMap={descMap} selKey={selKey} setSelKey={setSelKey} action="stage" onAction={stage} onDiscard={discard} />
                           </Section>
                         )}
                       </div>
