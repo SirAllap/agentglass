@@ -333,6 +333,84 @@ for (const col of ["project_path", "cwd_path"]) {
 db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_path)");
 
 // ---------------------------------------------------------------------------
+/**
+ * Who did what, kept.
+ *
+ * The cockpit performs real writes — it stages and discards, force-pushes,
+ * merges pull requests, removes containers, and answers the gate that has an
+ * agent stopped at the other end of it. Every one of those was recorded only in
+ * a ring buffer that says of itself, at gitlog.ts:11, that it is "a live view of
+ * the current session, not an audit trail". So the moment more than one person
+ * can reach a cockpit — or one person can reach it from two devices — "who
+ * approved that" has no answer, and neither does "what happened to my branch
+ * while I was at lunch".
+ *
+ * Append-only, and small enough to stay that way: every row here is a human
+ * pressing something, which is tens of rows a day, not the thousands an hour
+ * the events table takes. Nothing prunes it and nothing needs to.
+ *
+ * `actor` is what the server can honestly assert, which is where the request
+ * came from and nothing more. There are no accounts here — a token is shared,
+ * not personal — so claiming a name would be a fiction. `local` means the
+ * loopback caller, which is the dashboard on this machine; anything else is the
+ * address it came from, which is how "I approved that from my phone" gets an
+ * answer.
+ */
+db.exec(`
+CREATE TABLE IF NOT EXISTS actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  ok INTEGER NOT NULL,
+  detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_actions_at ON actions(at);
+`);
+
+export interface ActionRow {
+  id: number;
+  at: number;
+  actor: string;
+  action: string;
+  target: string;
+  ok: number;
+  detail: string | null;
+}
+
+const actionInsert = db.query(
+  `INSERT INTO actions (at, actor, action, target, ok, detail) VALUES ($at, $actor, $action, $target, $ok, $detail)`
+);
+
+/** Write one row. Never throws: a failed audit write must not fail the action
+ *  it was recording, which would be a worse outcome than a missing line. */
+export function recordAction(a: {
+  actor: string; action: string; target?: string; ok: boolean; detail?: string | null; at?: number;
+}): void {
+  try {
+    actionInsert.run({
+      $at: a.at ?? Date.now(),
+      $actor: a.actor,
+      $action: a.action,
+      $target: a.target ?? "",
+      $ok: a.ok ? 1 : 0,
+      $detail: a.detail ?? null,
+    } as any);
+  } catch { /* the action already happened; losing its record is the lesser harm */ }
+}
+
+/** Newest first. Unscoped on purpose: the question this answers is "what has
+ *  been done through this cockpit", and narrowing it by the project that
+ *  happens to be open would hide exactly the answer somebody is looking for. */
+export function actionLog(limit = 200, before?: number): ActionRow[] {
+  const n = Math.max(1, Math.min(1000, limit));
+  return before
+    ? db.query<ActionRow, [number, number]>(`SELECT * FROM actions WHERE at < ? ORDER BY at DESC, id DESC LIMIT ?`).all(before, n)
+    : db.query<ActionRow, [number]>(`SELECT * FROM actions ORDER BY at DESC, id DESC LIMIT ?`).all(n);
+}
+
+// ---------------------------------------------------------------------------
 // Control plane: gate requests.
 //
 // The gate used to live only in memory, which made the one feature whose job is

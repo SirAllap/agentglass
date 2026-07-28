@@ -83,7 +83,7 @@ and no menu item that removes recorded data. The `Clear ✕` in the header clear
 
 | Where | What is in it |
 |---|---|
-| `~/.local/share/agentglass/agentglass.db`<br><sub>or `$XDG_DATA_HOME/agentglass/`, or `./agentglass.db` if one is already there</sub> | Every event, with its `summary`, its `error_text` and the **raw hook payload** — which for a tool call is the command line, the file path, and the prompt. Plus session totals, the full-text search index, gate decisions, and the daily rollup. |
+| `~/.local/share/agentglass/agentglass.db`<br><sub>or `$XDG_DATA_HOME/agentglass/`, or `./agentglass.db` if one is already there</sub> | Every event, with its `summary`, its `error_text` and the **raw hook payload** — which for a tool call is the command line, the file path, and the prompt. Plus session totals, the full-text search index, gate decisions, the daily rollup, and the **activity log** — every write the dashboard performed, with the address it came from. |
 | `~/.config/agentglass/token` | The shared secret, `0600`, when one has been minted. |
 | `~/.config/agentglass/config.json` | The active project scope and the UI switches. |
 
@@ -97,6 +97,12 @@ Two things about retention are easy to get wrong:
 - **The rollup has no expiry at all.** Nothing prunes it, and there is no path
   in the product that removes a row from it. It is designed to be kept for
   years.
+- **Neither does the activity log.** Settings › Activity is an audit trail, so
+  it is append-only by design: every git write, container action, pull-request
+  action and gate decision, with what it touched and the address it came from
+  (`local` for this machine, otherwise the IP — there are no accounts here, so
+  a name would be invented). One row per thing a person pressed, which is tens
+  a day rather than the thousands an hour the events table takes.
 
 To get rid of any of it, delete the files. Stop the server first — SQLite is
 open while it runs:

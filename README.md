@@ -880,6 +880,7 @@ cannot be configured by `export` at all.
 | `GET /insights` | Derived warnings — loops, fast burn, high failure rate, spend velocity. |
 | `GET /search?q=` | Full-text search across all captured prompts/commands/outputs. |
 | `POST /gate` · `GET /gate/pending` · `POST /gate/decide` | Control-plane approve/deny for the opt-in `PreToolUse` gate. |
+| `GET /actions?limit=&before=` | Every write the cockpit performed — git, docker, pull requests, gate decisions — with the address it came from. Append-only; unscoped on purpose. |
 | `POST /control` | Drive the dashboard's own UI (switch view, toggle workspace, theme, zoom, new chat) from an external controller — a Stream Deck, a phone. Validated then rebroadcast on `/stream`; changes only what's shown, grants no capability the keyboard doesn't. See [`docs/EXTENDING.md`](docs/EXTENDING.md). |
 | `GET /export?format=csv\|json` | Download all events (bounded by retention). |
 | `GET /export?kind=daily&format=csv\|json` | Download the **daily totals**, rollup included — so a month already pruned still exports. |

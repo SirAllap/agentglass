@@ -21,8 +21,11 @@ import {
   dailyUsage,
   rollupEarliestDay,
   retentionSeamDay,
+  getGate,
+  actionLog,
 } from "./db.ts";
 import { maybeAlert, setAlertSink } from "./alerts.ts";
+import { noteAction } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { getUsage } from "./usage.ts";
@@ -694,7 +697,16 @@ const server = Bun.serve<WsData>({
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false }); }
-      const ok = decideGate(String(b.id), b.decision === "deny" ? "deny" : "allow", String(b.reason || ""));
+      const decision = b.decision === "deny" ? "deny" : "allow";
+      // Read the row BEFORE deciding: afterwards it is resolved, and what makes
+      // the line worth keeping is what was held, not the uuid it was held
+      // under. "denied Bash · rm -rf build" is an audit line; a uuid is not.
+      const held = getGate(String(b.id));
+      const ok = decideGate(String(b.id), decision, String(b.reason || ""));
+      // "Who approved that" is the question #299 opens with, and a gate is the
+      // one write with a stopped agent on the other end of it.
+      noteAction(srv.requestIP(req)?.address, `/gate/${decision}`,
+        { tool: held?.tool_name, summary: held?.summary }, { ok });
       return json({ ok });
     }
     // Drive the dashboard's own UI from outside — a Stream Deck, a phone. Unlike
@@ -960,7 +972,9 @@ const server = Bun.serve<WsData>({
         case "/git/undo-merge": res = await undoMerge(root); break;
         default: res = null;
       }
-      if (res) return json(res, res.ok ? 200 : 400);
+      // Every write through this switch is recorded — see actions.ts for why
+      // it keeps the small ones too.
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- live docker panel (lazydocker-style) ---
@@ -1013,7 +1027,9 @@ const server = Bun.serve<WsData>({
         case "/docker/rm": res = await removeContainer(id); break;
         default: res = null;
       }
-      if (res) return json(res, res.ok ? 200 : 400);
+      // Every write through this switch is recorded — see actions.ts for why
+      // it keeps the small ones too.
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- pull requests (gh-backed) ---
@@ -1111,7 +1127,9 @@ const server = Bun.serve<WsData>({
         case "/prs/review-prompt": res = await prepareReviewPrompt(root, n); break;
         default: res = null;
       }
-      if (res) return json(res, res.ok ? 200 : 400);
+      // Every write through this switch is recorded — see actions.ts for why
+      // it keeps the small ones too.
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
@@ -1144,6 +1162,16 @@ const server = Bun.serve<WsData>({
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      // The launch, not the turn. chatSend returns a stream rather than an
+      // outcome, and the auditable fact is that somebody started an agent in a
+      // checkout through this cockpit — what it then does is gated and lands in
+      // the events table on its own.
+      //
+      // The prompt is deliberately not kept here. It is already in the
+      // transcript and in `events`, and a second copy in an append-only table
+      // that nothing prunes is a copy nobody asked for.
+      noteAction(srv.requestIP(req)?.address, "/chat/send",
+        { root: b.cwd, name: b.model }, { ok: true });
       return chatSend(b);
     }
     // The command that hands a chat to the user's own terminal. Server-side
@@ -1270,6 +1298,20 @@ const server = Bun.serve<WsData>({
         retention_days: RETENTION_DAYS,
         rollup_from: rollupEarliestDay(),
       });
+    }
+
+    /*
+     * What has been done through this cockpit.
+     *
+     * Unscoped on purpose. Every other metric narrows to the open project, but
+     * the question this answers — "who merged that", "what happened while I was
+     * at lunch" — is at its most useful precisely when the answer is somewhere
+     * you were not looking.
+     */
+    if (pathname === "/actions") {
+      const limit = Number(url.searchParams.get("limit") || 200);
+      const before = Number(url.searchParams.get("before")) || undefined;
+      return json({ actions: actionLog(limit, before).map((a) => ({ ...a, ok: !!a.ok })) });
     }
 
     // --- export ---

@@ -12,7 +12,7 @@ import type {
   WalkthroughResult, WalkthroughInputFile, GitRepoRef, WorkingTree, GitFileChange, GitActionResult,
   GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult,
   PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
-  UsageDay, UsageHistory,
+  UsageDay, UsageHistory, ActionRecord,
 } from "../../../shared/types.ts";
 import { modelLabelOf, providerOf } from "./format.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -625,6 +625,27 @@ export function dailyExportUri(fmt: "csv" | "json"): string {
   ];
   const rows = h.days.map((d) => cols.map((c) => String(d[c])).join(","));
   return dataUri("text/csv", [cols.join(","), ...rows].join("\n"));
+}
+
+/** A plausible afternoon of writes, for the showcase. */
+export function actions(): { actions: ActionRecord[] } {
+  const now = Date.now();
+  const rows: [string, string, string, boolean, string | null][] = [
+    ["local", "/gate/deny", "Bash · rm -rf ./dist ./node_modules", true, null],
+    ["192.168.1.42", "/prs/merge", "shop-api #482", true, null],
+    ["192.168.1.42", "/gate/allow", "Write · src/checkout/index.ts", true, null],
+    ["local", "/git/discard", "shop-api src/pay.ts", true, null],
+    ["local", "/docker/rm", "shop-api-redis-1", true, null],
+    ["local", "/git/branch-delete", "shop-api feat/coupon-table", true, null],
+    ["local", "/git/push", "agentglass", false, "rejected — remote has commits you do not"],
+    ["local", "/prs/review", "shop-api #468", true, null],
+    ["local", "/git/commit-staged", "agentglass round prices at the cart boundary", true, null],
+  ];
+  return {
+    actions: rows.map(([actor, action, target, ok, detail], i) => ({
+      id: rows.length - i, at: now - i * rnd(4, 40) * 60_000, actor, action, target, ok, detail,
+    })),
+  };
 }
 
 export function skillsExportUri(): string {

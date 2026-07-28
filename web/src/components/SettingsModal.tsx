@@ -12,6 +12,8 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
+import { fmtAgo } from "../lib/format.ts";
+import type { ActionRecord } from "../../../shared/types.ts";
 import { ingestUpdate } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
@@ -125,12 +127,13 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "prefs" | "keys" | "open" | "export" | "hooks" | "reqs" | "remote" | "about";
+type Pane = "prefs" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
 const TABS: { id: Pane; label: string }[] = [
   { id: "prefs", label: "Preferences" },
   { id: "keys", label: "Shortcuts" },
   { id: "open", label: "Open" },
   { id: "export", label: "Export" },
+  { id: "log", label: "Activity" },
   { id: "hooks", label: "Hooks" },
   { id: "reqs", label: "Requirements" },
   { id: "remote", label: "Remote" },
@@ -217,6 +220,111 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
  * it cannot run — a dirty checkout, a diverged branch — it says which, because
  * "update unavailable" sends people looking in the wrong place.
  */
+/**
+ * What has been done through this cockpit.
+ *
+ * The dashboard makes real changes — it discards, force-pushes, merges pull
+ * requests, removes containers, answers the gate an agent is stopped at — and
+ * every one of those was recorded only in a ring buffer that says of itself it
+ * is a live view of the session rather than an audit trail. So "who approved
+ * that" and "what happened to my branch while I was at lunch" had no answer.
+ *
+ * `actor` is deliberately an address rather than a name. There are no accounts
+ * here and the token is shared, so a name would be invented; where the request
+ * came from is a fact. `local` is this machine's dashboard, and anything else
+ * is the device that reached it — which is what makes "I approved that from my
+ * phone" answerable.
+ */
+function ActivityPane({ open }: { open: boolean }) {
+  const [rows, setRows] = useState<ActionRecord[] | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    api.actions(200).then((r) => { if (alive) setRows(r.actions); }).catch(() => { if (alive) setRows([]); });
+    return () => { alive = false; };
+  }, [open]);
+
+  if (!rows) return <Section title="Activity"><div className="px-3 py-3 text-[11.5px] t-dim2">Loading…</div></Section>;
+  if (!rows.length) {
+    return (
+      <Section title="Activity">
+        <div className="px-3 py-3 text-[11.5px] t-dim2">
+          Nothing yet. Every write this dashboard performs — staging, discarding, pushing,
+          merging, container actions, gate decisions — is recorded here as it happens.
+        </div>
+      </Section>
+    );
+  }
+
+  return (
+    <Section title="Activity">
+      <div className="px-3 pb-2 text-[10.5px] t-dim2">
+        Newest first. Kept indefinitely — these are the changes you made, not telemetry.
+      </div>
+      <div className="flex flex-col">
+        {rows.map((a) => (
+          <div key={a.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-baseline px-3 py-1.5 rounded-lg hover:bg-white/5">
+            <span
+              className="text-[9.5px] font-semibold tabular-nums shrink-0"
+              style={{ color: a.ok ? "var(--text4)" : "var(--error)" }}
+              title={a.ok ? "succeeded" : a.detail || "failed"}
+            >
+              {a.ok ? "·" : "✕"}
+            </span>
+            <span className="min-w-0">
+              <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{verb(a.action)}</span>
+              {a.target && <span className="text-[11.5px] t-dim"> {a.target}</span>}
+              {!a.ok && a.detail && <span className="block text-[10px] mt-0.5" style={{ color: "var(--error)" }}>{a.detail}</span>}
+            </span>
+            <span className="text-[9.5px] t-dim2 tabular-nums shrink-0 text-right">
+              {a.actor === "local" ? "" : `${a.actor} · `}{fmtAgo(a.at)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * `/git/branch-delete` reads as a route. "deleted branch" reads as something a
+ * person did, which is what a log is for — and past tense, because every line
+ * here is already over.
+ *
+ * Named where naming helps and derived where it does not, so a route added
+ * later still produces a readable line instead of nothing.
+ */
+const VERBS: Record<string, string> = {
+  "/gate/allow": "approved", "/gate/deny": "denied",
+  "/git/stage": "staged", "/git/unstage": "unstaged",
+  "/git/stage-all": "staged everything", "/git/unstage-all": "unstaged everything",
+  "/git/discard": "discarded", "/git/commit-staged": "committed",
+  "/git/push": "pushed", "/git/pull": "pulled", "/git/fetch": "fetched",
+  "/git/checkout": "checked out", "/git/branch-create": "created branch",
+  "/git/branch-delete": "deleted branch", "/git/branch-rename": "renamed branch",
+  "/git/merge": "merged", "/git/rebase": "rebased", "/git/reset": "reset",
+  "/git/stash-push": "stashed", "/git/stash-apply": "applied stash",
+  "/git/stash-pop": "popped stash", "/git/stash-drop": "dropped stash",
+  "/git/apply-hunk": "staged a hunk", "/git/undo-merge": "undid the merge",
+  "/git/worktree-add": "added worktree", "/git/worktree-remove": "removed worktree",
+  "/docker/start": "started container", "/docker/stop": "stopped container",
+  "/docker/restart": "restarted container", "/docker/rm": "removed container",
+  "/prs/merge": "merged pull request", "/prs/close": "closed pull request",
+  "/prs/review": "reviewed", "/prs/comment": "commented on",
+  "/prs/rerun": "re-ran the checks on", "/prs/draft": "changed draft state of",
+  "/chat/send": "started a chat in",
+};
+
+function verb(action: string): string {
+  const known = VERBS[action];
+  if (known) return known;
+  const [, family, ...rest] = action.split("/");
+  const what = rest.join("/").replace(/-/g, " ");
+  if (family === "docker") return `${what} container`;
+  if (family === "prs") return `${what} pull request`;
+  return what || action;
+}
+
 function AboutPane({ open }: { open: boolean }) {
   const [st, setSt] = useState<UpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -921,6 +1029,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
 
                   {pane === "remote" && <RemoteAccessPane open={open} />}
 
+                  {pane === "log" && <ActivityPane open={open} />}
                   {pane === "about" && <AboutPane open={open} />}
                   </div>
                 </div>
