@@ -63,6 +63,75 @@ const drain = async (cdp: CDP, screen: string) => {
   await cdp.ev("window.__audit = { errors: [], net: [] }");
 };
 
+/**
+ * The defects that are invisible in code and obvious on a phone.
+ *
+ * Every one of these was reported by hand at least once: a switch clipped by
+ * its own hit area, a header sitting under another header, a control too small
+ * to hit, a row wider than the screen. They are cheap to check and they are the
+ * difference between "works" and "polished", so every screen gets swept rather
+ * than only the ones someone thought to look at.
+ */
+const HYGIENE = `(() => {
+  const bad = { overflow: [], tiny: [], clipped: [], covered: [] };
+  const vw = innerWidth, vh = innerHeight;
+  // A screen that is closed is still mounted, parked one viewport to the right.
+  // Everything inside it "overflows" by exactly that much and none of it is on
+  // screen, so the whole subtree is out of scope.
+  const parked = (el) => !!el.closest('.mb-screen:not(.on), [aria-hidden="true"]');
+  // Content inside a horizontal scroller is reachable by definition — a long
+  // diff line in Scroll mode is the feature, not a defect.
+  const scrollable = (el) => {
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      const o = getComputedStyle(p).overflowX;
+      if (o === "auto" || o === "scroll") return true;
+    }
+    return false;
+  };
+  const visible = (el) => {
+    if (parked(el)) return false;
+    const s = getComputedStyle(el);
+    if (s.display === "none" || s.visibility === "hidden" || Number(s.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < vh;
+  };
+  const name = (el) => (el.tagName.toLowerCase() + (el.className && typeof el.className === "string"
+    ? "." + el.className.trim().split(/\\s+/).slice(0, 2).join(".") : "")
+    + (el.textContent ? " «" + el.textContent.trim().slice(0, 24) + "»" : "")).slice(0, 80);
+
+  for (const el of document.querySelectorAll("body *")) {
+    if (!visible(el)) continue;
+    const r = el.getBoundingClientRect();
+
+    // Something reaching past the right edge: the page cannot scroll sideways,
+    // so whatever is out there is simply gone.
+    if (r.right > vw + 1.5 && getComputedStyle(el).position !== "fixed" && !scrollable(el)) {
+      bad.overflow.push(name(el) + " right=" + Math.round(r.right));
+    }
+
+    // A tap target you have to aim at. 40px is the floor everyone agrees on.
+    const tappable = el.tagName === "BUTTON" || el.getAttribute("role") === "switch"
+      || el.getAttribute("role") === "tab" || el.tagName === "A";
+    if (tappable && (r.height < 36 || r.width < 24)) bad.tiny.push(name(el) + " " + Math.round(r.width) + "x" + Math.round(r.height));
+
+    // Text cut off with no ellipsis and no way to scroll to it.
+    const s = getComputedStyle(el);
+    if (el.children.length === 0 && el.textContent && el.textContent.trim()
+        && el.scrollWidth > el.clientWidth + 2 && s.textOverflow !== "ellipsis" && s.overflowX === "hidden") {
+      bad.clipped.push(name(el));
+    }
+  }
+  return JSON.stringify(bad);
+})()`;
+
+const hygiene = async (cdp: CDP, screen: string) => {
+  const raw = await cdp.ev(HYGIENE);
+  const b = JSON.parse(raw || "{}") as Record<string, string[]>;
+  note(screen, "nothing reaches past the right edge", !b.overflow?.length, b.overflow?.slice(0, 3).join(" | "));
+  note(screen, "every control is big enough to hit", !b.tiny?.length, b.tiny?.slice(0, 3).join(" | "));
+  note(screen, "no text is cut off without an ellipsis", !b.clipped?.length, b.clipped?.slice(0, 3).join(" | "));
+};
+
 const shot = async (cdp: CDP, name: string) => {
   const png = await cdp.shot();
   writeFileSync(join(SHOTS, `${name}.png`), png);
@@ -140,6 +209,7 @@ async function main() {
         const r=n.getBoundingClientRect();return r.bottom<=innerHeight+1&&r.top<innerHeight;})()`));
     await shot(cdp, "01-now");
     await drain(cdp, "shell");
+    await hygiene(cdp, "now");
 
     // ---- Now ---------------------------------------------------------
     const nowText = await cdp.ev(`document.querySelector("main")?.textContent?.trim()?.length || 0`);
@@ -170,6 +240,7 @@ async function main() {
     await tap(cdp, "main button", "Today");
     await Bun.sleep(900);
     await drain(cdp, "chats");
+    await hygiene(cdp, "chats");
 
     // ---- a conversation ---------------------------------------------
     if (rows > 0) {
@@ -218,6 +289,7 @@ async function main() {
           return b.scrollHeight - b.scrollTop - b.clientHeight < 80;})()`));
       await shot(cdp, "03-conversation");
       await drain(cdp, "conversation");
+      await hygiene(cdp, "conversation");
       await tap(cdp, ".mb-chat .hd .back");
       await Bun.sleep(700);
     }
@@ -253,6 +325,7 @@ async function main() {
         files.filter((f) => /^[abciwo]\//.test(f)).join(", ") || "(list was empty)");
       await shot(cdp, "05-changes");
       await drain(cdp, "changes");
+      await hygiene(cdp, "changes");
 
       // Open the first file's diff — the "it just won't load" report.
       // Scoped to the screen that is actually on: every other screen is still
@@ -290,6 +363,7 @@ async function main() {
         await Bun.sleep(1200);
         await shot(cdp, "06-diff");
         await drain(cdp, "diff");
+      await hygiene(cdp, "diff");
 
         // The phone's own back gesture, which is what the screen stack exists
         // for: it must close the diff and land back on the repo, not leave.
@@ -347,6 +421,7 @@ async function main() {
           return r.bottom<=innerHeight+1 && r.top>=-1;})()`));
       await shot(cdp, "08-settings");
       await drain(cdp, "settings");
+      await hygiene(cdp, "settings");
       // The scrim that is actually up: every sheet keeps one mounted, and the
       // first in the document belongs to a sheet that is closed.
       await cdp.ev(`document.querySelector(".mb-scrim.on")?.click()`);
@@ -365,6 +440,7 @@ async function main() {
       note("new chat", "offers a model", await cdp.ev(`document.querySelectorAll("main button").length > 3`));
       await shot(cdp, "09-newchat");
       await drain(cdp, "new chat");
+      await hygiene(cdp, "new chat");
       await tap(cdp, "main button", "← Chats");
       await Bun.sleep(500);
     }
