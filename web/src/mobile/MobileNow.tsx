@@ -1,5 +1,6 @@
 import { Act, Empty } from "./mobileUi.tsx";
 import { fmtAgo } from "../lib/format.ts";
+import { shortTarget } from "./transcript.ts";
 import type { NowItem, NowTone } from "./nowQueue.ts";
 
 /**
@@ -35,7 +36,7 @@ export const NOW_CSS = `
 .mb-open .r{display:flex;align-items:center;gap:8px;font-size:11px;min-width:0}
 .mb-open .r b{color:var(--primary-hover);font-weight:700;flex:none}
 .mb-open .r .t{color:var(--text2);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;direction:rtl;text-align:left}
+  white-space:nowrap}
 .mb-open .r .o{flex:none;color:var(--text3);font-variant-numeric:tabular-nums;font-size:10px}
 .mb-open .r .o.long{color:var(--warning)}
 .mb-open .more{font-size:10px;color:var(--text3)}
@@ -60,9 +61,13 @@ export const NOW_CSS = `
 .mb-item.bad .k{color:var(--error)}
 .mb-item.good .k{color:var(--success)}
 .mb-item .at{margin-left:auto;font-size:10.5px;color:var(--text3);white-space:nowrap}
-.mb-item .t{padding:6px 14px 0 17px;font-size:14.5px;line-height:1.38;color:var(--text);text-wrap:balance;
+/* The whole header is the way in, so it is one target and it is comfortably
+   over 44px — the title alone was 26. */
+.mb-item .tt{display:block;padding:6px 0 4px}
+.mb-item .t{display:block;padding:0 14px 0 17px;font-size:14.5px;line-height:1.38;color:var(--text);
+  text-wrap:balance;overflow-wrap:anywhere}
+.mb-item .s{display:block;padding:6px 14px 0 17px;font-size:11.5px;color:var(--text3);line-height:1.5;
   overflow-wrap:anywhere}
-.mb-item .s{padding:6px 14px 0 17px;font-size:11.5px;color:var(--text3);line-height:1.5;overflow-wrap:anywhere}
 .mb-item .code{margin:9px 14px 0 17px;padding:9px 11px;border-radius:9px;font-size:11px;color:var(--warning);
   background:color-mix(in srgb,#000 40%,transparent);overflow-wrap:anywhere;
   border-left:2px solid color-mix(in srgb,var(--warning) 55%,transparent)}
@@ -108,7 +113,11 @@ export function NowHero({ pending, working, live, spend, repos }: {
           {live.slice(0, 3).map((c) => (
             <div className="r" key={c.key}>
               <b>{c.tool}</b>
-              <span className="t">{c.target || c.app}</span>
+              {/* Shortened here rather than with `direction: rtl`, which does
+                  keep the filename but re-orders the leading slash of an
+                  absolute path to the end — `…/live/root/shared/types.ts/`.
+                  Bidi reordering is not a truncation strategy. */}
+              <span className="t">{shortTarget(c.target) || c.app}</span>
               {/* How long it has been open is the difference between thinking
                   and stuck, and it is the one number a count cannot give you. */}
               <span className={`o${c.openMs > 60_000 ? " long" : ""}`}>{fmtAgo(Date.now() - c.openMs)}</span>
@@ -156,10 +165,15 @@ export function NowStream({ items, actionsFor, onOpen }: {
             <span className="k">{it.kind}</span>
             <span className="at">{fmtAgo(it.ts)}</span>
           </div>
-          <button className="t mb-press w-full text-left" style={{ background: "transparent" }} onClick={() => onOpen(it)}>
-            {it.title}
+          {/* Title and subtitle are one target, not a 26px line of text with
+              dead space under it. A queue card's whole point is that you can
+              open it, and the only way in was a strip barely half a fingertip
+              tall — which on a card you are already scrolling past is a miss
+              more often than a hit. */}
+          <button className="tt mb-press w-full text-left" style={{ background: "transparent" }} onClick={() => onOpen(it)}>
+            <span className="t">{it.title}</span>
+            <span className="s">{it.sub}</span>
           </button>
-          <div className="s">{it.sub}</div>
           {it.code && <div className="code">{it.code}</div>}
           <div className="acts">
             {actionsFor(it).map((a) => (

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "../lib/api.ts";
+import { api, probeServer } from "../lib/api.ts";
 import { useLive } from "../lib/useLive.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { subscribeSessionChanged } from "../lib/sessionBus.ts";
@@ -57,6 +57,23 @@ const LINK_WORD: Record<LinkState, string> = { live: "Live", slow: "Catching up"
 const LINK_TONE: Record<LinkState, string> = {
   live: "var(--success)", slow: "var(--warning)", offline: "var(--error)",
 };
+
+/**
+ * How often the phone asks whether the machine is still there.
+ *
+ * Separate from the data polls on purpose, and this is a correction to the
+ * change that put the phone on the socket. Reachability used to be a side
+ * effect of the four-second gate poll, and slowing that poll to a backstop
+ * slowed the *indicator* with it — so the header went on claiming a live
+ * connection for up to twenty seconds after the server stopped answering, and
+ * claimed it outright whenever the socket happened to still be open while every
+ * request was failing. Saying "Live" over stale numbers is the one thing an
+ * availability indicator must never do.
+ *
+ * `/health` is a few bytes and touches no database, and this only ticks while
+ * somebody is looking at the screen.
+ */
+const HEALTH_MS = 5_000;
 
 /**
  * Fallback intervals, not the delivery mechanism.
@@ -182,6 +199,14 @@ export function MobileApp() {
         .then((res) => res.prs.map((pr) => ({ root: r.root, repo: baseName(r.root), pr, scope })))
         .catch(() => [] as { root: string; repo: string; pr: PrSummary; scope: "mine" | "review" }[])
     ))).then((groups) => setPrs(groups.flat()));
+  }, []);
+
+  // Is the machine still there? Its own probe, so the answer is never as old as
+  // the slowest data poll.
+  useEffect(() => {
+    const ping = () => probeServer(2_000).then((id) => setReachable(id === "ours")).catch(() => setReachable(false));
+    ping();
+    return pollWhileVisible(ping, HEALTH_MS);
   }, []);
 
   useEffect(() => {
@@ -436,7 +461,7 @@ export function MobileApp() {
    * but the server still answers (so nothing is lost, only late), and nothing
    * is reachable at all.
    */
-  const link: LinkState = conn === "open" ? "live" : reachable ? "slow" : "offline";
+  const link: LinkState = !reachable ? "offline" : conn === "open" ? "live" : "slow";
 
   return (
     <div className="mb min-h-[100dvh] flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>

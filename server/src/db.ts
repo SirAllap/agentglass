@@ -2152,6 +2152,21 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     session_id: sessionId,
     source_app: agg.source_app,
     model_name: agg.model_name ?? roll?.model_name ?? null,
+    /*
+     * What this session is called.
+     *
+     * The type has declared these since it was written and nothing ever filled
+     * them in, so `sessionTitle(detail)` had nothing to work with and every
+     * conversation header — on the phone and at the desk — showed a uuid, next
+     * to a list row that showed the real name. The row is right there in
+     * `roll`; it was simply never copied across.
+     */
+    custom_title: roll?.custom_title ?? null,
+    ai_title: roll?.ai_title ?? null,
+    // Same rule as the list: only when there is no title to use instead.
+    first_prompt: roll?.custom_title || roll?.ai_title
+      ? null
+      : firstPrompts([sessionId]).get(sessionId) ?? null,
     // Prefer the session row; fall back to the events for one that predates the
     // column. Without a directory the UI can't offer to resume the session.
     project_path: roll?.project_path ?? agg.project_path ?? null,

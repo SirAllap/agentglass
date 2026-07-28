@@ -673,7 +673,11 @@ function ToolBlock({ runs, errors, agent }: { runs: FeedTool[]; errors: number; 
         )}
         <span className="text-[11px] truncate flex-1">{summariseRuns(runs)}</span>
         {!!errors && <span className="text-[10px] shrink-0" style={{ color: "var(--error)" }}>{errors} failed</span>}
-        <span className="text-[10px] shrink-0 tabular-nums" style={{ opacity: 0.7 }}>{runs.length}</span>
+        {/* Named, because next to a "1 failed" chip a bare number reads as
+            part of it — "1 failed 1". */}
+        <span className="text-[10px] shrink-0 tabular-nums" style={{ opacity: 0.7 }}>
+          {runs.length} run{runs.length === 1 ? "" : "s"}
+        </span>
       </button>
       {open && (
         <div className="flex flex-col gap-1 px-2.5 pt-1.5">
