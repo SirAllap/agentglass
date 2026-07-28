@@ -87,6 +87,18 @@ and no menu item that removes recorded data. The `Clear ✕` in the header clear
 | `~/.config/agentglass/token` | The shared secret, `0600`, when one has been minted. |
 | `~/.config/agentglass/config.json` | The active project scope and the UI switches. |
 
+**One feature does send data off this machine, and it is the only one.** The AI
+**Explain** walkthrough hands your changed lines to a model — the local `claude`
+CLI, or the Anthropic API if you have set a key — so it can describe them. That
+is what the button is for, and it runs only when you press it.
+
+What it will not send: files whose contents are a credential by design (`.env*`,
+`*.pem`, `*.key`, `id_rsa`, `credentials.json`, `.npmrc`, and their neighbours)
+are held back, and the patches that do go are run through the same secret
+scrubber the crash reporter uses, for a key pasted into an ordinary source file.
+Anything withheld is **named on screen** rather than quietly missing — a summary
+of a different changeset than the one you are looking at is worse than none.
+
 Two things about retention are easy to get wrong:
 
 - **`AGENTGLASS_RETENTION_DAYS` bounds the raw events, not the history.** Expiring
