@@ -150,7 +150,9 @@ function capPayload(p: Record<string, unknown>): void {
   if (tr && typeof tr === "object") for (const k of ["content", "stdout", "stderr"]) if (k in tr) tr[k] = cap(tr[k]);
 }
 
-export function normalize(body: IngestBody): NormalizedEvent {
+let lastClampWarn = 0;
+
+export function normalize(body: IngestBody, opts?: { skipClockClamp?: boolean }): NormalizedEvent {
   const payload = (body.payload ?? {}) as Record<string, unknown>;
   const type = String(body.hook_event_type ?? "Unknown");
 
@@ -197,10 +199,24 @@ export function normalize(body: IngestBody): NormalizedEvent {
     usage_is_cumulative: !hasPayloadUsage,
     summary: str(body.summary),
     session_name: str(body.session_name),
-    timestamp: typeof body.timestamp === "number"
-      ? (Math.abs(body.timestamp - Date.now()) > 300_000 ? Date.now() : body.timestamp)
-      : Date.now(),
+    timestamp: clampTimestamp(body.timestamp, opts?.skipClockClamp),
     payload,
     chat,
   };
+}
+
+// Live events with a clock more than 5 minutes off get clamped to server time;
+// backfill (skipClockClamp) keeps original timestamps so history stays intact.
+function clampTimestamp(ts: unknown, skipClockClamp?: boolean): number {
+  if (typeof ts !== "number" || !Number.isFinite(ts)) return Date.now();
+  if (skipClockClamp) return ts;
+  if (Math.abs(ts - Date.now()) > 300_000) {
+    const now = Date.now();
+    if (now - lastClampWarn > 60_000) {
+      lastClampWarn = now;
+      console.warn(`[ingest] clamped event timestamp ${ts} (>5min from server clock)`);
+    }
+    return now;
+  }
+  return ts;
 }

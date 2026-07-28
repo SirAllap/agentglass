@@ -413,7 +413,7 @@ async function ingestFile(
       }
       if (i < from) continue; // already ingested — parsed only for tool names
       for (const body of bodies) {
-        emitted.push(insertEvent(normalize(body)));
+        emitted.push(insertEvent(normalize(body, { skipClockClamp: true })));
         ingested++;
       }
     }

@@ -121,10 +121,10 @@ function spanToEvents(span: OtlpSpan, resAttrs: Record<string, unknown>): Ingest
 
   // LLM inference — one event carrying per-call token usage.
   const usage = {
-    input_tokens: firstNum(a, ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "llm.usage.prompt_tokens"]),
-    output_tokens: firstNum(a, ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "llm.usage.completion_tokens"]),
-    cache_read_tokens: firstNum(a, ["gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_read_tokens"]),
-    cache_creation_tokens: firstNum(a, ["gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_creation_tokens"]),
+    input_tokens: firstNum(a, ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "llm.usage.prompt_tokens", "llm.token_count.prompt"]),
+    output_tokens: firstNum(a, ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "llm.usage.completion_tokens", "llm.token_count.completion"]),
+    cache_read_tokens: firstNum(a, ["gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_read_tokens", "llm.token_count.prompt_details.cache_read"]),
+    cache_creation_tokens: firstNum(a, ["gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_creation_tokens", "llm.token_count.prompt_details.cache_write"]),
   };
   return [
     {
@@ -213,8 +213,8 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
 
   const toolName = firstStr(a, ["gen_ai.tool.name", "tool.name", "tool_name"]);
   const toolCallId = firstStr(a, ["gen_ai.tool.call.id", "tool.call.id", "tool_call_id", "call_id"]);
-  const input = firstNum(a, ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "input_tokens", "prompt_tokens"]);
-  const output = firstNum(a, ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "output_tokens", "completion_tokens"]);
+  const input = firstNum(a, ["gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens", "input_tokens", "prompt_tokens", "llm.token_count.prompt"]);
+  const output = firstNum(a, ["gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens", "output_tokens", "completion_tokens", "llm.token_count.completion"]);
 
   // Tool decision/result → a tool event (Pre if a call, else Post so it counts).
   if (toolName || eventName.includes("tool")) {
@@ -233,8 +233,8 @@ function logRecordToEvent(rec: OtlpLogRecord, resAttrs: Record<string, unknown>)
         usage: {
           input_tokens: input,
           output_tokens: output,
-          cache_read_tokens: firstNum(a, ["gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_read_tokens"]),
-          cache_creation_tokens: firstNum(a, ["gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_creation_tokens"]),
+          cache_read_tokens: firstNum(a, ["gen_ai.usage.cache_read_input_tokens", "gen_ai.usage.cache_read_tokens", "llm.token_count.prompt_details.cache_read"]),
+          cache_creation_tokens: firstNum(a, ["gen_ai.usage.cache_creation_input_tokens", "gen_ai.usage.cache_creation_tokens", "llm.token_count.prompt_details.cache_write"]),
         },
         gen_ai_system: system,
         event: eventName || undefined,

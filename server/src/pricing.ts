@@ -63,7 +63,8 @@ export const PRICE_TABLE: ModelPrice[] = [
   { match: ["glm"], label: "GLM", input: 1.43, output: 5.24, cache_write: 0, cache_read: 0.29 },
 
   // --- others (approx) ---
-  { match: ["kimi", "moonshot", "k3"], label: "Kimi K3", input: 0.55, output: 2.19, cache_write: 0, cache_read: 0.14 },
+  { match: ["k3"], label: "Kimi K3", input: 3, output: 15, cache_write: 0, cache_read: 0.3 },
+  { match: ["kimi", "moonshot"], label: "Kimi/Moonshot", input: 0.55, output: 2.19, cache_write: 0, cache_read: 0.14 },
   { match: ["deepseek"], label: "DeepSeek", input: 0.27, output: 1.1, cache_write: 0, cache_read: 0.07 },
   { match: ["grok"], label: "Grok", input: 2, output: 10, cache_write: 0, cache_read: 0 },
   { match: ["mistral", "mixtral", "codestral"], label: "Mistral", input: 0.4, output: 2, cache_write: 0, cache_read: 0 },
