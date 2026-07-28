@@ -644,6 +644,41 @@ const titleOf = (s: string) => {
  * `activeId` decides whether the reply counts as unread — a chat answering in
  * the background should say so, and the one on screen shouldn't.
  */
+/**
+ * Sessions the server says are mid-turn, refreshed by the panel.
+ *
+ * A session has exactly one writer. This browser knows about its own turns
+ * (`chat.sending`) and nothing about a turn started from the phone or from a
+ * terminal — and sending into one of those interrupts it and loses both
+ * answers. The server spawned the process, so it is the one that knows; see
+ * server/src/chat.ts and GET /chat/active.
+ */
+let activeElsewhere = new Set<string>();
+
+export function setActiveTurns(ids: string[]): void {
+  const next = new Set(ids);
+  // Only wake the UI when the answer actually changed: this is polled.
+  if (next.size === activeElsewhere.size && [...next].every((i) => activeElsewhere.has(i))) return;
+  const freed = [...activeElsewhere].filter((i) => !next.has(i));
+  activeElsewhere = next;
+  emit();
+  // Somebody else's turn just ended. Anything held for that session goes now —
+  // without this the queue would wait for a turn of ours that never comes.
+  for (const sid of freed) {
+    for (const c of chats.values()) {
+      if (c.sessionId !== sid || c.sending || !c.queued.length) continue;
+      const q = c.queued[0]!;
+      update(c.id, (x) => { x.queued = x.queued.filter((t) => t.id !== q.id); });
+      void send(c.id, q.text, () => activeChatId === c.id, [], q.images);
+    }
+  }
+}
+
+/** Is this chat's session being written by someone other than this tab? */
+export function busyElsewhere(chat: Pick<Chat, "sessionId" | "sending">): boolean {
+  return !!chat.sessionId && !chat.sending && activeElsewhere.has(chat.sessionId);
+}
+
 export async function send(id: string, text: string, isActive: () => boolean, allowedTools: string[] = [], queuedImages?: ChatImage[]) {
   const chat = chats.get(id);
   const msg = text.trim();
@@ -655,6 +690,16 @@ export async function send(id: string, text: string, isActive: () => boolean, al
   // is being written next.
   const images: ChatImage[] = queuedImages ?? (chat ? chat.attachments.map((a) => ({ mediaType: a.mediaType, data: a.data })) : []);
   if (!chat || (!msg && !images.length) || chat.sending || !chat.cwd) return;
+
+  // Someone else is mid-turn on this session — the phone, a terminal, another
+  // tab. Sending now interrupts their turn and loses this message with it, so
+  // it goes in the queue and leaves when the session is free. The server would
+  // refuse it anyway (409 turn_in_flight); this is the same answer without the
+  // round trip and without a message disappearing on the way.
+  if (busyElsewhere(chat)) {
+    enqueue(id, msg);
+    return;
+  }
 
   update(id, (c) => {
     // A name you chose outranks one derived from the first message.
@@ -866,8 +911,11 @@ export async function send(id: string, text: string, isActive: () => boolean, al
       });
     }
   } finally {
-    // Read before the update, because draining pops it.
-    const next = broke ? undefined : chats.get(id)?.queued[0];
+    // Read before the update, because draining pops it. A session that is now
+    // being written from somewhere else keeps its queue: the next turn goes out
+    // when that writer is done, not on top of it.
+    const nowBusy = (() => { const c = chats.get(id); return !!c && busyElsewhere({ sessionId: c.sessionId, sending: false }); })();
+    const next = broke || nowBusy ? undefined : chats.get(id)?.queued[0];
     update(id, (c) => {
       c.sending = false;
       c.abort = null;

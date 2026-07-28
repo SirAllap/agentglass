@@ -6,7 +6,7 @@ import { fmtUsd, fmtAgo, sessionTitle, modelLabelOf } from "../lib/format.ts";
 import { sessionIsLive } from "../lib/derive.ts";
 import { scopeSessions, openingScope, type ChatScope } from "./chatList.ts";
 import { MODELS, resumeModel } from "./resumeModel.ts";
-import { recentTurns } from "./transcript.ts";
+import { recentTurns, buildFeed, summariseRuns, shortTarget, type FeedEntry, type FeedItem, type FeedTool } from "./transcript.ts";
 import type { SessionDetail, SessionRollup, GitRepoRef } from "../../../shared/types.ts";
 
 /**
@@ -247,9 +247,24 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
     }, 5000);
   }, [load]);
 
-  /** The newest turns, oldest at the top and the latest one last — see
-   *  transcript.ts for why the server's order is the other way round. */
-  const turns = useMemo(() => recentTurns(detail?.conversation), [detail?.conversation]);
+  /**
+   * What this agent said AND what it did, oldest first.
+   *
+   * The phone used to draw messages only, so a session that spent twenty
+   * minutes reading files, running tests and editing code looked like three
+   * sentences of commentary. The desktop has always shown the work; the
+   * companion has to show the same thing or the two are not the same product.
+   *
+   * `timeline` carries both. `conversation` is the fallback for a server older
+   * than that field.
+   */
+  const feed = useMemo(() => {
+    const built = buildFeed(detail?.timeline as FeedEntry[] | undefined);
+    if (built.length) return built;
+    return recentTurns(detail?.conversation).map((m): FeedItem =>
+      ({ kind: "message", ts: m.ts, role: m.role, text: m.text }));
+  }, [detail?.timeline, detail?.conversation]);
+  const turns = feed;
 
   /** Jump the thread to the newest turn. */
   const toBottom = useCallback((smooth = false) => {
@@ -422,7 +437,9 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
           </div>
         )}
 
-        {turns.map((m, i) => <Bubble key={`${m.ts}-${i}`} role={m.role} text={m.text} ts={m.ts} />)}
+        {turns.map((item, i) => item.kind === "message"
+          ? <Bubble key={`${item.ts}-${i}`} role={item.role} text={item.text} ts={item.ts} />
+          : <ToolBlock key={`${item.ts}-${i}`} runs={item.runs} errors={item.errors} />)}
         {sent && <Bubble role="user" text={sent} />}
         {live && (
           <Bubble role="assistant" text={live.text || "…"} streaming tools={live.tools} error={live.error} />
@@ -482,6 +499,45 @@ function Conversation({ id, knownCwd, onBack }: { id: string; knownCwd: string; 
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The work between two things the agent said.
+ *
+ * Collapsed by default and one line high: a turn is routinely twenty tool runs,
+ * and twenty rows of "Read" on a 412px screen buries the sentence they belong
+ * to. Open it and every run is there with what it acted on — the same trade the
+ * terminal makes, and the same one the desktop panel makes.
+ */
+function ToolBlock({ runs, errors }: { runs: FeedTool[]; errors: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="self-stretch">
+      <button onClick={() => setOpen((o) => !o)}
+        className="w-full text-left flex items-center gap-2 px-2.5 py-2 rounded-xl"
+        style={{
+          minHeight: 40,
+          background: "color-mix(in srgb, var(--bg2) 45%, transparent)",
+          border: `1px solid color-mix(in srgb, ${errors ? "var(--error)" : "var(--border)"} 30%, transparent)`,
+          color: "var(--text3)",
+        }}>
+        <span className="text-[10px] shrink-0" style={{ opacity: 0.8 }}>{open ? "▾" : "▸"}</span>
+        <span className="text-[11px] truncate flex-1">{summariseRuns(runs)}</span>
+        {!!errors && <span className="text-[10px] shrink-0" style={{ color: "var(--error)" }}>{errors} failed</span>}
+        <span className="text-[10px] shrink-0 tabular-nums" style={{ opacity: 0.7 }}>{runs.length}</span>
+      </button>
+      {open && (
+        <div className="flex flex-col gap-1 px-2.5 pt-1.5">
+          {runs.map((r, i) => (
+            <div key={i} className="flex items-baseline gap-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
+              <span className="shrink-0" style={{ color: r.is_error ? "var(--error)" : "var(--text4)" }}>{r.tool || "tool"}</span>
+              <span className="truncate" style={{ opacity: 0.85 }}>{shortTarget(r.note || r.target)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

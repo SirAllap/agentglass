@@ -20,6 +20,7 @@ import { ToolFeed } from "./ToolFeed.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { buildRows } from "../lib/toolTree.ts";
 import { chatToMarkdown } from "../lib/chatTranscript.ts";
+import { busyElsewhere, setActiveTurns } from "../lib/chatStore.ts";
 import { tidyPaneScreen } from "../lib/paneScreen.ts";
 import { quickSkills, pinnedSkills, togglePinnedSkill } from "../lib/quickSkills.ts";
 import { fmtTime } from "../lib/format.ts";
@@ -404,12 +405,15 @@ function CopyButton({ label, title, text, disabled }: { label: string; title: st
 
 /** Why a session can't be picked up, or `null` if it can.
  *
- *  Three different refusals with three different remedies — "wait for it to
- *  finish", "nothing we can do", "it's already open over there" — so the row
- *  has to say which one applies rather than just going grey. */
-type Blocked = "live" | "no-dir" | null;
-const blockedReason = (s: SessionRollup): Blocked =>
-  sessionIsLive(s) ? "live" : sessionCwd(s) ? null : "no-dir";
+ *  Only one refusal is absolute now: a session that never recorded a directory
+ *  has nowhere to resume into. "Still running" used to be the other, which made
+ *  the sessions you most wanted — the one you just started on your phone, the
+ *  one working in a terminal — the only ones you could not open. They can be
+ *  opened and read; what protects the transcript is that a turn is queued
+ *  rather than sent while someone else is writing (see chatStore.busyElsewhere,
+ *  and the server's own 409 behind it). */
+type Blocked = "no-dir" | null;
+const blockedReason = (s: SessionRollup): Blocked => (sessionCwd(s) ? null : "no-dir");
 
 /** One resumable session in the picker. */
 function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: string; onPick: () => void }) {
@@ -419,12 +423,13 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
   // itself — resuming lands back in that checkout, so it has to say which.
   const wt = sessionWorktree(s);
   const label = (s.project_path ? repoName(s.project_path) : s.source_app) + (wt ? ` └ ${wt}` : "");
-  const note = why === "live"
-    ? "This session is still running. A claude session has a single owner — a second one writing to the same transcript would corrupt its history. Resume it once it stops."
-    : why === "no-dir"
+  const live = sessionIsLive(s);
+  const note = why === "no-dir"
     ? "No directory was recorded for this session, so there's nowhere to run the resumed conversation."
     : openChatId
     ? "Already open in this panel — picking it focuses that tab."
+    : live
+    ? `Running now. Opening it shows the conversation; anything you send waits until this turn ends, because a session has one writer.`
     : `Continue this conversation in ${sessionCwd(s)}`;
 
   return (
@@ -448,7 +453,7 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
           <span>· {fmtUsd(s.cost_usd)}</span>
         </div>
       </div>
-      {why === "live"
+      {live
         ? <span className="text-[9.5px] shrink-0" style={{ color: "var(--success)" }}>● Running</span>
         : why === "no-dir"
         ? <span className="text-[9.5px] shrink-0 t-dim2">No dir</span>
@@ -604,6 +609,27 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   useEffect(() => { try { localStorage.setItem(ALLOW_KEY, allowed); } catch { /* private mode */ } }, [allowed]);
   const [query, setQuery] = useState("");
   const [resumeOpen, setResumeOpen] = useState(false);
+
+  /**
+   * Which sessions are mid-turn, from the server.
+   *
+   * The panel knows about its own turns and nothing about a turn started on the
+   * phone or in a terminal — and sending into one of those interrupts it and
+   * loses both answers. Polled rather than pushed because it is two words of
+   * JSON and it must be right within a couple of seconds of a turn ending, when
+   * a queued message is waiting to go out.
+   */
+  useEffect(() => {
+    let stop = false;
+    const read = () => {
+      api.chatActive()
+        .then((r) => { if (!stop) setActiveTurns(r.ids); })
+        .catch(() => { /* keep the last answer; guessing a new one is the bug */ });
+    };
+    read();
+    const t = setInterval(read, 3000);
+    return () => { stop = true; clearInterval(t); };
+  }, []);
   const [defaultCwd, setDefaultCwd] = useState<string>(() => { try { return localStorage.getItem(CWD_KEY) || ""; } catch { return ""; } });
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -768,7 +794,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     setResumeOpen(false);
     // Resume in the checkout it ran in, not the repo it rolls up to.
     const cwd = sessionCwd(s);
-    if (!cwd || sessionIsLive(s)) return;
+    if (!cwd) return;
     const chat = chatResuming(s.session_id)
       ?? newChat(cwd, s.model_name || undefined, active?.mode ?? DEFAULT_MODE, {
         sessionId: s.session_id,
@@ -811,7 +837,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // Mid-turn, Enter queues instead of sending. The composer used to go dead
     // for the length of a reply, so a long tool-running turn meant watching it
     // work with an answer already typed and no way to hand it over.
-    if (active.sending) { enqueue(active.id, text); return; }
+    //
+    // The same applies when the turn belongs to someone else — a chat you
+    // started on the phone, an agent running in a terminal. `send` would queue
+    // it anyway; doing it here keeps the composer honest about what pressing
+    // Enter just did.
+    if (active.sending || busyElsewhere(active)) { enqueue(active.id, text); return; }
     send(active.id, text, () => openRef.current && activeIdRef.current === active.id, allowed.split(/\s+/).filter(Boolean));
   };
   const [hint, setHint] = useState("");
