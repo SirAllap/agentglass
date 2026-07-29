@@ -79,7 +79,12 @@ async function pushEveryone(title: string, body: string, urgency: 0 | 1 | 2) {
   const subs = subscriptions();
   if (!subs.length) return;
   const keys = await vapidKeys();
-  const payload = new TextEncoder().encode(JSON.stringify({ title, body, at: Date.now() }));
+  // `urgency` travels inside the encrypted payload as well as in the header.
+  // The header is for the push service, which decides whether to wake the
+  // radio; the field is for the service worker, which decides whether the
+  // notification stays on screen until it is dealt with. Only one of the two
+  // can read the body, and only one of the two can wake the device.
+  const payload = new TextEncoder().encode(JSON.stringify({ title, body, at: Date.now(), urgency }));
   await Promise.all(subs.map(async (s) => {
     const r = await sendPush(s, payload, keys, {
       // A gate is worth waking the device for; a tool error is not.
