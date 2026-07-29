@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { b64uEncode } from "../src/push.ts";
+import { deviceId } from "../src/pushstore.ts";
 
 const P256DH = "BAyQHUI8gxyoXifHPCY7oTJyG7nXqExPA4CypnVv1gEzHIhwI03sh4UEwXQUT6SxS2amUWkWBtgXPlW9N-OBVp4";
 const AUTH = b64uEncode(new Uint8Array(16).fill(0x11));
@@ -159,7 +160,41 @@ describe("what the device list is allowed to say", () => {
     expect(text).not.toContain(AUTH);
     const { devices } = JSON.parse(text);
     expect(devices.some((d: { label: string }) => d.label === "Pixel")).toBe(true);
-    for (const d of devices) expect(Object.keys(d).sort()).toEqual(["addedAt", "label", "lastOkAt"]);
+    for (const d of devices) expect(Object.keys(d).sort()).toEqual(["addedAt", "id", "label", "lastOkAt"]);
+  });
+
+  it("names each device with a handle that is not its endpoint", async () => {
+    // The list has to be actionable — you cannot forget a phone you cannot
+    // refer to — and the endpoint is the one thing it may not say. A one-way
+    // handle is both: usable against this server, useless anywhere else.
+    await post("/push/subscribe", { subscription: sub("https://push/aaa"), label: "A" });
+    await post("/push/subscribe", { subscription: sub("https://push/bbb"), label: "B" });
+    const { devices } = await getJson("/push/devices");
+    const ids: string[] = devices.map((d: { id: string }) => d.id);
+    expect(new Set(ids).size).toBe(ids.length);           // one per device
+    for (const id of ids) {
+      expect(id).toMatch(/^[0-9a-f]{16}$/);
+      // Not the endpoint, encoded or otherwise: nothing in the handle spells
+      // out where to send.
+      expect(Buffer.from(id, "hex").toString("latin1")).not.toContain("push");
+    }
+  });
+
+  it("derives the handle the phone will derive too", async () => {
+    // The same string is pinned in web/test/webpush.test.ts. These are two
+    // implementations of one hash, in two different crypto APIs, and if they
+    // ever disagree the symptom is silent: the device list stops marking which
+    // phone you are holding, and you forget the wrong one.
+    expect(deviceId("https://push.example/device/abc")).toBe("981f012daaac75bc");
+  });
+
+  it("hands back the same handle for the same device every time", async () => {
+    // It is derived, not stored, so a restart must not renumber the list —
+    // otherwise a Forget button would refer to whatever happened to be there
+    // before the server came back.
+    const a = (await getJson("/push/devices")).devices;
+    const b = (await getJson("/push/devices")).devices;
+    expect(b.map((d: { id: string }) => d.id)).toEqual(a.map((d: { id: string }) => d.id));
   });
 });
 
@@ -170,6 +205,24 @@ describe("unsubscribing", () => {
     const r = await postJson("/push/unsubscribe", { endpoint: "https://push/bye" });
     expect(r.ok).toBe(true);
     expect(r.devices).toBe(before - 1);
+  });
+
+  it("forgets one by the handle the device list gave out", async () => {
+    // The list never saw an endpoint, so this is the only way it could offer a
+    // Forget button at all.
+    await post("/push/subscribe", { subscription: sub("https://push/by-id"), label: "Old phone" });
+    const before = (await getJson("/push/devices")).devices;
+    const target = before.find((d: { label: string }) => d.label === "Old phone");
+    expect(target.id).toBeTruthy();
+    const r = await postJson("/push/unsubscribe", { id: target.id });
+    expect(r.ok).toBe(true);
+    const after = (await getJson("/push/devices")).devices;
+    expect(after).toHaveLength(before.length - 1);
+    // The right one, and only the right one.
+    expect(after.some((d: { label: string }) => d.label === "Old phone")).toBe(false);
+    expect(after.map((d: { id: string }) => d.id)).toEqual(
+      before.filter((d: { id: string }) => d.id !== target.id).map((d: { id: string }) => d.id),
+    );
   });
 
   it("is not an error to forget something twice", async () => {

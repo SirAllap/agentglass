@@ -124,6 +124,32 @@ export function pushCopy(state: PushState): { sub: string; action: string | null
   }
 }
 
+/**
+ * The same handle the server derives, so this device can find itself in the
+ * list it is shown.
+ *
+ * Recomputed here rather than asked for, because asking would mean the server
+ * answering "and which of these is you" — which it can only do by matching on
+ * the endpoint the client sent, and that is a request this client would then
+ * be making with an endpoint in it for no reason. The hash is one-way in both
+ * places; agreeing on it costs four lines.
+ */
+export async function deviceIdOf(endpoint: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(endpoint));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16);
+}
+
+/** This device's handle, or null when it is not subscribed at all. */
+export async function myDeviceId(env: PushEnv): Promise<string | null> {
+  if (!env.sw) return null;
+  try {
+    const sub = await (await env.sw.ready).pushManager.getSubscription();
+    return sub ? await deviceIdOf(sub.endpoint) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Whatever the phone should call itself in the device list. Free text, only
  *  ever shown back — a name, not an identifier. */
 export function deviceLabel(ua: string): string {

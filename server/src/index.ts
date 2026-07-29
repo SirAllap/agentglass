@@ -28,7 +28,7 @@ import { maybeAlert, setAlertSink, pushEveryone } from "./alerts.ts";
 import { noteAction } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
-import { vapidKeys, addSubscription, removeSubscription, subscriptions } from "./pushstore.ts";
+import { vapidKeys, addSubscription, removeSubscription, removeDevice, deviceId, subscriptions } from "./pushstore.ts";
 import { getUsage } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
@@ -726,7 +726,12 @@ const server = Bun.serve<WsData>({
     if (pathname === "/push/unsubscribe" && req.method === "POST") {
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "bad body" }); }
-      const subs = removeSubscription(String(b?.endpoint || ""));
+      // Either handle. The phone knows its own endpoint and unsubscribes with
+      // that; the device list only ever saw an id, because an endpoint is a
+      // capability and this response goes to whatever is asking.
+      const subs = b?.id
+        ? removeDevice(String(b.id))
+        : removeSubscription(String(b?.endpoint || ""));
       return json({ ok: true, devices: subs.length });
     }
     if (pathname === "/push/devices") {
@@ -736,6 +741,9 @@ const server = Bun.serve<WsData>({
       // called".
       return json({
         devices: subscriptions().map((s) => ({
+          // A one-way handle, not the endpoint: enough to forget this device
+          // against this server, and useless anywhere else.
+          id: deviceId(s.endpoint),
           label: s.label ?? "", addedAt: s.addedAt, lastOkAt: s.lastOkAt ?? null,
         })),
       });

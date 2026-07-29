@@ -4,7 +4,7 @@ import { useLive } from "../lib/useLive.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { subscribeSessionChanged } from "../lib/sessionBus.ts";
 import { useStats } from "../lib/useStats.ts";
-import { fmtUsd, fmtTokens } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, since } from "../lib/format.ts";
 import { MobileChats, type OpenChat, type Compose } from "./MobileChats.tsx";
 import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobileUi.tsx";
 import { pollWhileVisible } from "../lib/poll.ts";
@@ -20,8 +20,9 @@ import { buildQueue, type NowItem } from "./nowQueue.ts";
 import { dedupePrs, mainCheckouts } from "./prRows.ts";
 import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
 import {
-  browserPushEnv, currentPushState, disablePush, enablePush, pushCopy, type PushState,
+  browserPushEnv, currentPushState, disablePush, enablePush, myDeviceId, pushCopy, type PushState,
 } from "../lib/webpush.ts";
+import type { PushDevice } from "../lib/api.ts";
 import type {
   PendingGate, SessionRollup, DockerContainer, DockerStat, PrSummary, GitRepoRef, GitTreeState, Insight,
 } from "../../../shared/types.ts";
@@ -191,6 +192,41 @@ export function MobileApp() {
     currentPushState(pushEnv).then((s) => { if (live) setPushState(s); });
     return () => { live = false; };
   }, [pushEnv, settings]);
+
+  /**
+   * Every device subscribed to this machine, not only this one.
+   *
+   * The row above speaks for the phone in your hand; a phone you replaced last
+   * year is still on the list and still being pushed to, and the only place
+   * that could ever be seen or stopped is here. Read when Settings opens
+   * rather than polled — nothing about it changes while the sheet is shut.
+   */
+  const [devices, setDevices] = useState<PushDevice[]>([]);
+  const [myDevice, setMyDevice] = useState<string | null>(null);
+  const [forgetting, setForgetting] = useState<string | null>(null);
+  const refreshDevices = useCallback(() => {
+    api.pushDevices()
+      .then((r) => setDevices(r.devices ?? []))
+      .catch(() => { /* the sheet works without it; the row above is the point */ });
+    myDeviceId(pushEnv).then(setMyDevice).catch(() => setMyDevice(null));
+  }, [pushEnv]);
+  useEffect(() => { if (settings) refreshDevices(); }, [settings, refreshDevices, pushState]);
+
+  const forgetDevice = useCallback(async (d: PushDevice) => {
+    setForgetting(d.id);
+    try {
+      await api.pushForget(d.id);
+      // If it was this phone, the switch above has to stop saying "on" — the
+      // browser still holds a subscription the server no longer knows about,
+      // and that is precisely the state where alerts silently stop.
+      if (d.id === myDevice) { await disablePush(pushEnv); setPushState("off"); }
+      refreshDevices();
+      toast(d.id === myDevice ? "Alerts off on this phone" : `${d.label || "That device"} will no longer be alerted`);
+    } catch {
+      toast("Could not reach the server", true);
+    }
+    setForgetting(null);
+  }, [myDevice, pushEnv, refreshDevices]);
 
   const togglePush = useCallback(async () => {
     setPushBusy(true);
@@ -778,6 +814,29 @@ export function MobileApp() {
               )}
             </span>
           )} />
+        {/* Every device, not only this one. A phone you replaced last year is
+            still subscribed and still being pushed to, and this is the only
+            place it can be seen — or stopped. Hidden when there is nothing to
+            manage: one device is already fully described by the row above. */}
+        {devices.length > 1 && (
+          <div className="flex flex-col gap-2.5" style={{ marginTop: 10 }}>
+            {devices.map((d) => (
+              <Row key={d.id}
+                title={`${d.label || "A device"}${d.id === myDevice ? " · this phone" : ""}`}
+                sub={d.lastOkAt
+                  ? `Last alerted ${since(d.lastOkAt)}`
+                  // Added but never delivered to is worth saying plainly: it is
+                  // what a subscription that never worked looks like, and it is
+                  // otherwise indistinguishable from a quiet week.
+                  : `Added ${since(d.addedAt)} · never alerted`}
+                right={
+                  <Act small disabled={forgetting === d.id} onAct={() => forgetDevice(d)}>
+                    {forgetting === d.id ? "…" : "Forget"}
+                  </Act>
+                } />
+            ))}
+          </div>
+        )}
         <div className="mb-eyebrow" style={{ margin: "16px 0 9px" }}>Queue</div>
         <Row title="Snoozed" sub={snoozed ? `${snoozed} hidden until they change` : "Nothing snoozed"}
           right={snoozed

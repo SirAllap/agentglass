@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
@@ -101,6 +102,33 @@ export function forgetVapid(): void { memo = null; }
 
 export function subscriptions(): StoredSubscription[] {
   return read().subs ?? [];
+}
+
+/**
+ * A stable handle for a device, safe to hand to a client.
+ *
+ * Derived from the endpoint rather than stored, so there is nothing to migrate
+ * onto existing files and it survives a restart on its own. And it is one-way:
+ * it cannot be turned back into the endpoint, which is the whole reason
+ * /push/devices can carry it. An endpoint is a capability — anyone holding one
+ * can ask a push service to wake that phone, forever, with no further
+ * credential — and this is only a name for one, usable against this server and
+ * nowhere else.
+ *
+ * Sixteen hex characters of SHA-256. Long enough that a collision would take
+ * billions of devices; short enough to read in a log.
+ */
+export function deviceId(endpoint: string): string {
+  return createHash("sha256").update(endpoint).digest("hex").slice(0, 16);
+}
+
+/** Forget a device by its handle. Same as removeSubscription, from the other
+ *  end: the caller here never had the endpoint to begin with. */
+export function removeDevice(id: string): StoredSubscription[] {
+  const f = read();
+  const subs = (f.subs ?? []).filter((s) => deviceId(s.endpoint) !== id);
+  write({ ...f, subs });
+  return subs;
 }
 
 /**
