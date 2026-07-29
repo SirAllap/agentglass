@@ -3,7 +3,8 @@ import { api } from "../lib/api.ts";
 import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
-import type { RemoteStatus } from "../../../shared/types.ts";
+import { pickIndex, readPick, writePick, maskToken, type PickedAddress } from "../lib/remoteLink.ts";
+import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
 
 /**
  * Open the dashboard on your phone.
@@ -28,10 +29,15 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
-  const [pick, setPick] = useState(0);
+  // The chosen route, not its position in the list: see remotePick.ts for why
+  // an index cannot survive a new DHCP lease or a tailnet that comes up late.
+  const [chosen, setChosen] = useState<PickedAddress | null>(() => readPick());
   // Revoking cannot be undone and cannot be partially done, so it asks once.
   const [confirming, setConfirming] = useState(false);
   const [revokeNote, setRevokeNote] = useState<string | null>(null);
+  // The access code is covered until asked for: this pane is the one that ends
+  // up in screenshots. See maskToken.
+  const [reveal, setReveal] = useState(false);
 
   const load = useCallback(() => {
     api.remoteStatus().then(setSt).catch(() => setSt(null));
@@ -83,19 +89,19 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   if (!st) return <Wrap><div className="px-3 py-2 text-[11px] t-dim2">Reading network state…</div></Wrap>;
 
   const urls = st.urls;
+  const pick = pickIndex(st.addresses, chosen);
   const url = urls[Math.min(pick, urls.length - 1)] ?? "";
-  const address = st.addresses[Math.min(pick, st.addresses.length - 1)];
+  const address = st.addresses[pick];
   const live = st.exposed && st.trustLan && urls.length > 0;
 
   return (
     <Wrap>
       <div className="px-3 py-2 flex flex-col gap-3">
-        <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
-          Open agentglass on a phone or tablet on the same network. Monitoring, sessions and gate
-          approvals, from the sofa. A device that connects from off this machine always gets the
-          phone companion, never this dashboard.
-        </div>
-
+        {/* The state of the feature, in the one row the eye lands on: what the
+            server is doing, whether anything is attached to it at this
+            instant, and the switch that changes it. The old pane opened with a
+            paragraph and put the switch under it, which meant the answer to
+            "is this on, and is anyone on it" was two reads away. */}
         {enabled === null ? (
           /* A browser tab cannot rebind the server it is talking to: only the
              process that spawned it can. Rather than a switch that would do
@@ -104,13 +110,30 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           <Recipe port={st.port} />
         ) : (
           <button onClick={toggle} disabled={busy} role="switch" aria-checked={!!enabled}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-white/5">
+            className="tile w-full !flex-row !items-center !gap-3 text-left hover:bg-white/5"
+            style={{ borderColor: enabled ? "color-mix(in srgb, var(--primary) 34%, transparent)" : undefined }}>
+            <StateDot on={!!enabled} live={st.clients.liveCount > 0} />
             <span className="min-w-0 flex-1">
-              <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>Remote access</span>
+              <span className="block text-[13px] font-medium" style={{ color: "var(--text)" }}>
+                {busy ? "Restarting the server…" : enabled ? "Listening on your network" : "Remote access is off"}
+              </span>
               <span className="block text-[10.5px] t-dim2 mt-0.5">
-                {busy ? "Restarting the server…" : enabled ? "The server is listening on your network" : "Off — the server answers this machine only"}
+                {enabled
+                  ? "A phone or tablet can open the companion from the sofa: monitoring, sessions and gate approvals."
+                  : "The server answers this machine only. Nothing off-box can reach it."}
               </span>
             </span>
+            {/* Live count as a chip rather than a sentence: it changes every
+                three seconds, and a number that moves inside prose is noise. */}
+            {enabled && st.clients.liveCount > 0 && (
+              <span className="chip shrink-0 t-mono" style={{
+                color: "var(--success)",
+                background: "color-mix(in srgb, var(--success) 12%, transparent)",
+                borderColor: "color-mix(in srgb, var(--success) 34%, transparent)",
+              }}>
+                {st.clients.liveCount} connected
+              </span>
+            )}
             <span className="shrink-0 relative rounded-full transition-colors" style={{
               width: 34, height: 19, opacity: busy ? 0.5 : 1,
               background: enabled ? "color-mix(in srgb, var(--primary) 55%, transparent)" : "color-mix(in srgb, var(--border) 55%, transparent)",
@@ -124,59 +147,108 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
           </button>
         )}
 
-        {/* Turning it on is a real decision, so the consequence is stated in
-            the words it deserves rather than as "advanced". */}
-        {(enabled || st.exposed) && (
-          <div className="text-[10.5px] px-2.5 py-2 rounded-lg" style={{
-            color: "var(--text2)",
-            background: "color-mix(in srgb, var(--warning) 10%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)",
-          }}>
-            Anyone on this network who has the link below gets a terminal, git write access and docker
-            control on this machine. Fine at home. Not on café or airport wifi.
-          </div>
-        )}
-
         {live && (
           <>
-            <div className="flex items-start gap-3">
-              <Qr text={url} />
-              <div className="min-w-0 flex-1 flex flex-col gap-1.5">
-                <div className="text-[10.5px] t-dim2">Scan it with the phone's camera</div>
-                <button onClick={() => copy(url)}
-                  className="t-mono text-[10.5px] text-left px-2 py-1.5 rounded-lg break-all hover:opacity-80"
-                  style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg2) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
-                  {url}
-                </button>
-                <div className="text-[10px] t-dim2">
-                  {copied === url ? "Copied" : "Tap to copy. The link carries the access code once; after that the phone remembers it."}
-                </div>
-                {/* More than one route to this machine is normal (wifi plus a
-                    tailnet). Naming them beats picking one and being wrong. */}
-                {urls.length > 1 && (
-                  <div className="flex flex-wrap gap-1 pt-0.5">
-                    {st.addresses.map((a, i) => (
-                      <button key={a.address} onClick={() => setPick(i)}
-                        className="text-[10px] px-2 py-1 rounded-md"
-                        style={{
-                          color: i === pick ? "var(--primary-hover)" : "var(--text2)",
-                          background: i === pick ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent",
-                          border: `1px solid color-mix(in srgb, var(--border) ${i === pick ? 60 : 30}%, transparent)`,
-                        }}>
-                        {a.tailnet ? "Tailscale" : a.iface} · {a.address}
+            {/* The link, given the room it needs: the code beside the QR
+                rather than under it, and the routes to this machine as a
+                column of real choices instead of a row of small pills. At the
+                old width all of this wrapped into a stack you had to scroll. */}
+            <div className="flex items-start gap-3.5">
+              <div className="shrink-0 flex flex-col items-center gap-1.5">
+                <Qr text={url} />
+                <span className="text-[10px] t-dim2">Scan with the camera</span>
+              </div>
+
+              <div className="min-w-0 flex-1 flex flex-col gap-2.5">
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] t-dim2 uppercase tracking-wider flex-1">The link</span>
+                    {/* The QR always carries the real code — a masked one would
+                        not scan. This only covers the text a screenshot keeps. */}
+                    {url.includes("token=") && (
+                      <button onClick={(e) => { e.stopPropagation(); setReveal((v) => !v); }}
+                        className="text-[10px] px-2 py-0.5 rounded-md hover:opacity-80"
+                        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                        {reveal ? "Hide code" : "Show code"}
                       </button>
-                    ))}
+                    )}
                   </div>
-                )}
-                {address?.tailnet && (
+                  <button onClick={() => copy(url)}
+                    className="t-mono text-[11px] text-left px-2.5 py-2 rounded-lg break-all hover:opacity-80"
+                    style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
+                    {reveal ? url : maskToken(url)}
+                  </button>
                   <div className="text-[10px] t-dim2">
-                    A tailnet address: reachable from anywhere, but only by devices signed into your Tailscale.
+                    {copied === url
+                      ? "Copied, code included"
+                      : "Click to copy, code included. The phone needs it once and then remembers it."}
+                  </div>
+                </div>
+
+                {/* More than one route to this machine is normal (wifi plus a
+                    tailnet), and they are not equivalent — one crosses a café,
+                    the other does not. Each says what it is rather than making
+                    the user infer it from an address, and the choice is kept
+                    (see remoteLink.ts) because the pane used to forget it. */}
+                {st.addresses.length > 1 && (
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[10px] t-dim2 uppercase tracking-wider">Reachable at</span>
+                    <div className="flex flex-col gap-1">
+                      {st.addresses.map((a, i) => {
+                        const on = i === pick;
+                        return (
+                          <button key={a.address} onClick={() => { setChosen(a); writePick(a); }}
+                            className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left hover:opacity-90"
+                            style={{
+                              background: on ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
+                              border: `1px solid color-mix(in srgb, ${on ? "var(--primary)" : "var(--border)"} ${on ? 45 : 30}%, transparent)`,
+                            }}>
+                            <span className="shrink-0 rounded-full" aria-hidden style={{
+                              width: 6, height: 6,
+                              background: on ? "var(--primary-hover)" : "transparent",
+                              border: on ? "none" : "1px solid var(--text4)",
+                            }} />
+                            <span className="min-w-0 flex-1">
+                              <span className="block text-[11.5px]" style={{ color: on ? "var(--text)" : "var(--text2)" }}>
+                                {a.tailnet ? "Tailscale" : a.iface}
+                                <span className="t-mono text-[10.5px] t-dim2"> {a.address}</span>
+                              </span>
+                              <span className="block text-[10px] t-dim2">
+                                {a.tailnet
+                                  ? "Works from anywhere, for devices signed into your tailnet."
+                                  : "Works for anything on this network, and only there."}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
             </div>
 
-            <Devices st={st} onCopy={copy} copied={copied} />
+            {/* Turning it on is a real decision, so the consequence is stated
+                in the words it deserves rather than as "advanced". The
+                sentence follows the address the user actually chose: a tailnet
+                link is reachable from anywhere and only by devices signed into
+                their own Tailscale, and saying "anyone on this network" over
+                the top of that would be false in the direction that teaches
+                people to stop reading warnings. */}
+            <div className="text-[10.5px] px-2.5 py-2 rounded-lg" style={{
+              color: "var(--text2)",
+              background: "color-mix(in srgb, var(--warning) 10%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)",
+            }}>
+              {address?.tailnet
+                ? <>Whoever holds this link gets a terminal, git write access and docker control on this
+                    machine. Over Tailscale that is limited to devices signed into your tailnet, which is the
+                    safer of the two links on offer. It is still a shell: treat the code like a house key.</>
+                : <>Anyone on this network who has this link gets a terminal, git write access and docker
+                    control on this machine. Fine at home. Not on café or airport wifi.</>}
+            </div>
+
+            <Devices st={st} onCopy={copy} copied={copied} onChanged={load} />
 
             {/* The toggle shuts the port; it does not take back the key. A
                 phone that scanned the code once can still get in the next time
@@ -184,7 +256,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
                 Rotating the code is the revoke that reaches devices you no
                 longer have in your hand. */}
             {enabled !== null && st.tokenRequired && (
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1.5 pt-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
                 {!confirming ? (
                   <button onClick={() => { setConfirming(true); setRevokeNote(null); }} disabled={busy}
                     className="self-start text-[11px] px-2.5 py-1.5 rounded-lg hover:opacity-80"
@@ -256,19 +328,91 @@ function Wrap({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Proof, or the reason there is none. */
-function Devices({ st, onCopy, copied }: { st: RemoteStatus; onCopy: (s: string) => void; copied: string | null }) {
-  const { clients, firewall } = st;
-  if (clients.count > 0) {
+/**
+ * Who is on this machine, one row each, and the button that ends it.
+ *
+ * This replaced a single green sentence that counted devices and gave their
+ * age. Counting is the wrong shape for the question being asked: the thing on
+ * the other end of that link holds a terminal, git write access and docker, so
+ * what a person wants to know is which device, whether it is connected *now*,
+ * and how to stop it without getting up. `live` answers the second one
+ * honestly — it is sockets held open at this instant, not a timestamp that
+ * says "4m" whether the phone is in your hand or in a taxi.
+ */
+function Devices({ st, onCopy, copied, onChanged }: {
+  st: RemoteStatus; onCopy: (s: string) => void; copied: string | null; onChanged: () => void;
+}) {
+  const { devices, clients, firewall } = st;
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const setBlocked = async (d: RemoteDevice, blocked: boolean) => {
+    setBusy(d.address);
+    await api.remoteDevice(d.address, blocked).catch(() => null);
+    setBusy(null);
+    onChanged();
+  };
+
+  if (devices.length > 0) {
     return (
-      <div className="text-[11px] px-2.5 py-2 rounded-lg" style={{
-        color: "var(--success)",
-        background: "color-mix(in srgb, var(--success) 10%, transparent)",
-        border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)",
-      }}>
-        {clients.count === 1 ? "One device has connected" : `${clients.count} devices have connected`}
-        {clients.lastAt ? ` — last seen ${fmtAgo(clients.lastAt)}` : ""}.
-        <span className="t-mono t-dim2"> {clients.addresses.slice(0, 3).join(" · ")}</span>
+      <div className="flex flex-col gap-1">
+        <div className="flex items-baseline gap-2 px-0.5">
+          <span className="text-[10px] t-dim2 uppercase tracking-wider flex-1">Devices</span>
+          <span className="text-[10px]" style={{ color: clients.liveCount > 0 ? "var(--success)" : "var(--text4)" }}>
+            {clients.liveCount > 0
+              ? `${clients.liveCount === 1 ? "One device is" : `${clients.liveCount} devices are`} connected right now`
+              : `${devices.length === 1 ? "One device has" : `${devices.length} devices have`} connected before`}
+          </span>
+        </div>
+        {devices.map((d) => {
+          const live = d.live > 0 && !d.blocked;
+          const tint = d.blocked ? "var(--error)" : live ? "var(--success)" : "var(--text3)";
+          return (
+            <div key={d.address} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg" style={{
+              background: live ? "color-mix(in srgb, var(--success) 8%, transparent)" : "color-mix(in srgb, var(--bg2) 60%, transparent)",
+              border: `1px solid color-mix(in srgb, ${d.blocked ? "var(--error)" : live ? "var(--success)" : "var(--border)"} ${live || d.blocked ? 30 : 40}%, transparent)`,
+            }}>
+              {/* Steady when a socket is open, hollow when the device is only
+                  remembered. It is the fastest read in the row, so it carries
+                  the one fact that decides everything else. */}
+              <span className="shrink-0 rounded-full" aria-hidden style={{
+                width: 7, height: 7, background: live ? "var(--success)" : "transparent",
+                border: live ? "none" : `1px solid ${tint}`,
+                boxShadow: live ? "0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent)" : "none",
+              }} />
+              <div className="min-w-0 flex-1">
+                <div className="text-[11.5px] truncate" style={{ color: "var(--text)" }}>
+                  {d.label}
+                  <span className="t-mono text-[10px] t-dim2"> {d.address}</span>
+                </div>
+                <div className="text-[10px]" style={{ color: tint }}>
+                  {d.blocked
+                    ? "Disconnected. It is refused on every request until you let it back in."
+                    : live
+                      ? `Connected now · ${d.live === 1 ? "one open connection" : `${d.live} open connections`}`
+                      : `Last seen ${fmtAgo(d.lastAt)} · ${d.hits === 1 ? "one request" : `${d.hits} requests`}`}
+                </div>
+              </div>
+              <button onClick={() => setBlocked(d, !d.blocked)} disabled={busy === d.address}
+                className="shrink-0 text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
+                style={{
+                  color: d.blocked ? "var(--text2)" : "var(--error)",
+                  background: d.blocked ? "transparent" : "color-mix(in srgb, var(--error) 10%, transparent)",
+                  border: `1px solid color-mix(in srgb, ${d.blocked ? "var(--border)" : "var(--error)"} ${d.blocked ? 45 : 32}%, transparent)`,
+                  opacity: busy === d.address ? 0.5 : 1,
+                }}>
+                {busy === d.address ? "Working…" : d.blocked ? "Let it back in" : "Disconnect"}
+              </button>
+            </div>
+          );
+        })}
+        {/* Said once, under the list, rather than in every row: an address is
+            not an identity. Cutting one off is immediate and it is not the
+            same promise as rotating the code. */}
+        <div className="text-[10px] t-dim2 px-0.5">
+          Disconnecting closes what that device is holding and refuses it by address until this server
+          restarts. A device that can take a new address on your network can come back, so revoke the link
+          below when the answer needs to be permanent.
+        </div>
       </div>
     );
   }
@@ -330,6 +474,25 @@ function Recipe({ port }: { port: number }) {
   );
 }
 
+/**
+ * On, off, and on-with-someone-attached, as one mark.
+ *
+ * Three states rather than two: "listening" and "listening while a phone holds
+ * a socket" are different facts about your machine, and the second is the one
+ * worth noticing from across the room.
+ */
+function StateDot({ on, live }: { on: boolean; live: boolean }) {
+  const tint = !on ? "var(--text4)" : live ? "var(--success)" : "var(--primary-hover)";
+  return (
+    <span className="shrink-0 rounded-full" aria-hidden style={{
+      width: 9, height: 9,
+      background: on ? tint : "transparent",
+      border: on ? "none" : `1px solid ${tint}`,
+      boxShadow: live ? `0 0 0 4px color-mix(in srgb, ${tint} 16%, transparent)` : "none",
+    }} />
+  );
+}
+
 /** The code itself: one SVG path, on a light plate so a dark theme still scans. */
 function Qr({ text }: { text: string }) {
   let path: string;
@@ -345,7 +508,7 @@ function Qr({ text }: { text: string }) {
   const span = size + quiet * 2;
   return (
     <svg
-      width={132} height={132} viewBox={`0 0 ${span} ${span}`} shapeRendering="crispEdges"
+      width={150} height={150} viewBox={`0 0 ${span} ${span}`} shapeRendering="crispEdges"
       role="img" aria-label={`QR code for ${text}`}
       className="shrink-0 rounded-lg"
       style={{ background: "#fff", padding: 0 }}>

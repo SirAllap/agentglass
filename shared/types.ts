@@ -281,14 +281,6 @@ export interface StatsSummary {
   retention_days?: number;
 }
 
-/** What an agent running in a tmux window says it wants from you: `waiting` for
- *  a question it has asked, `done` for a turn it has finished. Read from the
- *  window's own `@ai_state` option, which `hooks/send_event.py` sets from the
- *  agent's Stop and Notification hooks. A plain tmux option rather than
- *  something of ours, so a build script or another agent can flash a tab with
- *  one line: `tmux set-option -w -t "$TMUX_PANE" @ai_state done`. */
-export type TmuxAttention = "waiting" | "done" | null;
-
 /** One tmux window, as tmux itself reports it. The panel renders these as its
  *  own tabs; tmux stays the source of truth for which is active. `flags` is
  *  tmux's own marks (`*` current, `-` last, `!` bell, `#` activity, `Z` zoomed),
@@ -302,9 +294,6 @@ export interface TmuxWindow {
   name: string;
   active: boolean;
   flags: string;
-  /** Absent in demo mode's older payloads, and null whenever nothing has
-   *  claimed the window. */
-  attention?: TmuxAttention;
 }
 
 /** A tool call held at the gate, awaiting a remote approve/deny. */
@@ -1526,6 +1515,22 @@ export interface FirewallHint {
   undo: string | null;
 }
 
+/** A device that has reached this machine over the network. */
+export interface RemoteDevice {
+  address: string;
+  firstAt: number;
+  lastAt: number;
+  /** Sockets open from it at this instant: the event stream, a terminal, the
+   *  notification mirror. Above zero means it is connected now. */
+  live: number;
+  /** Its User-Agent, condensed to something a person recognises. */
+  label: string;
+  agent: string;
+  hits: number;
+  /** Refused at the door until it is let back in or the server restarts. */
+  blocked: boolean;
+}
+
 /** Whether another device can reach this server, and whether one ever has. */
 export interface RemoteStatus {
   /** Bound off loopback, so off-box traffic can arrive at all. */
@@ -1540,7 +1545,10 @@ export interface RemoteStatus {
   /** Ready-to-open URLs, token included when the caller is local. */
   urls: string[];
   addresses: ReachableAddress[];
-  clients: { count: number; lastAt: number | null; addresses: string[] };
+  clients: { count: number; lastAt: number | null; addresses: string[]; liveCount: number };
+  /** One row per device that has reached this machine. `live` is sockets held
+   *  open right now, which is the difference between "is here" and "was here". */
+  devices: RemoteDevice[];
   firewall: FirewallHint | null;
   /** Only ever sent to a caller on this machine. */
   token?: string;

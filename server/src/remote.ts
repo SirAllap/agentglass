@@ -21,8 +21,35 @@
 // problem is a worse trade than reading one line and pasting it.
 import { networkInterfaces } from "node:os";
 
-/** A non-loopback address that has talked to us, and when it last did. */
-const seen = new Map<string, number>();
+/**
+ * A non-loopback address that has talked to us, and what we know about it.
+ *
+ * The panel used to say "one device has connected, last seen 4m" and that was
+ * the whole story: a number, an age, and no way to tell a phone in your hand
+ * from a phone in a drawer, or either from something on the wifi that is not
+ * yours. What is on the other end of an open port carrying a terminal is not a
+ * detail to summarise. So each address keeps its own record, including whether
+ * a socket from it is open *right now*, which is the only honest answer to
+ * "connected" — an HTTP request proves a device was here a moment ago, and a
+ * held-open WebSocket proves it is here.
+ */
+export interface DeviceRecord {
+  address: string;
+  firstAt: number;
+  lastAt: number;
+  /** Sockets from this address open at this instant. Zero is "was here". */
+  live: number;
+  /** What it calls itself, condensed. See deviceLabel. */
+  label: string;
+  /** The raw User-Agent, for the ones the condenser cannot name. */
+  agent: string;
+  /** Requests seen since it first arrived. */
+  hits: number;
+  /** Turned away at the door until it is let back in, or the server restarts. */
+  blocked: boolean;
+}
+
+const seen = new Map<string, DeviceRecord>();
 
 /** Bun hands v4-mapped v6 back on a dual-stack listener; compare the v4 part. */
 function unmap(ip: string): string {
@@ -42,32 +69,144 @@ export function isLoopback(ip: string): boolean {
  * loopback is every local fetch the app makes of itself, thousands an hour,
  * and it proves nothing about reachability.
  */
-export function noteClient(ip: string | null | undefined, now = Date.now()): void {
+export function noteClient(ip: string | null | undefined, opts: { now?: number; agent?: string | null } = {}): void {
   if (!ip) return;
   const h = unmap(ip);
   if (isLoopback(h)) return;
-  seen.set(h, now);
-  // A cap, because this is fed by unauthenticated connection metadata: without
-  // one, anything that can reach the port can grow this map without limit.
-  if (seen.size > 64) {
-    const oldest = [...seen.entries()].sort((a, b) => a[1] - b[1])[0];
-    if (oldest) seen.delete(oldest[0]);
+  const now = opts.now ?? Date.now();
+  const agent = (opts.agent ?? "").slice(0, 300);
+  const prev = seen.get(h);
+  if (prev) {
+    prev.lastAt = now;
+    prev.hits++;
+    // A device that starts sending a User-Agent (or changes it) renames itself;
+    // a request without one — the phone's own service worker, say — must not
+    // erase the name we already have.
+    if (agent && agent !== prev.agent) { prev.agent = agent; prev.label = deviceLabel(agent); }
+  } else {
+    seen.set(h, {
+      address: h, firstAt: now, lastAt: now, live: 0,
+      label: deviceLabel(agent), agent, hits: 1, blocked: false,
+    });
   }
+  // A cap, because this is fed by unauthenticated connection metadata: without
+  // one, anything that can reach the port can grow this map without limit. A
+  // device with a socket open, or one deliberately blocked, is never the one
+  // dropped: both are answers the user is relying on.
+  if (seen.size > 64) {
+    const evictable = [...seen.values()].filter((d) => d.live === 0 && !d.blocked).sort((a, b) => a.lastAt - b.lastAt)[0];
+    if (evictable) seen.delete(evictable.address);
+  }
+}
+
+/**
+ * A socket from `ip` opened (+1) or closed (-1).
+ *
+ * This is what separates "connected" from "was connected". It is called for
+ * every kind of socket the server holds — the event stream, a terminal, the
+ * notification mirror — because any of them being open means that device is
+ * live on this machine right now.
+ */
+export function noteSocket(ip: string | null | undefined, delta: 1 | -1, now = Date.now()): void {
+  if (!ip) return;
+  const h = unmap(ip);
+  if (isLoopback(h)) return;
+  const d = seen.get(h);
+  if (!d) {
+    if (delta < 0) return; // a close for something we never saw open
+    noteClient(h, { now });
+    const made = seen.get(h);
+    if (made) made.live = 1;
+    return;
+  }
+  // Clamped: a close that arrives twice, or after a reset, must not push this
+  // negative and make a live device look absent forever.
+  d.live = Math.max(0, d.live + delta);
+  d.lastAt = now;
+}
+
+/**
+ * Refuse this address, or let it back in.
+ *
+ * Honest about what it is: an address-level block, held in memory until the
+ * server restarts. It stops a device that is on the network now, which is the
+ * thing you want when you see something you do not recognise holding a
+ * terminal. It is not a replacement for rotating the code — anything that can
+ * pick a new address on the same network can come back — which is why the UI
+ * offers both and says which is which.
+ */
+export function blockDevice(address: string, blocked: boolean): boolean {
+  const d = seen.get(unmap(address));
+  if (!d) return false;
+  d.blocked = blocked;
+  return true;
+}
+
+export function isBlocked(ip: string | null | undefined): boolean {
+  if (!ip) return false;
+  return seen.get(unmap(ip))?.blocked === true;
+}
+
+/** Newest activity first, with anything currently holding a socket on top. */
+export function remoteDevices(): DeviceRecord[] {
+  return [...seen.values()]
+    .sort((a, b) => (b.live > 0 ? 1 : 0) - (a.live > 0 ? 1 : 0) || b.lastAt - a.lastAt)
+    .map((d) => ({ ...d }));
 }
 
 export interface RemoteClients {
   count: number;
   lastAt: number | null;
   addresses: string[];
+  /** How many are holding a socket open at this instant. */
+  liveCount: number;
 }
 
 export function remoteClients(): RemoteClients {
-  const entries = [...seen.entries()].sort((a, b) => b[1] - a[1]);
+  const all = remoteDevices();
   return {
-    count: entries.length,
-    lastAt: entries[0]?.[1] ?? null,
-    addresses: entries.slice(0, 8).map(([ip]) => ip),
+    count: all.length,
+    lastAt: all.reduce<number | null>((n, d) => (n === null || d.lastAt > n ? d.lastAt : n), null),
+    addresses: all.slice(0, 8).map((d) => d.address),
+    liveCount: all.filter((d) => d.live > 0).length,
   };
+}
+
+/**
+ * A User-Agent, reduced to the phrase a person would use for that device.
+ *
+ * Deliberately coarse. The point is telling "my Pixel" apart from "something
+ * else on this wifi", not building a fingerprint: a wrong-but-specific guess
+ * ("Galaxy S22") is worse than a right-and-vague one ("An Android phone"),
+ * because the user acts on this by deciding whether to cut a device off.
+ */
+export function deviceLabel(uaRaw: string | null | undefined): string {
+  const ua = (uaRaw ?? "").trim();
+  if (!ua) return "Unnamed device";
+  if (/^(curl|wget|python-requests|node-fetch|go-http-client|httpie)/i.test(ua)) {
+    return `A script (${ua.split("/")[0]!.toLowerCase()})`;
+  }
+  const browser =
+    /\bEdg\//.test(ua) ? "Edge"
+    : /\bOPR\/|\bOpera\b/.test(ua) ? "Opera"
+    : /\bFirefox\//.test(ua) ? "Firefox"
+    : /\bChrome\//.test(ua) ? "Chrome"
+    : /\bSafari\//.test(ua) ? "Safari"
+    : null;
+  // The model is inside the Android comment, before the build tag. It is the
+  // one place a phone says something a person recognises.
+  const android = ua.match(/Android[^;)]*;\s*([^;)]+?)(?:\s+Build\/[^;)]*)?\s*\)/);
+  const device =
+    /\biPhone\b/.test(ua) ? "iPhone"
+    : /\biPad\b/.test(ua) ? "iPad"
+    : /\bCrOS\b/.test(ua) ? "Chromebook"
+    : android ? (android[1] && !/^wv$/i.test(android[1].trim()) ? android[1].trim() : "An Android device")
+    : /\bMacintosh\b/.test(ua) ? "Mac"
+    : /\bWindows NT\b/.test(ua) ? "Windows PC"
+    : /\bLinux\b/.test(ua) ? "Linux machine"
+    : null;
+  if (device && browser) return `${device} · ${browser}`;
+  return device ?? browser ?? "Unnamed device";
 }
 
 /** Test seam: forget every recorded client. */
@@ -190,6 +329,8 @@ export interface RemoteStatus {
   urls: string[];
   addresses: Reachable[];
   clients: RemoteClients;
+  /** One row per device that has reached this machine, live state included. */
+  devices: DeviceRecord[];
   firewall: FirewallHint | null;
   /** Present only for a local caller — see the gate in index.ts. */
   token?: string;
@@ -219,6 +360,7 @@ export function remoteStatus(opts: {
     urls: addresses.map((a) => `http://${a.address}:${opts.port}${q}`),
     addresses,
     clients: remoteClients(),
+    devices: remoteDevices(),
     firewall: firewallHint(opts.port, addresses[0]?.subnet ?? null, opts.which),
     ...(opts.includeToken && opts.token ? { token: opts.token } : {}),
   };

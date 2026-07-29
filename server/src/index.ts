@@ -77,7 +77,7 @@ import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
-import { noteClient, isLoopback, remoteStatus } from "./remote.ts";
+import { noteClient, noteSocket, isLoopback, isBlocked, blockDevice, remoteStatus } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
@@ -115,8 +115,13 @@ const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
 /** One socket, three roles: the live event stream, PTY terminal shells, and
  *  the desktop-notification mirror. */
-type WsData = { kind: "events" } | { kind: "notify" } | PtyWsData;
+/** Every socket carries the address that opened it, so "who is connected right
+ *  now" is answerable, and so a device can be cut off while it is holding one. */
+type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null };
 const clients = new Set<ServerWebSocket<WsData>>();
+/** Every open socket of every kind, which `clients` is not: it holds the event
+ *  streams only, and a device cut off mid-session may be holding a terminal. */
+const sockets = new Set<ServerWebSocket<WsData>>();
 /** Notification sockets, each holding the unsubscribe that keeps the D-Bus
  *  monitor alive. Empty map => no monitor process. */
 const notifySubs = new Map<ServerWebSocket<WsData>, () => void>();
@@ -452,7 +457,16 @@ const server = Bun.serve<WsData>({
     // have actually arrived. Loopback is ignored — it is every call the app
     // makes of itself and says nothing about whether a phone can get in.
     const clientIp = srv.requestIP(req)?.address;
-    noteClient(clientIp);
+    noteClient(clientIp, { agent: req.headers.get("user-agent") });
+    // Cut off on sight. A device the user turned away in the panel is refused
+    // before the token is even considered, because the case this exists for is
+    // "something I do not recognise is holding a terminal on my machine" and
+    // the answer to that has to arrive on the next packet, not the next
+    // restart. It is deliberately above the auth gate: the device already has
+    // the code, which is exactly why it needs to be stopped by address.
+    if (isBlocked(clientIp)) return new Response(JSON.stringify({ ok: false, error: "this device was disconnected from this machine" }), {
+      status: 403, headers: { "content-type": "application/json" },
+    });
     // Same fact, put to a second use: a page served off-box gets the phone
     // application, not the cockpit (see webui.ts). An address we cannot read is
     // treated as local — it means the socket had no peer to report, which on
@@ -519,7 +533,7 @@ const server = Bun.serve<WsData>({
     // stream — a read this feed is not meant to give to the open web.
     if (pathname === "/stream") {
       if (!trustedCaller(req)) return csrfBlocked();
-      if (srv.upgrade(req, { data: { kind: "events" } })) return undefined as unknown as Response;
+      if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null } })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
     }
 
@@ -527,11 +541,12 @@ const server = Bun.serve<WsData>({
     if (pathname === "/terminal/pty") {
       if (!trustedCaller(req)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
-      const data: PtyWsData = {
+      const data: PtyWsData & { ip?: string | null } = {
         kind: "pty",
         root: url.searchParams.get("root") || "",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
+        ip: clientIp ?? null,
       };
       if (srv.upgrade(req, { data })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
@@ -554,7 +569,7 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req)) return csrfBlocked();
       const cap = notifyCapability();
       if (!cap.supported) return json({ error: cap.reason ?? "unsupported" }, 501);
-      if (srv.upgrade(req, { data: { kind: "notify" } })) return undefined as unknown as Response;
+      if (srv.upgrade(req, { data: { kind: "notify", ip: clientIp ?? null } })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
     }
 
@@ -808,6 +823,38 @@ const server = Bun.serve<WsData>({
      * the token is ever set aside. The local UI is the only thing that needs it
      * anyway: it is what draws the QR code.
      */
+    /**
+     * Cut a device off, or let it back in.
+     *
+     * Only from this machine. A phone that already holds the code must not be
+     * able to disconnect the laptop next to it, and an address-level block is
+     * exactly the kind of control that has to stay on the side of the desk the
+     * user is sitting at.
+     *
+     * Blocking closes what it is holding as well as refusing what it sends
+     * next. Half of it — refusing new requests while an open terminal keeps
+     * streaming — would be the worst of both: it looks disconnected in the
+     * panel and is not disconnected on the wire.
+     */
+    if (pathname === "/remote/device" && req.method === "POST") {
+      const ip = srv.requestIP(req)?.address ?? null;
+      if (!ip || !isLoopback(ip)) return json({ ok: false, error: "only this machine can disconnect a device" }, 403);
+      let b: { address?: unknown; blocked?: unknown };
+      try { b = (await req.json()) as { address?: unknown; blocked?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const address = typeof b.address === "string" ? b.address : "";
+      const blocked = b.blocked !== false;
+      if (!address) return json({ ok: false, error: "no address" }, 400);
+      if (!blockDevice(address, blocked)) return json({ ok: false, error: "no such device" }, 404);
+      let closed = 0;
+      if (blocked) {
+        for (const ws of [...sockets]) {
+          if (ws.data?.ip && ws.data.ip.replace(/^::ffff:/, "") === address) {
+            try { ws.close(1008, "disconnected from the host machine"); closed++; } catch { /* already gone */ }
+          }
+        }
+      }
+      return json({ ok: true, address, blocked, closed });
+    }
     if (pathname === "/remote/status") {
       const ip = srv.requestIP(req)?.address ?? null;
       return json(
@@ -1481,6 +1528,11 @@ const server = Bun.serve<WsData>({
 
   websocket: {
     open(ws: ServerWebSocket<WsData>) {
+      // Before the per-kind branches: every socket counts towards "this device
+      // is connected right now", and every socket has to be closable when the
+      // user cuts that device off.
+      sockets.add(ws);
+      noteSocket(ws.data?.ip, 1);
       if (ws.data?.kind === "pty") { ptyOpen(ws); return; }
       if (ws.data?.kind === "notify") {
         notifySubs.set(ws, subscribeNotifications((n) => {
@@ -1499,6 +1551,8 @@ const server = Bun.serve<WsData>({
       ws.send(JSON.stringify(frame));
     },
     close(ws: ServerWebSocket<WsData>) {
+      sockets.delete(ws);
+      noteSocket(ws.data?.ip, -1);
       if (ws.data?.kind === "pty") { ptyClose(ws); return; }
       if (ws.data?.kind === "notify") {
         // Unsubscribing is what stops the monitor process once the last

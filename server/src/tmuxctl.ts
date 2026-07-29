@@ -162,12 +162,6 @@ const WINDOW_ID = /^@\d+$/;
  * `#` activity, `Z` zoomed). They are passed through rather than interpreted
  * here: the panel decides what to show, and tmux stays the single source of
  * truth for what is true.
- *
- * `@ai_state` is the one field tmux does not set itself: it is a user option on
- * the window, which an agent's own hooks write when it finishes a turn or stops
- * to ask something. Unknown values are dropped rather than passed on, because
- * this ends up choosing a colour and a half-written option should not paint a
- * tab a colour nothing else in the app uses.
  */
 export function parseWindows(out: string): TmuxWindow[] {
   const windows: TmuxWindow[] = [];
@@ -175,18 +169,10 @@ export function parseWindows(out: string): TmuxWindow[] {
     if (!line.trim()) continue;
     // Tab-separated, because window names routinely contain spaces and a
     // space-separated format would split "npm run dev" into three windows.
-    const [id, index, name, active, flags, state] = line.split("\t");
+    const [id, index, name, active, flags] = line.split("\t");
     const i = Number(index);
     if (!WINDOW_ID.test(id ?? "") || !Number.isInteger(i)) continue;
-    const attention = state?.trim();
-    windows.push({
-      id: id!,
-      index: i,
-      name: name ?? "",
-      active: active === "1",
-      flags: (flags ?? "").trim(),
-      attention: attention === "waiting" || attention === "done" ? attention : null,
-    });
+    windows.push({ id: id!, index: i, name: name ?? "", active: active === "1", flags: (flags ?? "").trim() });
   }
   return windows;
 }
@@ -224,22 +210,11 @@ export function readFrame(c: TmuxClient): TmuxFrame | null {
     "list-clients", "-F", "c\t#{client_tty}\t#{session_name}\t#{session_id}",
     ";",
     "list-windows", "-a",
-    "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}\t#{@ai_state}",
+    "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}",
   ]);
   if (!out) return null;
   const f = parseFrame(out, c.tty);
-  if (!f) return null;
-  // The window you are on cannot be asking for your attention, so a state left
-  // on it is dropped here rather than rendered. `runAction` clears it when the
-  // panel does the switching; this catches the other half, where the user
-  // switched with `^b n` and tmux told nobody. Costs a second spawn only in the
-  // one poll after that happens.
-  const stale = f.windows.find((w) => w.active && w.attention);
-  if (stale) {
-    tmux(c.socket, ["set-option", "-w", "-q", "-t", stale.id, "-u", "@ai_state"]);
-    stale.attention = null;
-  }
-  return { target: { pid: c.pid, socket: c.socket, session: f.session, id: f.id }, windows: f.windows };
+  return f ? { target: { pid: c.pid, socket: c.socket, session: f.session, id: f.id }, windows: f.windows } : null;
 }
 
 /**
@@ -325,16 +300,7 @@ export function runAction(t: TmuxTarget, action: TmuxAction, window?: string, na
   const id = WINDOW_ID.test(window ?? "") ? window! : null;
   switch (action) {
     case "select":
-      // Selecting a window also drops its `@ai_state`, in the same tmux call:
-      // the tab was flashing to get you here, and you are here. tmux clears its
-      // own bell flag on select for the same reason, but it knows nothing about
-      // a user option, and leaving that to a `pane-focus-in` hook in the user's
-      // config would mean the flash only ever stops for people who have one.
-      return id === null ? false : tmux(t.socket, [
-        "select-window", "-t", id,
-        ";",
-        "set-option", "-w", "-q", "-t", id, "-u", "@ai_state",
-      ]) !== null;
+      return id === null ? false : tmux(t.socket, ["select-window", "-t", id]) !== null;
     case "new":
       // At the end, which is tmux's default and where the button is.
       //
