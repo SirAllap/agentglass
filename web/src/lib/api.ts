@@ -587,6 +587,10 @@ const realApi = {
     post<{ ok: boolean; devices?: number }>("/push/unsubscribe", { endpoint }),
   pushDevices: () =>
     get<{ devices: { label: string; addedAt: number; lastOkAt: number | null }[] }>("/push/devices"),
+  // The same fan-out an alert uses. Without it the only way to find out
+  // whether push works is to miss the one thing it exists for.
+  pushTest: () =>
+    post<{ ok: boolean; sent: number; failed: number; pruned: number }>("/push/test", {}),
 };
 
 // In demo mode every call resolves against the fabricated dataset — no server.
@@ -719,6 +723,7 @@ const demoApi: typeof realApi = {
   pushSubscribe: (_s: unknown, _l: string) => D({ ok: false, error: "not available in the demo" }),
   pushUnsubscribe: (_e: string) => D({ ok: true }),
   pushDevices: () => D({ devices: [] as { label: string; addedAt: number; lastOkAt: number | null }[] }),
+  pushTest: () => D({ ok: false, sent: 0, failed: 0, pruned: 0 }),
 
   // The demo has no GitHub behind it, and pretending otherwise would put a
   // fake PR list in front of someone evaluating the app. It reports the same

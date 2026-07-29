@@ -75,9 +75,21 @@ function shouldSend(key: string): boolean {
  * over-eager prune would silently unsubscribe a working phone, and nobody would
  * find out until a gate went unanswered.
  */
-async function pushEveryone(title: string, body: string, urgency: 0 | 1 | 2) {
+export interface PushFanout {
+  /** How many devices the push service accepted it for. */
+  sent: number;
+  /** How many refused for a reason that is not "this device is gone". */
+  failed: number;
+  /** How many were forgotten because the service said they no longer exist. */
+  pruned: number;
+}
+
+export async function pushEveryone(
+  title: string, body: string, urgency: 0 | 1 | 2,
+): Promise<PushFanout> {
   const subs = subscriptions();
-  if (!subs.length) return;
+  const out: PushFanout = { sent: 0, failed: 0, pruned: 0 };
+  if (!subs.length) return out;
   const keys = await vapidKeys();
   // `urgency` travels inside the encrypted payload as well as in the header.
   // The header is for the push service, which decides whether to wake the
@@ -90,9 +102,11 @@ async function pushEveryone(title: string, body: string, urgency: 0 | 1 | 2) {
       // A gate is worth waking the device for; a tool error is not.
       urgency: urgency === 2 ? "high" : "normal",
     });
-    if (r.gone) removeSubscription(s.endpoint);
-    else if (r.ok) markDelivered(s.endpoint);
+    if (r.gone) { removeSubscription(s.endpoint); out.pruned++; }
+    else if (r.ok) { markDelivered(s.endpoint); out.sent++; }
+    else out.failed++;
   }));
+  return out;
 }
 
 async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2) {
