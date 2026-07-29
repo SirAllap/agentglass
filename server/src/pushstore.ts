@@ -160,16 +160,32 @@ export function removeDevice(id: string): StoredSubscription[] {
  * same subscription, and a *new* one when the user clears site data or the push
  * service rotates it — so matching on endpoint is what stops one phone becoming
  * four entries and getting four buzzes for one gate.
+ *
+ * "Update what is known about it" was a claim this did not honour: a device
+ * that re-subscribed was replaced rather than updated, so its history went with
+ * it. Re-subscribing is not rare — turning the switch on when the browser
+ * already holds a subscription posts the same endpoint again, which happens
+ * whenever this machine has lost its file and the phone has not — and the row
+ * afterwards read "Added just now · never alerted" for a phone that had been
+ * receiving for weeks. A device list that resets itself is a device list nobody
+ * can use to decide anything.
+ *
+ * So the keys are replaced, because those are what encryption needs and the
+ * newest ones are the true ones; everything the machine learned about the
+ * device is carried forward. A label only when a new one is offered — the
+ * phone sends one on subscribe and not on every call.
  */
 export function addSubscription(sub: PushSubscription, label?: string, now = Date.now()): StoredSubscription[] {
   if (!sub?.endpoint || !sub.keys?.p256dh || !sub.keys?.auth) return subscriptions();
   const f = read();
+  const prior = (f.subs ?? []).find((s) => s.endpoint === sub.endpoint);
   const subs = (f.subs ?? []).filter((s) => s.endpoint !== sub.endpoint);
   subs.push({
     endpoint: sub.endpoint,
     keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth },
-    ...(label ? { label } : {}),
-    addedAt: now,
+    ...(label ?? prior?.label ? { label: label ?? prior!.label! } : {}),
+    addedAt: prior?.addedAt ?? now,
+    ...(prior?.lastOkAt ? { lastOkAt: prior.lastOkAt } : {}),
   });
   write({ ...f, subs });
   return subs;

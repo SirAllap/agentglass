@@ -160,6 +160,35 @@ describe("the store", () => {
     expect(subscriptions().at(-1)!.label).toBe("new name");
   });
 
+  it("keeps what it knows about a device that re-subscribes", async () => {
+    // Re-subscribing is not rare: turning the switch on when the browser
+    // already holds a subscription posts the same endpoint again, which is
+    // what happens whenever this machine has lost its file and the phone has
+    // not. Replacing the entry threw the history away, and the device list
+    // then read "Added just now · never alerted" for a phone that had been
+    // receiving for weeks — a list that resets itself cannot be used to decide
+    // which device to forget.
+    scratch();
+    addSubscription({ ...sub, endpoint: "https://push/one" }, "Pixel", 1_000);
+    markDelivered("https://push/one", 2_000);
+    addSubscription({ ...sub, endpoint: "https://push/one" }, undefined, 9_000);
+    const [only] = subscriptions();
+    expect(only!.addedAt).toBe(1_000);
+    expect(only!.lastOkAt).toBe(2_000);
+    // And the name, which the phone sends on subscribe and not on every call.
+    expect(only!.label).toBe("Pixel");
+  });
+
+  it("takes the newest keys, because those are the ones that will encrypt", async () => {
+    // The rest is carried forward; the keys are not. A browser that rotated
+    // them and kept the endpoint would otherwise be encrypted to with the old
+    // pair forever, and every push would be quietly undecryptable.
+    scratch();
+    addSubscription({ ...sub, endpoint: "https://push/one" }, "Pixel");
+    addSubscription({ endpoint: "https://push/one", keys: { p256dh: "NEWKEY", auth: "NEWAUTH" } });
+    expect(subscriptions()[0]!.keys).toEqual({ p256dh: "NEWKEY", auth: "NEWAUTH" });
+  });
+
   it("survives a restart, which is the whole point of a file", async () => {
     const d = scratch();
     addSubscription({ ...sub, endpoint: "https://push/one" }, "Pixel");
