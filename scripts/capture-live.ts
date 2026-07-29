@@ -31,7 +31,7 @@ const PANEL_H = 1080;
 
 /** Chrome and the protocol — the same helpers capture.ts and capture-phone.ts
  *  drive, so a fix to the connect retry loop reaches all three. */
-import { connect, findChrome, key, until } from "./cdp.ts";
+import { connect, findChrome, key, lit, until } from "./cdp.ts";
 
 async function main() {
   if (!existsSync(join(REPO, ".git"))) { console.error(`no scratch repo at ${REPO}`); process.exit(1); }
@@ -113,7 +113,7 @@ async function main() {
     for (const line of lines) {
       await cdp.ev(`(()=>{const t=document.querySelector('.xterm-helper-textarea');
         if(!t) return 0;
-        for (const ch of ${JSON.stringify(line + "\r")}) {
+        for (const ch of ${lit(line + "\r")}) {
           t.dispatchEvent(new InputEvent('input',{data:ch,inputType:'insertText',bubbles:true}));
         }
         return 1})()`);

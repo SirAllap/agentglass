@@ -54,7 +54,7 @@ const GIF_W = 1100, GIF_FPS = 12;
  *  see scripts/still.ts for why that step exists at all. */
 import { finishStill, STILL_W, THEME_W } from "./still.ts";
 /** Chrome, the protocol and the static server for the demo build. */
-import { connect, findChrome, key, serveDist, until, DEMO_BASE } from "./cdp.ts";
+import { connect, findChrome, key, lit, serveDist, until, DEMO_BASE } from "./cdp.ts";
 
 async function main() {
   if (!existsSync(join(DIST, "index.html"))) {
@@ -145,7 +145,7 @@ async function main() {
     await Bun.sleep(1200);
 
     for (const id of views) {
-      const ok = await cdp.ev(`(()=>{const b=document.querySelector('[data-view=${JSON.stringify(id)}]');b?.click();return !!b})()`);
+      const ok = await cdp.ev(`(()=>{const b=document.querySelector('[data-view=${lit(id)}]');b?.click();return !!b})()`);
       if (!ok) { console.warn(`  ! no "${id}" view in the rail — skipped`); continue; }
       await Bun.sleep(1600);
       // The PR panel opens on Overview; Files is the view worth showing, and
@@ -176,7 +176,7 @@ async function main() {
       ["forest", THEME_W], ["ember", THEME_W], ["deep-sea", THEME_W], ["light", STILL_W],
     ];
     for (const [t, tw] of themes) {
-      const ok = await cdp.ev(`(()=>{try{localStorage.setItem('agentglass.theme',${JSON.stringify(t)});window.dispatchEvent(new StorageEvent('storage',{key:'agentglass.theme'}));return 1}catch{return 0}})()`);
+      const ok = await cdp.ev(`(()=>{try{localStorage.setItem('agentglass.theme',${lit(t)});window.dispatchEvent(new StorageEvent('storage',{key:'agentglass.theme'}));return 1}catch{return 0}})()`);
       if (!ok) continue;
       await cdp.ev(`location.reload()`);
       await until(cdp, `document.querySelector('#root')?.children.length`, `the ${t} theme`);

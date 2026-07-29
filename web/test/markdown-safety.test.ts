@@ -6,12 +6,23 @@
 // possible, but an href is still attacker-controlled: `javascript:` and `data:`
 // URLs execute on click.
 //
-// Kept as a plain predicate test rather than a DOM render because the server
-// suite has no React test environment; the renderer imports this same rule.
+// Kept as a plain predicate test rather than a DOM render: the rule is a pure
+// function, and rendering a component to assert one attribute would test React.
+//
+// It lived in the server suite, where the renderer it describes could not be
+// imported at all. That is what made it a copy.
+//
+// It used to restate the rule as its own regexp, with a comment saying it
+// mirrored the renderer. That is a test of a copy: the renderer could change
+// its mind about a scheme and this would keep passing on the old answer. It now
+// imports the very function the renderer calls, so there is one rule with one
+// test — and the renderer no longer pattern-matches the URL at all, it asks the
+// URL parser, which is the stricter reader of the two.
 import { describe, expect, test } from "bun:test";
+import { externalUrl } from "../src/lib/externalUrl.ts";
 
-/** Mirrors the check in web/src/lib/markdown.tsx — only http(s) becomes a link. */
-const isSafeHref = (href: string) => /^https?:\/\//i.test(href);
+/** The renderer's own check: only an absolute http(s) URL becomes a link. */
+const isSafeHref = (href: string) => externalUrl(href) !== undefined;
 
 describe("markdown link hrefs", () => {
   test("allows ordinary web links", () => {
@@ -42,7 +53,16 @@ describe("markdown link hrefs", () => {
 
   test("a leading-whitespace trick doesn't slip through", () => {
     expect(isSafeHref(" javascript:alert(1)")).toBe(false);
-    expect(isSafeHref("\thttps://ok.example.com")).toBe(false);
+    expect(isSafeHref("\tjavascript:alert(1)")).toBe(false);
+    // Whitespace inside the scheme is the sharper version of the same trick,
+    // and it is why this is parsed rather than matched: a pattern anchored on
+    // `https?://` reads this as "not a link" and moves on, while a browser
+    // handed the raw string strips the tab and runs it.
+    expect(isSafeHref("java\tscript:alert(1)")).toBe(false);
+    // Surrounding whitespace on an otherwise ordinary link is not a trick, and
+    // the parser says so: it trims, then judges the scheme. The regexp this
+    // replaced called it unsafe, which cost a real link for no safety.
+    expect(isSafeHref("\thttps://ok.example.com")).toBe(true);
   });
 });
 
