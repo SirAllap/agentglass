@@ -42,7 +42,7 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
@@ -323,6 +323,28 @@ const treeCache = new Map<string, { at: number; data: WorkingTree }>();
 const WORKTREES_TTL_MS = 2_500;
 const worktreesCache = new Map<string, { at: number; body: string }>();
 setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); broadcast({ type: "git" }); });
+
+/**
+ * The one thing the merged-branch sweep cannot do for itself.
+ *
+ * `whileRefsHoldAsync` above is right about almost everything it caches: if not
+ * one ref has moved, last time's answer is identical, not stale. The sweep that
+ * recognises squash- and rebase-merged branches is the exception, because it
+ * changes the ANSWER without touching a ref, and on the repository you are
+ * actually tidying, nothing else moves a ref either. So the pre-sweep body was
+ * served indefinitely and a branch merged yesterday read "not merged, kept"
+ * until an unrelated commit happened to invalidate the fingerprint.
+ *
+ * Every `branches:` body goes, not just this root's: the cache is keyed by the
+ * QUERY root, which is any worktree of the repo, while the sweep knows only the
+ * repo root. There are at most forty entries and rebuilding one costs a cached
+ * read, so dropping them all is cheaper than being subtly wrong about which
+ * checkout the panel is looking at.
+ */
+setMergedVerdictHook(() => {
+  for (const k of refsCache.keys()) if (k.startsWith("branches:")) refsCache.delete(k);
+  broadcast({ type: "git" });
+});
 // Let the alert path reach a connected client, which raises a native OS
 // notification (cross-platform) instead of the Linux-only notify-send.
 setAlertSink({ broadcast: (a) => broadcast({ type: "alert", data: a }), hasClients: () => clients.size > 0 });

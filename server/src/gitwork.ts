@@ -1066,11 +1066,17 @@ function applyMemo(root: string, key: string, set: Set<string>): void {
   }
 }
 
+/** The key every merged-set cache is filed under: one repo, one trunk.
+ *
+ *  `\u0000` rather than a raw NUL byte: written literally it makes the whole
+ *  file `data` to grep, which then skips it silently — you get no matches and
+ *  no warning. Same separator, same keys, still greppable. Written once here
+ *  rather than at each use, so `sweepInFlight` cannot drift from the key the
+ *  sweep is actually filed under and answer "no sweep is running" forever. */
+const mergedKey = (root: string, ref: string) => `${root}\u0000${ref}`;
+
 async function mergedInto(root: string, ref: string): Promise<Set<string>> {
-  // \u0000 rather than a raw NUL byte: written literally it makes the whole
-  // file `data` to grep, which then skips it silently — you get no matches
-  // and no warning. Same separator, same keys, still greppable.
-  const key = `${root}\u0000${ref}`;
+  const key = mergedKey(root, ref);
   const hit = mergedCache.get(key);
   if (hit && Date.now() - hit.at < MERGED_TTL_MS) return hit.set;
   // 644ms on a repo with a long history — the single most expensive call in
@@ -1098,9 +1104,22 @@ async function mergedInto(root: string, ref: string): Promise<Set<string>> {
  * absent: the UI reads that as "we don't know" and keeps the delete
  * confirmation, which is the safe direction to be wrong in. So the list goes
  * out immediately and the sweep fills the very Set the cache entry holds, in
- * place, so the next poll serves the fuller answer with no extra request — and
- * records each verdict in probeMemo, which is what carries it past the moment
- * that Set is thrown away and rebuilt.
+ * place, and records each verdict in probeMemo, which is what carries it past
+ * the moment that Set is thrown away and rebuilt.
+ *
+ * Filling the Set is not enough on its own, and that was the bug: the answer
+ * this endpoint serves is a JSON string cached against a fingerprint of every
+ * ref, so it is only rebuilt when a ref MOVES. A sweep moves no refs. On a
+ * repository nobody is committing to, which is exactly the repository you sit
+ * down to tidy, the pre-sweep answer was served forever, and a branch whose PR
+ * was squash-merged read "not merged, kept" until something unrelated happened
+ * to move a ref. Measured on this repo: a branch merged 17 hours earlier, still
+ * reported unmerged, two forced fingerprint changes needed to see the truth.
+ *
+ * So a sweep that changes a verdict says so. The hook clears that cached body
+ * and nudges the clients, which is the one thing the sweep could not do for
+ * itself. Fired once, when the sweep finishes, and only when it actually proved
+ * something: a sweep that learns nothing must not cost a rebuild.
  *
  * Newest first: that's the order for-each-ref gives with this sort, and the
  * order that spends the probe budget where deletes actually happen.
@@ -1123,7 +1142,15 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
   let idx = 0;
   let probes = 0;
   let started = false;
+  let proved = 0;
   let all: [string, string][] = [];
+  const finish = () => {
+    probeRunning.delete(key);
+    // Only when the sweep changed the answer. Announcing an empty sweep would
+    // invalidate a cached response and wake every open panel to redraw the
+    // identical list, on a five-minute clock, forever.
+    if (proved) { try { onMergedVerdicts?.(root); } catch { /* a listener must not break the sweep */ } }
+  };
   const step = () => {
     try {
       if (!started) { all = [...branchTips(root)]; started = true; }
@@ -1138,6 +1165,7 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
           // sees the fuller answer without another sweep — and the memo keeps
           // it once that Set expires.
           set.add(name);
+          proved++;
           let memo = probeMemo.get(key);
           if (!memo) probeMemo.set(key, (memo = new Map()));
           memo.set(name, sha);
@@ -1146,13 +1174,41 @@ function sweepProbes(root: string, ref: string, key: string, set: Set<string>): 
         return;
       }
       probedAt.set(key, Date.now());
-      probeRunning.delete(key);
+      finish();
     } catch {
       // A failed sweep just leaves the ancestry answer standing.
-      probeRunning.delete(key);
+      finish();
     }
   };
   setTimeout(step, 0);
+}
+
+/**
+ * Told when a sweep proved something ancestry could not see.
+ *
+ * A hook for the same reason `setGitChangeHook` is one: this module must not
+ * import the HTTP layer. What the listener does with it (drop the cached
+ * `/git/branches` body, nudge the clients) is the server's business, and both
+ * of those are things only the server can do.
+ */
+let onMergedVerdicts: ((root: string) => void) | null = null;
+export function setMergedVerdictHook(fn: ((root: string) => void) | null): void { onMergedVerdicts = fn; }
+
+/**
+ * Is a sweep still running for this root's trunk?
+ *
+ * A flag like this was tried once and removed, because it was asked from inside
+ * `branches()`, which is the very call that schedules the sweep, so it always
+ * answered yes and the label it drove never went away. Two things make it
+ * honest now: a completed sweep is remembered for PROBE_TTL_MS, so this reads
+ * false for minutes at a time; and the sweep now announces itself when it ends,
+ * so whatever the flag explains stops being true on screen without a poll.
+ *
+ * The panel uses it for one thing only: not calling a branch "not merged"
+ * while the check that could clear it is still running.
+ */
+export function sweepInFlight(root: string, ref: string): boolean {
+  return probeRunning.has(mergedKey(root, ref));
 }
 
 
@@ -1183,9 +1239,9 @@ export function invalidateMerged(root?: string): void {
 }
 
 
-export async function branches(rootIn: unknown): Promise<{ current: string; branches: GitBranch[]; trunk: string | null }> {
+export async function branches(rootIn: unknown): Promise<{ current: string; branches: GitBranch[]; trunk: string | null; checking: boolean }> {
   const root = repoRoot(rootIn);
-  if (!root) return { current: "", branches: [], trunk: null };
+  if (!root) return { current: "", branches: [], trunk: null, checking: false };
   const fmt = `%(refname:short)${US}%(HEAD)${US}%(upstream:short)${US}%(upstream:track)${US}%(committerdate:relative)${US}%(contents:subject)`;
   // The ref list and the trunk lookup are independent; run them together and
   // off the loop (this recomputes on /git/branches whenever a ref moves).
@@ -1206,13 +1262,19 @@ export async function branches(rootIn: unknown): Promise<{ current: string; bran
       ...(merged ? { mergedIntoTrunk: merged.has(name) } : {}),
     });
   }
-  // No "still sweeping" flag here, deliberately. mergedInto() above is what
-  // schedules the sweep, so asking whether one is running always answered yes:
-  // the sweep is a setTimeout and cannot have run yet within this call. The
-  // flag was a question asked immediately after switching it on. The count
-  // settling a beat later is the honest behaviour, and a permanent label
-  // explaining it was worse than the thing it explained.
-  return { current: await currentBranch(root), branches: list, trunk };
+  // A "still sweeping" flag lived here once and was taken out, because
+  // mergedInto() above is what schedules the sweep: asked immediately after
+  // switching it on, it always answered yes, and the label it drove never went
+  // away. What was missing then was the other half: nothing ever told the
+  // panel the sweep had finished, so the flag had no end and the count it
+  // qualified never settled on screen either.
+  //
+  // Both halves exist now. The sweep announces itself when it proves something
+  // (setMergedVerdictHook), and a finished sweep is remembered for
+  // PROBE_TTL_MS, so this reads false for minutes at a time rather than always.
+  // It says one thing: "not merged" is not the final answer yet. The panel uses
+  // it for exactly that and nothing else.
+  return { current: await currentBranch(root), branches: list, trunk, checking: trunk ? sweepInFlight(root, trunk) : false };
 }
 
 // lazygit-style branch ops

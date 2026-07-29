@@ -7,7 +7,7 @@ import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
-import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody } from "../lib/goneCleanup.ts";
+import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { RescueModal } from "./RescueModal.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { api } from "../lib/api.ts";
@@ -464,7 +464,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   // branches / log / stashes / worktrees
-  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null }>({ current: "", branches: [] });
+  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null; checking?: boolean }>({ current: "", branches: [] });
   const [newBranch, setNewBranch] = useState("");
   const [graph, setGraph] = useState<GitGraphLine[]>([]);
   const [stashes, setStashes] = useState<GitStash[]>([]);
@@ -810,10 +810,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    *     kind of thing this panel exists to avoid.
    *   * "not fully merged" — true of every squash-merged branch, which is most
    *     of them here: the PR landed as a new commit, so the branch tip is not
-   *     an ancestor of anything. Only offer the forced retry when we've already
-   *     verified the work is in the trunk (`mergedIntoTrunk`, computed against
-   *     the trunk rather than whatever HEAD happens to be). Without that proof
-   *     the refusal is correct and stands.
+   *     an ancestor of anything. Both answers to "is it really merged?" get a
+   *     way forward, and they are not the same way:
+   *
+   *       - Proven (`mergedIntoTrunk`, computed against the trunk rather than
+   *         whatever HEAD happens to be): git's refusal is the stale one, the
+   *         dialog says so, and the forced retry is a formality.
+   *       - Not proven: the refusal might be right, and it might be one of the
+   *         gaps the server's own probes admit to (a branch whose only commits
+   *         ahead are merges; a repo with more branches than one sweep checks).
+   *         Being unable to tell those apart is not a reason to leave someone
+   *         with a toast that vanishes and no next step, so the delete is still
+   *         offered, named as unproven, with what it would cost and the reflog
+   *         window that can undo it.
    *
    * Deliberately not routed through `act`: it reports failures by flashing the
    * message and returns a bare boolean, and the whole point here is to branch
@@ -840,9 +849,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         reloadWorktrees();
         r = await api.gitBranchDelete(root, b.name, false);
       }
-      if (!r.ok && /not fully merged/i.test(r.error || "") && b.mergedIntoTrunk) {
-        const trunk = branchData.trunk ?? "the trunk";
-        if (await ask({ title: `git says ${b.name} isn't merged`, body: `Its commits are already in ${trunk} — a squash merge rewrites them, so the tip never becomes an ancestor of anything.\n\nDelete it anyway?`, danger: true })) {
+      if (!r.ok && /not fully merged/i.test(r.error || "")) {
+        const q = forcedDeletePrompt(b.name, b.mergedIntoTrunk === true, branchData.trunk ?? "the trunk");
+        if (await ask({ title: q.title, body: q.body, danger: true, confirmLabel: q.confirmLabel })) {
           r = await api.gitBranchDelete(root, b.name, true);
         }
       }
@@ -1961,7 +1970,17 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           // Joining a list cannot produce that.
                           const parts: ReactNode[] = [];
                           if (goneMerged.length) parts.push(<>{goneMerged.length} already in {branchData.trunk ?? "the trunk"}</>);
-                          if (goneUnmerged.length) parts.push(<span style={{ color: "var(--warning)" }}>{goneUnmerged.length} not merged — kept</span>);
+                          // "Not merged" is a verdict, and while the squash /
+                          // rebase sweep is still running it is not one we have
+                          // yet: those checks are what turn most of these
+                          // green. Saying so beats stating a false negative as
+                          // final, and it clears itself: the sweep pushes the
+                          // moment it proves anything.
+                          if (goneUnmerged.length) parts.push(
+                            branchData.checking
+                              ? <span style={{ color: "var(--text2)" }}>Checking {goneUnmerged.length} more…</span>
+                              : <span style={{ color: "var(--warning)" }}>{goneUnmerged.length} not merged — kept</span>,
+                          );
                           return <span className="text-[9.5px] t-dim2">{parts.map((p, i) => <Fragment key={i}>{i > 0 && " · "}{p}</Fragment>)}</span>;
                         })()}
                       </div>

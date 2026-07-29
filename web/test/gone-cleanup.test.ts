@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, preselected, fmtBytes, rescueKey, rescuePicks } from "../src/lib/goneCleanup.ts";
+import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt, preselected, fmtBytes, rescueKey, rescuePicks } from "../src/lib/goneCleanup.ts";
 import type { GitBranch, WorktreeLeftovers, LeftoverEntry } from "../../shared/types.ts";
 
 /**
@@ -115,6 +115,41 @@ describe("goneConfirmTitle / goneConfirmBody", () => {
     for (const t of [goneConfirmTitle([branch("a")], [branch("b")], trunk), goneConfirmTitle([], [branch("a")], trunk)]) {
       expect(t).not.toContain("\n");
     }
+  });
+});
+
+/**
+ * The single-branch delete, at the moment git refuses it.
+ *
+ * The panel used to offer a way out only when the trunk provably held the work,
+ * and print the raw git error otherwise: a toast that clears itself in 2.6s,
+ * and no next step. But "we could not prove it" is not "it is not merged", and
+ * the difference has to survive in the wording, because the wording is the only
+ * safeguard between a keypress and `branch -D`.
+ */
+describe("forcedDeletePrompt", () => {
+  it("treats git's refusal as the stale answer when the trunk holds the work", () => {
+    const q = forcedDeletePrompt("fix/thing", true, "origin/main");
+    expect(q.title).toBe("git says fix/thing isn't merged");
+    expect(q.body).toContain("already in origin/main");
+    expect(q.confirmLabel).toBe("Delete");
+  });
+
+  it("says plainly that it could not prove it, and never claims the work is safe", () => {
+    const q = forcedDeletePrompt("fix/thing", false, "origin/main");
+    expect(q.title).toBe("Delete fix/thing without proof it is merged?");
+    expect(q.body).toContain("could not prove");
+    expect(q.body).toContain("last copy");
+    expect(q.body).not.toContain("already in origin/main");
+    expect(q.confirmLabel).toBe("Delete anyway");
+  });
+
+  it("still offers the delete when unproven, rather than dead-ending", () => {
+    // The whole point: an unproven branch keeps a way forward, with the reflog
+    // named as the way back.
+    const q = forcedDeletePrompt("fix/thing", false, "origin/main");
+    expect(q.confirmLabel).toMatch(/delete/i);
+    expect(q.body).toContain("reflog");
   });
 });
 
