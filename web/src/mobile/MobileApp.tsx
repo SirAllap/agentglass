@@ -19,6 +19,9 @@ import { sessionForInsight } from "./fleet.ts";
 import { buildQueue, type NowItem } from "./nowQueue.ts";
 import { dedupePrs, mainCheckouts } from "./prRows.ts";
 import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
+import {
+  browserPushEnv, currentPushState, disablePush, enablePush, pushCopy, type PushState,
+} from "../lib/webpush.ts";
 import type {
   PendingGate, SessionRollup, DockerContainer, DockerStat, PrSummary, GitRepoRef, GitTreeState, Insight,
 } from "../../../shared/types.ts";
@@ -145,6 +148,17 @@ export function MobileApp() {
   const [openChat, setOpenChat] = useState<OpenChat | null>(null);
   const [compose, setCompose] = useState<Compose | null>(null);
   const [settings, setSettings] = useState(false);
+  /**
+   * Whether this phone gets alerts with its screen off.
+   *
+   * `null` while it is being worked out: three separate things decide it — the
+   * browser's support, the notification permission, and whether a subscription
+   * exists — and only the first is known synchronously. Rendering a guess in
+   * the meantime would flash "Turn on" at a phone that is already subscribed,
+   * which is exactly the mistake that ends with two of every alert.
+   */
+  const [pushState, setPushState] = useState<PushState | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
   /** A conversation is open and owns the whole screen: no app header, no tabs. */
   const [immersive, setImmersive] = useState(false);
   /**
@@ -162,6 +176,36 @@ export function MobileApp() {
   const [insights, setInsights] = useState<Insight[]>([]);
   const snoozeStore = useMemo(() => deviceStore(), []);
   const [snoozeRev, bumpSnooze] = useReducer((n: number) => n + 1, 0);
+
+  // ── push ─────────────────────────────────────────────────────────────
+  //
+  // Resolved on mount, and again whenever Settings is opened. `currentPushState`
+  // registers the worker as a side effect, which is the point of doing it on
+  // mount rather than only when the toggle is used: registering an unchanged
+  // file is a no-op, and it means the worker that receives the next push is the
+  // one that shipped, not one left over from an older build.
+  const pushEnv = useMemo(() => browserPushEnv(api), []);
+  useEffect(() => {
+    let live = true;
+    currentPushState(pushEnv).then((s) => { if (live) setPushState(s); });
+    return () => { live = false; };
+  }, [pushEnv, settings]);
+
+  const togglePush = useCallback(async () => {
+    setPushBusy(true);
+    // The result carries the state it ended in, including the failures: a
+    // denied permission lands on "blocked", which has no button, because the
+    // browser will not ask again and only the user can undo it.
+    const r = pushState === "on" ? await disablePush(pushEnv) : await enablePush(pushEnv);
+    setPushState(r.state);
+    setPushBusy(false);
+    // The second argument is what makes it a failure toast. Without it a
+    // browser reporting "the push service could not be reached" arrived under
+    // a green tick — which is how a real run of this looked before it was
+    // fixed, and it read as though push had been turned on.
+    if (r.ok) toast(r.state === "on" ? "This phone will be alerted" : "Alerts off on this phone");
+    else toast(r.error, true);
+  }, [pushEnv, pushState]);
 
   // ── the live channel ─────────────────────────────────────────────────
   //
@@ -685,6 +729,18 @@ export function MobileApp() {
           <Row title="Sessions" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.sessions) : "—"} />
           <Row title="Tool errors" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.errors) : "—"} />
         </div>
+        <div className="mb-eyebrow" style={{ margin: "16px 0 9px" }}>Alerts</div>
+        {/* The one channel that reaches a phone in a pocket. The socket closes
+            with the screen on purpose, and a webhook or a desktop toast needs
+            somebody already looking — so without this, the case the companion
+            exists for is the one case nothing covers. */}
+        <Row title="Push to this phone"
+          sub={pushState === null ? "Checking…" : pushCopy(pushState).sub}
+          right={pushState !== null && pushCopy(pushState).action
+            ? <Act small disabled={pushBusy} onAct={togglePush}>
+                {pushBusy ? "…" : pushCopy(pushState).action}
+              </Act>
+            : undefined} />
         <div className="mb-eyebrow" style={{ margin: "16px 0 9px" }}>Queue</div>
         <Row title="Snoozed" sub={snoozed ? `${snoozed} hidden until they change` : "Nothing snoozed"}
           right={snoozed

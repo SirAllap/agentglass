@@ -575,6 +575,18 @@ const realApi = {
   dockerStop: (id: string) => post<DockerActionResult>("/docker/stop", { id }),
   dockerRestart: (id: string) => post<DockerActionResult>("/docker/restart", { id }),
   dockerRm: (id: string) => post<DockerActionResult>("/docker/rm", { id }),
+
+  // Web Push. `pushKey` is this server's VAPID public key, which a browser
+  // needs before it can subscribe at all; the other two are the register and
+  // forget. `pushDevices` never returns an endpoint or a key — an endpoint is
+  // a capability, and anyone holding one can wake that phone forever.
+  pushKey: () => get<{ key: string }>("/push/key"),
+  pushSubscribe: (subscription: unknown, label: string) =>
+    post<{ ok: boolean; devices?: number; error?: string }>("/push/subscribe", { subscription, label }),
+  pushUnsubscribe: (endpoint: string) =>
+    post<{ ok: boolean; devices?: number }>("/push/unsubscribe", { endpoint }),
+  pushDevices: () =>
+    get<{ devices: { label: string; addedAt: number; lastOkAt: number | null }[] }>("/push/devices"),
 };
 
 // In demo mode every call resolves against the fabricated dataset — no server.
@@ -698,6 +710,15 @@ const demoApi: typeof realApi = {
   dockerStop: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRestart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerRm: (_id: string) => D(demo.dockerActionUnavailable()),
+
+  // There is no server behind the demo, so there is no key to subscribe
+  // against and nothing that could ever push. An empty key is what the UI
+  // already treats as "the server did not hand over a key", so the toggle
+  // fails honestly instead of appearing to work.
+  pushKey: () => D({ key: "" }),
+  pushSubscribe: (_s: unknown, _l: string) => D({ ok: false, error: "not available in the demo" }),
+  pushUnsubscribe: (_e: string) => D({ ok: true }),
+  pushDevices: () => D({ devices: [] as { label: string; addedAt: number; lastOkAt: number | null }[] }),
 
   // The demo has no GitHub behind it, and pretending otherwise would put a
   // fake PR list in front of someone evaluating the app. It reports the same

@@ -706,6 +706,34 @@ async function main() {
         await cdp.ev(`(()=>{const s=document.querySelector(".mb-sheet.on");if(!s)return false;
           const r=s.getBoundingClientRect();
           return r.bottom<=innerHeight+1 && r.top>=-1;})()`));
+
+      // Push is the only channel that reaches this device with its screen off,
+      // and the row is the only way to turn it on. Checked here rather than
+      // trusted: the state comes from three separate places — browser support,
+      // notification permission, and whether a subscription exists — and the
+      // wrong answer looks exactly like the right one.
+      const pushRow = `[...document.querySelectorAll(".mb-sheet.on .mb-row")]
+        .find(r => r.textContent.includes("Push to this phone"))`;
+      note("settings", "offers push to this device",
+        await cdp.ev(`!!(${pushRow})`));
+      // Never "Checking…" by the time the sheet is up and painted: that is the
+      // placeholder, and a row stuck on it says nothing and does nothing.
+      const pushText = await cdp.ev(`(${pushRow})?.innerText?.replace(/\\n/g, " · ") || ""`);
+      note("settings", "says where this device actually stands",
+        !!pushText && !pushText.includes("Checking"), pushText);
+      // A button only where pressing one could do something. Chrome here has
+      // no reachable push service, so "Turn on" is the honest state; a browser
+      // that cannot do this at all must offer no button rather than a dead one.
+      const pushBtn = await cdp.ev(`(${pushRow})?.querySelector("button")?.innerText || ""`);
+      note("settings", "the button matches what the row says",
+        (pushText.includes("cannot receive") || pushText.includes("blocked"))
+          ? pushBtn === ""
+          : /Turn on|Turn off/.test(pushBtn),
+        `row "${pushText}" / button "${pushBtn || "(none)"}"`);
+      note("settings", "the worker that receives a push is registered",
+        await cdp.ev(`navigator.serviceWorker.getRegistrations().then(r =>
+          r.some(x => (x.active?.scriptURL || "").endsWith("/sw.js")))`));
+
       await shot(cdp, "08-settings");
       await drain(cdp, "settings");
       await hygiene(cdp, "settings");

@@ -205,7 +205,7 @@ describe("an agent stops, and the phone hears", () => {
     // from; anything else buzzes a phone with nothing on it, and — because the
     // wire is ciphertext either way — every check above would still pass.
     const text = await decrypt(svc.seen[0]!.body, AUTH);
-    const msg = JSON.parse(text) as { title?: string; body?: string; at?: number };
+    const msg = JSON.parse(text) as { title?: string; body?: string; at?: number; urgency?: number };
     expect(typeof msg.title).toBe("string");
     expect(typeof msg.body).toBe("string");
     expect(msg.title).toContain("Approval needed");
@@ -215,6 +215,11 @@ describe("an agent stops, and the phone hears", () => {
     // A timestamp, so the worker can tell a fresh alert from one the service
     // held while the phone was offline — TTL is 12h, so this is not theoretical.
     expect(msg.at).toBeGreaterThan(0);
+    // And the urgency inside the payload, not only in the header. The header
+    // is for the push service, which decides whether to wake the radio; this
+    // is for the service worker, which decides whether the notification stays
+    // on screen until it is dealt with. Only one of the two can read the body.
+    expect(msg.urgency).toBe(2);
   });
 
   it("records that the device actually received it", async () => {

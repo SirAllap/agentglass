@@ -35,10 +35,12 @@ const enc = new TextEncoder();
 // ── base64url, which is what every value in this protocol travels as ──
 
 export function b64uDecode(s: string): Uint8Array {
-  // Padding is stripped before it is re-added. Browsers hand `p256dh` and
-  // `auth` over unpadded, but nothing in the spec forbids a client or a proxy
-  // from padding them, and appending `=` to a string that already ends in one
-  // makes it invalid — a subscription that would simply never work.
+  // Padding is stripped before it is recomputed. That is a no-op for a
+  // correctly padded string, which is already a multiple of four so nothing is
+  // added back — the earlier note here claimed otherwise and was wrong. What it
+  // actually buys is that a *mis*-padded value decodes instead of throwing.
+  // Browsers hand `p256dh` and `auth` over unpadded, so anything that turns up
+  // padded came from a client or a proxy that added its own.
   const pad = s.replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
   const bin = atob(pad + "=".repeat((4 - (pad.length % 4)) % 4));
   const out = new Uint8Array(bin.length);
