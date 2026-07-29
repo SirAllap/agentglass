@@ -230,3 +230,74 @@ export async function vapidHeader(
   ));
   return `vapid t=${signing}.${b64uEncode(sig)}, k=${keys.publicKey}`;
 }
+
+// ── sending ───────────────────────────────────────────────────────────
+
+export interface PushResult {
+  ok: boolean;
+  status: number;
+  /**
+   * The subscription is dead and should be forgotten.
+   *
+   * 404 and 410 are the push service saying so, and they are the only two
+   * answers that mean it — a 429 or a 503 is the service being busy, and
+   * dropping a subscription over one would silently unsubscribe a phone that
+   * was working perfectly. This distinction is the whole reason the caller
+   * cannot just treat "not ok" as "delete".
+   */
+  gone: boolean;
+  error?: string;
+}
+
+export interface SendOptions {
+  /** How long the service should hold it for a phone that is offline. */
+  ttlSeconds?: number;
+  /** `high` wakes the device; a gate is worth it, a status change is not. */
+  urgency?: "very-low" | "low" | "normal" | "high";
+  subject?: string;
+  now?: number;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * One message, to one subscription.
+ *
+ * Never throws for a transport failure: the caller is an alert path, and an
+ * unreachable push service must not take down the notification that was also
+ * going to the desktop.
+ */
+export async function sendPush(
+  sub: PushSubscription, payload: Uint8Array, vapid: VapidKeys, opts: SendOptions = {},
+): Promise<PushResult> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  try {
+    const body = await encryptPush(payload, sub);
+    const auth = await vapidHeader(
+      sub.endpoint, vapid, opts.subject ?? "mailto:agentglass@localhost", opts.now,
+    );
+    const res = await doFetch(sub.endpoint, {
+      method: "POST",
+      headers: {
+        authorization: auth,
+        // Both are required by RFC 8291 and a service rejects the message
+        // without them, with a 400 that says nothing useful.
+        "content-encoding": "aes128gcm",
+        "content-type": "application/octet-stream",
+        ttl: String(opts.ttlSeconds ?? 12 * 60 * 60),
+        urgency: opts.urgency ?? "high",
+      },
+      body,
+    });
+    return {
+      ok: res.ok,
+      status: res.status,
+      gone: res.status === 404 || res.status === 410,
+      ...(res.ok ? {} : { error: `push service answered ${res.status}` }),
+    };
+  } catch (e) {
+    // Status 0 rather than a made-up one: nothing answered, and pretending a
+    // number came back would let a caller reason about a response that does
+    // not exist.
+    return { ok: false, status: 0, gone: false, error: String(e) };
+  }
+}
