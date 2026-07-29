@@ -561,6 +561,50 @@ async function main() {
           await closeTop(cdp);
           await Bun.sleep(700);
 
+          // ---- a failing check's log -----------------------------------
+          //
+          // The tab used to print "the phone does not download run logs" under
+          // every failure, while the endpoint sat on the server. Reading a log
+          // is a read, so this one presses the button.
+          if (await tap(cdp, ".mb-screen.on .mb-seg button", "Checks")) {
+            await Bun.sleep(2600);
+            const failing = await cdp.ev(`(()=>{const b=[...${TOP}.querySelectorAll("button")]
+              .find(b=>/FAILURE|failure/.test(b.textContent) && !b.disabled);
+              if(!b) return null; b.click(); return b.textContent.trim().slice(0,40)})()`);
+            if (!failing) {
+              console.log("  skip  job log · no failing check on this pull request");
+            } else {
+              await Bun.sleep(900);
+              note("job log", "the phone no longer sends you to a browser",
+                !(await cdp.ev(`/does not download run logs/.test(${TOP}.textContent)`)));
+              const opened = await cdp.ev(`(()=>{const b=[...${TOP}.querySelectorAll("button")]
+                .find(b=>/Show the failure/.test(b.textContent)); if(!b||b.disabled) return false; b.click(); return true})()`);
+              note("job log", "a failing check offers its log", opened, failing);
+              if (opened) {
+                await Bun.sleep(2600);
+                note("job log", "the log arrives",
+                  await cdp.ev(`(${TOP}.querySelector(".mb-log pre")?.textContent || "").trim().length > 40`));
+                note("job log", "and says which part of it this is",
+                  await cdp.ev(`(${TOP}.querySelector(".mb-log .lh")?.textContent || "").length > 8`),
+                  await cdp.ev(`${TOP}.querySelector(".mb-log .lh")?.textContent`));
+                note("job log", "the timestamps are gone",
+                  !(await cdp.ev(`/\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z/.test(${TOP}.querySelector(".mb-log pre")?.textContent || "")`)));
+                // The whole point: you land on the failure. A window taller
+                // than its box that opens at the top is a log you scroll.
+                note("job log", "it opens at the failure, not at the top",
+                  await cdp.ev(`(()=>{const p=${TOP}.querySelector(".mb-log pre");const e=p?.querySelector(".e");
+                    if(!p) return false; if(!e) return true;
+                    const pr=p.getBoundingClientRect(), er=e.getBoundingClientRect();
+                    return er.top >= pr.top - 1 && er.bottom <= pr.bottom + 1})()`),
+                  await cdp.ev(`(()=>{const p=${TOP}.querySelector(".mb-log pre");
+                    return p ? p.clientHeight+"/"+p.scrollHeight+" at "+Math.round(p.scrollTop) : "?"})()`));
+                await shot(cdp, "07d-joblog");
+                await hygiene(cdp, "job log");
+                await drain(cdp, "job log");
+              }
+            }
+          }
+
           // ---- line threads --------------------------------------------
           //
           // Read-only again: what is drawn and in what order. Replying and
