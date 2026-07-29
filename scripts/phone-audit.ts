@@ -258,6 +258,23 @@ async function main() {
     const nowText = await cdp.ev(`document.querySelector("main")?.textContent?.trim()?.length || 0`);
     note("now", "renders something", nowText > 20, `main had ${nowText} chars`);
 
+    // Fifteen sheets are mounted on this tab and every one of them is closed.
+    // A closed sheet is parked below the viewport, which hides the sheet and
+    // not its shadow — that one points upward, so it landed back on the page
+    // and fifteen of them stacked into a black band along the bottom edge.
+    // Invisible for as long as the tab bar was docked over that strip, which is
+    // exactly why it is worth asserting rather than looking for.
+    note("now", "a closed sheet paints nothing",
+      await cdp.ev(`[...document.querySelectorAll(".mb-sheet:not(.on)")].every(s=>{
+        const c=getComputedStyle(s);
+        return c.visibility === "hidden" && (c.boxShadow === "none" || c.boxShadow === "");
+      })`),
+      await cdp.ev(`(()=>{const b=[...document.querySelectorAll(".mb-sheet:not(.on)")]
+        .filter(s=>{const c=getComputedStyle(s);
+          return c.visibility!=="hidden" || (c.boxShadow!=="none" && c.boxShadow!=="")});
+        return b.length + " of " + document.querySelectorAll(".mb-sheet:not(.on)").length
+          + " closed sheets still paint";})()`));
+
     // The tab bar floats over the queue, so the queue has to end above it. A
     // last card parked permanently under the pill is the one way this shape is
     // worse than the bar it replaced, and it is invisible until you scroll to

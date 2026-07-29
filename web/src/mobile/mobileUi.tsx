@@ -173,12 +173,32 @@ export const MOBILE_CSS = `
 .mb-scrim{position:fixed;inset:0;z-index:70;background:rgba(4,1,10,.66);opacity:0;pointer-events:none;
   transition:opacity .24s;backdrop-filter:blur(3px)}
 .mb-scrim.on{opacity:1;pointer-events:auto}
+/* A closed sheet must paint nothing at all.
+
+   It is parked one screen-height below the viewport, which hides the sheet but
+   not its shadow: that shadow points upward, 0 -20px 50px of black, so it
+   landed back inside the visible page as a band along the bottom edge. Fifteen
+   of these are mounted at once on the Now tab (Settings, the confirmation, the
+   permission modes, one per screen), and fifteen stacked black shadows took the
+   bottom 65px of a magenta test page from 249 down to 93.
+
+   Nobody could see it while the tab bar was docked, because a full-bleed bar
+   was painted over exactly that strip. The bar floated, the strip appeared, and
+   it read as the app going dark towards the floor.
+
+   So the shadow belongs to the open state, and a closed sheet is hidden
+   outright, which is the general form of the same bug: it costs a closed sheet
+   the ability to paint anything at all. Hiding is delayed by the length of the
+   slide, so the sheet is still there to watch on the way out. */
 .mb-sheet{position:fixed;left:0;right:0;bottom:0;z-index:71;border-radius:24px 24px 0 0;
   background:linear-gradient(180deg,color-mix(in srgb,var(--bg3) 50%,var(--bg2)),var(--bg2));
   border-top:1px solid color-mix(in srgb,var(--primary) 38%,transparent);transform:translateY(100%);
-  transition:transform .3s cubic-bezier(.32,.72,0,1);max-height:88dvh;display:flex;flex-direction:column;
+  visibility:hidden;
+  transition:transform .3s cubic-bezier(.32,.72,0,1),visibility 0s linear .3s;
+  max-height:88dvh;display:flex;flex-direction:column}
+.mb-sheet.on{transform:none;visibility:visible;
+  transition:transform .3s cubic-bezier(.32,.72,0,1),visibility 0s;
   box-shadow:0 -20px 50px -20px #000}
-.mb-sheet.on{transform:none}
 .mb-sheet .grab{width:40px;height:4px;border-radius:3px;flex:none;margin:10px auto 5px;
   background:color-mix(in srgb,var(--border) 72%,transparent)}
 /* min-height:0 is what lets this scroll. A flex child will not shrink below its
