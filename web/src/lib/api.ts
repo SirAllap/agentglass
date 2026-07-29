@@ -585,8 +585,12 @@ const realApi = {
     post<{ ok: boolean; devices?: number; error?: string }>("/push/subscribe", { subscription, label }),
   pushUnsubscribe: (endpoint: string) =>
     post<{ ok: boolean; devices?: number }>("/push/unsubscribe", { endpoint }),
+  // By the handle the device list gave out, which is the only reference a
+  // client other than the device itself ever has.
+  pushForget: (id: string) =>
+    post<{ ok: boolean; devices?: number }>("/push/unsubscribe", { id }),
   pushDevices: () =>
-    get<{ devices: { label: string; addedAt: number; lastOkAt: number | null }[] }>("/push/devices"),
+    get<{ devices: PushDevice[] }>("/push/devices"),
   // The same fan-out an alert uses. Without it the only way to find out
   // whether push works is to miss the one thing it exists for.
   pushTest: () =>
@@ -722,7 +726,8 @@ const demoApi: typeof realApi = {
   pushKey: () => D({ key: "" }),
   pushSubscribe: (_s: unknown, _l: string) => D({ ok: false, error: "not available in the demo" }),
   pushUnsubscribe: (_e: string) => D({ ok: true }),
-  pushDevices: () => D({ devices: [] as { label: string; addedAt: number; lastOkAt: number | null }[] }),
+  pushForget: (_id: string) => D({ ok: true }),
+  pushDevices: () => D({ devices: [] as PushDevice[] }),
   pushTest: () => D({ ok: false, sent: 0, failed: 0, pruned: 0 }),
 
   // The demo has no GitHub behind it, and pretending otherwise would put a
@@ -771,6 +776,21 @@ const demoApi: typeof realApi = {
 };
 
 export const api = IS_DEMO ? demoApi : realApi;
+
+/**
+ * A subscribed device, as the server is willing to describe one.
+ *
+ * No endpoint and no keys, ever: an endpoint is a capability — anyone holding
+ * one can ask a push service to wake that phone, forever, with no further
+ * credential. `id` is a one-way handle over it, enough to forget the device
+ * against this server and useless anywhere else.
+ */
+export interface PushDevice {
+  id: string;
+  label: string;
+  addedAt: number;
+  lastOkAt: number | null;
+}
 
 export interface UsageWindow {
   utilization: number;

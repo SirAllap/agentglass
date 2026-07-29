@@ -16,9 +16,10 @@ import { describe, expect, it } from "bun:test";
 import {
   decodeKey, deviceLabel, pushCopy, pushStateOf,
   currentPushState, enablePush, disablePush,
-  isApplePortable, needsHomeScreen,
+  isApplePortable, needsHomeScreen, deviceIdOf, myDeviceId,
   type PushEnv, type PushState,
 } from "../src/lib/webpush.ts";
+import { since } from "../src/lib/format.ts";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 Version/17.4 Mobile/15E148 Safari/604.1";
 // iPadOS 13+ reports a desktop Safari string: no "iPad" anywhere in it.
@@ -224,6 +225,28 @@ describe("an iPhone in a browser tab", () => {
     // screen, and telling it to would be nonsense.
     const { env } = fakeEnv({ hasPushManager: false, ua: MAC, maxTouchPoints: 0 });
     expect(await currentPushState(env)).toBe("unsupported");
+  });
+});
+
+describe("finding this phone in the list of devices", () => {
+  it("derives the same handle the server does", async () => {
+    // Pinned on both sides — server/test/push-routes.test.ts asserts the same
+    // string for the same endpoint. These are two implementations of one hash
+    // in two languages' crypto APIs, and if they ever disagree the symptom is
+    // silent: the device list simply stops marking which one you are holding,
+    // and you forget the wrong phone.
+    expect(await deviceIdOf("https://push.example/device/abc")).toBe("981f012daaac75bc");
+    expect(await deviceIdOf("https://push.example/device/abd")).not.toBe("981f012daaac75bc");
+  });
+
+  it("says nothing when this device is not subscribed", async () => {
+    const { env } = fakeEnv({ existing: null });
+    expect(await myDeviceId(env)).toBeNull();
+  });
+
+  it("names this device when it is", async () => {
+    const { env } = fakeEnv({ existing: { endpoint: "https://push.example/device/abc" } });
+    expect(await myDeviceId(env)).toBe("981f012daaac75bc");
   });
 });
 
@@ -441,5 +464,15 @@ describe("working out where this device stands", () => {
   it("reports unsupported with no service worker at all", async () => {
     const { env } = fakeEnv({ sw: null });
     expect(await currentPushState(env)).toBe("unsupported");
+  });
+});
+
+describe("how long ago a device last heard anything", () => {
+  it("does not say 'now ago'", async () => {
+    // fmtAgo answers "now" under a second, which is exactly the value this row
+    // shows immediately after pressing Test.
+    expect(since(Date.now())).toBe("just now");
+    expect(since(Date.now() - 5_000)).toBe("5s ago");
+    expect(since(Date.now() - 3 * 3_600_000)).toBe("3h ago");
   });
 });

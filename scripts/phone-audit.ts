@@ -546,9 +546,22 @@ async function main() {
       } else {
         await cdp.ev(`${TOP}.querySelector("button.mb-row").click()`);
         await Bun.sleep(2600);
-        if (await tap(cdp, ".mb-screen.on .mb-seg button", "Files")) {
+        // Every skip below says so out loud, including this one.
+        //
+        // The note above is about a selector that made this section vanish for
+        // two runs. The same thing happened again, one level in: the pull
+        // request opened, `Files` was not there to tap, and twenty-four checks
+        // quietly stopped running — the count went from 170 to 134 and nothing
+        // said why. A silent skip reads as a section that passed, so a skip
+        // that prints nothing is the same bug as before wearing a different
+        // condition.
+        if (!(await tap(cdp, ".mb-screen.on .mb-seg button", "Files"))) {
+          console.log("  skip  review · the pull request opened but has no Files tab to review");
+        } else {
           await Bun.sleep(1500);
-          if (await cdp.ev(`!!${TOP}.querySelector(".mb-row button")`)) {
+          if (!(await cdp.ev(`!!${TOP}.querySelector(".mb-row button")`))) {
+            console.log("  skip  review · the pull request has no changed files listed");
+          } else {
             await cdp.ev(`${TOP}.querySelector(".mb-row button").click()`);
             await Bun.sleep(1800);
             const taps = await cdp.ev(`${TOP}.querySelectorAll("button.mb-dl").length`);

@@ -55,6 +55,14 @@ export function fmtAgo(ts: number): string {
   return Math.floor(d / 86_400_000) + "d";
 }
 
+/** fmtAgo as a sentence. It answers "now" under a second, and "now ago" is not
+ *  English — which is exactly the value a "last seen" row shows right after the
+ *  thing it is describing happened. */
+export function since(ts: number): string {
+  const d = fmtAgo(ts);
+  return d === "now" ? "just now" : `${d} ago`;
+}
+
 export const fmtTime = (ts: number) =>
   new Date(ts).toLocaleTimeString([], { hour12: false });
 
