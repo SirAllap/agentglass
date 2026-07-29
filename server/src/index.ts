@@ -28,6 +28,7 @@ import { maybeAlert, setAlertSink } from "./alerts.ts";
 import { noteAction } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
+import { vapidKeys, addSubscription, removeSubscription, subscriptions } from "./pushstore.ts";
 import { getUsage } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
@@ -699,6 +700,47 @@ const server = Bun.serve<WsData>({
     // What was decided while you weren't looking — including the requests a
     // timeout or a restart resolved for you.
     if (pathname === "/gate/history") return json({ gates: gateHistory(Number(url.searchParams.get("limit") || 50)) });
+    // ── web push: the only way an alert reaches a locked phone ────────
+    //
+    // The socket closes with the screen on purpose, so nothing the server
+    // already had could wake a device in a pocket — which is the one case the
+    // companion exists for. See server/src/push.ts.
+    if (pathname === "/push/key") {
+      // Public by definition: the browser needs it to subscribe at all.
+      return json({ key: (await vapidKeys()).publicKey });
+    }
+    // No per-route origin check on either write: the gate at the top of this
+    // handler already covers the whole surface, reads included, so one here
+    // could never fire. An unprovable guard is worse than none — it reads as
+    // protection and no mutation can show it working.
+    if (pathname === "/push/subscribe" && req.method === "POST") {
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "bad body" }); }
+      const sub = b?.subscription;
+      if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) {
+        return json({ ok: false, error: "a subscription needs an endpoint and both keys" });
+      }
+      const subs = addSubscription(sub, typeof b.label === "string" ? b.label.slice(0, 60) : undefined);
+      return json({ ok: true, devices: subs.length });
+    }
+    if (pathname === "/push/unsubscribe" && req.method === "POST") {
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "bad body" }); }
+      const subs = removeSubscription(String(b?.endpoint || ""));
+      return json({ ok: true, devices: subs.length });
+    }
+    if (pathname === "/push/devices") {
+      // Endpoints and keys never leave the machine: an endpoint is a
+      // capability — anyone holding one can ask the push service to wake that
+      // phone — and this answer is only ever "how many, and what are they
+      // called".
+      return json({
+        devices: subscriptions().map((s) => ({
+          label: s.label ?? "", addedAt: s.addedAt, lastOkAt: s.lastOkAt ?? null,
+        })),
+      });
+    }
+
     if (pathname === "/gate/decide" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
