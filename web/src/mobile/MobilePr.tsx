@@ -10,6 +10,7 @@ import {
   type ReviewDraft, type Side, type Verb,
 } from "./reviewDraft.ts";
 import { orderThreads, openCount, type ThreadRow } from "./threads.ts";
+import { mergeMove, MERGE_WHY, whyBlocked } from "./mergeMove.ts";
 
 /**
  * Reviewing a pull request from a phone.
@@ -27,15 +28,6 @@ import { orderThreads, openCount, type ThreadRow } from "./threads.ts";
 
 type Tab = "overview" | "files" | "checks" | "talk";
 
-const MERGE_WHY: Record<string, string> = {
-  BLOCKED: "A required review or check has not passed",
-  BEHIND: "The base branch has moved — update the branch first",
-  DIRTY: "There are conflicts with the base branch",
-  UNSTABLE: "A check is failing",
-  DRAFT: "This is a draft",
-  HAS_HOOKS: "A repository hook is blocking the merge",
-  UNKNOWN: "GitHub has not finished working it out",
-};
 
 export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: {
   open: boolean; root: string; number: number | null; onBack: () => void;
@@ -102,6 +94,14 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
   const { ask, dialog: askDialog } = useAsk();
 
   const canMerge = d?.mergeState === "CLEAN";
+  /** The one thing worth putting on the primary button — see mergeMove.ts. */
+  const mergeFacts = d && {
+    state: d.mergeState, isDraft: d.isDraft,
+    autoMerge: !!d.autoMerge,
+    anyFailing: d.checks.failure > 0,
+  };
+  const move = mergeFacts ? mergeMove(mergeFacts) : null;
+  const why = mergeFacts ? whyBlocked(mergeFacts) : "";
 
   const openThreads = d?.threads.filter((t) => !t.isResolved).length ?? 0;
 
@@ -119,26 +119,45 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
           onClick={() => setMore(true)} aria-label="More">⋯</button>}
         foot={d ? (
           <>
-            {!canMerge && (
+            {move?.kind !== "merge" && (
               <div className="absolute left-0 right-0 text-center text-[10.5px] px-4"
                 style={{ top: -21, color: "var(--text3)" }}>
-                {MERGE_WHY[d.mergeState] ?? "Not mergeable"}
+                {why}
               </div>
             )}
             <Act small onAct={() => act("Approved", () => api.prReview(root, d.number, "approve", ""))}
               disabled={d.viewerDidAuthor} title={d.viewerDidAuthor ? "You cannot approve your own pull request" : undefined}>
               ✓ Approve
             </Act>
-            <Act kind="acc" full disabled={!canMerge}
-              title={canMerge ? undefined : MERGE_WHY[d.mergeState]}
+            {/* The next useful move rather than a dead "Blocked". The reason
+                stays above it either way — it was the good part. */}
+            <Act kind={move?.kind === "merge" ? "acc" : move?.kind === "none" ? undefined : "ok"}
+              full disabled={!move || move.kind === "none"}
+              title={move?.kind === "none" ? why : undefined}
               onAct={async () => {
-                if (!(await ask({
-                  title: `Squash & merge #${d.number}?`, danger: true, confirmLabel: "Squash & merge",
-                  body: "Every commit becomes one, and the head branch is deleted straight after. Neither step is reversible from here.",
-                }))) return;
-                await act(`Merged #${d.number}`, () => api.prMerge(root, d.number, "squash", { deleteBranch: true }));
+                if (!move) return;
+                if (move.kind === "merge") {
+                  if (!(await ask({
+                    title: `Squash & merge #${d.number}?`, danger: true, confirmLabel: "Squash & merge",
+                    body: "Every commit becomes one, and the head branch is deleted straight after. Neither step is reversible from here.",
+                  }))) return;
+                  await act(`Merged #${d.number}`, () => api.prMerge(root, d.number, "squash", { deleteBranch: true }));
+                } else if (move.kind === "update") {
+                  await act("Branch updated from the base", () => api.prUpdateBranch(root, d.number));
+                } else if (move.kind === "auto") {
+                  // Arming this is a decision that outlives the screen: it
+                  // merges without you when the run turns green.
+                  if (!(await ask({
+                    title: `Merge #${d.number} when the checks pass?`, confirmLabel: "Arm it",
+                    body: "GitHub squashes and merges it on its own the moment everything required is green, and deletes the head branch. Nobody presses anything.",
+                  }))) return;
+                  await act("Armed — it merges when the checks pass",
+                    () => api.prMerge(root, d.number, "squash", { auto: true, deleteBranch: true }));
+                } else if (move.kind === "rerun") {
+                  await act("Re-running the failed checks", () => api.prRerun(root, d.number));
+                }
               }}>
-              {canMerge ? "Squash & merge" : "Blocked"}
+              {move?.label ?? "…"}
             </Act>
           </>
         ) : undefined}
@@ -183,7 +202,7 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
                     <span>
                       <b className="block text-[14.5px]">{canMerge ? "Ready to merge" : "Merging is blocked"}</b>
                       <span className="block text-[11.5px] mt-0.5" style={{ color: "var(--text3)" }}>
-                        {canMerge ? "Nothing is standing in the way" : (MERGE_WHY[d.mergeState] ?? "Not mergeable")}
+                        {canMerge ? MERGE_WHY.CLEAN : why}
                       </span>
                     </span>
                   </div>
