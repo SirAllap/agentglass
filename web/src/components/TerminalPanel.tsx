@@ -1393,16 +1393,43 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       // one pane is filling the window and the others are still
                       // there, which is confusing precisely when it is invisible.
                       const zoomed = w.flags.includes("Z");
+                      // An agent in the window has said what it wants: amber
+                      // because it asked you something, green because its turn
+                      // ended. A dot was not enough here. These tabs are how you
+                      // watch four agents at once, and the thing you need to see
+                      // from across the room is which one of the four, not that
+                      // one of them did something.
+                      //
+                      // Never on the tab you are looking at: whatever it wanted
+                      // to tell you is on screen, and the state is cleared the
+                      // moment the window is selected anyway. Painting it first
+                      // would only flash once on every switch.
+                      const attention = w.id === activeWindow ? null : w.attention ?? null;
+                      const attentionColor = attention === "waiting" ? "var(--warning)" : "var(--success)";
                       return (
                         <div key={w.id}
                           onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd("select", { window: w.id }); } }}
                           onDoubleClick={() => setRenaming(w.id)}
-                          title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
+                          title={attention
+                            ? `Window ${w.index}: ${attention === "waiting" ? "asking you something" : "finished its turn"}${w.flags ? ` (${w.flags})` : ""}, double-click to rename`
+                            : `Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
                           className="group flex items-center gap-1.5 px-2 py-1 rounded-md text-[10.5px] cursor-pointer shrink-0"
+                          // Every branch carries a border, transparent when it
+                          // has nothing to say, so a tab lighting up does not
+                          // shove the strip a pixel sideways.
                           style={w.id === activeWindow
-                            ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
-                            : { background: "color-mix(in srgb, var(--bg3) 55%, transparent)", color: "var(--text2)" }}>
-                          <span className="tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>
+                            ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)", border: "1px solid transparent" }
+                            : attention
+                              ? {
+                                  background: `color-mix(in srgb, ${attentionColor} 22%, transparent)`,
+                                  color: attentionColor,
+                                  border: `1px solid color-mix(in srgb, ${attentionColor} 60%, transparent)`,
+                                  animation: "agx-attention 1.8s ease-in-out infinite",
+                                }
+                              : { background: "color-mix(in srgb, var(--bg3) 55%, transparent)", color: "var(--text2)", border: "1px solid transparent" }}>
+                          {/* The index inherits the tab's colour while it is
+                              flashing; --text4 on an amber pill is unreadable. */}
+                          <span className="tabular-nums" style={attention ? undefined : { color: "var(--text4)" }}>{w.index}</span>
                           {renaming === w.id ? (
                             <input
                               autoFocus
@@ -1428,8 +1455,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             <span>{w.name || "shell"}</span>
                           )}
                           {zoomed && <span className="text-[9px] font-semibold leading-none" style={{ color: "var(--text4)" }} title="A pane in this window is zoomed">⤢</span>}
-                          {bell && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} title="Bell" />}
-                          {!bell && activity && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="Activity" />}
+                          {/* The dots stand down while the whole tab is
+                              flashing: a bell rung by the same turn that set
+                              the state is the same news twice. */}
+                          {!attention && bell && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} title="Bell" />}
+                          {!attention && !bell && activity && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="Activity" />}
                           <button onClick={(e) => { e.stopPropagation(); tmuxCmd("kill", { window: w.id }); }}
                             className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="Close window (kill-window)">✕</button>
                         </div>

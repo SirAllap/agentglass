@@ -15,10 +15,69 @@ Env:
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import urllib.request
 
 DEFAULT_SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000")
+
+# What each event means to a tmux tab. None clears the mark: the user is driving
+# this window again, so it has nothing to ask for.
+TMUX_STATE = {
+    "Stop": "done",
+    "Notification": "waiting",
+    "UserPromptSubmit": None,
+    "SessionStart": None,
+    "SessionEnd": None,
+}
+
+
+def mark_tmux_window(event_type):
+    """Tell the tmux window this agent runs in what it wants, if anything.
+
+    The terminal panel draws tmux's windows as tabs and flashes the ones with a
+    state set, which is the only way to see which of four agents stopped when
+    all four are off screen. The mark is a plain tmux user option, so tmux is
+    the one holding the state and anything else can read or set it too.
+
+    Best effort throughout: an agent must never fail a turn because a status
+    colour could not be set.
+    """
+    if event_type not in TMUX_STATE:
+        return
+    pane = os.environ.get("TMUX_PANE")
+    if not pane or not os.environ.get("TMUX"):
+        return
+    tmux = shutil.which("tmux")
+    if not tmux:
+        return
+    state = TMUX_STATE[event_type]
+    try:
+        if state is None:
+            subprocess.run([tmux, "set-option", "-w", "-q", "-t", pane, "-u", "@ai_state"],
+                           timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        # Don't flash the window the user is already looking at, as long as
+        # somebody is there to look: a state set on a detached session still has
+        # to be waiting when its user comes back.
+        #
+        # Two calls rather than one command list. `display-message ; list-clients`
+        # answers only the first half from a hook's context, which is how this
+        # went out flagging the window it was told to leave alone.
+        # (`#{session_attached}` is no use either: it reports 0 whenever the
+        # command has no client of its own, which is always the case here.)
+        current = subprocess.run([tmux, "display-message", "-p", "-t", pane, "#{window_active}"],
+                                 capture_output=True, text=True, timeout=2)
+        if current.stdout.strip() == "1":
+            seen = subprocess.run([tmux, "list-clients", "-F", "c"],
+                                  capture_output=True, text=True, timeout=2)
+            if seen.stdout.strip():
+                return
+        subprocess.run([tmux, "set-option", "-w", "-q", "-t", pane, "@ai_state", state],
+                       timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 def _agentglass_local_only(url):
     """Refuse to send transcript/telemetry anywhere but this machine.
@@ -84,6 +143,10 @@ def main():
     session_id = payload.get("session_id") or payload.get("sessionId") or "unknown"
     event_type = args.event_type or payload.get("hook_event_name") or "Unknown"
     model_name = payload.get("model") or payload.get("model_name") or args.model_name
+
+    # Before the POST: the tab should light up the moment the turn ends, not
+    # after a server round trip that may be timing out.
+    mark_tmux_window(event_type)
 
     chat = None
     if args.add_chat:
