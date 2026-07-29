@@ -47,6 +47,9 @@ export interface DeviceRecord {
   hits: number;
   /** Turned away at the door until it is let back in, or the server restarts. */
   blocked: boolean;
+  /** This machine, reaching itself through one of its own addresses rather
+   *  than through loopback. Never a device to cut off. */
+  self?: boolean;
 }
 
 const seen = new Map<string, DeviceRecord>();
@@ -135,9 +138,13 @@ export function noteSocket(ip: string | null | undefined, delta: 1 | -1, now = D
  * pick a new address on the same network can come back — which is why the UI
  * offers both and says which is which.
  */
-export function blockDevice(address: string, blocked: boolean): boolean {
+export function blockDevice(address: string, blocked: boolean, own: Iterable<string> = ownAddresses()): boolean {
   const d = seen.get(unmap(address));
   if (!d) return false;
+  // Never this machine. Blocking an address the dashboard itself arrives on
+  // would lock the user out of the window they pressed the button in, and
+  // there is no undo from a page that can no longer talk to its server.
+  if (blocked && isSelf(address, own)) return false;
   d.blocked = blocked;
   return true;
 }
@@ -147,11 +154,35 @@ export function isBlocked(ip: string | null | undefined): boolean {
   return seen.get(unmap(ip))?.blocked === true;
 }
 
-/** Newest activity first, with anything currently holding a socket on top. */
-export function remoteDevices(): DeviceRecord[] {
+/**
+ * Newest activity first, with anything currently holding a socket on top.
+ *
+ * `own` is the set of addresses this machine answers on. Anything arriving
+ * from one of them is this machine talking to itself the long way round — the
+ * app opened at its own tailnet address rather than at loopback, a browser
+ * tab on the same box — and the panel listed it as a stranger with a
+ * Disconnect button beside it. Pressing that would have blocked the address
+ * the dashboard itself was arriving on. Marking it is what lets the UI
+ * suppress the button, and the block route refuse it outright.
+ */
+export function remoteDevices(own: Iterable<string> = ownAddresses()): DeviceRecord[] {
+  const mine = new Set([...own].map(unmap));
   return [...seen.values()]
     .sort((a, b) => (b.live > 0 ? 1 : 0) - (a.live > 0 ? 1 : 0) || b.lastAt - a.lastAt)
-    .map((d) => ({ ...d }));
+    .map((d) => ({ ...d, self: mine.has(d.address) }));
+}
+
+/** Every address this machine answers on, from the live interfaces. */
+export function ownAddresses(): string[] {
+  return reachableAddresses().map((a) => a.address);
+}
+
+/** Whether an address belongs to this machine (loopback included). */
+export function isSelf(ip: string | null | undefined, own: Iterable<string> = ownAddresses()): boolean {
+  if (!ip) return false;
+  const h = unmap(ip);
+  if (isLoopback(h)) return true;
+  return [...own].map(unmap).includes(h);
 }
 
 export interface RemoteClients {
@@ -163,7 +194,10 @@ export interface RemoteClients {
 }
 
 export function remoteClients(): RemoteClients {
-  const all = remoteDevices();
+  // This machine does not count as a device that reached us: "one device is
+  // connected" meaning the window you are reading it in is a lie of the kind
+  // that makes the number useless. The row still appears in the list, named.
+  const all = remoteDevices().filter((d) => !d.self);
   return {
     count: all.length,
     lastAt: all.reduce<number | null>((n, d) => (n === null || d.lastAt > n ? d.lastAt : n), null),
@@ -186,6 +220,10 @@ export function deviceLabel(uaRaw: string | null | undefined): string {
   if (/^(curl|wget|python-requests|node-fetch|go-http-client|httpie)/i.test(ua)) {
     return `A script (${ua.split("/")[0]!.toLowerCase()})`;
   }
+  // Electron says Chrome as well, and on this server the Electron in question
+  // is almost always agentglass itself talking to its own sidecar over a real
+  // address rather than loopback. Naming it beats calling the cockpit "Chrome".
+  if (/\bElectron\//.test(ua)) return "The agentglass app";
   const browser =
     /\bEdg\//.test(ua) ? "Edge"
     : /\bOPR\/|\bOpera\b/.test(ua) ? "Opera"
@@ -194,13 +232,20 @@ export function deviceLabel(uaRaw: string | null | undefined): string {
     : /\bSafari\//.test(ua) ? "Safari"
     : null;
   // The model is inside the Android comment, before the build tag. It is the
-  // one place a phone says something a person recognises.
+  // one place a phone says something a person recognises — when it says
+  // anything at all. Chrome on Android 13 and later freezes the model to the
+  // literal "K" for privacy, and `wv` means a WebView rather than a device, so
+  // both are placeholders to see through. A row reading "K · Chrome" is what
+  // this pane looked like on a Pixel, which is worse than admitting the phone
+  // did not say.
   const android = ua.match(/Android[^;)]*;\s*([^;)]+?)(?:\s+Build\/[^;)]*)?\s*\)/);
+  const model = android?.[1]?.trim() ?? "";
+  const namedModel = model && !/^(k|wv)$/i.test(model) ? model : "";
   const device =
     /\biPhone\b/.test(ua) ? "iPhone"
     : /\biPad\b/.test(ua) ? "iPad"
     : /\bCrOS\b/.test(ua) ? "Chromebook"
-    : android ? (android[1] && !/^wv$/i.test(android[1].trim()) ? android[1].trim() : "An Android device")
+    : android ? (namedModel || "An Android device")
     : /\bMacintosh\b/.test(ua) ? "Mac"
     : /\bWindows NT\b/.test(ua) ? "Windows PC"
     : /\bLinux\b/.test(ua) ? "Linux machine"
@@ -360,7 +405,7 @@ export function remoteStatus(opts: {
     urls: addresses.map((a) => `http://${a.address}:${opts.port}${q}`),
     addresses,
     clients: remoteClients(),
-    devices: remoteDevices(),
+    devices: remoteDevices(addresses.map((a) => a.address)),
     firewall: firewallHint(opts.port, addresses[0]?.subnet ?? null, opts.which),
     ...(opts.includeToken && opts.token ? { token: opts.token } : {}),
   };

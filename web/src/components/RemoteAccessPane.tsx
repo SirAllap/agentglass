@@ -76,7 +76,13 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
     // the server again is what puts it in the QR.
     if (ok) load();
     // The messages below are for the two cases where the shell declines.
-    if (ok === false) setRevokeNote("AGENTGLASS_TOKEN is set in this app's environment, so the app cannot rotate it. Change it where it is set.");
+    // "Change it where it is set" was true and useless: the variable is
+    // inherited, so the place it is set is somewhere the person has to go
+    // looking — a shell profile, a tmux server's environment, a launcher. Say
+    // what to do instead, and what happens once it is done: with nothing in
+    // the environment the app keeps its own code in ~/.config/agentglass/token
+    // and this button starts working.
+    if (ok === false) setRevokeNote("AGENTGLASS_TOKEN is set in the environment this app was started from, so rotating a file the server does not read would report a revoke that did not happen. Unset it where it is exported (a shell profile, or `tmux setenv -gu AGENTGLASS_TOKEN` if you start the app from tmux), then start agentglass again. The app will keep its own code from then on, and this button will rotate it.");
     else if (ok === null) setRevokeNote("This shell cannot rotate the access code.");
   };
 
@@ -357,51 +363,66 @@ function Devices({ st, onCopy, copied, onChanged }: {
       <div className="flex flex-col gap-1">
         <div className="flex items-baseline gap-2 px-0.5">
           <span className="text-[10px] t-dim2 uppercase tracking-wider flex-1">Devices</span>
+          {/* Counts exclude this machine, which is in the list but is not a
+              device that reached us: "one device is connected" meaning the
+              window you are reading it in is worse than no number at all. */}
           <span className="text-[10px]" style={{ color: clients.liveCount > 0 ? "var(--success)" : "var(--text4)" }}>
             {clients.liveCount > 0
               ? `${clients.liveCount === 1 ? "One device is" : `${clients.liveCount} devices are`} connected right now`
-              : `${devices.length === 1 ? "One device has" : `${devices.length} devices have`} connected before`}
+              : clients.count > 0
+                ? `${clients.count === 1 ? "One device has" : `${clients.count} devices have`} connected before`
+                : "Nothing else has connected yet"}
           </span>
         </div>
         {devices.map((d) => {
           const live = d.live > 0 && !d.blocked;
-          const tint = d.blocked ? "var(--error)" : live ? "var(--success)" : "var(--text3)";
+          // This machine, reaching its own server through a real address
+          // instead of loopback. It is shown because a row that vanishes is
+          // its own kind of confusing, but it is named for what it is and the
+          // button is gone: cutting it off would black out this window.
+          const self = !!d.self;
+          const tint = d.blocked ? "var(--error)" : self ? "var(--text3)" : live ? "var(--success)" : "var(--text3)";
           return (
             <div key={d.address} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg" style={{
-              background: live ? "color-mix(in srgb, var(--success) 8%, transparent)" : "color-mix(in srgb, var(--bg2) 60%, transparent)",
-              border: `1px solid color-mix(in srgb, ${d.blocked ? "var(--error)" : live ? "var(--success)" : "var(--border)"} ${live || d.blocked ? 30 : 40}%, transparent)`,
+              background: live && !self ? "color-mix(in srgb, var(--success) 8%, transparent)" : "color-mix(in srgb, var(--bg2) 60%, transparent)",
+              border: `1px solid color-mix(in srgb, ${d.blocked ? "var(--error)" : live && !self ? "var(--success)" : "var(--border)"} ${(live && !self) || d.blocked ? 30 : 40}%, transparent)`,
             }}>
               {/* Steady when a socket is open, hollow when the device is only
                   remembered. It is the fastest read in the row, so it carries
                   the one fact that decides everything else. */}
               <span className="shrink-0 rounded-full" aria-hidden style={{
-                width: 7, height: 7, background: live ? "var(--success)" : "transparent",
-                border: live ? "none" : `1px solid ${tint}`,
-                boxShadow: live ? "0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent)" : "none",
+                width: 7, height: 7, background: live && !self ? "var(--success)" : "transparent",
+                border: live && !self ? "none" : `1px solid ${tint}`,
+                boxShadow: live && !self ? "0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent)" : "none",
               }} />
               <div className="min-w-0 flex-1">
-                <div className="text-[11.5px] truncate" style={{ color: "var(--text)" }}>
-                  {d.label}
-                  <span className="t-mono text-[10px] t-dim2"> {d.address}</span>
+                <div className="text-[11.5px] truncate flex items-center gap-1.5" style={{ color: "var(--text)" }}>
+                  <span className="truncate">{d.label}</span>
+                  <span className="t-mono text-[10px] t-dim2">{d.address}</span>
+                  {self && <span className="chip shrink-0 t-dim2">This machine</span>}
                 </div>
                 <div className="text-[10px]" style={{ color: tint }}>
-                  {d.blocked
-                    ? "Disconnected. It is refused on every request until you let it back in."
-                    : live
-                      ? `Connected now · ${d.live === 1 ? "one open connection" : `${d.live} open connections`}`
-                      : `Last seen ${fmtAgo(d.lastAt)} · ${d.hits === 1 ? "one request" : `${d.hits} requests`}`}
+                  {self
+                    ? "This machine, reaching its own server through one of its addresses rather than through localhost."
+                    : d.blocked
+                      ? "Disconnected. It is refused on every request until you let it back in."
+                      : live
+                        ? `Connected now · ${d.live === 1 ? "one open connection" : `${d.live} open connections`}`
+                        : `Last seen ${fmtAgo(d.lastAt)} · ${d.hits === 1 ? "one request" : `${d.hits} requests`}`}
                 </div>
               </div>
-              <button onClick={() => setBlocked(d, !d.blocked)} disabled={busy === d.address}
-                className="shrink-0 text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
-                style={{
-                  color: d.blocked ? "var(--text2)" : "var(--error)",
-                  background: d.blocked ? "transparent" : "color-mix(in srgb, var(--error) 10%, transparent)",
-                  border: `1px solid color-mix(in srgb, ${d.blocked ? "var(--border)" : "var(--error)"} ${d.blocked ? 45 : 32}%, transparent)`,
-                  opacity: busy === d.address ? 0.5 : 1,
-                }}>
-                {busy === d.address ? "Working…" : d.blocked ? "Let it back in" : "Disconnect"}
-              </button>
+              {!self && (
+                <button onClick={() => setBlocked(d, !d.blocked)} disabled={busy === d.address}
+                  className="shrink-0 text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
+                  style={{
+                    color: d.blocked ? "var(--text2)" : "var(--error)",
+                    background: d.blocked ? "transparent" : "color-mix(in srgb, var(--error) 10%, transparent)",
+                    border: `1px solid color-mix(in srgb, ${d.blocked ? "var(--border)" : "var(--error)"} ${d.blocked ? 45 : 32}%, transparent)`,
+                    opacity: busy === d.address ? 0.5 : 1,
+                  }}>
+                  {busy === d.address ? "Working…" : d.blocked ? "Let it back in" : "Disconnect"}
+                </button>
+              )}
             </div>
           );
         })}

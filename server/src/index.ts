@@ -77,7 +77,7 @@ import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
 import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
-import { noteClient, noteSocket, isLoopback, isBlocked, blockDevice, remoteStatus } from "./remote.ts";
+import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
@@ -866,6 +866,10 @@ const server = Bun.serve<WsData>({
       const address = typeof b.address === "string" ? b.address : "";
       const blocked = b.blocked !== false;
       if (!address) return json({ ok: false, error: "no address" }, 400);
+      // Said before the store is asked, so the message names the real reason
+      // rather than "no such device": blocking an address this machine answers
+      // on would cut off the window the button was pressed in.
+      if (blocked && isSelf(address)) return json({ ok: false, error: "that address is this machine" }, 400);
       if (!blockDevice(address, blocked)) return json({ ok: false, error: "no such device" }, 404);
       let closed = 0;
       if (blocked) {
