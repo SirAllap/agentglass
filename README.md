@@ -196,6 +196,17 @@ straight to tmux, and the tabs follow. The point is that the window list stops
 being the one strip of the workspace themed by whichever `.tmux.conf` the
 machine happens to carry.
 
+A tab **flashes** when the agent in that window wants you: amber because it
+stopped to ask something, green because its turn ended. Four agents in four
+windows, and the strip says which one, not just that something happened. The
+mark is tmux's own `@ai_state` window option, set by agentglass's `Stop` and
+`Notification` hooks and cleared the moment you switch to the window, so
+anything else can raise it too:
+
+```bash
+tmux set-option -w -t "$TMUX_PANE" @ai_state done   # or: waiting
+```
+
 **If a shell ever renders solid white,** switch **Settings ▸ Preferences ▸
 Terminal renderer** to *Compatibility*. xterm's GPU renderer is fast, but on
 some Linux GPU/compositor stacks it paints the terminal blank with no catchable

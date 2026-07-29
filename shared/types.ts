@@ -281,6 +281,14 @@ export interface StatsSummary {
   retention_days?: number;
 }
 
+/** What an agent running in a tmux window says it wants from you: `waiting` for
+ *  a question it has asked, `done` for a turn it has finished. Read from the
+ *  window's own `@ai_state` option, which `hooks/send_event.py` sets from the
+ *  agent's Stop and Notification hooks. A plain tmux option rather than
+ *  something of ours, so a build script or another agent can flash a tab with
+ *  one line: `tmux set-option -w -t "$TMUX_PANE" @ai_state done`. */
+export type TmuxAttention = "waiting" | "done" | null;
+
 /** One tmux window, as tmux itself reports it. The panel renders these as its
  *  own tabs; tmux stays the source of truth for which is active. `flags` is
  *  tmux's own marks (`*` current, `-` last, `!` bell, `#` activity, `Z` zoomed),
@@ -294,6 +302,9 @@ export interface TmuxWindow {
   name: string;
   active: boolean;
   flags: string;
+  /** Absent in demo mode's older payloads, and null whenever nothing has
+   *  claimed the window. */
+  attention?: TmuxAttention;
 }
 
 /** A tool call held at the gate, awaiting a remote approve/deny. */
