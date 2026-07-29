@@ -16,8 +16,14 @@ import { describe, expect, it } from "bun:test";
 import {
   decodeKey, deviceLabel, pushCopy, pushStateOf,
   currentPushState, enablePush, disablePush,
+  isApplePortable, needsHomeScreen,
   type PushEnv, type PushState,
 } from "../src/lib/webpush.ts";
+
+const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 Version/17.4 Mobile/15E148 Safari/604.1";
+// iPadOS 13+ reports a desktop Safari string: no "iPad" anywhere in it.
+const IPAD = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.4 Safari/605.1.15";
+const MAC = IPAD;
 
 // A real VAPID public key shape: uncompressed P-256, 65 bytes, leading 0x04.
 const KEY = "BFFcPW6545a5BNP-yn9U_c0MwemXvzddylFa0KbDtANfRTa-OlDzGPv5pUdZAqIhUCvvDVfgjFOyzApW8X2fk1Q";
@@ -85,6 +91,8 @@ function fakeEnv(over: Partial<PushEnv> & {
     permission: "default",
     requestPermission: async () => { calls.permissionAsked++; return "granted"; },
     ua: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Mobile",
+    maxTouchPoints: 5,
+    standalone: false,
     getKey: async () => ({ key: KEY }),
     subscribe: async (sub: unknown, label: string) => {
       calls.order.push("server-subscribe");
@@ -158,11 +166,64 @@ describe("which of the three ways this can fail", () => {
     expect(pushCopy("off").action).toBeTruthy();
     expect(pushCopy("blocked").action).toBeNull();
     expect(pushCopy("unsupported").action).toBeNull();
+    expect(pushCopy("needs-install").action).toBeNull();
     // And each says something different, so the row is never ambiguous.
-    const subs = (["on", "off", "blocked", "unsupported"] as PushState[]).map((s) => pushCopy(s).sub);
-    expect(new Set(subs).size).toBe(4);
+    const all: PushState[] = ["on", "off", "blocked", "unsupported", "needs-install"];
+    const subs = all.map((s) => pushCopy(s).sub);
+    expect(new Set(subs).size).toBe(all.length);
+    // None of them is empty, which is what a missing switch arm would produce.
+    for (const s of subs) expect(s.length).toBeGreaterThan(10);
     // Blocked has to say where the switch actually is, since it is not here.
     expect(pushCopy("blocked").sub).toContain("browser");
+  });
+});
+
+describe("an iPhone in a browser tab", () => {
+  // This is most of the phones this companion is for, and it was being told
+  // something false. Safari has had Web Push since 16.4 — but only for a site
+  // added to the Home Screen. In a tab, `window.PushManager` does not exist,
+  // which is indistinguishable from "this browser cannot" unless you look at
+  // what the browser actually is.
+
+  it("is not confused with a Mac, even when it says it is one", async () => {
+    expect(isApplePortable(IPHONE, 5)).toBe(true);
+    // An iPad reports a desktop Safari string. A touchscreen gives it away;
+    // a real Mac reports zero touch points.
+    expect(isApplePortable(IPAD, 5)).toBe(true);
+    expect(isApplePortable(MAC, 0)).toBe(false);
+    expect(isApplePortable("Mozilla/5.0 (Linux; Android 14) Mobile", 5)).toBe(false);
+  });
+
+  it("is told to add it to the Home Screen, not that its browser cannot", async () => {
+    const { env } = fakeEnv({ hasPushManager: false, ua: IPHONE, maxTouchPoints: 5, standalone: false });
+    expect(await currentPushState(env)).toBe("needs-install");
+    const r = await enablePush(env);
+    expect(r.state).toBe("needs-install");
+    // And the row names the actual gesture, since the button cannot be here.
+    expect(pushCopy("needs-install").sub).toContain("Home Screen");
+    expect(pushCopy("needs-install").action).toBeNull();
+    expect(pushCopy("needs-install").sub).not.toBe(pushCopy("unsupported").sub);
+  });
+
+  it("does not tell an installed app to install itself", async () => {
+    // Standalone and still no PushManager is an iOS older than 16.4. Nothing
+    // the user does to the Home Screen will change that, so saying so would
+    // send them round a loop.
+    const { env } = fakeEnv({ hasPushManager: false, ua: IPHONE, maxTouchPoints: 5, standalone: true });
+    expect(await currentPushState(env)).toBe("unsupported");
+  });
+
+  it("does not tell a working browser to install anything", async () => {
+    // The question only arises when push is missing. An installed PWA that has
+    // it must never be sent to the share sheet.
+    expect(needsHomeScreen({ hasPushManager: true, ua: IPHONE, maxTouchPoints: 5, standalone: false })).toBe(false);
+  });
+
+  it("leaves a desktop browser without push saying exactly that", async () => {
+    // A Mac or a Linux desktop on an old browser has nothing to add to a home
+    // screen, and telling it to would be nonsense.
+    const { env } = fakeEnv({ hasPushManager: false, ua: MAC, maxTouchPoints: 0 });
+    expect(await currentPushState(env)).toBe("unsupported");
   });
 });
 

@@ -42,6 +42,16 @@ export function decodeKey(b64url: string): Uint8Array {
 export type PushState =
   /** No service worker or no PushManager: Safari before 16.4, or an insecure origin. */
   | "unsupported"
+  /**
+   * iOS, in a browser tab.
+   *
+   * Not the same as unsupported, and the difference is most of the phones this
+   * companion is for. Safari has had Web Push since 16.4, but *only* for a site
+   * added to the Home Screen — in a tab, `window.PushManager` simply does not
+   * exist. Telling that user "this browser cannot receive push notifications"
+   * is both false and a dead end, when the fix is one entry in the share sheet.
+   */
+  | "needs-install"
   /** The user denied notifications. Only they can undo this, in browser settings. */
   | "blocked"
   /** Supported and allowed, but this device is not registered. */
@@ -49,12 +59,40 @@ export type PushState =
   /** Registered. Alerts reach this device with its screen off. */
   | "on";
 
+/**
+ * Is this an Apple phone or tablet?
+ *
+ * iPadOS 13 and later report a desktop Safari user agent — "Macintosh", no
+ * "iPad" anywhere — so the string alone says Mac. A touchscreen is what tells
+ * them apart: a real Mac reports `maxTouchPoints` 0.
+ */
+export function isApplePortable(ua: string, maxTouchPoints: number): boolean {
+  if (/iPhone|iPad|iPod/i.test(ua)) return true;
+  return /Macintosh/i.test(ua) && maxTouchPoints > 1;
+}
+
+/**
+ * Would this device support push, but only once it is on the Home Screen?
+ *
+ * Asked only when push is missing: if `PushManager` is there, the question
+ * does not arise, and an installed PWA that somehow lost it should not be told
+ * to install itself again.
+ */
+export function needsHomeScreen(env: {
+  hasPushManager: boolean; ua: string; maxTouchPoints: number; standalone: boolean;
+}): boolean {
+  if (env.hasPushManager) return false;
+  return isApplePortable(env.ua, env.maxTouchPoints) && !env.standalone;
+}
+
 export function pushStateOf(env: {
   supported: boolean;
   permission: "default" | "granted" | "denied";
   subscribed: boolean;
+  /** Set when the only thing missing is Add to Home Screen. */
+  needsInstall?: boolean;
 }): PushState {
-  if (!env.supported) return "unsupported";
+  if (!env.supported) return env.needsInstall ? "needs-install" : "unsupported";
   // Subscribed wins over permission on purpose. A browser can report
   // "default" while an active subscription exists — permission is per-origin
   // and can be reset without the subscription being torn down — and showing
@@ -65,9 +103,14 @@ export function pushStateOf(env: {
   return "off";
 }
 
-/** What the settings row says, for each of the four ways this can stand. */
+/** What the settings row says, for each of the five ways this can stand. */
 export function pushCopy(state: PushState): { sub: string; action: string | null } {
   switch (state) {
+    case "needs-install":
+      // No button, because there is nothing here to press — the action is in
+      // Safari's share sheet. So the row has to name it, or it is the same
+      // dead end as saying "unsupported".
+      return { sub: "Add to Home Screen first — Share ⇧, then Add to Home Screen", action: null };
     case "on":
       return { sub: "Alerts reach this phone with the screen off", action: "Turn off" };
     case "off":
@@ -105,6 +148,10 @@ export interface PushEnv {
   permission: "default" | "granted" | "denied";
   requestPermission: () => Promise<"default" | "granted" | "denied">;
   ua: string;
+  /** iPadOS reports a Mac user agent; a touchscreen is what gives it away. */
+  maxTouchPoints: number;
+  /** Running from the Home Screen rather than in a browser tab. */
+  standalone: boolean;
   /** This app's server. */
   getKey: () => Promise<{ key: string }>;
   subscribe: (sub: unknown, label: string) => Promise<{ ok: boolean; error?: string }>;
@@ -166,7 +213,9 @@ function withTimeout<T>(p: Promise<T>, ms: number, sleep: (ms: number) => Promis
  * shipped worker is the one that will receive the next push.
  */
 export async function currentPushState(env: PushEnv): Promise<PushState> {
-  if (!env.sw || !env.hasPushManager) return "unsupported";
+  const cannot = (): PushState =>
+    pushStateOf({ supported: false, permission: env.permission, subscribed: false, needsInstall: needsHomeScreen(env) });
+  if (!env.sw || !env.hasPushManager) return cannot();
   try {
     await env.sw.register("./sw.js");
     const reg = await env.sw.ready;
@@ -175,6 +224,12 @@ export async function currentPushState(env: PushEnv): Promise<PushState> {
   } catch {
     // A registration that throws means no worker, which means no push —
     // whatever the browser claims to support.
+    //
+    // Plainly "unsupported", not the Home Screen hint: reaching here means
+    // `hasPushManager` was true, so this is not an iOS tab and telling anyone
+    // to install something would be wrong. Routing it through the same helper
+    // as the branch above looked more careful and could only ever return this
+    // — a mutation swapping the two changed nothing, which is how that showed.
     return "unsupported";
   }
 }
@@ -189,7 +244,9 @@ export async function currentPushState(env: PushEnv): Promise<PushState> {
  */
 export async function enablePush(env: PushEnv): Promise<PushResult> {
   if (!env.sw || !env.hasPushManager) {
-    return { ok: false, state: "unsupported", error: "This browser cannot receive push notifications." };
+    return needsHomeScreen(env)
+      ? { ok: false, state: "needs-install", error: pushCopy("needs-install").sub }
+      : { ok: false, state: "unsupported", error: "This browser cannot receive push notifications." };
   }
   try {
     const permission = env.permission === "granted" ? "granted" : await env.requestPermission();
@@ -266,12 +323,26 @@ export function browserPushEnv(api: {
 }): PushEnv {
   const nav = typeof navigator === "undefined" ? null : navigator;
   const canNotify = typeof Notification !== "undefined";
+  // Two ways to be on the Home Screen, because the reliable one on iOS is
+  // Apple's own non-standard flag: `display-mode: standalone` is honoured
+  // there, but it is the media query that arrived late and the flag has been
+  // right since long before Web Push existed. Either counts.
+  const standalone = (() => {
+    try {
+      if ((nav as { standalone?: boolean } | null)?.standalone) return true;
+      return typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches;
+    } catch {
+      return false;
+    }
+  })();
   return {
     sw: nav && "serviceWorker" in nav ? (nav.serviceWorker as unknown as PushEnv["sw"]) : null,
     hasPushManager: typeof PushManager !== "undefined",
     permission: canNotify ? Notification.permission : "denied",
     requestPermission: () => (canNotify ? Notification.requestPermission() : Promise.resolve("denied" as const)),
     ua: nav?.userAgent ?? "",
+    maxTouchPoints: nav?.maxTouchPoints ?? 0,
+    standalone,
     getKey: api.pushKey,
     subscribe: api.pushSubscribe,
     unsubscribe: api.pushUnsubscribe,
