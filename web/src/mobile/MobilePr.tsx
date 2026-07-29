@@ -4,13 +4,14 @@ import { parseUnifiedDiff } from "../lib/prBody.ts";
 import { Screen, Sheet, Seg, Empty, Act, useAsk } from "./mobileUi.tsx";
 import { MobileDiff, FileRow } from "./MobileDiff.tsx";
 import { fmtAgo } from "../lib/format.ts";
-import type { PrDetail, PrCheck } from "../../../shared/types.ts";
+import type { PrDetail, PrCheck, PrCheckJob } from "../../../shared/types.ts";
 import {
   EMPTY, canSubmit, commentAt, countFor, annotatedPaths, setComment as withRemark, summarise,
   type ReviewDraft, type Side, type Verb,
 } from "./reviewDraft.ts";
 import { orderThreads, openCount, type ThreadRow } from "./threads.ts";
 import { mergeMove, MERGE_WHY, whyBlocked } from "./mergeMove.ts";
+import { failureWindow, jobFor, type LogWindow } from "./joblog.ts";
 
 /**
  * Reviewing a pull request from a phone.
@@ -42,6 +43,17 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
   const [diffAt, setDiffAt] = useState<number | null>(null);
   const [more, setMore] = useState(false);
   const [openLog, setOpenLog] = useState<string | null>(null);
+  /**
+   * The jobs behind the checks, and the log of whichever one is open.
+   *
+   * The tab said "the phone does not download run logs" under every failure,
+   * while `jobLog` was on the server and `api.prJobLog` was in the client — so
+   * the queue card you are most likely to be woken by ended at a sentence
+   * telling you to go and use a browser.
+   */
+  const [jobs, setJobs] = useState<PrCheckJob[]>([]);
+  const [log, setLog] = useState<{ for: string; window: LogWindow; truncated: boolean } | null>(null);
+  const [logging, setLogging] = useState(false);
   const [comment, setComment] = useState("");
   /**
    * The review being written, and where it is being written.
@@ -68,6 +80,7 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
     // last one into the next would post them against lines that mean nothing.
     setDraft(EMPTY); setVerb(null); setAt(null); setNote(""); setReviewing(false);
     setReplyTo(null); setReplyText("");
+    setJobs([]); setLog(null); setLogging(false);
     api.prDetail(root, number).then((r) => {
       if (r.ok && r.detail) setD(r.detail); else setErr(r.error || "Could not load it");
     }).catch((e) => setErr(String(e)));
@@ -91,6 +104,25 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
       if (r.ok) reload();
     } catch (e) { toast(String(e), true); }
   };
+  // Only when the tab is opened: this is several requests to GitHub behind the
+  // scenes and most visits to a pull request never look at the checks.
+  useEffect(() => {
+    if (!open || tab !== "checks" || number == null || jobs.length) return;
+    api.prCheckJobs(root, number).then((r) => { if (r.ok && r.jobs) setJobs(r.jobs); }).catch(() => {});
+  }, [open, tab, root, number, jobs.length]);
+
+  const fetchLog = async (check: PrCheck) => {
+    const job = jobFor(check.name, jobs);
+    if (!job) { toast("No job on this run matches that check", true); return; }
+    setLogging(true);
+    try {
+      const r = await api.prJobLog(root, job.id);
+      if (!r.ok || !r.text) { toast(r.error || "Could not read the log", true); return; }
+      setLog({ for: check.name, window: failureWindow(r.text), truncated: !!r.truncated });
+    } catch (e) { toast(String(e), true); }
+    finally { setLogging(false); }
+  };
+
   const { ask, dialog: askDialog } = useAsk();
 
   const canMerge = d?.mergeState === "CLEAN";
@@ -250,7 +282,8 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
               </>
             )}
 
-            {tab === "checks" && <Checks d={d} openLog={openLog} onOpenLog={setOpenLog}
+            {tab === "checks" && <Checks d={d} openLog={openLog} onOpenLog={(k) => { setOpenLog(k); setLog(null); }}
+              jobs={jobs} log={log} logging={logging} onFetchLog={fetchLog}
               onRerun={() => act("Re-running the failed checks", () => api.prRerun(root, d.number))}
               onAsk={onOpenChatWith ? (c) => handOver(root, d.number,
                 `The check "${c.name}" is failing on pull request #${d.number} (${d.title}). Work out why and propose the fix.`,
@@ -395,8 +428,12 @@ function Why({ glyph, tint, children, onGo }: { glyph: string; tint: string; chi
   );
 }
 
-function Checks({ d, openLog, onOpenLog, onRerun, onAsk }: {
+function Checks({ d, openLog, onOpenLog, jobs, log, logging, onFetchLog, onRerun, onAsk }: {
   d: PrDetail; openLog: string | null; onOpenLog: (k: string | null) => void;
+  jobs: PrCheckJob[];
+  log: { for: string; window: LogWindow; truncated: boolean } | null;
+  logging: boolean;
+  onFetchLog: (c: PrCheck) => void;
   onRerun: () => void; onAsk?: (c: PrCheck) => void;
 }) {
   const groups = useMemo(() => {
@@ -437,12 +474,46 @@ function Checks({ d, openLog, onOpenLog, onRerun, onAsk }: {
                     style={{ color: bad ? "var(--error)" : "var(--text3)" }}>{k.state}</span>
                 </button>
                 {on && (
-                  <div className="px-3 pb-3 flex gap-2 flex-wrap">
-                    {onAsk && <Act small kind="acc" onAct={() => onAsk(k)}>✦ Ask Claude why</Act>}
-                    {k.url && <Act small onAct={() => { window.open(k.url, "_blank", "noopener,noreferrer"); }}>Open run ↗</Act>}
-                    <Act small onAct={onRerun}>↻ Re-run failed</Act>
-                    <div className="text-[10px] w-full mt-1" style={{ color: "var(--text3)" }}>
-                      The log itself lives on GitHub — the phone does not download run logs.
+                  <div className="px-3 pb-3">
+                    {log?.for === k.name ? (
+                      <div className="mb-log">
+                        <div className="lh">
+                          <b>{log.window.why}</b>
+                          {log.window.hidden > 0 && <span>· {log.window.hidden} lines above</span>}
+                          {log.truncated && <span>· the start was cut by the server</span>}
+                        </div>
+                        {/* Opened at the failure, not at the top of the
+                            window. Twenty-four lines of context is right when
+                            you want it and wrong as a thing to scroll past —
+                            a run that printed a hundred "✓ suite passed" lines
+                            fills the box with them otherwise. */}
+                        <pre ref={(el) => {
+                          if (!el || log.window.at < 0) return;
+                          const line = el.children[log.window.at] as HTMLElement | undefined;
+                          if (line) el.scrollTop = Math.max(0, line.offsetTop - el.clientHeight * 0.55);
+                        }}>{log.window.lines.map((l, n) => (
+                          <span key={n} className={l.startsWith("##[error]") ? "e" : undefined}>
+                            {l.replace(/^##\[error\]/, "")}{"\n"}
+                          </span>
+                        ))}</pre>
+                      </div>
+                    ) : (
+                      <div className="mb-2.5">
+                        {/* The reason a phone shows a window rather than a
+                            file: an Actions log is tens of thousands of lines
+                            with a 28-character timestamp on every one. */}
+                        <Act small full kind="acc" disabled={logging || !jobFor(k.name, jobs)}
+                          title={jobFor(k.name, jobs) ? undefined
+                            : jobs.length ? "No job on this run matches that check" : "Still finding the job"}
+                          onAct={() => onFetchLog(k)}>
+                          {logging ? "Reading the log…" : "Show the failure"}
+                        </Act>
+                      </div>
+                    )}
+                    <div className="flex gap-2 flex-wrap">
+                      {onAsk && <Act small kind="acc" onAct={() => onAsk(k)}>✦ Ask Claude why</Act>}
+                      {k.url && <Act small onAct={() => { window.open(k.url, "_blank", "noopener,noreferrer"); }}>Open run ↗</Act>}
+                      <Act small onAct={onRerun}>↻ Re-run failed</Act>
                     </div>
                   </div>
                 )}
@@ -463,6 +534,18 @@ function Checks({ d, openLog, onOpenLog, onRerun, onAsk }: {
  * — the answer is — and on a phone there is nowhere else to go and read it.
  */
 export const THREAD_CSS = `
+/* A CI log on a phone. Monospace and small, wrapping rather than scrolling
+   sideways — a stack trace read one word at a time is not read. */
+.mb-log{border-radius:11px;overflow:hidden;margin-bottom:10px;
+  background:color-mix(in srgb,#000 45%,transparent);
+  border:1px solid color-mix(in srgb,var(--border) 34%,transparent)}
+.mb-log .lh{display:flex;flex-wrap:wrap;gap:6px;padding:8px 10px;font-size:10px;color:var(--text3);
+  background:color-mix(in srgb,var(--bg3) 40%,transparent)}
+.mb-log .lh b{color:var(--text2);font-weight:600}
+.mb-log pre{margin:0;padding:9px 10px;font-size:10.5px;line-height:1.5;color:var(--text2);
+  white-space:pre-wrap;overflow-wrap:anywhere;max-height:52vh;overflow-y:auto}
+.mb-log pre .e{color:var(--error);font-weight:600}
+
 .mb-thr{border-radius:15px;overflow:hidden;background:var(--mb-card);
   border:1px solid color-mix(in srgb,var(--border) 38%,transparent);box-shadow:var(--mb-edge)}
 .mb-thr.quiet{opacity:.62;border-style:dashed}
