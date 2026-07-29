@@ -18,7 +18,7 @@ import {
   decodeKey, deviceLabel, pushCopy, pushStateOf,
   currentPushState, enablePush, disablePush,
   isApplePortable, needsHomeScreen, deviceIdOf, myDeviceId,
-  isOpenedFromNotification, OPENED_FROM_NOTIFICATION,
+  isOpenedFromNotification, OPENED_FROM_NOTIFICATION, browserPushEnv,
   type PushEnv, type PushState,
 } from "../src/lib/webpush.ts";
 import { since } from "../src/lib/format.ts";
@@ -170,14 +170,92 @@ describe("which of the three ways this can fail", () => {
     expect(pushCopy("blocked").action).toBeNull();
     expect(pushCopy("unsupported").action).toBeNull();
     expect(pushCopy("needs-install").action).toBeNull();
+    expect(pushCopy("demo").action).toBeNull();
     // And each says something different, so the row is never ambiguous.
-    const all: PushState[] = ["on", "off", "blocked", "unsupported", "needs-install"];
+    const all: PushState[] = ["on", "off", "blocked", "unsupported", "needs-install", "demo"];
     const subs = all.map((s) => pushCopy(s).sub);
     expect(new Set(subs).size).toBe(all.length);
     // None of them is empty, which is what a missing switch arm would produce.
     for (const s of subs) expect(s.length).toBeGreaterThan(10);
     // Blocked has to say where the switch actually is, since it is not here.
     expect(pushCopy("blocked").sub).toContain("browser");
+  });
+});
+
+describe("the published demo, which has no server behind it", () => {
+  // Both of these shipped before this test existed, on a public page.
+
+  it("registers no service worker at all", async () => {
+    // A worker installed from the demo would sit in a stranger's browser for a
+    // feature that cannot work there, outliving the visit, with nothing in the
+    // UI able to remove it.
+    const { env, calls } = fakeEnv({ demo: true });
+    expect(await currentPushState(env)).toBe("demo");
+    expect(calls.registered).toEqual([]);
+  });
+
+  it("never asks a visitor for notification permission", async () => {
+    // The most intrusive thing this app can do to somebody who is only
+    // looking — and granting it would buy them nothing, because the next step
+    // fails on a key no server is there to hand over.
+    const { env, calls } = fakeEnv({ demo: true });
+    const r = await enablePush(env);
+    expect(r.ok).toBe(false);
+    expect(r.state).toBe("demo");
+    expect(calls.permissionAsked).toBe(0);
+    expect(calls.subscribedWith).toEqual([]);
+    expect(calls.toldServer).toEqual([]);
+  });
+
+  it("says why, rather than blaming the browser", async () => {
+    expect(pushCopy("demo").action).toBeNull();
+    expect(pushCopy("demo").sub).not.toBe(pushCopy("unsupported").sub);
+    expect(pushCopy("demo").sub.toLowerCase()).toContain("demo");
+  });
+
+  it("leaves a real install alone", async () => {
+    // The flag is the only thing that turns this on; everything else behaves
+    // exactly as before.
+    const { env, calls } = fakeEnv({ permission: "granted" });
+    expect(await currentPushState(env)).toBe("off");
+    expect(calls.registered).toEqual(["./sw.js"]);
+  });
+});
+
+describe("the wiring between the app and all of the above", () => {
+  // browserPushEnv is where the flags are actually read, and it was the one
+  // part with no test — which is precisely where the demo bug lived. Two
+  // mutations proved it: `demo = true` as the default, and dropping the field
+  // on its way into the env, both changed nothing that anything checked.
+  const fakeApi = {
+    pushKey: async () => ({ key: "" }),
+    pushSubscribe: async () => ({ ok: false }),
+    pushUnsubscribe: async () => ({ ok: true }),
+  };
+
+  it("carries the demo flag all the way to the answer", async () => {
+    // Asserted through `currentPushState` rather than by reading the field
+    // back, so what is pinned is the behaviour and not the plumbing.
+    expect(await currentPushState(browserPushEnv(fakeApi, true))).toBe("demo");
+  });
+
+  it("does not call a real install a demo", async () => {
+    // The default matters: every other caller relies on it, and a `true`
+    // default would silently switch push off everywhere.
+    expect(await currentPushState(browserPushEnv(fakeApi))).not.toBe("demo");
+  });
+
+  it("builds without a browser at all", async () => {
+    // This module is imported by the desktop cockpit too, where `Notification`
+    // and `PushManager` may simply not exist. Reading a missing global is a
+    // ReferenceError, not undefined, so this has to be a probe rather than an
+    // access — and the failure would be at import time, taking the app with it.
+    const env = browserPushEnv(fakeApi);
+    expect(env.permission).toBe("denied");
+    expect(env.hasPushManager).toBe(false);
+    expect(typeof env.ua).toBe("string");
+    expect(env.standalone).toBe(false);
+    expect(await env.requestPermission()).toBe("denied");
   });
 });
 
@@ -205,6 +283,7 @@ describe("an iPhone in a browser tab", () => {
     // And the row names the actual gesture, since the button cannot be here.
     expect(pushCopy("needs-install").sub).toContain("Home Screen");
     expect(pushCopy("needs-install").action).toBeNull();
+    expect(pushCopy("demo").action).toBeNull();
     expect(pushCopy("needs-install").sub).not.toBe(pushCopy("unsupported").sub);
   });
 

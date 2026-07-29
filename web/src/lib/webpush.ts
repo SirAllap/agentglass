@@ -57,7 +57,18 @@ export type PushState =
   /** Supported and allowed, but this device is not registered. */
   | "off"
   /** Registered. Alerts reach this device with its screen off. */
-  | "on";
+  | "on"
+  /**
+   * The published demo, which is a static site with nobody behind it.
+   *
+   * Its own state rather than "unsupported", which would be false — the
+   * browser is fine, there is simply no machine to be alerted about. And it is
+   * the reason the demo must not reach the code below: registering a worker
+   * would leave one installed on a public page for a feature that cannot work
+   * there, and offering the switch would ask a visitor for notification
+   * permission and then fail. Both of those shipped before this existed.
+   */
+  | "demo";
 
 /**
  * Is this an Apple phone or tablet?
@@ -103,9 +114,13 @@ export function pushStateOf(env: {
   return "off";
 }
 
-/** What the settings row says, for each of the five ways this can stand. */
+/** What the settings row says, for each of the six ways this can stand. */
 export function pushCopy(state: PushState): { sub: string; action: string | null } {
   switch (state) {
+    case "demo":
+      // No button, and it says why rather than pretending the browser is at
+      // fault: there is no machine behind the demo to be alerted about one.
+      return { sub: "Not in the demo — this needs agentglass running on your machine", action: null };
     case "needs-install":
       // No button, because there is nothing here to press — the action is in
       // Safari's share sheet. So the row has to name it, or it is the same
@@ -199,6 +214,8 @@ export interface PushEnv {
   /** Injected so the timeout above can be exercised without a 20s test. */
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
+  /** The published demo: a static site, no server, nothing that can push. */
+  demo?: boolean;
 }
 
 export interface ServiceWorkerRegistrationLike {
@@ -253,6 +270,11 @@ function withTimeout<T>(p: Promise<T>, ms: number, sleep: (ms: number) => Promis
  * shipped worker is the one that will receive the next push.
  */
 export async function currentPushState(env: PushEnv): Promise<PushState> {
+  // First, and before anything is registered. The demo is served from a static
+  // host with no agentglass behind it, so a worker installed there could only
+  // ever sit on a stranger's browser doing nothing — and it would outlive the
+  // visit, with nothing in the UI able to remove it.
+  if (env.demo) return "demo";
   const cannot = (): PushState =>
     pushStateOf({ supported: false, permission: env.permission, subscribed: false, needsInstall: needsHomeScreen(env) });
   if (!env.sw || !env.hasPushManager) return cannot();
@@ -283,6 +305,10 @@ export async function currentPushState(env: PushEnv): Promise<PushState> {
  * first would fail on every phone, every time.
  */
 export async function enablePush(env: PushEnv): Promise<PushResult> {
+  // Never ask a demo visitor for notification permission. The prompt is the
+  // most intrusive thing this app can do to somebody who is only looking, and
+  // granting it would buy them nothing at all.
+  if (env.demo) return { ok: false, state: "demo", error: pushCopy("demo").sub };
   if (!env.sw || !env.hasPushManager) {
     return needsHomeScreen(env)
       ? { ok: false, state: "needs-install", error: pushCopy("needs-install").sub }
@@ -360,7 +386,7 @@ export function browserPushEnv(api: {
   pushKey: () => Promise<{ key: string }>;
   pushSubscribe: (sub: unknown, label: string) => Promise<{ ok: boolean; error?: string }>;
   pushUnsubscribe: (endpoint: string) => Promise<{ ok: boolean }>;
-}): PushEnv {
+}, demo = false): PushEnv {
   const nav = typeof navigator === "undefined" ? null : navigator;
   const canNotify = typeof Notification !== "undefined";
   // Two ways to be on the Home Screen, because the reliable one on iOS is
@@ -386,5 +412,6 @@ export function browserPushEnv(api: {
     getKey: api.pushKey,
     subscribe: api.pushSubscribe,
     unsubscribe: api.pushUnsubscribe,
+    demo,
   };
 }
