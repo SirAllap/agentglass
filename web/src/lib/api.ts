@@ -414,6 +414,10 @@ const realApi = {
   /** Where this server is reachable from another device, whether one has
    *  arrived, and which firewall is the likely reason if none has. */
   remoteStatus: () => get<RemoteStatus>("/remote/status"),
+  /** Cut one device off (or let it back in). Closes the sockets it is holding
+   *  as well as refusing what it sends next; only this machine may call it. */
+  remoteDevice: (address: string, blocked: boolean) =>
+    post<{ ok: boolean; address?: string; blocked?: boolean; closed?: number; error?: string }>("/remote/device", { address, blocked }),
   updateStatus: () => get<UpdateStatus>("/update/status"),
   // The tag is optional because the automatic modal wants "whatever this build
   // came from", while About asks for a named release — the update it is about
@@ -695,7 +699,8 @@ const demoApi: typeof realApi = {
   dockerStats: () => D(demo.dockerStats()),
   dockerLogs: (id: string, _tail?: number) => D(demo.dockerLogs(id)),
   updateNotes: (_tag?: string) => D({ ok: false, tag: "", notes: "", source: "", error: "not available in the demo" } as ReleaseNotes),
-  remoteStatus: () => D({ exposed: false, bind: "127.0.0.1", port: 4000, trustLan: false, tokenRequired: false, webUi: true, urls: [], addresses: [], clients: { count: 0, lastAt: null, addresses: [] }, firewall: null } as RemoteStatus),
+  remoteStatus: () => D({ exposed: false, bind: "127.0.0.1", port: 4000, trustLan: false, tokenRequired: false, webUi: true, urls: [], addresses: [], clients: { count: 0, lastAt: null, addresses: [], liveCount: 0 }, devices: [], firewall: null } as RemoteStatus),
+  remoteDevice: (_address: string, _blocked: boolean) => D({ ok: false, error: "not available in the demo" }),
   updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0 }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
   updateRun: () => D({ ok: false, error: "not available in the demo" }),
   hooksStatus: () => D({ installed: false, bundled: false, settingsPath: "~/.claude/settings.json", python: "python3" } as HookSetupStatus),

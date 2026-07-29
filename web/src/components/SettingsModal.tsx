@@ -821,12 +821,19 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
               <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[820px] max-w-[95vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
+                className="w-[1040px] max-w-[95vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
                 // Fixed, not max: with tabs the pane's height would otherwise
                 // change with whichever section you picked, and a dialog that
                 // resizes under the cursor is disorienting in a way a little
                 // empty space never is.
-                                style={{ height: "min(78vh, 620px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+                //
+                // Grown from 820x620 once Remote became a page rather than a
+                // paragraph: a QR code, a list of addresses and a row per
+                // connected device do not fit a column that narrow without
+                // wrapping into something you have to scroll to read. The vh
+                // caps keep it a dialog on a laptop screen rather than a
+                // full-screen takeover.
+                                style={{ height: "min(86vh, 760px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Settings</span>
@@ -837,7 +844,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   {/* One page per concern instead of one long scroll: four
                       sections stacked vertically meant the shortcuts, the part
                       you come here to change, were always below the fold. */}
-                  <div className="shrink-0 w-[168px] py-2 px-2 flex flex-col gap-0.5 border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+                  <div className="shrink-0 w-[186px] py-2 px-2 flex flex-col gap-0.5 border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
                     {TABS.map((t) => (
                       <button key={t.id} onClick={() => setPane(t.id)}
                         className="w-full text-left px-2.5 py-1.5 rounded-lg text-[12px] flex items-center gap-2"

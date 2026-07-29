@@ -628,15 +628,10 @@
 /* A chat that replied while you were elsewhere. Deliberately a slow, low-
    contrast breath rather than a hard blink: it sits in a header you look at
    all day, and something that flashes urgently for a message that can wait
-   trains you to ignore it.
-
-   The halo is drawn in currentColor so one keyframe serves every caller: the
-   element already has to set a colour to look like it means anything, and a
-   tmux tab breathing amber for "it asked you something" reads differently from
-   a chat breathing green for "it replied". */
+   trains you to ignore it. */
 @keyframes agx-attention {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 40%, transparent); }
-  50%      { box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 0%, transparent); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 40%, transparent); }
+  50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 0%, transparent); }
 }
 @media (prefers-reduced-motion: reduce) {
   @keyframes agx-attention { 0%, 100% { box-shadow: none; } }

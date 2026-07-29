@@ -6,6 +6,11 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import {
   noteClient,
+  noteSocket,
+  blockDevice,
+  isBlocked,
+  remoteDevices,
+  deviceLabel,
   remoteClients,
   __resetRemoteClients,
   isLoopback,
@@ -40,33 +45,153 @@ describe("noteClient", () => {
     noteClient(undefined);
     expect(remoteClients().count).toBe(0);
 
-    noteClient("192.168.1.42", 1000);
+    noteClient("192.168.1.42", { now: 1000 });
     expect(remoteClients()).toMatchObject({ count: 1, lastAt: 1000, addresses: ["192.168.1.42"] });
   });
 
   test("one entry per address, keeping the most recent time", () => {
-    noteClient("192.168.1.42", 1000);
-    noteClient("192.168.1.42", 5000);
+    noteClient("192.168.1.42", { now: 1000 });
+    noteClient("192.168.1.42", { now: 5000 });
     expect(remoteClients()).toMatchObject({ count: 1, lastAt: 5000 });
   });
 
   test("newest first, and the address list is capped", () => {
-    noteClient("192.168.1.10", 1000);
-    noteClient("192.168.1.11", 3000);
-    noteClient("192.168.1.12", 2000);
+    noteClient("192.168.1.10", { now: 1000 });
+    noteClient("192.168.1.11", { now: 3000 });
+    noteClient("192.168.1.12", { now: 2000 });
     expect(remoteClients().addresses.slice(0, 2)).toEqual(["192.168.1.11", "192.168.1.12"]);
   });
 
   test("cannot be grown without limit by an unauthenticated caller", () => {
     // This is fed by connection metadata from anything that can reach the port.
-    for (let i = 0; i < 300; i++) noteClient(`10.0.${Math.floor(i / 250)}.${i % 250}`, 1000 + i);
+    for (let i = 0; i < 300; i++) noteClient(`10.0.${Math.floor(i / 250)}.${i % 250}`, { now: 1000 + i });
     expect(remoteClients().count).toBeLessThanOrEqual(64);
   });
 
   test("a v4-mapped address is the same device as its plain form", () => {
-    noteClient("192.168.1.42", 1000);
-    noteClient("::ffff:192.168.1.42", 2000);
+    noteClient("192.168.1.42", { now: 1000 });
+    noteClient("::ffff:192.168.1.42", { now: 2000 });
     expect(remoteClients().count).toBe(1);
+  });
+
+  test("a later request without a User-Agent does not erase the name", () => {
+    // The phone's service worker sends none, and it must not turn a named
+    // device back into "Unnamed device" between two polls.
+    noteClient("192.168.1.42", { now: 1000, agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1" });
+    noteClient("192.168.1.42", { now: 2000, agent: null });
+    expect(remoteDevices()[0]!.label).toBe("iPhone · Safari");
+  });
+});
+
+describe("connected right now", () => {
+  test("a held-open socket is what makes a device live, not its last request", () => {
+    noteClient("192.168.1.42", { now: 1000 });
+    expect(remoteDevices()[0]!.live).toBe(0);
+    noteSocket("192.168.1.42", 1, 2000);
+    expect(remoteDevices()[0]!.live).toBe(1);
+    expect(remoteClients().liveCount).toBe(1);
+    noteSocket("192.168.1.42", -1, 3000);
+    expect(remoteDevices()[0]!.live).toBe(0);
+    expect(remoteClients().liveCount).toBe(0);
+  });
+
+  test("counts several sockets from one device, and never goes negative", () => {
+    // A phone holds the event stream and a terminal at once; a close that
+    // arrives twice must not leave a live device stuck at -1, which would read
+    // as "not connected" forever after.
+    noteSocket("192.168.1.42", 1, 1000);
+    noteSocket("192.168.1.42", 1, 1000);
+    expect(remoteDevices()[0]!.live).toBe(2);
+    noteSocket("192.168.1.42", -1, 2000);
+    noteSocket("192.168.1.42", -1, 2000);
+    noteSocket("192.168.1.42", -1, 2000);
+    expect(remoteDevices()[0]!.live).toBe(0);
+  });
+
+  test("a socket from an address we never saw registers the device", () => {
+    noteSocket("192.168.1.77", 1, 1000);
+    expect(remoteDevices().map((d) => d.address)).toEqual(["192.168.1.77"]);
+    expect(remoteDevices()[0]!.live).toBe(1);
+  });
+
+  test("loopback holds no sockets: the app talking to itself is not a device", () => {
+    noteSocket("127.0.0.1", 1, 1000);
+    noteSocket("::1", 1, 1000);
+    expect(remoteClients().count).toBe(0);
+  });
+
+  test("live devices sort above ones that merely visited", () => {
+    noteClient("192.168.1.10", { now: 9000 });
+    noteClient("192.168.1.11", { now: 1000 });
+    noteSocket("192.168.1.11", 1, 1000);
+    expect(remoteDevices().map((d) => d.address)).toEqual(["192.168.1.11", "192.168.1.10"]);
+  });
+});
+
+describe("disconnecting a device", () => {
+  test("blocks by address and lets it back in", () => {
+    noteClient("192.168.1.42", { now: 1000 });
+    expect(blockDevice("192.168.1.42", true)).toBe(true);
+    expect(isBlocked("192.168.1.42")).toBe(true);
+    // The gate reads whatever the socket reports, which may be v4-mapped.
+    expect(isBlocked("::ffff:192.168.1.42")).toBe(true);
+    expect(blockDevice("192.168.1.42", false)).toBe(true);
+    expect(isBlocked("192.168.1.42")).toBe(false);
+  });
+
+  test("an address that was never seen cannot be blocked into existence", () => {
+    // Otherwise the list becomes writable by anything that can POST a string.
+    expect(blockDevice("8.8.8.8", true)).toBe(false);
+    expect(remoteClients().count).toBe(0);
+  });
+
+  test("nothing and loopback are never blocked", () => {
+    expect(isBlocked(null)).toBe(false);
+    expect(isBlocked("127.0.0.1")).toBe(false);
+  });
+
+  test("the cap never evicts a connected or a blocked device", () => {
+    // The two rows the user is relying on are exactly the two that must not
+    // quietly vanish when 300 strangers touch the port.
+    noteClient("192.168.1.5", { now: 1 });
+    noteSocket("192.168.1.5", 1, 1);
+    noteClient("192.168.1.6", { now: 2 });
+    blockDevice("192.168.1.6", true);
+    for (let i = 0; i < 300; i++) noteClient(`10.0.${Math.floor(i / 250)}.${i % 250}`, { now: 1000 + i });
+    const kept = remoteDevices().map((d) => d.address);
+    expect(kept).toContain("192.168.1.5");
+    expect(kept).toContain("192.168.1.6");
+    expect(remoteDevices().length).toBeLessThanOrEqual(64);
+  });
+});
+
+describe("deviceLabel", () => {
+  test("names the phones a person would recognise", () => {
+    expect(deviceLabel("Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"))
+      .toBe("Pixel 8 Pro · Chrome");
+    expect(deviceLabel("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"))
+      .toBe("iPhone · Safari");
+    expect(deviceLabel("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1")).toBe("iPad · Safari");
+  });
+
+  test("names the machines too, and prefers Edge over the Chrome it also claims", () => {
+    expect(deviceLabel("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")).toBe("Mac · Chrome");
+    expect(deviceLabel("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0")).toBe("Windows PC · Edge");
+    expect(deviceLabel("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36")).toBe("Linux machine · Chrome");
+  });
+
+  test("says plainly when it is not a browser", () => {
+    expect(deviceLabel("curl/8.4.0")).toBe("A script (curl)");
+    expect(deviceLabel("python-requests/2.31.0")).toBe("A script (python-requests)");
+  });
+
+  test("stays vague rather than guessing", () => {
+    // A wrong-but-specific name is worse than an honest blank: the user acts
+    // on this by deciding whether to cut a device off.
+    expect(deviceLabel("")).toBe("Unnamed device");
+    expect(deviceLabel(null)).toBe("Unnamed device");
+    expect(deviceLabel("Mozilla/5.0 (Linux; Android 14; wv) AppleWebKit/537.36 Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36"))
+      .toBe("An Android device · Chrome");
   });
 });
 
@@ -162,7 +287,7 @@ describe("remoteStatus", () => {
   });
 
   test("reports the devices that have been seen", () => {
-    noteClient("192.168.1.42", 4242);
+    noteClient("192.168.1.42", { now: 4242 });
     const st = remoteStatus({ ...base, bind: "0.0.0.0", token: null, includeToken: true });
     expect(st.clients).toMatchObject({ count: 1, lastAt: 4242 });
   });

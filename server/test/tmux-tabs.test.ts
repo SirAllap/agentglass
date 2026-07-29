@@ -14,8 +14,8 @@ describe("reading tmux's window list", () => {
   test("id, index, name, active flag and tmux's own marks", () => {
     const out = "@0\t1\tAI01\t0\t-\n@4\t2\tlazygit\t1\t*\n";
     expect(parseWindows(out)).toEqual([
-      { id: "@0", index: 1, name: "AI01", active: false, flags: "-", attention: null },
-      { id: "@4", index: 2, name: "lazygit", active: true, flags: "*", attention: null },
+      { id: "@0", index: 1, name: "AI01", active: false, flags: "-" },
+      { id: "@4", index: 2, name: "lazygit", active: true, flags: "*" },
     ]);
   });
 
@@ -29,7 +29,7 @@ describe("reading tmux's window list", () => {
 
   test("a window with no name is not dropped", () => {
     const [w] = parseWindows("@7\t4\t\t0\t\n");
-    expect(w).toEqual({ id: "@7", index: 4, name: "", active: false, flags: "", attention: null });
+    expect(w).toEqual({ id: "@7", index: 4, name: "", active: false, flags: "" });
   });
 
   test("blank lines and unparseable indexes are skipped, not guessed at", () => {
@@ -44,21 +44,6 @@ describe("reading tmux's window list", () => {
     const [bell, activity] = parseWindows("@0\t1\tbuild\t0\t!\n@1\t2\ttest\t0\t#\n");
     expect(bell!.flags).toBe("!");
     expect(activity!.flags).toBe("#");
-  });
-
-  test("an agent's own state comes back as the tab's attention", () => {
-    const [waiting, done] = parseWindows("@0\t1\tAI00\t0\t\twaiting\n@1\t2\tAI01\t0\t\tdone\n");
-    expect(waiting!.attention).toBe("waiting");
-    expect(done!.attention).toBe("done");
-  });
-
-  test("a state nothing recognises is dropped, not passed on", () => {
-    // It picks a colour at the far end. A half-written option, or one somebody
-    // else's tooling set for its own purposes, should leave the tab alone.
-    expect(parseWindows("@0\t1\tAI00\t0\t\tthinking\n")[0]!.attention).toBeNull();
-    expect(parseWindows("@0\t1\tAI00\t0\t\t\n")[0]!.attention).toBeNull();
-    // tmux servers older than the format change answer without the column.
-    expect(parseWindows("@0\t1\tAI00\t0\t-\n")[0]!.attention).toBeNull();
   });
 });
 
@@ -103,16 +88,11 @@ describe("which session the client is on", () => {
     expect(parseFrame("", "/dev/pts/0")).toBeNull();
   });
 
-  test("the agent's state survives the trip through the tagged frame", () => {
-    const f = parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$2\t@1\t1\tAI00\t0\t\twaiting", "/dev/pts/0");
-    expect(f!.windows[0]!.attention).toBe("waiting");
-  });
-
   test("window names with tabs in them do not smuggle a session id", () => {
     // The name is the last-but-two field and is not re-split, so this is a
     // window called what it says, in $2, and not one in $7.
     const f = parseFrame("c\t/dev/pts/0\tmain\t$2\nw\t$2\t@1\t1\tnpm run dev\t1\t*", "/dev/pts/0");
-    expect(f!.windows).toEqual([{ id: "@1", index: 1, name: "npm run dev", active: true, flags: "*", attention: null }]);
+    expect(f!.windows).toEqual([{ id: "@1", index: 1, name: "npm run dev", active: true, flags: "*" }]);
   });
 });
 
