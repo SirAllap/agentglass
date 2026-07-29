@@ -408,7 +408,13 @@ async function main() {
       // looks exactly like a click that did nothing.
       if (files.length && await tap(cdp, ".mb-screen.on .mb-row button")) {
         await Bun.sleep(2200);
-        note("diff", "the diff screen opens", (await topTitle(cdp)).includes("."), await topTitle(cdp));
+        // The title has to be the file that was tapped. This used to assert it
+        // "contains a dot", which is a stand-in for "looks like a filename" and
+        // is wrong about `Makefile`, `Dockerfile`, `LICENSE` and every other
+        // extensionless file a repository has.
+        const want = (files[0] || "").split("/").pop() || "";
+        note("diff", "the diff screen opens on the file that was tapped",
+          !!want && (await topTitle(cdp)).includes(want), `${await topTitle(cdp)} vs ${want}`);
         const lines = await cdp.ev(`document.querySelectorAll(".mb-dl, .mb-diff-line, .mb-hunk").length`);
         const said = await cdp.ev(`(document.querySelector(".mb-screen.on")?.textContent || "")
           .includes("Nothing to show") ? "empty" : ""`);
@@ -480,6 +486,33 @@ async function main() {
           await drain(cdp, facet.toLowerCase());
         }
       }
+      // ---- the project's own commands -------------------------------
+      if (await tap(cdp, ".mb-screen.on .mb-seg button", "Commands")) {
+        await Bun.sleep(2200);
+        const rows = await cdp.ev(`${TOP}.querySelectorAll(".mb-row").length`);
+        if (!rows) {
+          console.log("  skip  commands · no Makefile or package.json in this checkout");
+          note("commands", "an empty list says which kind of empty it is",
+            await cdp.ev(`(${TOP}.querySelector(".mb-empty span")?.textContent || "").length > 12`),
+            await cdp.ev(`${TOP}.querySelector(".mb-empty span")?.textContent`));
+        } else {
+          // The command itself, not a target name: `up` means nothing out of
+          // context and is what you would be handing to an agent.
+          note("commands", "each row shows the command that would run",
+            await cdp.ev(`[...${TOP}.querySelectorAll(".mb-row .i b")].every(e=>/\\S/.test(e.textContent))`),
+            await cdp.ev(`JSON.stringify([...${TOP}.querySelectorAll(".mb-row .i b")].map(e=>e.textContent).slice(0,4))`));
+          note("commands", "a Makefile target is offered before a script",
+            await cdp.ev(`(()=>{const k=[...${TOP}.querySelectorAll(".mb-row .r")].map(e=>e.textContent.trim());
+              const i=k.indexOf("script"); return i === -1 || !k.slice(i).includes("make")})()`),
+            await cdp.ev(`JSON.stringify([...${TOP}.querySelectorAll(".mb-row .r")].map(e=>e.textContent.trim()))`));
+          note("commands", "and each one is a way to hand it over",
+            await cdp.ev(`[...${TOP}.querySelectorAll(".mb-row")].every(e=>e.tagName === "BUTTON" || !!e.querySelector("button"))`));
+        }
+        await shot(cdp, "06b-commands");
+        await hygiene(cdp, "commands");
+        await drain(cdp, "commands");
+      }
+
       // ---- reviewing a pull request --------------------------------
       //
       // Read-only, deliberately: everything up to and including the state of
