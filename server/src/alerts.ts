@@ -13,6 +13,8 @@
 // desktop setting can suppress. Treat everything below as best-effort reach
 // for when nobody is looking at agentglass at all.
 import type { WatchEvent, AlertNote } from "../../shared/types.ts";
+import { sendPush } from "./push.ts";
+import { vapidKeys, subscriptions, removeSubscription, markDelivered } from "./pushstore.ts";
 
 const WEBHOOK = process.env.AGENTGLASS_WEBHOOK;
 const DESKTOP = process.env.AGENTGLASS_NOTIFY === "1";
@@ -60,6 +62,34 @@ function shouldSend(key: string): boolean {
   return true;
 }
 
+/**
+ * Every phone that asked to be told, in parallel, best effort.
+ *
+ * This is the only channel that reaches a device with its screen off. The
+ * others cannot: a webhook goes to a chat app, notify-send goes to a desktop
+ * that may not exist, and the socket closes with the phone's screen on purpose.
+ *
+ * A push service answering 404 or 410 means that subscription is dead — the
+ * user cleared site data, or the browser rotated it — so it is forgotten. Any
+ * other failure is the service having a bad minute and the device is kept: an
+ * over-eager prune would silently unsubscribe a working phone, and nobody would
+ * find out until a gate went unanswered.
+ */
+async function pushEveryone(title: string, body: string, urgency: 0 | 1 | 2) {
+  const subs = subscriptions();
+  if (!subs.length) return;
+  const keys = await vapidKeys();
+  const payload = new TextEncoder().encode(JSON.stringify({ title, body, at: Date.now() }));
+  await Promise.all(subs.map(async (s) => {
+    const r = await sendPush(s, payload, keys, {
+      // A gate is worth waking the device for; a tool error is not.
+      urgency: urgency === 2 ? "high" : "normal",
+    });
+    if (r.gone) removeSubscription(s.endpoint);
+    else if (r.ok) markDelivered(s.endpoint);
+  }));
+}
+
 async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2) {
   if (WEBHOOK && !IS_TEST) {
     try {
@@ -72,6 +102,16 @@ async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2) {
       console.warn("[alerts] webhook failed:", e);
     }
   }
+  // Before the desktop branch and outside it: a phone is subscribed whether or
+  // not AGENTGLASS_NOTIFY is on, and the desktop path returns early when a
+  // client is attached — which would have skipped the phone entirely in the
+  // one case where somebody is at the desk and the phone still wants to know.
+  if (!IS_TEST) {
+    // Never awaited: an unreachable push service must not hold up the
+    // notification that is also going to the desktop.
+    pushEveryone(title, body, urgency).catch((e) => console.warn("[alerts] push failed:", e));
+  }
+
   if (DESKTOP) {
     // A connected client shows a native OS notification (cross-platform).
     // notify-send is the fallback only when nothing is attached to show it.
