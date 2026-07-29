@@ -278,8 +278,16 @@ async function main() {
     await Bun.sleep(900);
     const liveRows = await cdp.ev(`document.querySelectorAll("main button.w-full").length`);
     note("chats", "Working narrows it", liveRows <= allRows, `${allRows} → ${liveRows}`);
+    // Any sentence, not one particular sentence. "Try a wider range" is the
+    // right words when other scopes have rows; a machine with no agents at all
+    // says "No agents yet", which is better — and asserting the first wording
+    // turned a correct cold-start screen red. An audit that fails on a
+    // legitimate state teaches you to ignore it.
     note("chats", "an empty scope explains itself",
-      liveRows > 0 || await cdp.ev(`document.body.textContent.includes("Try a wider range")`));
+      liveRows > 0 || await cdp.ev(`(()=>{const m=document.querySelector("main");
+        if(!m) return false; const t=m.textContent||"";
+        return /Try a wider range|No agents yet|Nothing here/i.test(t)})()`),
+      await cdp.ev(`(document.querySelector("main")?.textContent||"").trim().replace(/\s+/g," ").slice(-90)`));
     await tap(cdp, "main button", "Today");
     await Bun.sleep(900);
     await drain(cdp, "chats");
@@ -392,11 +400,17 @@ async function main() {
         await shot(cdp, "05b-halted");
         await hygiene(cdp, "halt");
         await drain(cdp, "halt");
+      } else if (!files.length) {
+        // A clean checkout is not a broken one. This asserted rows
+        // unconditionally, so a brand-new machine — the state every user is in
+        // once — came back red on a screen that was doing exactly its job.
+        console.log("  skip  changes · this checkout has nothing uncommitted");
+        note("changes", "a clean tree says so", await cdp.ev(`/Nothing to commit/.test(${TOP}.textContent)`));
       } else {
         note("changes", "lists the changed files", files.length > 0, `${files.length} rows`);
         note("changes", "file paths carry no diff prefix",
-          files.length > 0 && !files.some((f) => /^[abciwo]\//.test(f)),
-          files.filter((f) => /^[abciwo]\//.test(f)).join(", ") || "(list was empty)");
+          !files.some((f) => /^[abciwo]\//.test(f)),
+          files.filter((f) => /^[abciwo]\//.test(f)).join(", ") || "(none)");
       }
       await shot(cdp, "05-changes");
       await drain(cdp, "changes");
