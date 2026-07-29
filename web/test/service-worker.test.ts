@@ -27,9 +27,13 @@ function loadWorker(opts: { clients?: any[] } = {}) {
   const waits: Promise<unknown>[] = [];
   let claimed = false, skipped = false;
 
+  const messaged: { url: string; data: unknown }[] = [];
+  // One list, so the order of the two is a fact rather than an inference.
+  const order: string[] = [];
   const windows = (opts.clients ?? []).map((c) => ({
     ...c,
-    focus() { focused.push(c.url); return Promise.resolve(this); },
+    focus() { order.push("focus"); focused.push(c.url); return Promise.resolve(this); },
+    postMessage(data: unknown) { order.push("message"); messaged.push({ url: c.url, data }); },
   }));
 
   const scope = {
@@ -60,7 +64,7 @@ function loadWorker(opts: { clients?: any[] } = {}) {
     await Promise.all(waits);
   };
 
-  return { fire, shown, opened, focused, listeners, waits,
+  return { fire, shown, opened, focused, messaged, order, listeners, waits,
     get claimed() { return claimed; }, get skipped() { return skipped; } };
 }
 
@@ -210,6 +214,32 @@ describe("tapping it", () => {
     await w.fire("notificationclick", { notification: { close() {} } });
     expect(w.focused).toEqual([]);
     expect(w.opened).toEqual(["https://box.local/"]);
+  });
+
+  it("tells the window why it was raised", async () => {
+    // Focusing alone raises the app wherever it was left — the fleet, a diff, a
+    // conversation. Tapping "Approval needed" would then show something else
+    // entirely, with the thing you were woken for two taps away and
+    // unmentioned.
+    const w = loadWorker({ clients: [{ url: "https://box.local/#fleet" }] });
+    await w.fire("notificationclick", { notification: { close() {} } });
+    expect(w.messaged).toHaveLength(1);
+    expect(w.messaged[0]!.data).toEqual({ type: "agentglass:opened-from-notification" });
+  });
+
+  it("says so before raising the window, not after", async () => {
+    // `focus()` resolves when the window is actually up, which on a phone
+    // waking from a locked screen is long enough to watch the wrong screen
+    // paint first.
+    const w = loadWorker({ clients: [{ url: "https://box.local/" }] });
+    await w.fire("notificationclick", { notification: { close() {} } });
+    expect(w.order).toEqual(["message", "focus"]);
+  });
+
+  it("does not message a window belonging to some other site", async () => {
+    const w = loadWorker({ clients: [{ url: "https://elsewhere.example/x" }] });
+    await w.fire("notificationclick", { notification: { close() {} } });
+    expect(w.messaged).toEqual([]);
   });
 
   it("dismisses the notification it came from", async () => {
