@@ -13,7 +13,7 @@ import { NOW_CSS, NowHero, NowStream, type NowAction, type LiveCall } from "./Mo
 import { RepoList, RepoScreen, ContainerScreen, HALT_CSS, type RepoSummary } from "./MobileRepo.tsx";
 import { projectRows } from "./projects.ts";
 import { baseName, ownerOf } from "../../../shared/projectKey.ts";
-import { MobilePr } from "./MobilePr.tsx";
+import { MobilePr, THREAD_CSS } from "./MobilePr.tsx";
 import { buildQueue, type NowItem } from "./nowQueue.ts";
 import { dedupePrs, mainCheckouts } from "./prRows.ts";
 import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
@@ -582,7 +582,7 @@ export function MobileApp() {
 
   return (
     <div className="mb min-h-[100dvh] flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>
-      <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}{HALT_CSS}</style>
+      <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}{HALT_CSS}{THREAD_CSS}</style>
       {askDialog}
       <div className="mb-sky" />
 

@@ -171,6 +171,9 @@ const texts = (cdp: CDP, sel: string) =>
  */
 const TOP = `[...document.querySelectorAll(".mb-screen.on")].pop()`;
 
+/** Close the screen that is actually on top. */
+const closeTop = (cdp: CDP) => cdp.ev(`(()=>{const b=${TOP}?.querySelector(".hd .back");b?.click();return !!b})()`);
+
 /** Click inside the topmost screen only. */
 const tapTop = async (cdp: CDP, sel: string, needle?: string) => {
   const hit = await cdp.ev(`(()=>{const s=${TOP}; if(!s) return false;
@@ -548,6 +551,47 @@ async function main() {
               // Leave without sending anything.
               await cdp.ev(`document.querySelector(".mb-scrim.on")?.click()`);
               await Bun.sleep(500);
+            }
+          }
+          // The TOP screen's back, not the first one in the document. Screens
+          // stay mounted under their children, so `.mb-screen.on .hd .back`
+          // matches the repository's back button first and closes the wrong
+          // thing — which is why the section below saw a diff where it expected
+          // a pull request. Same trap the TOP helper exists for.
+          await closeTop(cdp);
+          await Bun.sleep(700);
+
+          // ---- line threads --------------------------------------------
+          //
+          // Read-only again: what is drawn and in what order. Replying and
+          // resolving are writes and are not pressed here.
+          if (await tap(cdp, ".mb-screen.on .mb-seg button", "Talk")) {
+            await Bun.sleep(1600);
+            const threads = await cdp.ev(`${TOP}.querySelectorAll(".mb-thr").length`);
+            if (!threads) {
+              console.log("  skip  threads · no line threads on this pull request");
+            } else {
+              // Every reply, not a count. The old rendering folded a thread into
+              // its opening sentence and dropped the answers — which is the part
+              // that decides anything.
+              note("threads", "every reply is on screen, not a count",
+                await cdp.ev(`[...${TOP}.querySelectorAll(".mb-thr")].some(t=>t.querySelectorAll(".tc").length > 1)`),
+                await cdp.ev(`JSON.stringify([...${TOP}.querySelectorAll(".mb-thr")].map(t=>t.querySelectorAll(".tc").length))`));
+              note("threads", "what is still open is read first",
+                await cdp.ev(`(()=>{const q=[...${TOP}.querySelectorAll(".mb-thr")].map(t=>t.classList.contains("quiet"));
+                  return q.indexOf(false) === -1 || q.lastIndexOf(false) < (q.indexOf(true) === -1 ? q.length : q.indexOf(true));})()`),
+                await cdp.ev(`JSON.stringify([...${TOP}.querySelectorAll(".mb-thr .th")].map(e=>e.textContent))`));
+              note("threads", "a settled thread says which kind of settled",
+                await cdp.ev(`[...${TOP}.querySelectorAll(".mb-thr.quiet")].every(t=>/resolved|outdated/.test(t.textContent))`));
+              note("threads", "each one can be answered and closed",
+                await cdp.ev(`[...${TOP}.querySelectorAll(".mb-thr")].every(t=>{
+                  const v=[...t.querySelectorAll(".ta button")].map(b=>b.textContent.trim());
+                  return v.includes("Reply") && (v.includes("Resolve") || v.includes("Reopen"));})`));
+              note("threads", "a line with no current number does not print one",
+                !(await cdp.ev(`/:(null|undefined|NaN)/.test(${TOP}.textContent)`)));
+              await shot(cdp, "07c-threads");
+              await hygiene(cdp, "threads");
+              await drain(cdp, "threads");
             }
           }
           await tap(cdp, ".mb-screen.on .hd .back");
