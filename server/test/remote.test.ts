@@ -9,6 +9,7 @@ import {
   noteSocket,
   blockDevice,
   isBlocked,
+  isSelf,
   remoteDevices,
   deviceLabel,
   remoteClients,
@@ -165,6 +166,50 @@ describe("disconnecting a device", () => {
   });
 });
 
+describe("this machine is not a device to cut off", () => {
+  test("a connection from one of our own addresses is marked as self", () => {
+    // What the panel showed on a machine with Tailscale: the app reaching its
+    // own sidecar at 100.85.155.119 instead of localhost, listed as a stranger
+    // with a Disconnect button next to it.
+    noteClient("100.85.155.119", { now: 1000 });
+    noteClient("192.168.1.50", { now: 1000 });
+    const devices = remoteDevices(["100.85.155.119", "192.168.1.131"]);
+    expect(devices.find((d) => d.address === "100.85.155.119")?.self).toBe(true);
+    expect(devices.find((d) => d.address === "192.168.1.50")?.self).toBe(false);
+  });
+
+  test("it cannot be blocked, because there is no undo from a dead page", () => {
+    noteClient("192.168.1.50", { now: 1000 });
+    // Same address, once as a stranger and once as one of ours: only the
+    // second is refused, and the refusal is what stops the button blacking
+    // out the window it was pressed in.
+    expect(blockDevice("192.168.1.50", true, ["192.168.1.131"])).toBe(true);
+    expect(blockDevice("192.168.1.50", false, ["192.168.1.131"])).toBe(true);
+    expect(blockDevice("192.168.1.50", true, ["192.168.1.50"])).toBe(false);
+    expect(isBlocked("192.168.1.50")).toBe(false);
+    // Letting a device back in is never refused: it cannot lock anyone out.
+    expect(blockDevice("192.168.1.50", false, ["192.168.1.50"])).toBe(true);
+  });
+
+  test("isSelf covers loopback, v4-mapped forms and nothing else", () => {
+    expect(isSelf("127.0.0.1")).toBe(true);
+    expect(isSelf(null)).toBe(false);
+    expect(isSelf("8.8.8.8", ["192.168.1.131"])).toBe(false);
+    expect(isSelf("192.168.1.131", ["192.168.1.131"])).toBe(true);
+    expect(isSelf("::ffff:192.168.1.131", ["192.168.1.131"])).toBe(true);
+  });
+
+  test("the counts leave this machine out, while the list keeps it", () => {
+    // A number that says "one device is connected" about the window you are
+    // reading it in is worse than no number.
+    noteClient("100.85.155.119", { now: 1000 });
+    noteSocket("100.85.155.119", 1, 1000);
+    const own = ["100.85.155.119"];
+    expect(remoteDevices(own).length).toBe(1);
+    expect(remoteDevices(own)[0]!.self).toBe(true);
+  });
+});
+
 describe("deviceLabel", () => {
   test("names the phones a person would recognise", () => {
     expect(deviceLabel("Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"))
@@ -183,6 +228,22 @@ describe("deviceLabel", () => {
   test("says plainly when it is not a browser", () => {
     expect(deviceLabel("curl/8.4.0")).toBe("A script (curl)");
     expect(deviceLabel("python-requests/2.31.0")).toBe("A script (python-requests)");
+  });
+
+  test("sees through Android's frozen model string", () => {
+    // Chrome on Android 13+ reports the model as the literal "K" for privacy.
+    // A Pixel showed up in the panel as "K · Chrome", which reads like a
+    // stranger's device rather than the phone in your pocket.
+    expect(deviceLabel("Mozilla/5.0 (Linux; Android 13; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"))
+      .toBe("An Android device · Chrome");
+    // A phone that does name itself is still named.
+    expect(deviceLabel("Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"))
+      .toBe("Pixel 8 Pro · Chrome");
+  });
+
+  test("names the cockpit rather than calling it Chrome", () => {
+    expect(deviceLabel("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) agentglass/0.6.0 Chrome/130.0.0.0 Electron/33.4.11 Safari/537.36"))
+      .toBe("The agentglass app");
   });
 
   test("stays vague rather than guessing", () => {

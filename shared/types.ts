@@ -1529,6 +1529,9 @@ export interface RemoteDevice {
   hits: number;
   /** Refused at the door until it is let back in or the server restarts. */
   blocked: boolean;
+  /** This machine reaching itself through one of its own addresses rather than
+   *  loopback. Shown, named, and never offered a Disconnect. */
+  self?: boolean;
 }
 
 /** Whether another device can reach this server, and whether one ever has. */
