@@ -7,9 +7,10 @@ import { MobilePr } from "./MobilePr.tsx";
 import { projectRows } from "./projects.ts";
 import { listState, dockerState } from "./listState.ts";
 import { halt, type Halt } from "./haltState.ts";
+import { commandRows, promptFor, commandsEmpty } from "./commands.ts";
 import type {
   GitRepoRef, WorkingTree, GitBranch, DockerContainer, DockerStat, PrSummary, GitFileChange,
-  PrListResponse,
+  PrListResponse, TerminalCommands,
 } from "../../../shared/types.ts";
 
 /**
@@ -22,7 +23,7 @@ import type {
  * separate panels each asking which repo you meant.
  */
 
-type Facet = "changes" | "prs" | "containers";
+type Facet = "changes" | "prs" | "containers" | "commands";
 
 export interface RepoSummary {
   ref: GitRepoRef;
@@ -111,6 +112,10 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   );
   const [msg, setMsg] = useState("");
   const [branches, setBranches] = useState<GitBranch[] | null>(null);
+  /** The project's own Makefile targets and package.json scripts. Fetched when
+   *  the facet is opened — one walk of the checkout, and most visits never
+   *  ask. */
+  const [cmds, setCmds] = useState<TerminalCommands | null>(null);
   const [openPr, setOpenPr] = useState<number | null>(null);
   const [diffAt, setDiffAt] = useState<number | null>(null);
   const [prNonce, setPrNonce] = useState(0);
@@ -164,6 +169,12 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
   // stopped part-way through a rebase would otherwise be invisible from the
   // pull request list, which is exactly where a clean-looking checkout opens.
   useEffect(() => { if (open) loadTree(); }, [open, facet, loadTree]);
+  useEffect(() => {
+    if (!open || facet !== "commands" || !root) return;
+    setCmds(null);
+    api.terminalCommands(root).then(setCmds).catch(() => setCmds({ enabled: true, make: [], scripts: [] }));
+  }, [open, facet, root]);
+
   useEffect(() => {
     if (!open || facet !== "prs" || !root) return;
     setPrsLoading(true);
@@ -269,6 +280,7 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
           { id: "changes", label: "Changes", n: repo?.dirty || null },
           { id: "prs", label: "Pull requests", n: prs.length || null },
           { id: "containers", label: "Containers", n: mine.length || null },
+          { id: "commands", label: "Commands", n: null },
         ]} />
 
         {facet === "changes" && (
@@ -400,6 +412,32 @@ export function RepoScreen({ open, repo, checkouts = [], onPickCheckout, contain
               </div>
             )
         )}
+
+        {facet === "commands" && (() => {
+          const why = commandsEmpty(cmds);
+          if (why) return <Empty glyph="▷" title="Nothing to run from here" body={why} />;
+          return (
+            <>
+              {/* Nothing runs behind your back. The command goes to an agent in
+                  this checkout, which is something you can watch and interrupt
+                  — the only kind of remote execution worth having in a pocket. */}
+              <p className="text-[11px] mb-2.5" style={{ color: "var(--text3)" }}>
+                {onOpenChatWith
+                  ? "Tap one to hand it to an agent in this checkout."
+                  : "Read-only here — this build has no way to open a conversation."}
+              </p>
+              <div className="flex flex-col gap-2.5">
+                {commandRows(cmds).map((c) => (
+                  <Row key={c.key}
+                    title={c.cmd}
+                    sub={[c.desc?.trim(), c.dir || null].filter(Boolean).join(" · ") || c.kind}
+                    right={c.kind === "make" ? "make" : "script"}
+                    onClick={onOpenChatWith ? () => onOpenChatWith(root, promptFor(c)) : undefined} />
+                ))}
+              </div>
+            </>
+          );
+        })()}
       </Screen>
 
       <MobileDiff
