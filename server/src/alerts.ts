@@ -75,6 +75,25 @@ function shouldSend(key: string): boolean {
  * over-eager prune would silently unsubscribe a working phone, and nobody would
  * find out until a gate went unanswered.
  */
+/**
+ * What a phone should do about an alert — which is not the same question as
+ * how loud the desktop should be, and conflating the two was a mistake.
+ *
+ * `urgency` is freedesktop's 0/1/2, and a tool error has been *critical* there
+ * on purpose since long before any of this: you are at the machine, and a
+ * failed tool call is worth a notification that does not time out. When push
+ * arrived, that same number was reused to decide two new things — whether to
+ * wake the device's radio, and whether the notification stays on the lock
+ * screen until it is dealt with. So a failed `grep` on one of eight agents
+ * lit up a phone in a pocket and pinned a notification to it that would not
+ * go away, which is precisely how somebody learns to swipe the whole app away.
+ *
+ * `wake` means an agent is stopped until a person answers. Nothing else is.
+ * The default is `tell` so that a new kind of alert is quiet on a phone until
+ * somebody decides otherwise, rather than loud until somebody notices.
+ */
+export type Reach = "wake" | "tell";
+
 export interface PushFanout {
   /** How many devices the push service accepted it for. */
   sent: number;
@@ -85,22 +104,26 @@ export interface PushFanout {
 }
 
 export async function pushEveryone(
-  title: string, body: string, urgency: 0 | 1 | 2,
+  title: string, body: string, reach: Reach,
 ): Promise<PushFanout> {
   const subs = subscriptions();
   const out: PushFanout = { sent: 0, failed: 0, pruned: 0 };
   if (!subs.length) return out;
   const keys = await vapidKeys();
-  // `urgency` travels inside the encrypted payload as well as in the header.
-  // The header is for the push service, which decides whether to wake the
-  // radio; the field is for the service worker, which decides whether the
-  // notification stays on screen until it is dealt with. Only one of the two
-  // can read the body, and only one of the two can wake the device.
-  const payload = new TextEncoder().encode(JSON.stringify({ title, body, at: Date.now(), urgency }));
+  // `reach` travels inside the encrypted payload as well as in the header, as
+  // the same 0/1/2 the worker already reads. The header is for the push
+  // service, which decides whether to wake the radio; the field is for the
+  // service worker, which decides whether the notification stays on screen
+  // until it is dealt with. Only one of the two can read the body, and only
+  // one of the two can wake the device.
+  const wake = reach === "wake";
+  const payload = new TextEncoder().encode(
+    JSON.stringify({ title, body, at: Date.now(), urgency: wake ? 2 : 1 }),
+  );
   await Promise.all(subs.map(async (s) => {
     const r = await sendPush(s, payload, keys, {
-      // A gate is worth waking the device for; a tool error is not.
-      urgency: urgency === 2 ? "high" : "normal",
+      // Only something an agent is stopped on is worth waking a pocket for.
+      urgency: wake ? "high" : "normal",
     });
     if (r.gone) { removeSubscription(s.endpoint); out.pruned++; }
     else if (r.ok) { markDelivered(s.endpoint); out.sent++; }
@@ -109,7 +132,7 @@ export async function pushEveryone(
   return out;
 }
 
-async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2) {
+async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2, reach: Reach = "tell") {
   if (WEBHOOK && !IS_TEST) {
     try {
       await fetch(WEBHOOK, {
@@ -128,7 +151,7 @@ async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2) {
   if (!IS_TEST) {
     // Never awaited: an unreachable push service must not hold up the
     // notification that is also going to the desktop.
-    pushEveryone(title, body, urgency).catch((e) => console.warn("[alerts] push failed:", e));
+    pushEveryone(title, body, reach).catch((e) => console.warn("[alerts] push failed:", e));
   }
 
   if (DESKTOP) {
@@ -163,7 +186,11 @@ let warnedNoNotifySend = false;
 /** A tool call is being held at the control-plane gate — ping the human. */
 export function pushGate(agent: string, tool: string, summary: string) {
   if (shouldSend(`gate:${agent}:${summary}`))
-    deliver("✋ Approval needed", `${agent} wants to run ${tool}${summary ? `: ${summary.slice(0, 200)}` : ""} — approve or deny in agentglass.`);
+    deliver(
+      "✋ Approval needed",
+      `${agent} wants to run ${tool}${summary ? `: ${summary.slice(0, 200)}` : ""} — approve or deny in agentglass.`,
+      2, "wake",
+    );
 }
 
 /** Inspect an event and fire an alert if it warrants one. */
@@ -172,7 +199,13 @@ export function maybeAlert(e: WatchEvent) {
 
   if (e.hook_event_type === "PermissionRequest") {
     if (shouldSend(`perm:${e.session_id}`))
-      deliver("⏳ Approval needed", `${agent} is waiting on a permission request${e.tool_name ? ` (${e.tool_name})` : ""}.`);
+      deliver(
+        "⏳ Approval needed",
+        `${agent} is waiting on a permission request${e.tool_name ? ` (${e.tool_name})` : ""}.`,
+        // The other one an agent is stopped on. Everything below this line is
+        // news rather than a blockage, and reaches a phone quietly.
+        2, "wake",
+      );
     return;
   }
   if (e.hook_event_type === "Notification") {

@@ -125,11 +125,19 @@ beforeAll(async () => {
       AGENTGLASS_SCAN_DISABLED: "1",
       AGENTGLASS_PORT: String(port),
     },
-    stdout: "ignore", stderr: "ignore",
+    stdout: "ignore", stderr: "pipe",
   });
+  // Say so when it does not come up. This used to break out of the loop and
+  // carry on, so a server that had died at boot showed as nine assertion
+  // failures about connection refused and nothing about the actual cause.
+  let up = false;
   for (let i = 0; i < 100; i++) {
-    try { if ((await fetch(base + "/health")).ok) break; } catch { /* not up yet */ }
+    try { if ((await fetch(base + "/health")).ok) { up = true; break; } } catch { /* not up yet */ }
     await Bun.sleep(100);
+  }
+  if (!up) {
+    const err = await new Response(proc.stderr as ReadableStream).text();
+    throw new Error("the server did not come up: " + err.slice(0, 600));
   }
   await fetch(base + "/push/subscribe", {
     method: "POST", headers: { "content-type": "application/json" },
@@ -167,8 +175,15 @@ async function ingest(event: unknown) {
   return res;
 }
 
-/** Delivery is fire-and-forget on purpose, so wait for it rather than assume. */
-async function waitForPush(atLeast: number, ms = 5000): Promise<boolean> {
+/**
+ * Delivery is fire-and-forget on purpose, so wait for it rather than assume.
+ *
+ * Under bun's own 5s test timeout, deliberately. Matching it meant a push that
+ * never arrived killed the whole run rather than failing one test — and every
+ * test after it then reported a connection refused to a server the runner had
+ * already torn down, which says nothing about the one thing that was wrong.
+ */
+async function waitForPush(atLeast: number, ms = 3000): Promise<boolean> {
   const until = Date.now() + ms;
   while (Date.now() < until) {
     if (svc.seen.length >= atLeast) return true;
@@ -228,6 +243,84 @@ describe("an agent stops, and the phone hears", () => {
     };
     const pixel = devices.find((d) => d.label === "Pixel");
     expect(pixel?.lastOkAt).toBeGreaterThan(0);
+  });
+});
+
+/** An event of the kind that happens all day and stops nothing. */
+const toolError = (session: string) => ({
+  source_app: "claude-code",
+  session_id: session,
+  hook_event_type: "PostToolUse",
+  payload: {
+    tool_name: "Bash",
+    // A shape `detectError` actually recognises. The first version of this
+    // fixture paired a stderr string with `interrupted: false`, which is not a
+    // failure by any of its rules — so no alert fired, no push arrived, and the
+    // test sat waiting for one that was never coming.
+    tool_response: { stdout: "", stderr: "grep: fixtures: No such file or directory", returnCodeInterpretation: "error" },
+  },
+});
+
+describe("what is worth waking a pocket for", () => {
+  it("does not wake the phone for a tool that merely failed", async () => {
+    // A failed tool call is *critical* on the desktop and has been on purpose
+    // since long before push existed: you are at the machine, and a
+    // notification that does not time out is right there. Reusing that same
+    // number to decide whether to wake a radio and pin a lock-screen
+    // notification meant a failed grep on one of eight agents lit up a phone
+    // in a pocket with something that would not go away. That is how somebody
+    // learns to swipe the whole app away, and then the gate goes unanswered
+    // too.
+    const before = svc.seen.length;
+    expect((await ingest(toolError("s-err-1"))).ok).toBe(true);
+    expect(await waitForPush(before + 1)).toBe(true);
+
+    const got = svc.seen[before]!;
+    expect(got.headers["urgency"]).toBe("normal");
+    const msg = JSON.parse(await decrypt(got.body, AUTH)) as { title?: string; urgency?: number };
+    expect(msg.title).toContain("error");
+    // Not 2: the worker reads this to decide whether the notification waits
+    // for you, and this one has no reason to.
+    expect(msg.urgency).toBe(1);
+  });
+
+  it("wakes it for a tool call held at the gate, which is the whole point", async () => {
+    // The control-plane hold: the agent is not merely waiting, it is stopped
+    // at a `PreToolUse` until a person answers, and the hook's own request is
+    // open the entire time. If any alert deserves a locked screen lighting up
+    // and staying lit, it is this one — and nothing covered it, which a
+    // mutation dropping its wake proved by walking straight through.
+    const before = svc.seen.length;
+    // Not awaited: /gate holds the connection open until it is decided or
+    // times out, which is exactly what the hook does.
+    const held = fetch(base + "/gate", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        source_app: "claude-code", session_id: "s-gate-1",
+        tool_name: "Bash", tool_input: { command: "rm -rf build" }, timeout_ms: 2000,
+      }),
+    }).catch(() => null);
+
+    expect(await waitForPush(before + 1)).toBe(true);
+    expect(svc.seen[before]!.headers["urgency"]).toBe("high");
+    const msg = JSON.parse(await decrypt(svc.seen[before]!.body, AUTH)) as { title?: string; body?: string; urgency?: number };
+    expect(msg.urgency).toBe(2);
+    expect(msg.title).toContain("Approval needed");
+    // And it says what is being asked for, which is what makes it answerable
+    // from a lock screen.
+    expect(msg.body).toContain("rm -rf build");
+    await held;
+  });
+
+  it("still wakes it for something an agent is stopped on", async () => {
+    // The contrast is the point. Both arrive; only one is worth a locked
+    // screen lighting up and staying lit.
+    const before = svc.seen.length;
+    await ingest(permissionRequest("s-wake-again"));
+    expect(await waitForPush(before + 1)).toBe(true);
+    expect(svc.seen[before]!.headers["urgency"]).toBe("high");
+    const msg = JSON.parse(await decrypt(svc.seen[before]!.body, AUTH)) as { urgency?: number };
+    expect(msg.urgency).toBe(2);
   });
 });
 

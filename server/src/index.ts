@@ -758,10 +758,10 @@ const server = Bun.serve<WsData>({
       const r = await pushEveryone(
         "✅ agentglass",
         "Push is working. This is what a held gate will look like.",
-        // Deliberately not 2: a test should not be the thing that teaches
+        // Deliberately not "wake": a test should not be the thing that teaches
         // somebody to swipe these away, and a notification that will not
         // dismiss itself is a poor introduction.
-        1,
+        "tell",
       );
       return json({ ok: r.sent > 0, ...r });
     }
