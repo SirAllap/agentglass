@@ -189,4 +189,71 @@ describe("mergedIntoTrunk", () => {
   });
 });
 
+/**
+ * A verdict nobody can read is not a verdict.
+ *
+ * Everything above proves the sweep reaches the right answer. It reached it in
+ * production too, and no user ever saw it: `/git/branches` serves a JSON body
+ * cached against a fingerprint of every ref, rebuilt only when a ref MOVES, and
+ * a sweep moves no refs. On a repository nobody is committing to, which is the
+ * one you sit down to tidy, the pre-sweep answer was served forever. Measured
+ * on this project: a branch squash-merged 17 hours earlier, still listed as "1
+ * not merged, kept", and two forced ref changes needed to shake it loose.
+ *
+ * So the sweep now says when it proved something, and that announcement is what
+ * drops the cached body and nudges the panel. These pin both halves: that it
+ * fires when there is news, and that it stays quiet when there is not, because
+ * an announcement per sweep would invalidate a good cache and redraw every open
+ * panel on a five-minute clock forever.
+ */
+describe("a proved verdict reaches the panel", () => {
+  const fired: string[] = [];
+  const waitFor = async (want: number, ms = 5000) => {
+    const deadline = Date.now() + ms;
+    while (fired.length < want && Date.now() < deadline) await Bun.sleep(25);
+    return fired.length;
+  };
+
+  test("the sweep announces the repo it proved something in", async () => {
+    gw.setMergedVerdictHook((root) => { fired.push(root); });
+    try {
+      gw.invalidateMerged(REPO);
+      await gw.branches(REPO); // schedules the sweep; answers from ancestry alone
+      expect(await waitFor(1)).toBeGreaterThan(0);
+      expect(fired[0]).toBe(REPO);
+    } finally { gw.setMergedVerdictHook(null); }
+  });
+
+  test("a sweep with nothing new to say stays quiet", async () => {
+    gw.setMergedVerdictHook((root) => { fired.push(root); });
+    try {
+      fired.length = 0;
+      // No invalidation: the sweep ran moments ago and declines to run again,
+      // which is exactly the poll the panel makes every few seconds.
+      for (let i = 0; i < 3; i++) await gw.branches(REPO);
+      await Bun.sleep(200);
+      expect(fired).toEqual([]);
+    } finally { gw.setMergedVerdictHook(null); }
+  });
+});
+
+/**
+ * "Not merged" and "not checked yet" are different things, and the panel now
+ * shows them differently: while a sweep is running it says it is still
+ * checking, instead of stating a false negative as final.
+ *
+ * A flag like this existed once and was removed for answering yes forever, and
+ * it deserved to be: nothing told the panel when the sweep finished, so the
+ * label had no end. Both properties are pinned here, in order.
+ */
+describe("checking", () => {
+  test("is true while the sweep runs, and false once it has", async () => {
+    gw.invalidateMerged(REPO);
+    expect((await gw.branches(REPO)).checking).toBe(true);
+    const deadline = Date.now() + 5000;
+    while ((await gw.branches(REPO)).checking && Date.now() < deadline) await Bun.sleep(25);
+    expect((await gw.branches(REPO)).checking).toBe(false);
+  });
+});
+
 afterAll(() => setSystemTime());

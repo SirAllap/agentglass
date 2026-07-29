@@ -105,6 +105,45 @@ export function goneConfirmBody(free: GitBranch[], held: GitBranch[], unmergedCo
 }
 
 /**
+ * What to ask when `git branch -d` answers "not fully merged".
+ *
+ * Two different questions wear the same git error, and collapsing them is how
+ * the panel used to dead-end. Squash and rebase merges make that refusal the
+ * normal case here, so when the trunk demonstrably holds the work the dialog
+ * exists only to say git is looking at the wrong thing.
+ *
+ * When it does NOT hold the work, the honest answer is that we could not tell.
+ * The server's probes have two admitted gaps (a branch whose only commits ahead
+ * are merge commits, and a repository with more branches than one sweep sizes
+ * up), so an unproven branch is not the same as a branch with unlanded work.
+ * Refusing outright left people with a toast that clears itself in 2.6s and no
+ * next step but a terminal. So it is still offered, named as unproven, with the
+ * cost stated and the reflog window that can undo it.
+ *
+ * Lives here rather than in the panel for the reason at the top of this file:
+ * the wording IS the safeguard on an irreversible action, and wording buried in
+ * a component is wording nobody can test.
+ */
+export function forcedDeletePrompt(name: string, proven: boolean, trunk: string): { title: string; body: string; confirmLabel: string } {
+  if (proven) {
+    return {
+      title: `git says ${name} isn't merged`,
+      body: `Its commits are already in ${trunk}. A squash merge rewrites them, so the tip never becomes an ancestor of anything.\n\nDelete it anyway?`,
+      confirmLabel: "Delete",
+    };
+  }
+  return {
+    title: `Delete ${name} without proof it is merged?`,
+    body: [
+      `We could not prove its commits are in ${trunk} either, so this may be work that exists nowhere else.`,
+      `The checks that clear a squash or rebase merge can miss one: a branch whose only commits ahead are merge commits, or a repository with more branches than a single sweep gets through. If ${name} is one of those, deleting costs nothing. If it isn't, this is the last copy.`,
+      "git reflog keeps the tip for about 30 days, so it can still be recovered from this machine.",
+    ].join("\n\n"),
+    confirmLabel: "Delete anyway",
+  };
+}
+
+/**
  * Which leftovers start out ticked in the rescue list.
  *
  * Two rules, and neither one knows what a `.specs` directory is — the repo this
