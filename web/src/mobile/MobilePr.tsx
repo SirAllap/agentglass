@@ -9,6 +9,7 @@ import {
   EMPTY, canSubmit, commentAt, countFor, annotatedPaths, setComment as withRemark, summarise,
   type ReviewDraft, type Side, type Verb,
 } from "./reviewDraft.ts";
+import { orderThreads, openCount, type ThreadRow } from "./threads.ts";
 
 /**
  * Reviewing a pull request from a phone.
@@ -63,6 +64,8 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
   const [at, setAt] = useState<{ path: string; line: number; side: Side } | null>(null);
   const [note, setNote] = useState("");
   const [reviewing, setReviewing] = useState(false);
+  const [replyTo, setReplyTo] = useState<ThreadRow | null>(null);
+  const [replyText, setReplyText] = useState("");
   const [verb, setVerb] = useState<Verb | null>(null);
   const verdict = canSubmit(draft, verb, !!d?.viewerDidAuthor);
 
@@ -72,6 +75,7 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
     // A review is written about one pull request. Carrying remarks from the
     // last one into the next would post them against lines that mean nothing.
     setDraft(EMPTY); setVerb(null); setAt(null); setNote(""); setReviewing(false);
+    setReplyTo(null); setReplyText("");
     api.prDetail(root, number).then((r) => {
       if (r.ok && r.detail) setD(r.detail); else setErr(r.error || "Could not load it");
     }).catch((e) => setErr(String(e)));
@@ -235,7 +239,11 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
 
             {tab === "talk" && (
               <>
-                <Talk d={d} />
+                <Talk d={d}
+                  onReply={(t) => { setReplyTo(t); setReplyText(""); }}
+                  onResolve={(t) => act(
+                    t.thread.isResolved ? "Reopened" : "Resolved",
+                    () => api.prSetThreadResolved(root, t.thread.id, !t.thread.isResolved))} />
                 <div className="mb-card overflow-hidden mt-3">
                   <textarea value={comment} onChange={(e) => setComment(e.target.value)}
                     placeholder="Leave a comment…"
@@ -290,6 +298,22 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
             toast(note.trim() ? "Queued for the review" : "Remark removed");
             setAt(null);
           }}>{note.trim() ? "Save" : "Remove"}</Act>
+        </div>
+      </Sheet>
+
+      <Sheet open={!!replyTo} title="Reply" sub={replyTo?.where} onClose={() => setReplyTo(null)}>
+        <textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} rows={5}
+          placeholder="Answer the thread"
+          className="w-full rounded-xl p-3 text-[13px]"
+          style={{ background: "var(--bg2)", border: "1px solid var(--mb-line)", color: "var(--text)", resize: "vertical" }} />
+        <div className="flex gap-2 mt-3">
+          <Act small full onAct={() => setReplyTo(null)}>Cancel</Act>
+          <Act small full kind="acc" disabled={!replyText.trim() || !d || replyTo?.replyTo == null}
+            onAct={async () => {
+              if (!d || !replyTo || replyTo.replyTo == null) return;
+              await act("Replied", () => api.prReply(root, d.number, replyTo.replyTo!, replyText));
+              setReplyTo(null); setReplyText("");
+            }}>Send</Act>
         </div>
       </Sheet>
 
@@ -412,8 +436,45 @@ function Checks({ d, openLog, onOpenLog, onRerun, onAsk }: {
   );
 }
 
-/** One timeline, oldest first — the order the replies were written in. */
-function Talk({ d }: { d: PrDetail }) {
+/**
+ * A line thread, drawn as one.
+ *
+ * Every reply is shown. A collapsed "3 replies" is the shape that made the old
+ * rendering useless in the first place: the count is never the thing you needed
+ * — the answer is — and on a phone there is nowhere else to go and read it.
+ */
+export const THREAD_CSS = `
+.mb-thr{border-radius:15px;overflow:hidden;background:var(--mb-card);
+  border:1px solid color-mix(in srgb,var(--border) 38%,transparent);box-shadow:var(--mb-edge)}
+.mb-thr.quiet{opacity:.62;border-style:dashed}
+.mb-thr .th{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:11px;
+  background:color-mix(in srgb,var(--bg3) 44%,transparent);min-width:0}
+.mb-thr .th b{font-weight:600;color:var(--primary-hover);min-width:0}
+.mb-thr .tc{padding:10px 12px 0}
+.mb-thr .tc .w{display:flex;align-items:center;gap:7px;font-size:11px}
+.mb-thr .tc .w b{font-weight:600}
+.mb-thr .tc .b{font-size:12.5px;line-height:1.55;color:var(--text2);margin-top:4px;
+  white-space:pre-wrap;overflow-wrap:anywhere}
+/* Between the opening remark and the answers to it, so a thread reads as a
+   question with replies rather than as a stack of equals. */
+.mb-thr .tc .sep{height:1px;margin:10px 0 0;background:color-mix(in srgb,var(--border) 40%,transparent)}
+.mb-thr .ta{display:flex;gap:9px;padding:11px 12px 12px}
+`;
+
+/**
+ * One timeline, oldest first — the order the replies were written in.
+ *
+ * Line threads are drawn as threads now rather than folded into this list as
+ * their opening sentence. The conversation about one line is the thing that
+ * decides whether a pull request can merge, and it was the one part of the
+ * screen reduced to a single quote with every answer discarded.
+ */
+function Talk({ d, onReply, onResolve }: {
+  d: PrDetail;
+  onReply: (t: ThreadRow) => void;
+  onResolve: (t: ThreadRow) => void;
+}) {
+  const rows = useMemo(() => orderThreads(d.threads), [d.threads]);
   const entries = useMemo(() => {
     const out: { at: string; who: string; verdict?: string; body: string; bot: boolean }[] = [];
     for (const r of d.reviews) {
@@ -425,17 +486,59 @@ function Talk({ d }: { d: PrDetail }) {
       });
     }
     for (const c of d.comments) out.push({ at: c.createdAt, who: c.author, bot: c.isBot, body: c.digest || c.body });
-    for (const t of d.threads) {
-      const first = t.comments[0];
-      if (first) out.push({ at: first.createdAt, who: first.author, bot: first.isBot, body: `${t.path}${t.line ? `:${t.line}` : ""} — ${first.body}` });
-    }
     return out.sort((a, b) => a.at.localeCompare(b.at));
   }, [d]);
 
-  if (!entries.length) return <Empty glyph="▤" title="Nobody has said anything" body="No reviews, comments or line threads on this pull request yet." />;
+  if (!entries.length && !rows.length) {
+    return <Empty glyph="▤" title="Nobody has said anything" body="No reviews, comments or line threads on this pull request yet." />;
+  }
+
+  const threadList = rows.length > 0 && (
+    <>
+      <div className="mb-eyebrow" style={{ margin: "0 0 9px" }}>
+        Line threads · {openCount(d.threads)} open of {rows.length}
+      </div>
+      <div className="flex flex-col gap-2.5 mb-4">
+        {rows.map((r) => (
+          <div key={r.thread.id} className={`mb-thr${r.quiet ? " quiet" : ""}`}>
+            <div className="th">
+              <b className="truncate">{r.where}</b>
+              {r.quiet && <span className="mb-chip" style={{ color: "var(--text3)" }}>{r.quiet}</span>}
+            </div>
+            {r.thread.comments.map((c, i) => (
+              <div className="tc" key={c.id}>
+                <div className="w">
+                  <b>{c.author}</b>
+                  {c.isBot && <span className="mb-chip" style={{ color: "var(--info)" }}>bot</span>}
+                  <span className="ml-auto" style={{ color: "var(--text3)" }}>{fmtAgo(Date.parse(c.createdAt))}</span>
+                </div>
+                <div className="b">{c.body}</div>
+                {/* Every reply is shown. The count under a collapsed thread is
+                    the thing nobody can act on. */}
+                {i === 0 && r.replies > 0 && <div className="sep" />}
+              </div>
+            ))}
+            <div className="ta">
+              <Act small full disabled={r.replyTo == null}
+                title={r.replyTo == null ? "GitHub gave this thread no id to reply to" : undefined}
+                onAct={() => onReply(r)}>Reply</Act>
+              <Act small full kind={r.thread.isResolved ? undefined : "ok"} onAct={() => onResolve(r)}>
+                {r.thread.isResolved ? "Reopen" : "Resolve"}
+              </Act>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+
+  if (!entries.length) return <div>{threadList}</div>;
 
   return (
-    <div className="flex flex-col gap-2.5">
+    <div>
+      {threadList}
+      {rows.length > 0 && <div className="mb-eyebrow" style={{ margin: "0 0 9px" }}>Conversation</div>}
+      <div className="flex flex-col gap-2.5">
       {entries.map((e, i) => (
         <div key={i} className="mb-card overflow-hidden">
           <div className="flex items-center gap-2 px-3 py-2.5 text-[11.5px]" style={{ background: "color-mix(in srgb, var(--bg3) 44%, transparent)" }}>
@@ -447,6 +550,7 @@ function Talk({ d }: { d: PrDetail }) {
           <div className="p-3 text-[12.5px] leading-relaxed whitespace-pre-wrap break-words" style={{ color: "var(--text2)" }}>{e.body}</div>
         </div>
       ))}
+      </div>
     </div>
   );
 }
