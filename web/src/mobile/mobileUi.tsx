@@ -18,7 +18,16 @@ import type { ConfirmSpec } from "../components/ConfirmDialog.tsx";
 export const MOBILE_CSS = `
 .mb{
   --tap:44px;
-  --nav:64px;
+  /* The tab bar floats, so it is described by three numbers rather than one:
+     how tall the pill is, how far it keeps off the home indicator, and how far
+     it is inset from the sides. --nav-space is where its top edge lands, and
+     that is the reserve everything else measures from — the queue pads by it so
+     the last card is never stranded under the glass, and toasts sit on top of
+     it. Resize the pill here and both follow. */
+  --nav:54px;
+  --nav-gap:10px;
+  --nav-side:14px;
+  --nav-space:calc(var(--nav) + var(--nav-gap) + env(safe-area-inset-bottom));
   --mb-line:color-mix(in srgb,var(--border) 34%,transparent);
   --mb-card:color-mix(in srgb,var(--bg2) 70%,transparent);
   /* A raised surface catches light along its top edge and drops a shadow
@@ -182,9 +191,61 @@ export const MOBILE_CSS = `
   min-height:0;flex:1;overscroll-behavior:contain}
 .mb-sheet h3{font-size:16px;font-weight:600}
 
+/* ── the tab bar ──────────────────────────────────────────────────── */
+/**
+ * A pill that floats, rather than a bar welded to the bottom edge.
+ *
+ * Docked, the bar was 84% translucent, which means its contrast was whatever
+ * happened to be scrolling underneath it: a number that moves is not a contrast
+ * ratio, and at the bottom of a dark queue in daylight four grey labels is what
+ * it came to. On its own surface it has contrast of its own, and the same
+ * change buys the second complaint back for free — the queue visibly continues
+ * past the pill instead of stopping dead above a hard edge, so the reserved
+ * band reads as less of a small screen than it did.
+ *
+ * Labels went from 10.5px regular to 11.5px semibold at the same time. The
+ * translucency was only half of why they were hard to read.
+ */
+.mb-nav{position:fixed;z-index:40;display:flex;gap:2px;padding:5px;
+  left:var(--nav-side);right:var(--nav-side);bottom:calc(env(safe-area-inset-bottom) + var(--nav-gap));
+  border-radius:22px;
+  background:linear-gradient(180deg,color-mix(in srgb,var(--bg3) 62%,var(--bg2)),var(--bg2));
+  border:1px solid color-mix(in srgb,var(--primary) 34%,transparent);
+  box-shadow:0 18px 40px -14px rgba(0,0,0,.92),var(--mb-edge)}
+.mb-tab{flex:1;min-height:var(--nav);border-radius:17px;position:relative;background:transparent;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+  font-size:11.5px;font-weight:600;color:var(--text3);transition:background .16s,color .16s}
+.mb-tab .g{font-size:17px;line-height:1}
+/* The active tab is a filled slab. Docked, it was a 2px hairline along the top
+   edge of the bar; on a pill there is no shared edge to draw it on, and a slab
+   says the same thing without one. */
+.mb-tab[aria-current="true"]{color:var(--text);background:color-mix(in srgb,var(--primary) 20%,transparent)}
+.mb-tab .b{position:absolute;top:4px;right:calc(50% - 24px);min-width:17px;height:17px;border-radius:9px;
+  font-size:9.5px;font-weight:700;display:grid;place-items:center;padding:0 5px;
+  background:var(--warning);color:#2a1d02;font-variant-numeric:tabular-nums;
+  box-shadow:0 0 0 2px color-mix(in srgb,var(--bg3) 62%,var(--bg2))}
+/* Settings, and the state of the link as the dot on it. Deliberately not a
+   fifth tab: it does not navigate, so it is narrower than one, it sits behind a
+   hairline, and it never takes the active fill. */
+.mb-navkey{flex:none;width:48px;min-height:var(--nav);border-radius:17px;position:relative;
+  display:grid;place-items:center;font-size:16px;color:var(--text3);background:transparent;
+  transition:background .16s,color .16s}
+.mb-navkey::before{content:"";position:absolute;left:-3px;top:13px;bottom:13px;width:1px;border-radius:1px;
+  background:color-mix(in srgb,var(--primary) 26%,transparent)}
+.mb-navkey .lk{position:absolute;top:12px;right:9px;width:7px;height:7px;border-radius:50%;
+  box-shadow:0 0 0 2px color-mix(in srgb,var(--bg3) 62%,var(--bg2));animation:mb-dp 2s ease-out infinite}
+/* Nothing is answering: a dot that keeps pulsing is claiming otherwise. */
+.mb-navkey .lk.dead{animation:none}
+
+/* The status bar area, now that the app has nothing pinned under it. It costs
+   no layout height — the inset is unusable either way — and it keeps the clock
+   legible over a queue scrolling past underneath. */
+.mb-veil{position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top);z-index:35;pointer-events:none;
+  background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(12px)}
+
 /* ── toasts ───────────────────────────────────────────────────────── */
 .mb-toasts{position:fixed;left:14px;right:14px;z-index:90;display:flex;flex-direction:column;gap:9px;
-  pointer-events:none;bottom:calc(var(--nav) + env(safe-area-inset-bottom) + 14px)}
+  pointer-events:none;bottom:calc(var(--nav-space) + 14px)}
 .mb-toasts.raised{bottom:calc(env(safe-area-inset-bottom) + 112px)}
 .mb-toast{border-radius:14px;padding:12px 15px;font-size:12.5px;display:flex;align-items:center;gap:10px;
   background:linear-gradient(180deg,color-mix(in srgb,var(--bg3) 80%,var(--bg2)),var(--bg2));

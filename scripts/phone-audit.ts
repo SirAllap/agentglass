@@ -258,6 +258,23 @@ async function main() {
     const nowText = await cdp.ev(`document.querySelector("main")?.textContent?.trim()?.length || 0`);
     note("now", "renders something", nowText > 20, `main had ${nowText} chars`);
 
+    // The tab bar floats over the queue, so the queue has to end above it. A
+    // last card parked permanently under the pill is the one way this shape is
+    // worse than the bar it replaced, and it is invisible until you scroll to
+    // the bottom of a list — so scroll to the bottom of the list.
+    await cdp.ev(`scrollTo(0, document.body.scrollHeight)`);
+    await Bun.sleep(900);
+    note("now", "the last card ends above the tab bar",
+      await cdp.ev(`(()=>{const c=[...document.querySelectorAll("main .mb-item")].pop();
+        const n=document.querySelector("nav"); if(!c||!n) return true;
+        return c.getBoundingClientRect().bottom <= n.getBoundingClientRect().top + 1;})()`),
+      await cdp.ev(`(()=>{const c=[...document.querySelectorAll("main .mb-item")].pop();
+        const n=document.querySelector("nav"); if(!c||!n) return "nothing to measure";
+        return "card ends at " + Math.round(c.getBoundingClientRect().bottom)
+          + ", bar starts at " + Math.round(n.getBoundingClientRect().top);})()`));
+    await cdp.ev(`scrollTo(0, 0)`);
+    await Bun.sleep(500);
+
     // ---- Chats -------------------------------------------------------
     note("chats", "tab opens", await tap(cdp, "nav button", "Chats"));
     await Bun.sleep(900);
@@ -710,7 +727,12 @@ async function main() {
     }
 
     // ---- settings ----------------------------------------------------
-    if (await tap(cdp, "header button[aria-label='Settings']")) {
+    // The way in is the key on the tab bar now, not a gear in a header. When
+    // that entry point moves again, this has to fail rather than quietly skip
+    // the thirteen checks behind it, which is what it did the first time.
+    const intoSettings = await tap(cdp, "nav .mb-navkey");
+    note("settings", "the way in is on the tab bar", intoSettings);
+    if (intoSettings) {
       await Bun.sleep(900);
       note("settings", "sheet opens", await cdp.ev(`!!document.querySelector(".mb-sheet.on")`));
       note("settings", "reports what this machine spent",
@@ -815,7 +837,7 @@ async function main() {
 
       // The count the Settings row shows has to be the store's, not a list in
       // memory that a reload has already thrown away.
-      await tap(cdp, "header button", "⚙");
+      await tap(cdp, "nav .mb-navkey");
       await Bun.sleep(700);
       note("later", "Settings counts it as hidden",
         await cdp.ev(`/1 hidden until they change/.test(document.body.textContent)`),
@@ -873,15 +895,29 @@ async function main() {
     // ---- the server going away ---------------------------------------
     // A companion that silently shows stale numbers when the machine it is
     // watching has gone is worse than one that says so.
+    // The state of the link lives on the settings key: a coloured dot, and the
+    // word in the key's own accessible name, which is what a screen reader
+    // announces and what the sheet behind it prints. Reading the name rather
+    // than a header's text is the stronger check of the two — a header can say
+    // "Offline" while the control the person can actually reach says nothing.
+    const linkName = `(document.querySelector("nav .mb-navkey")?.getAttribute("aria-label") || "").toLowerCase()`;
+    const linkDot = `getComputedStyle(document.querySelector("nav .mb-navkey .lk") || document.body).backgroundColor`;
+    // Read while the machine is still there, so the comparison below is against
+    // a colour that actually meant "live".
+    const liveDot = await cdp.ev(linkDot);
+
     await cdp.ev(`window.__origFetch = window.fetch; window.fetch = () => Promise.reject(new Error("offline"))`);
     await Bun.sleep(6000);
-    note("offline", "says the connection is gone",
-      await cdp.ev(`(document.querySelector("header")?.textContent || "").includes("Offline")`));
+    note("offline", "says the connection is gone", await cdp.ev(`${linkName}.includes("offline")`),
+      await cdp.ev(linkName));
+    note("offline", "and the dot stops claiming otherwise",
+      (await cdp.ev(linkDot)) !== liveDot
+      && await cdp.ev(`getComputedStyle(document.querySelector("nav .mb-navkey .lk")).animationName === "none"`));
     await shot(cdp, "12-offline");
     await cdp.ev(`window.fetch = window.__origFetch; window.__audit = { errors: [], net: [] }`);
     await Bun.sleep(5000);
-    note("offline", "comes back on its own",
-      await cdp.ev(`(document.querySelector("header")?.textContent || "").includes("Live")`));
+    note("offline", "comes back on its own", await cdp.ev(`${linkName}.includes("live")`),
+      await cdp.ev(linkName));
     await drain(cdp, "offline");
 
     // ---- landscape ----------------------------------------------------

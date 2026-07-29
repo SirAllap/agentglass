@@ -734,33 +734,28 @@ export function MobileApp() {
       {askDialog}
       <div className="mb-sky" />
 
-      {!immersive && <header className="sticky top-0 z-40 flex items-center gap-2 px-4"
-        style={{
-          paddingTop: "calc(env(safe-area-inset-top) + 11px)", paddingBottom: 10,
-          background: "color-mix(in srgb, var(--bg) 80%, transparent)", backdropFilter: "blur(16px) saturate(1.4)",
-          borderBottom: "1px solid var(--mb-line)",
-        }}>
-        <span className="text-[17.5px] font-bold tracking-tight">
-          agent<span style={{ color: "var(--primary-hover)" }}>glass</span>
-        </span>
-        <span className="flex-1" />
-        {/* What this said before was that one four-second poll had succeeded,
-            on an app with no live connection — "Live" meant "the last request
-            came back". It is the socket now, so it can mean what it says. */}
-        <span className="flex items-center gap-1.5 text-[11px]" style={{ color: LINK_TONE[link] }}>
-          <span className="mb-dot pulse" style={{ background: "currentColor", color: "currentColor" }} />
-          {LINK_WORD[link]}
-        </span>
-        <button className="mb-press grid place-items-center" aria-label="Settings"
-          style={{ minHeight: 40, minWidth: 40, borderRadius: 11, fontSize: 15, color: "var(--text3)", background: "transparent" }}
-          onClick={() => setSettings(true)}>⚙</button>
-      </header>}
+      {/* Two permanent bands out of 844px was the complaint, and this is the
+          one that earned its height least: a wordmark the person installed, a
+          word for the link, and a way into settings. The last two moved onto
+          the tab bar, which was going to be there anyway; the wordmark did not
+          survive the move, and nothing is worse for it. What is left of it is
+          the veil over the status bar, which occupies space the layout could
+          never use. */}
+      {!immersive && <div className="mb-veil" />}
 
       {/* No padding while a conversation owns the screen: it is a fixed
           full-height surface of its own, and the reserve for a tab bar that is
           not being drawn would only push its composer off the bottom. */}
       <main className="flex-1 relative"
-        style={{ zIndex: 1, padding: immersive ? 0 : "14px 15px calc(var(--nav) + env(safe-area-inset-bottom) + 22px)" }}>
+        style={{
+          zIndex: 1,
+          padding: immersive
+            ? 0
+            // Top: what the header used to hold clear. Bottom: the pill's top
+            // edge and a breath, so the last card ends above it rather than
+            // under it.
+            : "calc(env(safe-area-inset-top) + 14px) 15px calc(var(--nav-space) + 12px)",
+        }}>
         {tab === "now" && (
           <>
             <NowHero
@@ -785,12 +780,7 @@ export function MobileApp() {
           }} />}
       </main>
 
-      {!immersive && <nav className="fixed left-0 right-0 bottom-0 z-40 flex"
-        style={{
-          background: "color-mix(in srgb, var(--bg2) 84%, transparent)", backdropFilter: "blur(20px) saturate(1.5)",
-          borderTop: "1px solid color-mix(in srgb, var(--border) 48%, transparent)",
-          paddingBottom: "env(safe-area-inset-bottom)",
-        }}>
+      {!immersive && <nav className="mb-nav">
         <TabBtn id="now" tab={tab} onPick={setTab} glyph="◎" label="Now" badge={queue.length} />
         <TabBtn id="chats" tab={tab} onPick={setTab} glyph="▤" label="Chats" />
         <TabBtn id="repos" tab={tab} onPick={setTab} glyph="◇" label="Repos" />
@@ -798,6 +788,17 @@ export function MobileApp() {
             and had no route to a phone. The badge is what is misbehaving. */}
         <TabBtn id="fleet" tab={tab} onPick={setTab} glyph="◈" label="Fleet"
           badge={insights.filter((i) => i.severity === "bad").length} />
+        {/* The state of the link is better off here than it was in the header:
+            a conversation used to hide the header and take the indicator with
+            it, and this is on screen on every tab at every scroll position.
+            The colour is the whole message, so the word it stands for is the
+            first row of the sheet it opens. */}
+        <button className="mb-navkey mb-press" onClick={() => setSettings(true)}
+          aria-label={`Settings · ${LINK_WORD[link].toLowerCase()}`}>
+          ⚙
+          <span className={`lk${link === "offline" ? " dead" : ""}`}
+            style={{ background: LINK_TONE[link], color: LINK_TONE[link] }} />
+        </button>
       </nav>}
 
       <RepoScreen open={!!openRepo && !openPr} repo={openRepo}
@@ -817,6 +818,13 @@ export function MobileApp() {
 
       <Sheet open={settings} title="Settings" sub="This device only." onClose={() => setSettings(false)}>
         <div className="flex flex-col gap-2.5">
+          {/* The word the header used to print, in the place the dot on the
+              settings key sends you. A colour says something is wrong; only
+              this says what. */}
+          <Row tint={LINK_TONE[link]} pulse={link !== "offline"} title={LINK_WORD[link]}
+            sub={link === "live" ? "Streaming from your machine"
+              : link === "slow" ? "Reachable, but not streaming right now"
+              : "Nothing is answering on this address"} />
           <Row title="Spend today" sub={stats?.totals ? `${fmtTokens(stats.totals.input_tokens + stats.totals.output_tokens)} tokens` : "—"} right={spend} />
           <Row title="Sessions" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.sessions) : "—"} />
           <Row title="Tool errors" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.errors) : "—"} />
@@ -887,19 +895,10 @@ function TabBtn({ id, tab, onPick, glyph, label, badge }: {
 }) {
   const on = tab === id;
   return (
-    <button onClick={() => onPick(id)} aria-current={on}
-      className="flex-1 flex flex-col items-center justify-center gap-1 relative"
-      style={{ minHeight: "var(--nav)", fontSize: 10.5, color: on ? "var(--primary-hover)" : "var(--text3)", background: "transparent" }}>
-      <span style={{ fontSize: 17, lineHeight: 1, transform: on ? "translateY(-2px) scale(1.12)" : undefined, transition: "transform .3s cubic-bezier(.3,1.4,.5,1)" }}>{glyph}</span>
+    <button className="mb-tab mb-press" onClick={() => onPick(id)} aria-current={on}>
+      <span className="g">{glyph}</span>
       {label}
-      {on && <span style={{ position: "absolute", top: 0, width: 30, height: 2, borderRadius: "0 0 3px 3px", background: "var(--primary-hover)", boxShadow: "0 0 12px var(--primary)" }} />}
-      {!!badge && (
-        <span className="mb-tnum" style={{
-          position: "absolute", top: 10, right: "calc(50% - 23px)", minWidth: 17, height: 17, borderRadius: 9,
-          fontSize: 9.5, display: "grid", placeItems: "center", padding: "0 5px", fontWeight: 700,
-          background: "var(--warning)", color: "#2a1d02", boxShadow: "0 0 0 2px color-mix(in srgb, var(--bg2) 88%, transparent)",
-        }}>{badge}</span>
-      )}
+      {!!badge && <span className="b">{badge}</span>}
     </button>
   );
 }
