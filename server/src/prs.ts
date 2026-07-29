@@ -1668,7 +1668,9 @@ async function runPr(rootIn: unknown, number: number, args: string[], stdin?: st
   const r = await gh([...args, "-R", repo.nameWithOwner], undefined, stdin);
   invalidate(repo, number);
   if (r.code !== 0) return { ok: false, error: (r.stderr || r.stdout).trim().split("\n")[0] || "gh failed" };
-  return { ok: true, detail: r.stdout.trim() || undefined };
+  // The first line, the same as the error path above. This is shown in a toast
+  // — a phone-width one — and some of these commands print a paragraph.
+  return { ok: true, detail: r.stdout.trim().split("\n")[0] || undefined };
 }
 
 const REVIEW_FLAG = { approve: "--approve", request_changes: "--request-changes", comment: "--comment" } as const;
