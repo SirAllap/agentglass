@@ -34,7 +34,8 @@ export function wantsPhoneLayout(
   width: number,
   coarsePointer: boolean,
   override: LayoutOverride = null,
-  remote = false
+  remote = false,
+  demo = false
 ): boolean {
   // Ahead of the override on purpose: the choice a person made about the
   // laptop on their desk is not consent for the cockpit to open on a device
@@ -43,6 +44,21 @@ export function wantsPhoneLayout(
   if (remote) return true;
   if (override === "mobile") return true;
   if (override === "desktop") return false;
+  // The published demo is a different question to everything below it.
+  //
+  // Every rule here is about *capability*: a phone cannot drive a terminal, so
+  // it gets an application that does not have one. The demo has no capability
+  // at all — no terminal, no git, no docker, no server — so the only thing
+  // left is what a stranger should be shown, and that is the cockpit. It is
+  // the part that is hard to describe in words and the reason anyone follows
+  // the link; the companion is already explained on the landing page and in
+  // the README, with real screenshots.
+  //
+  // What a phone visitor got instead was a queue of fabricated approvals,
+  // which without any of that context reads as a to-do list. Below the
+  // override so that anyone who does want to see the companion demo still
+  // can, by setting it by hand.
+  if (demo) return false;
   if (width < 768) return true;
   // A touch device up to 900px is a phone in landscape. Beyond that it is a
   // tablet, which has the room for the real thing.
@@ -94,9 +110,28 @@ export function servedToRemoteDevice(): boolean {
   );
 }
 
-/** The live answer for this browser, right now. */
-export function phoneLayoutNow(): boolean {
+/**
+ * Is this the published demo?
+ *
+ * The same flag `demo.ts` reads, checked here rather than imported from it:
+ * this module is on the path to the first paint, and demo.ts is a thousand
+ * lines of fabricated fleet that a real install must never pull in to answer
+ * one boolean. Vite replaces the expression at build time either way.
+ */
+export const IS_DEMO_BUILD = import.meta.env.VITE_DEMO === "1";
+
+/**
+ * The live answer for this browser, right now.
+ *
+ * `demo` is a parameter with the build-time flag as its default, only so the
+ * threading is checkable: a test cannot observe a constant Vite has already
+ * substituted, and leaving it unreachable is how the flag came to be dropped
+ * here in the first place — a mutation deleting it changed nothing. What no
+ * unit test can cover is the value of the constant itself; that is what the
+ * browser drive against a real `build:demo` is for.
+ */
+export function phoneLayoutNow(demo = IS_DEMO_BUILD): boolean {
   if (typeof window === "undefined") return false;
   const coarse = typeof window.matchMedia === "function" && window.matchMedia("(pointer: coarse)").matches;
-  return wantsPhoneLayout(window.innerWidth, coarse, readOverride(), servedToRemoteDevice());
+  return wantsPhoneLayout(window.innerWidth, coarse, readOverride(), servedToRemoteDevice(), demo);
 }

@@ -5,7 +5,7 @@
 // the git panel, and a phone that gets the cockpit has a terminal it cannot
 // type into. The saved override is the escape hatch from either.
 import { describe, expect, test, beforeEach } from "bun:test";
-import { wantsPhoneLayout, readOverride, LAYOUT_KEY } from "../src/lib/viewport.ts";
+import { wantsPhoneLayout, phoneLayoutNow, readOverride, LAYOUT_KEY } from "../src/lib/viewport.ts";
 
 describe("wantsPhoneLayout", () => {
   test("narrow viewports get the phone application", () => {
@@ -78,5 +78,68 @@ describe("readOverride", () => {
   test("survives storage that throws (private mode, blocked cookies)", () => {
     expect(readOverride({ getItem: () => { throw new Error("denied"); } })).toBe(null);
     expect(readOverride(null)).toBe(null);
+  });
+});
+
+describe("the published demo", () => {
+  // The demo is on GitHub Pages with nothing behind it, and every rule above
+  // is about capability: a phone gets its own application because it cannot
+  // drive a terminal. The demo has no terminal, no git, no docker and no
+  // server, so the only question left is what a stranger following the link
+  // should be shown — and that is the cockpit, which is the part that is hard
+  // to describe in words. The companion is already covered on the landing page
+  // and in the README, with real screenshots.
+
+  test("shows a phone the cockpit, which is what they came for", () => {
+    expect(wantsPhoneLayout(390, true, null, false, true)).toBe(false);
+    expect(wantsPhoneLayout(360, true, null, false, true)).toBe(false);
+    // And the same viewport off the demo still gets the companion.
+    expect(wantsPhoneLayout(390, true, null, false, false)).toBe(true);
+  });
+
+  test("changes nothing on a desk", () => {
+    expect(wantsPhoneLayout(1440, false, null, false, true)).toBe(false);
+    expect(wantsPhoneLayout(1440, false, null, false, false)).toBe(false);
+  });
+
+  test("still yields to somebody who asked for the companion by hand", () => {
+    // Nothing in the UI writes this, so it is the one way left to look at the
+    // companion demo on purpose. Losing that would make it unreachable.
+    expect(wantsPhoneLayout(390, true, "mobile", false, true)).toBe(true);
+    expect(wantsPhoneLayout(1440, false, "mobile", false, true)).toBe(true);
+  });
+
+  test("never lets the demo flag reach a device that came over the network", () => {
+    // Belt and braces: the demo is never served with the remote marker, but
+    // if the two ever met, the marker is a safety rule and must still win.
+    expect(wantsPhoneLayout(1440, false, null, true, true)).toBe(true);
+  });
+});
+
+describe("phoneLayoutNow, which is the part main.tsx actually calls", () => {
+  // The rule above was covered and the wiring to it was not, which is how the
+  // demo flag came to be dropped here — a mutation deleting it from this call
+  // changed nothing that anything checked.
+  const withWindow = (width: number, fn: () => void) => {
+    const g = globalThis as Record<string, unknown>;
+    const had = "window" in g;
+    const prev = g.window;
+    g.window = { innerWidth: width, matchMedia: () => ({ matches: true }) };
+    try { fn(); } finally { if (had) g.window = prev; else delete g.window; }
+  };
+
+  test("hands the demo flag to the rule", () => {
+    withWindow(390, () => {
+      expect(phoneLayoutNow(true)).toBe(false);   // demo: the cockpit
+      expect(phoneLayoutNow(false)).toBe(true);   // a real install: the companion
+    });
+  });
+
+  test("answers false where there is no browser at all", () => {
+    // Imported before React mounts, and on any server-side or test runtime
+    // `window` is simply absent — a bare read would be a ReferenceError that
+    // takes the whole app down at import time.
+    expect(phoneLayoutNow(true)).toBe(false);
+    expect(phoneLayoutNow(false)).toBe(false);
   });
 });
