@@ -231,6 +231,84 @@ describe("an agent stops, and the phone hears", () => {
   });
 });
 
+describe("proving it works, without waiting for an agent to block", () => {
+  // Before this existed the only way to find out whether push worked was to
+  // walk away and see whether anything arrived — so a silent failure looked
+  // exactly like a quiet afternoon, and you learned by missing the one thing
+  // the feature is for.
+
+  it("sends a real push down the real path", async () => {
+    const before = svc.seen.length;
+    const r = await (await fetch(base + "/push/test", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    })).json() as { ok: boolean; sent: number; failed: number; pruned: number };
+    expect(r).toMatchObject({ ok: true, sent: 1, failed: 0, pruned: 0 });
+    expect(await waitForPush(before + 1)).toBe(true);
+
+    // The same route an alert takes, not a special case: same encryption, same
+    // headers. A test that went a different way could pass while the real one
+    // was broken, which would be worse than having no test button.
+    const got = svc.seen[before]!;
+    expect(got.headers["content-encoding"]).toBe("aes128gcm");
+    expect(got.headers["authorization"]).toMatch(/^vapid t=/);
+    const msg = JSON.parse(await decrypt(got.body, AUTH)) as { title?: string; body?: string; urgency?: number };
+    expect(msg.title).toBeTruthy();
+    expect(msg.body).toBeTruthy();
+    // Not urgency 2: a test must not be the thing that teaches somebody to
+    // swipe these away, and one that will not dismiss itself is a poor
+    // introduction.
+    expect(msg.urgency).not.toBe(2);
+  });
+
+  it("says nothing was sent rather than claiming success", async () => {
+    // A green tick for a push that reached nobody is the one answer that would
+    // make this button worse than useless.
+    svc.status = 500;
+    const r = await (await fetch(base + "/push/test", { method: "POST", body: "{}" })).json() as
+      { ok: boolean; sent: number; failed: number };
+    expect(r.ok).toBe(false);
+    expect(r.sent).toBe(0);
+    expect(r.failed).toBe(1);
+    svc.status = 201;
+  });
+
+  it("tells a device it is no longer registered, rather than merely failing", async () => {
+    // The phone branches on this to say "turn it on again", which is the only
+    // useful thing to say — the subscription is gone at both ends and no
+    // amount of retrying will bring it back. Reported as a plain failure it
+    // would read as "the network is having a moment", and somebody would wait.
+    svc.status = 410;
+    const r = await (await fetch(base + "/push/test", { method: "POST", body: "{}" })).json() as
+      { ok: boolean; sent: number; failed: number; pruned: number };
+    expect(r).toMatchObject({ ok: false, sent: 0, failed: 0, pruned: 1 });
+    expect((await (await fetch(base + "/push/devices")).json() as { devices: unknown[] }).devices).toHaveLength(0);
+
+    // Put it back: the rest of this file is about a device that exists.
+    svc.status = 201;
+    await fetch(base + "/push/subscribe", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        subscription: { endpoint: svc.url, keys: { p256dh: device.p256dh, auth: AUTH } },
+        label: "Pixel",
+      }),
+    });
+  });
+
+  it("is refused from another origin, like every other write", async () => {
+    const res = await fetch(base + "/push/test", {
+      method: "POST", headers: { origin: "https://evil.example" }, body: "{}",
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("does not send one over GET", async () => {
+    const before = svc.seen.length;
+    await fetch(base + "/push/test");
+    await Bun.sleep(400);
+    expect(svc.seen.length).toBe(before);
+  });
+});
+
 describe("a device that has gone away", () => {
   it("is forgotten when the push service says it is gone, and only then", async () => {
     // 429 is the service being busy. Pruning on it would silently unsubscribe a

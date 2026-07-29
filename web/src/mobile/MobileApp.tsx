@@ -159,6 +159,7 @@ export function MobileApp() {
    */
   const [pushState, setPushState] = useState<PushState | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
+  const [pushTesting, setPushTesting] = useState(false);
   /** A conversation is open and owns the whole screen: no app header, no tabs. */
   const [immersive, setImmersive] = useState(false);
   /**
@@ -206,6 +207,31 @@ export function MobileApp() {
     if (r.ok) toast(r.state === "on" ? "This phone will be alerted" : "Alerts off on this phone");
     else toast(r.error, true);
   }, [pushEnv, pushState]);
+
+  /**
+   * Prove it, now, rather than the next time an agent blocks.
+   *
+   * Until this existed the only way to find out whether push worked was to
+   * walk away and see whether anything arrived — so a silent failure was
+   * indistinguishable from a quiet afternoon, and you learned by missing the
+   * one thing the feature is for.
+   */
+  const testPush = useCallback(async () => {
+    setPushTesting(true);
+    try {
+      const r = await api.pushTest();
+      // Three different outcomes, because they need three different reactions:
+      // it arrived, this device is no longer registered (turn it on again), or
+      // nothing is subscribed at all.
+      if (r.sent > 0) toast(r.sent === 1 ? "Sent — check your notifications" : `Sent to ${r.sent} devices`);
+      else if (r.pruned > 0) { setPushState("off"); toast("This device is no longer registered — turn it on again", true); }
+      else if (r.failed > 0) toast("The push service would not take it", true);
+      else toast("No device is subscribed", true);
+    } catch {
+      toast("The server could not be reached", true);
+    }
+    setPushTesting(false);
+  }, []);
 
   // ── the live channel ─────────────────────────────────────────────────
   //
@@ -736,11 +762,22 @@ export function MobileApp() {
             exists for is the one case nothing covers. */}
         <Row title="Push to this phone"
           sub={pushState === null ? "Checking…" : pushCopy(pushState).sub}
-          right={pushState !== null && pushCopy(pushState).action
-            ? <Act small disabled={pushBusy} onAct={togglePush}>
-                {pushBusy ? "…" : pushCopy(pushState).action}
-              </Act>
-            : undefined} />
+          right={pushState === null ? undefined : (
+            <span className="flex items-center gap-1.5">
+              {/* Only once it is on: a Test that could only ever fail is not a
+                  test, it is a second way to be told no. */}
+              {pushState === "on" && (
+                <Act small disabled={pushTesting || pushBusy} onAct={testPush}>
+                  {pushTesting ? "…" : "Test"}
+                </Act>
+              )}
+              {pushCopy(pushState).action && (
+                <Act small disabled={pushBusy || pushTesting} onAct={togglePush}>
+                  {pushBusy ? "…" : pushCopy(pushState).action}
+                </Act>
+              )}
+            </span>
+          )} />
         <div className="mb-eyebrow" style={{ margin: "16px 0 9px" }}>Queue</div>
         <Row title="Snoozed" sub={snoozed ? `${snoozed} hidden until they change` : "Nothing snoozed"}
           right={snoozed

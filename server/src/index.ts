@@ -24,7 +24,7 @@ import {
   getGate,
   actionLog,
 } from "./db.ts";
-import { maybeAlert, setAlertSink } from "./alerts.ts";
+import { maybeAlert, setAlertSink, pushEveryone } from "./alerts.ts";
 import { noteAction } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
@@ -739,6 +739,23 @@ const server = Bun.serve<WsData>({
           label: s.label ?? "", addedAt: s.addedAt, lastOkAt: s.lastOkAt ?? null,
         })),
       });
+    }
+    if (pathname === "/push/test" && req.method === "POST") {
+      // Until an agent happens to block while nobody is looking, there is no
+      // way to find out whether any of this works — and the way you would find
+      // out is by missing the one thing it exists for. This is the same fan-out
+      // the alert path uses, not a special case: same encryption, same headers,
+      // same pruning on 404/410. A test that took a different route could pass
+      // while the real one was broken.
+      const r = await pushEveryone(
+        "✅ agentglass",
+        "Push is working. This is what a held gate will look like.",
+        // Deliberately not 2: a test should not be the thing that teaches
+        // somebody to swipe these away, and a notification that will not
+        // dismiss itself is a poor introduction.
+        1,
+      );
+      return json({ ok: r.sent > 0, ...r });
     }
 
     if (pathname === "/gate/decide" && req.method === "POST") {
