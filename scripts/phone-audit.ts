@@ -24,7 +24,7 @@ import { spawn } from "bun";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect, findChrome, until, type CDP } from "./cdp.ts";
+import { connect, findChrome, lit, until, type CDP } from "./cdp.ts";
 
 const ORIGIN = process.env.AUDIT_ORIGIN || "http://127.0.0.1:4055";
 const SHOTS = process.env.AUDIT_SHOTS || join(tmpdir(), "agentglass-phone-audit");
@@ -157,7 +157,7 @@ const shot = async (cdp: CDP, name: string) => {
 
 /** Text of everything matching a selector, for eyeballing a list in one read. */
 const texts = (cdp: CDP, sel: string) =>
-  cdp.ev(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(sel)})].map(e=>e.textContent.trim()).slice(0,40))`)
+  cdp.ev(`JSON.stringify([...document.querySelectorAll(${lit(sel)})].map(e=>e.textContent.trim()).slice(0,40))`)
     .then((s: string) => JSON.parse(s || "[]") as string[]);
 
 /**
@@ -177,8 +177,8 @@ const closeTop = (cdp: CDP) => cdp.ev(`(()=>{const b=${TOP}?.querySelector(".hd 
 /** Click inside the topmost screen only. */
 const tapTop = async (cdp: CDP, sel: string, needle?: string) => {
   const hit = await cdp.ev(`(()=>{const s=${TOP}; if(!s) return false;
-    const els=[...s.querySelectorAll(${JSON.stringify(sel)})];
-    const el = ${needle ? `els.find(e=>e.textContent.includes(${JSON.stringify(needle)}))` : "els[0]"};
+    const els=[...s.querySelectorAll(${lit(sel)})];
+    const el = ${needle ? `els.find(e=>e.textContent.includes(${lit(needle)}))` : "els[0]"};
     if(!el) return false; el.click(); return true;})()`);
   await Bun.sleep(700);
   return !!hit;
@@ -187,8 +187,8 @@ const tapTop = async (cdp: CDP, sel: string, needle?: string) => {
 const topTitle = (cdp: CDP) => cdp.ev(`(${TOP})?.querySelector(".hd .t b")?.textContent || ""`);
 
 const tap = async (cdp: CDP, sel: string, needle?: string) => {
-  const hit = await cdp.ev(`(()=>{const els=[...document.querySelectorAll(${JSON.stringify(sel)})];
-    const el = ${needle ? `els.find(e=>e.textContent.includes(${JSON.stringify(needle)}))` : "els[0]"};
+  const hit = await cdp.ev(`(()=>{const els=[...document.querySelectorAll(${lit(sel)})];
+    const el = ${needle ? `els.find(e=>e.textContent.includes(${lit(needle)}))` : "els[0]"};
     if(!el) return false; el.click(); return true;})()`);
   await Bun.sleep(700);
   return !!hit;
@@ -849,7 +849,7 @@ async function main() {
       await tap(cdp, "nav button", "Now");
       await Bun.sleep(1600);
       note("later", "and stays gone across a reload",
-        !(await cdp.ev(`document.body.textContent.includes(${JSON.stringify(String(gone).slice(0, 40))})`)),
+        !(await cdp.ev(`document.body.textContent.includes(${lit(String(gone).slice(0, 40))})`)),
         `card was: ${gone}`);
 
       // The count the Settings row shows has to be the store's, not a list in

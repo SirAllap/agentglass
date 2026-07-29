@@ -15,6 +15,7 @@
 // contain anything a model or a tool emitted), so it must never be able to
 // become markup.
 import { memo, type ReactNode } from "react";
+import { externalUrl } from "./externalUrl.ts";
 
 const CODE_BG = "color-mix(in srgb, var(--bg3) 55%, transparent)";
 
@@ -41,9 +42,16 @@ function inline(text: string, keyBase: string): ReactNode[] {
       const label = tok.slice(1, sep);
       const href = tok.slice(sep + 2, -1);
       // Only http(s): a message could otherwise carry javascript: or data:.
-      const safe = /^https?:\/\//i.test(href);
+      //
+      // Asked of the URL parser rather than of a regexp, and asked through the
+      // helper the pull request panel already uses, so there is one answer to
+      // "is this safe to hand a browser" in the app instead of two that can
+      // drift. The parser is also the stricter reader: it normalises away the
+      // tab and newline tricks that hide a scheme from a pattern match, and it
+      // refuses anything that is not an absolute URL at all.
+      const safe = externalUrl(href);
       out.push(safe
-        ? <a key={k} href={href} target="_blank" rel="noreferrer noopener" style={{ color: "var(--primary-hover)", textDecoration: "underline" }}>{label}</a>
+        ? <a key={k} href={safe} target="_blank" rel="noreferrer noopener" style={{ color: "var(--primary-hover)", textDecoration: "underline" }}>{label}</a>
         : <span key={k}>{label}</span>);
     }
     last = m.index + tok.length;

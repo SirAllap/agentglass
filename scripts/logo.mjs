@@ -110,11 +110,16 @@ function small({ base, ok }) {
   ].join("");
 }
 
-/** Same markup, JSX attribute casing. */
+/** Same markup, JSX attribute casing.
+ *
+ *  One rule, and only one is needed: the hyphenated SVG attributes this mark
+ *  uses (`stop-color`, `stop-opacity`, `stroke-width`, `stroke-linecap`,
+ *  `fill-opacity`) become camelCase. The element names carry over untouched,
+ *  `<stop>` included, which is why the second pass that used to sit here
+ *  replaced `<stop ` with `<stop ` and did nothing at all. */
 const jsx = (s) => s
   .replace(/\b(stroke|fill|stop)-(width|opacity|linecap|color)="/g,
-    (_, a, b) => `${a}${b[0].toUpperCase()}${b.slice(1)}="`)
-  .replace(/<stop /g, "<stop ");
+    (_, a, b) => `${a}${b[0].toUpperCase()}${b.slice(1)}="`);
 
 // ── the copies ──────────────────────────────────────────────────────────
 /** One tag per line, indented — these files get read and reviewed by hand. */
