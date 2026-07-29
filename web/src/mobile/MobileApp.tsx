@@ -14,11 +14,13 @@ import { RepoList, RepoScreen, ContainerScreen, HALT_CSS, type RepoSummary } fro
 import { projectRows } from "./projects.ts";
 import { baseName, ownerOf } from "../../../shared/projectKey.ts";
 import { MobilePr, THREAD_CSS } from "./MobilePr.tsx";
+import { MobileFleet, FLEET_CSS } from "./MobileFleet.tsx";
+import { sessionForInsight } from "./fleet.ts";
 import { buildQueue, type NowItem } from "./nowQueue.ts";
 import { dedupePrs, mainCheckouts } from "./prRows.ts";
 import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
 import type {
-  PendingGate, SessionRollup, DockerContainer, DockerStat, PrSummary, GitRepoRef, GitTreeState,
+  PendingGate, SessionRollup, DockerContainer, DockerStat, PrSummary, GitRepoRef, GitTreeState, Insight,
 } from "../../../shared/types.ts";
 
 /**
@@ -51,7 +53,7 @@ import type {
  * still open.
  */
 
-type Tab = "now" | "chats" | "repos";
+type Tab = "now" | "chats" | "repos" | "fleet";
 
 /** Live on the socket · reachable but not streaming · nothing answering. */
 type LinkState = "live" | "slow" | "offline";
@@ -93,6 +95,9 @@ const GATE_MS = 20_000;
 const TREE_MS = 120_000;
 const DOCKER_MS = 15_000;
 const PR_MS = 60_000;
+/** Insights are computed over a window of hours; asking oftener than the answer
+ *  can change is a radio wake for nothing. */
+const INSIGHT_MS = 90_000;
 
 export function MobileApp() {
   const [tab, setTab] = useState<Tab>("now");
@@ -154,6 +159,7 @@ export function MobileApp() {
    * reports, so it lifts itself the moment there is news — see snooze.ts.
    */
   const [answered, setAnswered] = useState<string[]>([]);
+  const [insights, setInsights] = useState<Insight[]>([]);
   const snoozeStore = useMemo(() => deviceStore(), []);
   const [snoozeRev, bumpSnooze] = useReducer((n: number) => n + 1, 0);
 
@@ -257,6 +263,12 @@ export function MobileApp() {
     const ping = () => probeServer(2_000).then((id) => setReachable(id === "ours")).catch(() => setReachable(false));
     ping();
     return pollWhileVisible(ping, HEALTH_MS);
+  }, []);
+
+  useEffect(() => {
+    const load = () => api.insights().then((r) => setInsights(r.insights || [])).catch(() => { /* a poll */ });
+    load();
+    return pollWhileVisible(load, INSIGHT_MS);
   }, []);
 
   useEffect(() => {
@@ -582,7 +594,7 @@ export function MobileApp() {
 
   return (
     <div className="mb min-h-[100dvh] flex flex-col" style={{ background: "var(--bg)", color: "var(--text)" }}>
-      <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}{HALT_CSS}{THREAD_CSS}</style>
+      <style>{MOBILE_CSS}{DIFF_CSS}{NOW_CSS}{HALT_CSS}{THREAD_CSS}{FLEET_CSS}</style>
       {askDialog}
       <div className="mb-sky" />
 
@@ -627,6 +639,14 @@ export function MobileApp() {
         {tab === "chats" && <MobileChats sessions={sessions} onRefresh={loadFast} onImmersive={setImmersive}
           openChat={openChat} onOpenChat={setOpenChat} compose={compose} onCompose={setCompose} />}
         {tab === "repos" && <RepoList repos={repoSummaries} onOpen={(r, siblings) => { setOpenCheckouts(siblings); setOpenRepo(r); }} />}
+        {tab === "fleet" && <MobileFleet insights={insights} stats={stats}
+          onOpenInsight={(i) => {
+            const found = sessionForInsight(i.session, sessions);
+            // Nothing to open is a real answer here: the label is eight hex
+            // characters and an app name, and two sessions can share them.
+            if (found) openSession(found);
+            else toast(i.session ? "That agent is no longer in the list" : "This one is about the fleet, not one agent");
+          }} />}
       </main>
 
       {!immersive && <nav className="fixed left-0 right-0 bottom-0 z-40 flex"
@@ -638,6 +658,10 @@ export function MobileApp() {
         <TabBtn id="now" tab={tab} onPick={setTab} glyph="◎" label="Now" badge={queue.length} />
         <TabBtn id="chats" tab={tab} onPick={setTab} glyph="▤" label="Chats" />
         <TabBtn id="repos" tab={tab} onPick={setTab} glyph="◇" label="Repos" />
+        {/* Everything on this tab was computed and served from the beginning
+            and had no route to a phone. The badge is what is misbehaving. */}
+        <TabBtn id="fleet" tab={tab} onPick={setTab} glyph="◈" label="Fleet"
+          badge={insights.filter((i) => i.severity === "bad").length} />
       </nav>}
 
       <RepoScreen open={!!openRepo && !openPr} repo={openRepo}

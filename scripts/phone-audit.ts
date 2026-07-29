@@ -701,6 +701,39 @@ async function main() {
     }
     await drain(cdp, "now");
 
+    // ---- the fleet ---------------------------------------------------
+    await tap(cdp, "nav button", "Fleet");
+    await Bun.sleep(1800);
+    note("fleet", "the tab exists and renders",
+      await cdp.ev(`(document.querySelector("main")?.textContent || "").trim().length > 60`));
+    const cards = await cdp.ev(`document.querySelectorAll("main .mb-ins").length`);
+    if (!cards) {
+      console.log("  skip  fleet · nothing is misbehaving on this machine");
+      note("fleet", "an empty fleet says so rather than showing nothing",
+        await cdp.ev(`/Nothing is misbehaving/.test(document.body.textContent)`));
+    } else {
+      // Worst first, same as the Now queue and for the same reason.
+      note("fleet", "the worst is at the top",
+        await cdp.ev(`(()=>{const r=[...document.querySelectorAll("main .mb-ins")]
+          .map(e=>e.classList.contains("bad")?0:e.classList.contains("warn")?1:2);
+          return r.every((v,i)=>i===0||r[i-1]<=v)})()`),
+        await cdp.ev(`JSON.stringify([...document.querySelectorAll("main .mb-ins")].map(e=>e.querySelector(".t").textContent))`));
+      note("fleet", "an insight is a way in, not a headline",
+        await cdp.ev(`[...document.querySelectorAll("main .mb-ins")].every(e=>e.tagName === "BUTTON")`));
+    }
+    // A bar you cannot see is not a comparison. These are spans, and an inline
+    // element silently ignores a height — which drew every track 0px tall.
+    note("fleet", "the bars are actually drawn",
+      await cdp.ev(`[...document.querySelectorAll("main .mb-bar .g")].every(e=>e.getBoundingClientRect().height >= 4)`),
+      await cdp.ev(`JSON.stringify([...document.querySelectorAll("main .mb-bar .g")].map(e=>Math.round(e.getBoundingClientRect().height)))`));
+    note("fleet", "no figure renders as NaN or undefined",
+      !(await cdp.ev(`/NaN|undefined|Infinity/.test(document.querySelector("main")?.textContent || "")`)));
+    await shot(cdp, "14-fleet");
+    await hygiene(cdp, "fleet");
+    await drain(cdp, "fleet");
+    await tap(cdp, "nav button", "Now");
+    await Bun.sleep(900);
+
     // ---- the server going away ---------------------------------------
     // A companion that silently shows stale numbers when the machine it is
     // watching has gone is worse than one that says so.
