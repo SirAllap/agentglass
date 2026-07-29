@@ -95,7 +95,7 @@ self.addEventListener("push", function (event) {
 });
 
 /**
- * Tapping the notification puts the app in front of you.
+ * Tapping the notification puts the decision in front of you.
  *
  * Focus an existing window if there is one, rather than opening a second copy:
  * the app holds live socket state and a back stack, and a fresh tab throws
@@ -104,6 +104,12 @@ self.addEventListener("push", function (event) {
  * `includeUncontrolled` matters: a tab loaded before this worker took over is
  * not controlled by it, and without the flag it is invisible here. That tab is
  * the single most likely one to exist.
+ *
+ * Focusing alone is not enough, though. The app is wherever it was left — the
+ * fleet, a diff, a conversation — so tapping "Approval needed" would raise a
+ * window showing something else entirely, and the thing you were woken for
+ * would be one or two taps away and unmentioned. So the window is also told
+ * why it was raised. A fresh one needs no telling: it opens on the queue.
  */
 self.addEventListener("notificationclick", function (event) {
   event.notification.close();
@@ -112,7 +118,12 @@ self.addEventListener("notificationclick", function (event) {
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (all) {
       for (var i = 0; i < all.length; i++) {
         if (all[i].url.indexOf(self.registration.scope) === 0 && "focus" in all[i]) {
-          return all[i].focus();
+          var client = all[i];
+          // Told before focusing, not after: `focus()` resolves when the window
+          // is actually raised, which on a phone waking from a locked screen is
+          // long enough to see the wrong screen first.
+          try { client.postMessage({ type: "agentglass:opened-from-notification" }); } catch (e) { /* gone */ }
+          return client.focus();
         }
       }
       return self.clients.openWindow(home);

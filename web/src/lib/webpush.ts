@@ -150,6 +150,20 @@ export async function myDeviceId(env: PushEnv): Promise<string | null> {
   }
 }
 
+/**
+ * The message the worker sends the app when a notification is tapped.
+ *
+ * Checked rather than assumed: a page with a service worker receives messages
+ * from anything else that worker talks to, and acting on a bare truthy `data`
+ * would let an unrelated message yank somebody out of a conversation they were
+ * typing in.
+ */
+export const OPENED_FROM_NOTIFICATION = "agentglass:opened-from-notification";
+export function isOpenedFromNotification(data: unknown): boolean {
+  return !!data && typeof data === "object"
+    && (data as { type?: unknown }).type === OPENED_FROM_NOTIFICATION;
+}
+
 /** Whatever the phone should call itself in the device list. Free text, only
  *  ever shown back — a name, not an identifier. */
 export function deviceLabel(ua: string): string {

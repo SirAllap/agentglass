@@ -13,10 +13,12 @@
  * a phone with no console attached.
  */
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   decodeKey, deviceLabel, pushCopy, pushStateOf,
   currentPushState, enablePush, disablePush,
   isApplePortable, needsHomeScreen, deviceIdOf, myDeviceId,
+  isOpenedFromNotification, OPENED_FROM_NOTIFICATION,
   type PushEnv, type PushState,
 } from "../src/lib/webpush.ts";
 import { since } from "../src/lib/format.ts";
@@ -225,6 +227,36 @@ describe("an iPhone in a browser tab", () => {
     // screen, and telling it to would be nonsense.
     const { env } = fakeEnv({ hasPushManager: false, ua: MAC, maxTouchPoints: 0 });
     expect(await currentPushState(env)).toBe("unsupported");
+  });
+});
+
+describe("the message the worker sends when a notification is tapped", () => {
+  it("is recognised", async () => {
+    expect(isOpenedFromNotification({ type: OPENED_FROM_NOTIFICATION })).toBe(true);
+  });
+
+  it("is not confused with anything else a worker might say", async () => {
+    // A page with a service worker receives messages from everything else that
+    // worker talks to. Acting on a bare truthy `data` would yank somebody out
+    // of a conversation they were typing in, for a message that was never
+    // about them.
+    for (const other of [
+      null, undefined, "", 0, "agentglass:opened-from-notification",
+      {}, { type: "" }, { type: "workbox-broadcast-update" }, { data: { type: OPENED_FROM_NOTIFICATION } },
+      // Ours, near enough to look right and not the same thing. An exact
+      // match, not a prefix: this app will send other messages one day.
+      { type: OPENED_FROM_NOTIFICATION + "-v2" }, { type: "agentglass:something-else" },
+      [{ type: OPENED_FROM_NOTIFICATION }],
+    ]) {
+      expect(isOpenedFromNotification(other)).toBe(false);
+    }
+  });
+
+  it("is the string the worker actually sends", async () => {
+    // Pinned against public/sw.js, which is plain JavaScript and cannot import
+    // this constant. Two spellings of one name, so they are checked to agree.
+    const sw = readFileSync(new URL("../public/sw.js", import.meta.url).pathname, "utf8");
+    expect(sw).toContain(OPENED_FROM_NOTIFICATION);
   });
 });
 

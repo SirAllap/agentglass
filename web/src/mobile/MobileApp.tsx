@@ -20,7 +20,8 @@ import { buildQueue, type NowItem } from "./nowQueue.ts";
 import { dedupePrs, mainCheckouts } from "./prRows.ts";
 import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
 import {
-  browserPushEnv, currentPushState, disablePush, enablePush, myDeviceId, pushCopy, type PushState,
+  browserPushEnv, currentPushState, disablePush, enablePush, isOpenedFromNotification,
+  myDeviceId, pushCopy, type PushState,
 } from "../lib/webpush.ts";
 import type { PushDevice } from "../lib/api.ts";
 import type {
@@ -564,6 +565,35 @@ export function MobileApp() {
    * and the prompt to open with, which is why NewChat takes a preset rather
    * than always starting on the first repo in the list.
    */
+  /**
+   * A notification was tapped, so show what it was about.
+   *
+   * Focusing the window is not enough on its own: the app is wherever it was
+   * left — the fleet, a diff, a conversation — so tapping "Approval needed"
+   * raised a screen showing something else, and the thing that woke you was
+   * one or two taps away and unmentioned.
+   *
+   * Everything open is closed rather than the tab merely switched, because a
+   * parked screen sits *over* the tabs: setting the tab underneath a diff
+   * changes nothing anybody can see.
+   */
+  useEffect(() => {
+    const sw = typeof navigator === "undefined" ? null : navigator.serviceWorker;
+    if (!sw) return;
+    const onMessage = (e: MessageEvent) => {
+      if (!isOpenedFromNotification(e.data)) return;
+      setOpenPr(null);
+      setOpenRepo(null);
+      setOpenCtr(null);
+      setOpenChat(null);
+      setCompose(null);
+      setSettings(false);
+      setTab("now");
+    };
+    sw.addEventListener("message", onMessage);
+    return () => sw.removeEventListener("message", onMessage);
+  }, []);
+
   const openChatWith = useCallback((cwd: string, prompt: string) => {
     setOpenPr(null);
     setOpenRepo(null);

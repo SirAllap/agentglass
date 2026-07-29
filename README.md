@@ -300,6 +300,38 @@ otherwise the phone shows a white page and nothing anywhere says why.
 The page ships a web manifest, so **Add to home screen** gives you an icon that
 opens without browser chrome.
 
+### Alerts that reach a locked phone
+
+Everything else agentglass can say needs somebody already looking. A webhook
+goes to a chat app, `notify-send` goes to a desktop that may not exist, and the
+phone's socket closes with the screen **on purpose** — a socket reconnecting
+behind a dark screen is a worse deal than a poll. So the one case the companion
+exists for, you walked away and an agent is now blocked waiting on a person,
+was the one case nothing covered.
+
+**Settings ▸ Push to this phone**, one switch. After that a held gate buzzes the
+phone in your pocket, and tapping it opens the queue with the decision on it.
+
+It is end-to-end encrypted by design: the push service relays a blob it cannot
+read (RFC 8291 over RFC 8188, VAPID for the token). Your machine generates its
+own signing key on first use and keeps it in `~/.config/agentglass/push.json`
+at 0600 — nothing is registered with anybody, and the only thing that leaves is
+ciphertext addressed to your own device.
+
+- **Test** sends a real notification down the real path, so you find out now
+  rather than by missing something later.
+- More than one device gets a list — what each is called, when it last actually
+  received an alert, and a way to forget one. A phone you replaced keeps
+  receiving until you say otherwise, and the list is where you say it.
+- A held gate stays on the lock screen until you deal with it; anything less
+  urgent is allowed to fade.
+- **On iPhone and iPad this needs the Home Screen icon first.** Safari has had
+  Web Push since 16.4, but only for an installed site — in a browser tab the
+  switch will say so and point at the share sheet.
+
+Independent of `AGENTGLASS_NOTIFY`, which is the desktop channel: a phone is
+subscribed whether or not the machine it watches has a screen.
+
 ---
 
 ![the phone companion — the queue, a repository's changes, and the chat list](.github/assets/mobile.png)
@@ -332,7 +364,7 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 📈 **Anthropic plan usage** | 5-hour + weekly plan-limit meters — shown only when you're viewing Anthropic (the one provider with a usage API), on wide screens. |
 | ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `o` Docker · `t` terminal · `c` chat · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
 | 🎨 **22 themes** | 11 dark palettes (Midnight Purple, Forest, Ember, Nord, …), each with a light twin — instant switch, remembered. |
-| 🔔 **Push alerts** | Webhook (Slack/Discord) + desktop notify + optional in-app chime on approvals and errors. |
+| 🔔 **Alerts** | Web Push to a locked phone (end-to-end encrypted, no account anywhere) + webhook (Slack/Discord) + desktop notify + optional in-app chime, on approvals and errors. |
 | 📤 **Export** | One-click CSV / JSON of all events. |
 
 ### Themes
@@ -652,7 +684,16 @@ are:
   using your own credentials), the update check against the GitHub releases API,
   the **Pull requests** panel through your own authenticated `gh` CLI, the AI
   **Explain** walkthrough through a local `claude` (or your `ANTHROPIC_API_KEY`),
-  and anything *you* configure (webhook alerts).
+  Web Push once you turn it on for a phone, and anything *you* configure
+  (webhook alerts).
+- **Push, specifically.** Turning it on means this machine posts to whichever
+  push service your phone's browser nominated — Google's for Chrome, Mozilla's
+  for Firefox, Apple's for Safari. The body is encrypted end to end (RFC 8291),
+  so that service relays something it cannot read: it learns that this machine
+  sent something to that device, and nothing else — not the project, not the
+  command, not the agent. No account is created anywhere, and the signing key is
+  generated locally and never leaves (`~/.config/agentglass/push.json`, 0600).
+  Off until you switch it on, per device, and revocable from the same list.
 
 ---
 
@@ -792,7 +833,7 @@ in its own buckets rather than charged again as ordinary input.
 | `AGENTGLASS_RETENTION_DAYS` | `8` | Days of **raw events** to keep (pruned hourly). Covers the full 7d stats window; `0` = keep forever. Expiring days are folded into a daily rollup first, so spend history outlives the rows — see *spend per day* in Statistics. |
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` alerts here (Slack/Discord compatible). |
-| `AGENTGLASS_NOTIFY` | — | `1` → fire desktop alerts. A connected client (browser or desktop app) raises a **native OS notification** on any platform; `notify-send` is the fallback for a headless server with nothing attached to show it. |
+| `AGENTGLASS_NOTIFY` | — | `1` → fire desktop alerts. A connected client (browser or desktop app) raises a **native OS notification** on any platform; `notify-send` is the fallback for a headless server with nothing attached to show it. Does **not** gate Web Push to a phone, which is subscribed per device from the companion's own settings — see [Alerts that reach a locked phone](#alerts-that-reach-a-locked-phone). |
 | `AGENTGLASS_SERVER` | `http://localhost:4000` | Used by the hook/seed scripts. Refused unless it points at this machine — see the next row. |
 | `AGENTGLASS_ALLOW_REMOTE` | — | `1` → let the hook scripts post to a **non-local** `AGENTGLASS_SERVER`. Off by default and deliberately awkward: those payloads carry full session transcripts, and `AGENTGLASS_SERVER` can be set by a repo-local `settings.json` — so a cloned repository could otherwise redirect your transcripts to somebody else's host. Set it only if you genuinely run the server on another machine. |
 | `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). Unset, the UI resolves same-origin when the server itself served it (single-port mode), `:4000` otherwise. |
@@ -880,6 +921,7 @@ cannot be configured by `export` at all.
 | `GET /insights` | Derived warnings — loops, fast burn, high failure rate, spend velocity. |
 | `GET /search?q=` | Full-text search across all captured prompts/commands/outputs. |
 | `POST /gate` · `GET /gate/pending` · `POST /gate/decide` | Control-plane approve/deny for the opt-in `PreToolUse` gate. |
+| `GET /push/key · /push/devices` · `POST /push/subscribe · /push/unsubscribe · /push/test` | Web Push to a phone: this machine's VAPID public key, the subscribed devices, registering and forgetting one, and sending a real test alert down the real path. `/push/devices` answers *how many and what are they called* and never an endpoint or a key — an endpoint is a capability, and anyone holding one could wake that phone forever. |
 | `GET /actions?limit=&before=` | Every write the cockpit performed — git, docker, pull requests, gate decisions — with the address it came from. Append-only; unscoped on purpose. |
 | `POST /control` | Drive the dashboard's own UI (switch view, toggle workspace, theme, zoom, new chat) from an external controller — a Stream Deck, a phone. Validated then rebroadcast on `/stream`; changes only what's shown, grants no capability the keyboard doesn't. See [`docs/EXTENDING.md`](docs/EXTENDING.md). |
 | `GET /export?format=csv\|json` | Download all events (bounded by retention). |
