@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
 import { Screen } from "./mobileUi.tsx";
 import type { DiffHunk } from "../../../shared/types.ts";
+// One rule for which file a line number lives in, shared with the draft that
+// stores the remark, so the renderer and the payload cannot disagree.
+import { sideFor } from "./reviewDraft.ts";
 
 /**
  * A diff you can actually read on a phone.
@@ -24,6 +27,12 @@ export const DIFF_CSS = `
   border:1px solid color-mix(in srgb,var(--border) 32%,transparent);
   background:color-mix(in srgb,#000 30%,transparent)}
 .mb-dl{display:flex;width:100%;text-align:left;align-items:flex-start;background:transparent}
+/* Only where a line is a control. A diff has to stay dense to be readable at
+   all — 44px a line shows eighteen of them, which is not reading code — so this
+   buys what it can without turning the screen into a list. What actually makes
+   a mis-tap survivable is the sheet: it opens naming the file, the line and
+   which side of the diff it is, before anything has been written. */
+button.mb-dl{padding:3px 0}
 .mb-dl .g{flex:none;width:34px;padding:1px 7px 1px 0;text-align:right;color:var(--text4);opacity:.5;
   user-select:none;font-size:10px;font-variant-numeric:tabular-nums}
 .mb-dl .s{flex:none;width:12px;user-select:none;opacity:.9}
@@ -35,12 +44,19 @@ export const DIFF_CSS = `
 .mb-dl.add{background:color-mix(in srgb,var(--success) 13%,transparent)}
 .mb-dl.add .g,.mb-dl.add .s{color:var(--success);opacity:.95}
 .mb-dl.del{background:color-mix(in srgb,var(--error) 12%,transparent)}
+/* A line you have already said something about. The marker is on the gutter
+   rather than the whole row so it reads against an added line's green and a
+   deleted line's red alike. */
+.mb-dl.said{background:color-mix(in srgb,var(--primary) 17%,transparent)}
+.mb-dl.said .g{color:var(--primary-hover);opacity:1;font-weight:700}
+.mb-dl.said .g::after{content:"●";font-size:7px;vertical-align:top;margin-left:2px}
 .mb-dl.del .g,.mb-dl.del .s{color:var(--error);opacity:.95}
 .mb-dl.hdr{background:color-mix(in srgb,var(--primary) 10%,transparent);color:var(--text4);
   font-size:10.5px;padding:4px 0}
 `;
 
 type Line = { kind: "ctx" | "add" | "del" | "hdr"; n: string; text: string };
+
 
 /** Anything carrying hunks: a working-tree change or a parsed pull request
  *  diff. Both already speak this shape, so neither needs translating. */
@@ -63,7 +79,7 @@ function toLines(f: Hunked | undefined): Line[] {
   return out;
 }
 
-export function MobileDiff({ open, file, files, index, onIndex, onBack, onLine, extra }: {
+export function MobileDiff({ open, file, files, index, onIndex, onBack, onLine, markOn, extra }: {
   open: boolean;
   file: Hunked | undefined;
   /** Paths in order, for prev/next and for the "3 of 11" the footer shows. */
@@ -71,9 +87,20 @@ export function MobileDiff({ open, file, files, index, onIndex, onBack, onLine, 
   index: number;
   onIndex: (i: number) => void;
   onBack: () => void;
-  /** Tapping a line — a review comment on a pull request, nothing on a working
-   *  tree diff, where the line has no stable identity to hang a comment on. */
-  onLine?: (path: string, line: number) => void;
+  /**
+   * Tapping a line — a review comment on a pull request, nothing on a working
+   * tree diff, where the line has no stable identity to hang a comment on.
+   *
+   * The side is not decoration, it is half the address: a deleted line is
+   * numbered in the old file and everything else in the new one, so `(path,
+   * line)` alone is ambiguous and resolving it the wrong way puts the remark on
+   * unrelated code. This handed over only `(path, line)` for as long as nothing
+   * passed it — see reviewDraft.ts.
+   */
+  onLine?: (path: string, line: number, side: "LEFT" | "RIGHT") => void;
+  /** How many remarks are already queued on a given line, so a line you have
+   *  annotated looks different from one you have not. */
+  markOn?: (path: string, line: number, side: "LEFT" | "RIGHT") => boolean;
   extra?: React.ReactNode;
 }) {
   const [wrap, setWrap] = useState(true);
@@ -110,9 +137,14 @@ export function MobileDiff({ open, file, files, index, onIndex, onBack, onLine, 
               return <div key={i} className="mb-dl hdr"><span className="g" /><span className="s" /><span className="c">{l.text}</span></div>;
             }
             const body = <><span className="g">{l.n}</span><span className="s">{sign}</span><span className="c">{l.text}</span></>;
-            return onLine
-              ? <button key={i} className={`mb-dl ${l.kind} mb-press`} onClick={() => onLine(path, Number(l.n) || 0)}>{body}</button>
-              : <div key={i} className={`mb-dl ${l.kind}`}>{body}</div>;
+            if (!onLine) return <div key={i} className={`mb-dl ${l.kind}`}>{body}</div>;
+            const n = Number(l.n) || 0;
+            const side = sideFor(l.kind);
+            const said = markOn?.(path, n, side) ?? false;
+            return (
+              <button key={i} className={`mb-dl ${l.kind} mb-press${said ? " said" : ""}`}
+                onClick={() => onLine(path, n, side)}>{body}</button>
+            );
           })}
         </div>
       )}

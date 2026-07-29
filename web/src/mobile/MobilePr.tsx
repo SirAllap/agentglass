@@ -5,6 +5,10 @@ import { Screen, Sheet, Seg, Empty, Act, useAsk } from "./mobileUi.tsx";
 import { MobileDiff, FileRow } from "./MobileDiff.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import type { PrDetail, PrCheck } from "../../../shared/types.ts";
+import {
+  EMPTY, canSubmit, commentAt, countFor, annotatedPaths, setComment as withRemark, summarise,
+  type ReviewDraft, type Side, type Verb,
+} from "./reviewDraft.ts";
 
 /**
  * Reviewing a pull request from a phone.
@@ -46,10 +50,28 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
   const [more, setMore] = useState(false);
   const [openLog, setOpenLog] = useState<string | null>(null);
   const [comment, setComment] = useState("");
+  /**
+   * The review being written, and where it is being written.
+   *
+   * GitHub's own model: you read, you leave remarks as you go, and you submit
+   * them together with a verdict — one notification for the author instead of a
+   * scatter. `MobileDiff` has rendered every line as a button and printed "Tap
+   * a line to comment on it" since it was written, and nothing ever passed it
+   * an `onLine`, so none of this was reachable from a phone.
+   */
+  const [draft, setDraft] = useState<ReviewDraft>(EMPTY);
+  const [at, setAt] = useState<{ path: string; line: number; side: Side } | null>(null);
+  const [note, setNote] = useState("");
+  const [reviewing, setReviewing] = useState(false);
+  const [verb, setVerb] = useState<Verb | null>(null);
+  const verdict = canSubmit(draft, verb, !!d?.viewerDidAuthor);
 
   useEffect(() => {
     if (!open || number == null) return;
     setTab("overview"); setD(null); setErr(""); setDiff(""); setSeen([]); setComment("");
+    // A review is written about one pull request. Carrying remarks from the
+    // last one into the next would post them against lines that mean nothing.
+    setDraft(EMPTY); setVerb(null); setAt(null); setNote(""); setReviewing(false);
     api.prDetail(root, number).then((r) => {
       if (r.ok && r.detail) setD(r.detail); else setErr(r.error || "Could not load it");
     }).catch((e) => setErr(String(e)));
@@ -76,6 +98,7 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
   const { ask, dialog: askDialog } = useAsk();
 
   const canMerge = d?.mergeState === "CLEAN";
+
   const openThreads = d?.threads.filter((t) => !t.isResolved).length ?? 0;
 
   return (
@@ -234,7 +257,53 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
 
       <MobileDiff open={diffAt != null} files={paths} index={diffAt ?? 0} onIndex={setDiffAt}
         file={diffAt != null ? byPath.get(paths[diffAt] ?? "") : undefined}
-        onBack={() => setDiffAt(null)} />
+        onBack={() => setDiffAt(null)}
+        onLine={(path, line, side) => {
+          if (!line) return; // a hunk header has no address
+          setAt({ path, line, side });
+          setNote(commentAt(draft, path, line, side)?.body ?? "");
+        }}
+        markOn={(path, line, side) => !!commentAt(draft, path, line, side)}
+        extra={draft.comments.length > 0 ? (
+          <Act small kind="acc" onAct={() => setReviewing(true)}>
+            Finish review · {draft.comments.length}
+          </Act>
+        ) : undefined} />
+
+      {/* One line, one remark. Opening on a line you have already annotated
+          pre-fills it, so editing and deleting are the same gesture as writing. */}
+      <Sheet open={!!at} title={at ? `Line ${at.line}` : ""}
+        sub={at ? `${at.path.split("/").pop()} · ${at.side === "LEFT" ? "the old file" : "the new file"}` : undefined}
+        onClose={() => setAt(null)}>
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={5}
+          placeholder="What is wrong with this line, or what you would rather see"
+          className="w-full rounded-xl p-3 text-[13px]"
+          style={{ background: "var(--bg2)", border: "1px solid var(--mb-line)", color: "var(--text)", resize: "vertical" }} />
+        <div className="flex gap-2 mt-3">
+          <Act small full onAct={() => setAt(null)}>Cancel</Act>
+          <Act small full kind="acc" onAct={() => {
+            if (!at) return;
+            setDraft((cur) => withRemark(cur, at.path, at.line, at.side, note));
+            // Saying it is queued matters more here than anywhere else: nothing
+            // has gone to GitHub yet, and a remark that vanished into a closing
+            // sheet would be written twice or not at all.
+            toast(note.trim() ? "Queued for the review" : "Remark removed");
+            setAt(null);
+          }}>{note.trim() ? "Save" : "Remove"}</Act>
+        </div>
+      </Sheet>
+
+      <ReviewSheet open={reviewing} draft={draft} verb={verb} verdict={verdict}
+        mine={!!d?.viewerDidAuthor}
+        onVerb={setVerb} onBody={(b) => setDraft((cur) => ({ ...cur, body: b }))}
+        onDrop={(c) => setDraft((cur) => withRemark(cur, c.path, c.line, c.side, ""))}
+        onClose={() => setReviewing(false)}
+        onSubmit={async () => {
+          if (!d || !verdict.ok || !verb) return;
+          await act(verb === "approve" ? "Approved" : verb === "request_changes" ? "Changes requested" : "Review sent",
+            () => api.prReviewWith(root, d.number, verb, draft.body, draft.comments));
+          setDraft(EMPTY); setVerb(null); setReviewing(false);
+        }} />
 
       <Sheet open={more} title="Pull request" sub="Things you do to it, rather than in it."
         onClose={() => setMore(false)}>
@@ -396,4 +465,104 @@ async function handOver(
     onOpenChatWith(r.cwd, r.prompt && prompt.startsWith("Review pull request") ? r.prompt : prompt);
     toast(`Checked out #${number} — it is waiting in chat`);
   } catch (e) { toast(String(e), true); }
+}
+
+/**
+ * The verdict, and everything queued under it.
+ *
+ * Three verbs, not one. The screen could approve and it could merge, which
+ * covers exactly the review that has nothing to say — and a phone is where you
+ * are most likely to be reading something you want to push back on, because you
+ * are not at the keyboard that would let you fix it yourself.
+ *
+ * The queued remarks are listed and removable from here, so the last thing you
+ * see before sending is everything you are about to send. A review you cannot
+ * re-read before submitting is one you write more carefully than you should
+ * have to.
+ */
+function ReviewSheet({ open, draft, verb, verdict, mine, onVerb, onBody, onDrop, onClose, onSubmit }: {
+  open: boolean;
+  draft: ReviewDraft;
+  verb: Verb | null;
+  verdict: { ok: true } | { ok: false; why: string };
+  mine: boolean;
+  onVerb: (v: Verb) => void;
+  onBody: (b: string) => void;
+  onDrop: (c: { path: string; line: number; side: Side }) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  const VERBS: { id: Verb; label: string; hint: string }[] = [
+    { id: "approve", label: "Approve", hint: "It can go in" },
+    { id: "request_changes", label: "Request changes", hint: "Not until these are addressed" },
+    { id: "comment", label: "Comment", hint: "Thoughts, no verdict" },
+  ];
+  return (
+    <Sheet open={open} title="Submit review" sub={summarise(draft)} onClose={onClose}>
+      <div className="flex flex-col gap-2">
+        {VERBS.map((v) => {
+          // Both of these are refused by GitHub on your own pull request. Saying
+          // so on the option is better than letting it be chosen and then
+          // disabling the button underneath with a reason nobody connects to it.
+          const barred = mine && v.id !== "comment";
+          const on = verb === v.id;
+          return (
+            <button key={v.id} disabled={barred} onClick={() => onVerb(v.id)}
+              className={`mb-row mb-press${barred ? " dis" : ""}`}
+              style={{
+                opacity: barred ? 0.4 : 1,
+                borderColor: on ? "var(--primary-hover)" : undefined,
+                background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined,
+              }}>
+              <span className="i">
+                <b style={{ color: on ? "var(--primary-hover)" : undefined }}>{v.label}</b>
+                <span>{barred ? "Not on your own pull request" : v.hint}</span>
+              </span>
+              {on && <span className="r" style={{ color: "var(--primary-hover)" }}>✓</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      <textarea value={draft.body} onChange={(e) => onBody(e.target.value)} rows={4}
+        placeholder="A covering note (optional for an approval)"
+        className="w-full rounded-xl p-3 text-[13px] mt-3"
+        style={{ background: "var(--bg2)", border: "1px solid var(--mb-line)", color: "var(--text)", resize: "vertical" }} />
+
+      {annotatedPaths(draft).length > 0 && (
+        <>
+          <div className="mb-eyebrow" style={{ margin: "16px 0 8px" }}>Queued remarks</div>
+          <div className="flex flex-col gap-2">
+            {annotatedPaths(draft).map((path) => (
+              <div key={path}>
+                <div className="text-[10.5px] mb-1.5 truncate" style={{ color: "var(--text3)" }}>
+                  {path} · {countFor(draft, path)}
+                </div>
+                {draft.comments.filter((c) => c.path === path).map((c) => (
+                  <div key={`${c.side}${c.line}`} className="flex items-start gap-2 mb-1.5">
+                    <span className="mb-tnum text-[10.5px] pt-1" style={{ color: "var(--text3)", flex: "none", minWidth: 34 }}>
+                      {c.side === "LEFT" ? "−" : "+"}{c.line}
+                    </span>
+                    <span className="flex-1 min-w-0 text-[11.5px]" style={{ color: "var(--text2)", overflowWrap: "anywhere" }}>
+                      {c.body}
+                    </span>
+                    <button className="mb-press" aria-label={`Remove the remark on line ${c.line}`}
+                      onClick={() => onDrop(c)}
+                      style={{ flex: "none", minHeight: 40, minWidth: 40, borderRadius: 10, color: "var(--text3)", background: "transparent" }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {!verdict.ok && (
+        <p className="text-[11px] mt-4" style={{ color: "var(--warning)" }}>{verdict.why}</p>
+      )}
+      <div className="mt-3">
+        <Act full kind="acc" disabled={!verdict.ok} onAct={onSubmit}>Submit review</Act>
+      </div>
+    </Sheet>
+  );
 }

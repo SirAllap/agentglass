@@ -112,7 +112,15 @@ const HYGIENE = `(() => {
     // A tap target you have to aim at. 40px is the floor everyone agrees on.
     const tappable = el.tagName === "BUTTON" || el.getAttribute("role") === "switch"
       || el.getAttribute("role") === "tab" || el.tagName === "A";
-    if (tappable && (r.height < 36 || r.width < 24)) bad.tiny.push(name(el) + " " + Math.round(r.width) + "x" + Math.round(r.height));
+    // A diff line is the one control that cannot meet the floor: a phone-sized
+    // diff at 44px a line shows eighteen of them, and reading a change is the
+    // whole point of the screen. It is exempt because a mis-tap is *visible and
+    // free* — the sheet opens naming the file, the line and the side before a
+    // word is written, and Cancel costs nothing. Nothing else gets this.
+    const dense = el.classList.contains("mb-dl");
+    if (tappable && !dense && (r.height < 36 || r.width < 24)) bad.tiny.push(name(el) + " " + Math.round(r.width) + "x" + Math.round(r.height));
+    // It is not exempt from being hittable at all, though.
+    if (tappable && dense && (r.height < 18 || r.width < 24)) bad.tiny.push(name(el) + " (diff line) " + Math.round(r.width) + "x" + Math.round(r.height));
 
     // A control that will do nothing has to look like it will do nothing. The
     // costly version of this is a filled, primary-coloured button that is the
@@ -469,6 +477,86 @@ async function main() {
           await drain(cdp, facet.toLowerCase());
         }
       }
+      // ---- reviewing a pull request --------------------------------
+      //
+      // Read-only, deliberately: everything up to and including the state of
+      // the Submit button, and nothing that would post a review to GitHub. The
+      // one thing this cannot check is the payload, which is checked by hand
+      // against a stubbed `gh` — see the note on `onLine` in reviewDraft.ts.
+      await tap(cdp, ".mb-screen.on button", "Pull requests");
+      await Bun.sleep(2400);
+      // A pull request row IS a button; a file row CONTAINS one. Reaching for
+      // `.mb-row button` on the list found nothing and skipped this whole
+      // section silently, which is the failure mode a conditional audit has.
+      // A section that skips silently reads as a section that passed. This one
+      // skipped for two full runs because of the selector above, and the only
+      // sign was a check count nobody was watching.
+      if (!(await cdp.ev(`!!${TOP}.querySelector("button.mb-row")`))) {
+        console.log("  skip  review · no open pull request on this repository to review");
+      } else {
+        await cdp.ev(`${TOP}.querySelector("button.mb-row").click()`);
+        await Bun.sleep(2600);
+        if (await tap(cdp, ".mb-screen.on .mb-seg button", "Files")) {
+          await Bun.sleep(1500);
+          if (await cdp.ev(`!!${TOP}.querySelector(".mb-row button")`)) {
+            await cdp.ev(`${TOP}.querySelector(".mb-row button").click()`);
+            await Bun.sleep(1800);
+            const taps = await cdp.ev(`${TOP}.querySelectorAll("button.mb-dl").length`);
+            // `MobileDiff` has rendered every line as a button and printed "Tap
+            // a line to comment on it" since it was written, and nothing ever
+            // passed it an `onLine` — so the invitation was there and the
+            // gesture did nothing.
+            note("review", "diff lines can actually be tapped", taps > 0, `${taps} lines`);
+
+            const del = await cdp.ev(`(()=>{const b=${TOP}.querySelector("button.mb-dl.del");
+              if(!b) return null; b.click(); return b.querySelector(".g").textContent})()`);
+            if (del) {
+              // A deleted line is numbered in the OLD file. If the sheet claims
+              // the new one, the remark is addressed to the wrong place and
+              // nothing downstream can tell.
+              note("review", "a deleted line is named as the old file",
+                await cdp.ev(`/the old file/.test(document.querySelector(".mb-sheet.on")?.textContent || "")`),
+                await cdp.ev(`document.querySelector(".mb-sheet.on .hd span")?.textContent`));
+              await cdp.ev(`(()=>{const t=document.querySelector(".mb-sheet.on textarea");
+                const set=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").set;
+                set.call(t,"An audit remark, never sent.");
+                t.dispatchEvent(new Event("input",{bubbles:true}));})()`);
+              await Bun.sleep(300);
+              await tap(cdp, ".mb-sheet.on button", "Save");
+              await Bun.sleep(1000);
+              note("review", "the annotated line is marked in the diff",
+                await cdp.ev(`${TOP}.querySelectorAll("button.mb-dl.said").length > 0`));
+              note("review", "and the way to finish appears",
+                await cdp.ev(`[...${TOP}.querySelectorAll("button")].some(b=>/Finish review/.test(b.textContent))`));
+
+              await cdp.ev(`[...${TOP}.querySelectorAll("button")].find(b=>/Finish review/.test(b.textContent))?.click()`);
+              await Bun.sleep(900);
+              const sheet = `document.querySelector(".mb-sheet.on")`;
+              note("review", "all three verbs are offered",
+                await cdp.ev(`[...${sheet}.querySelectorAll("button.mb-row")].length === 3`),
+                await cdp.ev(`JSON.stringify([...${sheet}.querySelectorAll("button.mb-row b")].map(b=>b.textContent))`));
+              note("review", "submitting is refused until a verb is chosen, with a reason",
+                await cdp.ev(`[...${sheet}.querySelectorAll("button")].find(b=>/Submit review/.test(b.textContent))?.disabled === true`)
+                && await cdp.ev(`[...${sheet}.querySelectorAll("p")].some(p=>p.textContent.length > 12)`));
+              await cdp.ev(`[...${sheet}.querySelectorAll("button.mb-row")].find(b=>/Comment/.test(b.textContent))?.click()`);
+              await Bun.sleep(500);
+              note("review", "and allowed once one is",
+                await cdp.ev(`[...${sheet}.querySelectorAll("button")].find(b=>/Submit review/.test(b.textContent))?.disabled === false`));
+              await shot(cdp, "07b-review");
+              await hygiene(cdp, "review");
+              await drain(cdp, "review");
+              // Leave without sending anything.
+              await cdp.ev(`document.querySelector(".mb-scrim.on")?.click()`);
+              await Bun.sleep(500);
+            }
+          }
+          await tap(cdp, ".mb-screen.on .hd .back");
+          await Bun.sleep(600);
+        }
+        await tap(cdp, ".mb-screen.on .hd .back");
+        await Bun.sleep(600);
+      }
+
       await tap(cdp, ".mb-screen.on .hd .back");
       await Bun.sleep(600);
     }
