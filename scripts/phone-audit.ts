@@ -721,14 +721,18 @@ async function main() {
       const pushText = await cdp.ev(`(${pushRow})?.innerText?.replace(/\\n/g, " · ") || ""`);
       note("settings", "says where this device actually stands",
         !!pushText && !pushText.includes("Checking"), pushText);
-      // A button only where pressing one could do something. Chrome here has
-      // no reachable push service, so "Turn on" is the honest state; a browser
-      // that cannot do this at all must offer no button rather than a dead one.
+      // A button exactly where pressing one could do something.
+      //
+      // Keyed on the two states that are actually actionable rather than on
+      // the ones that are not: "blocked", "unsupported" and "add to Home
+      // Screen" are three different dead ends and a fourth could be added, and
+      // a rule written as "not those" would silently start demanding a button
+      // for whatever came next. Chrome here has no reachable push service, so
+      // "Turn on" is the honest state.
       const pushBtn = await cdp.ev(`(${pushRow})?.querySelector("button")?.innerText || ""`);
+      const actionable = /Alerts reach|Get held gates/.test(pushText);
       note("settings", "the button matches what the row says",
-        (pushText.includes("cannot receive") || pushText.includes("blocked"))
-          ? pushBtn === ""
-          : /Turn on|Turn off/.test(pushBtn),
+        actionable ? /Turn on|Turn off/.test(pushBtn) : pushBtn === "",
         `row "${pushText}" / button "${pushBtn || "(none)"}"`);
       note("settings", "the worker that receives a push is registered",
         await cdp.ev(`navigator.serviceWorker.getRegistrations().then(r =>
