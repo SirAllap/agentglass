@@ -238,6 +238,30 @@ describe("the VAPID identity", () => {
     expect(second.privateKey).toBe(first.privateKey);
   });
 
+  it("is generated once even when several callers ask at the same moment", async () => {
+    // The phone asks for /push/key while the first alert may already be
+    // fanning out, which is exactly the window this used to lose: the `await`
+    // on key generation sat between the check and the memo assignment, so both
+    // callers generated, both wrote, and the first one was handed a key that
+    // was no longer the one on disk. A phone subscribing there is pinned to a
+    // key this server will never sign with again — and the push service just
+    // stops accepting the token, silently, forever.
+    dir = mkdtempSync(join(tmpdir(), "agx-push-"));
+    process.env.XDG_CONFIG_HOME = dir;
+    forgetVapid();
+
+    const many = await Promise.all(Array.from({ length: 8 }, () => vapidKeys()));
+    const keys = new Set(many.map((k) => k.publicKey));
+    expect(keys.size).toBe(1);
+
+    // And the one everybody got is the one that was written down. Comparing
+    // the callers to each other is not enough: they could all agree on a key
+    // that a later write replaced on disk, which is the same failure.
+    const onDisk = JSON.parse(readFileSync(join(dir, "agentglass", "push.json"), "utf8"));
+    expect(onDisk.vapid.publicKey).toBe(many[0]!.publicKey);
+    expect(onDisk.vapid.privateKey).toBe(many[0]!.privateKey);
+  });
+
   it("is written where only this user can read it", async () => {
     dir = mkdtempSync(join(tmpdir(), "agx-push-"));
     process.env.XDG_CONFIG_HOME = dir;

@@ -86,15 +86,37 @@ function write(f: PushFile): boolean {
  * the token. Generating on every boot would look fine in every test and buzz
  * nobody.
  */
-let memo: VapidKeys | null = null;
-export async function vapidKeys(): Promise<VapidKeys> {
-  if (memo) return memo;
-  const f = read();
-  if (f.vapid?.publicKey && f.vapid?.privateKey) { memo = f.vapid; return memo; }
-  const fresh = await generateVapidKeys();
-  write({ ...f, vapid: fresh });
-  memo = fresh;
-  return fresh;
+/**
+ * The *promise* is memoized, not the result, and that is the whole point.
+ *
+ * Holding the result meant the `await` on key generation sat between the
+ * check and the assignment, so two callers arriving together on a fresh
+ * install both generated, both wrote, and the first one returned a key that
+ * was no longer the one on disk. A phone subscribing in that window is pinned
+ * to a key this server will never sign with again — and the failure is exactly
+ * the silent one described above: the push service simply stops accepting the
+ * token, and nothing anywhere says so.
+ *
+ * Not theoretical on first use: the phone asks for `/push/key` while the first
+ * alert may already be fanning out.
+ */
+let memo: Promise<VapidKeys> | null = null;
+export function vapidKeys(): Promise<VapidKeys> {
+  if (!memo) {
+    memo = (async () => {
+      const f = read();
+      if (f.vapid?.publicKey && f.vapid?.privateKey) return f.vapid;
+      const fresh = await generateVapidKeys();
+      write({ ...f, vapid: fresh });
+      return fresh;
+    })().catch((e) => {
+      // A failure must not be cached, or one bad moment makes push dead for
+      // the lifetime of the process.
+      memo = null;
+      throw e;
+    });
+  }
+  return memo;
 }
 
 /** Only for tests, which run several servers in one process. */
