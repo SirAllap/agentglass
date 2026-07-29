@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { api, probeServer } from "../lib/api.ts";
+import { api, probeServer, IS_DEMO } from "../lib/api.ts";
 import { useLive } from "../lib/useLive.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { subscribeSessionChanged } from "../lib/sessionBus.ts";
@@ -187,7 +187,7 @@ export function MobileApp() {
   // mount rather than only when the toggle is used: registering an unchanged
   // file is a no-op, and it means the worker that receives the next push is the
   // one that shipped, not one left over from an older build.
-  const pushEnv = useMemo(() => browserPushEnv(api), []);
+  const pushEnv = useMemo(() => browserPushEnv(api, IS_DEMO), []);
   useEffect(() => {
     let live = true;
     currentPushState(pushEnv).then((s) => { if (live) setPushState(s); });
