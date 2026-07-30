@@ -20,6 +20,7 @@ import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
 import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
 import { RunningPanes } from "./RunningPanes.tsx";
+import { BudgetsPane } from "./BudgetsPane.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
@@ -939,6 +940,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         { v: "process", label: "Separate" },
                         { v: "tmux", label: "tmux panes" },
                       ]} />
+                    {/* A limit you chose, so the spend insights stop firing on
+                        constants — which are noise on a project that genuinely
+                        costs that and silence on one where a tenth would be
+                        alarming. */}
+                    <div className="flex flex-col gap-1.5 pt-1">
+                      <span className="text-[10px] t-dim2 uppercase tracking-wider">Spending budgets</span>
+                      <BudgetsPane open={open} />
+                    </div>
                     {/* The consequence of the setting above, made visible.
                         Panes outlive the app, so "how new chats run" quietly
                         decides how much memory is resident on this machine an

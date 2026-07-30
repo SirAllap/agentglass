@@ -1039,6 +1039,68 @@ export function dailyUsage(fromDay?: string, toDay?: string): UsageDay[] {
     .all(...rArgs, ...rs.args, ...eArgs, ...es.args);
 }
 
+/**
+ * What was spent, over a window, by one project and optionally one model.
+ *
+ * The same seam dailyUsage() crosses, asked a narrower question. Two things
+ * make it a separate function rather than a filter on that one.
+ *
+ * The scope is *given*, not ambient. Every other metric here answers about the
+ * project the cockpit is currently looking at; a budget answers about the
+ * project it was set for, whatever is on screen. So the scope clauses are
+ * passed a root rather than left to read `workspaceRoot()`.
+ *
+ * And cost is the one column that simply adds. dailyUsage has to count sessions
+ * distinctly because a session running across the cutoff has a row on both
+ * sides — cost does not: the prune folds `timestamp < cutoff`, so every dollar
+ * is on exactly one side of it and summing both is the whole answer. That is
+ * what makes this query short enough to be obviously right, which for the
+ * number a budget fires on is worth more than sharing code.
+ *
+ * Days are UTC, matching what the fold wrote, and `toDay` is inclusive.
+ */
+export function spendBetween(opts: {
+  fromDay: string;
+  toDay: string;
+  /** Project root, or null for the whole machine. */
+  root?: string | null;
+  /** Exact model name, or null for all of them. */
+  model?: string | null;
+}): number {
+  const root = opts.root || null;
+  const rs = rollupScopeClause(root);
+  const es = scopeClause(root);
+  const rModel = opts.model ? " AND model_name = ?" : "";
+  const eModel = opts.model ? " AND model_name = ?" : "";
+  const mArgs = opts.model ? [opts.model] : [];
+  const r = db
+    .query<{ cost: number | null }, any[]>(
+      `SELECT
+         (SELECT COALESCE(SUM(cost_usd), 0) FROM daily_rollup
+           WHERE day >= ? AND day <= ?${rModel}${rs.clause})
+       + (SELECT COALESCE(SUM(cost_usd), 0) FROM events
+           WHERE timestamp >= CAST(strftime('%s', ?) AS INTEGER) * 1000
+             AND timestamp < (CAST(strftime('%s', ?) AS INTEGER) + 86400) * 1000${eModel}${es.clause})
+         AS cost`
+    )
+    .get(opts.fromDay, opts.toDay, ...mArgs, ...rs.args,
+         opts.fromDay, opts.toDay, ...mArgs, ...es.args);
+  return r?.cost ?? 0;
+}
+
+/** Every model that has cost anything, newest activity first — so a budget can
+ *  be attached to one by picking rather than by typing its exact id. */
+export function costedModels(): string[] {
+  const rows = db
+    .query<{ m: string }, []>(
+      `SELECT model_name AS m FROM events WHERE model_name IS NOT NULL AND cost_usd > 0
+       UNION SELECT model_name AS m FROM daily_rollup WHERE cost_usd > 0
+       ORDER BY m`
+    )
+    .all();
+  return rows.map((r) => r.m).filter(Boolean);
+}
+
 /** The oldest day the rollup can speak to, or null when it is empty. Lets a
  *  panel state the real range instead of implying it has everything. */
 export function rollupEarliestDay(): string | null {
