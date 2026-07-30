@@ -5,7 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>agentglass</title>
     <meta name="description" content="Every AI coding agent on your machine, on one screen — live cost, tokens and tool calls across every provider, and a hold on anything dangerous until you say go. From your desk or your phone." />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      Relative, not absolute. The demo build is served from
+      /agentglass/demo/, and `/favicon.svg` there resolves to the host root
+      and 404s — the manifest link two lines down already got this right.
+    -->
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <!--
       Installable on a phone.
 
@@ -24,7 +29,13 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="agentglass" />
-    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <!--
+      A PNG, because iOS does not support SVG here at all. It ignored the tag,
+      fell back to a screenshot of the page, and the home-screen icon was a
+      shrunken dashboard — on the one platform where Add to Home Screen is not
+      optional, since it is the only way an iPhone gets Web Push.
+    -->
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
     <!--
       What fills the window before React does.
 

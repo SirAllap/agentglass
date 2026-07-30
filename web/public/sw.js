@@ -64,8 +64,14 @@ function toNotification(raw) {
     title: title,
     options: {
       body: body,
-      icon: "./favicon.svg",
-      badge: "./favicon.svg",
+      // Rasters, not the SVG that used to be here. Chrome on Android is not
+      // expected to draw an SVG notification icon and falls back to a generic
+      // glyph, so every alert this app sent arrived wearing somebody else's
+      // mark. The badge is a separate, monochrome file because Android throws
+      // the colours away and draws it from the alpha channel — the full mark
+      // reduced to a stencil is a blob.
+      icon: "./icon-192.png",
+      badge: "./icon-badge.png",
       // Two pushes carrying the same thing collapse into one notification
       // instead of stacking. The server already debounces by key, so a repeat
       // means a retry or a reconnect, not a second event — and a lock screen
