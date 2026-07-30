@@ -126,6 +126,16 @@ export const withToken = (url: string): string =>
 /** Whether this client has a shared-secret token configured. */
 export const hasToken = (): boolean => !!TOKEN;
 
+/**
+ * The credential itself, for the one caller that cannot use `authHeaders`.
+ *
+ * The service worker answers a gate from a notification while the app is
+ * closed, so it needs the credential in a store it can read — see
+ * lib/swAuth.ts. Everything in the page uses `authHeaders`/`withToken` and
+ * should keep doing so: this exists to be mirrored, once, into IndexedDB.
+ */
+export const authToken = (): string => TOKEN;
+
 /** Why a chat turn ended early.
  *
  *  `refused` — the server answered and declined; `detail` is its reason.

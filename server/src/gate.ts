@@ -109,7 +109,7 @@ export function submitGate(
   recordGate({ id, source_app, session_id, tool_name, summary, created, expires });
   return new Promise((resolve) => {
     waiters.set(id, { id, source_app, session_id, tool_name, summary, created, expires, resolve, timer: arm(id, expires) });
-    pushGate(`${source_app}:${session_id.slice(0, 8)}`, tool_name, summary);
+    pushGate(`${source_app}:${session_id.slice(0, 8)}`, tool_name, summary, id);
     onChange();
   });
 }
