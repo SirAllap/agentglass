@@ -328,7 +328,22 @@ async function main() {
     await hygiene(cdp, "chats");
 
     // ---- a conversation ---------------------------------------------
-    if (rows > 0) {
+    //
+    // Opened from a scope that has rows *now*, not from whichever one the
+    // scope exercise above happened to leave selected. It left "Today", and a
+    // fixture seeded a day ago has nothing in Today — so this tapped an empty
+    // list and then waited twelve seconds for a screen that was never going to
+    // mount, taking the whole run down with it. The failure said "timed out
+    // waiting for the conversation screen", which is true and points at
+    // entirely the wrong thing: the conversation was fine, the list was empty.
+    if (!(await cdp.ev(`!!document.querySelector("main button.w-full")`))) {
+      await tap(cdp, "main button", "All");
+      await Bun.sleep(1200);
+    }
+    const openable = await cdp.ev(`document.querySelectorAll("main button.w-full").length`);
+    if (!openable) {
+      console.log("  skip  conversation · no session on this machine to open");
+    } else {
       await tap(cdp, "main button.w-full");
       await until(cdp, `document.querySelector(".mb-chat")`, "the conversation screen", 12_000);
       await Bun.sleep(1400);
@@ -824,6 +839,62 @@ async function main() {
     const actions = await texts(cdp, "main button");
     note("now", "offers an action per item, or none at all",
       !actions.some((a) => a === ""), `${actions.length} buttons`);
+
+    // Nothing in this list finishes work.
+    //
+    // The queue is a scrolling list where every card puts its buttons in the
+    // same shape and the same place, and it carried "Squash & merge" for a
+    // while — behind a confirm, which is the weakest control there is against
+    // a mis-tap, because it appears under the thumb that just tapped. Checked
+    // by label rather than by call site: the audit cannot see the handler, and
+    // the label is what a thumb aims at.
+    const verbs = await cdp.ev(`JSON.stringify(
+      [...document.querySelectorAll("main .mb-item .acts button")].map(b => b.textContent.trim()))`);
+    note("now", "offers nothing irreversible",
+      !/merge|delete|remove|discard|close|force/i.test(verbs || ""), verbs);
+
+    // The count is only ever what is stopped. A badge that adds a held gate to
+    // five pull requests is never zero, and a number that is never zero stops
+    // being read — which is most of what made this screen an inbox.
+    // No regular expressions in here.
+    //
+    // This is a template literal, so `\b` and `\d` are string escapes long
+    // before they are regex syntax — the backslash is eaten and `/^\d+$/`
+    // arrives in the page as `/^d+$/`, which matches the letter d and nothing
+    // else. It found no badge, reported 0, and failed a check about counting
+    // for a reason that had nothing to do with counting.
+    const counts = await cdp.ev(`JSON.stringify((() => {
+      const digits = (t) => t.trim().length > 0 && [...t.trim()].every(ch => ch >= "0" && ch <= "9");
+      const nowTab = [...document.querySelectorAll("nav button")]
+        .find(b => (b.innerText || "").includes("Now"));
+      const badge = nowTab && [...nowTab.querySelectorAll("span")]
+        .find(sp => digits(sp.textContent || ""));
+      const hero = document.querySelector(".mb-hero .mb-fig")?.textContent?.trim();
+      const cards = document.querySelectorAll("main .mb-item").length;
+      const quiet = document.querySelectorAll("main .mb-item.quiet").length;
+      return { badge: badge ? Number(badge.textContent) : 0, hero, cards, quiet,
+        screens: document.querySelectorAll(".mb-screen.on").length };
+    })())`);
+    const c = JSON.parse(counts || "{}") as {
+      badge: number; hero: string; cards: number; quiet: number; screens: number;
+    };
+    note("now", "counts what is stopped, not what is merely true",
+      c.badge === c.cards - c.quiet,
+      `badge ${c.badge} · ${c.cards} cards, ${c.quiet} quiet · ${c.screens} screens open`);
+    note("now", "the hero agrees with the badge",
+      c.hero === (c.badge === 0 ? "✓" : String(c.badge)), `hero "${c.hero}" · badge ${c.badge}`);
+
+    // And when both halves are present, the line between them is drawn — the
+    // one thing that stops news and blockages reading as one undifferentiated
+    // scroll.
+    if (c.quiet > 0 && c.cards > c.quiet) {
+      note("now", "says where the things waiting on you stop",
+        await cdp.ev(`[...document.querySelectorAll("main .mb-eyebrow")]
+          .some(e => /waiting on you/i.test(e.textContent || ""))`));
+    } else {
+      console.log("  skip  now · only one half of the queue is present, so there is no divider to draw");
+    }
+
     await shot(cdp, "11-now-queue");
     await hygiene(cdp, "now");
 
