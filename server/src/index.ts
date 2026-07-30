@@ -74,7 +74,9 @@ import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } f
 import { workspaceRoot, setWorkspaceRoot, inScope } from "./config.ts";
 import { hookStatus, applyHooks } from "./hooksetup.ts";
 import { privateHost } from "./net.ts";
-import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
+import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller } from "./auth.ts";
+import { activeDevices, markSeen, revokeDevice, type Scope } from "./devices.ts";
+import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
 import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus } from "./remote.ts";
@@ -117,7 +119,11 @@ const AUTH_TOKEN = AUTH.token;
  *  the desktop-notification mirror. */
 /** Every socket carries the address that opened it, so "who is connected right
  *  now" is answerable, and so a device can be cut off while it is holding one. */
-type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null };
+// `deviceId` is how a socket remembers which paired device opened it. Without
+// it, forgetting a device revokes its credential and leaves whatever it is
+// already holding — an event stream, a terminal — running until it disconnects
+// on its own, which is a revoke in the list and not on the wire.
+type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
 const clients = new Set<ServerWebSocket<WsData>>();
 /** Every open socket of every kind, which `clients` is not: it holds the event
  *  streams only, and a device cut off mid-session may be holding a terminal. */
@@ -537,8 +543,33 @@ const server = Bun.serve<WsData>({
     // as ?token= (a browser can't set a header on them); fetch uses Bearer.
     // /gate is NOT exempt here: it's the control plane, and its hook carries the
     // token when one is set (see auth.ts / gate_event.py).
-    if (AUTH_TOKEN && !isAuthExempt(pathname) && !tokenOk(req, url, AUTH_TOKEN)) {
-      return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
+    //
+    // A paired phone carries its own credential rather than this one (see
+    // devices.ts), so the answer is no longer yes-or-no: it is *who*, and then
+    // whether that caller's scope covers what the request is asking for. The
+    // machine's token is still the machine, and everything below is unchanged
+    // for it.
+    // Held for the WebSocket upgrades below: a socket has to remember which
+    // device opened it, or forgetting that device cannot close what it holds.
+    let caller: Caller | null = null;
+    if (AUTH_TOKEN && !isAuthExempt(pathname)) {
+      caller = callerFor(req, url, AUTH_TOKEN);
+      if (!caller) return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
+      if (!allowed(caller, req.method, pathname)) {
+        // 403 rather than 401: the credential is real and was accepted. Saying
+        // "unauthorized" to a device that is correctly paired sends people to
+        // re-scan a QR, which fixes nothing and is the wrong thing to learn.
+        return json({
+          ok: false,
+          error: `this device is paired for "${caller.scope}" access, and ${pathname} needs "${scopeNeeded(req.method, pathname)}"`,
+          scope: caller.scope,
+          needs: scopeNeeded(req.method, pathname),
+        }, 403);
+      }
+      // Cheap enough to do on every request because it is throttled to once a
+      // minute per device — it is what lets the pane say when a phone was last
+      // heard from, which is the difference between a device list and a guess.
+      if (caller.device) markSeen(caller.device.id);
     }
 
     // Throttle the unauthenticated intake sinks so a runaway client can't flood
@@ -555,7 +586,7 @@ const server = Bun.serve<WsData>({
     // stream — a read this feed is not meant to give to the open web.
     if (pathname === "/stream") {
       if (!trustedCaller(req)) return csrfBlocked();
-      if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null } })) return undefined as unknown as Response;
+      if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
     }
 
@@ -563,8 +594,9 @@ const server = Bun.serve<WsData>({
     if (pathname === "/terminal/pty") {
       if (!trustedCaller(req)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
-      const data: PtyWsData & { ip?: string | null } = {
+      const data: PtyWsData & { ip?: string | null; deviceId?: string | null } = {
         kind: "pty",
+        deviceId: caller?.device?.id ?? null,
         root: url.searchParams.get("root") || "",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
@@ -591,7 +623,7 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req)) return csrfBlocked();
       const cap = notifyCapability();
       if (!cap.supported) return json({ error: cap.reason ?? "unsupported" }, 501);
-      if (srv.upgrade(req, { data: { kind: "notify", ip: clientIp ?? null } })) return undefined as unknown as Response;
+      if (srv.upgrade(req, { data: { kind: "notify", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
     }
 
@@ -882,7 +914,6 @@ const server = Bun.serve<WsData>({
       return json({ ok: true, address, blocked, closed });
     }
     if (pathname === "/remote/status") {
-      const ip = srv.requestIP(req)?.address ?? null;
       return json(
         remoteStatus({
           bind: BIND,
@@ -890,10 +921,168 @@ const server = Bun.serve<WsData>({
           trustLan: TRUST_LAN,
           token: AUTH_TOKEN,
           webUi: WEB_UI_ENABLED,
-          includeToken: !!ip && isLoopback(ip),
         })
       );
     }
+    /**
+     * --- pairing a device ---
+     *
+     * The protocol is in pairing.ts, including why it has the shape it does.
+     * What lives here is the split it depends on: four routes that only this
+     * machine may call, and three that must work with no credential at all,
+     * because handing one out is the point.
+     *
+     * `atMachine` is the stronger of the two checks the codebase already uses.
+     * Loopback alone would let any other local process start a pairing; the
+     * token alone would let a phone that is already paired invite another one.
+     * Minting an invitation, seeing the code, and accepting a request are the
+     * three things that must happen where the user is sitting.
+     */
+    const atMachine = (): boolean => {
+      const ip = srv.requestIP(req)?.address ?? null;
+      if (!ip || !isLoopback(ip)) return false;
+      return !AUTH_TOKEN || tokenOk(req, url, AUTH_TOKEN);
+    };
+    const notHere = () => json({ ok: false, error: "only this machine can do that" }, 403);
+
+    if (pathname === "/pair/ticket" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      const t = mintTicket();
+      // Refused rather than queued: several unanswered invitations at once is
+      // not a person adding a phone, and quietly making room by discarding one
+      // somebody is looking at is worse than saying no.
+      if (!t) return json({ ok: false, error: "too many pairings in progress — answer or wait for the ones open" }, 429);
+      return json({ ok: true, id: t.id, code: t.code, expiresAt: t.expiresAt });
+    }
+
+    if (pathname === "/pair/cancel" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      let b: { ticket?: unknown };
+      try { b = (await req.json()) as { ticket?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      dropTicket(typeof b.ticket === "string" ? b.ticket : "");
+      return json({ ok: true });
+    }
+
+    if (pathname === "/pair/state") {
+      if (!atMachine()) return notHere();
+      // The ticket the pane is showing is identified by the pane, not held as
+      // "the current one": two windows open on the same machine each have
+      // their own invitation, and a server-side notion of *the* ticket would
+      // have one of them drawing a QR for the other one's code.
+      const id = url.searchParams.get("ticket") || "";
+      const t = id ? getTicket(id) : null;
+      return json({
+        ticket: t ? { id: t.id, code: t.code, expiresAt: t.expiresAt } : null,
+        pending: pendingPairings(),
+        devices: activeDevices(),
+      });
+    }
+
+    if (pathname === "/pair/accept" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      let b: { ticket?: unknown; scope?: unknown };
+      try { b = (await req.json()) as { ticket?: unknown; scope?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      // Anything unrecognised lands on the narrow scope rather than the wide
+      // one. A typo in a scope name must not be how a phone gets a terminal.
+      const asked = b.scope;
+      const scope: Scope = asked === "read" || asked === "full" ? asked : "answer";
+      const r = acceptTicket(typeof b.ticket === "string" ? b.ticket : "", scope);
+      if (!r.ok) return json({ ok: false, error: r.error === "unknown" ? "that request expired" : "that request is not waiting on you" }, 404);
+      return json({ ok: true, device: r.device });
+    }
+
+    if (pathname === "/pair/reject" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      let b: { ticket?: unknown };
+      try { b = (await req.json()) as { ticket?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json({ ok: rejectTicket(typeof b.ticket === "string" ? b.ticket : "") });
+    }
+
+    /**
+     * Cut one device off, and only that one.
+     *
+     * The revoke that already existed rotates the machine's token, which kicks
+     * every device including the desk — the right answer when you have lost
+     * control of the code, and far too big a hammer for "that tablet is in a
+     * drawer". This is the small one.
+     */
+    if (pathname === "/pair/forget" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      let b: { id?: unknown };
+      try { b = (await req.json()) as { id?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const id = typeof b.id === "string" ? b.id : "";
+      if (!revokeDevice(id)) return json({ ok: false, error: "no such device" }, 404);
+      // Its open sockets go with it. Revoking a credential while the terminal
+      // it opened keeps streaming is the worst of both: the list says gone and
+      // the wire says otherwise.
+      let closed = 0;
+      for (const ws of [...sockets]) {
+        if (ws.data?.deviceId === id) {
+          try { ws.close(1008, "this device was disconnected from the host machine"); closed++; } catch { /* already gone */ }
+        }
+      }
+      return json({ ok: true, closed });
+    }
+
+    // --- the three the phone calls, before it has anything to authenticate with ---
+
+    /** Is this invitation still open? Lets the phone say "that code expired"
+     *  instead of presenting a form that cannot succeed. */
+    if (pathname === "/pair/info") {
+      const t = getTicket(url.searchParams.get("ticket") || "");
+      return json({ ok: !!t && t.state === "waiting", expiresAt: t?.expiresAt ?? null });
+    }
+
+    if (pathname === "/pair/claim" && req.method === "POST") {
+      let b: { ticket?: unknown; code?: unknown; label?: unknown; pub?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = claimTicket(
+        typeof b.ticket === "string" ? b.ticket : "",
+        typeof b.code === "string" ? b.code : "",
+        {
+          label: typeof b.label === "string" ? b.label : "",
+          pub: typeof b.pub === "string" ? b.pub : undefined,
+          agent: req.headers.get("user-agent") ?? "",
+          ip: srv.requestIP(req)?.address ?? "",
+        },
+      );
+      if (r.ok) return json({ ok: true, secret: r.secret });
+      const said =
+        r.error === "unknown" ? "that invitation has expired — start a new one on the computer"
+        : r.error === "taken" ? "another device is already using that invitation"
+        : r.error === "locked" ? `too many wrong codes — the invitation is closed, start a new one on the computer`
+        : r.error === "shape" ? "this browser could not generate a key for the connection"
+        : `that code is wrong — ${r.left} ${r.left === 1 ? "try" : "tries"} left of ${MAX_ATTEMPTS}`;
+      return json({ ok: false, error: said, left: r.left, reason: r.error }, r.error === "code" ? 401 : 410);
+    }
+
+    /**
+     * The phone picks up what it was given.
+     *
+     * Polled, because the thing it is waiting for is a person walking to a
+     * computer. Answers `claimed` until they decide, and hands the sealed
+     * credential over exactly once — see collect().
+     */
+    if (pathname === "/pair/collect") {
+      const r = collectPairing(url.searchParams.get("ticket") || "", url.searchParams.get("secret") || "");
+      return json(r, r.state === "unknown" ? 404 : 200);
+    }
+
+    /** What this device is, as this server sees it. The phone's Settings shows
+     *  it, and a 401 here is how it learns it has been forgotten. */
+    if (pathname === "/pair/whoami") {
+      if (!AUTH_TOKEN) return json({ paired: false, scope: "full", machine: true });
+      const caller = callerFor(req, url, AUTH_TOKEN);
+      if (!caller) return json({ paired: false }, 401);
+      return json({
+        paired: caller.kind === "device",
+        machine: caller.kind === "machine",
+        scope: caller.scope,
+        label: caller.device?.label ?? null,
+        id: caller.device?.id ?? null,
+      });
+    }
+
     if (pathname === "/search") {
       const q = url.searchParams.get("q") || "";
       const limit = Math.min(200, Number(url.searchParams.get("limit") || 60));

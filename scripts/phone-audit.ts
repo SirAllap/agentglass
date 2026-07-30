@@ -1008,6 +1008,125 @@ async function main() {
       await cdp.ev(linkName));
     await drain(cdp, "offline");
 
+    // ---- pairing this device -------------------------------------------
+    //
+    // The one part of the companion that runs before the application does, and
+    // the only part that is cryptography. Both are reasons to drive it in a
+    // real browser rather than trust the unit tests: `unseal` uses WebCrypto,
+    // and the two halves of the handshake are written against two entirely
+    // different implementations of the same four steps. A mismatch in any of
+    // them produces a device that pairs, appears in the list, and then cannot
+    // authenticate.
+    //
+    // Skipped when the audit is run against a server with no token, because
+    // then there is no credential to hand out and `/pair/ticket` is not the
+    // thing being exercised.
+    if (token) {
+      const invite = await (await fetch(ORIGIN + "/pair/ticket", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: "{}",
+      })).json() as { ok?: boolean; id?: string; code?: string };
+      note("pairing", "the machine can start an invitation", !!invite.ok && !!invite.id && !!invite.code,
+        JSON.stringify(invite).slice(0, 160));
+
+      if (invite.ok && invite.id && invite.code) {
+        // A device with no credential at all: the page has to load, and it has
+        // to be the pairing screen rather than an application failing behind it.
+        await cdp.ev(`try { localStorage.removeItem("agentglass_token"); } catch {}`);
+        await cdp.send("Page.navigate", { url: `${ORIGIN}/?pair=${encodeURIComponent(invite.id)}` });
+        await until(cdp, `document.querySelector(".pair-card")`, "the pairing screen", 20_000);
+        await Bun.sleep(900);
+
+        note("pairing", "asks for a name and a code, and nothing else",
+          await cdp.ev(`!!document.querySelector("#pair-name") && !!document.querySelector("#pair-code")`));
+        note("pairing", "the application is not mounted behind it",
+          await cdp.ev(`!document.querySelector(".mb") && !document.querySelector("nav")`));
+        note("pairing", "says a person still has to accept",
+          await cdp.ev(`(document.body.textContent||"").includes("Nothing is granted yet")`));
+        note("pairing", "the button is dead until six digits are in",
+          await cdp.ev(`document.querySelector(".pair-go")?.disabled === true`));
+        note("pairing", "nothing spills off the side at phone width",
+          await cdp.ev(`document.documentElement.scrollWidth <= innerWidth + 2`));
+        await shot(cdp, "15-pairing");
+
+        // Type the code the way a person does, then watch for the request to
+        // arrive at the machine. Nothing is granted by this step, which is the
+        // property being checked.
+        await cdp.ev(`(()=>{const i=document.querySelector("#pair-name");
+          const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set;
+          set.call(i,"the audit's phone"); i.dispatchEvent(new Event("input",{bubbles:true}));})()`);
+        await cdp.ev(`(()=>{const i=document.querySelector("#pair-code");
+          const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set;
+          set.call(i,${JSON.stringify(invite.code)}); i.dispatchEvent(new Event("input",{bubbles:true}));})()`);
+        await Bun.sleep(300);
+        note("pairing", "the button wakes up once the code is complete",
+          await cdp.ev(`document.querySelector(".pair-go")?.disabled === false`));
+        await tap(cdp, ".pair-go");
+        await until(cdp, `(document.body.textContent||"").includes("Waiting for someone at the computer")`,
+          "the wait for a person", 12_000);
+        await shot(cdp, "16-pairing-waiting");
+
+        const state = await (await fetch(`${ORIGIN}/pair/state?ticket=${encodeURIComponent(invite.id)}`,
+          { headers: { authorization: `Bearer ${token}` } })).json() as
+          { pending?: { label?: string; code?: string; agent?: string }[] };
+        const req = state.pending?.[0];
+        note("pairing", "the request reaches the machine, named",
+          req?.label === "the audit's phone", JSON.stringify(state.pending ?? []).slice(0, 200));
+        note("pairing", "and carries the same code, for the person to check",
+          req?.code === invite.code);
+
+        // A person accepts, at the narrow level.
+        const accepted = await (await fetch(ORIGIN + "/pair/accept", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({ ticket: invite.id, scope: "answer" }),
+        })).json() as { ok?: boolean; device?: { id?: string; scope?: string } };
+        note("pairing", "accepting mints a device at the scope chosen",
+          !!accepted.ok && accepted.device?.scope === "answer", JSON.stringify(accepted).slice(0, 160));
+
+        // …and the phone, still polling, unwraps it in this browser with this
+        // browser's WebCrypto and mounts the application on it.
+        await until(cdp, `!!document.querySelector(".mb")`, "the companion, now paired", 20_000);
+        await Bun.sleep(1200);
+        note("pairing", "the phone opens the credential and the app comes up",
+          await cdp.ev(`document.documentElement.dataset.layout === "phone" && !!document.querySelector("nav")`));
+        note("pairing", "the invitation is out of the address bar",
+          await cdp.ev(`!location.search.includes("pair=")`));
+        note("pairing", "and it is a working credential, not a page that 401s",
+          await cdp.ev(`(async()=>{const t=localStorage.getItem("agentglass_token");
+            const r=await fetch("${ORIGIN}/gate/pending",{headers:{authorization:"Bearer "+t}});
+            return r.status===200;})()`),
+          await cdp.ev(`String(localStorage.getItem("agentglass_token") || "").slice(0,4)+"…"`));
+        note("pairing", "…at the level it was granted, and no further",
+          await cdp.ev(`(async()=>{const t=localStorage.getItem("agentglass_token");
+            const r=await fetch("${ORIGIN}/prs/merge",{method:"POST",
+              headers:{"content-type":"application/json",authorization:"Bearer "+t},
+              body:JSON.stringify({root:"/",number:1,method:"squash"})});
+            return r.status===403;})()`));
+        await shot(cdp, "17-paired");
+        // That refusal *is* the check above, so it is not a fault for the
+        // hygiene pass to report. Dropped by hand rather than by draining
+        // early, which would also throw away any real failure this section
+        // caused before it.
+        await cdp.ev(`(()=>{const a=window.__audit; if(a) a.net=a.net.filter(
+          n=>!(String(n).startsWith("403 ") && String(n).includes("/prs/merge")));})()`);
+        await drain(cdp, "pairing");
+
+        // Put the audit's own credential back, so everything after this runs as
+        // the machine rather than as a device that cannot do half of it.
+        const forgot = await (await fetch(ORIGIN + "/pair/forget", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({ id: accepted.device?.id }),
+        })).json() as { ok?: boolean };
+        note("pairing", "forgetting the device revokes it", !!forgot.ok);
+        await cdp.send("Page.navigate", { url: `${ORIGIN}/?token=${encodeURIComponent(token)}` });
+        await until(cdp, `document.querySelector(".mb")`, "the phone shell", 25_000);
+        await Bun.sleep(1000);
+      }
+    }
+
     // ---- landscape ----------------------------------------------------
     // A phone turned sideways is 915x412: the same app, half the height, and
     // the composer still has to be reachable.

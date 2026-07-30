@@ -326,22 +326,27 @@ describe("remoteStatus", () => {
   const base = { port: 4000, trustLan: true, webUi: true, addresses, which: () => null };
 
   test("a loopback bind is not exposed; 0.0.0.0 is", () => {
-    expect(remoteStatus({ ...base, bind: "127.0.0.1", token: null, includeToken: true }).exposed).toBe(false);
-    expect(remoteStatus({ ...base, bind: "::1", token: null, includeToken: true }).exposed).toBe(false);
-    expect(remoteStatus({ ...base, bind: "0.0.0.0", token: null, includeToken: true }).exposed).toBe(true);
+    expect(remoteStatus({ ...base, bind: "127.0.0.1", token: null }).exposed).toBe(false);
+    expect(remoteStatus({ ...base, bind: "::1", token: null }).exposed).toBe(false);
+    expect(remoteStatus({ ...base, bind: "0.0.0.0", token: null }).exposed).toBe(true);
   });
 
-  test("a local caller gets URLs that carry the token", () => {
-    const st = remoteStatus({ ...base, bind: "0.0.0.0", token: "s3cret", includeToken: true });
-    expect(st.token).toBe("s3cret");
-    expect(st.urls).toEqual(["http://192.168.1.131:4000/?token=s3cret"]);
-  });
-
-  test("a remote caller is never handed the token, in the field or in a URL", () => {
-    // The page on the phone already proved it holds the token to get this far.
-    // Re-serving the credential to whatever else is on the wifi is the risk.
-    const st = remoteStatus({ ...base, bind: "0.0.0.0", token: "s3cret", includeToken: false });
-    expect(st.token).toBeUndefined();
+  /**
+   * The one with teeth, and the reason this answer no longer has a local and a
+   * remote version.
+   *
+   * It used to hand a caller on this machine `http://192.168.1.131:4000/?token=
+   * s3cret`, because the QR *was* the credential and the pane had to draw it.
+   * A device is added by pairing now (server/src/pairing.ts), so nothing needs
+   * the secret in a URL — and a URL that grants a terminal is precisely what
+   * ends up in a screenshot of this pane.
+   *
+   * Asserted over the whole serialised answer rather than over `urls`: the hole
+   * this closes was a *field*, and a check that only reads the field it knows
+   * about would pass against a status that leaked the token somewhere else.
+   */
+  test("the token appears nowhere in the status, for any caller", () => {
+    const st = remoteStatus({ ...base, bind: "0.0.0.0", token: "s3cret" });
     expect(st.tokenRequired).toBe(true);
     expect(st.urls).toEqual(["http://192.168.1.131:4000/"]);
     expect(JSON.stringify(st)).not.toContain("s3cret");
@@ -349,7 +354,7 @@ describe("remoteStatus", () => {
 
   test("reports the devices that have been seen", () => {
     noteClient("192.168.1.42", { now: 4242 });
-    const st = remoteStatus({ ...base, bind: "0.0.0.0", token: null, includeToken: true });
+    const st = remoteStatus({ ...base, bind: "0.0.0.0", token: null });
     expect(st.clients).toMatchObject({ count: 1, lastAt: 4242 });
   });
 });
