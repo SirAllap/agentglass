@@ -18,9 +18,10 @@
 // `tmux -L agentglass attach -t <id>` drops the user into the very chat they
 // were reading in the app and lets them keep typing. That is not something the
 // `-p` engine can ever offer.
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
+import type { PaneAgent } from "./paneagent.ts";
+import { claudeCode, claudeHome, projectSlug } from "./agents/claudecode.ts";
 import { stat } from "node:fs/promises";
 import { costUsd } from "./pricing.ts";
 import {
@@ -28,31 +29,26 @@ import {
   touchPane, forgetPane, tmuxCapability, validPaneName, attachCommand,
 } from "./tmuxpane.ts";
 
-const claudeBin = () => Bun.which("claude");
-
-/** Where Claude Code keeps its transcripts. `CLAUDE_CONFIG_DIR` is the CLI's own
- *  knob and is honoured for the same reason it exists; the agentglass override
- *  is so tests can point at a fixture instead of a developer's real history. */
-function claudeHome(): string {
-  return process.env.AGENTGLASS_CLAUDE_HOME || process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
-}
-
-/** The directory name Claude Code derives from a working directory.
+/**
+ * Which agent this engine runs.
  *
- *  Every character that is not a letter or a digit becomes `-`, which is why a
- *  path like `/home/x/code/app/.claude/wt` lands in `-home-x-code-app--claude-wt`
- *  (the separator and the leading dot each contribute one). Verified against a
- *  real session rather than inferred. */
-export function projectSlug(cwd: string): string {
-  return cwd.replace(/[^A-Za-z0-9]/g, "-");
-}
+ * One, today. The point of the indirection is not that there are two — it is
+ * that the four things Claude Code's own format decides (where the binary is,
+ * the transcript path, the launch flags, and the line that ends a turn) were
+ * spread through this file, so "run something else in a pane" could not even be
+ * costed. They are named in paneagent.ts and implemented in
+ * agents/claudecode.ts, unchanged.
+ */
+const agent: PaneAgent = claudeCode;
 
 /** Where this session's transcript will be, whether or not it exists yet. The
  *  path has to be computable up front: a brand-new session has no file until it
  *  has answered something, and the turn needs to know where to watch. */
 export function transcriptFor(cwd: string, sessionId: string): string {
-  return join(claudeHome(), "projects", projectSlug(cwd), `${sessionId}.jsonl`);
+  return agent.transcriptFor(cwd, sessionId);
 }
+
+export { projectSlug };
 
 /** Size of a file, or 0 when it does not exist.
  *
@@ -64,8 +60,8 @@ async function sizeOf(path: string): Promise<number> {
 
 // What we launched each pane with. A chat that changes model or permission mode
 // mid-conversation cannot be honoured by an already-running CLI — both are
-// process-level here — so the pane is relaunched with `--resume`, which costs
-// one slow turn and keeps the conversation intact.
+// process-level here — so the pane is taken down and brought back resumed,
+// which costs one slow turn and keeps the conversation intact.
 interface PaneSpec { model: string; mode: string; effort: string; cwd: string }
 const specs = new Map<string, PaneSpec>();
 
@@ -197,15 +193,15 @@ async function submitConfirmed(name: string, pasted: string, deadline: number): 
 
 /** Ensure a live pane for this session, launching or relaunching as needed.
  *
- *  The distinction that matters: a session id that has never run must be started
- *  with `--session-id`, and one that has must be started with `--resume`. Reusing
- *  `--session-id` on an existing session is a hard error ("Session ID is already
- *  in use"), so getting this backwards does not degrade, it fails the turn. */
+ *  Whether the session has ever run is decided here — an empty transcript means
+ *  it has not — and handed to the agent as `fresh`. What that turns into on the
+ *  command line is the agent's business, and it is not a detail to get wrong:
+ *  see agents/claudecode.ts, where getting it backwards fails the turn outright
+ *  rather than degrading. */
 async function ensurePane(
   sessionId: string, cwd: string, model: string, mode: string, effort: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const bin = claudeBin();
-  if (!bin) return { ok: false, error: "no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)" };
+  if (!agent.bin()) return { ok: false, error: agent.missingReason() };
 
   const alive = await paneAlive(sessionId);
   const spec = specs.get(sessionId);
@@ -220,12 +216,7 @@ async function ensurePane(
   }
 
   const fresh = (await sizeOf(transcriptFor(cwd, sessionId))) === 0;
-  const argv = [bin, "--model", model];
-  if (effort) argv.push("--effort", effort);
-  if (fresh) argv.push("--session-id", sessionId);
-  else argv.push("--resume", sessionId);
-  if (mode === "bypassPermissions") argv.push("--dangerously-skip-permissions");
-  else argv.push("--permission-mode", mode);
+  const argv = agent.argv({ sessionId, cwd, model, effort, mode, fresh });
 
   const started = await startPane(sessionId, cwd, argv);
   if (!started.ok) return { ok: false, error: started.stderr.trim() || "could not start the tmux pane" };
@@ -253,6 +244,15 @@ const EXT: Record<string, string> = {
   "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp",
 };
 
+/**
+ * Where a turn's images are written before their paths go into the prompt.
+ *
+ * Under Claude Code's home, which is where it has always been — but note this
+ * is *not* part of the agent contract. Any CLI can read any path; the directory
+ * only has to exist and be readable. It is imported directly rather than added
+ * to `PaneAgent` so the interface stays the four things that genuinely differ
+ * per agent.
+ */
 function attachmentDir(): string {
   const dir = join(claudeHome(), "agentglass-attachments");
   mkdirSync(dir, { recursive: true });
@@ -290,15 +290,12 @@ export function panePrompt(text: string, paths: string[]): string {
  *  history snapshots, attachment records, the CLI's own title guess. None of it
  *  means anything to the chat renderer, and forwarding it would have the browser
  *  parsing shapes no one wrote a case for. */
-const FORWARD = new Set(["assistant", "user"]);
+const FORWARD = (type: string): boolean => agent.forwards(type);
 
-/** The line that ends a turn.
- *
- *  Deterministic and written by the CLI itself: every completed turn's last
- *  transcript line is a `system` entry with subtype `turn_duration`. This is why
- *  the engine never has to guess from a spinner or an idle screen. */
-const isTurnEnd = (o: Record<string, unknown>): boolean =>
-  o.type === "system" && o.subtype === "turn_duration";
+/** The line that ends a turn — an explicit marker the agent itself wrote, never
+ *  a guess from a spinner or an idle screen. See paneagent.ts for why that is
+ *  the load-bearing part of the contract. */
+const isTurnEnd = (o: Record<string, unknown>): boolean => agent.isTurnEnd(o);
 
 export interface PaneTurnOptions {
   cwd: string;
@@ -475,7 +472,7 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
                 controller.close();
                 return;
               }
-              if (!FORWARD.has(String(o.type))) continue;
+              if (!FORWARD(String(o.type))) continue;
               const msg = o.message as Record<string, unknown> | undefined;
               const u = msg?.usage as Record<string, unknown> | undefined;
               if (u) {
@@ -584,7 +581,7 @@ export function paneTurnStream(opts: PaneTurnOptions): Response {
 export function paneEngineCapability(): { available: boolean; reason: string } {
   const t = tmuxCapability();
   if (!t.available) return t;
-  if (!claudeBin()) return { available: false, reason: "no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)" };
+  if (!agent.bin()) return { available: false, reason: agent.missingReason() };
   return { available: true, reason: "" };
 }
 
