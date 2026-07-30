@@ -27,6 +27,39 @@ const section = (() => {
   return README.slice(from, README.indexOf("### Alerts that reach a locked phone", from));
 })();
 
+/**
+ * The README also promises the notification can be answered from the lock
+ * screen, which is a promise about `web/public/sw.js`. A worker that stops
+ * drawing the buttons is invisible — the alert still arrives, and only the
+ * thing the README says it does is missing.
+ */
+describe("what the README promises about the notification", () => {
+  const alerts = (() => {
+    const from = README.indexOf("### Alerts that reach a locked phone");
+    expect(from, "the alerts section is gone from the README").toBeGreaterThan(-1);
+    return README.slice(from, README.indexOf("Independent of `AGENTGLASS_NOTIFY`", from));
+  })();
+
+  test("the buttons it names are the buttons the worker draws", () => {
+    expect(alerts).toContain("Allow and Deny on the notification");
+    const sw = repo("web/public/sw.js");
+    expect(sw).toContain('{ action: "allow", title: "Allow" }');
+    expect(sw).toContain('{ action: "deny", title: "Deny" }');
+  });
+
+  test("and it still says only a held gate gets them", () => {
+    // The claim that keeps the feature from becoming a notification with
+    // buttons on everything, which is the version nobody wants.
+    expect(alerts).toMatch(/Only a held gate gets them/);
+    expect(repo("web/public/sw.js")).toContain("actions: gate");
+  });
+
+  test("the tap-to-open path it points iPhone users at is still there", () => {
+    expect(alerts).toContain("Safari draws no");
+    expect(repo("web/public/sw.js")).toContain("openWindow");
+  });
+});
+
 describe("what the README tells people about reaching this from elsewhere", () => {
   test("the escape hatch it names is the one the hooks actually read", () => {
     expect(section).toContain("AGENTGLASS_ALLOW_REMOTE");

@@ -369,7 +369,18 @@ exists for, you walked away and an agent is now blocked waiting on a person,
 was the one case nothing covered.
 
 **Settings ▸ Push to this phone**, one switch. After that a held gate buzzes the
-phone in your pocket, and tapping it opens the queue with the decision on it.
+phone in your pocket **with Allow and Deny on the notification** — you answer it
+from the lock screen and nothing opens. That is the whole loop: an agent stops,
+your pocket buzzes, you tap Allow, it goes. Tapping the notification itself
+still opens the queue, which is what happens on an iPhone, where Safari draws no
+buttons.
+
+Only a held gate gets them. Everything else this app sends is news, and news
+with buttons on it is a worse notification rather than a better one.
+
+Answering is bounded by what the device was paired for: a phone paired to
+**Look only** is told so rather than silently failing, and the two buttons do
+nothing it was not granted — the check is on the route, not on the notification.
 
 It is end-to-end encrypted by design: the push service relays a blob it cannot
 read (RFC 8291 over RFC 8188, VAPID for the token). Your machine generates its
@@ -384,6 +395,11 @@ ciphertext addressed to your own device.
   receiving until you say otherwise, and the list is where you say it.
 - A held gate stays on the lock screen until you deal with it; anything less
   urgent is allowed to fade.
+- Every tap says what it did — including the ones that are not a clean yes. A
+  gate somebody already answered at the desk, one that timed out while the phone
+  was face-down, a device that has since been forgotten, or a machine that has
+  gone to sleep are four different sentences, because they need four different
+  things done about them.
 - **On iPhone and iPad this needs the Home Screen icon first.** Safari has had
   Web Push since 16.4, but only for an installed site — in a browser tab the
   switch will say so and point at the share sheet.
