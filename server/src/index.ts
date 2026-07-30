@@ -19,6 +19,7 @@ import {
   providerOf,
   gateHistory,
   dailyUsage,
+  costedModels,
   rollupEarliestDay,
   retentionSeamDay,
   getGate,
@@ -71,7 +72,9 @@ import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_D
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
-import { workspaceRoot, setWorkspaceRoot, inScope } from "./config.ts";
+import { workspaceRoot, setWorkspaceRoot, inScope, readBudgets, writeBudgets } from "./config.ts";
+import { budgetStatus } from "./budget.ts";
+import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks } from "./hooksetup.ts";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller } from "./auth.ts";
@@ -778,6 +781,49 @@ const server = Bun.serve<WsData>({
     if ((pathname === "/hooks/install" || pathname === "/hooks/uninstall") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       return json(applyHooks(pathname === "/hooks/install" ? "install" : "uninstall"));
+    }
+
+    /**
+     * Budgets: what is set, and where each stands right now.
+     *
+     * Reading is like reading the cost chart beside it — a limit and what has
+     * been spent against it is the same class of fact. Writing is a local
+     * decision like every other setting, so it goes through the origin gate.
+     */
+    if (pathname === "/budgets" && req.method === "GET") {
+      return json({ budgets: readBudgets(), status: budgetStatus(), models: costedModels() });
+    }
+    if (pathname === "/budgets/set" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: { budgets?: unknown };
+      try { b = (await req.json()) as { budgets?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (!Array.isArray(b.budgets)) return json({ ok: false, error: "expected a list of budgets" }, 400);
+      // Refused on the way in, not silently dropped. readBudgets() skips what it
+      // cannot use, so a bad row accepted here would vanish on the next read and
+      // look exactly like a save that did nothing.
+      const clean: Budget[] = [];
+      for (const raw of b.budgets as Partial<Budget>[]) {
+        if (!raw || typeof raw !== "object") return json({ ok: false, error: "that is not a budget" }, 400);
+        // A *number*, not something Number() can be talked into. `"40"`
+        // coerces to forty and readBudgets() then refuses it on the next read,
+        // so the save would appear to work and silently do nothing — which is
+        // the exact failure the validation on both sides exists to prevent.
+        const limit = raw.limit;
+        if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
+          return json({ ok: false, error: "a budget needs a limit above zero" }, 400);
+        }
+        if (raw.period !== "day" && raw.period !== "week" && raw.period !== "month") {
+          return json({ ok: false, error: "a budget needs a period of day, week or month" }, 400);
+        }
+        clean.push({
+          root: typeof raw.root === "string" ? raw.root : "",
+          model: typeof raw.model === "string" ? raw.model : "",
+          limit, period: raw.period,
+        });
+      }
+      const r = writeBudgets(clean);
+      if (!r.ok) return json(r, 400);
+      return json({ ...r, budgets: readBudgets(), status: budgetStatus() });
     }
 
     if (pathname === "/insights") return json({ insights: getInsights() });

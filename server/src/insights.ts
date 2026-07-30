@@ -3,6 +3,7 @@
 // Computed from the full event history (better than the live buffer for loops).
 import type { Insight } from "../../shared/types.ts";
 import { db, scopeClause } from "./db.ts";
+import { budgetStatus, budgetScopeLabel, periodLabel } from "./budget.ts";
 
 const key = (app: string, sid: string) => `${app}:${sid.slice(0, 8)}`;
 const trim = (s: string, n = 64) => (s.length > n ? s.slice(0, n) + "…" : s);
@@ -93,7 +94,33 @@ export function getInsights(): Insight[] {
     });
   }
 
-  // 4) Spend velocity — overall $/hr over the last hour (context, info-level).
+  // 4) Budgets — a number the user chose, which beats every constant above it.
+  //
+  //    Only when one is set. With none, everything here behaves exactly as it
+  //    did, because a fixed threshold is a reasonable default and taking it
+  //    away from people who never asked for budgets would be a regression
+  //    dressed as a feature.
+  //
+  //    Unscoped by design: a budget names its own project, so it fires whether
+  //    or not the cockpit is currently looking at that one. The whole point is
+  //    to be told about a limit you set, not about the tab you have open.
+  for (const s of budgetStatus(undefined, now)) {
+    if (s.level === "ok") continue;
+    const pct = Math.round(s.pct * 100);
+    out.push({
+      id: `budget:${s.budget.root}:${s.budget.model}:${s.budget.period}`,
+      severity: s.level === "over" ? "bad" : "warn",
+      kind: "spend",
+      title: s.level === "over"
+        ? `Over budget · $${s.spent.toFixed(2)} of $${s.budget.limit.toFixed(2)} ${periodLabel(s.budget.period)}`
+        : `${pct}% of budget · $${s.spent.toFixed(2)} of $${s.budget.limit.toFixed(2)} ${periodLabel(s.budget.period)}`,
+      detail: budgetScopeLabel(s.budget),
+      session: null,
+      ts: now,
+    });
+  }
+
+  // 5) Spend velocity — overall $/hr over the last hour (context, info-level).
   const burn = db
     .query<{ cost: number; toks: number }, any[]>(
       `SELECT SUM(cost_usd) cost, SUM(input_tokens + output_tokens) toks FROM events WHERE timestamp > ?${sc}`

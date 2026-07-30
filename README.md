@@ -439,7 +439,8 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 📈 **Anthropic plan usage** | 5-hour + weekly plan-limit meters — shown only when you're viewing Anthropic (the one provider with a usage API), on wide screens. |
 | ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `o` Docker · `t` terminal · `c` chat · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
 | 🎨 **22 themes** | 11 dark palettes (Midnight Purple, Forest, Ember, Nord, …), each with a light twin — instant switch, remembered. |
-| 🔔 **Alerts** | Web Push to a locked phone (end-to-end encrypted, no account anywhere) + webhook (Slack/Discord) + desktop notify + optional in-app chime, on approvals and errors. |
+| 🔔 **Alerts** | Web Push to a locked phone (end-to-end encrypted, no account anywhere) — a held gate arrives with **Allow and Deny on the notification** — plus webhook (Slack/Discord), desktop notify and an optional in-app chime. |
+| 💰 **Budgets** | *"No more than $40 a month on this repository."* Per-project and per-model, warned at 80% rather than only when you cross it, counted from the daily rollup as well as live events so a monthly budget really means a month. Settings ▸ Preferences. |
 | 📤 **Export** | One-click CSV / JSON of all events. |
 
 ### Themes

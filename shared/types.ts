@@ -1591,6 +1591,41 @@ export interface PairState {
   devices: PairedDevice[];
 }
 
+/** How often a budget resets. Calendar periods, not trailing windows — the
+ *  reset is what makes a number feel like a budget rather than an average. */
+export type BudgetPeriod = "day" | "week" | "month";
+
+/**
+ * A spending limit somebody chose.
+ *
+ * The insights used to fire on constants, which makes them noise on a project
+ * that genuinely costs that much and silent on one where a tenth would be
+ * alarming. Three fields, deliberately: how much, over what period, for what.
+ */
+export interface Budget {
+  /** Project root this applies to. Empty means the whole machine. */
+  root: string;
+  /** Exact model name this applies to. Empty means all of them. */
+  model: string;
+  /** In USD, matching every other cost in this app. */
+  limit: number;
+  period: BudgetPeriod;
+}
+
+/** A budget, and where it stands right now. */
+export interface BudgetStatus {
+  budget: Budget;
+  /** The window evaluated, UTC and inclusive — so a panel can say which days
+   *  the number covers rather than implying it covers all of them. */
+  fromDay: string;
+  toDay: string;
+  spent: number;
+  /** Fraction of the limit. Above 1 when over, which is left uncapped: "180%"
+   *  is the useful number and "100%" would hide how far past it went. */
+  pct: number;
+  level: "ok" | "warn" | "over";
+}
+
 /**
  * A warm CLI held in a tmux pane, and what is known about it.
  *
