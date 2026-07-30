@@ -1591,6 +1591,51 @@ export interface PairState {
   devices: PairedDevice[];
 }
 
+/**
+ * An agent CLI this app knows how to connect, and how.
+ *
+ * Everything not installed is listed too, rather than hidden: a list of what is
+ * present says nothing about what is *supported*, and that is the question
+ * somebody has before they decide to try a second agent at all.
+ */
+export interface KnownAgent {
+  id: string;
+  label: string;
+  /** The executable looked for on PATH. */
+  bin: string;
+  /** How it reports: our own hook forwarder, or its OpenTelemetry exporter. */
+  via: "hooks" | "otel";
+  /** The file connecting it writes. Shown, so nobody has to guess. */
+  configPath: string;
+  /** A fragment of the `source_app` its events arrive under. Not the whole
+   *  thing: for an OTel agent that is the CLI's own `service.name`, which this
+   *  app does not choose and cannot pin. */
+  match: string;
+  /** How to get it, for the ones that are not here. */
+  install: string;
+  /** What connecting it actually does, in a few words. */
+  connects: string;
+}
+
+export interface AgentProbe extends KnownAgent {
+  /** On PATH right now. */
+  found: boolean;
+  /** Where, when it was found. */
+  path: string | null;
+  /** Its config currently points at a local agentglass. */
+  connected: boolean;
+  /**
+   * When an event from it last arrived, or null if one never has.
+   *
+   * The half that matters, and deliberately independent of `connected`: a
+   * config that was written and an event that landed are different facts, and
+   * every failure here looks like a successful write — a file in the right
+   * shape the CLI does not read, a session started before the change, a typo in
+   * an endpoint. A tick over a file that changed nothing stops the search.
+   */
+  seenAt: number | null;
+}
+
 /** How often a budget resets. Calendar periods, not trailing windows — the
  *  reset is what makes a number feel like a budget rather than an average. */
 export type BudgetPeriod = "day" | "week" | "month";
