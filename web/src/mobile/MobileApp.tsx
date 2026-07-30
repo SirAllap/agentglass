@@ -543,12 +543,29 @@ export function MobileApp() {
 
   const decide = async (id: string, d: "allow" | "deny", itemId: string) => {
     try {
-      await api.gateDecide(id, d);
+      const r = await api.gateDecide(id, d);
+      /*
+       * An answer that did not take must not look like one that did.
+       *
+       * A press that lost the race — the timeout got there first, or somebody
+       * else answered from the desk — comes back 200 with `ok: false`, so it
+       * never reached the `catch` and this said "the agent is moving again"
+       * about a request that had already been decided the other way. On the one
+       * surface built for answering gates, that is the worst sentence available.
+       * The server says what actually won; this repeats it.
+       */
+      if (!r.ok) {
+        toast(r.error || "That did not take — the request was already decided", true);
+        // Still dropped: it is genuinely resolved, just not by this press, and
+        // leaving it in the queue invites pressing again to the same effect.
+        drop(itemId);
+        return;
+      }
       drop(itemId);
       toast(d === "allow" ? "Allowed — the agent is moving again" : "Denied — the agent was told no");
     } catch {
-      // An answer that did not arrive must not look like one that did: the
-      // agent is still blocked, and saying otherwise is the worst outcome here.
+      // Nothing reached the server at all. The agent is still blocked, and
+      // saying otherwise is the worse of the two mistakes.
       toast("That did not reach the server — the agent is still waiting", true);
     }
   };

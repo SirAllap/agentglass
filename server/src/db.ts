@@ -492,6 +492,25 @@ CREATE TABLE IF NOT EXISTS gates (
 CREATE INDEX IF NOT EXISTS idx_gates_pending ON gates(decision, expires);
 CREATE INDEX IF NOT EXISTS idx_gates_created ON gates(created);
 `);
+/**
+ * *Which* human, not just that one of them answered.
+ *
+ * `resolution` already said what kind of thing decided — a person, the clock, a
+ * restart — and that was the whole answer while a cockpit had one door. Now a
+ * paired phone carries its own credential and its own name (devices.ts), so a
+ * gate can be approved by somebody who is not at the machine, and "a human
+ * decided" stops being an answer to "who".
+ *
+ * It lives on the gate row rather than only in `actions` because the two cannot
+ * be joined: an action line records the route and a clipped `tool · summary`,
+ * so two gates on the same tool a second apart are indistinguishable in it. The
+ * column is written by the same UPDATE that resolves the row, which is what
+ * makes it impossible for the actor and the decision to disagree.
+ *
+ * NULL when nobody decided. A timeout is not an actor, and writing "system"
+ * would invent one — the same reason `actorOf` refuses to invent a name.
+ */
+try { db.exec("ALTER TABLE gates ADD COLUMN decided_by TEXT"); } catch { /* already present */ }
 
 export interface GateRow {
   id: string;
@@ -505,6 +524,9 @@ export interface GateRow {
   reason: string | null;
   resolution: "human" | "timeout" | "restart" | null;
   decided_at: number | null;
+  /** Who, when a person decided. NULL for a timeout, a restart, and for every
+   *  row written before this column existed — an absent actor is not `local`. */
+  decided_by: string | null;
 }
 
 const gateInsert = db.query(`
@@ -513,7 +535,8 @@ const gateInsert = db.query(`
 // Only ever resolves a still-pending row: a decision already recorded wins over
 // a late timeout, so a human's approve can't be overwritten by the clock.
 const gateResolve = db.query(`
-  UPDATE gates SET decision = $decision, reason = $reason, resolution = $resolution, decided_at = $decided_at
+  UPDATE gates SET decision = $decision, reason = $reason, resolution = $resolution,
+                   decided_at = $decided_at, decided_by = $decided_by
    WHERE id = $id AND decision IS NULL`);
 const gateById = db.query<GateRow, [string]>(`SELECT * FROM gates WHERE id = ?`);
 const gatesPending = db.query<GateRow, []>(`SELECT * FROM gates WHERE decision IS NULL ORDER BY created ASC`);
@@ -536,8 +559,16 @@ export function resolveGateRow(
   reason: string,
   resolution: "human" | "timeout" | "restart",
   decided_at = Date.now(),
+  /** Only ever set for a human. The clock is not an actor. */
+  decided_by: string | null = null,
 ): void {
-  gateResolve.run({ $id: id, $decision: decision, $reason: reason, $resolution: resolution, $decided_at: decided_at } as any);
+  gateResolve.run({
+    $id: id, $decision: decision, $reason: reason, $resolution: resolution,
+    $decided_at: decided_at,
+    // Belt as well as braces: the callers pass null for a timeout, and so does
+    // this, so an actor cannot arrive attached to an outcome nobody chose.
+    $decided_by: resolution === "human" ? decided_by : null,
+  } as any);
 }
 
 export function getGate(id: string): GateRow | null {

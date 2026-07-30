@@ -316,14 +316,22 @@ export interface GateRecord extends PendingGate {
   reason: string | null;
   resolution: "human" | "timeout" | "restart" | null;
   decided_at: number | null;
+  /** *Which* human — a paired device's name, or the address the answer came
+   *  from. NULL when nobody decided: a timeout is not an actor, and neither is
+   *  a restart. Also NULL on rows written before the column existed, which is
+   *  why an absent value is never read as "this machine". */
+  decided_by: string | null;
 }
 
 /**
  * One write the cockpit performed, kept.
  *
- * `actor` is where the request came from, not who someone is: there are no
- * accounts and the token is shared, so `local` means the loopback caller — this
- * machine's dashboard — and anything else is the address it arrived from.
+ * `actor` is the most the server can honestly assert. A paired device has its
+ * own credential and the name somebody accepted when they paired it, so it is
+ * named — "iPhone · 3f9c21", with the device id because an unnamed phone
+ * defaults to "A device" and two of those must not read as one. Otherwise it is
+ * a place rather than a person: `local` for the loopback caller — this
+ * machine's dashboard — and the address for anything else.
  */
 export interface ActionRecord {
   id: number;

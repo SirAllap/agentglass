@@ -64,13 +64,20 @@ function timeoutOutcome(): GateOutcome {
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const validGateId = (id: unknown): id is string => typeof id === "string" && ID_RE.test(id);
 
-function finish(id: string, out: GateOutcome, resolution: "human" | "timeout" | "restart"): void {
+function finish(
+  id: string,
+  out: GateOutcome,
+  resolution: "human" | "timeout" | "restart",
+  /** Who, when a person decided. The timeout path leaves this null on purpose:
+   *  an outcome nobody chose must not arrive carrying an actor. */
+  by: string | null = null,
+): void {
   const w = waiters.get(id);
   if (w) {
     clearTimeout(w.timer);
     waiters.delete(id);
   }
-  resolveGateRow(id, out.decision, out.reason, resolution);
+  resolveGateRow(id, out.decision, out.reason, resolution, Date.now(), by);
   w?.resolve?.(out);
   onChange();
 }
@@ -157,13 +164,39 @@ export function defaultReason(decision: GateDecision): string {
     : "A human reviewed this call in agentglass and approved it.";
 }
 
-export function decideGate(id: string, decision: GateDecision, reason: string): boolean {
+/**
+ * `by` is who the server can honestly say answered — a paired device's name, or
+ * the address it came from. It is recorded on the row itself rather than only
+ * in the action log, because the two cannot be joined: an action line carries a
+ * clipped `tool · summary`, so two gates on the same tool a second apart are
+ * indistinguishable in it.
+ */
+export function decideGate(id: string, decision: GateDecision, reason: string, by: string | null = null): boolean {
   const row = getGate(id);
   // Decidable while pending, whether or not a connection is currently held: a
   // restored request has no waiter and must still take the operator's answer.
   if (!row || row.decision) return false;
-  finish(id, { decision, reason: reason || defaultReason(decision) }, "human");
+  finish(id, { decision, reason: reason || defaultReason(decision) }, "human", by);
   return true;
+}
+
+/**
+ * The words a person actually typed, or nothing.
+ *
+ * `decideGate` backfills an empty reason with `defaultReason`, because the
+ * string travels to a model that has just been stopped and needs something it
+ * can act on. That makes the stored reason useless to a *reader*: every gate
+ * anybody waved through carries the same paragraph, and a history quoting it
+ * back would be three lines of boilerplate per row hiding the one row where
+ * somebody explained themselves.
+ *
+ * Compared against the real function rather than a copy of its text, so the two
+ * cannot drift into a history that quotes a default it no longer recognises.
+ */
+export function typedReason(row: { decision: "allow" | "deny" | null; reason: string | null }): string {
+  const r = row.reason || "";
+  if (!r || !row.decision) return "";
+  return r === defaultReason(row.decision) ? "" : r;
 }
 
 export function pendingGates(): PendingGate[] {

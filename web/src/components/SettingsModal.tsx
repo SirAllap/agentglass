@@ -13,7 +13,8 @@ import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
-import type { ActionRecord } from "../../../shared/types.ts";
+import type { ActionRecord, GateRecord } from "../../../shared/types.ts";
+import { mergeActivity, gateLine, actorLabel, type ActivityRow } from "../lib/activity.ts";
 import { ingestUpdate } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
@@ -232,18 +233,33 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
  * is a live view of the session rather than an audit trail. So "who approved
  * that" and "what happened to my branch while I was at lunch" had no answer.
  *
- * `actor` is deliberately an address rather than a name. There are no accounts
- * here and the token is shared, so a name would be invented; where the request
- * came from is a fact. `local` is this machine's dashboard, and anything else
- * is the device that reached it — which is what makes "I approved that from my
- * phone" answerable.
+ * Who did it is now a name when there is an honest one. A paired phone carries
+ * its own credential and the label somebody accepted when they paired it, so
+ * "iPhone · 3f9c21 approved that" is a fact, not an invention — the id comes
+ * along because an unnamed device defaults to "A device" and two of those must
+ * not read as one. The machine token is still shared and still anonymous, so
+ * anything holding it is a place: `local` for this machine's dashboard, and the
+ * address for anything else.
+ *
+ * Two records feed this list, not one. The action log holds what a person asked
+ * for; the gates table holds the fate of every held tool call, including the
+ * ones a timeout or a restart resolved while nobody was looking. Those changed
+ * what an agent did and appear in no action row, because nobody made a request
+ * for them — and an outcome nobody chose is the one least likely to be
+ * remembered and most worth writing down. See lib/activity.ts for the merge.
  */
 function ActivityPane({ open }: { open: boolean }) {
-  const [rows, setRows] = useState<ActionRecord[] | null>(null);
+  const [rows, setRows] = useState<ActivityRow[] | null>(null);
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    api.actions(200).then((r) => { if (alive) setRows(r.actions); }).catch(() => { if (alive) setRows([]); });
+    // Both records, because neither is the whole story: the action log has only
+    // what a person asked for, and a gate the timeout allowed is something that
+    // happened without anybody asking. See lib/activity.ts.
+    Promise.all([
+      api.actions(200).then((r) => r.actions).catch(() => [] as ActionRecord[]),
+      api.gateHistory(200).then((r) => r.gates).catch(() => [] as GateRecord[]),
+    ]).then(([a, g]) => { if (alive) setRows(mergeActivity(a, g)); });
     return () => { alive = false; };
   }, [open]);
 
@@ -263,29 +279,78 @@ function ActivityPane({ open }: { open: boolean }) {
     <Section title="Activity">
       <div className="px-3 pb-2 text-[10.5px] t-dim2">
         Newest first. Kept indefinitely — these are the changes you made, not telemetry.
+        Held tool calls appear here whoever resolved them, including the ones the timeout
+        decided while nobody was looking.
       </div>
       <div className="flex flex-col">
-        {rows.map((a) => (
-          <div key={a.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-baseline px-3 py-1.5 rounded-lg hover:bg-white/5">
-            <span
-              className="text-[9.5px] font-semibold tabular-nums shrink-0"
-              style={{ color: a.ok ? "var(--text4)" : "var(--error)" }}
-              title={a.ok ? "succeeded" : a.detail || "failed"}
-            >
-              {a.ok ? "·" : "✕"}
-            </span>
-            <span className="min-w-0">
-              <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{verb(a.action)}</span>
-              {a.target && <span className="text-[11.5px] t-dim"> {a.target}</span>}
-              {!a.ok && a.detail && <span className="block text-[10px] mt-0.5" style={{ color: "var(--error)" }}>{a.detail}</span>}
-            </span>
-            <span className="text-[9.5px] t-dim2 tabular-nums shrink-0 text-right">
-              {a.actor === "local" ? "" : `${a.actor} · `}{fmtAgo(a.at)}
-            </span>
-          </div>
-        ))}
+        {rows.map((r) => (r.kind === "gate" ? <GateLine key={r.key} g={r.row} /> : <ActionLine key={r.key} a={r.row} />))}
       </div>
     </Section>
+  );
+}
+
+/** The right-hand column: who, then how long ago. Shared so a gate line and a
+ *  git line cannot drift into two different ways of saying the same thing. */
+function Who({ actor, at }: { actor: string; at: number }) {
+  return (
+    <span className="text-[9.5px] t-dim2 tabular-nums shrink-0 text-right">
+      {actor && `${actor} · `}{fmtAgo(at)}
+    </span>
+  );
+}
+
+function ActionLine({ a }: { a: ActionRecord }) {
+  return (
+    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-baseline px-3 py-1.5 rounded-lg hover:bg-white/5">
+      <span
+        className="text-[9.5px] font-semibold tabular-nums shrink-0"
+        style={{ color: a.ok ? "var(--text4)" : "var(--error)" }}
+        title={a.ok ? "succeeded" : a.detail || "failed"}
+      >
+        {a.ok ? "·" : "✕"}
+      </span>
+      <span className="min-w-0">
+        <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{verb(a.action)}</span>
+        {a.target && <span className="text-[11.5px] t-dim"> {a.target}</span>}
+        {!a.ok && a.detail && <span className="block text-[10px] mt-0.5" style={{ color: "var(--error)" }}>{a.detail}</span>}
+      </span>
+      <Who actor={actorLabel({ kind: "action", at: a.at, key: "", row: a })} at={a.at} />
+    </div>
+  );
+}
+
+/**
+ * A held tool call and how it ended.
+ *
+ * The dot is amber for an outcome nobody chose. "approved" for a call somebody
+ * read and "allowed" for one that expired while they were at lunch are opposite
+ * facts about whether anybody looked, and in a list of past tense verbs they
+ * are one glance apart — so the distinction gets a colour as well as a word.
+ */
+function GateLine({ g }: { g: GateRecord }) {
+  const { verb: did, note } = gateLine(g);
+  const nobody = g.resolution !== "human";
+  return (
+    <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 items-baseline px-3 py-1.5 rounded-lg hover:bg-white/5">
+      <span
+        className="text-[9.5px] font-semibold tabular-nums shrink-0"
+        style={{ color: nobody ? "var(--warning)" : g.decision === "deny" ? "var(--error)" : "var(--text4)" }}
+        title={nobody ? "nobody decided this" : "decided by a person"}
+      >
+        {nobody ? "⏱" : "·"}
+      </span>
+      <span className="min-w-0">
+        <span className="text-[11.5px]" style={{ color: "var(--text)" }}>{did}</span>
+        <span className="text-[11.5px] t-dim"> {g.tool_name}{g.summary ? ` · ${g.summary}` : ""}</span>
+        {note && <span className="block text-[10px] mt-0.5" style={{ color: "var(--warning)" }}>{note}</span>}
+        {/* The reason a person typed, which lives nowhere else: the agent was
+            given it and the action log never carried it. */}
+        {g.resolution === "human" && g.reason && (
+          <span className="block text-[10px] mt-0.5 t-dim2">“{g.reason}”</span>
+        )}
+      </span>
+      <Who actor={actorLabel({ kind: "gate", at: g.decided_at ?? 0, key: "", row: g })} at={g.decided_at ?? 0} />
+    </div>
   );
 }
 
