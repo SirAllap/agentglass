@@ -113,6 +113,9 @@ const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
 // writes through the victim's own loopback. Treating TRUST_LAN as "not loopback
 // only" for the token decision forces a token exactly when one is needed; net.ts
 // already documents TRUST_LAN as something used on top of a token.
+/** So a misconfigured exporter explains itself once rather than every batch. */
+let warnedNoMetrics = false;
+
 const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
 /** One socket, three roles: the live event stream, PTY terminal shells, and
@@ -695,6 +698,45 @@ const server = Bun.serve<WsData>({
         if (b.source_app && b.session_id && b.hook_event_type) ingestBody(b);
       }
       return json({}); // ExportLogsServiceResponse: {} = success
+    }
+
+    /**
+     * --- OTLP metrics: refused out loud, rather than 404 ---
+     *
+     * There is no metrics receiver here, on purpose — otlp.ts says why. What
+     * this route fixes is not the absence but the silence: point
+     * `OTEL_EXPORTER_OTLP_ENDPOINT` at agentglass from Claude Code and its
+     * metrics went to a 404, which an exporter swallows into a log nobody is
+     * reading. The person is left watching a dashboard that never fills, with
+     * nothing anywhere saying the endpoint they configured does not exist.
+     *
+     * 501 rather than 404 or 429: it is honest about what happened, and it is
+     * in the class OTel exporters do not retry — so a misconfigured agent says
+     * this once per batch rather than hammering the port forever.
+     *
+     * Registered for GET as well as POST. An exporter only ever POSTs, but the
+     * first thing anybody does when telemetry does not arrive is open the URL
+     * in a browser, and a 404 there is the same dead end by hand.
+     */
+    if (pathname === "/v1/metrics" || pathname === "/otlp/v1/metrics") {
+      // Said once, on the console the operator is actually looking at. The
+      // exporter's own log is the other place this could land, and it is on
+      // the wrong machine's terminal about as often as not.
+      if (!warnedNoMetrics) {
+        warnedNoMetrics = true;
+        console.warn(
+          "[otlp] something POSTed metrics to " + pathname + ". This server receives OpenTelemetry " +
+          "traces (/v1/traces) and logs (/v1/logs), not metrics — see README ▸ OpenTelemetry. " +
+          "If this is Claude Code, it is already covered in full by the hooks (bun run setup) and its " +
+          "OTel export can be left pointed elsewhere.",
+        );
+      }
+      return json({
+        error: "this server has no OpenTelemetry metrics receiver",
+        accepts: ["/v1/traces", "/v1/logs"],
+        why: "agentglass maps GenAI spans and log records into per-call events. Metrics carry totals, which it already computes from those events.",
+        claudeCode: "Claude Code's OTel export is metrics, and it is already covered at higher fidelity by the hooks — run `bun run setup`.",
+      }, 501);
     }
 
     // --- reads ---

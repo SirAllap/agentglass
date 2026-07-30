@@ -839,7 +839,16 @@ agentglass isn't Claude-only. It exposes an **OTLP/HTTP** trace receiver that
 maps OpenTelemetry **GenAI** spans (the `gen_ai.*` semantic conventions) into the
 same events the dashboard already understands — so anything emitting GenAI
 telemetry streams in: the OpenAI / Google / Bedrock SDK instrumentations,
-LangChain, LiteLLM, OpenLLMetry, and Claude Code's own OTel export.
+LangChain, LiteLLM, OpenLLMetry, Arize Phoenix and the other OpenInference
+instrumentors.
+
+**Not Claude Code's own OTel export**, which this used to list. That export is
+*metrics*, and this receiver takes spans and log records — so pointing
+`OTEL_EXPORTER_OTLP_ENDPOINT` at agentglass from Claude Code sends its metrics
+to an endpoint that turns them away and says why. Nothing is lost: Claude Code
+is already covered, at far higher fidelity, by the hooks (`bun run setup`) —
+per-tool timings, the prompt, the arguments, and the gate. Metrics carry totals,
+which is the one thing the dashboard can already compute.
 
 ### Auto-connect installed CLIs — one command, opt-in
 

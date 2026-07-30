@@ -8,11 +8,24 @@
 // feed the dashboard.
 //
 // NOT Claude Code's own OTel export, which this used to claim. That export is
-// METRICS, and the only OTLP routes registered are /v1/traces and /v1/logs
-// (server/src/index.ts) — point OTEL_EXPORTER_OTLP_ENDPOINT here from Claude
-// Code and its metrics get a 404. Nothing breaks, because Claude Code is
-// already covered properly by the hooks, but the sentence sent anyone
-// extending this mapper looking for a metrics receiver that is not here.
+// METRICS, and there is no metrics receiver here — deliberately, not by
+// omission:
+//
+//   * everything those metrics carry about Claude Code is already in the
+//     database via the hooks, and at far higher fidelity — per-tool timings,
+//     the prompt, the arguments, the gate decision. Metrics carry totals,
+//     which is the one thing this dashboard already computes;
+//   * a second source for the same numbers is a double-counting bug waiting to
+//     happen. Attribution here is already careful work (see the cumulative-usage
+//     handling in ingest.ts and the pricing fallbacks), and feeding it a
+//     parallel stream of the same tokens would quietly inflate every total;
+//   * metrics have no per-call identity, so nothing in them can become an
+//     event. There is no mapping to write, only a sink to throw them into.
+//
+// So /v1/metrics exists and refuses, rather than 404ing. A silent 404 is how
+// somebody spends an afternoon wondering why nothing arrives — see the route
+// in index.ts, which says what this server takes and where Claude Code is
+// already covered.
 //
 // Mapping strategy:
 //   • a TOOL span (operation "execute_tool" or carrying gen_ai.tool.name) becomes
@@ -22,7 +35,9 @@
 //     carries per-call token usage in payload.usage, so cost math just works.
 // Spans with no gen_ai.* signal are ignored (this is not a general trace store).
 //
-// JSON only: point your exporter with OTEL_EXPORTER_OTLP_PROTOCOL=http/json.
+// Both OTLP/HTTP encodings are accepted — JSON and protobuf, the SDK default —
+// so no Collector is needed. (This line said "JSON only" long after the
+// protobuf decoder landed in otlp_pb.ts.)
 import type { IngestBody } from "../../shared/types.ts";
 
 interface AnyVal {

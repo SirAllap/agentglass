@@ -41,6 +41,12 @@ const AUTH_EXEMPT = new Set([
   "/otlp/v1/traces",
   "/v1/logs",
   "/otlp/v1/logs",
+  // Exempt although it receives nothing: it exists to explain that there is no
+  // metrics receiver here (see index.ts). An exporter cannot carry a token, so
+  // gating it would replace a silent 404 with a silent 401 — the same dead end
+  // wearing a different number.
+  "/v1/metrics",
+  "/otlp/v1/metrics",
 ]);
 
 /**

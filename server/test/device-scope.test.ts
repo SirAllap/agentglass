@@ -193,9 +193,29 @@ describe("the pairing routes themselves", () => {
     expect(isPairing("/pair/anything")).toBe(true);
     expect(isPairing("/paired")).toBe(false);
     expect(isPairing("/repair/x")).toBe(false);
+    // The register of everything reachable with no credential at all, and why
+    // each one is allowed to be. Changing this list is the moment to re-read
+    // it, which is the whole point of writing it out rather than deriving it.
+    const OPEN: Record<string, string> = {
+      "/health": "answers a fixed shape, so a shell can find which server owns the port",
+      "/ingest": "append-only: a local hook has no way to carry a secret",
+      "/v1/traces": "append-only OTel sink, same reason",
+      "/otlp/v1/traces": "append-only OTel sink, same reason",
+      "/v1/logs": "append-only OTel sink, same reason",
+      "/otlp/v1/logs": "append-only OTel sink, same reason",
+      // Receives nothing and stores nothing — it exists to say there is no
+      // metrics receiver here. Gating it would turn a silent 404 into a silent
+      // 401, which is the same dead end.
+      "/v1/metrics": "refuses, and explains; reads and writes nothing",
+      "/otlp/v1/metrics": "refuses, and explains; reads and writes nothing",
+    };
     for (const r of ROUTES.filter((r) => !isPairing(r))) {
-      if (["/health", "/ingest", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs"].includes(r)) continue;
+      if (r in OPEN) continue;
       expect(isAuthExempt(r), `${r} no longer needs a credential`).toBe(false);
+    }
+    // And nothing on the list has quietly stopped being a route.
+    for (const r of Object.keys(OPEN)) {
+      expect(isAuthExempt(r), `${r} is listed as open but is not exempt`).toBe(true);
     }
   });
 
