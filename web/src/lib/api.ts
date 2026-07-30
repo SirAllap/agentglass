@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, UsageHistory, ActionRecord } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, UsageHistory, ActionRecord } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -573,6 +573,15 @@ const realApi = {
    *  Only navigation and the two answers a prompt takes — the server keeps its
    *  own allowlist, since this reaches a live terminal running an agent. */
   chatPaneKey: (session: string, key: string) => post<{ screen: string }>("/chat/pane/key", { session, key }),
+  /** Exempt this chat's pane from idle eviction. About idleness only — closing
+   *  the chat still releases the pane. */
+  chatPanePin: (session: string, pinned: boolean) =>
+    post<{ ok: boolean; session: string; pinned: boolean }>("/chat/pane/pin", { session, pinned }),
+  /** Every pane on this machine, with which of them belongs to nothing. `open`
+   *  is the chats this client has on screen — the server does not know, and a
+   *  pane belonging to a chat in another window is not an orphan. */
+  chatPanes: (open: string[]) =>
+    get<ChatPaneList>(`/chat/panes?open=${encodeURIComponent(open.join(","))}`),
   chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     let res: Response;
     // A fetch that throws before a response has arrived never reached the
@@ -753,6 +762,10 @@ const demoApi: typeof realApi = {
   chatAttach: (_session: string) => D({ command: "", live: false }),
   chatPaneClose: (_session: string) => D({ killed: false }),
   chatPaneKey: (_session: string, _key: string) => D({ screen: "" }),
+  chatPanePin: (_session: string, pinned: boolean) => D({ ok: false, session: "", pinned }),
+  // The demo runs no processes, so there is nothing to list and nothing to
+  // reclaim. An empty list is the truth here rather than a placeholder.
+  chatPanes: (_open: string[]) => D({ panes: [], idleEvictMs: 0 } as ChatPaneList),
   chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void) => {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });

@@ -19,6 +19,7 @@ import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
 import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
 import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
+import { RunningPanes } from "./RunningPanes.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
@@ -938,6 +939,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         { v: "process", label: "Separate" },
                         { v: "tmux", label: "tmux panes" },
                       ]} />
+                    {/* The consequence of the setting above, made visible.
+                        Panes outlive the app, so "how new chats run" quietly
+                        decides how much memory is resident on this machine an
+                        hour from now, and until this list existed the only
+                        place to see that was a terminal. */}
+                    {tmuxEngine?.available && (
+                      <div className="flex flex-col gap-1.5 pt-1">
+                        <span className="text-[10px] t-dim2 uppercase tracking-wider">Warm CLIs running now</span>
+                        <RunningPanes open={open} />
+                      </div>
+                    )}
                     <Choice<SysNotifyMode>
                       label="Desktop notifications on the notch"
                       hint="Slack and the rest, mirrored onto the strip you can still see in fullscreen"

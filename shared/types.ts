@@ -1591,6 +1591,34 @@ export interface PairState {
   devices: PairedDevice[];
 }
 
+/**
+ * A warm CLI held in a tmux pane, and what is known about it.
+ *
+ * Each is several hundred megabytes — that is the price of skipping the MCP
+ * re-init a fresh turn pays — so "what is running" is a question with a number
+ * attached to it, and until now the only place to ask it was a terminal.
+ */
+export interface ChatPane {
+  /** The chat's session id, which is also the pane's name. */
+  name: string;
+  /** When this server last ran a turn in it. Null for a pane it has never
+   *  served — a leftover from a previous run, or something started by hand. */
+  lastUsedAt: number | null;
+  /** Exempt from idle eviction until unpinned or closed. */
+  pinned: boolean;
+  /** Mid-turn at this instant. Never an orphan, and never safe to end. */
+  running: boolean;
+  /** No chat this client has open, and no turn in flight, points at it. */
+  orphan: boolean;
+}
+
+export interface ChatPaneList {
+  panes: ChatPane[];
+  /** How long a pane may sit unused before it is reclaimed. 0 means eviction
+   *  is switched off, which is a thing the UI has to say rather than imply. */
+  idleEvictMs: number;
+}
+
 /** Whether another device can reach this server, and whether one ever has. */
 export interface RemoteStatus {
   /** Bound off loopback, so off-box traffic can arrive at all. */

@@ -35,7 +35,7 @@ import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
   engineFor,
   DEFAULT_MODEL, DEFAULT_MODE, addAttachments, answerPane, dropAttachment, renameChat, clearAttention, type Chat,
-  restoredActiveId, setActiveChatId, chatFocusRequest,
+  restoredActiveId, setActiveChatId, chatFocusRequest, setPanePinned, hydratePanePins,
 } from "../lib/chatStore.ts";
 import { peekChatIntent, subscribeChatIntent, takeChatIntent } from "../lib/chatIntent.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
@@ -695,6 +695,11 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
       .then((r) => setWorkspace(r.workspace))
       .catch(() => {})
       .finally(() => setScopeKnown(true));
+    // Which panes are pinned lives on the server and deliberately does not
+    // persist with the chat — it is a statement about a process running now.
+    // So a reloaded window knows nothing about it, and a Pin button showing
+    // "off" over a pinned pane is the same lie as the reverse.
+    void hydratePanePins();
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
@@ -1176,6 +1181,29 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             className="text-[10px] px-2 py-1 rounded-md shrink-0 disabled:opacity-40"
                             style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
                           >⚙ Config</button>
+                        )}
+                        {/* Keep this one, however long you are away.
+                            The engine reclaims a warm CLI after half an hour
+                            idle, which is right for the four chats you opened to
+                            ask one question each and wrong for the one you are
+                            living in — step away for lunch and the session you
+                            care about is exactly the one reclaimed, so the turn
+                            you come back to is the slow one. Beside the engine
+                            chip rather than in a menu, because a pin that holds
+                            several hundred megabytes should be something you can
+                            see you switched on. */}
+                        {engineFor(active) === "tmux" && active.sessionId && (
+                          <button
+                            onClick={() => void setPanePinned(active.id, !active.panePinned)}
+                            role="switch" aria-checked={!!active.panePinned}
+                            title={active.panePinned
+                              ? "Pinned: this chat's warm CLI is kept no matter how long it sits idle. Closing the chat still releases it."
+                              : "Pin this chat, so its warm CLI is never reclaimed for being idle. Costs a few hundred megabytes for as long as it is on."}
+                            className="text-[10px] px-2 py-1 rounded-md shrink-0"
+                            style={active.panePinned
+                              ? { color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }
+                              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                          >{active.panePinned ? "📌 Pinned" : "📌 Pin"}</button>
                         )}
                         {active.sessionId && <span className="text-[9.5px] t-dim2 tabular-nums" title="Resuming this session">↻ {active.sessionId.slice(0, 8)}</span>}
                         {/* Pushed right so the two copy actions sit together at
