@@ -56,8 +56,39 @@ describe("the promises SECURITY.md makes about retention", () => {
     // "no route" half of the claim false.
     const idx = read("server/src/index.ts");
     const routes = [...idx.matchAll(/pathname === "(\/[^"]*)"/g)].map((m) => m[1]!);
-    const suspicious = routes.filter((r) => /delete|purge|clear|wipe|forget|reset/i.test(r));
+    const suspicious = routes.filter((r) => /delete|purge|clear|wipe|forget|reset/i.test(r) && !REVIEWED.has(r));
     expect(suspicious, "a route now removes data — say so in SECURITY.md").toEqual([]);
+  });
+
+  /**
+   * The exceptions, and the reason they are not just holes in the rule above.
+   *
+   * This tripwire matches on the *name* of a route, which is cheap and catches
+   * the thing worth catching. It also means an honestly-named route that
+   * removes nothing recorded can trip it: `/pair/forget` revokes one paired
+   * device's credential, and devices.ts deliberately keeps a revoked row rather
+   * than dropping it, precisely so "did I definitely cut that phone off" stays
+   * answerable.
+   *
+   * Renaming it to slip past the regex would leave a heuristic passing for a
+   * reason that has nothing to do with what it is checking, which is how a
+   * tripwire quietly stops being one. So the exception is listed, and the test
+   * below makes it earn its place on every run.
+   */
+  const REVIEWED = new Set(["/pair/forget"]);
+
+  test("the reviewed exceptions still touch no stored data", () => {
+    const idx = read("server/src/index.ts");
+    for (const route of REVIEWED) {
+      const at = idx.indexOf(`pathname === "${route}"`);
+      expect(at, `${route} is no longer a route — take it out of REVIEWED`).toBeGreaterThan(-1);
+      // To the start of the next route, so the check reads the whole handler
+      // and only the handler however long it grows.
+      const rest = idx.slice(at + 1);
+      const next = rest.indexOf('pathname === "');
+      const body = next === -1 ? rest : rest.slice(0, next);
+      expect(body, `${route} now reaches the database`).not.toMatch(/DELETE\s+FROM|pruneOldRows|\bdb\.(run|query|exec|prepare)\b/i);
+    }
   });
 
   test("SECURITY.md still says all three, so the tripwire is wired to something", () => {

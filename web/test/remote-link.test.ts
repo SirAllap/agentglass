@@ -1,10 +1,14 @@
-// The Remote pane's two pure decisions: which address to offer back, and how
-// much of the link to put on screen. Both exist because of something that
-// happened rather than something imagined — a chosen tailnet address that
-// reverted to the LAN on every open, and an access code legible in a
-// screenshot.
+// The Remote pane's one pure decision: which of this machine's addresses to
+// offer back. It exists because of something that happened rather than
+// something imagined — a chosen tailnet address that reverted to the LAN on
+// every open.
+//
+// There used to be a second: how much of the link to cover up, because the
+// link carried the access code. Nothing hands a credential out in a URL any
+// more (see server/src/pairing.ts), so there is nothing left to mask — what
+// the pane shows is an address and only an address.
 import { describe, expect, test } from "bun:test";
-import { pickIndex, readPick, writePick, maskToken, type PickedAddress } from "../src/lib/remoteLink.ts";
+import { pickIndex, readPick, writePick, type PickedAddress } from "../src/lib/remoteLink.ts";
 
 const lan: PickedAddress = { address: "192.168.1.131", iface: "enp42s0", tailnet: false };
 const tail: PickedAddress = { address: "100.85.155.119", iface: "tailscale0", tailnet: true };
@@ -70,31 +74,5 @@ describe("remembering it", () => {
     // in the pane breaks.
     const throwing = { setItem: () => { throw new Error("denied"); } };
     expect(() => writePick(tail, throwing)).not.toThrow();
-  });
-});
-
-describe("masking the access code", () => {
-  test("covers the code and nothing else", () => {
-    // An obviously fake code on purpose: this file is public, and a realistic
-    // one is the kind of string that gets copied out of a test into a shell.
-    const masked = maskToken("http://192.168.1.131:4000/?token=EXAMPLE-not-a-real-access-code-0000");
-    expect(masked).toStartWith("http://192.168.1.131:4000/?token=");
-    expect(masked).not.toContain("EXAMPLE-not-a-real");
-    expect(masked).toMatch(/token=•+$/);
-  });
-
-  test("leaves a link that carries no code alone", () => {
-    expect(maskToken("http://192.168.1.131:4000/")).toBe("http://192.168.1.131:4000/");
-  });
-
-  test("keeps whatever follows the code", () => {
-    expect(maskToken("http://x:4000/?token=abc123&view=fleet")).toBe("http://x:4000/?token=••••••&view=fleet");
-  });
-
-  test("the mask length does not leak the code length", () => {
-    const short = maskToken("http://x:4000/?token=ab");
-    const long = maskToken("http://x:4000/?token=" + "a".repeat(64));
-    expect(short.split("=")[1]).toBe("••••••");
-    expect(long.split("=")[1]).toBe("••••••••••••");
   });
 });

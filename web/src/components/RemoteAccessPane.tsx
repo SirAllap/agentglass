@@ -3,7 +3,8 @@ import { api } from "../lib/api.ts";
 import { IS_DESKTOP, remoteAccessEnabled, setRemoteAccess, revokeRemoteAccess } from "../lib/desktop.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
-import { pickIndex, readPick, writePick, maskToken, type PickedAddress } from "../lib/remoteLink.ts";
+import { pickIndex, readPick, writePick, type PickedAddress } from "../lib/remoteLink.ts";
+import { PairPanel } from "./PairPanel.tsx";
 import type { RemoteStatus, RemoteDevice } from "../../../shared/types.ts";
 
 /**
@@ -35,9 +36,6 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   // Revoking cannot be undone and cannot be partially done, so it asks once.
   const [confirming, setConfirming] = useState(false);
   const [revokeNote, setRevokeNote] = useState<string | null>(null);
-  // The access code is covered until asked for: this pane is the one that ends
-  // up in screenshots. See maskToken.
-  const [reveal, setReveal] = useState(false);
 
   const load = useCallback(() => {
     api.remoteStatus().then(setSt).catch(() => setSt(null));
@@ -155,84 +153,64 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
 
         {live && (
           <>
-            {/* The link, given the room it needs: the code beside the QR
-                rather than under it, and the routes to this machine as a
-                column of real choices instead of a row of small pills. At the
-                old width all of this wrapped into a stack you had to scroll. */}
-            <div className="flex items-start gap-3.5">
-              <div className="shrink-0 flex flex-col items-center gap-1.5">
-                <Qr text={url} />
-                <span className="text-[10px] t-dim2">Scan with the camera</span>
-              </div>
+            {/* Pairing comes first, because it is what this pane is for. The
+                address below it is a fallback for a device that cannot scan;
+                it is only an address, and on its own it opens a page that asks
+                for a code. */}
+            <PairPanel baseUrl={url} />
 
-              <div className="min-w-0 flex-1 flex flex-col gap-2.5">
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] t-dim2 uppercase tracking-wider flex-1">The link</span>
-                    {/* The QR always carries the real code — a masked one would
-                        not scan. This only covers the text a screenshot keeps. */}
-                    {url.includes("token=") && (
-                      <button onClick={(e) => { e.stopPropagation(); setReveal((v) => !v); }}
-                        className="text-[10px] px-2 py-0.5 rounded-md hover:opacity-80"
-                        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
-                        {reveal ? "Hide code" : "Show code"}
-                      </button>
-                    )}
-                  </div>
-                  <button onClick={() => copy(url)}
-                    className="t-mono text-[11px] text-left px-2.5 py-2 rounded-lg break-all hover:opacity-80"
-                    style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
-                    {reveal ? url : maskToken(url)}
-                  </button>
-                  <div className="text-[10px] t-dim2">
-                    {copied === url
-                      ? "Copied, code included"
-                      : "Click to copy, code included. The phone needs it once and then remembers it."}
-                  </div>
-                </div>
-
-                {/* More than one route to this machine is normal (wifi plus a
-                    tailnet), and they are not equivalent — one crosses a café,
-                    the other does not. Each says what it is rather than making
-                    the user infer it from an address, and the choice is kept
-                    (see remoteLink.ts) because the pane used to forget it. */}
-                {st.addresses.length > 1 && (
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[10px] t-dim2 uppercase tracking-wider">Reachable at</span>
-                    <div className="flex flex-col gap-1">
-                      {st.addresses.map((a, i) => {
-                        const on = i === pick;
-                        return (
-                          <button key={a.address} onClick={() => { setChosen(a); writePick(a); }}
-                            className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left hover:opacity-90"
-                            style={{
-                              background: on ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
-                              border: `1px solid color-mix(in srgb, ${on ? "var(--primary)" : "var(--border)"} ${on ? 45 : 30}%, transparent)`,
-                            }}>
-                            <span className="shrink-0 rounded-full" aria-hidden style={{
-                              width: 6, height: 6,
-                              background: on ? "var(--primary-hover)" : "transparent",
-                              border: on ? "none" : "1px solid var(--text4)",
-                            }} />
-                            <span className="min-w-0 flex-1">
-                              <span className="block text-[11.5px]" style={{ color: on ? "var(--text)" : "var(--text2)" }}>
-                                {a.tailnet ? "Tailscale" : a.iface}
-                                <span className="t-mono text-[10.5px] t-dim2"> {a.address}</span>
-                              </span>
-                              <span className="block text-[10px] t-dim2">
-                                {a.tailnet
-                                  ? "Works from anywhere, for devices signed into your tailnet."
-                                  : "Works for anything on this network, and only there."}
-                              </span>
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[10px] t-dim2 uppercase tracking-wider">Or type this address</span>
+              <button onClick={() => copy(url)}
+                className="t-mono text-[11px] text-left px-2.5 py-2 rounded-lg break-all hover:opacity-80"
+                style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
+                {url}
+              </button>
+              <div className="text-[10px] t-dim2">
+                {copied === url ? "Copied" : "Safe to share — it is an address, not a key. Opening it on a device that is not paired gets a page and nothing else."}
               </div>
             </div>
+
+            {/* More than one route to this machine is normal (wifi plus a
+                tailnet), and they are not equivalent — one crosses a café,
+                the other does not. Each says what it is rather than making
+                the user infer it from an address, and the choice is kept
+                (see remoteLink.ts) because the pane used to forget it. */}
+            {st.addresses.length > 1 && (
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[10px] t-dim2 uppercase tracking-wider">Reachable at</span>
+                <div className="flex flex-col gap-1">
+                  {st.addresses.map((a, i) => {
+                    const on = i === pick;
+                    return (
+                      <button key={a.address} onClick={() => { setChosen(a); writePick(a); }}
+                        className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left hover:opacity-90"
+                        style={{
+                          background: on ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent",
+                          border: `1px solid color-mix(in srgb, ${on ? "var(--primary)" : "var(--border)"} ${on ? 45 : 30}%, transparent)`,
+                        }}>
+                        <span className="shrink-0 rounded-full" aria-hidden style={{
+                          width: 6, height: 6,
+                          background: on ? "var(--primary-hover)" : "transparent",
+                          border: on ? "none" : "1px solid var(--text4)",
+                        }} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[11.5px]" style={{ color: on ? "var(--text)" : "var(--text2)" }}>
+                            {a.tailnet ? "Tailscale" : a.iface}
+                            <span className="t-mono text-[10.5px] t-dim2"> {a.address}</span>
+                          </span>
+                          <span className="block text-[10px] t-dim2">
+                            {a.tailnet
+                              ? "Works from anywhere, for devices signed into your tailnet. Encrypted end to end, which is the one this pane recommends."
+                              : "Works for anything on this network, and only there. Not encrypted — see below."}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Turning it on is a real decision, so the consequence is stated
                 in the words it deserves rather than as "advanced". The
@@ -247,11 +225,13 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
               border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)",
             }}>
               {address?.tailnet
-                ? <>Whoever holds this link gets a terminal, git write access and docker control on this
-                    machine. Over Tailscale that is limited to devices signed into your tailnet, which is the
-                    safer of the two links on offer. It is still a shell: treat the code like a house key.</>
-                : <>Anyone on this network who has this link gets a terminal, git write access and docker
-                    control on this machine. Fine at home. Not on café or airport wifi.</>}
+                ? <>Over Tailscale this is encrypted end to end and reaches only devices signed into your
+                    tailnet, which makes it the safer of the two routes and the one to use on wifi you do not
+                    own. Each paired device still gets exactly what you granted it, and nothing more.</>
+                : <>This runs over plain HTTP, so everything between a phone and this machine is readable by
+                    anything else on the network. Pairing keeps the credential itself out of that — it is
+                    encrypted to the device that asked for it — but what it fetches afterwards is not. Fine
+                    at home. On café or airport wifi, use the Tailscale route instead.</>}
             </div>
 
             <Devices st={st} onCopy={copy} copied={copied} onChanged={load} />

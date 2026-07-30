@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, UsageHistory, ActionRecord } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, UsageHistory, ActionRecord } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -418,6 +418,27 @@ const realApi = {
    *  as well as refusing what it sends next; only this machine may call it. */
   remoteDevice: (address: string, blocked: boolean) =>
     post<{ ok: boolean; address?: string; blocked?: boolean; closed?: number; error?: string }>("/remote/device", { address, blocked }),
+
+  // --- pairing a device: the machine's half. See server/src/pairing.ts.
+  //
+  // Every one of these is refused unless it comes from loopback *and* carries
+  // the machine's token, because the three things they do — start an
+  // invitation, read the code, accept a request — are the three that have to
+  // happen where the user is sitting.
+
+  /** Start an invitation: a ticket for the QR and a code for the screen. */
+  pairTicket: () => post<{ ok: boolean; id?: string; code?: string; expiresAt?: number; error?: string }>("/pair/ticket", {}),
+  /** Close one early — when the pane is shut, or a fresh code is asked for. */
+  pairCancel: (ticket: string) => post<{ ok: boolean }>("/pair/cancel", { ticket }),
+  /** The live invitation, the requests waiting on a decision, and what is
+   *  already paired — one poll, because the pane shows all three at once. */
+  pairState: (ticket: string) => get<PairState>(`/pair/state?ticket=${encodeURIComponent(ticket)}`),
+  pairAccept: (ticket: string, scope: DeviceScope) =>
+    post<{ ok: boolean; device?: PairedDevice; error?: string }>("/pair/accept", { ticket, scope }),
+  pairReject: (ticket: string) => post<{ ok: boolean }>("/pair/reject", { ticket }),
+  /** Revoke one device's credential and close what it is holding. */
+  pairForget: (id: string) => post<{ ok: boolean; closed?: number; error?: string }>("/pair/forget", { id }),
+
   updateStatus: () => get<UpdateStatus>("/update/status"),
   // The tag is optional because the automatic modal wants "whatever this build
   // came from", while About asks for a named release — the update it is about
@@ -701,6 +722,14 @@ const demoApi: typeof realApi = {
   updateNotes: (_tag?: string) => D({ ok: false, tag: "", notes: "", source: "", error: "not available in the demo" } as ReleaseNotes),
   remoteStatus: () => D({ exposed: false, bind: "127.0.0.1", port: 4000, trustLan: false, tokenRequired: false, webUi: true, urls: [], addresses: [], clients: { count: 0, lastAt: null, addresses: [], liveCount: 0 }, devices: [], firewall: null } as RemoteStatus),
   remoteDevice: (_address: string, _blocked: boolean) => D({ ok: false, error: "not available in the demo" }),
+  // Pairing needs a machine on the other end of it. The demo has none, and a
+  // QR that cannot lead anywhere is worse than an absent one.
+  pairTicket: () => D({ ok: false, error: "not available in the demo" }),
+  pairCancel: (_ticket: string) => D({ ok: false }),
+  pairState: (_ticket: string) => D({ ticket: null, pending: [], devices: [] } as PairState),
+  pairAccept: (_ticket: string, _scope: DeviceScope) => D({ ok: false, error: "not available in the demo" }),
+  pairReject: (_ticket: string) => D({ ok: false }),
+  pairForget: (_id: string) => D({ ok: false, error: "not available in the demo" }),
   updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0 }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
   updateRun: () => D({ ok: false, error: "not available in the demo" }),
   hooksStatus: () => D({ installed: false, bundled: false, settingsPath: "~/.claude/settings.json", python: "python3" } as HookSetupStatus),

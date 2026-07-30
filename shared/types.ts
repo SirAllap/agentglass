@@ -1534,6 +1534,63 @@ export interface RemoteDevice {
   self?: boolean;
 }
 
+/**
+ * What a paired device is allowed to do. See server/src/devices.ts.
+ *
+ * Three levels rather than a permission matrix: looking at things, answering
+ * the thing an agent is stopped on, and operating the machine.
+ */
+export type DeviceScope = "read" | "answer" | "full";
+
+/** A phone (or anything else) that holds its own credential to this machine. */
+export interface PairedDevice {
+  id: string;
+  /** Whatever it called itself when it paired. */
+  label: string;
+  scope: DeviceScope;
+  createdAt: number;
+  /** Last request it made, recorded at most once a minute. */
+  lastSeenAt?: number;
+  /** Set when forgotten. The row stays so "did I definitely cut it off" is
+   *  answerable rather than inferred from an absence. */
+  revokedAt?: number;
+}
+
+/**
+ * A device that has typed the code and is waiting on somebody at the machine.
+ *
+ * Carries the code so the pane can show it beside the request: the person
+ * accepting is meant to check that the six digits on the phone in their hand
+ * are the six digits on the screen, which is the step that makes this more
+ * than a button that says yes.
+ */
+export interface PairRequest {
+  id: string;
+  code: string;
+  label: string;
+  agent: string;
+  ip: string;
+  claimedAt: number;
+  expiresAt: number;
+}
+
+/** The credential, sealed to the key the phone generated for this pairing. */
+export interface PairWrapped {
+  /** The server's ephemeral P-256 public key, base64url. */
+  pub: string;
+  iv: string;
+  data: string;
+}
+
+/** Everything the Remote pane needs about pairing, in one poll. Local only. */
+export interface PairState {
+  /** The live invitation, if the pane has started one. */
+  ticket: { id: string; code: string; expiresAt: number } | null;
+  /** Claims waiting on a decision, oldest first. */
+  pending: PairRequest[];
+  devices: PairedDevice[];
+}
+
 /** Whether another device can reach this server, and whether one ever has. */
 export interface RemoteStatus {
   /** Bound off loopback, so off-box traffic can arrive at all. */
@@ -1545,7 +1602,8 @@ export interface RemoteStatus {
   tokenRequired: boolean;
   /** This port serves the dashboard itself, not only the API. */
   webUi: boolean;
-  /** Ready-to-open URLs, token included when the caller is local. */
+  /** Ready-to-open addresses. Never a credential: a device is added by
+   *  pairing (see PairState), not by being handed a link. */
   urls: string[];
   addresses: ReachableAddress[];
   clients: { count: number; lastAt: number | null; addresses: string[]; liveCount: number };
@@ -1553,6 +1611,4 @@ export interface RemoteStatus {
    *  open right now, which is the difference between "is here" and "was here". */
   devices: RemoteDevice[];
   firewall: FirewallHint | null;
-  /** Only ever sent to a caller on this machine. */
-  token?: string;
 }

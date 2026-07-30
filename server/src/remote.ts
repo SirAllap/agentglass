@@ -370,15 +370,22 @@ export interface RemoteStatus {
   tokenRequired: boolean;
   /** This port serves the dashboard itself, not just the API. */
   webUi: boolean;
-  /** URLs to hand another device, token included when we know it. */
+  /**
+   * Where this machine answers. Addresses only — no credential.
+   *
+   * These used to arrive with `?token=` on the end for a local caller, because
+   * the QR was the credential and the pane had to draw it. Pairing replaced
+   * that (see pairing.ts), and once nothing needs the secret in a URL, serving
+   * it in one is a hole with no user left: a link that grants a terminal is
+   * exactly the sort of thing that ends up in a screenshot, a chat, or an
+   * issue about why the phone will not connect.
+   */
   urls: string[];
   addresses: Reachable[];
   clients: RemoteClients;
   /** One row per device that has reached this machine, live state included. */
   devices: DeviceRecord[];
   firewall: FirewallHint | null;
-  /** Present only for a local caller — see the gate in index.ts. */
-  token?: string;
 }
 
 export function remoteStatus(opts: {
@@ -387,14 +394,11 @@ export function remoteStatus(opts: {
   trustLan: boolean;
   token: string | null;
   webUi: boolean;
-  /** Whether to include the token (and tokenised URLs) in the answer. */
-  includeToken: boolean;
   addresses?: Reachable[];
   which?: (cmd: string) => string | null;
 }): RemoteStatus {
   const addresses = opts.addresses ?? reachableAddresses();
   const exposed = !["127.0.0.1", "::1", "localhost"].includes(opts.bind);
-  const q = opts.includeToken && opts.token ? `/?token=${encodeURIComponent(opts.token)}` : "/";
   return {
     exposed,
     bind: opts.bind,
@@ -402,11 +406,10 @@ export function remoteStatus(opts: {
     trustLan: opts.trustLan,
     tokenRequired: opts.token !== null,
     webUi: opts.webUi,
-    urls: addresses.map((a) => `http://${a.address}:${opts.port}${q}`),
+    urls: addresses.map((a) => `http://${a.address}:${opts.port}/`),
     addresses,
     clients: remoteClients(),
     devices: remoteDevices(addresses.map((a) => a.address)),
     firewall: firewallHint(opts.port, addresses[0]?.subnet ?? null, opts.which),
-    ...(opts.includeToken && opts.token ? { token: opts.token } : {}),
   };
 }

@@ -288,14 +288,42 @@ rely on, and for a good number of people it is not a signal at all.
 
 ### Getting it onto your phone
 
-**Settings ▸ Remote access**, one switch. It prints a QR code, because the URL
-is an IP, a port and a 32-character secret and nobody is typing that. Scan it
-and the phone remembers the code; the link only carries it once.
+**Settings ▸ Remote access**, one switch to open the port. Then adding a device
+is its own small handshake, and it is deliberately not one step.
 
-It is **your network only** — the server binds to the LAN, the code is required,
-and a phone that scanned it once keeps working until you rotate it. The same
-pane will tell you when a host firewall is dropping the packets, because
-otherwise the phone shows a white page and nothing anywhere says why.
+The pane shows a **QR code and six digits**. Scan the code, type the digits on
+the phone, and a request appears back at the computer — naming the device, the
+address it came from, and the same six digits — and waits for somebody to
+accept. Nothing exists until they do.
+
+That shape is the point. **The QR is an invitation, not a key.** It used to be
+the machine's own token, which meant a photograph of this screen, a screenshot
+in a chat or a shared window in a call was a working shell on your laptop; there
+is no way to scan a code carefully, and being able to see it was the whole
+authorisation. Now seeing it gets you a form asking for six digits that are not
+in the picture. The credential itself is minted only after a person agrees, and
+it is encrypted to a key the phone generated for that one pairing — so on a
+network without TLS, everything else on the wifi can watch the entire exchange
+and still not have it.
+
+Each device is then **its own thing**: named, at a level you chose while looking
+at the request, and revocable on its own.
+
+- **Look only** — sessions, costs, changes, pull requests. Approves nothing.
+- **Answer things** *(the default)* — the above, plus approving gates and
+  replying to a running session. What a phone is actually for.
+- **Everything** — the terminal, git write, Docker, merging. For a laptop you
+  trust, not a phone.
+
+**Forget** one device and only that one stops working: its credential is
+revoked, the sockets it is holding are closed, and the desk and every other
+phone carry on. Rotating the code is still there for when you have lost the code
+itself, and still kicks everything.
+
+It is **your network only** — the server binds to the LAN. The same pane will
+tell you when a host firewall is dropping the packets, because otherwise the
+phone shows a white page and nothing anywhere says why. Over café wifi, pair on
+the Tailscale address it offers instead: that one is encrypted end to end.
 
 The page ships a web manifest, so **Add to home screen** gives you an icon that
 opens without browser chrome.
