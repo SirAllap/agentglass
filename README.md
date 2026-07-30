@@ -326,7 +326,38 @@ phone shows a white page and nothing anywhere says why. Over café wifi, pair on
 the Tailscale address it offers instead: that one is encrypted end to end.
 
 The page ships a web manifest, so **Add to home screen** gives you an icon that
-opens without browser chrome.
+opens without browser chrome. On an iPhone that is not optional — it is the only
+way Safari will deliver a push.
+
+### Reaching it when you are not on the same wifi
+
+The honest answer is **Tailscale**, and it is the one the Remote pane offers
+beside the LAN address. A tailnet address is reachable from a train, encrypted
+end to end, and limited to devices signed into your own account — which is a
+much narrower grant than a network. Install it on both ends, pair on that
+address, and the sofa and the airport work the same way.
+
+The tempting answer is a tunnel — `cloudflared`, `ngrok`, a reverse proxy — and
+it is worth being plain about what that is. **This server can open a shell, push
+to your repositories and control Docker on the machine it runs on.** Putting a
+public hostname in front of it means the only thing between the internet and
+that is a credential, and credentials leak by being pasted into the wrong
+window. Treat the port the way you treat `sshd`: if you must put a proxy in
+front of it, terminate TLS there, require authentication at the proxy as well,
+and set `AGENTGLASS_ALLOWED_HOSTS` so the DNS-rebinding guard knows the name.
+It is not a configuration this project tests, and it is not one to reach for
+because Tailscale looked like a bigger setup than it is.
+
+Either way, **the tunnel is for the browser, not for the hooks.** Everything
+that reports into agentglass — the Claude Code hooks, the OTel exporters, the
+gate that holds a tool call — posts to the server on the machine it is running
+on, at `http://localhost:4000`. It has to: the hook scripts refuse to send a
+transcript anywhere but this host, precisely because a cloned repository can set
+`AGENTGLASS_SERVER` in its own `settings.json` and would otherwise redirect your
+prompts and file contents to somebody else. Pointing them at a public hostname
+does not make anything work better, and turning off the guard to do it
+(`AGENTGLASS_ALLOW_REMOTE=1`) is for the case where the server genuinely runs on
+another machine — not for the case where you added a tunnel to it.
 
 ### Alerts that reach a locked phone
 
