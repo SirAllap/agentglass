@@ -26,12 +26,12 @@ import {
   actionLog,
 } from "./db.ts";
 import { maybeAlert, setAlertSink, pushEveryone } from "./alerts.ts";
-import { noteAction } from "./actions.ts";
+import { noteAction, actorOf } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { vapidKeys, addSubscription, removeSubscription, removeDevice, deviceId, subscriptions } from "./pushstore.ts";
 import { getUsage } from "./usage.ts";
-import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
@@ -912,7 +912,16 @@ const server = Bun.serve<WsData>({
     if (pathname === "/gate/pending") return json({ gates: pendingGates() });
     // What was decided while you weren't looking — including the requests a
     // timeout or a restart resolved for you.
-    if (pathname === "/gate/history") return json({ gates: gateHistory(Number(url.searchParams.get("limit") || 50)) });
+    if (pathname === "/gate/history") {
+      // `reason` is narrowed to what a person typed. The stored one is
+      // backfilled with a paragraph written for the stopped model, and a
+      // history quoting that back is boilerplate on every row — see
+      // typedReason().
+      return json({
+        gates: gateHistory(Number(url.searchParams.get("limit") || 50))
+          .map((g) => ({ ...g, reason: typedReason(g) || null })),
+      });
+    }
     // ── web push: the only way an alert reaches a locked phone ────────
     //
     // The socket closes with the screen on purpose, so nothing the server
@@ -988,12 +997,35 @@ const server = Bun.serve<WsData>({
       // the line worth keeping is what was held, not the uuid it was held
       // under. "denied Bash · rm -rf build" is an audit line; a uuid is not.
       const held = getGate(String(b.id));
-      const ok = decideGate(String(b.id), decision, String(b.reason || ""));
       // "Who approved that" is the question #299 opens with, and a gate is the
-      // one write with a stopped agent on the other end of it.
+      // one write with a stopped agent on the other end of it. Resolved once
+      // and handed to both writers, so the gate row and the log line cannot
+      // name two different people for one press.
+      const who = actorOf(srv.requestIP(req)?.address, caller);
+      const ok = decideGate(String(b.id), decision, String(b.reason || ""), who);
+      /*
+       * Why it did not take, in words.
+       *
+       * A press only fails for one interesting reason: something already
+       * resolved the request — usually the clock, occasionally somebody else's
+       * phone — and the agent has already been told the other answer. That is
+       * the most confusing thing that can happen in this feature, and it left a
+       * bare ✕ in the log next to a gate row saying the opposite. The line has
+       * to explain itself, because the record of the press that lost is the
+       * only place the two can be reconciled.
+       */
+      // `held` is enough, and re-reading here would be a guard nothing could
+      // ever show working: it and `decideGate` are adjacent *synchronous*
+      // statements, so the expiry timer cannot fire between them. If this ever
+      // grows an `await` in the middle, that stops being true and the row has
+      // to be read again.
+      const error = ok ? undefined
+        : !held?.decision ? "that request is not one this server is holding"
+        : `already ${held.decision === "deny" ? "denied" : "allowed"} by ${
+            held.resolution === "human" ? "somebody else" : "the timeout"} — this answer arrived too late`;
       noteAction(srv.requestIP(req)?.address, `/gate/${decision}`,
-        { tool: held?.tool_name, summary: held?.summary }, { ok });
-      return json({ ok });
+        { tool: held?.tool_name, summary: held?.summary }, { ok, error }, caller);
+      return json({ ok, ...(error ? { error } : {}) });
     }
     // Drive the dashboard's own UI from outside — a Stream Deck, a phone. Unlike
     // every other route this one changes only what is *shown*: it validates a
@@ -1453,7 +1485,7 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- live docker panel (lazydocker-style) ---
@@ -1508,7 +1540,7 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- pull requests (gh-backed) ---
@@ -1608,7 +1640,7 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
@@ -1650,7 +1682,7 @@ const server = Bun.serve<WsData>({
       // transcript and in `events`, and a second copy in an append-only table
       // that nothing prunes is a copy nobody asked for.
       noteAction(srv.requestIP(req)?.address, "/chat/send",
-        { root: b.cwd, name: b.model }, { ok: true });
+        { root: b.cwd, name: b.model }, { ok: true }, caller);
       return chatSend(b);
     }
     // The command that hands a chat to the user's own terminal. Server-side

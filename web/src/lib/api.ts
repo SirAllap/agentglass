@@ -298,12 +298,15 @@ const realApi = {
   // useful when the answer is somewhere you were not looking.
   actions: (limit = 200, before?: number) =>
     get<{ actions: ActionRecord[] }>(`/actions?limit=${limit}${before ? `&before=${before}` : ""}`),
+  /** `ok: false` is a 200: the request arrived and something else had already
+   *  decided the gate. `error` says what won, and a caller that ignores it
+   *  tells somebody their answer took when it did not. */
   gateDecide: (id: string, decision: "allow" | "deny", reason = "") =>
     fetch(SERVER + "/gate/decide", {
       method: "POST",
       headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ id, decision, reason }),
-    }).then((r) => r.json()),
+    }).then((r) => r.json() as Promise<{ ok: boolean; error?: string }>),
   gitStatus: (paths: string[]) =>
     fetch(SERVER + "/git/status", {
       method: "POST",

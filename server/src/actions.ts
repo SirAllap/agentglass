@@ -14,16 +14,52 @@ import { isLoopback } from "./remote.ts";
 import { recordAction } from "./db.ts";
 import { basename } from "node:path";
 
+/** What the actor of a request needs to be nameable: a device that presented
+ *  its own credential, or nothing. Structural rather than importing `Caller`,
+ *  so a test can name an actor without standing up the auth module. */
+export interface ActorSource {
+  kind: "machine" | "device";
+  device?: { id: string; label: string };
+}
+
+/**
+ * A device's name, made unambiguous.
+ *
+ * The label is free text the phone picked for itself at pairing. Two of them
+ * being identical is not a corner case: `issueDevice` defaults an unnamed one
+ * to "A device", so every phone that skipped the field collides with every
+ * other. An audit line reading "A device approved rm -rf build" answers the
+ * question worse than the address it replaced, so the device's own id comes
+ * with it — short, because it only has to separate the handful of phones one
+ * person has paired.
+ *
+ * The id is part of the stored string rather than resolved at read time on
+ * purpose: forgetting a phone must not erase who used it, and a log that turns
+ * into unresolvable ids the moment you revoke a device is exactly wrong.
+ */
+export function deviceActor(d: { id: string; label: string }): string {
+  const short = String(d.id).replace(/[^0-9a-z]/gi, "").slice(0, 6) || "unknown";
+  const label = String(d.label || "").trim().replace(/\s+/g, " ").slice(0, 40);
+  return label ? `${label} · ${short}` : `device · ${short}`;
+}
+
 /**
  * Who did it, as far as the server can honestly tell.
  *
- * There are no accounts here, and the token is shared rather than personal, so
- * a name would be a fiction. What is true is where the request arrived from:
- * `local` for a loopback caller — the dashboard on this machine — and the
- * address for anything else, which is what makes "I approved that from my
- * phone" a question with an answer.
+ * Two answers, and which one applies is a question of what the caller proved.
+ *
+ * A *paired device* has its own credential and the name somebody accepted when
+ * they paired it (devices.ts), so here a name is a fact rather than a fiction —
+ * this is the part the shared token could never support, and the reason the
+ * question in #299 has a real answer now instead of an address.
+ *
+ * Everything else falls back to where the request arrived from: `local` for a
+ * loopback caller — the dashboard on this machine — and the address otherwise,
+ * which is all the machine token can honestly assert, since it is shared.
  */
-export function actorOf(ip: string | null | undefined): string {
+export function actorOf(ip: string | null | undefined, caller?: ActorSource | null): string {
+  const dev = caller?.kind === "device" ? caller.device : null;
+  if (dev) return deviceActor(dev);
   if (!ip) return "local";
   return isLoopback(ip) ? "local" : ip.replace(/^::ffff:/, "");
 }
@@ -88,9 +124,10 @@ export function noteAction(
   pathname: string,
   body: Record<string, unknown>,
   res: { ok?: boolean; error?: string } | null,
+  caller?: ActorSource | null,
 ): void {
   recordAction({
-    actor: actorOf(ip),
+    actor: actorOf(ip, caller),
     action: pathname,
     target: targetOf(pathname, body),
     ok: !!res?.ok,
