@@ -220,6 +220,18 @@ export type Chat = {
    *  `claude` that has never been logged in. Distinct from a failed turn:
    *  retrying changes nothing until the command is run. */
   setupNeeded?: { command: string; why: string };
+  /** Keep this chat's pane through any amount of idleness.
+   *
+   *  The engine reclaims a warm CLI after 30 idle minutes, which is right for
+   *  the four chats you opened to ask one question each and wrong for the one
+   *  you are living in — step away for lunch and the session you care about is
+   *  exactly the one reclaimed. Server-side state (see tmuxpane.ts); this is the
+   *  client's copy of it, so the toggle can render without a round trip.
+   *
+   *  Never persisted with the chat: it is a statement about a process that is
+   *  running now, and a pin restored for a pane that no longer exists is a
+   *  switch that is on and does nothing. */
+  panePinned?: boolean;
   /** An interactive prompt waiting in this chat's pane — a `/model` picker and
    *  the like. Held as state rather than left as text in the reply, because it
    *  is a thing to answer, not a thing to read: the screen redraws as keys are
@@ -631,6 +643,43 @@ export function update(id: string, fn: (c: Chat) => void) {
   if (!c) return;
   fn(c);
   emit();
+}
+
+/**
+ * Pin or unpin a chat's pane, and remember what the server said.
+ *
+ * Optimistic, then corrected: the toggle is the kind of control that has to
+ * move under the thumb, and a pin that fails is a pane that gets reclaimed
+ * half an hour later rather than anything immediate.
+ */
+export async function setPanePinned(id: string, pinned: boolean): Promise<void> {
+  const chat = chats.get(id);
+  if (!chat?.sessionId) return;
+  update(id, (c) => { c.panePinned = pinned; });
+  const r = await api.chatPanePin(chat.sessionId, pinned).catch(() => null);
+  if (!r?.ok) update(id, (c) => { c.panePinned = !pinned; });
+}
+
+/**
+ * Ask the server which panes are actually pinned, and adopt the answer.
+ *
+ * The pin lives on the server, and deliberately does not persist with the chat
+ * — it is a statement about a process that is running now. So after a reload
+ * the client knows nothing about it, and a button showing "not pinned" over a
+ * pane that is pinned is the same lie as the reverse. This is the one read that
+ * makes the toggle tell the truth.
+ */
+export async function hydratePanePins(): Promise<void> {
+  const ids = [...chats.values()].map((c) => c.sessionId).filter(Boolean);
+  if (!ids.length) return;
+  const r = await api.chatPanes(ids).catch(() => null);
+  if (!r) return;
+  const on = new Set(r.panes.filter((p) => p.pinned).map((p) => p.name));
+  for (const c of chats.values()) {
+    if (!c.sessionId) continue;
+    const want = on.has(c.sessionId);
+    if (c.panePinned !== want) update(c.id, (x) => { x.panePinned = want; });
+  }
 }
 
 const titleOf = (s: string) => {

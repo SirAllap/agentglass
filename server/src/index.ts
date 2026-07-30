@@ -69,7 +69,7 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope } from "./config.ts";
 import { hookStatus, applyHooks } from "./hooksetup.ts";
@@ -1569,6 +1569,53 @@ const server = Bun.serve<WsData>({
       forgetPane(id);
       return json({ killed: was });
     }
+    /**
+     * Keep this chat's pane, however long you are away.
+     *
+     * Eviction is right for the common case and wrong for the one conversation
+     * you are living in — see `pinned` in tmuxpane.ts. Only about idleness:
+     * closing the chat still releases the pane, because closing is an explicit
+     * "done".
+     */
+    if (pathname === "/chat/pane/pin" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      const id = typeof b.session === "string" ? b.session : "";
+      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
+      const on = b.pinned !== false;
+      pinPane(id, on);
+      return json({ ok: true, session: id, pinned: on });
+    }
+
+    /**
+     * What is actually running, and which of it belongs to nothing.
+     *
+     * Panes outlive the app: quit or crash and the sessions are still there,
+     * each holding several hundred megabytes. The only way to see that was
+     * `tmux -L agentglass ls` in a terminal, and the only way to clean up was
+     * `kill-session` by hand.
+     *
+     * `orphan` is decided here rather than in tmuxpane.ts, because it is a
+     * question about *chats* and that module knows only about panes: a pane is
+     * an orphan when no chat this server is tracking points at it. `open` is
+     * the set the caller says it has on screen — the client knows which chats
+     * are open, and the server does not, so a pane belonging to a chat in
+     * another window must not be reported as abandoned.
+     */
+    if (pathname === "/chat/panes") {
+      const open = (url.searchParams.get("open") || "").split(",").map((s) => s.trim()).filter(Boolean);
+      return json({
+        // The judgement is in tmuxpane.ts and pure — see classifyPanes. It was
+        // three lines here, which made it reachable only through a machine with
+        // tmux genuinely running.
+        panes: classifyPanes(await panes(), open, activeTurns()),
+        // So the UI can say "reclaimed after 30 minutes" rather than guessing,
+        // and can say "eviction is off" when somebody has turned it off.
+        idleEvictMs: idleEvictMs(),
+      });
+    }
+
     // Answer an interactive prompt without leaving the chat. The pane already
     // takes Enter and Escape from us; arrows are the rest of what a picker
     // needs, and sending them here beats telling someone to open a terminal to
