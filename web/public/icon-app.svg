@@ -1,0 +1,36 @@
+<!--
+  The mark on its own tile, for every place a platform draws an app icon.
+
+  Square rather than rounded, deliberately. iOS rounds an `apple-touch-icon`
+  itself, and Android's launchers apply their own shape, so a pre-rounded source
+  gets rounded twice and shows dark wedges in the corners. The tile is the
+  background colour the app already uses, because a transparent icon on a home
+  screen is a black or white box depending on whose phone it is.
+
+  This is the source the PNGs are rendered from — see scripts/make-icons.ts.
+  It is not referenced directly by anything: the three places a phone reads an
+  icon from all handle SVG badly, which is the whole reason the rasters exist.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#0f0a1a"/>
+  <g transform="translate(32 32) scale(.78) translate(-32 -32)">
+    <defs>
+      <radialGradient id="sheen" cx=".34" cy=".28" r=".82">
+        <stop offset="0" stop-color="#fff" stop-opacity=".72"/>
+        <stop offset=".5" stop-color="#fff" stop-opacity=".15"/>
+        <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <path d="M14.1 54.9 A29 8 -52 0 1 49.9 9.1" fill="none" stroke="#a78bfa" stroke-opacity=".4" stroke-width="3.2" stroke-linecap="round"/>
+    <circle cx="30" cy="34" r="12.5" fill="#a78bfa"/>
+    <circle cx="30" cy="34" r="12.5" fill="url(#sheen)"/>
+    <g fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1.1">
+      <ellipse cx="30" cy="34" rx="12.5" ry="4.5"/>
+      <ellipse cx="30" cy="34" rx="6" ry="12.1"/>
+    </g>
+    <path d="M30 21.5 A12.5 12.5 0 0 1 30 46.5 A17.0 17.0 0 0 0 30 21.5 Z" fill="#1b0b38" fill-opacity=".42"/>
+    <path d="M49.9 9.1 A29 8 -52 0 1 14.1 54.9" fill="none" stroke="#a78bfa" stroke-width="3.2" stroke-linecap="round"/>
+    <circle cx="50.8" cy="10.7" r="6.8" fill="#34d399" fill-opacity=".18"/>
+    <circle cx="50.8" cy="10.7" r="3.6" fill="#34d399"/>
+  </g>
+</svg>
