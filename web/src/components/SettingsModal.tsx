@@ -21,6 +21,7 @@ import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESK
 import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { BudgetsPane } from "./BudgetsPane.tsx";
+import { AgentsPane } from "./AgentsPane.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
@@ -136,7 +137,7 @@ const TABS: { id: Pane; label: string }[] = [
   { id: "open", label: "Open" },
   { id: "export", label: "Export" },
   { id: "log", label: "Activity" },
-  { id: "hooks", label: "Hooks" },
+  { id: "hooks", label: "Agents" },
   { id: "reqs", label: "Requirements" },
   { id: "remote", label: "Remote" },
   { id: "about", label: "About" },
@@ -571,6 +572,24 @@ function HooksPane({ open }: { open: boolean }) {
             </span>
           </>
         )}
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * Every agent this app can connect, not only the one it ships hooks for.
+ *
+ * Beside the Claude Code section rather than in a tab of its own: they are the
+ * same act — wiring an agent so it reports here — and splitting them would put
+ * the answer to "can I use my other CLI with this" one tab further away than
+ * the question that prompts it.
+ */
+function AgentsSection({ open }: { open: boolean }) {
+  return (
+    <Section title="Other agents on this machine">
+      <div className="px-3 py-2">
+        <AgentsPane open={open} />
       </div>
     </Section>
   );
@@ -1051,7 +1070,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   </Section>
                   )}
 
-                  {pane === "hooks" && <HooksPane open={open} />}
+                  {pane === "hooks" && <><HooksPane open={open} /><AgentsSection open={open} /></>}
 
                   {pane === "reqs" && <RequirementsPane open={open} />}
 

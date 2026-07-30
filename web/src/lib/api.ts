@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, UsageHistory, ActionRecord } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -449,6 +449,12 @@ const realApi = {
   /** Revoke one device's credential and close what it is holding. */
   pairForget: (id: string) => post<{ ok: boolean; closed?: number; error?: string }>("/pair/forget", { id }),
 
+  /** Which agent CLIs are on this machine, and whether any is reporting. */
+  agents: () => get<{ agents: AgentProbe[] }>("/agents"),
+  /** Wire one — and only the one asked for. */
+  agentConnect: (id: string, undo = false) =>
+    post<{ ok: boolean; detail?: string; error?: string; agents?: AgentProbe[] }>("/agents/connect", { id, undo }),
+
   /** Spending limits, and where each stands right now. */
   budgets: () => get<{ budgets: Budget[]; status: BudgetStatus[]; models: string[] }>("/budgets"),
   /** Replace the whole set — a budget row has no identity to address a partial
@@ -757,6 +763,10 @@ const demoApi: typeof realApi = {
   pairAccept: (_ticket: string, _scope: DeviceScope) => D({ ok: false, error: "not available in the demo" }),
   pairReject: (_ticket: string) => D({ ok: false }),
   pairForget: (_id: string) => D({ ok: false, error: "not available in the demo" }),
+  // The demo runs on a page, not a machine — there is no PATH to probe and
+  // nothing to wire, and an empty list is the truth rather than a placeholder.
+  agents: () => D({ agents: [] as AgentProbe[] }),
+  agentConnect: (_id: string, _undo?: boolean) => D({ ok: false, error: "not available in the demo" }),
   budgets: () => D({ budgets: [], status: [], models: [] }),
   budgetsSet: (_budgets: Budget[]) => D({ ok: false, error: "not available in the demo" }),
   updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0 }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),

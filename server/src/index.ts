@@ -75,7 +75,9 @@ import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } f
 import { workspaceRoot, setWorkspaceRoot, inScope, readBudgets, writeBudgets } from "./config.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
-import { hookStatus, applyHooks } from "./hooksetup.ts";
+import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
+import { probeAgents, ROSTER } from "./agentprobe.ts";
+import { join as joinPath } from "node:path";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller } from "./auth.ts";
 import { activeDevices, markSeen, revokeDevice, type Scope } from "./devices.ts";
@@ -777,6 +779,60 @@ const server = Bun.serve<WsData>({
     // streaming + gating from Settings instead of cloning the repo to run a
     // Python script. GET reports state; POST writes ~/.claude/settings.json with
     // the same idempotent, backup-first merge the CLI installer uses.
+    /**
+     * Which agents are on this machine, and whether any of them is talking.
+     *
+     * Connecting a second agent is where people stop — three questions (which
+     * harness, which file, what to put in it) that the cockpit can answer by
+     * looking. Everything not installed is listed too, because "what is
+     * supported" is the question somebody has before they try.
+     */
+    if (pathname === "/agents") return json({ agents: probeAgents() });
+
+    /**
+     * Wire one, and only the one asked for.
+     *
+     * Claude Code goes through the same hook installer the Hooks pane uses; the
+     * OTel agents go through connect_otel.py, which backs the file up, refuses
+     * to touch a config it cannot parse, and leaves a hand-written `[otel]`
+     * block alone. This route chooses which, and reports what the machine
+     * looks like afterwards — including whether anything has actually arrived,
+     * which a freshly written file never has.
+     */
+    if (pathname === "/agents/connect" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: { id?: unknown; undo?: unknown };
+      try { b = (await req.json()) as { id?: unknown; undo?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const id = typeof b.id === "string" ? b.id : "";
+      const agent = ROSTER.find((a) => a.id === id);
+      if (!agent) return json({ ok: false, error: "no such agent" }, 400);
+      const undo = b.undo === true;
+
+      if (agent.via === "hooks") {
+        const r = applyHooks(undo ? "uninstall" : "install");
+        return json({ ...r, agents: probeAgents() });
+      }
+
+      const dir = hooksDir();
+      if (!dir) return json({ ok: false, error: "the connect script is not bundled with this build" }, 400);
+      const args = [joinPath(dir, "connect_otel.py"), "--only", id, ...(undo ? ["--undo"] : [])];
+      const p = Bun.spawnSync([hookPython(), ...args], {
+        // A named environment. The script refuses any server but this machine
+        // unless told otherwise, and inheriting an AGENTGLASS_ALLOW_REMOTE from
+        // whatever launched the app would quietly widen that.
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      });
+      const out = (p.stdout?.toString() ?? "") + (p.stderr?.toString() ?? "");
+      return json({
+        ok: p.exitCode === 0,
+        // The script's own words. It knows things this route does not — that a
+        // config was already pointing here, or that the user has an `[otel]`
+        // block of their own that it will not touch.
+        detail: out.trim().split("\n").filter(Boolean).slice(-4).join("\n"),
+        agents: probeAgents(),
+      }, p.exitCode === 0 ? 200 : 400);
+    }
+
     if (pathname === "/hooks/status") return json(hookStatus());
     if ((pathname === "/hooks/install" || pathname === "/hooks/uninstall") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
