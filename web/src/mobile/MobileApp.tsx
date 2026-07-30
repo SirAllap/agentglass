@@ -16,7 +16,7 @@ import { baseName, ownerOf } from "../../../shared/projectKey.ts";
 import { MobilePr, THREAD_CSS } from "./MobilePr.tsx";
 import { MobileFleet, FLEET_CSS } from "./MobileFleet.tsx";
 import { sessionForInsight } from "./fleet.ts";
-import { buildQueue, type NowItem } from "./nowQueue.ts";
+import { buildQueue, waitingItems, type NowItem } from "./nowQueue.ts";
 import { dedupePrs, mainCheckouts } from "./prRows.ts";
 import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
 import {
@@ -480,6 +480,15 @@ export function MobileApp() {
     () => unsnoozed(snoozeStore, pending),
     [pending, snoozeStore, snoozeRev]
   );
+  /**
+   * The ones where something is actually stopped.
+   *
+   * The tab badge and the hero count these and nothing else. A badge that adds
+   * one held gate to five pull requests is never zero, and a number that is
+   * never zero stops being read — which is most of why this screen felt like an
+   * inbox rather than something you could empty.
+   */
+  const stopped = useMemo(() => waitingItems(queue), [queue]);
 
   /**
    * Which checkout each container belongs to, decided once by the rule the
@@ -636,21 +645,22 @@ export function MobileApp() {
           { label: "Later", tight: true, run: () => later(it) },
         ];
       case "pr-ready":
+        // No merge from here.
+        //
+        // This card used to lead with "Squash & merge", which rewrites history
+        // and deletes the head branch. A confirm sat in front of it, and a
+        // confirm is the weakest control there is against a mis-tap: it appears
+        // under the thumb that just tapped, in a list built for fast scrolling,
+        // in the same shape and position as Allow and Later. Every other action
+        // in this queue re-runs, snoozes or opens something; that one finished
+        // work on a shared repository and could not be undone from a phone.
+        //
+        // Merging is a decision you make looking at the change, and the diff,
+        // the checks and the threads are all one screen away. So the card says
+        // the pull request is ready and takes you to where deciding is possible.
         return [
-          {
-            // The one queue action that cannot be undone. Everything else here
-            // re-runs, snoozes or opens something; this rewrites history and
-            // deletes a branch, from a card the thumb is already scrolling past.
-            label: "Squash & merge", kind: "ok",
-            run: async () => {
-              if (!(await ask({
-                title: `Squash & merge #${o.pr.number}?`, danger: true, confirmLabel: "Squash & merge",
-                body: "Every commit becomes one, and the head branch is deleted straight after. Neither step is reversible from here.",
-              }))) return;
-              await settle(`Merged #${o.pr.number}`, () => api.prMerge(o.root, o.pr.number, "squash", { deleteBranch: true }), it.id);
-            },
-          },
-          { label: "Review", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
+          { label: "Open", kind: "acc", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
+          { label: "Later", tight: true, run: () => later(it) },
         ];
       case "pr-review":
         return [
@@ -759,7 +769,7 @@ export function MobileApp() {
         {tab === "now" && (
           <>
             <NowHero
-              pending={queue.length} working={live.length}
+              pending={stopped.length} news={queue.length - stopped.length} working={live.length}
               live={openCalls}
               spend={spend}
               repos={[...new Set(live.map((s) => (s.project_path || "").split("/").filter(Boolean).pop() || s.source_app))]}
@@ -781,7 +791,7 @@ export function MobileApp() {
       </main>
 
       {!immersive && <nav className="mb-nav">
-        <TabBtn id="now" tab={tab} onPick={setTab} glyph="◎" label="Now" badge={queue.length} />
+        <TabBtn id="now" tab={tab} onPick={setTab} glyph="◎" label="Now" badge={stopped.length} />
         <TabBtn id="chats" tab={tab} onPick={setTab} glyph="▤" label="Chats" />
         <TabBtn id="repos" tab={tab} onPick={setTab} glyph="◇" label="Repos" />
         {/* Everything on this tab was computed and served from the beginning

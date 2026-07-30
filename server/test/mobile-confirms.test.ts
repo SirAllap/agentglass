@@ -35,7 +35,25 @@ const IRREVERSIBLE: { file: string; call: string; what: string }[] = [
   { file: "MobileRepo.tsx", call: "api.dockerRm(", what: "removing a container" },
   { file: "MobilePr.tsx", call: "api.prClose(", what: "closing a pull request" },
   { file: "MobilePr.tsx", call: "api.prMerge(", what: "squash-merging and deleting the branch" },
-  { file: "MobileApp.tsx", call: "api.prMerge(", what: "squash-merging from the Now queue" },
+];
+
+/**
+ * Calls that may not appear in a file at all, confirm or no confirm.
+ *
+ * A confirm is a fine control on a screen you navigated to on purpose: the
+ * pull request is in front of you, with its diff, its checks and its threads,
+ * and the dialog is the last step of a decision you were already making.
+ *
+ * It is a poor one in the Now queue, which is a scrolling list where every
+ * card puts its buttons in the same shape and the same place. There, the
+ * dialog appears under the thumb that just tapped. `MobileApp.tsx` owns that
+ * queue, so the rule for it is not "ask first" but "do not offer".
+ */
+const NEVER: { file: string; call: string; what: string }[] = [
+  { file: "MobileApp.tsx", call: "api.prMerge(", what: "merging from a card in the queue" },
+  { file: "MobileApp.tsx", call: "api.prClose(", what: "closing a pull request from the queue" },
+  { file: "MobileApp.tsx", call: "api.dockerRm(", what: "removing a container from the queue" },
+  { file: "MobileApp.tsx", call: "api.gitDiscard(", what: "discarding changes from the queue" },
 ];
 
 /**
@@ -98,6 +116,27 @@ describe("the phone asks before it does something irreversible", () => {
       const title = spec.match(/title:\s*([^,\n]+)/)?.[1] ?? "";
       expect(title.trim(), `${file}: ${call} has no title at all`).not.toBe("");
       expect(LITERAL.test(title), `${file}: ${call} asks a fixed question — ${title}`).toBe(false);
+    }
+  });
+
+  test("the queue offers nothing irreversible, confirm or no confirm", () => {
+    // Stronger than "ask first", and a different rule for a different surface.
+    // This used to be an `ask()` guard on a Squash & merge in the queue; the
+    // guard was real and the button was still wrong, because the queue is a
+    // scrolling list and a confirm appears under the thumb that just tapped.
+    for (const { file, call, what } of NEVER) {
+      expect(read(file).includes(call), `${file} offers ${what}`).toBe(false);
+    }
+  });
+
+  test("and the shell has not simply been emptied", () => {
+    // The rule above passes trivially against a file that calls nothing, so
+    // pin the writes the queue legitimately makes: a re-run and a restart are
+    // both undone by doing them again, and a gate decision is the answer the
+    // agent is stopped waiting for.
+    const shell = read("MobileApp.tsx");
+    for (const call of ["api.prRerun(", "api.dockerRestart(", "api.gateDecide("]) {
+      expect(shell.includes(call), `the queue should still offer ${call}`).toBe(true);
     }
   });
 
