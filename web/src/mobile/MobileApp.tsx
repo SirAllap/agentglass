@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { api, probeServer, IS_DEMO } from "../lib/api.ts";
+import { api, probeServer, IS_DEMO, SERVER, authToken } from "../lib/api.ts";
+import { rememberForWorker, forgetForWorker } from "../lib/swAuth.ts";
 import { useLive } from "../lib/useLive.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { subscribeSessionChanged } from "../lib/sessionBus.ts";
@@ -187,7 +188,21 @@ export function MobileApp() {
   // mount rather than only when the toggle is used: registering an unchanged
   // file is a no-op, and it means the worker that receives the next push is the
   // one that shipped, not one left over from an older build.
-  const pushEnv = useMemo(() => browserPushEnv(api, IS_DEMO), []);
+  /**
+   * The push wiring, including the one thing the service worker needs.
+   *
+   * A held gate arrives with Allow and Deny on it, and answering happens in the
+   * worker while this app is closed — so the credential has to be somewhere the
+   * worker can read, which is neither `localStorage` nor this closure. Read at
+   * call time rather than captured: `SERVER` and the token are live bindings
+   * that `adoptServer` rewrites when remote access is toggled or this device is
+   * paired, and a mirror taken at mount would be whatever was true then.
+   */
+  const pushEnv = useMemo(() => browserPushEnv({
+    ...api,
+    remember: () => rememberForWorker({ origin: SERVER, token: authToken() }),
+    forget: forgetForWorker,
+  }, IS_DEMO), []);
   useEffect(() => {
     let live = true;
     currentPushState(pushEnv).then((s) => { if (live) setPushState(s); });
