@@ -15,7 +15,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { openExternal } from "../lib/externalUrl.ts";
-import type { GitRepoRef, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
+import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
@@ -452,6 +452,16 @@ function createSession(root: string): Sess {
     if (isFindChord(e) && panelFind()) return false;
     return true;
   });
+  // Copy on select, the tmux way: the instant a selection is made it is on the
+  // clipboard — no Ctrl+Shift+C, no right-click menu (a terminal has none), no
+  // fighting the shell over Ctrl+C. A cleared selection (a plain click) returns
+  // "" and is skipped, so clicking away never wipes what you just copied. Writes
+  // may fail mid-drag if the document is momentarily unfocused; the settled
+  // selection on mouse-up lands, and the failures are silent.
+  term.onSelectionChange(() => {
+    const sel = term.getSelection();
+    if (sel) navigator.clipboard?.writeText(sel).catch(() => { /* no clipboard permission */ });
+  });
   const holder = document.createElement("div");
   // Opaque themed backing, so any frame where the renderer paints nothing (a
   // WebGL context loss, a swap to the DOM renderer) shows the terminal's own
@@ -737,17 +747,32 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
   }, [sid]);
   useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); focusConsole(); });
-  // On demand: the Docker panel mounts this strip on every open, and most opens
-  // never touch the picker.
+  // Every time the picker OPENS — not once. The `repos.length` short-circuit was
+  // a fetch-once, so a worktree cut after this strip first loaded never showed:
+  // the list stayed frozen until a full app restart. Re-reading on each open is
+  // cheap and is the only way new worktrees (and branches) appear here the way
+  // they already do in Source control.
+  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[] }>({ current: "", branches: [] });
   useEffect(() => {
-    if (!repoOpen || repos.length || IS_DEMO) return;
+    if (!repoOpen || IS_DEMO) return;
     api.gitRepos().then(({ repos: r }) => setRepos(r)).catch(() => {});
-  }, [repoOpen, repos.length]);
+    if (root) api.gitBranches(root).then(setBranchData).catch(() => {});
+  }, [repoOpen, root]);
   const chooseRepo = (next: string) => {
     setPicked(next);
     try { localStorage.setItem(CONSOLE_ROOT_KEY, next); } catch { /* private mode — lasts the session */ }
     setRepoOpen(false); setRepoQuery("");
     focusConsole();
+  };
+  // A local branch with no worktree of its own: switch by checking it out in the
+  // console's current directory, then refresh so the list reflects the move.
+  const checkoutHere = (name: string) => {
+    api.gitCheckout(root, name).then((r) => {
+      if (!r.ok) return;
+      setRepoOpen(false); setRepoQuery("");
+      api.gitRepos().then(({ repos: rr }) => setRepos(rr)).catch(() => {});
+      focusConsole();
+    }).catch(() => {});
   };
   /** Same guard as the terminal view: a chip must not type into vim. */
   const [blocked, setBlocked] = useState<string | null>(null);
@@ -873,6 +898,25 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
                     {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
                   </button>
                 ))}
+                {/* Local branches with no worktree — switch by checking out in
+                    the console's current directory, same as Source control. */}
+                {(() => {
+                  const q = repoQuery.trim().toLowerCase();
+                  const checkedOut = new Set(repos.map((r) => r.branch));
+                  const branches = branchData.branches.filter((b) => !checkedOut.has(b.name) && (!q || b.name.toLowerCase().includes(q)));
+                  if (!branches.length) return null;
+                  return (
+                    <>
+                      <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                      {branches.slice(0, 80).map((b) => (
+                        <button key={b.name} onClick={() => checkoutHere(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
+                          <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
+                          <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
+                        </button>
+                      ))}
+                    </>
+                  );
+                })()}
                 {!repos.length && <div className="px-3 py-2 t-dim2">Reading repos…</div>}
               </div>
             </div>
@@ -929,6 +973,25 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     }).catch(() => {});
   }, [open]);
   useEffect(() => { if (root) { try { localStorage.setItem(ROOT_KEY, root); } catch { /* ignore */ } } }, [root]);
+  // Local branches, so the picker offers them the way Source control does — the
+  // ones with a worktree are already worktree rows; these switch by checking out
+  // in the current directory. Fetched only when the picker is open.
+  const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[] }>({ current: "", branches: [] });
+  // Refresh repos AND branches whenever the picker opens — so a worktree or
+  // branch made after this view first loaded shows without a restart.
+  useEffect(() => {
+    if (!repoOpen || !root || IS_DEMO) return;
+    api.gitRepos().then(({ repos }) => setRepos(repos)).catch(() => {});
+    api.gitBranches(root).then(setBranchData).catch(() => {});
+  }, [repoOpen, root]);
+  const checkoutBranch = (name: string) => {
+    api.gitCheckout(root, name).then((r) => {
+      if (!r.ok) return;
+      setRepoOpen(false); setRepoQuery("");
+      api.gitRepos().then(({ repos }) => setRepos(repos)).catch(() => {});
+      focusTerm();
+    }).catch(() => {});
+  };
   useEffect(() => {
     if (!open || !root) return;
     setCmds(null);
@@ -1283,6 +1346,26 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               </button>
                             );
                           })}
+                          {/* Local branches with no checkout of their own —
+                              switch by checking out in the current directory,
+                              same as Source control's picker. */}
+                          {(() => {
+                            const q = repoQuery.trim().toLowerCase();
+                            const checkedOut = new Set(repos.map((r) => r.branch));
+                            const branches = branchData.branches.filter((b) => !checkedOut.has(b.name) && (!q || b.name.toLowerCase().includes(q)));
+                            if (!branches.length) return null;
+                            return (
+                              <>
+                                <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                                {branches.slice(0, 80).map((b) => (
+                                  <button key={b.name} onClick={() => checkoutBranch(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
+                                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
+                                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
+                                  </button>
+                                ))}
+                              </>
+                            );
+                          })()}
                           {!repos.length && <div className="px-3 py-2 t-dim2">No repos seen yet</div>}
                         </div>
                       </div>
