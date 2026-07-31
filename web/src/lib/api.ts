@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -626,7 +626,12 @@ const realApi = {
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
-  chatEnabled: () => get<{ enabled: boolean; bypass?: boolean; tmuxEngine?: TmuxEngineInfo }>("/chat/enabled"),
+  // `models` rides along for the same reason it does on the other two agents:
+  // the panel cannot usefully draw a model picker without knowing what the CLI
+  // will accept, and asking twice would let it render one for a CLI that turns
+  // out not to be there. Claude's list is data on the server
+  // (shared/claude-models.json) rather than a table compiled in here.
+  chatEnabled: () => get<{ enabled: boolean; bypass?: boolean; models?: AgentModel[]; tmuxEngine?: TmuxEngineInfo }>("/chat/enabled"),
   /** The command that hands a chat to the user's own terminal, and whether its
    *  pane is up right now. Assembled server-side so the socket name never has to
    *  be duplicated here. */
@@ -817,7 +822,7 @@ const demoApi: typeof realApi = {
   dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
   dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
-  chatEnabled: () => D({ enabled: false, tmuxEngine: { available: false, reason: "the demo runs no local processes", defaultOn: false } }),
+  chatEnabled: () => D({ enabled: false, models: [] as AgentModel[], tmuxEngine: { available: false, reason: "the demo runs no local processes", defaultOn: false } }),
   chatAttach: (_session: string) => D({ command: "", live: false }),
   chatPaneClose: (_session: string) => D({ killed: false }),
   chatPaneKey: (_session: string, _key: string) => D({ screen: "" }),

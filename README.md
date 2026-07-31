@@ -214,6 +214,36 @@ a model, and a permission mode (plan → default / acceptEdits → bypass), then
 replies stream in, tool calls appear as chips, and follow-ups resume the same
 session. Sessions you start here show up in the fleet like any other agent.
 
+#### Which models the Chat panel offers
+
+Every list is the CLI's own answer rather than a table in this repo. Codex reads
+its `models_cache.json`; Antigravity answers `agy models`. Claude Code publishes
+no list at all — there is no `claude models` subcommand, no `--list-models`, and
+nothing cached on disk — so its catalogue lives in
+[`shared/claude-models.json`](shared/claude-models.json).
+
+It is **data, not code**: edit that file and the dropdown follows on the next
+request. No rebuild, no restart.
+
+```json
+{ "id": "claude-opus-5", "display_name": "Claude Opus 5", "status": "active",
+  "release_date": "2026-07-24", "scheduled_shutdown_date": "2027-07-24" }
+```
+
+A model is offered until its `scheduled_shutdown_date` has passed — that date is
+the last day it appears, so it drops out the day after, and the panel stops
+offering retired models without anyone editing anything. `status` is recorded for
+the reader and is deliberately *not* a filter: a `superseded` model still answers
+until it is actually retired, and hiding it early would remove a choice that
+works. A row with no shutdown date never expires, which reads as "no retirement
+announced".
+
+To change the list without touching the checkout — a packaged install, or a
+read-only one — put your own copy at `~/.config/agentglass/claude-models.json`,
+or point `AGENTGLASS_CLAUDE_MODELS` at a file. Ids are validated against the same
+expression that guards the spawn, so an entry that could not be sent is never
+offered.
+
 #### A second agent: OpenAI Codex
 
 The same panel drives **`codex`** as well. When both CLIs are on the machine an
@@ -1005,6 +1035,7 @@ in its own buckets rather than charged again as ordinary input.
 | `AGENTGLASS_GIT_TIMEOUT_SECONDS` | `120` | Ceiling on a single git subprocess. |
 | `AGENTGLASS_FS_BROWSE_DISABLED` | — | `1` → disable directory completion in the project picker (`/fs/complete`). Separate from the terminal switch on purpose: disabling the shell should not leave the directory tree readable. |
 | `AGENTGLASS_CHAT_DISABLED` | — | `1` → disable the **Chat** panel (no `claude` sessions can be started from the browser). |
+| `AGENTGLASS_CLAUDE_MODELS` | — | Path to the Claude model catalogue, overriding the copy in the checkout. See **Which models the Chat panel offers**. |
 | `AGENTGLASS_CODEX_DISABLED` | — | `1` → disable the **Codex** agent in the Chat panel, leaving Claude chat available. Codex is offered whenever a `codex` executable is on the server's `PATH`. |
 | `AGENTGLASS_ANTIGRAVITY_DISABLED` | — | `1` → disable the **Antigravity** agent in the Chat panel, leaving the other two available. Antigravity is offered whenever an `agy` executable is on the server's `PATH`. Independent of the Gemini CLI, which is a different product and is not driven from the chat panel at all. |
 | `CODEX_HOME` | `~/.codex` | Codex's own override for where it keeps its state. agentglass reads the model cache and the rollout history (resumed-thread transcripts) from there. |

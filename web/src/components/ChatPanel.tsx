@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import { CHAT_EFFORTS } from "../../../shared/types.ts";
-import type { GitRepoRef, SessionRollup, ChatEffort, AgentCliStatus } from "../../../shared/types.ts";
+import type { GitRepoRef, SessionRollup, ChatEffort, AgentCliStatus, AgentModel } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
@@ -42,23 +42,15 @@ import { peekChatIntent, subscribeChatIntent, takeChatIntent } from "../lib/chat
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 
-// Still hand-maintained, and still drifts every release — the runtime-sourced
-// list is its own job.
+// Claude's list arrives from the server, like the other two agents'. It is data
+// there (shared/claude-models.json), filtered to the models whose shutdown date
+// has not passed — Claude Code publishes no list of its own, so a file that can
+// be corrected without a rebuild is the closest thing to asking the CLI.
 //
-// The `· 1M` entry no longer changes what this app measures: `ctxLimitOf`
-// knows Opus 5 is a 1M model, so the plain id and the suffixed one resolve to
-// the same ceiling. It stays because the suffix is not ours to interpret — it
-// is what `claude` reads to pick a window behind an LLM gateway or on Bedrock
-// / Vertex / Foundry, where the plain id really does mean 200k. Locally the
-// two entries are the same choice; for someone pointed at a provider they are
-// not, and only they can tell which.
-const MODELS = [
-  { id: "claude-fable-5", label: "Fable 5" },
-  { id: "claude-opus-5", label: "Opus 5" },
-  { id: "claude-opus-5[1m]", label: "Opus 5 · 1M" },
-  { id: "claude-sonnet-5", label: "Sonnet 5" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5" },
-];
+// This is only what to draw before that answer arrives, and on a server too old
+// to send one. Deliberately a single certain id rather than a copy of the
+// catalogue: two lists that drift apart is the problem being solved.
+const MODELS_PENDING = [{ id: "claude-opus-5", label: "Claude Opus 5" }];
 // These run through `claude -p`, which has no terminal to prompt from: a tool
 // that would raise a permission dialog is refused outright, and there is no
 // way to grant it mid-chat. "Ask" therefore does not ask — it declines. The
@@ -103,15 +95,19 @@ const bypassMode = (agent: AgentKind) => AGENTS[agent].bypassMode;
 const cliName = (agent: AgentKind) => AGENTS[agent].cli;
 const agentLabel = (agent: AgentKind) => AGENTS[agent].label;
 
-/** What the model dropdown may offer. Claude's list is written down here
- *  because it is a judgement call about which of many ids are worth offering;
- *  the other two report whatever their own CLI currently serves, so those
- *  arrive from the server. A list that has not been asked for yet falls back to
- *  that agent's default rather than rendering an empty dropdown. */
+/** What the model dropdown may offer.
+ *
+ *  One path for all three agents now: every list comes from the server, because
+ *  every list is the answer to "what will this CLI actually accept" and none of
+ *  them is this component's to decide. Claude used to be the exception, with a
+ *  hand-maintained array here that drifted every release.
+ *
+ *  A list that has not arrived yet falls back to that agent's default rather
+ *  than rendering an empty dropdown. */
 function modelsFor(agent: AgentKind, status: AgentCliStatus): Array<{ id: string; label: string }> {
-  if (agent === "claude") return MODELS;
+  if (status.models.length) return status.models;
   const fallback = AGENTS[agent].defaultModel;
-  return status.models.length ? status.models : [{ id: fallback, label: fallback }];
+  return [{ id: fallback, label: fallback }];
 }
 const CWD_KEY = "agentglass.chatCwd";
 const ALLOW_KEY = "agentglass.chatAllowedTools";
@@ -652,17 +648,18 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // The server silently downgrades bypassPermissions unless the operator opted
   // in (AGENTGLASS_CHAT_BYPASS=1) — don't offer a mode that wouldn't stick.
   const [bypassAllowed, setBypassAllowed] = useState(false);
-  // Whether the other two CLIs are on the machine, and which models each
-  // currently offers. Both lists come from the server because each is read off
-  // that CLI's own answer rather than a table in this repo — see codexModels()
-  // and antigravityModels().
+  // Which models each CLI currently offers. Every list comes from the server,
+  // because every one of them is that CLI's own answer rather than a table in
+  // this repo — Codex's cache, `agy models`, and for Claude a catalogue file
+  // the server reads and filters by shutdown date.
+  const [claudeModels, setClaudeModels] = useState<AgentModel[]>(MODELS_PENDING);
   const [codex, setCodex] = useState<AgentCliStatus>(CLI_OFF);
   const [antigravity, setAntigravity] = useState<AgentCliStatus>(CLI_OFF);
   /** One lookup for "what does the server say about this agent?", so the
    *  dropdowns and the gates below stop naming CLIs one at a time. Claude's
-   *  status is two separate pieces of state for historical reasons. */
+   *  enabled/bypass are separate pieces of state for historical reasons. */
   const statusOf = (a: AgentKind): AgentCliStatus =>
-    a === "codex" ? codex : a === "antigravity" ? antigravity : { enabled, bypass: bypassAllowed, models: MODELS };
+    a === "codex" ? codex : a === "antigravity" ? antigravity : { enabled, bypass: bypassAllowed, models: claudeModels };
   // Shared by every chat and remembered across launches: the set of tools you
   // trust is a property of how you work, not of one conversation.
   const [allowed, setAllowed] = useState(() => {
@@ -764,7 +761,13 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
       setRepos(repos);
       setDefaultCwd((c) => c || repos[0]?.root || "");
     }).catch(() => {}).finally(() => setReposKnown(true));
-    api.chatEnabled().then((r) => { setEnabled(r.enabled); setBypassAllowed(!!r.bypass); }).catch(() => {});
+    api.chatEnabled().then((r) => {
+      setEnabled(r.enabled);
+      setBypassAllowed(!!r.bypass);
+      // Absent from a server too old to send it — keep the placeholder rather
+      // than emptying the dropdown.
+      if (r.models?.length) setClaudeModels(r.models);
+    }).catch(() => {});
     api.codexEnabled().then(setCodex).catch(() => {});
     api.antigravityEnabled().then(setAntigravity).catch(() => {});
     // Which project this instance is scoped to, if any. A failure here means we

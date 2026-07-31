@@ -65,6 +65,12 @@ jobs:
           mkdir -p electron/staging
           bun build --compile --target=${{ matrix.bunTarget }} server/src/index.ts \
             --outfile "electron/staging/agentglass-server${ext}"
+          # The Claude model catalogue is read from disk at runtime, not
+          # imported, so --compile does not carry it. It goes beside the sidecar
+          # because that is where claudemodels.ts looks in a packaged app
+          # (dirname(process.execPath)). Without this the desktop build falls
+          # back to a single model id and the dropdown looks broken.
+          cp shared/claude-models.json electron/staging/claude-models.json
 
       # Sync the package version to the tag so a v0.2.0 tag ships v0.2.0 files.
       - name: Sync version to the tag
