@@ -29,6 +29,18 @@ describe("agentOf", () => {
     expect(derive.agentOf({ source_app: "my-project", model_name: "claude-opus-5" })).toBe("claude");
   });
 
+  test("recognises antigravity, and only by its exporter name", () => {
+    // This is the one agent whose events this server mints itself, so the name
+    // is exact rather than a guess. The model is no help at all: `agy` runs
+    // Claude and open-weight models as happily as Gemini ones, so a model-name
+    // fallback would file half its sessions under the wrong CLI.
+    expect(derive.agentOf({ source_app: "antigravity", model_name: "gemini-3.1-pro-high" })).toBe("antigravity");
+    expect(derive.agentOf({ source_app: "antigravity", model_name: "claude-opus-4-6-thinking" })).toBe("antigravity");
+    // And the converse: a Claude model name does not make a Claude session out
+    // of an Antigravity one.
+    expect(derive.agentOf({ source_app: "antigravity", model_name: "gpt-oss-120b-medium" })).toBe("antigravity");
+  });
+
   test("defaults to claude on anything unrecognised", () => {
     // The recoverable direction: `claude --resume` with a stranger's id reports
     // an unknown session, while `codex exec resume` would be asked to continue
@@ -49,6 +61,18 @@ describe("switchAgent", () => {
     store.switchAgent(c.id, "codex");
     const after = store.getChat(c.id)!;
     expect([after.agent, after.model, after.mode]).toEqual(["codex", store.DEFAULT_CODEX_MODEL, store.DEFAULT_CODEX_MODE]);
+    store.closeChat(c.id);
+  });
+
+  test("carries the third agent's own defaults too", () => {
+    const c = store.newChat("/tmp/repo");
+    store.switchAgent(c.id, "antigravity");
+    const after = store.getChat(c.id)!;
+    expect([after.agent, after.model, after.mode])
+      .toEqual(["antigravity", store.DEFAULT_ANTIGRAVITY_MODEL, store.DEFAULT_ANTIGRAVITY_MODE]);
+    // And back again, without keeping a mode the other CLI has never heard of.
+    store.switchAgent(c.id, "codex");
+    expect(store.getChat(c.id)!.mode).toBe(store.DEFAULT_CODEX_MODE);
     store.closeChat(c.id);
   });
 
@@ -95,6 +119,17 @@ describe("persistence", () => {
     // by a version bump.
     const { agent, ...legacy } = chat({});
     cell.set("agentglass.chats.v1", JSON.stringify({ v: 1, activeId: "c1-abc", chats: [legacy] }));
+    expect(persist.loadChats().chats[0].agent).toBe("claude");
+
+    // The third agent survives a reload for the same reason, and this is the
+    // case that matters most for it: an Antigravity chat has no transcript to
+    // replay, so what is written down here *is* its history.
+    persist.saveChats([chat({ agent: "antigravity", model: "gemini-3.6-flash-low", mode: "request-review" })], "c1-abc");
+    expect(persist.loadChats().chats[0].agent).toBe("antigravity");
+
+    // Anything that is not one of the three is Claude, rather than a chat tab
+    // pointed at a CLI this build has never heard of.
+    persist.saveChats([chat({ agent: "gemini" })], "c1-abc");
     expect(persist.loadChats().chats[0].agent).toBe("claude");
   });
 });

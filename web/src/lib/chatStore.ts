@@ -10,6 +10,7 @@ import { loadChats, saveChats } from "./chatPersist.ts";
 import { chatEnginePref } from "./chatEnginePref.ts";
 import { paneStillAsking } from "./paneScreen.ts";
 import { applyCodexFrame } from "./codexFrames.ts";
+import { applyAntigravityFrame } from "./antigravityFrames.ts";
 import type { ChatImage, WatchEvent, ChatEngine, ChatEffort, SessionDetail } from "../../../shared/types.ts";
 
 /** A pasted image waiting in the composer. `url` is an object URL for the
@@ -115,19 +116,17 @@ export type ChatUsage = {
 /** A message typed during someone else's turn, waiting for its own. */
 export type QueuedTurn = { id: string; text: string; images: ChatImage[] };
 
-/**
- * Which CLI is behind this conversation.
- *
- * A chat is bound to one for life. Both are driven the same way — spawn the
- * binary non-interactively, stream its JSONL back — and both land in the same
- * `ChatMsg` / `ChatTool` shapes, which is what lets the panel render either
- * without knowing. What it changes is the endpoint, the model list, and what
- * the mode dropdown even means, so it is settled when the chat is opened
- * rather than switchable mid-thread: a `--resume` id belongs to the CLI that
- * minted it, and there is no such thing as handing a thread from one to the
- * other.
- */
-export type AgentKind = "claude" | "codex";
+/** The agents this panel can drive, and everything that differs between them.
+ *  Defined in agents.ts so chatPersist.ts can share it without a cycle, and
+ *  re-exported here because this is where the rest of the app already looks. */
+import { AGENTS, DEFAULT_MODEL, DEFAULT_MODE } from "./agents.ts";
+import type { AgentKind } from "./agents.ts";
+export {
+  AGENTS, asAgent,
+  DEFAULT_MODEL, DEFAULT_MODE, DEFAULT_CODEX_MODEL, DEFAULT_CODEX_MODE,
+  DEFAULT_ANTIGRAVITY_MODEL, DEFAULT_ANTIGRAVITY_MODE,
+} from "./agents.ts";
+export type { AgentKind, AgentSpec } from "./agents.ts";
 
 /** Press one key in a chat's pane and take in what it drew next.
  *
@@ -263,14 +262,6 @@ export type Chat = {
 const chats = new Map<string, Chat>();
 const subs = new Set<() => void>();
 let seq = 0;
-
-export const DEFAULT_MODEL = "claude-opus-5";
-export const DEFAULT_MODE = "default";
-/** Codex's counterparts. The mode is its sandbox rather than a permission
- *  policy, so the two vocabularies stay apart — see `AgentKind`. Keep in step
- *  with DEFAULT_SANDBOX in server/src/codex.ts. */
-export const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
-export const DEFAULT_CODEX_MODE = "read-only";
 
 // A cached snapshot, rebuilt only when something actually changes.
 //
@@ -412,7 +403,14 @@ async function hydrate(chatId: string, sessionId: string) {
     // thread with every sentence missing. Codex keeps its own rollout on disk,
     // which has both, so that is what the server reads for it. Same timeline
     // shape either way, which is why nothing below has to know.
+    //
+    // Antigravity has neither: its conversations are protobuf blobs inside a
+    // SQLite database on an undocumented internal schema, so there is nothing
+    // here to replay from. It never reaches this path in practice — nothing
+    // lists an Antigravity session to adopt — but a chat carrying an id from
+    // somewhere else must not ask Claude's endpoint about it.
     const agent = chats.get(chatId)?.agent ?? "claude";
+    if (!AGENTS[agent].hasTranscript) return;
     const s: { timeline?: SessionDetail["timeline"]; conversation?: SessionDetail["conversation"] } | null =
       agent === "codex" ? await api.codexTranscript(sessionId) : await api.session(sessionId);
     if (!s) return;
@@ -661,8 +659,8 @@ export function switchAgent(id: string, agent: AgentKind) {
   if (!c || c.agent === agent || !isFresh(c)) return;
   update(id, (x) => {
     x.agent = agent;
-    x.model = agent === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL;
-    x.mode = agent === "codex" ? DEFAULT_CODEX_MODE : DEFAULT_MODE;
+    x.model = AGENTS[agent].defaultModel;
+    x.mode = AGENTS[agent].defaultMode;
   });
 }
 
@@ -872,16 +870,22 @@ export async function send(id: string, text: string, isActive: () => boolean, al
     });
   };
 
-  /** Codex's frames, whose whole translation lives in codexFrames.ts. Every
-   *  concern around it — the queue, `sending`, abort, attention — is shared
-   *  with the Claude path below and stays here. */
-  const onCodexEvent = (o: Record<string, unknown>) => {
+  /** Codex's and Antigravity's frames, whose whole translations live in
+   *  codexFrames.ts and antigravityFrames.ts. Every concern around them — the
+   *  queue, `sending`, abort, attention — is shared with the Claude path below
+   *  and stays here.
+   *
+   *  `agx_error` is this server's own frame rather than either CLI's, so it is
+   *  peeled off before the translator sees it. */
+  const framed = (apply: (c: Chat, o: Record<string, unknown>) => void) => (o: Record<string, unknown>) => {
     if (o.type === "agx_error") { onAgxError(o); return; }
     update(id, (c) => {
-      applyCodexFrame(c, o);
+      apply(c, o);
       if (!isActive()) c.unread = true;
     });
   };
+  const onCodexEvent = framed(applyCodexFrame);
+  const onAntigravityEvent = framed(applyAntigravityFrame);
 
   const toolNames = new Map<string, string>();
   const onEvent = (o: Record<string, unknown>) => {
@@ -1031,14 +1035,18 @@ export async function send(id: string, text: string, isActive: () => boolean, al
 
   let broke = false;
   try {
-    // Codex takes no allowlist (it draws its line around the filesystem, not
-    // per tool call) and no pasted images (it attaches them as file paths), so
-    // neither is sent rather than being sent and ignored. The pane engine is
-    // Claude's too — a Codex turn is always the streamed subprocess.
+    // Neither of the other two takes an allowlist (Codex draws its line around
+    // the filesystem, Antigravity decides per call with its own modes) or pasted
+    // images (both attach them as file paths), so neither is sent rather than
+    // being sent and ignored. The pane engine is Claude's too — a Codex or
+    // Antigravity turn is always the streamed subprocess.
+    const turn = { cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId };
     if (chat.agent === "codex") {
-      await api.codexStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, resumeId: chat.sessionId }, onCodexEvent, ac.signal);
+      await api.codexStream(turn, onCodexEvent, ac.signal);
+    } else if (chat.agent === "antigravity") {
+      await api.antigravityStream(turn, onAntigravityEvent, ac.signal);
     } else {
-      await api.chatStream({ cwd: chat.cwd, message: msg, model: chat.model, mode: chat.mode, effort: chat.effort, resumeId: chat.sessionId, allowedTools, images, engine }, onEvent, ac.signal);
+      await api.chatStream({ ...turn, effort: chat.effort, allowedTools, images, engine }, onEvent, ac.signal);
     }
   } catch (e) {
     // A queue must not keep firing into a turn that failed or one you just

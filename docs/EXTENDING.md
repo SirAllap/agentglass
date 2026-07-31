@@ -170,9 +170,32 @@ alongside `server/src/chat.ts`. The division that makes it cheap:
   cost and no context window at all. Each of those is a visible difference in
   the panel, not a fabricated equivalence.
 
-A third CLI would repeat that shape: a `<name>.ts` beside those two, a frame
-translator beside `codexFrames.ts`, and `AgentKind` in `chatStore.ts` gaining a
-member.
+A third CLI repeats that shape, and Google Antigravity is the proof it holds:
+`server/src/antigravity.ts` beside the other two, `web/src/lib/antigravityFrames.ts`
+beside `codexFrames.ts`, and `AgentKind` gaining a member. What the third one
+changed is worth knowing before you add a fourth:
+
+- **The per-agent differences moved into a table.** `AGENTS` in
+  `web/src/lib/agents.ts` holds the label, the binary, the defaults, the
+  unattended mode, and whether the CLI takes attachments or has a replayable
+  transcript. Two agents justified `agent === "codex" ? … : …`; three did not,
+  because a missed branch is silent — a Claude default quietly applied to
+  something that is not Claude. Add the entry, not the branches.
+- **An agent may report through the panel itself.** Claude reaches the fleet
+  over hooks and Codex over OpenTelemetry, but Antigravity exports neither, so
+  its own stream is teed into `ingestBody` — `frameToEvent` maps frames to
+  `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` /
+  `Turn complete`. That is the `via: "chat"` kind in the agent roster. It only
+  covers chats started here, which is said plainly rather than implied.
+- **Check what the usage numbers actually mean before trusting them.** Codex
+  reports cumulative thread totals and Antigravity reports per-turn figures.
+  They look identical on the wire and are assigned in one case and added in the
+  other; getting it backwards over-reports spend severalfold and nothing fails
+  loudly.
+- **A capability the CLI has not got is left off, not faked.** Antigravity has
+  no readable transcript (protobuf inside SQLite), no price, and no context
+  window, so there is no resume route and the cost and context rows stay hidden
+  rather than being filled from a table in this repo.
 
 ## 2. Use the gate in your own harness
 

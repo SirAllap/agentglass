@@ -2,6 +2,7 @@ import type { WatchEvent, OpenToolCall, Liveness, SessionRollup } from "../../..
 import { agentKey, fmtMs, sessionTitle } from "./format.ts";
 import { sessionWorktree } from "./worktree.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
+import type { AgentKind } from "./agents.ts";
 
 export type AgentStatus = "working" | "waiting" | "errored" | "idle";
 
@@ -514,8 +515,16 @@ export const sessionIsLive = (
  * `codex exec resume` would be asked to continue a conversation it does not
  * have.
  */
-export const agentOf = (s: { source_app?: string | null; model_name?: string | null }): "claude" | "codex" => {
-  if ((s.source_app ?? "").toLowerCase().startsWith("codex")) return "codex";
+export const agentOf = (s: { source_app?: string | null; model_name?: string | null }): AgentKind => {
+  const app = (s.source_app ?? "").toLowerCase();
+  // Antigravity is matched on `source_app` alone, and only on `source_app`.
+  // Its events are minted by this server (server/src/antigravity.ts), which
+  // sets the name, so the signal is exact rather than a guess — and the model
+  // is no help at all here: `agy` runs Claude and open-weight models as
+  // happily as Gemini ones, so a model-name fallback would file half its
+  // sessions under the wrong CLI.
+  if (app.startsWith("antigravity")) return "antigravity";
+  if (app.startsWith("codex")) return "codex";
   if (/^(gpt|o[134])[-.]/i.test(s.model_name ?? "")) return "codex";
   return "claude";
 };

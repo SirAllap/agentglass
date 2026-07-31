@@ -71,6 +71,7 @@ import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERM
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { codexStream, codexModels, codexTranscript, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
+import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope, readBudgets, writeBudgets } from "./config.ts";
@@ -819,6 +820,12 @@ const server = Bun.serve<WsData>({
       if (agent.via === "hooks") {
         const r = applyHooks(undo ? "uninstall" : "install");
         return json({ ...r, agents: probeAgents() });
+      }
+      // A `chat` agent has no wiring to apply: it reports because this server
+      // runs it. Refusing plainly beats spawning connect_otel.py with an id it
+      // has never heard of and returning whatever that prints.
+      if (agent.via === "chat") {
+        return json({ ok: false, error: `${agent.label} needs no connecting — it reports through the chat panel that runs it`, agents: probeAgents() }, 400);
       }
 
       const dir = hooksDir();
@@ -1808,6 +1815,27 @@ const server = Bun.serve<WsData>({
     if (pathname === "/codex/transcript") {
       const id = url.searchParams.get("id") || "";
       return body(await singleFlight(`codex:${id}`, async () => JSON.stringify({ timeline: codexTranscript(id) })));
+    }
+
+    // --- multi-chat: the same panel, driving google antigravity ---
+    // No /antigravity/transcript to match the two above: Antigravity keeps each
+    // conversation as a SQLite database of protobuf blobs on an undocumented
+    // internal schema, so there is nothing here that could be read without
+    // guessing at it — see server/src/antigravity.ts.
+    if (pathname === "/antigravity/enabled") {
+      return json({ enabled: ANTIGRAVITY_ENABLED, bypass: ANTIGRAVITY_BYPASS_ALLOWED, models: ANTIGRAVITY_ENABLED ? antigravityModels() : [] });
+    }
+    if (pathname === "/antigravity/send" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      noteAction(srv.requestIP(req)?.address, "/antigravity/send",
+        { root: b.cwd, name: b.model }, { ok: true }, caller);
+      // `ingestBody` is handed in rather than imported by antigravity.ts, which
+      // would be a cycle. It is also what puts an Antigravity chat on the radar
+      // at all: unlike Claude (hooks) and Codex (OTel), this CLI reports to
+      // nobody, so its own frames are the only source there is.
+      return antigravityStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images, ingestBody);
     }
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---

@@ -13,6 +13,7 @@
 // also on disk in claude's own transcript, but the *set of open tabs* is known
 // nowhere but here.
 
+import { asAgent } from "./chatStore.ts";
 import type { Chat, ChatMsg, ChatTool } from "./chatStore.ts";
 
 const KEY = "agentglass.chats.v1";
@@ -98,7 +99,7 @@ function unpack(s: StoredChat): Chat {
     // older payload saying what it knew. Defaulting it costs nothing and means
     // the version number does not have to move, which would have thrown those
     // tabs away instead.
-    agent: s.agent === "codex" ? "codex" : "claude",
+    agent: asAgent(s.agent),
     messages: (s.messages ?? []).map((m) => ({ ...m, streaming: undefined })),
     sending: false,
     abort: null,

@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import { CHAT_EFFORTS } from "../../../shared/types.ts";
-import type { GitRepoRef, SessionRollup, ChatEffort, CodexStatus } from "../../../shared/types.ts";
+import type { GitRepoRef, SessionRollup, ChatEffort, AgentCliStatus } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
@@ -34,8 +34,7 @@ import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
   engineFor,
-  DEFAULT_MODEL, DEFAULT_MODE, DEFAULT_CODEX_MODEL, DEFAULT_CODEX_MODE,
-  isFresh, switchAgent,
+  AGENTS, isFresh, switchAgent,
   addAttachments, answerPane, dropAttachment, renameChat, clearAttention, type Chat, type AgentKind,
   restoredActiveId, setActiveChatId, chatFocusRequest, setPanePinned, hydratePanePins,
 } from "../lib/chatStore.ts";
@@ -82,22 +81,37 @@ const CODEX_MODES = [
   { id: "full-access", label: "⚡ Full access (no sandbox)" },
 ];
 
-/** The unattended mode for this agent — the one the server refuses to honour
- *  unless the operator opted in. One name for two spellings, so the mode
- *  dropdown and the warnings below don't each need the branch. */
-const bypassMode = (agent: AgentKind) => (agent === "codex" ? "full-access" : "bypassPermissions");
-const cliName = (agent: AgentKind) => (agent === "codex" ? "codex" : "claude");
-const agentLabel = (agent: AgentKind) => (agent === "codex" ? "Codex" : "Claude");
-const modesFor = (agent: AgentKind) => (agent === "codex" ? CODEX_MODES : MODES);
+// Antigravity's four land on Claude's, because it really does decide per tool
+// call and really does have a plan mode — this is the CLI's own shape rather
+// than a mapping forced here. `request-review` is its default and is spelled by
+// passing no flag. Keep in step with MODES in server/src/antigravity.ts.
+const ANTIGRAVITY_MODES = [
+  { id: "request-review", label: "Ask (denies un-allowed)" },
+  { id: "plan", label: "Plan (no edits)" },
+  { id: "accept-edits", label: "Auto-accept edits" },
+  { id: "always-proceed", label: "⚡ Bypass (runs all)" },
+];
+
+/** Before the server has answered, and for a CLI that is not installed. */
+const CLI_OFF: AgentCliStatus = { enabled: false, models: [] };
+
+const MODES_BY_AGENT: Record<AgentKind, Array<{ id: string; label: string }>> = {
+  claude: MODES, codex: CODEX_MODES, antigravity: ANTIGRAVITY_MODES,
+};
+const modesFor = (agent: AgentKind) => MODES_BY_AGENT[agent];
+const bypassMode = (agent: AgentKind) => AGENTS[agent].bypassMode;
+const cliName = (agent: AgentKind) => AGENTS[agent].cli;
+const agentLabel = (agent: AgentKind) => AGENTS[agent].label;
 
 /** What the model dropdown may offer. Claude's list is written down here
  *  because it is a judgement call about which of many ids are worth offering;
- *  Codex's is whatever its own cache currently says, so it arrives from the
- *  server. A Codex with an empty list has not been asked yet — fall back rather
- *  than render an empty dropdown. */
-function modelsFor(agent: AgentKind, codex: CodexStatus): Array<{ id: string; label: string }> {
-  if (agent !== "codex") return MODELS;
-  return codex.models.length ? codex.models : [{ id: DEFAULT_CODEX_MODEL, label: DEFAULT_CODEX_MODEL }];
+ *  the other two report whatever their own CLI currently serves, so those
+ *  arrive from the server. A list that has not been asked for yet falls back to
+ *  that agent's default rather than rendering an empty dropdown. */
+function modelsFor(agent: AgentKind, status: AgentCliStatus): Array<{ id: string; label: string }> {
+  if (agent === "claude") return MODELS;
+  const fallback = AGENTS[agent].defaultModel;
+  return status.models.length ? status.models : [{ id: fallback, label: fallback }];
 }
 const CWD_KEY = "agentglass.chatCwd";
 const ALLOW_KEY = "agentglass.chatAllowedTools";
@@ -638,10 +652,17 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // The server silently downgrades bypassPermissions unless the operator opted
   // in (AGENTGLASS_CHAT_BYPASS=1) — don't offer a mode that wouldn't stick.
   const [bypassAllowed, setBypassAllowed] = useState(false);
-  // Whether a `codex` is on the machine, and which models it currently offers.
-  // The list comes from the server because it is read off Codex's own cache
-  // rather than a table in this repo — see codexModels() in server/src/codex.ts.
-  const [codex, setCodex] = useState<CodexStatus>({ enabled: false, models: [] });
+  // Whether the other two CLIs are on the machine, and which models each
+  // currently offers. Both lists come from the server because each is read off
+  // that CLI's own answer rather than a table in this repo — see codexModels()
+  // and antigravityModels().
+  const [codex, setCodex] = useState<AgentCliStatus>(CLI_OFF);
+  const [antigravity, setAntigravity] = useState<AgentCliStatus>(CLI_OFF);
+  /** One lookup for "what does the server say about this agent?", so the
+   *  dropdowns and the gates below stop naming CLIs one at a time. Claude's
+   *  status is two separate pieces of state for historical reasons. */
+  const statusOf = (a: AgentKind): AgentCliStatus =>
+    a === "codex" ? codex : a === "antigravity" ? antigravity : { enabled, bypass: bypassAllowed, models: MODELS };
   // Shared by every chat and remembered across launches: the set of tools you
   // trust is a property of how you work, not of one conversation.
   const [allowed, setAllowed] = useState(() => {
@@ -697,16 +718,19 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // moves selection off it.
   const active = chats.find((c) => c.id === activeId);
 
+  /** Which CLIs this machine can actually run a chat with. Drives the agent
+   *  picker, and decides what a brand-new chat should be. */
+  const installed = (Object.keys(AGENTS) as AgentKind[]).filter((a) => statusOf(a).enabled);
   // Whether *this* chat can run: `enabled` only ever spoke for `claude`, so on
   // a machine with Codex installed and Claude not, it would have greyed out a
   // composer that works perfectly well.
-  const usable = active ? (active.agent === "codex" ? codex.enabled : enabled) : (enabled || codex.enabled);
-  // Pasting and dropping images is a Claude-only affordance. `codex exec` takes
+  const usable = active ? statusOf(active.agent).enabled : installed.length > 0;
+  // Pasting and dropping images is a Claude-only affordance. The other two take
   // images as file paths rather than as content blocks, so there is nowhere for
   // pasted bytes to go without staging them on disk first — the server refuses
   // them outright, and offering the button anyway would just be a slower way to
   // reach that refusal.
-  const canAttach = usable && active?.agent !== "codex";
+  const canAttach = usable && !!active && AGENTS[active.agent].canAttach;
 
   // Only while the draft is a bare `/word` on the first line: past the first
   // space it is prose, and a menu stealing Enter there would be maddening.
@@ -742,6 +766,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     }).catch(() => {}).finally(() => setReposKnown(true));
     api.chatEnabled().then((r) => { setEnabled(r.enabled); setBypassAllowed(!!r.bypass); }).catch(() => {});
     api.codexEnabled().then(setCodex).catch(() => {});
+    api.antigravityEnabled().then(setAntigravity).catch(() => {});
     // Which project this instance is scoped to, if any. A failure here means we
     // never learn of a scope, so nothing is hidden, which is the safe direction.
     api.projects()
@@ -840,12 +865,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // A new chat inherits the agent you were last using, the same way it
     // inherits the repo and the model — and falls back to whichever CLI is
     // actually installed when there is nothing to inherit from.
-    const agent: AgentKind = active?.agent ?? (enabled ? "claude" : codex.enabled ? "codex" : "claude");
+    const agent: AgentKind = active?.agent ?? installed[0] ?? "claude";
     const sameAgent = active?.agent === agent;
     const c = newChat(
       cwd,
-      sameAgent ? active!.model : agent === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL,
-      sameAgent ? active!.mode : agent === "codex" ? DEFAULT_CODEX_MODE : DEFAULT_MODE,
+      sameAgent ? active!.model : AGENTS[agent].defaultModel,
+      sameAgent ? active!.mode : AGENTS[agent].defaultMode,
       undefined,
       agent,
     );
@@ -853,7 +878,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     setActiveId(c.id);
     if (!seed) requestAnimationFrame(() => inputRef.current?.focus());
     return c;
-  }, [active, defaultCwd, repos, workspace, enabled, codex.enabled]);
+  }, [active, defaultCwd, repos, workspace, enabled, codex.enabled, antigravity.enabled]);
 
   // Adopt an existing claude session. Focusing an already-open tab rather than
   // opening a second one is not a nicety: two chats resuming one session id
@@ -872,10 +897,10 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     const chat = chatResuming(s.session_id)
       ?? newChat(
         cwd,
-        s.model_name || (agent === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL),
+        s.model_name || AGENTS[agent].defaultModel,
         // The mode is this agent's vocabulary, so a mode carried over from the
         // chat you happened to have open only applies when it is the same one.
-        active?.agent === agent ? active.mode : agent === "codex" ? DEFAULT_CODEX_MODE : DEFAULT_MODE,
+        active?.agent === agent ? active.mode : AGENTS[agent].defaultMode,
         { sessionId: s.session_id, title: `${s.source_app}:${s.session_id.slice(0, 8)}` },
         agent,
       );
@@ -980,11 +1005,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // it lands as a change event and opens a chat through onChange.
     const chat = active ?? (files.length ? add() ?? null : null);
     if (!chat) return;
-    // `codex exec` takes images as file paths, not content blocks, so there is
-    // nowhere for pasted bytes to go. Say so instead of dropping them silently.
-    if (files.length && chat.agent === "codex") {
+    // Codex and Antigravity take images as file paths, not content blocks, so
+    // there is nowhere for pasted bytes to go. Say so instead of dropping them
+    // silently.
+    if (files.length && !AGENTS[chat.agent].canAttach) {
       e.preventDefault();
-      setHint("codex chats can't take pasted images — start a Claude chat for that");
+      setHint(`${cliName(chat.agent)} chats can't take pasted images — start a Claude chat for that`);
       return;
     }
     if (!files.length) {
@@ -1242,27 +1268,28 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             there is no meaning to handing a live conversation
                             from one to the other — but a tab you have not sent
                             anything from yet is just a blank tab. */}
-                        {enabled && codex.enabled && (
+                        {installed.length > 1 && (
                           isFresh(active) ? (
                             <Select value={active.agent} onChange={(v) => switchAgent(active.id, v as AgentKind)}
                               className={selCls} style={selStyle} title="Which CLI runs this chat"
-                              options={[{ value: "claude", label: "Claude" }, { value: "codex", label: "Codex" }]} />
+                              options={installed.map((a) => ({ value: a, label: AGENTS[a].label }))} />
                           ) : (
                             <span className={selCls} title="The CLI behind this chat — settled once it has a thread to resume"
                               style={{ ...selStyle, color: "var(--text3)" }}>{agentLabel(active.agent)}</span>
                           )
                         )}
                         <Select value={active.model} onChange={(v) => update(active.id, (c) => { c.model = v; })}
-                          className={selCls} style={selStyle} options={modelsFor(active.agent, codex).map((m) => ({ value: m.id, label: m.label }))} />
+                          className={selCls} style={selStyle} options={modelsFor(active.agent, statusOf(active.agent)).map((m) => ({ value: m.id, label: m.label }))} />
                         <Select value={active.mode} onChange={(v) => update(active.id, (c) => { c.mode = v; })}
                           className={selCls} style={selStyle} title={active.agent === "codex" ? "How much codex may touch without asking" : "Permission mode for tool use"}
                           options={modesFor(active.agent)
-                            .filter((m) => (active.agent === "codex" ? codex.bypass : bypassAllowed) || m.id !== bypassMode(active.agent))
+                            .filter((m) => statusOf(active.agent).bypass || m.id !== bypassMode(active.agent))
                             .map((m) => ({ value: m.id, label: m.label }))} />
-                        {/* Codex has no allowlist to fill in: it decides per
-                            filesystem boundary, not per tool call, so a box here
-                            would be a control that silently did nothing. */}
-                        {active.agent !== "codex" && active.mode !== "bypassPermissions" && (
+                        {/* Only Claude has an allowlist to fill in. Codex decides
+                            per filesystem boundary and Antigravity per call under
+                            its own modes, so a box here would be a control that
+                            silently did nothing. */}
+                        {active.agent === "claude" && active.mode !== "bypassPermissions" && (
                           <input
                             value={allowed}
                             onChange={(e) => setAllowed(e.target.value)}

@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -661,6 +661,13 @@ const realApi = {
   codexStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
     turnStream("/codex/send", payload, onEvent, signal),
 
+  // --- multi-chat: the same panel, driving google antigravity ---
+  // No transcript call to match the other two: Antigravity keeps a conversation
+  // as protobuf inside SQLite, so there is nothing readable to ask for.
+  antigravityEnabled: () => get<AgentCliStatus>("/antigravity/enabled"),
+  antigravityStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
+    turnStream("/antigravity/send", payload, onEvent, signal),
+
   dockerStart: (id: string) => post<DockerActionResult>("/docker/start", { id }),
   dockerStop: (id: string) => post<DockerActionResult>("/docker/stop", { id }),
   dockerRestart: (id: string) => post<DockerActionResult>("/docker/restart", { id }),
@@ -829,6 +836,12 @@ const demoApi: typeof realApi = {
     onEvent({ type: "thread.started", thread_id: "demo" });
     onEvent({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "(chat is disabled in the demo — run agentglass locally to drive real Codex sessions)" } });
     onEvent({ type: "turn.completed", usage: {} });
+  },
+  antigravityEnabled: () => D({ enabled: false, models: [] } as AgentCliStatus),
+  antigravityStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
+    onEvent({ event: "init", conversation_id: "demo-0000-0000-0000-demodemodemo", init: { model: "demo" } });
+    onEvent({ event: "step_update", step_update: { step_index: 0, state: "DONE", step_type: "agent_response", text_delta: "(chat is disabled in the demo — run agentglass locally to drive real Antigravity sessions)" } });
+    onEvent({ event: "result", result: { status: "SUCCESS", usage: {} } });
   },
   dockerStart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerStop: (_id: string) => D(demo.dockerActionUnavailable()),
