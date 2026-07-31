@@ -20,7 +20,7 @@
 
 Point any AI coding agent at agentglass — via Claude Code hooks or any OpenTelemetry GenAI exporter (OpenAI Codex, Gemini CLI, Bedrock, LangChain, LiteLLM…) — and watch every agent, tool call, token, and dollar move in real time. Cost tracking, tool-latency percentiles, error timelines, session lifecycles, one switch that filters the whole cockpit by provider, and 22 themes. It persists across reloads (unlike a pure in-browser stream).
 
-And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — all behind one keystroke, under a notch that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
+And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code *and* Codex sessions — all behind one keystroke, under a notch that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
 
 ### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/demo/)
 
@@ -209,8 +209,8 @@ Electron window compositor rather than xterm.
 
 ### 💬 Chat — drive Claude and Codex sessions from the browser &nbsp;`c`
 
-Multi-chat against your **local `claude` CLI**: pick a repo/worktree, a model,
-and a permission mode (plan → default / acceptEdits → bypass), then converse —
+Multi-chat against your **local `claude` or `codex` CLI**: pick a repo/worktree,
+a model, and a permission mode (plan → default / acceptEdits → bypass), then converse —
 replies stream in, tool calls appear as chips, and follow-ups resume the same
 session. Sessions you start here show up in the fleet like any other agent.
 
@@ -230,6 +230,13 @@ offers instead of a table in this repo that goes stale on every release. Pasted
 and dropped images are Claude-only: `codex exec` takes images as file paths
 rather than content blocks, so the panel says so instead of dropping them
 silently.
+
+A Codex chat shows **tokens but no cost and no context meter**. `codex exec`
+reports neither a price nor a per-turn prompt size, and a bar drawn at 0 / 400k
+would be a claim about a session we know nothing about. Its token counts are
+cumulative for the whole thread rather than per turn, so they are assigned
+rather than added up — and its input count includes the cached part, which is
+subtracted back out so the "In" row means the same thing for both agents.
 
 Install and authenticate the Codex CLI separately, then make sure the `codex`
 executable is on the server's `PATH` when agentglass starts. The chat panel uses
@@ -768,8 +775,8 @@ are:
   also have accounts, any of them could reach the server and its shell **as
   your user**. Set `AGENTGLASS_TOKEN` to lock it to you, and/or disable the
   capability surfaces: `AGENTGLASS_TERMINAL_DISABLED=1`, `AGENTGLASS_FS_BROWSE_DISABLED=1`,
-  `AGENTGLASS_CHAT_DISABLED=1`, `AGENTGLASS_GIT_WRITE_DISABLED=1`,
-  `AGENTGLASS_DOCKER_WRITE_DISABLED=1`.
+  `AGENTGLASS_CHAT_DISABLED=1`, `AGENTGLASS_CODEX_DISABLED=1`,
+  `AGENTGLASS_GIT_WRITE_DISABLED=1`, `AGENTGLASS_DOCKER_WRITE_DISABLED=1`.
 - **⚠️ Exposing it to a network is a three-part deliberate act.** `AGENTGLASS_BIND=0.0.0.0`
   hands the shell, git write and Docker control to that network. Do it only with
   a token set **and** `AGENTGLASS_TRUST_LAN=1` (off by default, LAN browsers are
@@ -779,9 +786,12 @@ are:
   If a device still can't reach it, the host firewall is dropping the packets:
   the panel names it and prints the command that opens the port to your subnet
   only. Tailnet (Tailscale) addresses count as private under `TRUST_LAN` too.
-- **⚠️ Browser-driven autonomy is opt-in.** The Chat panel's `bypassPermissions`
-  mode (`claude --dangerously-skip-permissions`) is honored only when
-  `AGENTGLASS_CHAT_BYPASS=1`; otherwise it's downgraded to a prompting default.
+- **⚠️ Browser-driven autonomy is opt-in.** The Chat panel's unattended modes —
+  `bypassPermissions` for Claude (`claude --dangerously-skip-permissions`) and
+  `full-access` for Codex (`codex --dangerously-bypass-approvals-and-sandbox`) —
+  are honored only when `AGENTGLASS_CHAT_BYPASS=1`. One opt-in covers both, since
+  it is the same decision. Without it Claude is downgraded to a prompting default
+  and Codex to its read-only sandbox.
 - **Your data stays local.** Events live in a local SQLite file, written
   owner-only (`0700` dir, `0600` file) on POSIX; on Windows, which has no POSIX
   mode bits, it falls back to your account's default ACL. Outbound calls are few and all of them are yours to
@@ -963,7 +973,7 @@ in its own buckets rather than charged again as ordinary input.
 | `AGENTGLASS_CHAT_DISABLED` | — | `1` → disable the **Chat** panel (no `claude` sessions can be started from the browser). |
 | `AGENTGLASS_CODEX_DISABLED` | — | `1` → disable the **Codex** agent in the Chat panel, leaving Claude chat available. Codex is offered whenever a `codex` executable is on the server's `PATH`. |
 | `CODEX_HOME` | `~/.codex` | Codex's own override for where it keeps its state. agentglass reads the model cache and the rollout history (resumed-thread transcripts) from there. |
-| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's `bypassPermissions` mode (`claude --dangerously-skip-permissions`). Off by default: the mode is downgraded to a prompting default unless you opt in. |
+| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's unattended modes: `bypassPermissions` for Claude (`--dangerously-skip-permissions`) and `full-access` for Codex (`--dangerously-bypass-approvals-and-sandbox`). Off by default; without it Claude is downgraded to a prompting default and Codex to its read-only sandbox. |
 | `AGENTGLASS_CHAT_ENGINE` | `process` | `tmux` → new chats run as a live `claude` in a pane on agentglass's own tmux server instead of one `claude -p` per turn. Faster per turn (the CLI's session start is paid once, not every message) and the session is attachable from your own terminal; costs a warm CLI (~380MB, growing with use) for as long as the chat is warm. Per-chat in **Settings → Preferences → How new chats run**. |
 | `AGENTGLASS_TMUX_SOCKET` | `agentglass` | Socket name for that server (`tmux -L <name>`). It is always launched with a config of our own (`-f`), never your `~/.tmux.conf` — otherwise tpm/resurrect/continuum would come with it and continuum's autosave would overwrite your own saved layout in the shared `~/.tmux/resurrect/`. |
 | `AGENTGLASS_TMUX_IDLE_MINUTES` | `30` | Minutes a chat pane may sit unused before its CLI is reclaimed. The next turn resumes the session transparently (one slower turn). `0` disables eviction and keeps every warm chat resident. |

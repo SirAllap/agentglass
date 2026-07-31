@@ -178,14 +178,21 @@ function Inspector({ chat }: { chat: Chat }) {
   return (
     <div className="shrink-0 px-3 py-2 border-t flex flex-col gap-1.5"
       style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
-      <div className="flex items-baseline gap-2">
-        <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>context</span>
-        <span className="text-[10px] tabular-nums ml-auto" style={{ color: tone }}>{pct.toFixed(0)}%</span>
-        <span className="text-[9px] t-dim2 tabular-nums">{fmtTokens(u.contextTokens)} / {fmtTokens(limit)}</span>
-      </div>
-      <div className="h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
-        <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(1, pct)}%`, background: tone }} />
-      </div>
+      {/* Only when the CLI told us the prompt size. Codex's exec stream reports
+          no per-turn context and no window, and a bar drawn at 0 / 400k would
+          be a claim about a session we know nothing about. */}
+      {u.contextTokens > 0 && (
+        <>
+          <div className="flex items-baseline gap-2">
+            <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>context</span>
+            <span className="text-[10px] tabular-nums ml-auto" style={{ color: tone }}>{pct.toFixed(0)}%</span>
+            <span className="text-[9px] t-dim2 tabular-nums">{fmtTokens(u.contextTokens)} / {fmtTokens(limit)}</span>
+          </div>
+          <div className="h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+            <div className="h-full rounded-full transition-all" style={{ width: `${Math.max(1, pct)}%`, background: tone }} />
+          </div>
+        </>
+      )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mt-0.5">
         <Row k="In" v={fmtTokens(u.input)} />
         <Row k="Out" v={fmtTokens(u.output)} />
@@ -1018,7 +1025,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     e.preventDefault();
     dragDepth.current = 0;
     setDragOver(false);
-    if (!canAttach) { setHint("codex chats can't take dropped files — start a Claude chat for that"); return; }
+    if (!canAttach) { setHint("codex chats can't take dropped images — start a Claude chat for that"); return; }
     // Files, not just images: `addAttachments` quotes a text file into the
     // draft, which is the same thing the picker and the paste path already do.
     const files = Array.from(e.dataTransfer.files);

@@ -497,6 +497,20 @@ const APPLIED_MAX = 8000;
  * `UserPromptSubmit` has the prompt, `Stop` the assistant's reply, and the
  * tool pair the call and its output — so this is a matter of routing, not of
  * new plumbing. Called from the one place `useLive` is consumed.
+ *
+ * That last paragraph is true of Claude Code and only partly true of Codex, and
+ * the difference is worth stating rather than discovering. Codex reaches this
+ * app over OpenTelemetry rather than over hooks, and its log records carry the
+ * shape of a turn but not its words: `logRecordToEvent` in server/src/otlp.ts
+ * can build `PreToolUse` / `PostToolUse` / `Turn complete` out of them, and
+ * there is nothing there to build `UserPromptSubmit` or `Stop` from. So a Codex
+ * session watched from here fills in its tool rows and stays silent between
+ * them.
+ *
+ * It matters less than it sounds. A chat's own turns are drawn from the
+ * `/codex/send` response, which carries everything; this path only covers a
+ * session *adopted* from the fleet, and for those the conversation is replayed
+ * from Codex's own rollout on disk when the chat opens (`hydrate`).
  */
 export function applyLiveEvent(ev: WatchEvent) {
   if (applied.has(ev.id)) return;
