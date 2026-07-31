@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from "react";
-import { api, probeServer, IS_DEMO } from "../lib/api.ts";
+import { api, probeServer, IS_DEMO, SERVER, authToken } from "../lib/api.ts";
+import { rememberForWorker, forgetForWorker } from "../lib/swAuth.ts";
 import { useLive } from "../lib/useLive.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { subscribeSessionChanged } from "../lib/sessionBus.ts";
 import { useStats } from "../lib/useStats.ts";
-import { fmtUsd, fmtTokens, since } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, fmtEq, since } from "../lib/format.ts";
 import { MobileChats, type OpenChat, type Compose } from "./MobileChats.tsx";
 import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobileUi.tsx";
 import { pollWhileVisible } from "../lib/poll.ts";
@@ -16,7 +17,7 @@ import { baseName, ownerOf } from "../../../shared/projectKey.ts";
 import { MobilePr, THREAD_CSS } from "./MobilePr.tsx";
 import { MobileFleet, FLEET_CSS } from "./MobileFleet.tsx";
 import { sessionForInsight } from "./fleet.ts";
-import { buildQueue, type NowItem } from "./nowQueue.ts";
+import { buildQueue, waitingItems, type NowItem } from "./nowQueue.ts";
 import { dedupePrs, mainCheckouts } from "./prRows.ts";
 import { deviceStore, restoreAll, snooze, unsnoozed } from "./snooze.ts";
 import {
@@ -187,7 +188,21 @@ export function MobileApp() {
   // mount rather than only when the toggle is used: registering an unchanged
   // file is a no-op, and it means the worker that receives the next push is the
   // one that shipped, not one left over from an older build.
-  const pushEnv = useMemo(() => browserPushEnv(api, IS_DEMO), []);
+  /**
+   * The push wiring, including the one thing the service worker needs.
+   *
+   * A held gate arrives with Allow and Deny on it, and answering happens in the
+   * worker while this app is closed — so the credential has to be somewhere the
+   * worker can read, which is neither `localStorage` nor this closure. Read at
+   * call time rather than captured: `SERVER` and the token are live bindings
+   * that `adoptServer` rewrites when remote access is toggled or this device is
+   * paired, and a mirror taken at mount would be whatever was true then.
+   */
+  const pushEnv = useMemo(() => browserPushEnv({
+    ...api,
+    remember: () => rememberForWorker({ origin: SERVER, token: authToken() }),
+    forget: forgetForWorker,
+  }, IS_DEMO), []);
   useEffect(() => {
     let live = true;
     currentPushState(pushEnv).then((s) => { if (live) setPushState(s); });
@@ -480,6 +495,15 @@ export function MobileApp() {
     () => unsnoozed(snoozeStore, pending),
     [pending, snoozeStore, snoozeRev]
   );
+  /**
+   * The ones where something is actually stopped.
+   *
+   * The tab badge and the hero count these and nothing else. A badge that adds
+   * one held gate to five pull requests is never zero, and a number that is
+   * never zero stops being read — which is most of why this screen felt like an
+   * inbox rather than something you could empty.
+   */
+  const stopped = useMemo(() => waitingItems(queue), [queue]);
 
   /**
    * Which checkout each container belongs to, decided once by the rule the
@@ -519,12 +543,29 @@ export function MobileApp() {
 
   const decide = async (id: string, d: "allow" | "deny", itemId: string) => {
     try {
-      await api.gateDecide(id, d);
+      const r = await api.gateDecide(id, d);
+      /*
+       * An answer that did not take must not look like one that did.
+       *
+       * A press that lost the race — the timeout got there first, or somebody
+       * else answered from the desk — comes back 200 with `ok: false`, so it
+       * never reached the `catch` and this said "the agent is moving again"
+       * about a request that had already been decided the other way. On the one
+       * surface built for answering gates, that is the worst sentence available.
+       * The server says what actually won; this repeats it.
+       */
+      if (!r.ok) {
+        toast(r.error || "That did not take — the request was already decided", true);
+        // Still dropped: it is genuinely resolved, just not by this press, and
+        // leaving it in the queue invites pressing again to the same effect.
+        drop(itemId);
+        return;
+      }
       drop(itemId);
       toast(d === "allow" ? "Allowed — the agent is moving again" : "Denied — the agent was told no");
     } catch {
-      // An answer that did not arrive must not look like one that did: the
-      // agent is still blocked, and saying otherwise is the worst outcome here.
+      // Nothing reached the server at all. The agent is still blocked, and
+      // saying otherwise is the worse of the two mistakes.
       toast("That did not reach the server — the agent is still waiting", true);
     }
   };
@@ -636,21 +677,22 @@ export function MobileApp() {
           { label: "Later", tight: true, run: () => later(it) },
         ];
       case "pr-ready":
+        // No merge from here.
+        //
+        // This card used to lead with "Squash & merge", which rewrites history
+        // and deletes the head branch. A confirm sat in front of it, and a
+        // confirm is the weakest control there is against a mis-tap: it appears
+        // under the thumb that just tapped, in a list built for fast scrolling,
+        // in the same shape and position as Allow and Later. Every other action
+        // in this queue re-runs, snoozes or opens something; that one finished
+        // work on a shared repository and could not be undone from a phone.
+        //
+        // Merging is a decision you make looking at the change, and the diff,
+        // the checks and the threads are all one screen away. So the card says
+        // the pull request is ready and takes you to where deciding is possible.
         return [
-          {
-            // The one queue action that cannot be undone. Everything else here
-            // re-runs, snoozes or opens something; this rewrites history and
-            // deletes a branch, from a card the thumb is already scrolling past.
-            label: "Squash & merge", kind: "ok",
-            run: async () => {
-              if (!(await ask({
-                title: `Squash & merge #${o.pr.number}?`, danger: true, confirmLabel: "Squash & merge",
-                body: "Every commit becomes one, and the head branch is deleted straight after. Neither step is reversible from here.",
-              }))) return;
-              await settle(`Merged #${o.pr.number}`, () => api.prMerge(o.root, o.pr.number, "squash", { deleteBranch: true }), it.id);
-            },
-          },
-          { label: "Review", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
+          { label: "Open", kind: "acc", run: () => setOpenPr({ root: o.root, number: o.pr.number }) },
+          { label: "Later", tight: true, run: () => later(it) },
         ];
       case "pr-review":
         return [
@@ -759,7 +801,7 @@ export function MobileApp() {
         {tab === "now" && (
           <>
             <NowHero
-              pending={queue.length} working={live.length}
+              pending={stopped.length} news={queue.length - stopped.length} working={live.length}
               live={openCalls}
               spend={spend}
               repos={[...new Set(live.map((s) => (s.project_path || "").split("/").filter(Boolean).pop() || s.source_app))]}
@@ -781,7 +823,7 @@ export function MobileApp() {
       </main>
 
       {!immersive && <nav className="mb-nav">
-        <TabBtn id="now" tab={tab} onPick={setTab} glyph="◎" label="Now" badge={queue.length} />
+        <TabBtn id="now" tab={tab} onPick={setTab} glyph="◎" label="Now" badge={stopped.length} />
         <TabBtn id="chats" tab={tab} onPick={setTab} glyph="▤" label="Chats" />
         <TabBtn id="repos" tab={tab} onPick={setTab} glyph="◇" label="Repos" />
         {/* Everything on this tab was computed and served from the beginning
@@ -825,7 +867,7 @@ export function MobileApp() {
             sub={link === "live" ? "Streaming from your machine"
               : link === "slow" ? "Reachable, but not streaming right now"
               : "Nothing is answering on this address"} />
-          <Row title="Spend today" sub={stats?.totals ? `${fmtTokens(stats.totals.input_tokens + stats.totals.output_tokens)} tokens` : "—"} right={spend} />
+          <Row title="Spend today" sub={stats?.totals ? `${fmtEq(stats.totals.equiv_tokens ?? stats.totals.input_tokens + stats.totals.output_tokens)}` : "—"} right={spend} />
           <Row title="Sessions" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.sessions) : "—"} />
           <Row title="Tool errors" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.errors) : "—"} />
         </div>

@@ -60,12 +60,22 @@ function toNotification(raw) {
   }
   var title = typeof data.title === "string" && data.title ? data.title : FALLBACK.title;
   var body = typeof data.body === "string" && data.body ? data.body : FALLBACK.body;
+  // A non-empty string, or nothing. An older server sends no `gate` at all and
+  // a newer one could send something unexpected; either way the notification
+  // has to end up showable rather than throwing (see above).
+  var gate = typeof data.gate === "string" && data.gate ? data.gate : null;
   return {
     title: title,
     options: {
       body: body,
-      icon: "./favicon.svg",
-      badge: "./favicon.svg",
+      // Rasters, not the SVG that used to be here. Chrome on Android is not
+      // expected to draw an SVG notification icon and falls back to a generic
+      // glyph, so every alert this app sent arrived wearing somebody else's
+      // mark. The badge is a separate, monochrome file because Android throws
+      // the colours away and draws it from the alpha channel — the full mark
+      // reduced to a stencil is a blob.
+      icon: "./icon-192.png",
+      badge: "./icon-badge.png",
       // Two pushes carrying the same thing collapse into one notification
       // instead of stacking. The server already debounces by key, so a repeat
       // means a retry or a reconnect, not a second event — and a lock screen
@@ -83,6 +93,23 @@ function toNotification(raw) {
       // than "now", which is not.
       timestamp: typeof data.at === "number" ? data.at : undefined,
       renotify: false,
+      // The gate this is about, if it is about one. Carried through so the
+      // click handler knows what it is answering without going back to the
+      // server to ask, and so the buttons below have something to send.
+      data: gate ? { gate: gate } : undefined,
+      // Answer it here, rather than being told where to go and answer it.
+      //
+      // A held gate is the only alert with two obvious replies and an agent
+      // stopped until one of them arrives — so the notification carries them.
+      // Everything else this app sends is news, and news with buttons on it is
+      // a worse notification, not a better one.
+      //
+      // Ignored where they are not supported, which today means iPhone: Safari
+      // draws the notification without them and tapping it opens the queue, as
+      // it did before. Nothing here is required for that path to work.
+      actions: gate
+        ? [{ action: "allow", title: "Allow" }, { action: "deny", title: "Deny" }]
+        : undefined,
     },
   };
 }
@@ -93,6 +120,113 @@ self.addEventListener("push", function (event) {
   // the push arrives, the process is torn down, and nothing appears.
   event.waitUntil(self.registration.showNotification(n.title, n.options));
 });
+
+/**
+ * Where the worker finds out who it is.
+ *
+ * The page holds the credential in `localStorage`, which a service worker
+ * cannot read — it has no `window` and no `localStorage`. IndexedDB is the one
+ * store both halves can reach, so the app mirrors two things into it whenever
+ * push is switched on: the server this device is paired to, and the credential
+ * it was given. See web/src/lib/swAuth.ts, which also clears it.
+ *
+ * It is the same credential the page already holds on the same origin, at the
+ * same level it was paired at — not a wider one minted for the worker. A phone
+ * paired to answer gates can answer a gate from here and can do nothing else,
+ * because the server checks the scope on the route, not on the caller's
+ * politeness. Forgetting the device at the machine kills this copy too.
+ *
+ * Every failure resolves to null rather than throwing: this runs with no UI
+ * anywhere, and a rejection here would turn a tapped button into the browser's
+ * own "site updated in the background" notification.
+ */
+function openDb() {
+  return new Promise(function (resolve) {
+    try {
+      // `self.`-qualified, like everything else this file touches. In a real
+      // worker `self` *is* the global, so it changes nothing there — and it is
+      // what lets the suite run this file against a fake scope instead of
+      // reaching past it to the host's real IndexedDB and its real network.
+      var req = self.indexedDB.open("agentglass", 1);
+      req.onupgradeneeded = function () {
+        try { req.result.createObjectStore("auth"); } catch (e) { /* already there */ }
+      };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { resolve(null); };
+      req.onblocked = function () { resolve(null); };
+    } catch (e) { resolve(null); }
+  });
+}
+
+function readAuth() {
+  return openDb().then(function (db) {
+    if (!db) return null;
+    return new Promise(function (resolve) {
+      try {
+        var r = db.transaction("auth", "readonly").objectStore("auth").get("server");
+        r.onsuccess = function () { resolve(r.result || null); };
+        r.onerror = function () { resolve(null); };
+      } catch (e) { resolve(null); }
+    });
+  });
+}
+
+/**
+ * Answer the gate.
+ *
+ * Every outcome is named, because the phone is about to be told one of them
+ * and "something went wrong" is the answer that makes somebody unlock the
+ * screen and go looking — which is the whole thing this is here to avoid.
+ *
+ * `decideGate` on the server is idempotent: a gate that is already decided, or
+ * that timed out while the phone was in a pocket, comes back not-ok rather
+ * than as a conflict. That is a real answer and is reported as one.
+ */
+function decide(gate, decision) {
+  return readAuth().then(function (auth) {
+    if (!auth || !auth.origin) return { ok: false, why: "unpaired" };
+    var headers = { "content-type": "application/json" };
+    if (auth.token) headers.authorization = "Bearer " + auth.token;
+    return self.fetch(String(auth.origin).replace(/\/$/, "") + "/gate/decide", {
+      method: "POST",
+      headers: headers,
+      credentials: "omit",
+      body: JSON.stringify({ id: gate, decision: decision }),
+    }).then(function (r) {
+      // 401 is a credential that no longer works — the device was forgotten,
+      // or the machine's code was rotated. 403 is a device that works and is
+      // not allowed to decide, which is what a look-only phone gets. Different
+      // sentences, because they need different things done about them.
+      if (r.status === 401) return { ok: false, why: "unpaired" };
+      if (r.status === 403) return { ok: false, why: "notAllowed" };
+      return r.json().then(
+        function (j) { return j && j.ok ? { ok: true, why: "" } : { ok: false, why: "gone" }; },
+        function () { return { ok: false, why: "gone" }; },
+      );
+    }, function () { return { ok: false, why: "offline" }; });
+  });
+}
+
+/** What the tap did, said back. A button that answers silently is a button
+ *  nobody trusts the second time. */
+function report(result, decision, gate) {
+  var text =
+    result.ok ? (decision === "allow" ? "Allowed. The agent is going." : "Denied. The agent has been told why.")
+    : result.why === "gone" ? "Already answered, or it timed out waiting."
+    : result.why === "notAllowed" ? "This device is paired to look, not to answer. Change that on the computer."
+    : result.why === "unpaired" ? "This device is not connected any more. Open agentglass to pair it again."
+    : "Could not reach the computer. It may be asleep, or you may be on another network.";
+  return self.registration.showNotification(result.ok ? "✓ agentglass" : "agentglass", {
+    body: text,
+    icon: "./icon-192.png",
+    badge: "./icon-badge.png",
+    // Same tag as nothing else, and keyed to the gate: the answer to one
+    // approval must not replace the notification for a different one that is
+    // still waiting.
+    tag: "gate-result:" + gate,
+    requireInteraction: false,
+  });
+}
 
 /**
  * Tapping the notification puts the decision in front of you.
@@ -113,6 +247,19 @@ self.addEventListener("push", function (event) {
  */
 self.addEventListener("notificationclick", function (event) {
   event.notification.close();
+
+  // A button, rather than the notification itself. Answer it and stop — the
+  // point of the buttons is that the phone stays locked and the app stays
+  // closed, so opening a window here would undo the whole thing.
+  var gate = event.notification.data && event.notification.data.gate;
+  var action = event.action;
+  if (gate && (action === "allow" || action === "deny")) {
+    event.waitUntil(
+      decide(gate, action).then(function (r) { return report(r, action, gate); }),
+    );
+    return;
+  }
+
   var home = new URL("./", self.registration.scope).href;
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (all) {

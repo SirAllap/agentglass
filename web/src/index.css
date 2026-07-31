@@ -636,3 +636,85 @@
 @media (prefers-reduced-motion: reduce) {
   @keyframes agx-attention { 0%, 100% { box-shadow: none; } }
 }
+
+/* --- connecting a device (PairScreen) ---------------------------------------
+
+   Its own small stylesheet rather than the phone's, because it runs before
+   either application does: at this point the page holds no credential, so
+   every fetch the cockpit or the companion would make on mount is a 401. It
+   also runs on a desktop browser when somebody opens the link on a laptop, so
+   it centres rather than filling.
+
+   Sized for a thumb and a numeric keypad. The code field is the largest thing
+   on the screen on purpose — it is the one thing being asked for, and typing
+   six digits into a small box while comparing them to another screen is where
+   this goes wrong. */
+.pair-wrap {
+  min-height: 100dvh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+.pair-card {
+  width: 100%; max-width: 380px;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 22px 20px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.pair-mark { font-size: 26px; line-height: 1; }
+.pair-h1 { font-size: 19px; font-weight: 600; color: var(--text); margin: 0; }
+.pair-p { font-size: 13px; line-height: 1.5; color: var(--text2); margin: 0; }
+.pair-bad { color: var(--error); }
+.pair-hint { font-size: 11px; line-height: 1.45; color: var(--text3); }
+.pair-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text3); margin-top: 6px;
+}
+.pair-input {
+  width: 100%;
+  /* 16px is the threshold below which iOS Safari zooms the viewport on focus,
+     which on this screen scrolls the code you are copying out of view. */
+  font-size: 16px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+.pair-input:focus { outline: none; border-color: color-mix(in srgb, var(--primary) 55%, transparent); }
+.pair-code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 30px; letter-spacing: 0.28em; text-align: center;
+  padding: 12px 8px;
+}
+/* At this size the browser's default placeholder contrast is not enough: the
+   hint reads as six digits that are already there, and the first thing anyone
+   does with a filled-looking code field is press the button. */
+.pair-code::placeholder { color: var(--text4); opacity: 0.35; }
+.pair-go {
+  margin-top: 6px;
+  min-height: 46px;
+  border-radius: 12px;
+  font-size: 14px; font-weight: 600;
+  color: var(--primary-contrast, #fff);
+  background: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 70%, transparent);
+}
+.pair-go:disabled { opacity: 0.45; }
+.pair-err {
+  font-size: 12px; line-height: 1.45;
+  color: var(--error);
+  padding: 8px 10px; border-radius: 9px;
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+}
+@keyframes agx-pair-spin { to { transform: rotate(360deg); } }
+.pair-spin {
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-top-color: var(--primary);
+  animation: agx-pair-spin 0.9s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { .pair-spin { animation: none; } }

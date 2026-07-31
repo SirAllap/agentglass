@@ -2,6 +2,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.tsx";
 import { MobileApp } from "./mobile/MobileApp.tsx";
+import { PairScreen } from "./PairScreen.tsx";
+import { adoptServer } from "./lib/api.ts";
+import { ticketFromUrl, clearTicketFromUrl } from "./lib/pairing.ts";
 import { phoneLayoutNow } from "./lib/viewport.ts";
 import { followServerChanges } from "./lib/desktop.ts";
 import { applyTheme, initialTheme, watchThemeStorage } from "./lib/themes.ts";
@@ -35,8 +38,36 @@ const Root = phone ? MobileApp : App;
 // revoked. Adopt the new origin/token in place rather than reloading the app.
 followServerChanges();
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <Root />
-  </React.StrictMode>
-);
+const root = ReactDOM.createRoot(document.getElementById("root")!);
+
+const mount = (tree: React.ReactNode) => root.render(<React.StrictMode>{tree}</React.StrictMode>);
+
+/**
+ * A page opened from the QR has a handshake to finish before it has an
+ * application.
+ *
+ * Decided out here rather than inside the apps, for the same reason the phone
+ * check is: this device holds no credential yet, so every request either tree
+ * makes on mount would come back 401 and the first thing the user would see is
+ * an app failing to load behind a pairing form.
+ *
+ * Handing the token to `adoptServer` rather than reloading means the app mounts
+ * straight into a working session — a reload here would drop the URL the QR
+ * carried and land somebody on a cold start with no explanation of what just
+ * happened.
+ */
+const invitation = ticketFromUrl(location.href);
+if (invitation) {
+  mount(
+    <PairScreen
+      ticket={invitation}
+      onPaired={(token) => {
+        adoptServer({ token });
+        clearTicketFromUrl();
+        mount(<Root />);
+      }}
+    />
+  );
+} else {
+  mount(<Root />);
+}

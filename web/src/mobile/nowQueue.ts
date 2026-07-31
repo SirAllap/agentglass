@@ -60,8 +60,32 @@ export interface NowItem {
    * their band and draw no age at all.
    */
   ts?: number;
+  /**
+   * Something is stopped, and only a person can start it again.
+   *
+   * The distinction this whole screen turns on, and the one it did not make
+   * for a long time. An agent held at a gate is *paused* — the hook's request
+   * is open, nothing proceeds, and the only thing in the world that unblocks it
+   * is somebody tapping Allow. A pull request being ready is true, useful, and
+   * waiting on nobody.
+   *
+   * Both were cards in one list, in the same shape, counted by one number. There
+   * is always more news than there are blockages, so the news won, and what was
+   * left read as a notifications inbox — which everybody already has, and which
+   * is why the honest verdict on this screen was that it did not add value. It
+   * is also how an irreversible merge ended up one thumb-length from Allow.
+   *
+   * So it is a field rather than a tone: a tone says how loud, and this says
+   * whether anything is actually stuck.
+   */
+  waiting: boolean;
   origin: NowOrigin;
 }
+
+/** The ones that are stopped. The hero counts these and nothing else. */
+export const waitingItems = (items: NowItem[]): NowItem[] => items.filter((i) => i.waiting);
+/** Everything else: true, worth knowing, waiting on nobody. */
+export const newsItems = (items: NowItem[]): NowItem[] => items.filter((i) => !i.waiting);
 
 /** Blocked first: an agent waiting on a permission is stopped dead, and every
  *  second of that is wasted. Then things that are broken, then things that are
@@ -108,6 +132,8 @@ export function buildQueue({ gates, sessions, prs, containers, trees, me, now }:
       // three is progress worth being told about; the clock is not in here.
       mark: `halt:${root}:${h.state}:${h.conflicts.length}`,
       tone: "crit",
+      // Nothing in this checkout will move again until somebody decides.
+      waiting: true,
       kind: "Stopped part-way",
       title: `${baseName(root)}: ${h.title.toLowerCase()}`,
       sub: h.sub,
@@ -120,6 +146,8 @@ export function buildQueue({ gates, sessions, prs, containers, trees, me, now }:
   for (const g of gates) {
     out.push({
       id: `gate:${g.id}`, mark: `gate:${g.id}`, tone: "crit",
+      // The purest case: the hook's own request is open while this sits here.
+      waiting: true,
       kind: "Blocked · waiting on you",
       title: g.summary || g.tool_name,
       sub: `${g.source_app} · the agent is stopped until you answer`,
@@ -137,6 +165,9 @@ export function buildQueue({ gates, sessions, prs, containers, trees, me, now }:
       // It spoke again: that is the change, even if it has since gone quiet.
       mark: `session:${s.session_id}:${s.last_seen}`,
       tone: "plain",
+      // Quiet for longer than it takes to think. The agent is not working, it
+      // is waiting to be told something.
+      waiting: true,
       kind: "Stopped · wants direction",
       title: sessionTitle(s),
       sub: `${projectName(s)} · idle ${Math.round(quiet / 60_000)}m`,
@@ -158,6 +189,8 @@ export function buildQueue({ gates, sessions, prs, containers, trees, me, now }:
         // the failing set. Either is worth surfacing again.
         mark: `red:${repo}#${pr.number}:${pr.updatedAt}:${pr.checks.failing.map((f) => f.name).sort().join(",")}`,
         tone: "bad",
+        // The run already finished. Nothing is paused on your answer.
+        waiting: false,
         kind: "CI went red",
         title: `${pr.checks.failing[0]?.name ?? "A check"} is failing on #${pr.number}`,
         sub: `${pr.title} · ${repo}`,
@@ -172,6 +205,7 @@ export function buildQueue({ gates, sessions, prs, containers, trees, me, now }:
         id: `ready:${repo}#${pr.number}`,
         mark: `ready:${repo}#${pr.number}:${pr.updatedAt}`,
         tone: "good",
+        waiting: false,
         kind: "Ready to merge",
         title: `#${pr.number} ${pr.title}`,
         sub: `Approved · ${pr.checks.total} checks green · ${repo}`,
@@ -185,6 +219,10 @@ export function buildQueue({ gates, sessions, prs, containers, trees, me, now }:
         id: `review:${repo}#${pr.number}`,
         mark: `review:${repo}#${pr.number}:${pr.updatedAt}`,
         tone: "plain",
+        // A person is waiting, which is real and is not the same as an agent
+        // stopped mid-run. This is the kind there is always most of, and
+        // letting it into the count is what drowned the gates.
+        waiting: false,
         kind: "Review requested",
         title: `#${pr.number} ${pr.title}`,
         sub: `${pr.author} asked you · +${pr.additions} −${pr.deletions} across ${pr.changedFiles} files`,
@@ -202,6 +240,8 @@ export function buildQueue({ gates, sessions, prs, containers, trees, me, now }:
       // hours ago"), and a mark that ticks is a snooze that never holds.
       mark: `ctr:${c.id}:${c.state}:${exitCode(c) ?? "?"}`,
       tone: "bad",
+      // Misbehaving, not waiting.
+      waiting: false,
       kind: "Container down",
       title: looping ? `${c.name} is restarting in a loop` : `${c.name} is ${c.state}`,
       // Docker's own status carries the age — "Exited (1) 3 hours ago" — and
@@ -212,10 +252,18 @@ export function buildQueue({ gates, sessions, prs, containers, trees, me, now }:
     });
   }
 
-  // Inside a band, newest first — and anything without a real moment after
-  // everything that has one, rather than ahead of all of it.
+  // Anything stopped outranks everything that is merely true, whatever its
+  // tone. A red build is `bad` and a stalled agent is `plain`, and before this
+  // the red build sorted above it — the loudest card in the list was the one
+  // nothing was waiting on.
+  //
+  // Then the old order inside each group: blocked, broken, finished, and
+  // newest first within a band, with items that have no honest moment last
+  // rather than ahead of everything real.
   return out.sort((a, b) =>
-    RANK[a.tone] - RANK[b.tone] || (b.ts ?? -Infinity) - (a.ts ?? -Infinity));
+    Number(b.waiting) - Number(a.waiting)
+    || RANK[a.tone] - RANK[b.tone]
+    || (b.ts ?? -Infinity) - (a.ts ?? -Infinity));
 }
 
 /**

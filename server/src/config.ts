@@ -6,6 +6,7 @@
 // find. Environment variables still win, so a one-off `AGENTGLASS_…=x bun run`
 // overrides the file without editing it.
 
+import type { Budget } from "../../shared/types.ts";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, dirname, sep, delimiter } from "node:path";
@@ -64,6 +65,9 @@ interface Config {
    *  for a packaged install or a shell-less deployment — exactly the people who
    *  want it off. The env var still wins when set. */
   terminalDisabled?: boolean;
+  /** Spending limits somebody set. See budget.ts. Hand-edited freely like the
+   *  rest of this file, so every field is checked on read. */
+  budgets?: Budget[];
 }
 
 function load(path: string): Config {
@@ -105,6 +109,86 @@ function config(): Config {
 }
 
 const expand = (p: string) => (p.startsWith("~/") ? join(homedir(), p.slice(2)) : p);
+
+/**
+ * The budgets on disk, with anything unusable dropped.
+ *
+ * Checked field by field rather than trusted, for the same reason `root` is:
+ * this file is hand-edited, and a budget is a *denominator*. A limit that
+ * arrives as a string turns every percentage into NaN, and a period nobody
+ * recognises would silently be evaluated as a month. Both are the kind of wrong
+ * that shows up as a number on a dashboard rather than as an error.
+ *
+ * A row that cannot be used is skipped and said about, never coerced into
+ * something plausible — a limit of `"40"` meaning forty is a guess, and
+ * guessing on a spending limit is how somebody finds out at the end of a month.
+ */
+export function readBudgets(): Budget[] {
+  const raw = config().budgets;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    console.error(`[config] ignoring "budgets" in ${configPath()}: expected an array`);
+    return [];
+  }
+  const out: Budget[] = [];
+  for (const b of raw) {
+    if (!b || typeof b !== "object" || Array.isArray(b)) continue;
+    const r = b as Partial<Budget>;
+    if (typeof r.limit !== "number" || !Number.isFinite(r.limit) || r.limit <= 0) {
+      console.error(`[config] ignoring a budget with a limit that is not a positive number`);
+      continue;
+    }
+    if (r.period !== "day" && r.period !== "week" && r.period !== "month") {
+      console.error(`[config] ignoring a budget with an unknown period: ${String(r.period)}`);
+      continue;
+    }
+    out.push({
+      root: typeof r.root === "string" ? expand(r.root) : "",
+      model: typeof r.model === "string" ? r.model : "",
+      limit: r.limit,
+      period: r.period,
+    });
+  }
+  return out;
+}
+
+/**
+ * Replace the whole set.
+ *
+ * Whole-set rather than per-row: budgets are edited as a list in one pane, and
+ * a partial update needs an identity for a row that has none — two budgets can
+ * differ only by a limit somebody is halfway through typing.
+ *
+ * Written through the same path as the workspace root, and refusing the same
+ * two things: a config file it could not parse, which would be overwritten
+ * wholesale, and any path outside the scratch directory under test.
+ */
+export function writeBudgets(budgets: Budget[]): { ok: boolean; persisted: boolean; error?: string } {
+  const path = configPath();
+  if (realConfigOffLimits(path)) {
+    return { ok: true, persisted: false, error: "not persisted: tests write settings only under os.tmpdir()" };
+  }
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(path)) {
+      const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { ok: false, persisted: false, error: `config file is malformed — fix ${path} to save budgets` };
+      }
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch (e) {
+    return { ok: false, persisted: false, error: `config file is malformed — fix ${path} to save budgets (${e instanceof Error ? e.message : e})` };
+  }
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ ...existing, budgets }, null, 2) + "\n");
+    cached = null; // so the next read sees what was just written
+    return { ok: true, persisted: true };
+  } catch (e) {
+    return { ok: false, persisted: false, error: `could not write ${path}: ${e instanceof Error ? e.message : e}` };
+  }
+}
 
 /**
  * Where to look for repos, most explicit source first.

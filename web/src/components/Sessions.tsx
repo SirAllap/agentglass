@@ -4,7 +4,7 @@ import type { SessionRollup } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { sessionIsLive } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
-import { fmtUsd, fmtMs, fmtTokens, modelColor, modelLabelOf } from "../lib/format.ts";
+import { fmtUsd, fmtMs, fmtEq, modelColor, modelLabelOf } from "../lib/format.ts";
 
 export const Sessions = memo(function Sessions({ provider = "" }: { provider?: string }) {
   const [sessions, setSessions] = useState<SessionRollup[]>([]);
@@ -46,7 +46,7 @@ export const Sessions = memo(function Sessions({ provider = "" }: { provider?: s
                   title={`${model} · ${fmtMs(dur)} · ${s.event_count} events`}
                 >
                   {live && <span className="h-1.5 w-1.5 rounded-full mr-1" style={{ background: "var(--success)", animation: "ping-ring 1.6s ease-out infinite" }} />}
-                  <span className="truncate" style={{ color: "var(--text2)" }}>{fmtTokens(s.input_tokens + s.output_tokens)} tok</span>
+                  <span className="truncate" style={{ color: "var(--text2)" }}>{fmtEq(s.equiv_tokens ?? s.input_tokens + s.output_tokens)}</span>
                 </motion.div>
               </div>
               <div className="w-14 shrink-0 text-right tabular-nums" style={{ color: "var(--success)" }}>{fmtUsd(s.cost_usd)}</div>

@@ -3,7 +3,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { motion } from "motion/react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
-import { fmtUsd, fmtTokens, modelColor } from "../lib/format.ts";
+import { fmtUsd, fmtEq, eqTitle, modelColor } from "../lib/format.ts";
 
 export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSummary | null }) {
   const models = (stats?.by_model ?? []).filter((m) => m.cost_usd > 0 || m.input_tokens > 0);
@@ -89,7 +89,9 @@ export const CostByModel = memo(function CostByModel({ stats }: { stats: StatsSu
                 )}
               </span>
               <span className="flex items-center gap-3 tabular-nums">
-                <span className="t-dim2">{fmtTokens(m.input_tokens + m.output_tokens)} tok</span>
+                <span className="t-dim2" title={eqTitle(m.equiv_tokens ?? m.input_tokens + m.output_tokens)}>
+                  {fmtEq(m.equiv_tokens ?? m.input_tokens + m.output_tokens)}
+                </span>
                 <span style={{ color: "var(--success)" }}>{fmtUsd(m.cost_usd)}</span>
               </span>
             </motion.div>

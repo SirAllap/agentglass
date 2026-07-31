@@ -6,7 +6,7 @@ import { ChangesModal } from "./ChangesModal.tsx";
 import { api } from "../lib/api.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { Markdown } from "../lib/markdown.tsx";
-import { fmtUsd, fmtTokens, fmtAgo, fmtTime, modelLabelOf, modelColor, sessionTitle } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, fmtEq, fmtAgo, fmtTime, modelLabelOf, modelColor, sessionTitle } from "../lib/format.ts";
 import { ToolRow } from "./ToolRow.tsx";
 import { buildRows, entryKey, type Row } from "../lib/toolTree.ts";
 import { sessionIsLive } from "../lib/derive.ts";
@@ -215,7 +215,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                         <Stat k="Tools" v={d.tools.toLocaleString()} />
                         <Stat k="Errors" v={String(d.errors)} color={d.errors ? "var(--error)" : "var(--text3)"} />
                         <Stat k="Subagents" v={String(d.subagents.length)} color="var(--info)" />
-                        <Stat k="Tokens" v={fmtTokens(d.input_tokens + d.output_tokens)} />
+                        <Stat k="Tokens" v={fmtEq(d.equiv_tokens ?? d.input_tokens + d.output_tokens)} />
                         <Stat k="Cost" v={fmtUsd(d.cost_usd)} color="var(--success)" />
                       </div>
                     </div>

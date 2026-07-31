@@ -43,6 +43,15 @@ export interface AgentCard {
    *  `tools` is a legitimate denominator for — see the rate rule below. */
   toolErrors: number;
   cost: number;
+  /**
+   * Every token class weighted by its own price, in uncached-input units.
+   *
+   * It used to be `input + output`, which is not a quantity: it adds a token
+   * that costs five to one that costs a tenth and drops the cache classes
+   * entirely — so a session that reads a large context every turn looked
+   * enormous and was cheap. The weighting happens on the server, where the
+   * prices are, and arrives on the event; this side only adds up.
+   */
   tokens: number;
   lastSeen: number;
   lastErrorTs: number;
@@ -163,18 +172,30 @@ export function buildTitles(sessions: { session_id: string; source_app?: string;
  *
  * The sessions poll already runs for the titles; these are the same rows.
  */
-export type RollupLookup = ReadonlyMap<string, Pick<SessionRollup, "cost_usd" | "input_tokens" | "output_tokens" | "tool_count">>;
+type RollupFields = "cost_usd" | "input_tokens" | "output_tokens" | "equiv_tokens" | "tool_count";
+export type RollupLookup = ReadonlyMap<string, Pick<SessionRollup, RollupFields>>;
 
 export function buildRollups(sessions: SessionRollup[]): RollupLookup {
-  const m = new Map<string, Pick<SessionRollup, "cost_usd" | "input_tokens" | "output_tokens" | "tool_count">>();
+  const m = new Map<string, Pick<SessionRollup, RollupFields>>();
   for (const s of sessions) {
     m.set(s.session_id, {
       cost_usd: s.cost_usd, input_tokens: s.input_tokens,
-      output_tokens: s.output_tokens, tool_count: s.tool_count,
+      output_tokens: s.output_tokens, equiv_tokens: s.equiv_tokens, tool_count: s.tool_count,
     });
   }
   return m;
 }
+
+/**
+ * The weighted figure, or the old raw sum when there isn't one.
+ *
+ * `equiv_tokens` is optional because a server older than this does not send it,
+ * and absent has to mean *unknown* rather than zero — a fleet reporting 0
+ * tokens against a real cost is a worse answer than the unweighted count it
+ * replaces, and it is the one a `?? 0` would give.
+ */
+const weighted = (r: { equiv_tokens?: number; input_tokens: number; output_tokens: number }): number =>
+  r.equiv_tokens ?? r.input_tokens + r.output_tokens;
 
 export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [], titles?: TitleLookup, rollups?: RollupLookup): AgentCard[] {
   const now = Date.now();
@@ -236,7 +257,7 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
       if (e.timestamp >= a.lastErrorTs) a.lastErrorTs = e.timestamp;
     }
     a.cost += e.cost_usd;
-    a.tokens += e.input_tokens + e.output_tokens;
+    a.tokens += weighted(e);
     if (e.timestamp >= a.lastSeen) {
       a.lastSeen = e.timestamp;
       a.lastType = e.hook_event_type;
@@ -310,7 +331,7 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     const r = rollups?.get(a.session_id);
     if (r) {
       a.cost = Math.max(a.cost, r.cost_usd);
-      a.tokens = Math.max(a.tokens, r.input_tokens + r.output_tokens);
+      a.tokens = Math.max(a.tokens, weighted(r));
       a.tools = Math.max(a.tools, r.tool_count);
     }
     const since = now - a.lastSeen;

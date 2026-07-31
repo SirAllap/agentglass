@@ -55,6 +55,16 @@ export interface WatchEvent {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  /**
+   * Every token class weighted by its own price and expressed in uncached input
+   * tokens — one comparable number in place of four kinds of token that differ
+   * by up to fifty times in what they cost.
+   *
+   * Derived on the server, where the price table lives, exactly as `cost_usd`
+   * already is. Optional because an older server does not send it: absent means
+   * unknown, and a reader must fall back to the raw classes rather than to 0.
+   */
+  equiv_tokens?: number;
   cost_usd: number;
   summary: string | null;
   timestamp: number; // ms
@@ -98,6 +108,9 @@ export interface SessionRollup {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  /** Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+   *  Optional: absent means an older server, not zero. */
+  equiv_tokens?: number;
   cost_usd: number;
 }
 
@@ -114,6 +127,9 @@ export interface CostByModel {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  /** Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+   *  Optional: absent means an older server, not zero. */
+  equiv_tokens?: number;
   cost_usd: number;
   sessions: number;
 }
@@ -170,6 +186,9 @@ export interface UsageDay {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  /** Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+   *  Optional: absent means an older server, not zero. */
+  equiv_tokens?: number;
   cost_usd: number;
   sessions: number;
   /** Mean tool duration, ms. */
@@ -257,6 +276,9 @@ export interface StatsSummary {
     output_tokens: number;
     cache_creation_tokens: number;
     cache_read_tokens: number;
+    /** Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+     *  Optional: absent means an older server, not zero. */
+    equiv_tokens?: number;
   };
   by_model: CostByModel[];
   tool_latency: ToolLatencyStat[];
@@ -316,14 +338,22 @@ export interface GateRecord extends PendingGate {
   reason: string | null;
   resolution: "human" | "timeout" | "restart" | null;
   decided_at: number | null;
+  /** *Which* human — a paired device's name, or the address the answer came
+   *  from. NULL when nobody decided: a timeout is not an actor, and neither is
+   *  a restart. Also NULL on rows written before the column existed, which is
+   *  why an absent value is never read as "this machine". */
+  decided_by: string | null;
 }
 
 /**
  * One write the cockpit performed, kept.
  *
- * `actor` is where the request came from, not who someone is: there are no
- * accounts and the token is shared, so `local` means the loopback caller — this
- * machine's dashboard — and anything else is the address it arrived from.
+ * `actor` is the most the server can honestly assert. A paired device has its
+ * own credential and the name somebody accepted when they paired it, so it is
+ * named — "iPhone · 3f9c21", with the device id because an unnamed phone
+ * defaults to "A device" and two of those must not read as one. Otherwise it is
+ * a place rather than a person: `local` for the loopback caller — this
+ * machine's dashboard — and the address for anything else.
  */
 export interface ActionRecord {
   id: number;
@@ -439,6 +469,16 @@ export interface SessionDetail {
   cost_usd: number;
   input_tokens: number;
   output_tokens: number;
+  /**
+   * Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+   *
+   * The cache classes are not on this shape and never were, which is the whole
+   * reason this pane's "Tokens" stat was input+output: not a decision, just the
+   * two columns the query happened to select. They are summed in the query now
+   * and weighted into this one figure rather than added to the type, since four
+   * numbers here would only recreate the problem one field along.
+   */
+  equiv_tokens?: number;
   summary: string | null;
   tool_mix: { tool: string; n: number }[];
   subagents: { agent_id: string; agent_type: string; events: number }[];
@@ -1534,6 +1574,171 @@ export interface RemoteDevice {
   self?: boolean;
 }
 
+/**
+ * What a paired device is allowed to do. See server/src/devices.ts.
+ *
+ * Three levels rather than a permission matrix: looking at things, answering
+ * the thing an agent is stopped on, and operating the machine.
+ */
+export type DeviceScope = "read" | "answer" | "full";
+
+/** A phone (or anything else) that holds its own credential to this machine. */
+export interface PairedDevice {
+  id: string;
+  /** Whatever it called itself when it paired. */
+  label: string;
+  scope: DeviceScope;
+  createdAt: number;
+  /** Last request it made, recorded at most once a minute. */
+  lastSeenAt?: number;
+  /** Set when forgotten. The row stays so "did I definitely cut it off" is
+   *  answerable rather than inferred from an absence. */
+  revokedAt?: number;
+}
+
+/**
+ * A device that has typed the code and is waiting on somebody at the machine.
+ *
+ * Carries the code so the pane can show it beside the request: the person
+ * accepting is meant to check that the six digits on the phone in their hand
+ * are the six digits on the screen, which is the step that makes this more
+ * than a button that says yes.
+ */
+export interface PairRequest {
+  id: string;
+  code: string;
+  label: string;
+  agent: string;
+  ip: string;
+  claimedAt: number;
+  expiresAt: number;
+}
+
+/** The credential, sealed to the key the phone generated for this pairing. */
+export interface PairWrapped {
+  /** The server's ephemeral P-256 public key, base64url. */
+  pub: string;
+  iv: string;
+  data: string;
+}
+
+/** Everything the Remote pane needs about pairing, in one poll. Local only. */
+export interface PairState {
+  /** The live invitation, if the pane has started one. */
+  ticket: { id: string; code: string; expiresAt: number } | null;
+  /** Claims waiting on a decision, oldest first. */
+  pending: PairRequest[];
+  devices: PairedDevice[];
+}
+
+/**
+ * An agent CLI this app knows how to connect, and how.
+ *
+ * Everything not installed is listed too, rather than hidden: a list of what is
+ * present says nothing about what is *supported*, and that is the question
+ * somebody has before they decide to try a second agent at all.
+ */
+export interface KnownAgent {
+  id: string;
+  label: string;
+  /** The executable looked for on PATH. */
+  bin: string;
+  /** How it reports: our own hook forwarder, or its OpenTelemetry exporter. */
+  via: "hooks" | "otel";
+  /** The file connecting it writes. Shown, so nobody has to guess. */
+  configPath: string;
+  /** A fragment of the `source_app` its events arrive under. Not the whole
+   *  thing: for an OTel agent that is the CLI's own `service.name`, which this
+   *  app does not choose and cannot pin. */
+  match: string;
+  /** How to get it, for the ones that are not here. */
+  install: string;
+  /** What connecting it actually does, in a few words. */
+  connects: string;
+}
+
+export interface AgentProbe extends KnownAgent {
+  /** On PATH right now. */
+  found: boolean;
+  /** Where, when it was found. */
+  path: string | null;
+  /** Its config currently points at a local agentglass. */
+  connected: boolean;
+  /**
+   * When an event from it last arrived, or null if one never has.
+   *
+   * The half that matters, and deliberately independent of `connected`: a
+   * config that was written and an event that landed are different facts, and
+   * every failure here looks like a successful write — a file in the right
+   * shape the CLI does not read, a session started before the change, a typo in
+   * an endpoint. A tick over a file that changed nothing stops the search.
+   */
+  seenAt: number | null;
+}
+
+/** How often a budget resets. Calendar periods, not trailing windows — the
+ *  reset is what makes a number feel like a budget rather than an average. */
+export type BudgetPeriod = "day" | "week" | "month";
+
+/**
+ * A spending limit somebody chose.
+ *
+ * The insights used to fire on constants, which makes them noise on a project
+ * that genuinely costs that much and silent on one where a tenth would be
+ * alarming. Three fields, deliberately: how much, over what period, for what.
+ */
+export interface Budget {
+  /** Project root this applies to. Empty means the whole machine. */
+  root: string;
+  /** Exact model name this applies to. Empty means all of them. */
+  model: string;
+  /** In USD, matching every other cost in this app. */
+  limit: number;
+  period: BudgetPeriod;
+}
+
+/** A budget, and where it stands right now. */
+export interface BudgetStatus {
+  budget: Budget;
+  /** The window evaluated, UTC and inclusive — so a panel can say which days
+   *  the number covers rather than implying it covers all of them. */
+  fromDay: string;
+  toDay: string;
+  spent: number;
+  /** Fraction of the limit. Above 1 when over, which is left uncapped: "180%"
+   *  is the useful number and "100%" would hide how far past it went. */
+  pct: number;
+  level: "ok" | "warn" | "over";
+}
+
+/**
+ * A warm CLI held in a tmux pane, and what is known about it.
+ *
+ * Each is several hundred megabytes — that is the price of skipping the MCP
+ * re-init a fresh turn pays — so "what is running" is a question with a number
+ * attached to it, and until now the only place to ask it was a terminal.
+ */
+export interface ChatPane {
+  /** The chat's session id, which is also the pane's name. */
+  name: string;
+  /** When this server last ran a turn in it. Null for a pane it has never
+   *  served — a leftover from a previous run, or something started by hand. */
+  lastUsedAt: number | null;
+  /** Exempt from idle eviction until unpinned or closed. */
+  pinned: boolean;
+  /** Mid-turn at this instant. Never an orphan, and never safe to end. */
+  running: boolean;
+  /** No chat this client has open, and no turn in flight, points at it. */
+  orphan: boolean;
+}
+
+export interface ChatPaneList {
+  panes: ChatPane[];
+  /** How long a pane may sit unused before it is reclaimed. 0 means eviction
+   *  is switched off, which is a thing the UI has to say rather than imply. */
+  idleEvictMs: number;
+}
+
 /** Whether another device can reach this server, and whether one ever has. */
 export interface RemoteStatus {
   /** Bound off loopback, so off-box traffic can arrive at all. */
@@ -1545,7 +1750,8 @@ export interface RemoteStatus {
   tokenRequired: boolean;
   /** This port serves the dashboard itself, not only the API. */
   webUi: boolean;
-  /** Ready-to-open URLs, token included when the caller is local. */
+  /** Ready-to-open addresses. Never a credential: a device is added by
+   *  pairing (see PairState), not by being handed a link. */
   urls: string[];
   addresses: ReachableAddress[];
   clients: { count: number; lastAt: number | null; addresses: string[]; liveCount: number };
@@ -1553,6 +1759,4 @@ export interface RemoteStatus {
    *  open right now, which is the difference between "is here" and "was here". */
   devices: RemoteDevice[];
   firewall: FirewallHint | null;
-  /** Only ever sent to a caller on this machine. */
-  token?: string;
 }

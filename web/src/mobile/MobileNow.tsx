@@ -1,7 +1,7 @@
 import { Act, Empty } from "./mobileUi.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { shortTarget } from "./transcript.ts";
-import type { NowItem, NowTone } from "./nowQueue.ts";
+import { waitingItems, newsItems, type NowItem, type NowTone } from "./nowQueue.ts";
 
 /**
  * The queue, and the hero above it.
@@ -78,6 +78,17 @@ export const NOW_CSS = `
    not the same size of decision as re-running it. */
 .mb-item .acts>.tight{flex:none;display:flex}
 .mb-item .acts>.tight>.mb-btn{min-height:50px;border-radius:13px;padding:0 15px}
+
+/* Nothing is waiting on these.
+   They are still worth reading, so they are not hidden and not shrunk — a card
+   you cannot read is not calmer, it is just worse. What they lose is the fight
+   for attention: no coloured stripe, a flatter surface, and a border that does
+   not compete with the one thing above them that is actually stuck. */
+.mb-item.quiet{background:color-mix(in srgb,var(--bg2) 46%,transparent);
+  border-color:color-mix(in srgb,var(--border) 24%,transparent);
+  box-shadow:var(--mb-edge)}
+.mb-item.quiet::before{width:2px;background:color-mix(in srgb,var(--text3) 42%,transparent)}
+.mb-item.quiet .k{color:var(--text3)}
 `;
 
 export interface NowAction {
@@ -102,8 +113,22 @@ export interface NowAction {
  * session last showed evidence of being alive. So the strip is now one row per
  * open call, and when nothing is open it says so instead of pulsing.
  */
-export function NowHero({ pending, working, live, spend, repos }: {
-  pending: number; working: number; live: LiveCall[]; spend: string; repos: string[];
+/**
+ * The count is only ever things that are stopped.
+ *
+ * It used to be every card in the queue, and a number that adds one held gate
+ * to five pull requests is a number nobody can act on: it is never zero, so it
+ * never means anything, and the screen it heads reads as an inbox. Counting
+ * only what is stuck makes the empty state reachable, and reaching it is the
+ * point — a companion whose queue is usually empty and occasionally urgent is
+ * worth more than one that always has six rows.
+ *
+ * `news` is passed only so the calm line can say what is still down there,
+ * rather than claiming the machine is idle when six things are waiting to be
+ * read.
+ */
+export function NowHero({ pending, news = 0, working, live, spend, repos }: {
+  pending: number; news?: number; working: number; live: LiveCall[]; spend: string; repos: string[];
 }) {
   const calm = pending === 0;
   return (
@@ -111,8 +136,12 @@ export function NowHero({ pending, working, live, spend, repos }: {
       <div className="in">
         <span className="mb-fig n">{calm ? "✓" : pending}</span>
         <span className="w">
-          <b>{calm ? "Nothing needs you" : `${pending} thing${pending > 1 ? "s" : ""} want${pending > 1 ? "" : "s"} you`}</b>
-          <span>{calm ? "The fleet is running clean" : "Answer one and it leaves the queue"}</span>
+          <b>{calm
+            ? "Nothing is waiting on you"
+            : `${pending} ${pending > 1 ? "are" : "is"} stopped, waiting on you`}</b>
+          <span>{calm
+            ? (news > 0 ? `Nothing is stopped · ${news} worth reading below` : "Every agent is running")
+            : "Answer one and it starts again"}</span>
         </span>
       </div>
       {live.length > 0 && (
@@ -160,14 +189,34 @@ export function NowStream({ items, actionsFor, onOpen }: {
 }) {
   if (!items.length) {
     return (
-      <Empty glyph="◎" title="The queue is empty"
-        body="You will hear about it when an agent stops, asks permission, turns something red, or opens something worth your eyes." />
+      <Empty glyph="◎" title="Nothing is waiting"
+        body="You will hear about it the moment an agent stops — a permission it cannot grant itself, a question it cannot answer, a checkout it cannot finish." />
     );
   }
+  const stopped = waitingItems(items);
+  const news = newsItems(items);
   return (
     <div className="flex flex-col gap-3">
-      {items.map((it, i) => (
-        <div key={it.id} className={`mb-item ${toneClass(it.tone)}`} style={{ animationDelay: `${i * 55}ms` }}>
+      {render(stopped, 0)}
+      {/* The line between "something is stuck" and "something is true".
+          Without it the two run together in one scroll, and because there is
+          always more news than there are blockages, the news wins — which is
+          how this screen came to read as a notifications inbox. Drawn only
+          when there is something on both sides of it; a divider over an empty
+          half is noise. */}
+      {stopped.length > 0 && news.length > 0 && (
+        <div className="mb-eyebrow" style={{ margin: "6px 0 -4px", opacity: .75 }}>
+          Nothing below is waiting on you
+        </div>
+      )}
+      {render(news, stopped.length)}
+    </div>
+  );
+
+  function render(list: NowItem[], offset: number) {
+    return list.map((it, i) => (
+        <div key={it.id} className={`mb-item ${toneClass(it.tone)}${it.waiting ? "" : " quiet"}`}
+          style={{ animationDelay: `${(offset + i) * 55}ms` }}>
           <div className="ih">
             <span className="k">{it.kind}</span>
             {it.ts != null && <span className="at">{fmtAgo(it.ts)}</span>}
@@ -189,9 +238,8 @@ export function NowStream({ items, actionsFor, onOpen }: {
             ))}
           </div>
         </div>
-      ))}
-    </div>
-  );
+    ));
+  }
 }
 
 const toneClass = (t: NowTone) => (t === "plain" ? "" : t);

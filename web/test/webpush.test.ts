@@ -38,6 +38,8 @@ interface Calls {
   toldServerToForget: string[];
   browserUnsubscribed: number;
   permissionAsked: number;
+  remembered: number;
+  forgot: number;
   order: string[];
 }
 
@@ -49,7 +51,7 @@ function fakeEnv(over: Partial<PushEnv> & {
 } = {}) {
   const calls: Calls = {
     registered: [], subscribedWith: [], toldServer: [], toldServerToForget: [],
-    browserUnsubscribed: 0, permissionAsked: 0, order: [],
+    browserUnsubscribed: 0, permissionAsked: 0, remembered: 0, forgot: 0, order: [],
   };
   let current = over.existing ?? null;
 
@@ -107,6 +109,12 @@ function fakeEnv(over: Partial<PushEnv> & {
       calls.toldServerToForget.push(endpoint);
       return { ok: true };
     },
+    // The credential mirror the service worker reads (lib/swAuth.ts). Recorded
+    // in `order` alongside everything else, because *when* it happens is the
+    // part worth pinning: before the server has accepted the subscription is
+    // too early, and never is the whole feature quietly gone.
+    remember: async () => { calls.order.push("remember"); calls.remembered++; },
+    forget: async () => { calls.order.push("forget"); calls.forgot++; },
     ...over,
   };
   return { env, calls };
@@ -523,7 +531,10 @@ describe("turning it off", () => {
     const r = await disablePush(env);
     expect(r.ok).toBe(true);
     expect(r.state).toBe("off");
-    expect(calls.order).toEqual(["server-unsubscribe", "browser-unsubscribe"]);
+    // The mirror is cleared last, once the subscription is genuinely gone at
+    // both ends — clearing it first would leave a window where a push already
+    // in flight arrives with buttons the worker can no longer answer.
+    expect(calls.order).toEqual(["server-unsubscribe", "browser-unsubscribe", "forget"]);
     expect(calls.toldServerToForget).toEqual(["https://push.example/old"]);
   });
 
@@ -575,6 +586,57 @@ describe("working out where this device stands", () => {
   it("reports unsupported with no service worker at all", async () => {
     const { env } = fakeEnv({ sw: null });
     expect(await currentPushState(env)).toBe("unsupported");
+  });
+});
+
+/**
+ * The credential the service worker needs, and when it gets it.
+ *
+ * A held gate arrives on the phone with Allow and Deny on it, and the worker
+ * answering has to hold a credential — it cannot read the one the page keeps.
+ * This is the handoff. It is invisible when it breaks: push still arrives, the
+ * notification still opens the app when tapped, and only the two buttons stop
+ * working, on a device nobody is looking at.
+ */
+describe("what the service worker is told", () => {
+  it("is told who we are once the server has taken the subscription", async () => {
+    const { env, calls } = fakeEnv();
+    expect(await enablePush(env)).toEqual({ ok: true, state: "on" });
+    expect(calls.remembered).toBe(1);
+    // After, not before: a credential mirrored for a subscription that was
+    // refused is a credential in a second place for no reason.
+    expect(calls.order.indexOf("remember")).toBeGreaterThan(calls.order.indexOf("server-subscribe"));
+  });
+
+  it("is told nothing when the server refuses the subscription", async () => {
+    const { env, calls } = fakeEnv({ serverTakesIt: { ok: false, error: "no" } });
+    expect((await enablePush(env)).ok).toBe(false);
+    expect(calls.remembered).toBe(0);
+  });
+
+  it("has it taken back when push is switched off", async () => {
+    // A worker with no subscription has nothing to answer, so it has no
+    // business still holding a credential.
+    const { env, calls } = fakeEnv({ existing: { endpoint: "https://push.example/a" } });
+    expect(await disablePush(env)).toEqual({ ok: true, state: "off" });
+    expect(calls.forgot).toBe(1);
+  });
+
+  it("and has it taken back even when there was nothing subscribed", async () => {
+    // The state a phone lands in after the browser drops a subscription on its
+    // own — pressing Off is how somebody tidies up, and the leftover credential
+    // is exactly what they are tidying.
+    const { env, calls } = fakeEnv({ existing: null });
+    expect(await disablePush(env)).toEqual({ ok: true, state: "off" });
+    expect(calls.forgot).toBe(1);
+  });
+
+  it("works on a browser that has no IndexedDB at all", async () => {
+    // Optional on purpose: this should cost the buttons on the notification,
+    // not the notification.
+    const { env } = fakeEnv({ remember: undefined, forget: undefined });
+    expect(await enablePush(env)).toEqual({ ok: true, state: "on" });
+    expect((await disablePush(env)).ok).toBe(true);
   });
 });
 

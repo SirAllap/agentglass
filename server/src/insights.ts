@@ -3,6 +3,8 @@
 // Computed from the full event history (better than the live buffer for loops).
 import type { Insight } from "../../shared/types.ts";
 import { db, scopeClause } from "./db.ts";
+import { equivalentTokens } from "./pricing.ts";
+import { budgetStatus, budgetScopeLabel, periodLabel } from "./budget.ts";
 
 const key = (app: string, sid: string) => `${app}:${sid.slice(0, 8)}`;
 const trim = (s: string, n = 64) => (s.length > n ? s.slice(0, n) + "…" : s);
@@ -93,19 +95,61 @@ export function getInsights(): Insight[] {
     });
   }
 
-  // 4) Spend velocity — overall $/hr over the last hour (context, info-level).
-  const burn = db
-    .query<{ cost: number; toks: number }, any[]>(
-      `SELECT SUM(cost_usd) cost, SUM(input_tokens + output_tokens) toks FROM events WHERE timestamp > ?${sc}`
+  // 4) Budgets — a number the user chose, which beats every constant above it.
+  //
+  //    Only when one is set. With none, everything here behaves exactly as it
+  //    did, because a fixed threshold is a reasonable default and taking it
+  //    away from people who never asked for budgets would be a regression
+  //    dressed as a feature.
+  //
+  //    Unscoped by design: a budget names its own project, so it fires whether
+  //    or not the cockpit is currently looking at that one. The whole point is
+  //    to be told about a limit you set, not about the tab you have open.
+  for (const s of budgetStatus(undefined, now)) {
+    if (s.level === "ok") continue;
+    const pct = Math.round(s.pct * 100);
+    out.push({
+      id: `budget:${s.budget.root}:${s.budget.model}:${s.budget.period}`,
+      severity: s.level === "over" ? "bad" : "warn",
+      kind: "spend",
+      title: s.level === "over"
+        ? `Over budget · $${s.spent.toFixed(2)} of $${s.budget.limit.toFixed(2)} ${periodLabel(s.budget.period)}`
+        : `${pct}% of budget · $${s.spent.toFixed(2)} of $${s.budget.limit.toFixed(2)} ${periodLabel(s.budget.period)}`,
+      detail: budgetScopeLabel(s.budget),
+      session: null,
+      ts: now,
+    });
+  }
+
+  // 5) Spend velocity — overall $/hr over the last hour (context, info-level).
+  /*
+   * Grouped by model so the token figure can be weighted.
+   *
+   * `SUM(input_tokens + output_tokens)` is not a quantity — it adds a token
+   * that costs five to one that costs a tenth and drops the cache classes — and
+   * this string sits in the same list as the headline, so an unweighted number
+   * here reads as the headline disagreeing with itself.
+   */
+  const burnRows = db
+    .query<{ model_name: string | null; cost: number; input_tokens: number; output_tokens: number;
+             cache_creation_tokens: number; cache_read_tokens: number }, any[]>(
+      `SELECT model_name, SUM(cost_usd) cost,
+              SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens,
+              SUM(cache_creation_tokens) cache_creation_tokens, SUM(cache_read_tokens) cache_read_tokens
+         FROM events WHERE timestamp > ?${sc} GROUP BY model_name`
     )
-    .get(now - 60 * 60_000, ...sa);
+    .all(now - 60 * 60_000, ...sa);
+  const burn = burnRows.reduce(
+    (a, r) => ({ cost: a.cost + (r.cost ?? 0), toks: a.toks + equivalentTokens(r, r.model_name) }),
+    { cost: 0, toks: 0 },
+  );
   if (burn && burn.cost > 1) {
     out.push({
       id: "burn:hourly",
       severity: burn.cost >= 60 ? "warn" : "info",
       kind: "burn",
       title: `Spend velocity · $${burn.cost.toFixed(2)}/hr`,
-      detail: `${(burn.toks / 1000).toFixed(0)}k tokens in the last hour`,
+      detail: `${(burn.toks / 1000).toFixed(0)}k eq tokens in the last hour`,
       session: null,
       ts: now,
     });

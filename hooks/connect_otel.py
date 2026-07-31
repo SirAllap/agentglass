@@ -136,10 +136,19 @@ def wire_codex(undo: bool) -> bool:
     return True
 
 
+# Keyed by the id the app uses for each agent (see server/src/agentprobe.ts), so
+# a button in the settings pane and a flag on this script name the same thing.
+WIRERS = {"gemini": wire_gemini, "codex": wire_codex}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Connect agent CLIs to agentglass via OpenTelemetry.")
     ap.add_argument("--undo", action="store_true", help="remove the agentglass telemetry wiring")
     ap.add_argument("--postinstall", action="store_true", help="lifecycle mode: honor AGENTGLASS_NO_OTEL, never fail")
+    # One at a time, for the Settings pane: it offers a button per agent, and
+    # wiring all of them because somebody pressed one is not what the button
+    # says it does.
+    ap.add_argument("--only", choices=sorted(WIRERS), help="connect (or unwire) just this agent")
     args = ap.parse_args()
     _agentglass_local_only(SERVER)
 
@@ -147,16 +156,23 @@ def main() -> None:
         print("[agentglass] AGENTGLASS_NO_OTEL set — skipping OTel auto-connect.")
         return
 
+    todo = {args.only: WIRERS[args.only]} if args.only else WIRERS
     any_tool = False
     try:
-        any_tool = wire_gemini(args.undo) or any_tool
-        any_tool = wire_codex(args.undo) or any_tool
+        for wire in todo.values():
+            any_tool = wire(args.undo) or any_tool
     except Exception as e:  # never break `bun install`
         print(f"[agentglass] OTel auto-connect skipped ({e}).")
-        return
+        # A lifecycle run must not fail the install; an explicit --only is
+        # somebody pressing a button and waiting for an answer, so it says so.
+        sys.exit(0 if args.postinstall else 1)
 
-    if not any_tool and not args.postinstall:
-        print("[agentglass] no supported agent CLIs detected (looked for Gemini CLI, Codex CLI).")
+    if not any_tool:
+        if args.only:
+            print(f"[agentglass] {args.only} is not installed on this machine.")
+            sys.exit(1)
+        if not args.postinstall:
+            print("[agentglass] no supported agent CLIs detected (looked for Gemini CLI, Codex CLI).")
 
 
 if __name__ == "__main__":

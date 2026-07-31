@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildQueue, type NowInput } from "../src/mobile/nowQueue.ts";
+import { buildQueue, waitingItems, newsItems, type NowInput } from "../src/mobile/nowQueue.ts";
 import type { PendingGate, SessionRollup, PrSummary, DockerContainer } from "../../shared/types.ts";
 
 const NOW = 1_700_000_000_000;
@@ -177,7 +177,7 @@ describe("buildQueue", () => {
     expect(opaque).toHaveLength(1);
   });
 
-  it("orders blocked, then broken, then finished, then the rest", () => {
+  it("puts everything that is stopped above everything that is merely true", () => {
     const red = rollup({ failure: 1, verdict: "red", failing: [{ name: "e2e", workflow: "CI", state: "failure", done: true }] });
     const q = buildQueue({
       ...base,
@@ -190,6 +190,58 @@ describe("buildQueue", () => {
         { root: "/r", repo: "s", scope: "review", pr: pr({ number: 3, author: "other" }) },
       ],
     });
-    expect(q.map((i) => i.tone)).toEqual(["crit", "bad", "bad", "good", "plain", "plain"]);
+    // The rule that matters, first: anything stopped comes before anything
+    // that is not, whatever its tone. Before this, a red build (`bad`) sorted
+    // above a stalled agent (`plain`) — so the loudest card on the screen was
+    // the one nothing was waiting on, and the one thing only a person could
+    // restart was below it.
+    expect(q.map((i) => i.waiting)).toEqual([true, true, false, false, false, false]);
+    // And the old order still holds inside each half: blocked, broken,
+    // finished, the rest.
+    expect(q.map((i) => i.tone)).toEqual(["crit", "plain", "bad", "bad", "good", "plain"]);
+  });
+
+  it("counts a gate, a stalled agent and a halted checkout as stopped, and nothing else", () => {
+    // The whole screen turns on this split, so it is worth stating flatly
+    // rather than inferring from an order. A pull request needing review is a
+    // person waiting, which is real and is not an agent that cannot continue —
+    // and it is the kind there is always most of, which is what drowned the
+    // gates when one number counted both.
+    const red = rollup({ failure: 1, verdict: "red", failing: [{ name: "e2e", workflow: "CI", state: "failure", done: true }] });
+    const q = buildQueue({
+      ...base,
+      gates: [gate()],
+      sessions: [session()],
+      containers: [ctr({ state: "exited" })],
+      prs: [
+        { root: "/r", repo: "s", scope: "mine", pr: pr({ number: 1, checks: red }) },
+        { root: "/r", repo: "s", scope: "mine", pr: pr({ number: 2, reviewDecision: "APPROVED" }) },
+        { root: "/r", repo: "s", scope: "review", pr: pr({ number: 3, author: "other" }) },
+      ],
+    });
+    const stopped = q.filter((i) => i.waiting).map((i) => i.origin.t).sort();
+    const news = q.filter((i) => !i.waiting).map((i) => i.origin.t).sort();
+    expect(stopped).toEqual(["gate", "session"]);
+    expect(news).toEqual(["container", "pr-ready", "pr-red", "pr-review"]);
+  });
+
+  it("counts a halted checkout as stopped", () => {
+    // Its own case because it needs a tree rather than a session, and because
+    // it is the one kind with no timestamp: nothing in that checkout moves
+    // again until somebody decides, which is the definition being used here.
+    const q = buildQueue({
+      ...base,
+      trees: { "/r": { state: "merging", conflicts: ["a.ts"], dirty: 1, ahead: 0, behind: 0, branch: "main" } },
+    });
+    expect(q).toHaveLength(1);
+    expect(q[0]!.waiting).toBe(true);
+  });
+
+  it("separates the two halves cleanly for the view", () => {
+    const q = buildQueue({ ...base, gates: [gate()], containers: [ctr({ state: "exited" })] });
+    expect(waitingItems(q).map((i) => i.origin.t)).toEqual(["gate"]);
+    expect(newsItems(q).map((i) => i.origin.t)).toEqual(["container"]);
+    // Every item lands in exactly one of them.
+    expect(waitingItems(q).length + newsItems(q).length).toBe(q.length);
   });
 });

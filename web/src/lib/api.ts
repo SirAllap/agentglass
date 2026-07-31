@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, UsageHistory, ActionRecord } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -125,6 +125,16 @@ export const withToken = (url: string): string =>
 
 /** Whether this client has a shared-secret token configured. */
 export const hasToken = (): boolean => !!TOKEN;
+
+/**
+ * The credential itself, for the one caller that cannot use `authHeaders`.
+ *
+ * The service worker answers a gate from a notification while the app is
+ * closed, so it needs the credential in a store it can read — see
+ * lib/swAuth.ts. Everything in the page uses `authHeaders`/`withToken` and
+ * should keep doing so: this exists to be mirrored, once, into IndexedDB.
+ */
+export const authToken = (): string => TOKEN;
 
 /** Why a chat turn ended early.
  *
@@ -288,12 +298,15 @@ const realApi = {
   // useful when the answer is somewhere you were not looking.
   actions: (limit = 200, before?: number) =>
     get<{ actions: ActionRecord[] }>(`/actions?limit=${limit}${before ? `&before=${before}` : ""}`),
+  /** `ok: false` is a 200: the request arrived and something else had already
+   *  decided the gate. `error` says what won, and a caller that ignores it
+   *  tells somebody their answer took when it did not. */
   gateDecide: (id: string, decision: "allow" | "deny", reason = "") =>
     fetch(SERVER + "/gate/decide", {
       method: "POST",
       headers: authHeaders({ "content-type": "application/json" }),
       body: JSON.stringify({ id, decision, reason }),
-    }).then((r) => r.json()),
+    }).then((r) => r.json() as Promise<{ ok: boolean; error?: string }>),
   gitStatus: (paths: string[]) =>
     fetch(SERVER + "/git/status", {
       method: "POST",
@@ -418,6 +431,41 @@ const realApi = {
    *  as well as refusing what it sends next; only this machine may call it. */
   remoteDevice: (address: string, blocked: boolean) =>
     post<{ ok: boolean; address?: string; blocked?: boolean; closed?: number; error?: string }>("/remote/device", { address, blocked }),
+
+  // --- pairing a device: the machine's half. See server/src/pairing.ts.
+  //
+  // Every one of these is refused unless it comes from loopback *and* carries
+  // the machine's token, because the three things they do — start an
+  // invitation, read the code, accept a request — are the three that have to
+  // happen where the user is sitting.
+
+  /** Start an invitation: a ticket for the QR and a code for the screen. */
+  pairTicket: () => post<{ ok: boolean; id?: string; code?: string; expiresAt?: number; error?: string }>("/pair/ticket", {}),
+  /** Close one early — when the pane is shut, or a fresh code is asked for. */
+  pairCancel: (ticket: string) => post<{ ok: boolean }>("/pair/cancel", { ticket }),
+  /** The live invitation, the requests waiting on a decision, and what is
+   *  already paired — one poll, because the pane shows all three at once. */
+  pairState: (ticket: string) => get<PairState>(`/pair/state?ticket=${encodeURIComponent(ticket)}`),
+  pairAccept: (ticket: string, scope: DeviceScope) =>
+    post<{ ok: boolean; device?: PairedDevice; error?: string }>("/pair/accept", { ticket, scope }),
+  pairReject: (ticket: string) => post<{ ok: boolean }>("/pair/reject", { ticket }),
+  /** Revoke one device's credential and close what it is holding. */
+  pairForget: (id: string) => post<{ ok: boolean; closed?: number; error?: string }>("/pair/forget", { id }),
+
+  /** Which agent CLIs are on this machine, and whether any is reporting. */
+  agents: () => get<{ agents: AgentProbe[] }>("/agents"),
+  /** Wire one — and only the one asked for. */
+  agentConnect: (id: string, undo = false) =>
+    post<{ ok: boolean; detail?: string; error?: string; agents?: AgentProbe[] }>("/agents/connect", { id, undo }),
+
+  /** Spending limits, and where each stands right now. */
+  budgets: () => get<{ budgets: Budget[]; status: BudgetStatus[]; models: string[] }>("/budgets"),
+  /** Replace the whole set — a budget row has no identity to address a partial
+   *  update at, since two can differ only by a limit being typed. */
+  budgetsSet: (budgets: Budget[]) =>
+    post<{ ok: boolean; persisted?: boolean; error?: string; budgets?: Budget[]; status?: BudgetStatus[] }>(
+      "/budgets/set", { budgets }),
+
   updateStatus: () => get<UpdateStatus>("/update/status"),
   // The tag is optional because the automatic modal wants "whatever this build
   // came from", while About asks for a named release — the update it is about
@@ -542,6 +590,15 @@ const realApi = {
    *  Only navigation and the two answers a prompt takes — the server keeps its
    *  own allowlist, since this reaches a live terminal running an agent. */
   chatPaneKey: (session: string, key: string) => post<{ screen: string }>("/chat/pane/key", { session, key }),
+  /** Exempt this chat's pane from idle eviction. About idleness only — closing
+   *  the chat still releases the pane. */
+  chatPanePin: (session: string, pinned: boolean) =>
+    post<{ ok: boolean; session: string; pinned: boolean }>("/chat/pane/pin", { session, pinned }),
+  /** Every pane on this machine, with which of them belongs to nothing. `open`
+   *  is the chats this client has on screen — the server does not know, and a
+   *  pane belonging to a chat in another window is not an orphan. */
+  chatPanes: (open: string[]) =>
+    get<ChatPaneList>(`/chat/panes?open=${encodeURIComponent(open.join(","))}`),
   chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
     let res: Response;
     // A fetch that throws before a response has arrived never reached the
@@ -701,6 +758,20 @@ const demoApi: typeof realApi = {
   updateNotes: (_tag?: string) => D({ ok: false, tag: "", notes: "", source: "", error: "not available in the demo" } as ReleaseNotes),
   remoteStatus: () => D({ exposed: false, bind: "127.0.0.1", port: 4000, trustLan: false, tokenRequired: false, webUi: true, urls: [], addresses: [], clients: { count: 0, lastAt: null, addresses: [], liveCount: 0 }, devices: [], firewall: null } as RemoteStatus),
   remoteDevice: (_address: string, _blocked: boolean) => D({ ok: false, error: "not available in the demo" }),
+  // Pairing needs a machine on the other end of it. The demo has none, and a
+  // QR that cannot lead anywhere is worse than an absent one.
+  pairTicket: () => D({ ok: false, error: "not available in the demo" }),
+  pairCancel: (_ticket: string) => D({ ok: false }),
+  pairState: (_ticket: string) => D({ ticket: null, pending: [], devices: [] } as PairState),
+  pairAccept: (_ticket: string, _scope: DeviceScope) => D({ ok: false, error: "not available in the demo" }),
+  pairReject: (_ticket: string) => D({ ok: false }),
+  pairForget: (_id: string) => D({ ok: false, error: "not available in the demo" }),
+  // The demo runs on a page, not a machine — there is no PATH to probe and
+  // nothing to wire, and an empty list is the truth rather than a placeholder.
+  agents: () => D({ agents: [] as AgentProbe[] }),
+  agentConnect: (_id: string, _undo?: boolean) => D({ ok: false, error: "not available in the demo" }),
+  budgets: () => D({ budgets: [], status: [], models: [] }),
+  budgetsSet: (_budgets: Budget[]) => D({ ok: false, error: "not available in the demo" }),
   updateStatus: () => D({ ok: true, available: false, info: { version: "demo", commit: "", builtAt: "", source: "", origin: "", baseTag: "", distance: 0 }, branch: "", behind: 0, ahead: 0, incoming: [], blocked: "not available in the demo" } as UpdateStatus),
   updateRun: () => D({ ok: false, error: "not available in the demo" }),
   hooksStatus: () => D({ installed: false, bundled: false, settingsPath: "~/.claude/settings.json", python: "python3" } as HookSetupStatus),
@@ -714,6 +785,10 @@ const demoApi: typeof realApi = {
   chatAttach: (_session: string) => D({ command: "", live: false }),
   chatPaneClose: (_session: string) => D({ killed: false }),
   chatPaneKey: (_session: string, _key: string) => D({ screen: "" }),
+  chatPanePin: (_session: string, pinned: boolean) => D({ ok: false, session: "", pinned }),
+  // The demo runs no processes, so there is nothing to list and nothing to
+  // reclaim. An empty list is the truth here rather than a placeholder.
+  chatPanes: (_open: string[]) => D({ panes: [], idleEvictMs: 0 } as ChatPaneList),
   chatStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void) => {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });

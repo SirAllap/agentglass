@@ -211,6 +211,18 @@ export interface PushEnv {
   getKey: () => Promise<{ key: string }>;
   subscribe: (sub: unknown, label: string) => Promise<{ ok: boolean; error?: string }>;
   unsubscribe: (endpoint: string) => Promise<{ ok: boolean }>;
+  /**
+   * Put the credential somewhere the service worker can read it, and take it
+   * back. See lib/swAuth.ts for what is mirrored and why.
+   *
+   * Seams like every other side effect in here, so the flow can be driven
+   * whole in a test — and *what* is mirrored is left to the wiring, so this
+   * module keeps knowing nothing about the app's server or its credential.
+   * Optional, because a browser that refuses IndexedDB should cost the buttons
+   * on the notification and not the notification.
+   */
+  remember?: () => Promise<unknown>;
+  forget?: () => Promise<unknown>;
   /** Injected so the timeout above can be exercised without a 20s test. */
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
@@ -352,6 +364,13 @@ export async function enablePush(env: PushEnv): Promise<PushResult> {
 
     const res = await env.subscribe(sub.toJSON(), deviceLabel(env.ua));
     if (!res.ok) return { ok: false, state: "off", error: res.error || "The server would not take the subscription." };
+    // After the server has accepted it, and never before: a credential mirrored
+    // for a subscription that was refused is a credential in a second place for
+    // no reason. Failing here does not fail the toggle — push still arrives,
+    // and tapping the notification still opens the queue. It is the two buttons
+    // on it that quietly stop working, which is why the worker says "not
+    // connected any more" rather than nothing.
+    await env.remember?.();
     return { ok: true, state: "on" };
   } catch (e) {
     return { ok: false, state: "off", error: String((e as Error)?.message ?? e) };
@@ -371,9 +390,12 @@ export async function disablePush(env: PushEnv): Promise<PushResult> {
   try {
     const reg = await env.sw.ready;
     const sub = await reg.pushManager.getSubscription();
-    if (!sub) return { ok: true, state: "off" };
+    if (!sub) { await env.forget?.(); return { ok: true, state: "off" }; }
     await env.unsubscribe(sub.endpoint);
     await sub.unsubscribe();
+    // A worker with no subscription has nothing to answer, so it has no
+    // business still holding a credential.
+    await env.forget?.();
     return { ok: true, state: "off" };
   } catch (e) {
     return { ok: false, state: "on", error: String((e as Error)?.message ?? e) };
@@ -386,6 +408,10 @@ export function browserPushEnv(api: {
   pushKey: () => Promise<{ key: string }>;
   pushSubscribe: (sub: unknown, label: string) => Promise<{ ok: boolean; error?: string }>;
   pushUnsubscribe: (endpoint: string) => Promise<{ ok: boolean }>;
+  /** Mirror the credential for the service worker, and clear it. Passed in
+   *  rather than imported, so this file still depends on nothing. */
+  remember?: () => Promise<unknown>;
+  forget?: () => Promise<unknown>;
 }, demo = false): PushEnv {
   const nav = typeof navigator === "undefined" ? null : navigator;
   const canNotify = typeof Notification !== "undefined";
@@ -412,6 +438,8 @@ export function browserPushEnv(api: {
     getKey: api.pushKey,
     subscribe: api.pushSubscribe,
     unsubscribe: api.pushUnsubscribe,
+    remember: api.remember,
+    forget: api.forget,
     demo,
   };
 }

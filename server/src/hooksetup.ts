@@ -76,7 +76,7 @@ export function hooksDir(): string | null {
 // _hook_python: python3 everywhere but Windows, where python3 is usually absent
 // and `py`/`python` is what exists. sys.executable is deliberately not used —
 // a venv deleted later would break every hook.
-function hookPython(): string {
+export function hookPython(): string {
   if (process.platform !== "win32") return "python3";
   for (const cand of ["py", "python"]) {
     if (onPath(cand)) return cand;

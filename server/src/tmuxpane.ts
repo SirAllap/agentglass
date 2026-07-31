@@ -283,8 +283,102 @@ const lastUsed = new Map<string, number>();
 export const idleEvictMs = (): number =>
   Math.max(0, Number(process.env.AGENTGLASS_TMUX_IDLE_MINUTES ?? 30)) * 60_000;
 
-export function touchPane(name: string): void { lastUsed.set(name, Date.now()); }
-export function forgetPane(name: string): void { lastUsed.delete(name); }
+/** `now` is a parameter for the same reason `evictIdlePanes` takes one: the two
+ *  are judged against each other, and a test that fixes one clock and not the
+ *  other is comparing a made-up timestamp with a real one. */
+export function touchPane(name: string, now = Date.now()): void { lastUsed.set(name, now); }
+export function forgetPane(name: string): void { lastUsed.delete(name); pinned.delete(name); }
+
+/**
+ * Panes the sweeper may not touch.
+ *
+ * Eviction is right for the common case and wrong for the one chat you are
+ * actually living in: step away for lunch and the session you care about is
+ * precisely the one reclaimed, so the turn you come back to is the slow one —
+ * which is the cost the pane engine exists to remove. There was no way to say
+ * "not this one".
+ *
+ * A pin is about *idleness only*. Closing a pinned chat still releases its
+ * pane, because closing is an explicit "done" and pinning is a statement about
+ * a gap in a conversation, not about keeping a process forever.
+ *
+ * Held in memory, alongside `lastUsed`, and dropped when the pane is — a pin on
+ * a process that no longer exists is not a preference anybody holds. A server
+ * restart therefore loses pins while the tmux panes survive it; the sweeper's
+ * own rule covers that, since a pane it has no record of gets a fresh full
+ * interval rather than being reaped immediately.
+ */
+const pinned = new Set<string>();
+
+export function pinPane(name: string, on: boolean): boolean {
+  if (!validPaneName(name)) return false;
+  if (on) pinned.add(name); else pinned.delete(name);
+  return true;
+}
+
+export const isPinned = (name: string): boolean => pinned.has(name);
+
+/**
+ * Every pane on our socket, with what is known about it.
+ *
+ * Panes outlive the app — quit or crash and the sessions are still there — and
+ * until now the only way to see that was `tmux -L agentglass ls` in a terminal,
+ * with `kill-session` by hand as the only cleanup. A person running five chats
+ * and wondering where two gigabytes went had nowhere in the app to look.
+ *
+ * `lastUsedAt` is null for a pane this process has never served a turn for,
+ * which is exactly the shape of an orphan from a previous run. Whether it *is*
+ * one also depends on which chats are open, which this module does not know —
+ * so that judgement is left to the caller (see /chat/panes).
+ */
+export interface PaneInfo {
+  name: string;
+  lastUsedAt: number | null;
+  pinned: boolean;
+}
+
+/** `list` is a parameter for the same reason `reachableAddresses` takes its
+ *  interfaces and `firewallHint` takes its `which`: everything else in this
+ *  module shells out to tmux, and a test that reached a real one would be
+ *  reading the developer's own sessions. */
+/**
+ * A pane, once it is known what is using it.
+ *
+ * Split out from `panes()` and pure, because the judgement needs two things
+ * neither side of the wire holds alone: which chats are on screen, which only
+ * the client knows, and which turns are in flight, which only the server does.
+ * Combining them in the route left it reachable only through a machine with
+ * tmux actually running, which is to say untested.
+ */
+export interface PaneStatus extends PaneInfo {
+  /** Mid-turn at this instant. Never an orphan, and never safe to end. */
+  running: boolean;
+  /** Nothing open and nothing in flight points at it. */
+  orphan: boolean;
+}
+
+export function classifyPanes(
+  rows: PaneInfo[], open: Iterable<string>, running: Iterable<string>,
+): PaneStatus[] {
+  const isOpen = new Set(open);
+  const isRunning = new Set(running);
+  return rows.map((p) => ({
+    ...p,
+    running: isRunning.has(p.name),
+    // A pane serving a turn is never an orphan, whatever anybody has on
+    // screen — the turn is the proof that something is using it, and it is the
+    // one row that must not be offered a one-click end.
+    orphan: !isRunning.has(p.name) && !isOpen.has(p.name),
+  }));
+}
+
+export async function panes(list: () => Promise<string[]> = listPanes): Promise<PaneInfo[]> {
+  return (await list()).map((name) => ({
+    name,
+    lastUsedAt: lastUsed.get(name) ?? null,
+    pinned: pinned.has(name),
+  }));
+}
 
 /** Kill panes idle past the threshold. Returns the names it reclaimed.
  *
@@ -292,16 +386,24 @@ export function forgetPane(name: string): void { lastUsed.delete(name); }
  *  chat from before a server restart or something a human started by hand, and
  *  killing an agent mid-work to save memory it might be actively using is a much
  *  worse failure than holding the memory. It gets a record instead, so it is
- *  eligible for eviction one full interval from now. */
-export async function evictIdlePanes(now = Date.now()): Promise<string[]> {
+ *  eligible for eviction one full interval from now.
+ *
+ *  A pinned pane is skipped entirely — see `pinned`. */
+export async function evictIdlePanes(
+  now = Date.now(),
+  io: { list: () => Promise<string[]>; kill: (n: string) => Promise<void> } = { list: listPanes, kill: killPane },
+): Promise<string[]> {
   const window = idleEvictMs();
   if (!window) return [];
   const evicted: string[] = [];
-  for (const name of await listPanes()) {
+  for (const name of await io.list()) {
+    // Checked before the bookkeeping, so a pinned pane is not silently given a
+    // timestamp it will be judged on the moment it is unpinned.
+    if (pinned.has(name)) continue;
     const seen = lastUsed.get(name);
     if (seen === undefined) { lastUsed.set(name, now); continue; }
     if (now - seen < window) continue;
-    await killPane(name);
+    await io.kill(name);
     lastUsed.delete(name);
     evicted.push(name);
   }
@@ -323,4 +425,4 @@ export function stopPaneSweeper(): void {
 }
 
 /** Test seam: drop the idle bookkeeping without touching any real server. */
-export function __resetPaneState(): void { lastUsed.clear(); }
+export function __resetPaneState(): void { lastUsed.clear(); pinned.clear(); }

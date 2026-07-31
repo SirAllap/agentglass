@@ -69,20 +69,3 @@ export function pickIndex(addresses: readonly PickedAddress[], saved: PickedAddr
   const sameKind = addresses.findIndex((a) => a.tailnet === saved.tailnet);
   return sameKind >= 0 ? sameKind : 0;
 }
-
-/**
- * The same link with the access code covered up.
- *
- * This pane is the one people screenshot — it is where the QR code is, so it
- * is what gets sent to a colleague or pasted into an issue to ask why the
- * phone will not connect. The code in that URL is a working key to a terminal
- * on this machine, and it is legible in the picture. Covering it by default
- * costs a click on the rare occasion someone wants to read it out, and saves
- * the one occasion that matters.
- *
- * The QR itself still carries the real URL: a masked code would not scan, and
- * a photograph of a screen is a far smaller audience than a screenshot.
- */
-export function maskToken(url: string): string {
-  return url.replace(/([?&]token=)([^&#]+)/i, (_m, lead: string, secret: string) => `${lead}${"•".repeat(Math.min(12, Math.max(6, secret.length)))}`);
-}

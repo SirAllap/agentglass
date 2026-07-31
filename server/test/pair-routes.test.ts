@@ -1,0 +1,274 @@
+/*
+ * Pairing a phone, over HTTP, against a real server with the token gate live.
+ *
+ * The unit tests pin the protocol; this pins the thing the protocol is for —
+ * that at the end of it a device holds a credential the server accepts, that
+ * the credential is bounded by what was granted, and that forgetting the device
+ * ends it. Driven end to end because the interesting failures are at the joins:
+ * an exemption that does not cover a step, a scope checked in the wrong place,
+ * a credential that arrives but is not accepted.
+ */
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createECDH, hkdfSync, createDecipheriv } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { INFO } from "../src/pairing.ts";
+
+const TOKEN = "test-machine-token-not-a-real-one";
+let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
+
+/** The phone: a keypair that never leaves this closure, and the unwrap. */
+function phone() {
+  const e = createECDH("prime256v1");
+  e.generateKeys();
+  return {
+    pub: e.getPublicKey().toString("base64url"),
+    open(w: { pub: string; iv: string; data: string }, ticket: string): string {
+      const shared = e.computeSecret(Buffer.from(w.pub, "base64url"));
+      const key = Buffer.from(hkdfSync("sha256", shared, Buffer.from(ticket, "utf8"), Buffer.from(INFO, "utf8"), 32));
+      const body = Buffer.from(w.data, "base64url");
+      const d = createDecipheriv("aes-256-gcm", key, Buffer.from(w.iv, "base64url"));
+      d.setAuthTag(body.subarray(body.length - 16));
+      return Buffer.concat([d.update(body.subarray(0, body.length - 16)), d.final()]).toString("utf8");
+    },
+  };
+}
+
+beforeAll(async () => {
+  dir = mkdtempSync(join(tmpdir(), "agx-pairsrv-"));
+  const port = 4700 + Math.floor(Math.random() * 260);
+  base = `http://127.0.0.1:${port}`;
+  proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
+    // A named environment, never `...process.env`: `bun test` shares one
+    // process across files, so the parent's environment is whatever every
+    // suite before this one happened to leave on it.
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: process.env.HOME ?? "",
+      XDG_CONFIG_HOME: dir,
+      AGENTGLASS_ROOT: dir,
+      AGENTGLASS_DB: join(dir, "f.db"),
+      AGENTGLASS_SCAN_DISABLED: "1",
+      AGENTGLASS_PORT: String(port),
+      // The whole point: the gate has to be live, or every request below passes
+      // for the wrong reason.
+      AGENTGLASS_TOKEN: TOKEN,
+    },
+    stdout: "ignore", stderr: "pipe",
+  });
+  for (let i = 0; i < 100; i++) {
+    try { if ((await fetch(base + "/health")).ok) return; } catch { /* not up yet */ }
+    await Bun.sleep(100);
+  }
+  throw new Error("the server did not come up: " + (await new Response(proc.stderr as ReadableStream).text()).slice(0, 400));
+});
+
+afterAll(() => {
+  try { proc?.kill(); } catch { /* already gone */ }
+  try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
+});
+
+/** Every answer below is JSON this file already knows the shape of; the point
+ *  of each assertion is the value, not the parse. */
+type Json = Record<string, any>;
+const jsonOf = (r: Response): Promise<Json> => r.json() as Promise<Json>;
+
+const post = (path: string, body: unknown, token?: string) =>
+  fetch(base + path, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+const get = (path: string, token?: string) =>
+  fetch(base + path, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+
+/** Machine ▸ invite, phone ▸ claim, machine ▸ accept, phone ▸ collect. */
+async function pair(scope: "read" | "answer" | "full", label = "iPhone") {
+  const p = phone();
+  const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
+  const claimed = await jsonOf(await post("/pair/claim", { ticket: t.id, code: t.code, label, pub: p.pub }));
+  expect(claimed.ok).toBe(true);
+  const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope }, TOKEN));
+  expect(acc.ok).toBe(true);
+  const got = await jsonOf(await get(`/pair/collect?ticket=${t.id}&secret=${encodeURIComponent(claimed.secret)}`));
+  expect(got.state).toBe("accepted");
+  return { token: p.open(got.wrapped, t.id), ticket: t, deviceId: acc.device.id as string };
+}
+
+describe("starting an invitation", () => {
+  test("needs the machine's own credential — a paired phone cannot invite another", () => {
+    // Otherwise the first device through the door can quietly add the rest,
+    // and the confirmation step that makes this safe happens somewhere nobody
+    // at the machine is looking.
+    return post("/pair/ticket", {}).then(async (r) => {
+      expect(r.status).toBe(403);
+      expect((await jsonOf(r)).ok).toBe(false);
+    });
+  });
+
+  test("the code and the ticket are different things", async () => {
+    const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
+    expect(t.ok).toBe(true);
+    expect(t.code).toMatch(/^[0-9]{6}$/);
+    expect(t.id).not.toContain(t.code);
+  });
+});
+
+describe("the phone's side, with no credential at all", () => {
+  test("can ask whether an invitation is open, and be told when it is not", async () => {
+    const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
+    expect((await jsonOf(await get(`/pair/info?ticket=${t.id}`))).ok).toBe(true);
+    expect((await jsonOf(await get("/pair/info?ticket=made-up"))).ok).toBe(false);
+  });
+
+  test("a wrong code is refused and counts against the five", async () => {
+    const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
+    const wrong = t.code === "000000" ? "111111" : "000000";
+    const r = await post("/pair/claim", { ticket: t.id, code: wrong, label: "x", pub: phone().pub });
+    expect(r.status).toBe(401);
+    const j = await jsonOf(r);
+    expect(j.ok).toBe(false);
+    expect(j.left).toBe(4);
+    expect(j.error).toContain("4 tries left");
+  });
+
+  test("everything else about the surface is still shut to it", async () => {
+    // The exemption is the pairing prefix and nothing more. If it leaked, a
+    // device would not need to pair at all.
+    for (const path of ["/sessions", "/gate/pending", "/remote/status"]) {
+      expect((await get(path)).status, path).toBe(401);
+    }
+  });
+});
+
+describe("what a paired phone can do", () => {
+  test("an answering phone reads, decides gates, and cannot merge or open a shell", async () => {
+    const { token } = await pair("answer", "iPhone");
+
+    // It is a real credential: the gate accepts it where it accepted nothing.
+    expect((await get("/gate/pending", token)).status).toBe(200);
+    expect((await get("/sessions", token)).status).toBe(200);
+
+    // A gate decision reaches the handler — 200 or a 400 about the gate, but
+    // never the 403 that means "your device may not".
+    const decide = await post("/gate/decide", { id: "no-such-gate", decision: "allow" }, token);
+    expect(decide.status).not.toBe(403);
+
+    // And the things a phone has no business doing say so, by name.
+    const merge = await post("/prs/merge", { root: dir, number: 1, method: "squash" }, token);
+    expect(merge.status).toBe(403);
+    const why = await jsonOf(merge);
+    expect(why.scope).toBe("answer");
+    expect(why.needs).toBe("full");
+    expect(why.error).toContain("/prs/merge");
+
+    for (const path of ["/git/push", "/git/reset", "/docker/rm", "/chat/attach"]) {
+      expect((await post(path, { root: dir }, token)).status, path).toBe(403);
+    }
+  });
+
+  test("a look-only phone cannot decide a gate either", async () => {
+    const { token } = await pair("read", "an old tablet");
+    expect((await get("/sessions", token)).status).toBe(200);
+    const r = await post("/gate/decide", { id: "x", decision: "allow" }, token);
+    expect(r.status).toBe(403);
+    expect((await jsonOf(r)).needs).toBe("answer");
+  });
+
+  test("a scope the server does not recognise lands on the narrow one", async () => {
+    // A typo in a scope name must not be how a phone ends up with a terminal.
+    const p = phone();
+    const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
+    const c = await jsonOf(await post("/pair/claim", { ticket: t.id, code: t.code, label: "typo", pub: p.pub }));
+    const acc = await jsonOf(await post("/pair/accept", { ticket: t.id, scope: "administrator" }, TOKEN));
+    expect(acc.device.scope).toBe("answer");
+    const got = await jsonOf(await get(`/pair/collect?ticket=${t.id}&secret=${encodeURIComponent(c.secret)}`));
+    const token = p.open(got.wrapped, t.id);
+    expect((await post("/prs/merge", { root: dir, number: 1, method: "squash" }, token)).status).toBe(403);
+  });
+
+  test("a full device is the machine", async () => {
+    const { token } = await pair("full", "my laptop");
+    // Reaches the handler rather than the gate: what comes back is about the
+    // pull request, not about the device.
+    expect((await post("/prs/merge", { root: dir, number: 1, method: "squash" }, token)).status).not.toBe(403);
+  });
+
+  test("it knows what it is, which is how it learns it was forgotten", async () => {
+    const { token, deviceId } = await pair("answer", "Pixel");
+    const me = await jsonOf(await get("/pair/whoami", token));
+    expect(me).toMatchObject({ paired: true, machine: false, scope: "answer", label: "Pixel", id: deviceId });
+  });
+});
+
+describe("taking one back", () => {
+  test("forgetting one device stops it, and leaves the others alone", async () => {
+    const a = await pair("answer", "the lost phone");
+    const b = await pair("answer", "the phone in my hand");
+    expect((await get("/sessions", a.token)).status).toBe(200);
+
+    const r = await jsonOf(await post("/pair/forget", { id: a.deviceId }, TOKEN));
+    expect(r.ok).toBe(true);
+
+    expect((await get("/sessions", a.token)).status).toBe(401);
+    expect((await get("/sessions", b.token)).status).toBe(200);
+    // …and the machine itself was never in question.
+    expect((await get("/sessions", TOKEN)).status).toBe(200);
+  });
+
+  test("only from the machine — a phone cannot disconnect the desk", async () => {
+    const { token, deviceId } = await pair("full", "a device with everything");
+    // Even at `full`: this is not a scope, it is a place. The button lives on
+    // the side of the desk the user is sitting at.
+    const r = await post("/pair/forget", { id: deviceId }, token);
+    expect(r.status).toBe(403);
+    expect((await get("/sessions", token)).status).toBe(200);
+  });
+
+  test("the machine's own token is not something pairing can revoke", async () => {
+    const r = await post("/pair/forget", { id: "anything-at-all" }, TOKEN);
+    expect(r.status).toBe(404);
+    expect((await get("/sessions", TOKEN)).status).toBe(200);
+  });
+});
+
+describe("what the machine sees", () => {
+  test("the pending list and the device list are for this machine only", async () => {
+    // The pending list carries the code. Serving it to anything that merely
+    // holds a device credential would hand a paired phone the six digits it is
+    // supposed to have needed a person for.
+    const { token } = await pair("full", "a device with everything");
+    expect((await get("/pair/state?ticket=", token)).status).toBe(403);
+    expect((await get("/pair/state?ticket=", TOKEN)).status).toBe(200);
+  });
+
+  test("names what is paired, and what it may do", async () => {
+    const s = await jsonOf(await get("/pair/state?ticket=", TOKEN));
+    const labels = s.devices.map((d: { label: string }) => d.label);
+    expect(labels).toContain("the phone in my hand");
+    expect(labels).not.toContain("the lost phone"); // revoked
+    expect(s.devices.every((d: { hash?: string }) => !d.hash)).toBe(false); // it is the stored row
+  });
+
+  test("a request waiting on a person shows who is asking and the same code", async () => {
+    const t = await jsonOf(await post("/pair/ticket", {}, TOKEN));
+    await post("/pair/claim", { ticket: t.id, code: t.code, label: "someone's phone", pub: phone().pub });
+    const s = await jsonOf(await get(`/pair/state?ticket=${t.id}`, TOKEN));
+    expect(s.pending).toHaveLength(1);
+    expect(s.pending[0]).toMatchObject({ id: t.id, code: t.code, label: "someone's phone" });
+    // Declining grants nothing.
+    expect((await jsonOf(await post("/pair/reject", { ticket: t.id }, TOKEN))).ok).toBe(true);
+  });
+});
+
+describe("the status pane no longer serves a key", () => {
+  test("nothing in /remote/status is the token, for any caller", async () => {
+    // The QR used to be `?token=<the machine's secret>`, so this answer had to
+    // carry it. Pairing replaced that, and a URL that grants a terminal is
+    // exactly what ends up in a screenshot of this pane.
+    const body = await (await get("/remote/status", TOKEN)).text();
+    expect(body).not.toContain(TOKEN);
+    expect(body).not.toContain("?token=");
+  });
+});

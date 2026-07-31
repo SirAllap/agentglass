@@ -103,8 +103,21 @@ export interface PushFanout {
   pruned: number;
 }
 
+/**
+ * What the phone can do about this without opening the app.
+ *
+ * Only a held gate has one, and only ever the gate's own id. It is not a
+ * credential and it is not a capability: deciding still needs the device's
+ * paired credential, and the id alone is a uuid that names something already
+ * on that person's screen. The worker uses it to put Allow and Deny on the
+ * notification instead of a line of text telling somebody to go and find it.
+ */
+export interface PushAction {
+  gate: string;
+}
+
 export async function pushEveryone(
-  title: string, body: string, reach: Reach,
+  title: string, body: string, reach: Reach, action?: PushAction,
 ): Promise<PushFanout> {
   const subs = subscriptions();
   const out: PushFanout = { sent: 0, failed: 0, pruned: 0 };
@@ -118,7 +131,10 @@ export async function pushEveryone(
   // one of the two can wake the device.
   const wake = reach === "wake";
   const payload = new TextEncoder().encode(
-    JSON.stringify({ title, body, at: Date.now(), urgency: wake ? 2 : 1 }),
+    JSON.stringify({
+      title, body, at: Date.now(), urgency: wake ? 2 : 1,
+      ...(action ? { gate: action.gate } : {}),
+    }),
   );
   await Promise.all(subs.map(async (s) => {
     const r = await sendPush(s, payload, keys, {
@@ -132,7 +148,9 @@ export async function pushEveryone(
   return out;
 }
 
-async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2, reach: Reach = "tell") {
+async function deliver(
+  title: string, body: string, urgency: 0 | 1 | 2 = 2, reach: Reach = "tell", action?: PushAction,
+) {
   if (WEBHOOK && !IS_TEST) {
     try {
       await fetch(WEBHOOK, {
@@ -151,7 +169,7 @@ async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2, reac
   if (!IS_TEST) {
     // Never awaited: an unreachable push service must not hold up the
     // notification that is also going to the desktop.
-    pushEveryone(title, body, reach).catch((e) => console.warn("[alerts] push failed:", e));
+    pushEveryone(title, body, reach, action).catch((e) => console.warn("[alerts] push failed:", e));
   }
 
   if (DESKTOP) {
@@ -183,13 +201,22 @@ async function deliver(title: string, body: string, urgency: 0 | 1 | 2 = 2, reac
 
 let warnedNoNotifySend = false;
 
-/** A tool call is being held at the control-plane gate — ping the human. */
-export function pushGate(agent: string, tool: string, summary: string) {
+/**
+ * A tool call is being held at the control-plane gate — ping the human.
+ *
+ * The id travels with it so a phone can answer from the notification rather
+ * than being told to go and find the app. That changes what the sentence
+ * should say, too: "approve or deny in agentglass" was the only instruction
+ * that made sense when the notification was a dead end, and it is the wrong
+ * one to read above two buttons that do it.
+ */
+export function pushGate(agent: string, tool: string, summary: string, id?: string) {
   if (shouldSend(`gate:${agent}:${summary}`))
     deliver(
       "✋ Approval needed",
-      `${agent} wants to run ${tool}${summary ? `: ${summary.slice(0, 200)}` : ""} — approve or deny in agentglass.`,
+      `${agent} wants to run ${tool}${summary ? `: ${summary.slice(0, 200)}` : ""}`,
       2, "wake",
+      id ? { gate: id } : undefined,
     );
 }
 

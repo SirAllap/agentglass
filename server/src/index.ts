@@ -19,18 +19,19 @@ import {
   providerOf,
   gateHistory,
   dailyUsage,
+  costedModels,
   rollupEarliestDay,
   retentionSeamDay,
   getGate,
   actionLog,
 } from "./db.ts";
 import { maybeAlert, setAlertSink, pushEveryone } from "./alerts.ts";
-import { noteAction } from "./actions.ts";
+import { noteAction, actorOf } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { vapidKeys, addSubscription, removeSubscription, removeDevice, deviceId, subscriptions } from "./pushstore.ts";
 import { getUsage } from "./usage.ts";
-import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, GATE_MAX_MS } from "./gate.ts";
+import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
@@ -69,12 +70,18 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
-import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane } from "./tmuxpane.ts";
+import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
-import { workspaceRoot, setWorkspaceRoot, inScope } from "./config.ts";
-import { hookStatus, applyHooks } from "./hooksetup.ts";
+import { workspaceRoot, setWorkspaceRoot, inScope, readBudgets, writeBudgets } from "./config.ts";
+import { budgetStatus } from "./budget.ts";
+import type { Budget } from "../../shared/types.ts";
+import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
+import { probeAgents, ROSTER } from "./agentprobe.ts";
+import { join as joinPath } from "node:path";
 import { privateHost } from "./net.ts";
-import { resolveToken, tokenOk, isIntake, isAuthExempt } from "./auth.ts";
+import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller } from "./auth.ts";
+import { activeDevices, markSeen, revokeDevice, type Scope } from "./devices.ts";
+import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
 import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus } from "./remote.ts";
@@ -111,13 +118,20 @@ const TRUST_LAN = process.env.AGENTGLASS_TRUST_LAN === "1";
 // writes through the victim's own loopback. Treating TRUST_LAN as "not loopback
 // only" for the token decision forces a token exactly when one is needed; net.ts
 // already documents TRUST_LAN as something used on top of a token.
+/** So a misconfigured exporter explains itself once rather than every batch. */
+let warnedNoMetrics = false;
+
 const AUTH = resolveToken(LOOPBACK_ONLY && !TRUST_LAN);
 const AUTH_TOKEN = AUTH.token;
 /** One socket, three roles: the live event stream, PTY terminal shells, and
  *  the desktop-notification mirror. */
 /** Every socket carries the address that opened it, so "who is connected right
  *  now" is answerable, and so a device can be cut off while it is holding one. */
-type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null };
+// `deviceId` is how a socket remembers which paired device opened it. Without
+// it, forgetting a device revokes its credential and leaves whatever it is
+// already holding — an event stream, a terminal — running until it disconnects
+// on its own, which is a revoke in the list and not on the wire.
+type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
 const clients = new Set<ServerWebSocket<WsData>>();
 /** Every open socket of every kind, which `clients` is not: it holds the event
  *  streams only, and a device cut off mid-session may be holding a terminal. */
@@ -537,8 +551,33 @@ const server = Bun.serve<WsData>({
     // as ?token= (a browser can't set a header on them); fetch uses Bearer.
     // /gate is NOT exempt here: it's the control plane, and its hook carries the
     // token when one is set (see auth.ts / gate_event.py).
-    if (AUTH_TOKEN && !isAuthExempt(pathname) && !tokenOk(req, url, AUTH_TOKEN)) {
-      return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
+    //
+    // A paired phone carries its own credential rather than this one (see
+    // devices.ts), so the answer is no longer yes-or-no: it is *who*, and then
+    // whether that caller's scope covers what the request is asking for. The
+    // machine's token is still the machine, and everything below is unchanged
+    // for it.
+    // Held for the WebSocket upgrades below: a socket has to remember which
+    // device opened it, or forgetting that device cannot close what it holds.
+    let caller: Caller | null = null;
+    if (AUTH_TOKEN && !isAuthExempt(pathname)) {
+      caller = callerFor(req, url, AUTH_TOKEN);
+      if (!caller) return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
+      if (!allowed(caller, req.method, pathname)) {
+        // 403 rather than 401: the credential is real and was accepted. Saying
+        // "unauthorized" to a device that is correctly paired sends people to
+        // re-scan a QR, which fixes nothing and is the wrong thing to learn.
+        return json({
+          ok: false,
+          error: `this device is paired for "${caller.scope}" access, and ${pathname} needs "${scopeNeeded(req.method, pathname)}"`,
+          scope: caller.scope,
+          needs: scopeNeeded(req.method, pathname),
+        }, 403);
+      }
+      // Cheap enough to do on every request because it is throttled to once a
+      // minute per device — it is what lets the pane say when a phone was last
+      // heard from, which is the difference between a device list and a guess.
+      if (caller.device) markSeen(caller.device.id);
     }
 
     // Throttle the unauthenticated intake sinks so a runaway client can't flood
@@ -555,7 +594,7 @@ const server = Bun.serve<WsData>({
     // stream — a read this feed is not meant to give to the open web.
     if (pathname === "/stream") {
       if (!trustedCaller(req)) return csrfBlocked();
-      if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null } })) return undefined as unknown as Response;
+      if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
     }
 
@@ -563,8 +602,9 @@ const server = Bun.serve<WsData>({
     if (pathname === "/terminal/pty") {
       if (!trustedCaller(req)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
-      const data: PtyWsData & { ip?: string | null } = {
+      const data: PtyWsData & { ip?: string | null; deviceId?: string | null } = {
         kind: "pty",
+        deviceId: caller?.device?.id ?? null,
         root: url.searchParams.get("root") || "",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
@@ -591,7 +631,7 @@ const server = Bun.serve<WsData>({
       if (!trustedCaller(req)) return csrfBlocked();
       const cap = notifyCapability();
       if (!cap.supported) return json({ error: cap.reason ?? "unsupported" }, 501);
-      if (srv.upgrade(req, { data: { kind: "notify", ip: clientIp ?? null } })) return undefined as unknown as Response;
+      if (srv.upgrade(req, { data: { kind: "notify", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
     }
 
@@ -665,6 +705,45 @@ const server = Bun.serve<WsData>({
       return json({}); // ExportLogsServiceResponse: {} = success
     }
 
+    /**
+     * --- OTLP metrics: refused out loud, rather than 404 ---
+     *
+     * There is no metrics receiver here, on purpose — otlp.ts says why. What
+     * this route fixes is not the absence but the silence: point
+     * `OTEL_EXPORTER_OTLP_ENDPOINT` at agentglass from Claude Code and its
+     * metrics went to a 404, which an exporter swallows into a log nobody is
+     * reading. The person is left watching a dashboard that never fills, with
+     * nothing anywhere saying the endpoint they configured does not exist.
+     *
+     * 501 rather than 404 or 429: it is honest about what happened, and it is
+     * in the class OTel exporters do not retry — so a misconfigured agent says
+     * this once per batch rather than hammering the port forever.
+     *
+     * Registered for GET as well as POST. An exporter only ever POSTs, but the
+     * first thing anybody does when telemetry does not arrive is open the URL
+     * in a browser, and a 404 there is the same dead end by hand.
+     */
+    if (pathname === "/v1/metrics" || pathname === "/otlp/v1/metrics") {
+      // Said once, on the console the operator is actually looking at. The
+      // exporter's own log is the other place this could land, and it is on
+      // the wrong machine's terminal about as often as not.
+      if (!warnedNoMetrics) {
+        warnedNoMetrics = true;
+        console.warn(
+          "[otlp] something POSTed metrics to " + pathname + ". This server receives OpenTelemetry " +
+          "traces (/v1/traces) and logs (/v1/logs), not metrics — see README ▸ OpenTelemetry. " +
+          "If this is Claude Code, it is already covered in full by the hooks (bun run setup) and its " +
+          "OTel export can be left pointed elsewhere.",
+        );
+      }
+      return json({
+        error: "this server has no OpenTelemetry metrics receiver",
+        accepts: ["/v1/traces", "/v1/logs"],
+        why: "agentglass maps GenAI spans and log records into per-call events. Metrics carry totals, which it already computes from those events.",
+        claudeCode: "Claude Code's OTel export is metrics, and it is already covered at higher fidelity by the hooks — run `bun run setup`.",
+      }, 501);
+    }
+
     // --- reads ---
     if (pathname === "/events/recent") {
       const limit = Math.min(2000, Number(url.searchParams.get("limit") || 300));
@@ -700,10 +779,107 @@ const server = Bun.serve<WsData>({
     // streaming + gating from Settings instead of cloning the repo to run a
     // Python script. GET reports state; POST writes ~/.claude/settings.json with
     // the same idempotent, backup-first merge the CLI installer uses.
+    /**
+     * Which agents are on this machine, and whether any of them is talking.
+     *
+     * Connecting a second agent is where people stop — three questions (which
+     * harness, which file, what to put in it) that the cockpit can answer by
+     * looking. Everything not installed is listed too, because "what is
+     * supported" is the question somebody has before they try.
+     */
+    if (pathname === "/agents") return json({ agents: probeAgents() });
+
+    /**
+     * Wire one, and only the one asked for.
+     *
+     * Claude Code goes through the same hook installer the Hooks pane uses; the
+     * OTel agents go through connect_otel.py, which backs the file up, refuses
+     * to touch a config it cannot parse, and leaves a hand-written `[otel]`
+     * block alone. This route chooses which, and reports what the machine
+     * looks like afterwards — including whether anything has actually arrived,
+     * which a freshly written file never has.
+     */
+    if (pathname === "/agents/connect" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: { id?: unknown; undo?: unknown };
+      try { b = (await req.json()) as { id?: unknown; undo?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const id = typeof b.id === "string" ? b.id : "";
+      const agent = ROSTER.find((a) => a.id === id);
+      if (!agent) return json({ ok: false, error: "no such agent" }, 400);
+      const undo = b.undo === true;
+
+      if (agent.via === "hooks") {
+        const r = applyHooks(undo ? "uninstall" : "install");
+        return json({ ...r, agents: probeAgents() });
+      }
+
+      const dir = hooksDir();
+      if (!dir) return json({ ok: false, error: "the connect script is not bundled with this build" }, 400);
+      const args = [joinPath(dir, "connect_otel.py"), "--only", id, ...(undo ? ["--undo"] : [])];
+      const p = Bun.spawnSync([hookPython(), ...args], {
+        // A named environment. The script refuses any server but this machine
+        // unless told otherwise, and inheriting an AGENTGLASS_ALLOW_REMOTE from
+        // whatever launched the app would quietly widen that.
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      });
+      const out = (p.stdout?.toString() ?? "") + (p.stderr?.toString() ?? "");
+      return json({
+        ok: p.exitCode === 0,
+        // The script's own words. It knows things this route does not — that a
+        // config was already pointing here, or that the user has an `[otel]`
+        // block of their own that it will not touch.
+        detail: out.trim().split("\n").filter(Boolean).slice(-4).join("\n"),
+        agents: probeAgents(),
+      }, p.exitCode === 0 ? 200 : 400);
+    }
+
     if (pathname === "/hooks/status") return json(hookStatus());
     if ((pathname === "/hooks/install" || pathname === "/hooks/uninstall") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       return json(applyHooks(pathname === "/hooks/install" ? "install" : "uninstall"));
+    }
+
+    /**
+     * Budgets: what is set, and where each stands right now.
+     *
+     * Reading is like reading the cost chart beside it — a limit and what has
+     * been spent against it is the same class of fact. Writing is a local
+     * decision like every other setting, so it goes through the origin gate.
+     */
+    if (pathname === "/budgets" && req.method === "GET") {
+      return json({ budgets: readBudgets(), status: budgetStatus(), models: costedModels() });
+    }
+    if (pathname === "/budgets/set" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: { budgets?: unknown };
+      try { b = (await req.json()) as { budgets?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      if (!Array.isArray(b.budgets)) return json({ ok: false, error: "expected a list of budgets" }, 400);
+      // Refused on the way in, not silently dropped. readBudgets() skips what it
+      // cannot use, so a bad row accepted here would vanish on the next read and
+      // look exactly like a save that did nothing.
+      const clean: Budget[] = [];
+      for (const raw of b.budgets as Partial<Budget>[]) {
+        if (!raw || typeof raw !== "object") return json({ ok: false, error: "that is not a budget" }, 400);
+        // A *number*, not something Number() can be talked into. `"40"`
+        // coerces to forty and readBudgets() then refuses it on the next read,
+        // so the save would appear to work and silently do nothing — which is
+        // the exact failure the validation on both sides exists to prevent.
+        const limit = raw.limit;
+        if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
+          return json({ ok: false, error: "a budget needs a limit above zero" }, 400);
+        }
+        if (raw.period !== "day" && raw.period !== "week" && raw.period !== "month") {
+          return json({ ok: false, error: "a budget needs a period of day, week or month" }, 400);
+        }
+        clean.push({
+          root: typeof raw.root === "string" ? raw.root : "",
+          model: typeof raw.model === "string" ? raw.model : "",
+          limit, period: raw.period,
+        });
+      }
+      const r = writeBudgets(clean);
+      if (!r.ok) return json(r, 400);
+      return json({ ...r, budgets: readBudgets(), status: budgetStatus() });
     }
 
     if (pathname === "/insights") return json({ insights: getInsights() });
@@ -736,7 +912,16 @@ const server = Bun.serve<WsData>({
     if (pathname === "/gate/pending") return json({ gates: pendingGates() });
     // What was decided while you weren't looking — including the requests a
     // timeout or a restart resolved for you.
-    if (pathname === "/gate/history") return json({ gates: gateHistory(Number(url.searchParams.get("limit") || 50)) });
+    if (pathname === "/gate/history") {
+      // `reason` is narrowed to what a person typed. The stored one is
+      // backfilled with a paragraph written for the stopped model, and a
+      // history quoting that back is boilerplate on every row — see
+      // typedReason().
+      return json({
+        gates: gateHistory(Number(url.searchParams.get("limit") || 50))
+          .map((g) => ({ ...g, reason: typedReason(g) || null })),
+      });
+    }
     // ── web push: the only way an alert reaches a locked phone ────────
     //
     // The socket closes with the screen on purpose, so nothing the server
@@ -812,12 +997,35 @@ const server = Bun.serve<WsData>({
       // the line worth keeping is what was held, not the uuid it was held
       // under. "denied Bash · rm -rf build" is an audit line; a uuid is not.
       const held = getGate(String(b.id));
-      const ok = decideGate(String(b.id), decision, String(b.reason || ""));
       // "Who approved that" is the question #299 opens with, and a gate is the
-      // one write with a stopped agent on the other end of it.
+      // one write with a stopped agent on the other end of it. Resolved once
+      // and handed to both writers, so the gate row and the log line cannot
+      // name two different people for one press.
+      const who = actorOf(srv.requestIP(req)?.address, caller);
+      const ok = decideGate(String(b.id), decision, String(b.reason || ""), who);
+      /*
+       * Why it did not take, in words.
+       *
+       * A press only fails for one interesting reason: something already
+       * resolved the request — usually the clock, occasionally somebody else's
+       * phone — and the agent has already been told the other answer. That is
+       * the most confusing thing that can happen in this feature, and it left a
+       * bare ✕ in the log next to a gate row saying the opposite. The line has
+       * to explain itself, because the record of the press that lost is the
+       * only place the two can be reconciled.
+       */
+      // `held` is enough, and re-reading here would be a guard nothing could
+      // ever show working: it and `decideGate` are adjacent *synchronous*
+      // statements, so the expiry timer cannot fire between them. If this ever
+      // grows an `await` in the middle, that stops being true and the row has
+      // to be read again.
+      const error = ok ? undefined
+        : !held?.decision ? "that request is not one this server is holding"
+        : `already ${held.decision === "deny" ? "denied" : "allowed"} by ${
+            held.resolution === "human" ? "somebody else" : "the timeout"} — this answer arrived too late`;
       noteAction(srv.requestIP(req)?.address, `/gate/${decision}`,
-        { tool: held?.tool_name, summary: held?.summary }, { ok });
-      return json({ ok });
+        { tool: held?.tool_name, summary: held?.summary }, { ok, error }, caller);
+      return json({ ok, ...(error ? { error } : {}) });
     }
     // Drive the dashboard's own UI from outside — a Stream Deck, a phone. Unlike
     // every other route this one changes only what is *shown*: it validates a
@@ -882,7 +1090,6 @@ const server = Bun.serve<WsData>({
       return json({ ok: true, address, blocked, closed });
     }
     if (pathname === "/remote/status") {
-      const ip = srv.requestIP(req)?.address ?? null;
       return json(
         remoteStatus({
           bind: BIND,
@@ -890,10 +1097,168 @@ const server = Bun.serve<WsData>({
           trustLan: TRUST_LAN,
           token: AUTH_TOKEN,
           webUi: WEB_UI_ENABLED,
-          includeToken: !!ip && isLoopback(ip),
         })
       );
     }
+    /**
+     * --- pairing a device ---
+     *
+     * The protocol is in pairing.ts, including why it has the shape it does.
+     * What lives here is the split it depends on: four routes that only this
+     * machine may call, and three that must work with no credential at all,
+     * because handing one out is the point.
+     *
+     * `atMachine` is the stronger of the two checks the codebase already uses.
+     * Loopback alone would let any other local process start a pairing; the
+     * token alone would let a phone that is already paired invite another one.
+     * Minting an invitation, seeing the code, and accepting a request are the
+     * three things that must happen where the user is sitting.
+     */
+    const atMachine = (): boolean => {
+      const ip = srv.requestIP(req)?.address ?? null;
+      if (!ip || !isLoopback(ip)) return false;
+      return !AUTH_TOKEN || tokenOk(req, url, AUTH_TOKEN);
+    };
+    const notHere = () => json({ ok: false, error: "only this machine can do that" }, 403);
+
+    if (pathname === "/pair/ticket" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      const t = mintTicket();
+      // Refused rather than queued: several unanswered invitations at once is
+      // not a person adding a phone, and quietly making room by discarding one
+      // somebody is looking at is worse than saying no.
+      if (!t) return json({ ok: false, error: "too many pairings in progress — answer or wait for the ones open" }, 429);
+      return json({ ok: true, id: t.id, code: t.code, expiresAt: t.expiresAt });
+    }
+
+    if (pathname === "/pair/cancel" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      let b: { ticket?: unknown };
+      try { b = (await req.json()) as { ticket?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      dropTicket(typeof b.ticket === "string" ? b.ticket : "");
+      return json({ ok: true });
+    }
+
+    if (pathname === "/pair/state") {
+      if (!atMachine()) return notHere();
+      // The ticket the pane is showing is identified by the pane, not held as
+      // "the current one": two windows open on the same machine each have
+      // their own invitation, and a server-side notion of *the* ticket would
+      // have one of them drawing a QR for the other one's code.
+      const id = url.searchParams.get("ticket") || "";
+      const t = id ? getTicket(id) : null;
+      return json({
+        ticket: t ? { id: t.id, code: t.code, expiresAt: t.expiresAt } : null,
+        pending: pendingPairings(),
+        devices: activeDevices(),
+      });
+    }
+
+    if (pathname === "/pair/accept" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      let b: { ticket?: unknown; scope?: unknown };
+      try { b = (await req.json()) as { ticket?: unknown; scope?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      // Anything unrecognised lands on the narrow scope rather than the wide
+      // one. A typo in a scope name must not be how a phone gets a terminal.
+      const asked = b.scope;
+      const scope: Scope = asked === "read" || asked === "full" ? asked : "answer";
+      const r = acceptTicket(typeof b.ticket === "string" ? b.ticket : "", scope);
+      if (!r.ok) return json({ ok: false, error: r.error === "unknown" ? "that request expired" : "that request is not waiting on you" }, 404);
+      return json({ ok: true, device: r.device });
+    }
+
+    if (pathname === "/pair/reject" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      let b: { ticket?: unknown };
+      try { b = (await req.json()) as { ticket?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      return json({ ok: rejectTicket(typeof b.ticket === "string" ? b.ticket : "") });
+    }
+
+    /**
+     * Cut one device off, and only that one.
+     *
+     * The revoke that already existed rotates the machine's token, which kicks
+     * every device including the desk — the right answer when you have lost
+     * control of the code, and far too big a hammer for "that tablet is in a
+     * drawer". This is the small one.
+     */
+    if (pathname === "/pair/forget" && req.method === "POST") {
+      if (!atMachine()) return notHere();
+      let b: { id?: unknown };
+      try { b = (await req.json()) as { id?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const id = typeof b.id === "string" ? b.id : "";
+      if (!revokeDevice(id)) return json({ ok: false, error: "no such device" }, 404);
+      // Its open sockets go with it. Revoking a credential while the terminal
+      // it opened keeps streaming is the worst of both: the list says gone and
+      // the wire says otherwise.
+      let closed = 0;
+      for (const ws of [...sockets]) {
+        if (ws.data?.deviceId === id) {
+          try { ws.close(1008, "this device was disconnected from the host machine"); closed++; } catch { /* already gone */ }
+        }
+      }
+      return json({ ok: true, closed });
+    }
+
+    // --- the three the phone calls, before it has anything to authenticate with ---
+
+    /** Is this invitation still open? Lets the phone say "that code expired"
+     *  instead of presenting a form that cannot succeed. */
+    if (pathname === "/pair/info") {
+      const t = getTicket(url.searchParams.get("ticket") || "");
+      return json({ ok: !!t && t.state === "waiting", expiresAt: t?.expiresAt ?? null });
+    }
+
+    if (pathname === "/pair/claim" && req.method === "POST") {
+      let b: { ticket?: unknown; code?: unknown; label?: unknown; pub?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const r = claimTicket(
+        typeof b.ticket === "string" ? b.ticket : "",
+        typeof b.code === "string" ? b.code : "",
+        {
+          label: typeof b.label === "string" ? b.label : "",
+          pub: typeof b.pub === "string" ? b.pub : undefined,
+          agent: req.headers.get("user-agent") ?? "",
+          ip: srv.requestIP(req)?.address ?? "",
+        },
+      );
+      if (r.ok) return json({ ok: true, secret: r.secret });
+      const said =
+        r.error === "unknown" ? "that invitation has expired — start a new one on the computer"
+        : r.error === "taken" ? "another device is already using that invitation"
+        : r.error === "locked" ? `too many wrong codes — the invitation is closed, start a new one on the computer`
+        : r.error === "shape" ? "this browser could not generate a key for the connection"
+        : `that code is wrong — ${r.left} ${r.left === 1 ? "try" : "tries"} left of ${MAX_ATTEMPTS}`;
+      return json({ ok: false, error: said, left: r.left, reason: r.error }, r.error === "code" ? 401 : 410);
+    }
+
+    /**
+     * The phone picks up what it was given.
+     *
+     * Polled, because the thing it is waiting for is a person walking to a
+     * computer. Answers `claimed` until they decide, and hands the sealed
+     * credential over exactly once — see collect().
+     */
+    if (pathname === "/pair/collect") {
+      const r = collectPairing(url.searchParams.get("ticket") || "", url.searchParams.get("secret") || "");
+      return json(r, r.state === "unknown" ? 404 : 200);
+    }
+
+    /** What this device is, as this server sees it. The phone's Settings shows
+     *  it, and a 401 here is how it learns it has been forgotten. */
+    if (pathname === "/pair/whoami") {
+      if (!AUTH_TOKEN) return json({ paired: false, scope: "full", machine: true });
+      const caller = callerFor(req, url, AUTH_TOKEN);
+      if (!caller) return json({ paired: false }, 401);
+      return json({
+        paired: caller.kind === "device",
+        machine: caller.kind === "machine",
+        scope: caller.scope,
+        label: caller.device?.label ?? null,
+        id: caller.device?.id ?? null,
+      });
+    }
+
     if (pathname === "/search") {
       const q = url.searchParams.get("q") || "";
       const limit = Math.min(200, Number(url.searchParams.get("limit") || 60));
@@ -1120,7 +1485,7 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- live docker panel (lazydocker-style) ---
@@ -1175,7 +1540,7 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- pull requests (gh-backed) ---
@@ -1275,7 +1640,7 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
@@ -1317,7 +1682,7 @@ const server = Bun.serve<WsData>({
       // transcript and in `events`, and a second copy in an append-only table
       // that nothing prunes is a copy nobody asked for.
       noteAction(srv.requestIP(req)?.address, "/chat/send",
-        { root: b.cwd, name: b.model }, { ok: true });
+        { root: b.cwd, name: b.model }, { ok: true }, caller);
       return chatSend(b);
     }
     // The command that hands a chat to the user's own terminal. Server-side
@@ -1338,6 +1703,53 @@ const server = Bun.serve<WsData>({
       forgetPane(id);
       return json({ killed: was });
     }
+    /**
+     * Keep this chat's pane, however long you are away.
+     *
+     * Eviction is right for the common case and wrong for the one conversation
+     * you are living in — see `pinned` in tmuxpane.ts. Only about idleness:
+     * closing the chat still releases the pane, because closing is an explicit
+     * "done".
+     */
+    if (pathname === "/chat/pane/pin" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      const id = typeof b.session === "string" ? b.session : "";
+      if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
+      const on = b.pinned !== false;
+      pinPane(id, on);
+      return json({ ok: true, session: id, pinned: on });
+    }
+
+    /**
+     * What is actually running, and which of it belongs to nothing.
+     *
+     * Panes outlive the app: quit or crash and the sessions are still there,
+     * each holding several hundred megabytes. The only way to see that was
+     * `tmux -L agentglass ls` in a terminal, and the only way to clean up was
+     * `kill-session` by hand.
+     *
+     * `orphan` is decided here rather than in tmuxpane.ts, because it is a
+     * question about *chats* and that module knows only about panes: a pane is
+     * an orphan when no chat this server is tracking points at it. `open` is
+     * the set the caller says it has on screen — the client knows which chats
+     * are open, and the server does not, so a pane belonging to a chat in
+     * another window must not be reported as abandoned.
+     */
+    if (pathname === "/chat/panes") {
+      const open = (url.searchParams.get("open") || "").split(",").map((s) => s.trim()).filter(Boolean);
+      return json({
+        // The judgement is in tmuxpane.ts and pure — see classifyPanes. It was
+        // three lines here, which made it reachable only through a machine with
+        // tmux genuinely running.
+        panes: classifyPanes(await panes(), open, activeTurns()),
+        // So the UI can say "reclaimed after 30 minutes" rather than guessing,
+        // and can say "eviction is off" when somebody has turned it off.
+        idleEvictMs: idleEvictMs(),
+      });
+    }
+
     // Answer an interactive prompt without leaving the chat. The pane already
     // takes Enter and Escape from us; arrows are the rest of what a picker
     // needs, and sending them here beats telling someone to open a terminal to

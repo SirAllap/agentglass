@@ -288,17 +288,76 @@ rely on, and for a good number of people it is not a signal at all.
 
 ### Getting it onto your phone
 
-**Settings ▸ Remote access**, one switch. It prints a QR code, because the URL
-is an IP, a port and a 32-character secret and nobody is typing that. Scan it
-and the phone remembers the code; the link only carries it once.
+**Settings ▸ Remote access**, one switch to open the port. Then adding a device
+is its own small handshake, and it is deliberately not one step.
 
-It is **your network only** — the server binds to the LAN, the code is required,
-and a phone that scanned it once keeps working until you rotate it. The same
-pane will tell you when a host firewall is dropping the packets, because
-otherwise the phone shows a white page and nothing anywhere says why.
+The pane shows a **QR code and six digits**. Scan the code, type the digits on
+the phone, and a request appears back at the computer — naming the device, the
+address it came from, and the same six digits — and waits for somebody to
+accept. Nothing exists until they do.
+
+That shape is the point. **The QR is an invitation, not a key.** It used to be
+the machine's own token, which meant a photograph of this screen, a screenshot
+in a chat or a shared window in a call was a working shell on your laptop; there
+is no way to scan a code carefully, and being able to see it was the whole
+authorisation. Now seeing it gets you a form asking for six digits that are not
+in the picture. The credential itself is minted only after a person agrees, and
+it is encrypted to a key the phone generated for that one pairing — so on a
+network without TLS, everything else on the wifi can watch the entire exchange
+and still not have it.
+
+Each device is then **its own thing**: named, at a level you chose while looking
+at the request, and revocable on its own.
+
+- **Look only** — sessions, costs, changes, pull requests. Approves nothing.
+- **Answer things** *(the default)* — the above, plus approving gates and
+  replying to a running session. What a phone is actually for.
+- **Everything** — the terminal, git write, Docker, merging. For a laptop you
+  trust, not a phone.
+
+**Forget** one device and only that one stops working: its credential is
+revoked, the sockets it is holding are closed, and the desk and every other
+phone carry on. Rotating the code is still there for when you have lost the code
+itself, and still kicks everything.
+
+It is **your network only** — the server binds to the LAN. The same pane will
+tell you when a host firewall is dropping the packets, because otherwise the
+phone shows a white page and nothing anywhere says why. Over café wifi, pair on
+the Tailscale address it offers instead: that one is encrypted end to end.
 
 The page ships a web manifest, so **Add to home screen** gives you an icon that
-opens without browser chrome.
+opens without browser chrome. On an iPhone that is not optional — it is the only
+way Safari will deliver a push.
+
+### Reaching it when you are not on the same wifi
+
+The honest answer is **Tailscale**, and it is the one the Remote pane offers
+beside the LAN address. A tailnet address is reachable from a train, encrypted
+end to end, and limited to devices signed into your own account — which is a
+much narrower grant than a network. Install it on both ends, pair on that
+address, and the sofa and the airport work the same way.
+
+The tempting answer is a tunnel — `cloudflared`, `ngrok`, a reverse proxy — and
+it is worth being plain about what that is. **This server can open a shell, push
+to your repositories and control Docker on the machine it runs on.** Putting a
+public hostname in front of it means the only thing between the internet and
+that is a credential, and credentials leak by being pasted into the wrong
+window. Treat the port the way you treat `sshd`: if you must put a proxy in
+front of it, terminate TLS there, require authentication at the proxy as well,
+and set `AGENTGLASS_ALLOWED_HOSTS` so the DNS-rebinding guard knows the name.
+It is not a configuration this project tests, and it is not one to reach for
+because Tailscale looked like a bigger setup than it is.
+
+Either way, **the tunnel is for the browser, not for the hooks.** Everything
+that reports into agentglass — the Claude Code hooks, the OTel exporters, the
+gate that holds a tool call — posts to the server on the machine it is running
+on, at `http://localhost:4000`. It has to: the hook scripts refuse to send a
+transcript anywhere but this host, precisely because a cloned repository can set
+`AGENTGLASS_SERVER` in its own `settings.json` and would otherwise redirect your
+prompts and file contents to somebody else. Pointing them at a public hostname
+does not make anything work better, and turning off the guard to do it
+(`AGENTGLASS_ALLOW_REMOTE=1`) is for the case where the server genuinely runs on
+another machine — not for the case where you added a tunnel to it.
 
 ### Alerts that reach a locked phone
 
@@ -310,7 +369,18 @@ exists for, you walked away and an agent is now blocked waiting on a person,
 was the one case nothing covered.
 
 **Settings ▸ Push to this phone**, one switch. After that a held gate buzzes the
-phone in your pocket, and tapping it opens the queue with the decision on it.
+phone in your pocket **with Allow and Deny on the notification** — you answer it
+from the lock screen and nothing opens. That is the whole loop: an agent stops,
+your pocket buzzes, you tap Allow, it goes. Tapping the notification itself
+still opens the queue, which is what happens on an iPhone, where Safari draws no
+buttons.
+
+Only a held gate gets them. Everything else this app sends is news, and news
+with buttons on it is a worse notification rather than a better one.
+
+Answering is bounded by what the device was paired for: a phone paired to
+**Look only** is told so rather than silently failing, and the two buttons do
+nothing it was not granted — the check is on the route, not on the notification.
 
 It is end-to-end encrypted by design: the push service relays a blob it cannot
 read (RFC 8291 over RFC 8188, VAPID for the token). Your machine generates its
@@ -325,6 +395,11 @@ ciphertext addressed to your own device.
   receiving until you say otherwise, and the list is where you say it.
 - A held gate stays on the lock screen until you deal with it; anything less
   urgent is allowed to fade.
+- Every tap says what it did — including the ones that are not a clean yes. A
+  gate somebody already answered at the desk, one that timed out while the phone
+  was face-down, a device that has since been forgotten, or a machine that has
+  gone to sleep are four different sentences, because they need four different
+  things done about them.
 - **On iPhone and iPad this needs the Home Screen icon first.** Safari has had
   Web Push since 16.4, but only for an installed site — in a browser tab the
   switch will say so and point at the share sheet.
@@ -364,7 +439,8 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 📈 **Anthropic plan usage** | 5-hour + weekly plan-limit meters — shown only when you're viewing Anthropic (the one provider with a usage API), on wide screens. |
 | ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `o` Docker · `t` terminal · `c` chat · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
 | 🎨 **22 themes** | 11 dark palettes (Midnight Purple, Forest, Ember, Nord, …), each with a light twin — instant switch, remembered. |
-| 🔔 **Alerts** | Web Push to a locked phone (end-to-end encrypted, no account anywhere) + webhook (Slack/Discord) + desktop notify + optional in-app chime, on approvals and errors. |
+| 🔔 **Alerts** | Web Push to a locked phone (end-to-end encrypted, no account anywhere) — a held gate arrives with **Allow and Deny on the notification** — plus webhook (Slack/Discord), desktop notify and an optional in-app chime. |
+| 💰 **Budgets** | *"No more than $40 a month on this repository."* Per-project and per-model, warned at 80% rather than only when you cross it, counted from the daily rollup as well as live events so a monthly budget really means a month. Settings ▸ Preferences. |
 | 📤 **Export** | One-click CSV / JSON of all events. |
 
 ### Themes
@@ -764,7 +840,16 @@ agentglass isn't Claude-only. It exposes an **OTLP/HTTP** trace receiver that
 maps OpenTelemetry **GenAI** spans (the `gen_ai.*` semantic conventions) into the
 same events the dashboard already understands — so anything emitting GenAI
 telemetry streams in: the OpenAI / Google / Bedrock SDK instrumentations,
-LangChain, LiteLLM, OpenLLMetry, and Claude Code's own OTel export.
+LangChain, LiteLLM, OpenLLMetry, Arize Phoenix and the other OpenInference
+instrumentors.
+
+**Not Claude Code's own OTel export**, which this used to list. That export is
+*metrics*, and this receiver takes spans and log records — so pointing
+`OTEL_EXPORTER_OTLP_ENDPOINT` at agentglass from Claude Code sends its metrics
+to an endpoint that turns them away and says why. Nothing is lost: Claude Code
+is already covered, at far higher fidelity, by the hooks (`bun run setup`) —
+per-tool timings, the prompt, the arguments, and the gate. Metrics carry totals,
+which is the one thing the dashboard can already compute.
 
 ### Auto-connect installed CLIs — one command, opt-in
 

@@ -1,0 +1,19 @@
+<!--
+  The small mark beside a notification in the Android status bar.
+
+  Android throws the colours away and draws this from the alpha channel alone,
+  as a flat silhouette. So it is white on transparent, and everything the full
+  mark has that only reads in colour — the sheen, the terminator shading, the
+  green dot's halo — is gone. What is left is the two shapes that survive being
+  reduced to a stencil at 24dp: the orbit and the planet.
+
+  Rendered to a PNG by scripts/make-icons.ts. An SVG here is not drawn at all.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g transform="translate(32 32) scale(.84) translate(-32 -32)" fill="#fff" stroke="#fff">
+    <path d="M14.1 54.9 A29 8.5 -52 0 1 49.9 9.1" fill="none" stroke-width="5" stroke-linecap="round"/>
+    <path d="M49.9 9.1 A29 8.5 -52 0 1 14.1 54.9" fill="none" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="30" cy="34" r="14" stroke="none"/>
+    <circle cx="50.7" cy="10.4" r="6" stroke="none"/>
+  </g>
+</svg>
