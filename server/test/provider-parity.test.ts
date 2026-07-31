@@ -37,6 +37,7 @@ const MODELS = [
   "deepseek-chat", "grok-2", "xai/grok", "mistral-large", "mixtral-8x7b", "codestral",
   "llama-3.1-70b", "meta-llama/Llama-3", "command-r-plus", "cohere.command",
   "k3", "kimi-k3", "kimi-code/k3", "moonshot-v1-128k",
+  "MiniMax-M3", "MiniMax-M2.7",
   // fall-through cases — must be the miss bucket on both sides
   "some-unknown-model", "qwen-2.5", "", "   ", "MODEL-WITH-NO-MATCH",
 ];
@@ -61,6 +62,15 @@ describe("providerOf agrees between the server and the web copy", () => {
       expect(webProviderOf(model)).toBe("Moonshot");
       expect(webModelLabelOf(model)).toBe("K3");
     }
+  });
+
+  test("MiniMax ids resolve to the MiniMax provider and display labels", () => {
+    for (const model of ["MiniMax-M3", "MiniMax-M2.7"]) {
+      expect(serverProviderOf(model)).toBe("MiniMax");
+      expect(webProviderOf(model)).toBe("MiniMax");
+    }
+    expect(webModelLabelOf("MiniMax-M3")).toBe("MiniMax M3");
+    expect(webModelLabelOf("MiniMax-M2.7")).toBe("MiniMax M2.7");
   });
 });
 
