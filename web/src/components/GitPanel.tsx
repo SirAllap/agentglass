@@ -449,6 +449,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
   const [tree, setTree] = useState<WorkingTree | null>(null);
+  // Which root the tree on screen belongs to. When it isn't the current root,
+  // the header (branch, sync-behind count, push/pull state) is still showing the
+  // worktree you just switched away from — so the group can say it is recomputing
+  // instead of presenting the old numbers as if they were the new ones.
+  const [treeFor, setTreeFor] = useState("");
   const [view, setView] = useState<View>("changes");
   const [selKey, setSelKey] = useState<string | null>(null);
   const [split, setSplit] = useState(true);
@@ -655,7 +660,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const loadTree = useCallback(async (r: string) => {
     if (!r) return;
     const seq = ++treeSeq.current;
-    try { const t = await api.gitTree(r); if (seq !== treeSeq.current) return; setTree(t); if (t.error) flash(false, t.error); }
+    try { const t = await api.gitTree(r); if (seq !== treeSeq.current) return; setTree(t); setTreeFor(r); if (t.error) flash(false, t.error); }
     catch (e) { if (seq === treeSeq.current) flash(false, String(e)); }
   }, []);
   const rel = (c: GitFileChange) => (c.file_path.startsWith(root + "/") ? c.file_path.slice(root.length + 1) : c.file_path);
@@ -1330,6 +1335,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
   const repoRef = repos.find((r) => r.root === root);
   const branch = tree?.branch;
+  // The header is showing another worktree's numbers until this lands.
+  const treeStale = treeFor !== root;
   /**
    * Behind a remote copy *of this branch* — the only case where merging the
    * base is the wrong move, because that copy has already merged what you are
@@ -1643,7 +1650,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   <div className="flex items-center gap-[9px] ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
                     {VIEW_GROUPS.map((g) => <ViewGroup key={g.label} views={g.views} />)}
                   </div>
-                  <div className="ml-auto flex items-center gap-1.5 min-w-0">
+                  <div className="ml-auto flex items-center gap-1.5 min-w-0" style={{ opacity: treeStale ? 0.5 : 1, transition: "opacity .18s ease" }}>
+                    {/* Switched worktrees — say the numbers are being recomputed
+                        rather than leave the old branch's sync count sitting
+                        there looking current. */}
+                    {treeStale && <span className="animate-spin shrink-0 text-[12px]" style={{ color: "var(--text3)" }} title="Reading the branch you switched to…">⟳</span>}
                     {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
                     {/* Offered only while undoing is exact: an unpushed merge
                         at the tip, on a clean tree. Once anything is committed
