@@ -491,3 +491,31 @@ export const sessionIsLive = (
   s: { ended_at?: number | null; last_seen: number },
   now = Date.now(),
 ): boolean => !s.ended_at && now - s.last_seen < SESSION_LIVE_MS;
+
+/**
+ * Which CLI owns a session on the radar.
+ *
+ * The question only has to be answered to resume one: a thread id means
+ * something to the binary that minted it and nothing to the other, so opening a
+ * Codex session as a Claude chat would hand `claude --resume` an id it has
+ * never seen and fail on the first turn.
+ *
+ * `source_app` is the stronger signal and is checked first. It is whatever the
+ * exporter called itself — Codex's OTel records arrive as `codex_exec` from
+ * `codex exec` and `codex_cli_rs` from the TUI, so this matches on the prefix
+ * rather than on either exact name. Claude Code's hooks send the project
+ * directory's name instead, which is why the model is the fallback and not the
+ * primary: it is the only thing a session with an unfamiliar `source_app` has
+ * to go on.
+ *
+ * Defaults to Claude, because that is the overwhelming majority of what this
+ * app sees and because being wrong in that direction is the recoverable one:
+ * `claude --resume` with a stranger's id reports an unknown session, while
+ * `codex exec resume` would be asked to continue a conversation it does not
+ * have.
+ */
+export const agentOf = (s: { source_app?: string | null; model_name?: string | null }): "claude" | "codex" => {
+  if ((s.source_app ?? "").toLowerCase().startsWith("codex")) return "codex";
+  if (/^(gpt|o[134])[-.]/i.test(s.model_name ?? "")) return "codex";
+  return "claude";
+};

@@ -70,6 +70,7 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
+import { codexStream, codexModels, codexTranscript, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope, readBudgets, writeBudgets } from "./config.ts";
@@ -1781,6 +1782,32 @@ const server = Bun.serve<WsData>({
       if (!pane.available) return json({ error: pane.reason }, 400);
       if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
       return json({ command: attachCommand(id), live: await paneAlive(id) });
+    }
+
+    // --- multi-chat: the same panel, driving codex instead ---
+    // `models` comes back with `enabled` rather than from a route of its own:
+    // the panel needs both to draw a single dropdown, and asking twice would
+    // let it render a model picker for a CLI that turns out not to be there.
+    if (pathname === "/codex/enabled") {
+      return json({ enabled: CODEX_ENABLED, bypass: CODEX_BYPASS_ALLOWED, models: CODEX_ENABLED ? codexModels() : [] });
+    }
+    if (pathname === "/codex/send" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      // Same reasoning as /chat/send: the launch is the auditable fact, not the
+      // turn, and the prompt is already in Codex's own rollout.
+      noteAction(srv.requestIP(req)?.address, "/codex/send",
+        { root: b.cwd, name: b.model }, { ok: true }, caller);
+      return codexStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images);
+    }
+    // What a Codex thread said, for a chat adopting it from the fleet. The
+    // OTel stream carries tool calls but no prose, so this reads Codex's own
+    // rollout — see codexTranscript(). Single-flighted like /session: several
+    // panels opening the same thread should read the file once.
+    if (pathname === "/codex/transcript") {
+      const id = url.searchParams.get("id") || "";
+      return body(await singleFlight(`codex:${id}`, async () => JSON.stringify({ timeline: codexTranscript(id) })));
     }
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---

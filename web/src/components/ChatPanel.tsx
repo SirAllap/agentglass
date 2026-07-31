@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import { CHAT_EFFORTS } from "../../../shared/types.ts";
-import type { GitRepoRef, SessionRollup, ChatEffort } from "../../../shared/types.ts";
+import type { GitRepoRef, SessionRollup, ChatEffort, CodexStatus } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { ToolRow } from "./ToolRow.tsx";
@@ -27,14 +27,16 @@ import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
 import { fmtAgo, fmtUsd, fmtTokens, modelLabelOf, modelColor, providerOf } from "../lib/format.ts";
-import { sessionIsLive } from "../lib/derive.ts";
+import { sessionIsLive, agentOf } from "../lib/derive.ts";
 import { ctxLimitOf } from "../lib/contextWindow.ts";
 import { worktreeTag, sessionWorktree, sessionCwd } from "../lib/worktree.ts";
 import { useStuckBottom } from "../lib/useStuckBottom.ts";
 import {
   listChats, getChat, newChat, closeChat, update, send, stop, enqueue, unqueue, subscribe, chatResuming,
   engineFor,
-  DEFAULT_MODEL, DEFAULT_MODE, addAttachments, answerPane, dropAttachment, renameChat, clearAttention, type Chat,
+  DEFAULT_MODEL, DEFAULT_MODE, DEFAULT_CODEX_MODEL, DEFAULT_CODEX_MODE,
+  isFresh, switchAgent,
+  addAttachments, answerPane, dropAttachment, renameChat, clearAttention, type Chat, type AgentKind,
   restoredActiveId, setActiveChatId, chatFocusRequest, setPanePinned, hydratePanePins,
 } from "../lib/chatStore.ts";
 import { peekChatIntent, subscribeChatIntent, takeChatIntent } from "../lib/chatIntent.ts";
@@ -69,6 +71,34 @@ const MODES = [
   { id: "acceptEdits", label: "Auto-accept edits" },
   { id: "bypassPermissions", label: "⚡ Bypass (runs all)" },
 ];
+
+// Codex draws its line around the filesystem rather than per tool call, so it
+// gets its own three rather than being squeezed into Claude's four. Labelling a
+// sandbox "Ask (denies un-allowed)" would describe a mechanism it has not got.
+// Keep in step with SANDBOXES in server/src/codex.ts.
+const CODEX_MODES = [
+  { id: "read-only", label: "Read-only (no writes)" },
+  { id: "workspace-write", label: "Write in this repo" },
+  { id: "full-access", label: "⚡ Full access (no sandbox)" },
+];
+
+/** The unattended mode for this agent — the one the server refuses to honour
+ *  unless the operator opted in. One name for two spellings, so the mode
+ *  dropdown and the warnings below don't each need the branch. */
+const bypassMode = (agent: AgentKind) => (agent === "codex" ? "full-access" : "bypassPermissions");
+const cliName = (agent: AgentKind) => (agent === "codex" ? "codex" : "claude");
+const agentLabel = (agent: AgentKind) => (agent === "codex" ? "Codex" : "Claude");
+const modesFor = (agent: AgentKind) => (agent === "codex" ? CODEX_MODES : MODES);
+
+/** What the model dropdown may offer. Claude's list is written down here
+ *  because it is a judgement call about which of many ids are worth offering;
+ *  Codex's is whatever its own cache currently says, so it arrives from the
+ *  server. A Codex with an empty list has not been asked yet — fall back rather
+ *  than render an empty dropdown. */
+function modelsFor(agent: AgentKind, codex: CodexStatus): Array<{ id: string; label: string }> {
+  if (agent !== "codex") return MODELS;
+  return codex.models.length ? codex.models : [{ id: DEFAULT_CODEX_MODEL, label: DEFAULT_CODEX_MODEL }];
+}
 const CWD_KEY = "agentglass.chatCwd";
 const ALLOW_KEY = "agentglass.chatAllowedTools";
 // A starting point that covers the reading and inspection an assistant reaches
@@ -601,6 +631,10 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // The server silently downgrades bypassPermissions unless the operator opted
   // in (AGENTGLASS_CHAT_BYPASS=1) — don't offer a mode that wouldn't stick.
   const [bypassAllowed, setBypassAllowed] = useState(false);
+  // Whether a `codex` is on the machine, and which models it currently offers.
+  // The list comes from the server because it is read off Codex's own cache
+  // rather than a table in this repo — see codexModels() in server/src/codex.ts.
+  const [codex, setCodex] = useState<CodexStatus>({ enabled: false, models: [] });
   // Shared by every chat and remembered across launches: the set of tools you
   // trust is a property of how you work, not of one conversation.
   const [allowed, setAllowed] = useState(() => {
@@ -656,6 +690,17 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // moves selection off it.
   const active = chats.find((c) => c.id === activeId);
 
+  // Whether *this* chat can run: `enabled` only ever spoke for `claude`, so on
+  // a machine with Codex installed and Claude not, it would have greyed out a
+  // composer that works perfectly well.
+  const usable = active ? (active.agent === "codex" ? codex.enabled : enabled) : (enabled || codex.enabled);
+  // Pasting and dropping images is a Claude-only affordance. `codex exec` takes
+  // images as file paths rather than as content blocks, so there is nowhere for
+  // pasted bytes to go without staging them on disk first — the server refuses
+  // them outright, and offering the button anyway would just be a slower way to
+  // reach that refusal.
+  const canAttach = usable && active?.agent !== "codex";
+
   // Only while the draft is a bare `/word` on the first line: past the first
   // space it is prose, and a menu stealing Enter there would be maddening.
   const slashQuery = (() => {
@@ -689,6 +734,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
       setDefaultCwd((c) => c || repos[0]?.root || "");
     }).catch(() => {}).finally(() => setReposKnown(true));
     api.chatEnabled().then((r) => { setEnabled(r.enabled); setBypassAllowed(!!r.bypass); }).catch(() => {});
+    api.codexEnabled().then(setCodex).catch(() => {});
     // Which project this instance is scoped to, if any. A failure here means we
     // never learn of a scope, so nothing is hidden, which is the safe direction.
     api.projects()
@@ -784,12 +830,23 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // and looked like new chats were broken. Refuse instead, and say why.
     if (!cwd) { setNoRepo(true); return; }
     setNoRepo(false);
-    const c = newChat(cwd, active?.model ?? DEFAULT_MODEL, active?.mode ?? DEFAULT_MODE);
+    // A new chat inherits the agent you were last using, the same way it
+    // inherits the repo and the model — and falls back to whichever CLI is
+    // actually installed when there is nothing to inherit from.
+    const agent: AgentKind = active?.agent ?? (enabled ? "claude" : codex.enabled ? "codex" : "claude");
+    const sameAgent = active?.agent === agent;
+    const c = newChat(
+      cwd,
+      sameAgent ? active!.model : agent === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL,
+      sameAgent ? active!.mode : agent === "codex" ? DEFAULT_CODEX_MODE : DEFAULT_MODE,
+      undefined,
+      agent,
+    );
     if (seed) update(c.id, (x) => { x.draft = seed; });
     setActiveId(c.id);
     if (!seed) requestAnimationFrame(() => inputRef.current?.focus());
     return c;
-  }, [active, defaultCwd, repos, workspace]);
+  }, [active, defaultCwd, repos, workspace, enabled, codex.enabled]);
 
   // Adopt an existing claude session. Focusing an already-open tab rather than
   // opening a second one is not a nicety: two chats resuming one session id
@@ -800,11 +857,21 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // Resume in the checkout it ran in, not the repo it rolls up to.
     const cwd = sessionCwd(s);
     if (!cwd) return;
+    // Which CLI this session belongs to decides which one has to pick it back
+    // up: a thread id is only meaningful to the binary that minted it, so
+    // opening a Codex session as a Claude chat would send `claude --resume` an
+    // id it has never heard of and fail on the first turn.
+    const agent = agentOf(s);
     const chat = chatResuming(s.session_id)
-      ?? newChat(cwd, s.model_name || undefined, active?.mode ?? DEFAULT_MODE, {
-        sessionId: s.session_id,
-        title: `${s.source_app}:${s.session_id.slice(0, 8)}`,
-      });
+      ?? newChat(
+        cwd,
+        s.model_name || (agent === "codex" ? DEFAULT_CODEX_MODEL : DEFAULT_MODEL),
+        // The mode is this agent's vocabulary, so a mode carried over from the
+        // chat you happened to have open only applies when it is the same one.
+        active?.agent === agent ? active.mode : agent === "codex" ? DEFAULT_CODEX_MODE : DEFAULT_MODE,
+        { sessionId: s.session_id, title: `${s.source_app}:${s.session_id.slice(0, 8)}` },
+        agent,
+      );
     setActiveId(chat.id);
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [active]);
@@ -906,6 +973,13 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // it lands as a change event and opens a chat through onChange.
     const chat = active ?? (files.length ? add() ?? null : null);
     if (!chat) return;
+    // `codex exec` takes images as file paths, not content blocks, so there is
+    // nowhere for pasted bytes to go. Say so instead of dropping them silently.
+    if (files.length && chat.agent === "codex") {
+      e.preventDefault();
+      setHint("codex chats can't take pasted images — start a Claude chat for that");
+      return;
+    }
     if (!files.length) {
       // A paste that carried a file which wasn't an image would otherwise look
       // identical to the feature being broken.
@@ -926,7 +1000,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
   const onDragOver = (e: React.DragEvent) => {
-    if (!enabled || !active) return;
+    if (!usable || !active) return;
     if (!Array.from(e.dataTransfer.items).some((i) => i.kind === "file")) return;
     // Without this the browser answers the drop itself by navigating to the
     // file, replacing the whole app with the image.
@@ -944,6 +1018,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     e.preventDefault();
     dragDepth.current = 0;
     setDragOver(false);
+    if (!canAttach) { setHint("codex chats can't take dropped files — start a Claude chat for that"); return; }
     // Files, not just images: `addAttachments` quotes a text file into the
     // draft, which is the same thing the picker and the paste path already do.
     const files = Array.from(e.dataTransfer.files);
@@ -1151,12 +1226,36 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                       <>
                         <Select value={active.cwd} onChange={(v) => { update(active.id, (c) => { c.cwd = v; }); setDefaultCwd(v); }}
                           className={selCls} style={selStyle} options={repoOptions} placeholder="Pick a repo" />
+                        {/* Only shown when there is a choice to make: on a
+                            machine with one CLI installed this would be a
+                            control with a single option and nothing to explain.
+
+                            Switchable until the chat has a thread, then frozen.
+                            A resume id belongs to the CLI that minted it, so
+                            there is no meaning to handing a live conversation
+                            from one to the other — but a tab you have not sent
+                            anything from yet is just a blank tab. */}
+                        {enabled && codex.enabled && (
+                          isFresh(active) ? (
+                            <Select value={active.agent} onChange={(v) => switchAgent(active.id, v as AgentKind)}
+                              className={selCls} style={selStyle} title="Which CLI runs this chat"
+                              options={[{ value: "claude", label: "Claude" }, { value: "codex", label: "Codex" }]} />
+                          ) : (
+                            <span className={selCls} title="The CLI behind this chat — settled once it has a thread to resume"
+                              style={{ ...selStyle, color: "var(--text3)" }}>{agentLabel(active.agent)}</span>
+                          )
+                        )}
                         <Select value={active.model} onChange={(v) => update(active.id, (c) => { c.model = v; })}
-                          className={selCls} style={selStyle} options={MODELS.map((m) => ({ value: m.id, label: m.label }))} />
+                          className={selCls} style={selStyle} options={modelsFor(active.agent, codex).map((m) => ({ value: m.id, label: m.label }))} />
                         <Select value={active.mode} onChange={(v) => update(active.id, (c) => { c.mode = v; })}
-                          className={selCls} style={selStyle} title="Permission mode for tool use"
-                          options={MODES.filter((m) => bypassAllowed || m.id !== "bypassPermissions").map((m) => ({ value: m.id, label: m.label }))} />
-                        {active.mode !== "bypassPermissions" && (
+                          className={selCls} style={selStyle} title={active.agent === "codex" ? "How much codex may touch without asking" : "Permission mode for tool use"}
+                          options={modesFor(active.agent)
+                            .filter((m) => (active.agent === "codex" ? codex.bypass : bypassAllowed) || m.id !== bypassMode(active.agent))
+                            .map((m) => ({ value: m.id, label: m.label }))} />
+                        {/* Codex has no allowlist to fill in: it decides per
+                            filesystem boundary, not per tool call, so a box here
+                            would be a control that silently did nothing. */}
+                        {active.agent !== "codex" && active.mode !== "bypassPermissions" && (
                           <input
                             value={allowed}
                             onChange={(e) => setAllowed(e.target.value)}
@@ -1254,9 +1353,9 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                     <div ref={contentRef} className="min-h-full flex flex-col justify-end gap-3">
                       {active && !active.messages.length && (
                         <div className="grid place-items-center text-center t-dim2 text-[12px] py-10">
-                          {enabled
-                            ? <div>Chat with a Claude session in <b style={{ color: "var(--text2)" }}>{repoName(active.cwd) || "a repo"}</b>.<br />It runs there, appears in your fleet, and follow-ups keep the context.</div>
-                            : <div>No local <code>claude</code> CLI found — install Claude Code to chat.</div>}
+                          {usable
+                            ? <div>Chat with a {agentLabel(active.agent)} session in <b style={{ color: "var(--text2)" }}>{repoName(active.cwd) || "a repo"}</b>.<br />It runs there, appears in your fleet, and follow-ups keep the context.</div>
+                            : <div>No local <code>{cliName(active.agent)}</code> CLI found — install it to chat.</div>}
                         </div>
                       )}
                       {active?.messages.map((m, i) => (
@@ -1515,8 +1614,10 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           ev.target.value = ""; // re-picking the same file must still fire
                           if (active && picked.length) setHint(await addAttachments(active.id, picked));
                         }} />
-                      <button onClick={() => fileRef.current?.click()} disabled={!enabled || !active}
-                        title="Attach a file — images are sent as images, text files are quoted into the message"
+                      <button onClick={() => fileRef.current?.click()} disabled={!canAttach || !active}
+                        title={active?.agent === "codex"
+                          ? "codex chats can't take attachments — start a Claude chat for that"
+                          : "Attach a file — images are sent as images, text files are quoted into the message"}
                         aria-label="Attach a file"
                         className="shrink-0 grid place-items-center rounded-lg px-3 self-stretch"
                         style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>
@@ -1529,7 +1630,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           the empty state said "press + new" and the box said
                           "Message a new session…", and only one of them was
                           telling the truth. */}
-                      <textarea ref={inputRef} aria-label="Chat composer" value={active?.draft ?? ""} disabled={!enabled} rows={2}
+                      <textarea ref={inputRef} aria-label="Chat composer" value={active?.draft ?? ""} disabled={!usable} rows={2}
                         onChange={(e) => {
                           const v = e.target.value;
                           if (active) { update(active.id, (c) => { c.draft = v; }); return; }
@@ -1540,7 +1641,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         }}
                         onKeyDown={onKey}
                         onPaste={onPaste}
-                        placeholder={!enabled ? "Chat unavailable" : active?.sending ? "Still replying — type anyway, Enter queues it for the next turn" : active?.sessionId ? "Reply… (Enter to send, Shift+Enter newline)" : "Message a new session… (Enter to send)"}
+                        placeholder={!usable ? `${agentLabel(active?.agent ?? "claude")} chat unavailable — no local \`${cliName(active?.agent ?? "claude")}\` CLI` : active?.sending ? "Still replying — type anyway, Enter queues it for the next turn" : active?.sessionId ? "Reply… (Enter to send, Shift+Enter newline)" : "Message a new session… (Enter to send)"}
                         className="agx-scroll flex-1 px-3 py-2 rounded-lg text-[12px] outline-none resize-none" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
                       {/* Stop stays reachable while a turn is queueing: the
                           two are different intents — "answer this next" and
@@ -1551,15 +1652,15 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                         <button onClick={() => stop(active.id)} title="Interrupt the turn and clear anything queued"
                           className="shrink-0 px-3.5 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>■ Stop</button>
                       )}
-                      <button onClick={submit} disabled={!hasTurn || !active?.cwd || !enabled} className="shrink-0 px-4 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>
+                      <button onClick={submit} disabled={!hasTurn || !active?.cwd || !usable} className="shrink-0 px-4 rounded-lg text-[11.5px] font-semibold self-stretch" style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 22%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", opacity: (!hasTurn || !active?.cwd) ? 0.45 : 1 }}>
                         {active?.sending ? "Queue ↵" : "Send ↵"}
                       </button>
                     </div>
                     <div className="mt-1.5 text-[9.5px] t-dim2">
                       {hint
                         ? <span style={{ color: "var(--warning)" }}>{hint}</span>
-                        : <>Runs claude in {active ? repoName(active.cwd) || "the repo" : "the repo"} · {MODES.find((x) => x.id === active?.mode)?.label} · tool calls fold away, click to open</>}
-                      {active?.mode === "bypassPermissions" && <span style={{ color: "var(--warning)" }}> · ⚡ runs tools unattended</span>}
+                        : <>Runs {cliName(active?.agent ?? "claude")} in {active ? repoName(active.cwd) || "the repo" : "the repo"} · {modesFor(active?.agent ?? "claude").find((x) => x.id === active?.mode)?.label} · tool calls fold away, click to open</>}
+                      {active && active.mode === bypassMode(active.agent) && <span style={{ color: "var(--warning)" }}> · ⚡ runs tools unattended</span>}
                     </div>
                   </div>
                 </div>

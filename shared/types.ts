@@ -1135,6 +1135,23 @@ export interface TerminalCommands {
   scripts: ProjectCommand[]; // package.json scripts, runner-aware
 }
 
+/** A model the local Codex CLI currently offers, read off its own
+ *  `models_cache.json` rather than a table in this repo — see codexModels() in
+ *  server/src/codex.ts for why. */
+export interface CodexModel {
+  id: string;    // the slug passed to `codex exec -m`
+  label: string; // Codex's own display name, or the slug when it has none
+}
+
+/** What the chat panel needs to decide whether to offer Codex at all, and what
+ *  to put in its model dropdown if it does. Both travel together because the
+ *  panel cannot usefully draw one without the other. */
+export interface CodexStatus {
+  enabled: boolean;  // a `codex` binary is on PATH
+  bypass?: boolean;  // the operator opted into the no-sandbox mode
+  models: CodexModel[];
+}
+
 /** Whether `git` is on this machine at all. `available: false` is a first-class
  *  UI state — the git/diff/PR panels and the terminal all need git — not an
  *  error to bury behind an empty "no repos found". */

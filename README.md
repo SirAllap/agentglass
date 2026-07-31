@@ -207,17 +207,46 @@ Electron window compositor rather than xterm.
 
 ![terminal panel](.github/assets/terminal.png)
 
-### 💬 Chat — drive Claude sessions from the browser &nbsp;`c`
+### 💬 Chat — drive Claude and Codex sessions from the browser &nbsp;`c`
 
 Multi-chat against your **local `claude` CLI**: pick a repo/worktree, a model,
 and a permission mode (plan → default / acceptEdits → bypass), then converse —
 replies stream in, tool calls appear as chips, and follow-ups resume the same
 session. Sessions you start here show up in the fleet like any other agent.
 
+#### A second agent: OpenAI Codex
+
+The same panel drives **`codex`** as well. When both CLIs are on the machine an
+agent picker appears next to the repo — it is switchable until the chat has a
+thread, then frozen, because a resume id belongs to the CLI that minted it and
+there is no meaning to handing a live conversation from one to the other.
+
+Codex brings its own vocabulary rather than borrowing Claude's. Its modes are
+filesystem sandboxes (**Read-only**, **Write in this repo**, **⚡ Full access**)
+instead of per-tool permissions, so there is no allowlist box for a Codex chat —
+it decides at the filesystem boundary, not per tool call. The model list is read
+from Codex's own `models_cache.json`, so it follows whatever your CLI currently
+offers instead of a table in this repo that goes stale on every release. Pasted
+and dropped images are Claude-only: `codex exec` takes images as file paths
+rather than content blocks, so the panel says so instead of dropping them
+silently.
+
+Install and authenticate the Codex CLI separately, then make sure the `codex`
+executable is on the server's `PATH` when agentglass starts. The chat panel uses
+`codex exec --json` for new turns and `codex exec resume` for follow-ups; it does
+not replace the CLI's own login or configuration. Set `CODEX_HOME` when Codex
+keeps its state somewhere other than `~/.codex` — the model cache and rollout
+history are read from that location. To turn off the Codex integration while
+leaving Claude chat available, set `AGENTGLASS_CODEX_DISABLED=1` before starting
+the server.
+
 **↩ resume** picks up a session that already exists — including one you started
-in a terminal — with its full context intact. Sessions that are still running
-are listed but can't be picked: a claude session has a single owner, and a
-second writer on the same transcript corrupts its history.
+in a terminal — with its full context intact, and opens it against the CLI that
+created it. Sessions that are still running are listed but can't be picked: a
+session has a single owner, and a second writer on the same transcript corrupts
+its history. For Codex the replayed history comes from its rollout in
+`$CODEX_HOME/sessions` (`~/.codex/sessions` by default), since the OpenTelemetry
+stream that puts Codex on the radar carries tool calls but none of the words.
 
 **What a session shows:** the conversation is a **timeline**, not only a chat
 log. Tool runs interleave with messages, each tool card carries the head of its
@@ -932,6 +961,8 @@ in its own buckets rather than charged again as ordinary input.
 | `AGENTGLASS_GIT_TIMEOUT_SECONDS` | `120` | Ceiling on a single git subprocess. |
 | `AGENTGLASS_FS_BROWSE_DISABLED` | — | `1` → disable directory completion in the project picker (`/fs/complete`). Separate from the terminal switch on purpose: disabling the shell should not leave the directory tree readable. |
 | `AGENTGLASS_CHAT_DISABLED` | — | `1` → disable the **Chat** panel (no `claude` sessions can be started from the browser). |
+| `AGENTGLASS_CODEX_DISABLED` | — | `1` → disable the **Codex** agent in the Chat panel, leaving Claude chat available. Codex is offered whenever a `codex` executable is on the server's `PATH`. |
+| `CODEX_HOME` | `~/.codex` | Codex's own override for where it keeps its state. agentglass reads the model cache and the rollout history (resumed-thread transcripts) from there. |
 | `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's `bypassPermissions` mode (`claude --dangerously-skip-permissions`). Off by default: the mode is downgraded to a prompting default unless you opt in. |
 | `AGENTGLASS_CHAT_ENGINE` | `process` | `tmux` → new chats run as a live `claude` in a pane on agentglass's own tmux server instead of one `claude -p` per turn. Faster per turn (the CLI's session start is paid once, not every message) and the session is attachable from your own terminal; costs a warm CLI (~380MB, growing with use) for as long as the chat is warm. Per-chat in **Settings → Preferences → How new chats run**. |
 | `AGENTGLASS_TMUX_SOCKET` | `agentglass` | Socket name for that server (`tmux -L <name>`). It is always launched with a config of our own (`-f`), never your `~/.tmux.conf` — otherwise tpm/resurrect/continuum would come with it and continuum's autosave would overwrite your own saved layout in the shared `~/.tmux/resurrect/`. |
@@ -996,6 +1027,8 @@ cannot be configured by `export` at all.
 | `GET /terminal/commands?root=` | Ready-to-run project commands: Makefile targets **with descriptions** + `package.json` scripts (runner-aware), from the repo root **and its subfolders** (`make -C …`), grouped by folder. |
 | `GET /chat/enabled` · `POST /chat/send` | Drive a local `claude` session in a repo (streamed JSONL) — gated by `AGENTGLASS_CHAT_DISABLED`. `send` takes an optional `engine` (`process` \| `tmux`). |
 | `GET /chat/attach` | The `tmux attach` command for a chat running on the pane engine, and whether its pane is still up. |
+| `GET /codex/enabled` · `POST /codex/send` | The same, driving a local `codex` session (`codex exec --json`, `codex exec resume` for follow-ups) — gated by `AGENTGLASS_CODEX_DISABLED`. `enabled` carries the model list read from Codex's own cache. |
+| `GET /codex/transcript?id=` | What a Codex thread said, read from its rollout under `$CODEX_HOME/sessions`. The OTel stream carries its tool calls but none of the prose, so this is what a resumed Codex chat replays. |
 | `GET /prs/capability · /prs/list · /prs/detail · /prs/diff · /prs/commit-diff · /prs/branch-url` | Pull requests through the `gh` CLI, per repository: capability probe, the list for a scope tab, one PR's full detail, its diff, a single commit's diff. Cached, with check states filled by a second batched GraphQL pass. |
 | `POST /prs/{review,review-with,comment,reply,thread-resolved,react,edit,labels,reviewers,draft,update-branch,rerun,merge,close}` | Pull-request actions — **gated** by `AGENTGLASS_GIT_WRITE_DISABLED` and by the active scope. |
 | `POST /prs/review-prompt` | The prompt to review a PR with Claude, and the directory to run it in. Reads only, so the write switch does not gate it; the active scope still does. |
