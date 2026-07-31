@@ -3,24 +3,24 @@
 @tailwind utilities;
 
 :root {
-  /* fallback (midnight-purple) until applyTheme() runs */
-  --bg: #0f0a1a;
-  --bg2: #1a1333;
-  --bg3: #2d1b4e;
-  --bg4: #3f2766;
-  --text: #f3e8ff;
-  --text2: #e9d5ff;
-  --text3: #d8b4fe;
-  --text4: #c084fc;
-  --border: #6d28d9;
-  --border2: #7e22ce;
-  --primary: #a78bfa;
-  --primary-hover: #c4b5fd;
-  --success: #34d399;
-  --warning: #fbbf24;
-  --error: #f472b6;
-  --info: #a78bfa;
-  --shadow: rgba(0, 0, 0, 0.8);
+  /* fallback (github-dark, the default) until applyTheme() runs */
+  --bg: #0d1117;
+  --bg2: #161b22;
+  --bg3: #21262d;
+  --bg4: #30363d;
+  --text: #e6edf3;
+  --text2: #c9d1d9;
+  --text3: #8b949e;
+  --text4: #6e7681;
+  --border: #30363d;
+  --border2: #444c56;
+  --primary: #58a6ff;
+  --primary-hover: #79c0ff;
+  --success: #3fb950;
+  --warning: #d29922;
+  --error: #f85149;
+  --info: #58a6ff;
+  --shadow: rgba(1, 4, 9, 0.85);
 }
 
 @layer base {
