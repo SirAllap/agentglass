@@ -103,6 +103,11 @@ type Session = {
   mode: "pty" | "pipe";
   grouped: boolean;
   sizeDir: string | null; // tmp dir holding the resize file (pty_bridge mode)
+  /** Reads OSC 133 out of the output stream — see shellparse.ts. Null when the
+   *  shell is one we have no snippet for, which is the silent-degrade case. */
+  markers: ShellMarkers | null;
+  /** Removes the shell-integration shim. Null when there was none. */
+  unshim: (() => void) | null;
   closed: boolean;
   exited: boolean;
   killTimer: ReturnType<typeof setTimeout> | null;
@@ -160,6 +165,9 @@ function killGroup(s: Session, sigNum: number) {
 
 import { resolveClient, readFrame, runAction, setStatusLine, prefixKeys, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { applyThemeTo } from "./themesync.ts";
+import { install as installMarkers, shq } from "./shellmark.ts";
+import { ShellMarkers, commandName } from "./shellparse.ts";
+import { beginShellCommand, recordShellCommand } from "./shelllog.ts";
 
 const enc = new TextEncoder();
 const ctl = (ws: PtyWs, frame: Record<string, unknown>) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
@@ -240,7 +248,19 @@ export function ptyOpen(ws: PtyWs) {
   const cols = clampCols(d.cols) || 80;
   const rows = clampRows(d.rows) || 24;
   const { shell, args } = pickShell();
-  const baseEnv = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" };
+  /*
+   * Teach this shell to report itself, if we know how.
+   *
+   * Declining is the normal path for a shell we have no snippet for, and it
+   * costs nothing but the telemetry: `wired` being null means the shell is
+   * spawned exactly as it was before any of this existed. That is the
+   * "degrade silently" the feature is required to do — a terminal that refuses
+   * to open because an integration could not be installed would be a far worse
+   * trade than a missing chart.
+   */
+  const wired = installMarkers(shell);
+  const baseEnv = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", ...(wired?.env ?? {}) };
+  const shellArgv = wired ? wired.argv(shell) : [shell, ...args];
 
   let argv: string[];
   let mode: Session["mode"] = "pty";
@@ -250,13 +270,13 @@ export function ptyOpen(ws: PtyWs) {
     sizeDir = mkdtempSync(join(tmpdir(), "agentglass-pty-"));
     writeSizeFile(sizeDir, rows, cols);
     env = { ...baseEnv, AGENTGLASS_PTY_SIZE_FILE: join(sizeDir, "size") };
-    argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, BRIDGE, shell, ...args];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, BRIDGE, ...shellArgv];
   } else if (HAS_SCRIPT) {
     env = { ...baseEnv, COLUMNS: String(cols), LINES: String(rows) };
-    argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", `exec ${shell} ${args.join(" ")}`, "/dev/null"];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", shellArgv.map(shq).join(" "), "/dev/null"];
   } else {
     mode = "pipe";
-    argv = [...(HAS_SETSID ? ["setsid"] : []), shell, "-i"];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), ...shellArgv];
   }
 
   let proc: ReturnType<typeof Bun.spawn>;
@@ -269,7 +289,28 @@ export function ptyOpen(ws: PtyWs) {
     return;
   }
 
-  const session: Session = { proc, mode, grouped: HAS_SETSID, sizeDir, closed: false, exited: false, killTimer: null };
+  /*
+   * One parser per shell, fed the same bytes the client gets — never instead of
+   * them. Nothing here rewrites the stream: xterm.js ignores an OSC it does not
+   * know, so the markers cost the display nothing, and a filter on this path
+   * would be one bug away from eating somebody's output.
+   */
+  const markers = wired
+    ? new ShellMarkers(
+        (c) => recordShellCommand({
+          id: c.id, command: c.command, name: commandName(c.command), exit: c.exit,
+          duration_ms: c.duration_ms, cwd: c.cwd ?? cwd, at: c.started_at,
+        }),
+        Date.now,
+        (c) => beginShellCommand({
+          id: c.id, command: c.command, name: commandName(c.command), cwd: c.cwd ?? cwd, at: c.at,
+        }),
+      )
+    : null;
+  const session: Session = {
+    proc, mode, grouped: HAS_SETSID, sizeDir, closed: false, exited: false, killTimer: null,
+    markers, unshim: wired ? wired.dispose : null,
+  };
   sessions.set(ws, session);
   ctl(ws, { t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir });
 
@@ -438,6 +479,8 @@ export function ptyOpen(ws: PtyWs) {
         if (done) break;
         if (session.closed) break;
         if (value?.length) {
+          // Read before forwarding, and never in place of it.
+          session.markers?.feed(value);
           held.push(value);
           size += value.length;
           if (size >= BIG) flush();
@@ -551,6 +594,10 @@ function cleanup(ws: PtyWs, s: Session) {
   // user's real terminal, and nothing there would point back at us.
   if (s.tmuxStatusHiddenOn) { setStatusLine(s.tmuxStatusHiddenOn, true); s.tmuxStatusHiddenOn = null; }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
+  // The shim lives as long as the shell does and no longer: it is a scratch
+  // copy of somebody's rc files, and leaving those around is both litter and a
+  // small disclosure.
+  if (s.unshim) { s.unshim(); s.unshim = null; }
 }
 
 /** Hang up every live shell and remove their temp dirs. Called when the server
