@@ -554,3 +554,33 @@ export const agentOf = (s: { source_app?: string | null; model_name?: string | n
   if (/^(gpt|o[134])[-.]/i.test(s.model_name ?? "")) return "codex";
   return "claude";
 };
+
+/**
+ * Every provider the cockpit has seen, for the header's filter.
+ *
+ * Takes both sources on purpose. `agents` is derived from the live event
+ * buffer, which is capped: a quiet agent — a Codex or Antigravity chat that ran
+ * nine events an hour ago — falls out of it as soon as a busy Claude session
+ * fills it, and any provider it was the only evidence for leaves the filter
+ * with it. That is how the dashboard came to offer "Anthropic" as the only
+ * provider ever seen while the server's own scoped answer listed three models.
+ *
+ * `sessions` is the roll-up over the whole retention window, so it carries the
+ * quiet ones; `agents` is the fresher of the two and carries a session that
+ * started since the last poll. Neither alone is right.
+ *
+ * `unknown` — sessions whose model never resolved — is kept as a real bucket so
+ * it can be filtered to and the per-provider views still add up, but sorted
+ * last so it never leads the list.
+ */
+export function providersSeen(
+  sessions: { session_id: string; model_name?: string | null }[],
+  agents: { session_id: string; model_name?: string | null }[],
+): string[] {
+  const bySession = new Map<string, string>();
+  for (const s of sessions) if (s.model_name) bySession.set(s.session_id, providerOf(s.model_name));
+  for (const a of agents) if (a.model_name) bySession.set(a.session_id, providerOf(a.model_name));
+  const seen = new Set(bySession.values());
+  const known = [...seen].filter((p) => p !== UNKNOWN).sort();
+  return seen.has(UNKNOWN) ? [...known, UNKNOWN] : known;
+}
