@@ -1,5 +1,15 @@
 import { test, expect, describe } from "bun:test";
-import { antigravityArgs, parseModels, frameToEvent, newFrameContext, ANTIGRAVITY_APP } from "../src/antigravity.ts";
+import { antigravityArgs, parseModels, antigravityModels, frameToEvent, newFrameContext, ANTIGRAVITY_APP } from "../src/antigravity.ts";
+
+/** How many subprocesses have been started. Counted rather than mocked, so the
+ *  assertion is about what actually happens on the machine. */
+const spawnCount = () => SPAWNS.n;
+const SPAWNS = { n: 0 };
+const realSpawn = Bun.spawn;
+(Bun as unknown as { spawn: typeof Bun.spawn }).spawn = ((...args: Parameters<typeof Bun.spawn>) => {
+  SPAWNS.n++;
+  return realSpawn(...args);
+}) as typeof Bun.spawn;
 
 // The two halves of driving a third CLI: the command line that starts a turn,
 // and the mapping that turns what it streams back into events. Both are pure,
@@ -51,6 +61,37 @@ describe("the command line", () => {
     expect(a[1]).toBe("-p");
     expect(a[2]).toBe(nasty);
     expect(a.filter((x) => x === "--model")).toHaveLength(1);
+  });
+});
+
+describe("the model list does not stall the server", () => {
+  // Regression. This used Bun.spawnSync, which blocks Bun's single event loop
+  // for as long as `agy models` takes — measured at 1.3–2.2s on a cold run.
+  // Nothing else was served in that window, so /health could not answer inside
+  // probeServer's 2.5s budget, the dashboard decided it was talking to a
+  // stranger, and every panel went empty behind a "Wrong server" banner. With
+  // `bun --watch` the cost is re-paid on every save.
+  test("is asked for asynchronously, never synchronously", async () => {
+    const out = antigravityModels();
+    expect(out, "antigravityModels must return a promise, not a resolved array").toBeInstanceOf(Promise);
+    expect(Array.isArray(await out)).toBe(true);
+  });
+
+  test("concurrent callers share one lookup", async () => {
+    // The panel mounts, React StrictMode mounts it twice, and a reconnect asks
+    // again — three spawns of the same subprocess, serialised, for one answer.
+    const spawns = spawnCount();
+    await Promise.all([antigravityModels(), antigravityModels(), antigravityModels()]);
+    expect(spawnCount() - spawns).toBeLessThanOrEqual(1);
+  });
+
+  test("a CLI that cannot answer is not re-asked on every request", async () => {
+    // Memoising only on success meant a broken or unauthenticated `agy` paid
+    // the full subprocess cost per request, forever.
+    await antigravityModels();
+    const spawns = spawnCount();
+    await antigravityModels();
+    expect(spawnCount()).toBe(spawns);
   });
 });
 

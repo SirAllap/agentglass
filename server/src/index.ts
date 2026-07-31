@@ -1823,7 +1823,7 @@ const server = Bun.serve<WsData>({
     // internal schema, so there is nothing here that could be read without
     // guessing at it — see server/src/antigravity.ts.
     if (pathname === "/antigravity/enabled") {
-      return json({ enabled: ANTIGRAVITY_ENABLED, bypass: ANTIGRAVITY_BYPASS_ALLOWED, models: ANTIGRAVITY_ENABLED ? antigravityModels() : [] });
+      return json({ enabled: ANTIGRAVITY_ENABLED, bypass: ANTIGRAVITY_BYPASS_ALLOWED, models: ANTIGRAVITY_ENABLED ? await antigravityModels() : [] });
     }
     if (pathname === "/antigravity/send" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();

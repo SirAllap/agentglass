@@ -126,17 +126,53 @@ export function parseModels(raw: string): AgentModel[] {
   return out;
 }
 
+/**
+ * Asked of `agy models`, off the event loop.
+ *
+ * Asynchronous, single-flighted, and memoised on failure as well as success —
+ * each of those is load-bearing rather than tidiness, and this function got all
+ * three wrong on the first pass:
+ *
+ * Bun runs one event loop. `Bun.spawnSync` here stopped the entire server for
+ * as long as the subprocess took — 1.3s to 2.2s cold. Nothing else was served
+ * in that window, so `/health` could not answer inside probeServer's 2.5s
+ * budget, the dashboard concluded it was talking to some other program, and
+ * every panel went empty behind a "Wrong server" banner. `bun --watch` restarts
+ * on every save, so in development that was re-paid constantly.
+ *
+ * Single-flighted because the panel asks on mount, React StrictMode mounts it
+ * twice, and a reconnect asks again — three subprocesses, serialised, for one
+ * answer that does not change.
+ *
+ * Memoised on failure too, with a retry window: an `agy` that is broken or not
+ * yet signed in otherwise paid the full subprocess cost on every request, which
+ * is the case that can least afford it.
+ */
 let modelCache: AgentModel[] | null = null;
-export function antigravityModels(): AgentModel[] {
-  if (modelCache) return modelCache;
+let modelAsk: Promise<AgentModel[]> | null = null;
+let modelAskedAt = 0;
+/** How long a failed lookup stands before it is worth another subprocess. */
+const MODEL_RETRY_MS = 60_000;
+
+export function antigravityModels(): Promise<AgentModel[]> {
+  if (modelCache) return Promise.resolve(modelCache);
+  if (modelAsk) return modelAsk;
+  if (modelAskedAt && Date.now() - modelAskedAt < MODEL_RETRY_MS) return Promise.resolve(FALLBACK_MODELS);
   const bin = agyBin();
-  if (!bin) return FALLBACK_MODELS;
-  try {
-    const r = Bun.spawnSync([bin, "models"], { stdout: "pipe", stderr: "pipe" });
-    const found = r.exitCode === 0 ? parseModels(r.stdout.toString()) : [];
-    if (found.length) { modelCache = found; return found; }
-  } catch { /* not installed, or it refused */ }
-  return FALLBACK_MODELS;
+  if (!bin) return Promise.resolve(FALLBACK_MODELS);
+  modelAsk = (async () => {
+    try {
+      const p = Bun.spawn([bin, "models"], { stdout: "pipe", stderr: "ignore" });
+      const text = await new Response(p.stdout as ReadableStream<Uint8Array>).text();
+      if ((await p.exited) === 0) {
+        const found = parseModels(text);
+        if (found.length) { modelCache = found; return found; }
+      }
+    } catch { /* not installed, or it refused */ }
+    modelAskedAt = Date.now();
+    return FALLBACK_MODELS;
+  })().finally(() => { modelAsk = null; });
+  return modelAsk;
 }
 
 // --- putting a chat on the radar --------------------------------------------
@@ -343,7 +379,11 @@ export function antigravityStream(
   // than an error.
   if (Array.isArray(images) && images.length) return err("antigravity chats cannot take pasted images yet — send the turn without it, or use a Claude chat");
   if (typeof message !== "string" || !message.trim() || message.length > 100_000) return err("invalid message");
-  const m = typeof model === "string" && MODEL_RE.test(model) ? model : (antigravityModels()[0]?.id ?? FALLBACK_MODELS[0].id);
+  // The panel always names a model, so the fallback is for a caller that did
+  // not. Deliberately the static default rather than the first of the live
+  // list: fetching that here would put a subprocess in front of every turn, to
+  // answer a question the request had already answered.
+  const m = typeof model === "string" && MODEL_RE.test(model) ? model : FALLBACK_MODELS[0].id;
   let mo = typeof mode === "string" && MODES.has(mode) ? mode : DEFAULT_MODE;
   if (mo === "always-proceed" && !ANTIGRAVITY_BYPASS_ALLOWED) mo = DEFAULT_MODE; // opt-in only
   const rid = typeof resumeId === "string" && SESSION_RE.test(resumeId) ? resumeId : "";
