@@ -3,7 +3,7 @@ import { motion } from "motion/react";
 import type { StatsSummary } from "../../../shared/types.ts";
 import type { AgentCard } from "../lib/derive.ts";
 import { useTicker, fmtClock } from "../lib/motion.ts";
-import { fmtUsd, usdDigits } from "../lib/format.ts";
+import { fmtUsd, usdDigits, eqTitle } from "../lib/format.ts";
 import { HealthRing } from "./HealthRing.tsx";
 
 const enter = { initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 } };
@@ -87,7 +87,22 @@ export function Kpis({
   // to the old field so a server that predates tool_errors still renders.
   const toolFailed = t?.tool_errors ?? failed;
   const cost = t?.cost_usd ?? 0;
-  const tokens = (t?.input_tokens ?? 0) + (t?.output_tokens ?? 0);
+  /*
+   * One comparable number, not four kinds of token.
+   *
+   * This was `input + output`: it dropped both cache classes, and added a token
+   * that costs five to one that costs a tenth. On a session that reads a large
+   * context every turn — which is most of them — the figure it produced was
+   * neither the work done nor the money spent, and two sessions could not be
+   * compared by it at all. Every class is weighted by its own price now and the
+   * result expressed in uncached input tokens, which is the unit that converts
+   * to money with a single rate.
+   *
+   * The fallback is the old sum rather than 0: `equiv_tokens` is absent on a
+   * server older than this, and a hero figure of zero next to real spend is a
+   * worse answer than an unweighted count.
+   */
+  const tokens = t?.equiv_tokens ?? (t?.input_tokens ?? 0) + (t?.output_tokens ?? 0);
   const cached = t?.cache_read_tokens ?? 0;
   const health = tools > 0 ? Math.max(0, Math.round((1 - toolFailed / Math.max(tools, 1)) * 100)) : 100;
   const spark = (stats?.timeline ?? []).slice(-24).map((b) => b.cost_usd);
@@ -122,8 +137,11 @@ export function Kpis({
                   minimumFractionDigits: usdDigits(cost), maximumFractionDigits: usdDigits(cost),
                 }} />}
           </div>
-          <div className="text-[11px] t-dim2 mt-1.5 tabular-nums">
-            <NumberFlow value={tokens} /> tokens · {(cached / 1000).toFixed(0)}k cached
+          {/* Spelled out here and abbreviated to `eq` everywhere else: this is
+              the most prominent token figure in the app, so it is where the
+              unit gets introduced rather than assumed. */}
+          <div className="text-[11px] t-dim2 mt-1.5 tabular-nums" title={eqTitle(tokens)}>
+            <NumberFlow value={tokens} /> input-equivalent tokens · {(cached / 1000).toFixed(0)}k cached
           </div>
         </div>
         <Spark values={spark} color="var(--success)" />

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { AgentCard, AgentOutcome } from "../lib/derive.ts";
 import { Panel } from "./Panel.tsx";
-import { fmtUsd, fmtTokens, fmtAgo, modelLabelOf } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, fmtEq, eqTitle, fmtAgo, modelLabelOf } from "../lib/format.ts";
 
 // "now ago" reads wrong — fmtAgo already returns "now" for the freshest events.
 const ago = (ts: number) => {
@@ -166,7 +166,7 @@ function SessionCard({ a, selected, onSelect }: { a: AgentCard; selected: boolea
       <div className="mt-1.5 flex items-center gap-3 text-[10px] t-dim2 tabular-nums">
         <span>{a.tools} tools</span>
         {a.errors > 0 && <span style={{ color: "var(--error)" }}>{a.errors} err</span>}
-        <span className="t-dim">{fmtTokens(a.tokens)} tok</span>
+        <span className="t-dim" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span>
         <span style={{ color: "var(--success)" }}>{fmtUsd(a.cost)}</span>
         <span className="ml-auto">{ago(a.lastSeen)}</span>
       </div>

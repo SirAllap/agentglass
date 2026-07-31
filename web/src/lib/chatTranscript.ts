@@ -74,7 +74,18 @@ export function chatToMarkdown(chat: Chat): string {
   if (chat.sessionId) head.push(`- Session: \`${chat.sessionId}\``);
   if (chat.attachCommand) head.push(`- Terminal: \`${chat.attachCommand}\``);
   if (chat.usage) {
-    head.push(`- Tokens: ${chat.usage.input.toLocaleString()} in / ${chat.usage.output.toLocaleString()} out · $${chat.usage.costUsd.toFixed(4)}`);
+    // All four classes. This said `in / out` and dropped both cache figures,
+    // which on a long chat is most of the tokens and most of the money — and a
+    // transcript is something somebody pastes into a report, so a number
+    // missing three quarters of itself travels further than most.
+    const u = chat.usage;
+    const cls = [
+      `${u.input.toLocaleString()} in`,
+      `${u.output.toLocaleString()} out`,
+      u.cacheWrite ? `${u.cacheWrite.toLocaleString()} cache write` : "",
+      u.cacheRead ? `${u.cacheRead.toLocaleString()} cache read` : "",
+    ].filter(Boolean);
+    head.push(`- Tokens: ${cls.join(" / ")} · $${u.costUsd.toFixed(4)}`);
   }
   // A chat with nothing in it still copies, and says so. Returning an empty
   // string would look exactly like the copy having failed.

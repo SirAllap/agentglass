@@ -38,6 +38,33 @@ export function fmtTokens(n: number | null | undefined): string {
   return String(Math.round(n));
 }
 
+/**
+ * What a weighted token count is called, and what it means, said once.
+ *
+ * A token is not a token: an output token on Opus costs five uncached input
+ * tokens and a cache read costs a tenth, so the "tokens" this app used to show
+ * — `input + output`, cache dropped — was not a quantity you could compare
+ * between two sessions, and the error did not even point one way.
+ *
+ * Everything spend-shaped now shows the same weighted figure, and everything
+ * says `eq` rather than `tok`, because a number that has stopped being a count
+ * of tokens should stop being labelled as one. The suffix is short enough for a
+ * chip; the sentence below is what a reader gets on hover, and it is the same
+ * sentence everywhere — eight call sites each explaining this in their own
+ * words is how three of them end up explaining it wrongly.
+ */
+export const EQ_SUFFIX = "eq";
+
+export function eqTitle(n: number | null | undefined): string {
+  const exact = n == null || !isFinite(n) ? "unknown" : Math.round(n).toLocaleString();
+  return `${exact} input-equivalent tokens — every class weighted by its own price ` +
+    `(on Opus an output token counts as 5, a cache write 1.25, a cache read 0.1), ` +
+    `so this is comparable between sessions and models in a way a raw token count is not.`;
+}
+
+/** The figure and its unit: "4.2M eq". */
+export const fmtEq = (n: number | null | undefined): string => `${fmtTokens(n)} ${EQ_SUFFIX}`;
+
 export function fmtMs(ms: number | null | undefined): string {
   if (ms == null || !isFinite(ms)) return "—";
   if (ms >= 3_600_000) { const h = ms / 3_600_000; return `${h.toFixed(h >= 10 ? 0 : 1)}h`; }

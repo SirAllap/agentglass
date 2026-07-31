@@ -184,6 +184,32 @@ test("a server roll-up beats the truncated buffer", () => {
   expect(card.tools).toBe(900);
 });
 
+test("and it carries the server's weighted token figure, not a raw sum", () => {
+  // #298. The client has no price table, so the weighting happens on the server
+  // and rides along on the roll-up. Dropping it here — which is what
+  // `buildRollups` narrowing the row used to do — silently puts the fleet back
+  // on `input + output`: a number that adds a token costing five to one costing
+  // a tenth, and ignores the cache classes entirely.
+  const r = rollup({
+    input_tokens: 900_000, output_tokens: 100_000,
+    cache_creation_tokens: 50_000, cache_read_tokens: 8_000_000,
+    equiv_tokens: 2_262_500,
+  });
+  const card = deriveAgents([ev()], [], undefined, buildRollups([r]))[0];
+  expect(card.tokens).toBe(2_262_500);
+  // Not the sum the pane used to show, and not the raw total either.
+  expect(card.tokens).not.toBe(1_000_000);
+  expect(card.tokens).toBeLessThan(9_050_000);
+});
+
+test("a roll-up from a server too old to weight falls back rather than to zero", () => {
+  // `equiv_tokens` is optional. Absent has to mean *unknown* — a fleet card
+  // reading 0 tokens next to $12.34 of real spend is a worse answer than the
+  // unweighted count it replaces, and it is the one a `?? 0` would produce.
+  const card = deriveAgents([ev()], [], undefined, buildRollups([rollup({ equiv_tokens: undefined })]))[0];
+  expect(card.tokens).toBe(1_000_000);
+});
+
 test("a burst that beat the 30s poll is not rounded back down", () => {
   // The buffer has more than the roll-up knows about yet. A headline number
   // must never read backwards while you are watching it.
