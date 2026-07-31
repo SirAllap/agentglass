@@ -103,9 +103,38 @@ export function PairPanel({ baseUrl }: { baseUrl: string }) {
 
   const left = ticket ? Math.max(0, Math.round((ticket.expiresAt - now) / 1000)) : 0;
   const pairUrl = ticket ? `${baseUrl.replace(/\/$/, "")}/?pair=${encodeURIComponent(ticket.id)}` : "";
+  /*
+   * An address a phone cannot pair over, said here rather than there.
+   *
+   * `crypto.subtle` exists only in a secure context — HTTPS or localhost — so a
+   * QR pointing at `http://100.64.1.2:4000` sends somebody to a page whose
+   * handshake is impossible before it starts. The phone now says so instead of
+   * failing quietly, but the phone is the wrong place to learn it: by then they
+   * have walked over, scanned, and typed a name. This is the screen where the
+   * address is chosen, so this is where it belongs.
+   */
+  const insecure = /^http:\/\//i.test(baseUrl) && !/^https?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?)([:/]|$)/i.test(baseUrl);
+  const tailnet = /^https?:\/\/100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(baseUrl);
 
   return (
     <div className="flex flex-col gap-2.5">
+      {insecure && (
+        <div className="text-[10.5px] px-2.5 py-2 rounded-lg" style={{
+          color: "var(--text2)",
+          background: "color-mix(in srgb, var(--error) 10%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)",
+        }}>
+          <span style={{ color: "var(--error)" }}>A phone cannot pair over this address.</span>{" "}
+          Browsers give a page served over plain HTTP no WebCrypto, and pairing has to encrypt the
+          credential to the device asking for it — so the handshake cannot start, however many times
+          the phone tries.{" "}
+          {tailnet
+            ? <>You are on Tailscale already: run <span className="t-mono">tailscale cert</span> on this
+                machine and pick the <span className="t-mono">https://…ts.net</span> name above.</>
+            : <>Serve the cockpit over HTTPS, or forward the port so the phone reaches it as
+                <span className="t-mono"> http://localhost</span>.</>}
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <span className="text-[10px] t-dim2 uppercase tracking-wider flex-1">Connect a phone</span>
         {ticket && (

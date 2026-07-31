@@ -76,6 +76,49 @@ export interface PairKeys {
   priv: CryptoKey;
 }
 
+/**
+ * Why this browser cannot pair, in words somebody can act on — or null.
+ *
+ * `crypto.subtle` does not exist outside a *secure context*, which means HTTPS
+ * or localhost and nothing else. A phone opening `http://100.64.1.2:4000` from
+ * a QR code therefore has no WebCrypto at all, and the whole handshake — the
+ * ECDH keypair, the sealed credential — is impossible before it starts.
+ *
+ * This shipped without the check, and the way it failed is the reason the check
+ * is phrased as a *diagnosis* rather than a boolean. Key generation rejected
+ * instantly; the `/pair/info` fetch resolved a network round-trip later and put
+ * the form back over the failure; and the button then said "still preparing the
+ * connection — try again in a second", which is an invitation to tap it forever
+ * for a reason that will never change. Every part of that was true-ish and the
+ * whole was useless.
+ *
+ * Not a thing the app can work around. A pure-JS P-256 is not something to
+ * hand-roll for a credential, and dropping the sealing would send the token
+ * over the same plain HTTP in the clear. So the only honest move is to say what
+ * is wrong and what reaches a secure context instead.
+ */
+export function pairingBlocked(
+  ctx: { isSecureContext?: boolean; origin?: string; subtle?: unknown } = {
+    isSecureContext: typeof isSecureContext !== "undefined" ? isSecureContext : undefined,
+    origin: typeof location !== "undefined" ? location.origin : "",
+    subtle: typeof crypto !== "undefined" ? crypto.subtle : undefined,
+  },
+): string | null {
+  if (ctx.subtle) return null;
+  const where = ctx.origin ? ` (${ctx.origin})` : "";
+  // Named separately because the fix is different: a tailnet already has a
+  // certificate available, and a plain LAN address does not.
+  const tailnet = /^https?:\/\/100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ctx.origin ?? "");
+  return (
+    `This page is not a secure context${where}, so the browser gives it no WebCrypto — ` +
+    `and pairing cannot encrypt the credential to this device without it. ` +
+    (tailnet
+      ? `You are on Tailscale already: run \`tailscale cert\` on the computer and open the ` +
+        `https://…ts.net name instead of the raw 100.x address.`
+      : `Open the cockpit over HTTPS, or reach it as http://localhost through a forwarded port.`)
+  );
+}
+
 /** A keypair for one pairing, and one pairing only. */
 export async function makeKeys(subtle: SubtleCrypto = crypto.subtle): Promise<PairKeys> {
   const kp = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"]);

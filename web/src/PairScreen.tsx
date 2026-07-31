@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SERVER } from "./lib/api.ts";
-import { claim, collectOnce, guessName, makeKeys, type PairKeys } from "./lib/pairing.ts";
+import { claim, collectOnce, guessName, makeKeys, pairingBlocked, type PairKeys } from "./lib/pairing.ts";
 
 /**
  * Connecting this phone, on the phone.
@@ -20,7 +20,21 @@ import { claim, collectOnce, guessName, makeKeys, type PairKeys } from "./lib/pa
  */
 export function PairScreen({ ticket, onPaired }: { ticket: string; onPaired: (token: string) => void }) {
   type Stage = "checking" | "form" | "waiting" | "expired" | "rejected" | "failed";
+  /** Nothing after this can succeed, so nothing after this may overwrite it. */
+  const TERMINAL: Stage[] = ["failed", "expired", "rejected"];
   const [stage, setStage] = useState<Stage>("checking");
+  /*
+   * Settle a stage only if the screen is not already finished.
+   *
+   * Two effects race here — key generation and the `/pair/info` fetch — and the
+   * fetch is a network round-trip behind. Without this, a browser that cannot
+   * do WebCrypto at all failed instantly and then had the form put back on top
+   * of the explanation, leaving somebody tapping a button that told them to try
+   * again in a second about a thing that would never change.
+   */
+  const settle = useCallback((next: Stage) => {
+    setStage((cur) => (TERMINAL.includes(cur) ? cur : next));
+  }, []);
   const [name, setName] = useState(() => guessName());
   const [code, setCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -33,9 +47,14 @@ export function PairScreen({ ticket, onPaired }: { ticket: string; onPaired: (to
   // the last digit and the answer.
   useEffect(() => {
     let live = true;
+    // Asked before trying, because the answer is a fact about the address this
+    // page was opened at rather than something a retry can change — and saying
+    // so is the difference between a 30-second fix and a mystery.
+    const blocked = pairingBlocked();
+    if (blocked) { settle("failed"); setErr(blocked); return; }
     makeKeys()
       .then((k) => { if (live) keys.current = k; })
-      .catch(() => { if (live) { setStage("failed"); setErr("This browser cannot generate the key this connection needs. It has to be a recent Safari, Chrome or Firefox, over the address the QR code pointed at."); } });
+      .catch(() => { if (live) { settle("failed"); setErr("This browser cannot generate the key this connection needs. It has to be a recent Safari, Chrome or Firefox, over the address the QR code pointed at."); } });
     return () => { live = false; };
   }, []);
 
@@ -43,8 +62,8 @@ export function PairScreen({ ticket, onPaired }: { ticket: string; onPaired: (to
     let live = true;
     fetch(`${SERVER}/pair/info?ticket=${encodeURIComponent(ticket)}`)
       .then((r) => r.json())
-      .then((j: { ok?: boolean }) => { if (live) setStage(j.ok ? "form" : "expired"); })
-      .catch(() => { if (live) { setStage("failed"); setErr(`Could not reach ${SERVER}. Check the phone is on the same network as the computer.`); } });
+      .then((j: { ok?: boolean }) => { if (live) settle(j.ok ? "form" : "expired"); })
+      .catch(() => { if (live) { settle("failed"); setErr((e) => e ?? `Could not reach ${SERVER}. Check the phone is on the same network as the computer.`); } });
     return () => { live = false; };
   }, [ticket]);
 
