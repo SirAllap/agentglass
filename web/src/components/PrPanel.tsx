@@ -19,7 +19,8 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Portal } from "./Portal.tsx";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrCheck, GitRepoRef, FileChange,
@@ -30,7 +31,7 @@ import { depSpec } from "../../../shared/deps.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
-import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, type LinePick, type LineSel } from "./ChangesModal.tsx";
+import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, LineMenuCtx, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
@@ -519,12 +520,19 @@ function ImageDiff({ root, number, path, status }: {
   );
 }
 
-function DiffPane({ file, split, wrap, onPick, sel, expand }: {
+function DiffPane({ file, split, wrap, onPick, sel, expand, rowAfter, permalink }: {
   file: FileChange; split: boolean; wrap: boolean;
   onPick?: (p: LinePick) => void; sel?: LineSel;
   /** Renders the "expand" strip above each hunk, when the file is one we can
    *  fetch more of. Absent for a commit diff, which is not a pull request. */
   expand?: (hunkIndex: number) => React.ReactNode;
+  /** Renders a review-comment thread inline, under the line it is anchored to.
+   *  Called per row with the new/old line numbers; return null for lines with
+   *  no comment. Absent for a commit diff, which carries no review threads. */
+  rowAfter?: (newN: number | null | undefined, oldN: number | null | undefined) => React.ReactNode;
+  /** A GitHub permalink to a line, for the "+" menu's Copy link. Present ⇒ this
+   *  is a pull request, so the "+" opens the review menu. */
+  permalink?: (line: number, side: "LEFT" | "RIGHT") => string | null;
 }) {
   // Syntax highlighting, which this pane never had: `Code` reads the theme out
   // of `HiliteCtx`, and with no Provider above it every PR diff rendered as
@@ -535,9 +543,11 @@ function DiffPane({ file, split, wrap, onPick, sel, expand }: {
   const heavy = file.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000;
   return (
     <HiliteCtx.Provider value={heavy ? { ...hilite, theme: null } : hilite}>
-      {split
-        ? <SplitDiff c={file} wrap={wrap} onPick={onPick} sel={sel} />
-        : <UnifiedDiff c={file} wrap={wrap} onPick={onPick} sel={sel} hunkAction={expand} />}
+      <LineMenuCtx.Provider value={onPick ? { permalink } : null}>
+        {split
+          ? <SplitDiff c={file} wrap={wrap} onPick={onPick} sel={sel} rowAfter={rowAfter} />
+          : <UnifiedDiff c={file} wrap={wrap} onPick={onPick} sel={sel} hunkAction={expand} rowAfter={rowAfter} />}
+      </LineMenuCtx.Provider>
     </HiliteCtx.Provider>
   );
 }
@@ -635,6 +645,19 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   // Cleared when the scope changes so each tab (mine / review / all) starts
   // fresh; "all" can be hundreds of rows and a facet beats scrolling.
   const [query, setQuery] = useState("");
+  // The query filters the rows already loaded LIVE and client-side (visiblePrs),
+  // so typing is instant. The SERVER copy — which re-runs `gh` to search across
+  // the pages the client does not hold — is debounced off it. Before this, every
+  // keystroke was in loadList's deps, so every letter refetched from GitHub and
+  // blanked the list mid-word: unusable, which is exactly what it looked like.
+  const [serverQuery, setServerQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setServerQuery(query), 400);
+    return () => clearTimeout(t);
+  }, [query]);
+  // A new server search is a new list — start it at page one, never continuing a
+  // cursor that belonged to the previous query.
+  useEffect(() => { setPages([]); }, [serverQuery]);
   const [prs, setPrs] = useState<PrSummary[]>([]);
   const [listState, setListState] = useState<{ fetchedAt: number; loading: boolean; checksPending?: boolean; error?: string; needsAuth?: boolean; total?: number; hasNext?: boolean; cursor?: string | null; pageSize?: number }>({ fetchedAt: 0, loading: false });
   const [selected, setSelected] = useState<number | null>(null);
@@ -715,7 +738,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (!root) return;
     const req = ++listReq.current;
     const want = filter;
-    api.prList(root, filter, stateSel, force, cursor, query).then((r) => {
+    api.prList(root, filter, stateSel, force, cursor, serverQuery).then((r) => {
       if (req !== listReq.current) return; // a newer request already won
       setRepo(r.repo);
       setPrs(r.prs);
@@ -731,7 +754,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       if (req !== listReq.current) return;
       setListState({ fetchedAt: 0, loading: false, error: String(e) });
     });
-  }, [root, filter, stateSel, cursor, query]);
+  }, [root, filter, stateSel, cursor, serverQuery]);
 
   /**
    * Switching filter empties the pane before anything is fetched.
@@ -1039,14 +1062,9 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     if (id) void api.prFileViewed(root, id, path, nowViewed).catch(() => { /* local tick still stands */ });
   };
 
-  const addDraft = async (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT") => {
-    const where = startLine && startLine !== line ? `${startLine}-${line}` : String(line);
-    const body = await askText({
-      title: `Comment on ${path.split("/").pop()}:${where}`,
-      body: "Queued with the rest of your review — nothing is sent until you submit.",
-      confirmLabel: "Add to review",
-      input: { label: "Comment", placeholder: "What needs to change here…" },
-    });
+  /** Queue a line comment into the pending review. The body comes from the
+   *  inline composer now, not a one-line dialog, so this just files it. */
+  const addDraft = (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT", body?: string) => {
     if (!body?.trim() || !key) return;
     setDrafts((cur) => {
       const next = { ...cur, [key]: [...(cur[key] ?? []), { path, line, ...(startLine && startLine !== line ? { startLine } : {}), ...(side ? { side } : {}), body: body.trim() }] };
@@ -1164,13 +1182,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     await act("Labels", () => api.prLabels(root, detail.number, add, remove));
   };
 
-  const doReply = async (t: PrThread) => {
-    if (!detail) return;
+  const doReply = async (t: PrThread, body: string): Promise<boolean> => {
+    if (!detail) return false;
     const first = t.comments[0];
-    if (typeof first?.databaseId !== "number") return;
-    const body = await askText({ title: `Reply on ${t.path}${t.line ? `:${t.line}` : ""}`, confirmLabel: "Reply", input: { label: "Reply" } });
-    if (!body?.trim()) return;
-    await act("Reply", () => api.prReply(root, detail.number, first.databaseId as number, body));
+    if (typeof first?.databaseId !== "number" || !body.trim()) return false;
+    return act("Reply", () => api.prReply(root, detail.number, first.databaseId as number, body));
   };
   /** Toggle an emoji. The node id is the GraphQL one, so the same call serves
    *  the body, a comment, a review and a line comment. */
@@ -1312,20 +1328,27 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
       <div className={viewHeaderClass} style={viewHeaderStyle}>
         <span className={viewTitleClass} style={{ color: "var(--text)" }}>Pull Requests</span>
-        {repos.length > 1 ? (
-          <select value={root} onChange={(e) => { setRoot(e.target.value); setSelected(null); setDetail(null); }}
-            title={repo?.nameWithOwner}
-            className="text-[10px] px-1 py-0.5 rounded bg-transparent max-w-[220px]"
-            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
-            {repos.map((r) => <option key={r.root} value={r.root} style={{ background: "var(--bg)" }}>{r.root.split("/").pop()}</option>)}
-          </select>
-        ) : repo && <span className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{repo.nameWithOwner}</span>}
+        {/* No repo/worktree picker here: pull requests belong to the GitHub
+            remote, and every worktree of a repo shares that one remote — so the
+            picker only ever offered a dozen ways to look at the SAME list. The
+            repo name, stated once, is all this header needs. */}
+        {repo && <span className="text-[10px] truncate" style={{ color: "var(--text3)" }}>{repo.nameWithOwner}</span>}
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {toast && <span className="text-[10px] max-w-[380px] truncate" style={{ color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</span>}
-          <span className="text-[10px] tabular-nums" style={{ color: listState.loading || listState.checksPending ? "var(--warning)" : "var(--text3)" }}>
-            {listState.loading ? "Loading pull requests…"
-              : listState.checksPending ? "Loading check states…"
-              : listState.fetchedAt ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}` : ""}
+          {/* The loud "Loading pull requests…" is for a genuinely empty pane
+              only. Once rows are up, the 20-second poll revalidates in the
+              background every minute and a half — announcing that each time read
+              as the list constantly reloading. With rows in hand it stays as the
+              timestamp, and a quiet "· updating" is all a background refresh
+              earns. */}
+          <span className="text-[10px] tabular-nums" style={{ color: (listState.loading || listState.checksPending) && prs.length === 0 ? "var(--warning)" : "var(--text3)" }}>
+            {prs.length === 0
+              ? (listState.loading ? "Loading pull requests…"
+                : listState.checksPending ? "Loading check states…"
+                : listState.fetchedAt ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}` : "")
+              : (listState.fetchedAt
+                ? `⟳ ${ago(new Date(listState.fetchedAt).toISOString())}${listState.loading || listState.checksPending ? " · updating" : ""}`
+                : "")}
           </span>
           <Btn onClick={() => loadList(true)} disabled={busy} small>Refresh</Btn>
         </div>
@@ -1451,7 +1474,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
           {!d ? (
             <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>
               {detailErr ? detailErr
-                : selected == null ? (listState.loading ? "Loading pull requests…" : "Select a pull request")
+                : selected == null ? ((listState.loading && prs.length === 0) ? "Loading pull requests…" : "Select a pull request")
                 : `Loading #${selected}…`}
             </div>
           ) : (
@@ -2216,6 +2239,38 @@ const BIG_FILE_LINES = 600;
 /** A directory node in the changed-files tree. */
 type TreeNode = { name: string; path: string; dirs: Map<string, TreeNode>; files: PrFile[] };
 
+/** Generated files GitHub holds behind a "Load diff" button — lockfiles,
+ *  minified bundles, source maps. Nobody reads these line by line, and a
+ *  4,000-row lockfile is not what the tab should spend its frame budget on. */
+const GENERATED_RE = /(^|\/)(pnpm-lock\.yaml|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|bun\.lockb?|composer\.lock|Cargo\.lock|poetry\.lock|Pipfile\.lock|Gemfile\.lock|go\.sum|flake\.lock)$|\.min\.(js|css)$|\.(map|lock)$/i;
+function needsLoadDiff(f: PrFile): boolean {
+  return GENERATED_RE.test(f.path) || f.additions + f.deletions > 1500;
+}
+
+/** The extension a file is filed under in the facet menu — the last `.suffix`
+ *  of the basename, lower-cased (`pnpm-lock.yaml` → `.yaml`). A dotfile or a
+ *  file with no extension (`Dockerfile`, `.gitignore`) is filed under its own
+ *  name, which is what GitHub does too. */
+function fileExt(path: string): string {
+  const base = (path.split("/").pop() ?? path).toLowerCase();
+  const i = base.lastIndexOf(".");
+  return i > 0 ? base.slice(i) : base;
+}
+
+/** A one-glyph status marker for the changed-files tree, coloured the way GitHub
+ *  colours them: added green, removed red, renamed/copied blue, and a muted ±
+ *  for a plain modification. `changeType` arrives lower-cased from the server. */
+function statusGlyph(status: string): { ch: string; tint: string; title: string } {
+  switch (status) {
+    case "added": return { ch: "+", tint: "var(--success)", title: "Added" };
+    case "removed":
+    case "deleted": return { ch: "−", tint: "var(--error)", title: "Deleted" };
+    case "renamed": return { ch: "→", tint: "var(--primary)", title: "Renamed" };
+    case "copied": return { ch: "⧉", tint: "var(--primary)", title: "Copied" };
+    default: return { ch: "±", tint: "var(--text3)", title: "Modified" };
+  }
+}
+
 /** Group changed paths into directories, then collapse the runs of single-child
  *  directories the way GitHub does (`web/src/lib` on one row, not three). */
 function buildFileTree(files: PrFile[]): TreeNode {
@@ -2260,13 +2315,17 @@ function FileTree({ node, sel, onPick, seen, drafts, depth = 0 }: {
         const on = sel === f.path;
         const n = drafts(f.path);
         return (
-          <button key={f.path} onClick={() => onPick(f.path)} title={f.path}
+          <button key={f.path} onClick={() => onPick(f.path)} title={`${f.path}${f.status ? ` · ${f.status}` : ""}`}
             className="agx-btn w-full text-left flex items-center gap-1 py-0.5 rounded truncate hover:bg-white/5"
             style={{
               paddingLeft: 6 + depth * 10, paddingRight: 4,
               background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined,
               color: seen(f.path) ? "var(--text3)" : "var(--text2)",
             }}>
+            {/* Which files are new, which changed — the status marker GitHub puts
+                on every row of its tree, so an added file reads as added without
+                opening it. */}
+            {(() => { const g = statusGlyph(f.status); return <span className="shrink-0 text-center leading-none" style={{ width: 11, fontSize: 9, color: g.tint }} title={g.title}>{g.ch}</span>; })()}
             <span className="truncate text-[10.5px]">{base}</span>
             {n > 0 && <span className="ml-auto text-[9px] shrink-0" style={{ color: "var(--warning)" }}>{n}</span>}
             {f.comments > 0 && <span className="ml-auto text-[9px] shrink-0" style={{ color: "var(--primary)" }}>{f.comments}</span>}
@@ -2278,16 +2337,103 @@ function FileTree({ node, sel, onPick, seen, drafts, depth = 0 }: {
   );
 }
 
+/**
+ * The changed-files filter, GitHub's funnel: a menu of the extensions present in
+ * this diff (each with its own count) and a toggle for whether files you have
+ * already marked viewed still show. `hiddenExts` is the set to leave out — empty
+ * means every extension is on, which is why the boxes all start ticked.
+ */
+function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showViewed, onToggleViewed, viewedCount }: {
+  facets: { ext: string; count: number }[];
+  hiddenExts: string[]; onToggleExt: (e: string) => void; onClearExts: () => void;
+  showViewed: boolean; onToggleViewed: () => void; viewedCount: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  useLayoutEffect(() => {
+    if (open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      // Keep the panel on screen when the funnel sits near the right edge.
+      setPos({ top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 236) });
+    }
+  }, [open]);
+  const active = hiddenExts.length > 0 || !showViewed;
+  const box = (on: boolean) => ({ width: 14, height: 14, borderRadius: 4, border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 70%, transparent)"}`, background: on ? "var(--primary)" : "transparent", color: "var(--bg)" });
+  return (
+    <>
+      <button ref={btnRef} onClick={() => setOpen((o) => !o)} title="Filter changed files"
+        aria-label="Filter changed files" aria-haspopup="menu" aria-expanded={open}
+        className="agx-btn shrink-0 grid place-items-center rounded"
+        style={{ width: 24, height: 22, color: active ? "var(--primary)" : "var(--text3)", border: `1px solid color-mix(in srgb, ${active || open ? "var(--primary)" : "var(--border) 45%"}, transparent)` }}>
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3.5h12L9.3 9v4L6.7 14.3V9L2 3.5Z" /></svg>
+      </button>
+      {open && (
+        <Portal>
+          <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
+          <div role="menu" className="fixed p-1.5 rounded-xl flex flex-col overflow-hidden text-[11px]"
+            style={{ top: pos.top, left: pos.left, minWidth: 216, maxHeight: "min(60vh, 420px)", zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)", boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
+            <div className="px-2 pt-1 pb-1 text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>File extensions</div>
+            <div className="flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar">
+              {facets.map((f) => {
+                const on = !hiddenExts.includes(f.ext);
+                return (
+                  <button key={f.ext} role="menuitemcheckbox" aria-checked={on} onClick={() => onToggleExt(f.ext)}
+                    className="px-2 py-1.5 rounded-lg text-left flex items-center gap-2 hover:bg-white/5">
+                    <span aria-hidden className="shrink-0 grid place-items-center text-[9px]" style={box(on)}>{on ? "✓" : ""}</span>
+                    <span className="flex-1 truncate" style={{ ...CODE_FONT_STYLE, color: on ? "var(--text)" : "var(--text3)" }}>{f.ext}</span>
+                    <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{f.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <button role="menuitemcheckbox" aria-checked={showViewed} onClick={onToggleViewed}
+              className="mt-1 px-2 py-1.5 rounded-lg text-left flex items-center gap-2 hover:bg-white/5"
+              style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+              <span aria-hidden className="shrink-0 grid place-items-center text-[9px]" style={box(showViewed)}>{showViewed ? "✓" : ""}</span>
+              <span className="flex-1" style={{ color: "var(--text2)" }}>Viewed files</span>
+              <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{viewedCount}</span>
+            </button>
+            {hiddenExts.length > 0 && (
+              <button onClick={onClearExts} className="mt-0.5 px-2 py-1 rounded-lg text-left text-[10.5px] hover:bg-white/5" style={{ color: "var(--text3)" }}>Reset extensions</button>
+            )}
+          </div>
+        </Portal>
+      )}
+    </>
+  );
+}
+
 function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
   seenFiles: string[]; onSeen: (p: string) => void;
   sel: string | null; onSel: (p: string | null) => void;
   split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
-  drafts: DraftComment[]; onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT") => void;
-  onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void;
+  drafts: DraftComment[]; onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT", body?: string) => void;
+  onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
 }) {
   const draftsFor = (p: string) => drafts.filter((x) => x.path === p).length;
+  // For the "+" menu's Copy link: a blob permalink at the PR head commit.
+  const repoName = useContext(RepoCtx);
+  const headSha = d.commits.length ? d.commits[d.commits.length - 1].oid : "";
+  // The text of one line as it stands in the diff — used to seed a "Suggest
+  // change" with the line it is about, the way GitHub prefills the block.
+  const lineTextAt = (path: string, line: number, side: "LEFT" | "RIGHT"): string => {
+    const ch = byPath.get(path);
+    if (!ch) return "";
+    for (const h of ch.hunks) {
+      let oldN = h.oldStart, newN = h.newStart;
+      for (const raw of h.lines) {
+        if (raw.startsWith("\\")) continue;
+        const tag = raw[0], text = raw.slice(1);
+        if (tag === "+") { if (side === "RIGHT" && newN === line) return text; newN++; }
+        else if (tag === "-") { if (side === "LEFT" && oldN === line) return text; oldN++; }
+        else { if ((side === "RIGHT" && newN === line) || (side === "LEFT" && oldN === line)) return text; oldN++; newN++; }
+      }
+    }
+    return "";
+  };
   /**
    * The line, or range of lines, a comment is being written about.
    *
@@ -2297,20 +2443,25 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
    * file can be mid-selection at a time.
    */
   const [selRange, setSelRange] = useState<{ path: string; sel: LineSel } | null>(null);
+  // Which line has a NEW-comment composer open, and (for Suggest change) the
+  // text it opened with. The composer renders inline under the line via the same
+  // rowAfter slot the threads use — GitHub's placement, not a modal.
+  const [composing, setComposing] = useState<{ path: string; line: number; startLine?: number; side: "LEFT" | "RIGHT"; initial?: string } | null>(null);
+  const cancelCompose = () => { setComposing(null); setSelRange(null); };
   const pickLine = (path: string, pk: LinePick) => {
     const cur = selRange?.path === path ? selRange.sel : null;
     if (pk.shift && cur && cur.side === pk.side) {
       const sel = { start: cur.start, end: pk.line, side: pk.side };
+      const line = Math.max(sel.start, sel.end), startLine = Math.min(sel.start, sel.end);
       setSelRange({ path, sel });
-      onAddDraft(path, Math.max(sel.start, sel.end), Math.min(sel.start, sel.end), pk.side);
-      setSelRange(null);
+      setComposing({ path, line, startLine: startLine !== line ? startLine : undefined, side: pk.side });
       return;
     }
-    // A single line: offer it straight away, and remember it so a following
-    // shift-click can stretch the range instead of starting over.
+    // A single line: mark it (a following shift-click can stretch the range) and
+    // open the composer under it. "Suggest change" seeds a ```suggestion block.
     setSelRange({ path, sel: { start: pk.line, end: pk.line, side: pk.side } });
-    onAddDraft(path, pk.line, undefined, pk.side);
-    setSelRange(null);
+    const initial = pk.mode === "suggest" ? "```suggestion\n" + lineTextAt(path, pk.line, pk.side) + "\n```\n" : undefined;
+    setComposing({ path, line: pk.line, side: pk.side, initial });
   };
   /** Unresolved first: a resolved thread is history, an open one is a question. */
   const threadsFor = (p: string) => d.threads.filter((t) => t.path === p)
@@ -2353,25 +2504,95 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
     const top = el.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop;
     sc.scrollTo({ top: Math.max(0, top - (barRef.current?.offsetHeight ?? 76) - 8), behavior: "smooth" });
   };
+  /**
+   * Scroll to a file and STAY on it while the diffs above it mount.
+   *
+   * Diffs are lazy-mounted (see LazyMount): a file below the fold is a short
+   * placeholder until it scrolls near, then it swaps in its real, taller
+   * content. A one-shot scroll to the last file therefore landed on where the
+   * file was BEFORE the files above it grew — "the end of what's loaded so far",
+   * never the file. So this re-aligns every frame, snapping the target back under
+   * the bar as the placeholders above it fill in, until its position stops moving
+   * (or a ~40-frame ceiling). The element is re-queried each frame because the
+   * mount replaces its node. Instant, not smooth: a smooth scroll and a moving
+   * target fight each other.
+   */
+  const scrollToFileStable = (getEl: () => Element | null | undefined) => {
+    const first = getEl();
+    const sc = first?.closest<HTMLElement>(".agx-scroll");
+    if (!sc) { scrollUnderBar(first); return; }
+    let ticks = 0, lastTop = NaN;
+    const align = () => {
+      const el = getEl();
+      if (!el) return;
+      const rel = el.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+      sc.scrollTop = Math.max(0, sc.scrollTop + rel - (barRef.current?.offsetHeight ?? 76) - 8);
+      const now = el.getBoundingClientRect().top;
+      if ((Number.isNaN(lastTop) || Math.abs(now - lastTop) > 1) && ++ticks < 40) {
+        lastTop = now;
+        requestAnimationFrame(align);
+      }
+    };
+    requestAnimationFrame(align);
+  };
   const [q, setQ] = useState("");
+  // The facet filter: extensions to leave OUT (empty = show every extension),
+  // and whether files already marked viewed still show. Both scope one review of
+  // one PR.
+  const [hiddenExts, setHiddenExts] = useState<string[]>([]);
+  const [showViewed, setShowViewed] = useState(true);
   // Folded, not opened: every file is open by default and this records the ones
   // you have put away. Seeded with the files too big to be a sensible default.
   const [folded, setFolded] = useState<Set<string>>(new Set());
+  // A generated or very large diff is held behind a "Load diff" button even when
+  // its file is open — GitHub does the same — so a lockfile does not render a
+  // thousand rows nobody reads. This records the ones you asked to load anyway.
+  const [loadedDiffs, setLoadedDiffs] = useState<Set<string>>(new Set());
+  // Reset per PR — keyed on the NUMBER, not on `d.files`. The 20-second poll
+  // hands back a fresh `d.files` array each time; depending on it here meant
+  // every background refresh wiped the folds you had made and the filter you had
+  // typed, and the re-expansion jumped the page back to the top mid-review.
   useEffect(() => {
-    setQ("");
+    setQ(""); setHiddenExts([]); setShowViewed(true); setLoadedDiffs(new Set());
     setFolded(new Set(d.files.filter((f) => f.additions + f.deletions > BIG_FILE_LINES).map((f) => f.path)));
-  }, [d.number, d.files]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.number]);
+
+  const extFacets = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of d.files) { const e = fileExt(f.path); m.set(e, (m.get(e) ?? 0) + 1); }
+    return [...m.entries()].map(([ext, count]) => ({ ext, count }))
+      .sort((a, b) => b.count - a.count || a.ext.localeCompare(b.ext));
+  }, [d.files]);
+  const viewedCount = useMemo(() => d.files.filter((f) => seenFiles.includes(f.path)).length, [d.files, seenFiles]);
 
   const shownFiles = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return needle ? d.files.filter((f) => f.path.toLowerCase().includes(needle)) : d.files;
-  }, [d.files, q]);
+    return d.files.filter((f) => {
+      if (needle && !f.path.toLowerCase().includes(needle)) return false;
+      if (hiddenExts.length && hiddenExts.includes(fileExt(f.path))) return false;
+      if (!showViewed && seenFiles.includes(f.path)) return false;
+      return true;
+    });
+  }, [d.files, q, hiddenExts, showViewed, seenFiles]);
 
   const toggleFold = (p: string) => setFolded((cur) => {
     const next = new Set(cur);
     if (next.has(p)) next.delete(p); else next.add(p);
     return next;
   });
+  // Marking a file viewed folds it away, and un-marking opens it back up — the
+  // pairing GitHub uses, so "viewed" clears a read diff off the screen instead of
+  // leaving it in the way.
+  const seenAndFold = (path: string) => {
+    const wasViewed = seenFiles.includes(path);
+    onSeen(path);
+    setFolded((cur) => {
+      const next = new Set(cur);
+      if (wasViewed) next.delete(path); else next.add(path);
+      return next;
+    });
+  };
   const allFolded = shownFiles.length > 0 && shownFiles.every((f) => folded.has(f.path));
 
   // The same keyboard model as the changes modal, so the two review surfaces
@@ -2383,7 +2604,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
     if (!files.length) return;
     const i = stepFileIndex(files.length, files.findIndex((f) => f.path === sel), dir);
     onSel(files[i].path);
-    requestAnimationFrame(() => scrollUnderBar(frameRef.current?.querySelector('[data-file="active"]')));
+    scrollToFileStable(() => frameRef.current?.querySelector('[data-file="active"]'));
   };
   const jumpHunk = (dir: 1 | -1) => {
     const frame = frameRef.current;
@@ -2417,7 +2638,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
     else if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); stepFile(-1); }
     else if (k === "n") { e.preventDefault(); e.stopPropagation(); jumpHunk(1); }
     else if (k === "p") { e.preventDefault(); e.stopPropagation(); jumpHunk(-1); }
-    else if (k === "x") { e.preventDefault(); e.stopPropagation(); if (sel) onSeen(sel); }
+    else if (k === "x") { e.preventDefault(); e.stopPropagation(); if (sel) seenAndFold(sel); }
     else if (k === "enter" || e.key === "Enter") { e.preventDefault(); e.stopPropagation(); if (sel) toggleFold(sel); }
   };
   // Focus the frame when the files tab mounts, so the keys work without a click
@@ -2427,9 +2648,18 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
   return (
     <div ref={frameRef} tabIndex={-1} onKeyDown={onKey} className="text-[11px] flex flex-col gap-2 outline-none">
       {/* One bar, and it stays put: filter, view mode, progress. Everything that
-          used to be repeated on each file's own toolbar lives here once. */}
-      <div ref={barRef} className="flex flex-col gap-1 sticky top-0 z-30 py-1.5 px-1 -mx-1 rounded"
-        style={{ background: "var(--bg)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+          used to be repeated on each file's own toolbar lives here once.
+
+          A header band, not a floating slab. It used to be the app's darkest
+          tone (--bg), rounded, and inset — a dark card hovering over the --bg2
+          panel it sits on, which read as not belonging to the app. Now it is
+          full-bleed to the panel edges, square, and the panel's OWN --bg2, so it
+          reads as one continuous header with the tab row above it, parted only
+          by a hairline like every other toolbar here. The box-shadow paints the
+          12px the scroll container insets above it (its p-3) in the same tone,
+          so nothing bleeds through while it is pinned. */}
+      <div ref={barRef} className="flex flex-col gap-1 sticky top-0 z-30 -mx-3 px-3 py-2"
+        style={{ background: "var(--bg2)", boxShadow: "0 -12px 0 var(--bg2)", borderBottom: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="flex items-center gap-1.5 px-2 py-1 rounded shrink-0"
           style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
@@ -2438,6 +2668,13 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
             className="bg-transparent outline-none text-[10.5px] w-28" style={{ color: "var(--text2)" }} />
           {q && <button onClick={() => setQ("")} title="Clear" style={{ color: "var(--text3)" }}>×</button>}
         </span>
+        <FilesFilterMenu
+          facets={extFacets} hiddenExts={hiddenExts}
+          onToggleExt={(e) => setHiddenExts((cur) => cur.includes(e) ? cur.filter((x) => x !== e) : [...cur, e])}
+          onClearExts={() => setHiddenExts([])}
+          showViewed={showViewed} onToggleViewed={() => setShowViewed((v) => !v)}
+          viewedCount={viewedCount}
+        />
         <Btn onClick={() => onSplit(false)} small primary={!split} title="One column, with a “+ Comment” target on every line">Unified</Btn>
         <Btn onClick={() => onSplit(true)} small primary={split} title="Before and after, side by side">Split</Btn>
         <Btn onClick={() => onWrap(!wrap)} small primary={wrap} title="Wrap long lines rather than scrolling them">Wrap</Btn>
@@ -2451,9 +2688,9 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
           <Bar parts={[{ pct: d.files.length ? (seenFiles.length / d.files.length) * 100 : 0, tint: seenFiles.length === d.files.length ? "var(--success)" : "var(--primary)" }]} />
         </span>
       </div>
-      <div className="text-[10px] px-1" style={{ color: "var(--text3)" }}>
+      <div className="text-[10px]" style={{ color: "var(--text3)" }}>
         <b>j/k</b> file · <b>n/p</b> hunk · <b>x</b> viewed · <b>↵</b> fold
-        {q && <span> · showing {shownFiles.length} of {d.files.length}</span>}
+        {shownFiles.length !== d.files.length && <span> · showing {shownFiles.length} of {d.files.length}</span>}
       </div>
       </div>
 
@@ -2466,7 +2703,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
             style={{ borderRight: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
             <FileTree
               node={buildFileTree(shownFiles)} sel={sel}
-              onPick={(path) => { onSel(path); setFolded((cur) => { const n = new Set(cur); n.delete(path); return n; }); requestAnimationFrame(() => scrollUnderBar(frameRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`))); }}
+              onPick={(path) => { onSel(path); setFolded((cur) => { const n = new Set(cur); n.delete(path); return n; }); scrollToFileStable(() => frameRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)); }}
               seen={(path) => seenFiles.includes(path)}
               drafts={draftsFor}
             />
@@ -2474,7 +2711,9 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
         )}
         <div className="min-w-0 flex-1 flex flex-col gap-2">
       {shownFiles.length === 0 && (
-        <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No file matches “{q}”.</div>
+        <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>
+          {q ? `No file matches “${q}”.` : "No files match the current filter."}
+        </div>
       )}
       {/* A file list that quietly disagreed with the header count is how nobody
           noticed the hundred-and-first file was missing. Say it. */}
@@ -2490,14 +2729,36 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
         const focused = sel === f.path;
         const nd = draftsFor(f.path);
         const change = byPath.get(f.path);
+        // Anchor each thread inline, under the line it is about — GitHub's
+        // placement. A thread whose line is not in the diff (outdated, or a
+        // context line the hunks do not reach) has no row to sit under, so it
+        // keeps its home in the list under the file rather than vanishing.
+        const inlineThreads = new Map<number, PrThread[]>();
+        const belowThreads: PrThread[] = [];
+        for (const t of threadsFor(f.path)) {
+          const anchored = t.line != null && !t.isOutdated &&
+            !!change?.hunks.some((h) => t.line! >= h.newStart && t.line! <= h.newStart + h.newLines - 1);
+          if (anchored) { const arr = inlineThreads.get(t.line!) ?? []; arr.push(t); inlineThreads.set(t.line!, arr); }
+          else belowThreads.push(t);
+        }
         return (
-          <div key={f.path} data-file={focused ? "active" : undefined} data-path={f.path} className="rounded overflow-hidden"
+          <div key={f.path} data-file={focused ? "active" : undefined} data-path={f.path} className="rounded"
             style={{
+              // `overflow: clip`, not `hidden`: hidden turns the card into its own
+              // scroll container, which would pin the sticky header below to the
+              // card instead of the page. clip keeps the rounded corners without
+              // that side effect, so the header can stick against the page scroll.
+              overflow: "clip",
               border: `1px solid color-mix(in srgb, ${focused ? "var(--primary) 45%" : "var(--border) 30%"}, transparent)`,
               opacity: done && !open ? 0.72 : 1,
             }}>
-            <div className="flex items-center gap-2 px-2.5 py-1.5"
-              style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: open ? "1px solid color-mix(in srgb, var(--border) 25%, transparent)" : undefined }}>
+            {/* The file's own header stays put while you read its diff — the
+                GitHub behaviour, so the code under the cursor always has a name
+                above it. Opaque (the tint mixed into --bg, not laid over
+                transparent) so the diff cannot bleed through it while pinned, and
+                pinned just under the toolbar. */}
+            <div className="flex items-center gap-2 px-2.5 py-1.5 sticky z-20"
+              style={{ top: Math.max(0, barH - 10), background: "color-mix(in srgb, var(--border) 12%, var(--bg))", borderBottom: open ? "1px solid color-mix(in srgb, var(--border) 25%, transparent)" : undefined }}>
               <button onClick={() => { onSel(f.path); toggleFold(f.path); }} className="flex-1 min-w-0 text-left flex items-center gap-2">
                 <span className="shrink-0" style={{ color: "var(--text3)" }}>{open ? "▾" : "▸"}</span>
                 <span className="truncate" style={{ ...CODE_FONT_STYLE, color: done ? "var(--text3)" : "var(--text)" }}>{f.path}</span>
@@ -2509,7 +2770,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
               </button>
               {/* "Viewed" is state you keep for the length of a review, not a
                   one-off tick — a switch says that and a checkbox does not. */}
-              <button onClick={() => onSeen(f.path)} title={done ? "Mark not viewed" : "Mark viewed"}
+              <button onClick={() => seenAndFold(f.path)} title={done ? "Mark not viewed" : "Mark viewed"}
                 aria-pressed={done}
                 className="agx-btn shrink-0 flex items-center gap-1.5 text-[10px] px-1.5 py-0.5 rounded"
                 style={{ color: done ? "var(--success)" : "var(--text3)", border: `1px solid color-mix(in srgb, ${done ? "var(--success) 50%" : "var(--border) 45%"}, transparent)` }}>
@@ -2517,6 +2778,19 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
               </button>
             </div>
             {open && (
+              needsLoadDiff(f) && !loadedDiffs.has(f.path) ? (
+                /* Generated or huge — held behind a button, GitHub-style, so a
+                   lockfile does not render a thousand rows on open. */
+                <div className="p-4 flex flex-col items-center gap-2.5 text-center" style={{ background: "color-mix(in srgb, var(--border) 4%, transparent)" }}>
+                  <div className="w-full max-w-[520px] flex flex-col items-start gap-1.5 mb-1" aria-hidden>
+                    {[62, 90, 74, 44, 82].map((w, i) => <div key={i} className="rounded" style={{ height: 8, width: `${w}%`, background: "color-mix(in srgb, var(--border) 30%, transparent)" }} />)}
+                  </div>
+                  <Btn small primary onClick={() => setLoadedDiffs((s) => new Set(s).add(f.path))}>Load diff</Btn>
+                  <span className="text-[10px]" style={{ color: "var(--text3)" }}>
+                    {GENERATED_RE.test(f.path) ? "Generated file — not rendered by default." : `Large file (${f.additions + f.deletions} changed lines) — load when you need it.`}
+                  </span>
+                </div>
+              ) : (
               <LazyMount minHeight={Math.min(320, 40 + (f.additions + f.deletions) * 18)}>
                 {/* No inner scroller: a scroll box inside the page scroll is
                     how a click in the tree lands on a file you then cannot
@@ -2538,6 +2812,34 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                         file={change} split={split} wrap={wrap}
                         onPick={(pk) => pickLine(f.path, pk)}
                         sel={selRange?.path === f.path ? selRange.sel : null}
+                        permalink={repoName && headSha ? (line) => `https://github.com/${repoName}/blob/${headSha}/${f.path}#L${line}` : undefined}
+                        rowAfter={(inlineThreads.size || composing?.path === f.path) ? (newN, oldN) => {
+                          const ts = newN != null ? inlineThreads.get(newN) : null;
+                          const composeHere = composing?.path === f.path &&
+                            ((composing.side === "RIGHT" && composing.line === newN) || (composing.side === "LEFT" && composing.line === oldN));
+                          if (!ts?.length && !composeHere) return null;
+                          const pfx = composing?.side === "LEFT" ? "L" : "R";
+                          // Bounded and pinned to the left so it reads at a sane
+                          // width and stays put while the code scrolls sideways.
+                          return (
+                            <div className="flex flex-col gap-2 my-1" style={{ position: "sticky", left: 0, width: split ? "min(560px, 46vw)" : "min(900px, 92vw)", padding: "8px", background: "color-mix(in srgb, var(--info) 6%, var(--bg))", borderTop: "1px solid color-mix(in srgb, var(--border) 22%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+                              {ts?.map((t) => <Thread key={t.id} t={t} inline onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
+                              {composeHere && composing && (
+                                <div className="rounded-md overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+                                  <div className="px-2.5 py-1.5 text-[10.5px]" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary)" }}>
+                                    {composing.startLine ? `Comment on lines ${pfx}${composing.startLine}–${composing.line}` : `Add a comment on line ${pfx}${composing.line}`}
+                                  </div>
+                                  <div className="p-2 flex flex-col gap-2">
+                                    <Composer initial={composing.initial} autoFocus={!split} busy={busy}
+                                      placeholder="Leave a comment — markdown works here" sendLabel="Comment"
+                                      onSend={async (b) => { onAddDraft(f.path, composing.line, composing.startLine, composing.side, b); cancelCompose(); return true; }} />
+                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Cancel</button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        } : undefined}
                         expand={(hi) => {
                           // The gap between the end of the previous hunk and the
                           // start of this one — the lines GitHub did not send.
@@ -2555,14 +2857,19 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                     : <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>No textual diff — binary, renamed, or too large to show</div>}
                 </div>
               </LazyMount>
+              )
             )}
             {/* The conversation about THIS file, under it. The count in the
                 header said threads existed but you had to leave for the
                 conversation tab to read them, which is the wrong way round
                 while you are looking at the code they are about. */}
-            {open && threadsFor(f.path).length > 0 && (
+            {open && belowThreads.length > 0 && (
               <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
-                {threadsFor(f.path).map((t) => (
+                {/* Not anchored to a visible line — outdated threads, or ones on
+                    context the diff does not reach — so they live under the file
+                    rather than inline. */}
+                <div className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>Other comments</div>
+                {belowThreads.map((t) => (
                   <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />
                 ))}
               </div>
@@ -2759,14 +3066,19 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
   );
 }
 
-function Thread({ t, onResolve, onReply, onApply, busy }: {
-  t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void;
+function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
+  t: PrThread; onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
+  /** Rendered anchored under its line in the diff, not in the file's thread
+   *  list: drop the path (obvious from where it sits) and the duplicated code
+   *  snippet (the line is right above it). */
+  inline?: boolean;
 }) {
   // The REST reply endpoint takes the numeric comment id. `id` is a GraphQL
   // node id (`PRRC_kwDO…`) and `Number()` of that is NaN — which is why reply
   // could never have worked before `databaseId` was asked for.
   const canReply = typeof t.comments[0]?.databaseId === "number";
+  const [replying, setReplying] = useState(false);
   // A suggestion inside this thread knows the file and the lines because the
   // thread does. An outdated thread is refused: its lines have moved, so the
   // range in hand no longer points where the comment meant.
@@ -2776,17 +3088,21 @@ function Thread({ t, onResolve, onReply, onApply, busy }: {
   );
   return (
     <SuggestCtx.Provider value={suggest}>
-    <div className="rounded-md overflow-hidden mb-2" style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
+    <div className={`rounded-md overflow-hidden ${inline ? "" : "mb-2"}`} style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
         style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
-        <span className="truncate" style={{ color: "var(--primary)" }}>{t.path}{t.line ? `:${t.line}` : ""}</span>
+        <span className="truncate" style={{ color: "var(--primary)" }}>
+          {inline
+            ? (t.startLine && t.line && t.startLine !== t.line ? `Lines ${t.startLine}–${t.line}` : t.line ? `Line ${t.line}` : "Comment")
+            : `${t.path}${t.line ? `:${t.line}` : ""}`}
+        </span>
         {t.isOutdated && <Chip text="outdated" tint="var(--text3)" title="The code under this comment has changed since" />}
         <span className="ml-auto flex items-center gap-1.5 shrink-0">
           {t.isResolved ? <Chip text="resolved" tint="var(--success)" /> : <Chip text="open" tint="var(--warning)" />}
           {t.url && <GhLink href={t.url} title="Open this thread on GitHub" />}
         </span>
       </div>
-      <ThreadSnippet hunk={t.diffHunk} line={t.originalLine ?? t.line} />
+      {!inline && <ThreadSnippet hunk={t.diffHunk} line={t.originalLine ?? t.line} />}
       {t.comments.map((c, i) => (
         <div key={c.id} className="px-3 py-2"
           style={{ paddingLeft: i ? 26 : 12, background: i ? "color-mix(in srgb, var(--border) 9%, transparent)" : undefined }}>
@@ -2802,10 +3118,26 @@ function Thread({ t, onResolve, onReply, onApply, busy }: {
           <Md body={c.body} />
         </div>
       ))}
-      <div className="flex gap-1.5 px-3 py-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
-        <Btn onClick={() => onReply(t)} disabled={busy || !canReply} small
-          title={canReply ? undefined : "This thread has no comment to reply to"}>Reply</Btn>
-        <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
+      <div className="flex flex-col gap-2 px-3 py-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
+        {/* Reply with the full markdown composer — Write/Preview, mentions, the
+            lot — the same box GitHub gives you, not a one-line prompt. Collapsed
+            to a slim affordance until you mean it. */}
+        {canReply && (replying ? (
+          <Composer
+            onSend={async (b) => { const ok = await onReply(t, b); if (ok) setReplying(false); return ok; }}
+            busy={busy} placeholder="Reply — markdown works here" sendLabel="Reply" autoFocus
+          />
+        ) : (
+          <button onClick={() => setReplying(true)}
+            className="agx-btn w-full text-left px-3 py-1.5 rounded-lg text-[11px]"
+            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
+            Reply…
+          </button>
+        ))}
+        <div className="flex gap-1.5">
+          {replying && <Btn onClick={() => setReplying(false)} small>Cancel</Btn>}
+          <Btn onClick={() => onResolve(t)} disabled={busy} ok={!t.isResolved} small>{t.isResolved ? "Unresolve" : "Resolve conversation"}</Btn>
+        </div>
       </div>
     </div>
     </SuggestCtx.Provider>
@@ -2901,7 +3233,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   d: PrDetail;
   lanes: { humans: PrReview[]; botReviews: PrReview[]; humanComments: PrComment[]; bots: PrComment[] };
   raw: boolean; onRaw: (v: boolean) => void;
-  onResolve: (t: PrThread) => void; onReply: (t: PrThread) => void;
+  onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void;
   onComment: (body: string) => Promise<boolean>;
   onReact: (nodeId: string, content: string, on: boolean) => void;
@@ -3058,13 +3390,17 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
  * Write, preview, send. Shared by the conversation and by anywhere else that
  * takes markdown, so the two never drift into behaving differently.
  */
-function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub }: {
+function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial, autoFocus }: {
   onSend: (body: string) => Promise<boolean>; busy: boolean; placeholder: string; sendLabel: string;
   /** Opens this pull request on GitHub — the only place an image can actually
    *  be attached. */
   onOpenGithub?: () => void;
+  /** Seed text — e.g. a ```suggestion block prefilled with the line. */
+  initial?: string;
+  /** Focus the textarea on mount — for a composer that opened on a click. */
+  autoFocus?: boolean;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(initial ?? "");
   const [preview, setPreview] = useState(false);
   const [sending, setSending] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -3198,6 +3534,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub }: {
           <textarea
             ref={taRef}
             value={text}
+            autoFocus={autoFocus}
             onChange={(e) => onType(e.target.value, e.target.selectionStart ?? e.target.value.length)}
             rows={4} placeholder={placeholder}
             onKeyDown={(e) => {

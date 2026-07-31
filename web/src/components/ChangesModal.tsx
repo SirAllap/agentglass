@@ -1,4 +1,4 @@
-import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { memo, Fragment, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
@@ -26,7 +26,12 @@ export const SPLIT_SEL_CSS = '.agx-split[data-sel="l"] [data-side="r"]{user-sele
 // Themed, slim scrollbars for the modal's scrollers (primary-tinted thumb).
 /** The gutter "+" only appears on the line you are pointing at, so the diff
  *  reads as a diff until you want to say something about it. */
-export const LINEBTN_CSS = '.agx-gutter{position:relative}.agx-linebtn{position:absolute;left:-2px;top:50%;transform:translateY(-50%);width:15px;height:15px;line-height:13px;text-align:center;border-radius:4px;background:var(--primary);color:var(--bg);font-size:12px;opacity:0;transition:opacity .1s;cursor:pointer;z-index:2}.agx-gutter:hover .agx-linebtn,.agx-linebtn:focus-visible{opacity:1}';
+export const LINEBTN_CSS = '.agx-gutter{position:relative}.agx-linebtn{position:absolute;right:-13px;top:50%;transform:translateY(-50%);width:19px;height:19px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--primary);color:#fff;font-size:15px;font-weight:600;line-height:1;opacity:0;transition:opacity .12s,transform .12s;cursor:pointer;z-index:3;box-shadow:0 1px 3px rgba(0,0,0,.35)}.agx-gutter:hover .agx-linebtn,.agx-linebtn:focus-visible,.agx-linebtn[data-open="1"]{opacity:1}.agx-linebtn:hover{transform:translateY(-50%) scale(1.08)}';
+
+/** Line-level review actions, when the diff is a pull request. Present ⇒ the "+"
+ *  gutter button opens a menu (comment / suggest / copy link); absent ⇒ it just
+ *  fires onPick, which is all the working-tree changes modal needs. */
+export const LineMenuCtx = createContext<{ permalink?: (line: number, side: DiffSide) => string | null } | null>(null);
 
 export const SCROLLBAR_CSS = '.agx-scroll{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--primary) 45%,transparent) transparent}.agx-scroll::-webkit-scrollbar{width:11px;height:11px}.agx-scroll::-webkit-scrollbar-track{background:transparent}.agx-scroll::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--primary) 38%,transparent);border-radius:999px;border:3px solid transparent;background-clip:padding-box}.agx-scroll::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--primary) 62%,transparent);background-clip:padding-box}.agx-scroll::-webkit-scrollbar-corner{background:transparent}';
 const cellBg = (k?: string) => (k === "del" ? "color-mix(in srgb, var(--error) 13%, transparent)" : k === "add" ? "color-mix(in srgb, var(--success) 13%, transparent)" : "transparent");
@@ -161,7 +166,7 @@ export function unifiedRows(h: DiffHunk): URow[] {
 
 /** Where a comment lands: a line, on a side of the diff, optionally a range. */
 export type DiffSide = "LEFT" | "RIGHT";
-export type LinePick = { line: number; side: DiffSide; shift: boolean };
+export type LinePick = { line: number; side: DiffSide; shift: boolean; mode?: "comment" | "suggest" };
 export type LineSel = { start: number; end: number; side: DiffSide } | null;
 
 /** Is this line inside the pending selection? */
@@ -179,18 +184,51 @@ function inSel(sel: LineSel, n: number | null | undefined, side: DiffSide): bool
  * GitHub does a multi-line comment.
  */
 function LineBtn({ n, side, onPick }: { n: number | null | undefined; side: DiffSide; onPick?: (p: LinePick) => void }) {
+  const menu = useContext(LineMenuCtx);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
   if (!onPick || n == null) return null;
+  const rn = side === "RIGHT" ? `R${n}` : `L${n}`;
+  const onClick = (e: React.MouseEvent) => {
+    // Shift-click keeps the fast range gesture, and with no PR context (the
+    // working-tree changes modal) there is nothing to offer but "comment", so
+    // click goes straight to it as before. Otherwise: the GitHub menu.
+    if (e.shiftKey || !menu) { onPick({ line: n, side, shift: e.shiftKey }); return; }
+    const r = ref.current!.getBoundingClientRect();
+    setPos({ top: r.bottom + 4, left: Math.min(r.left, window.innerWidth - 244) });
+    setOpen(true);
+  };
+  const Item = ({ label, glyph, onSel }: { label: string; glyph: React.ReactNode; onSel: () => void }) => (
+    <button role="menuitem" onClick={() => { onSel(); setOpen(false); }}
+      className="w-full text-left flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-white/5" style={{ color: "var(--text2)" }}>
+      <span className="grid place-items-center shrink-0" style={{ width: 16, color: "var(--text3)" }}>{glyph}</span>{label}
+    </button>
+  );
   return (
-    <button
-      onClick={(e) => onPick({ line: n, side, shift: e.shiftKey })}
-      title={`Comment on line ${n} — shift-click to cover a range`}
-      aria-label={`Comment on line ${n}`}
-      className="agx-linebtn"
-    >+</button>
+    <>
+      <button ref={ref} onClick={onClick} data-open={open ? "1" : undefined}
+        title={`Line ${n} — comment, suggest a change; shift-click to cover a range`}
+        aria-label={`Line ${n} actions`} aria-haspopup="menu" aria-expanded={open}
+        className="agx-linebtn">+</button>
+      {open && (
+        <Portal>
+          <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
+          <div role="menu" className="fixed p-1 rounded-xl text-[11.5px]"
+            style={{ top: pos.top, left: pos.left, minWidth: 224, zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)", boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
+            <Item glyph="+" label={`Add comment on line ${rn}`} onSel={() => onPick({ line: n, side, shift: false, mode: "comment" })} />
+            <Item glyph="±" label={`Suggest change on line ${rn}`} onSel={() => onPick({ line: n, side, shift: false, mode: "suggest" })} />
+            {menu?.permalink && (
+              <Item glyph="🔗" label="Copy link" onSel={() => { const u = menu.permalink!(n, side); if (u) void navigator.clipboard?.writeText(u); }} />
+            )}
+          </div>
+        </Portal>
+      )}
+    </>
   );
 }
 
-export function UnifiedDiff({ c, wrap, hunkAction, onPick, sel }: { c: FileChange; wrap: boolean; hunkAction?: (hunkIndex: number) => React.ReactNode; onPick?: (p: LinePick) => void; sel?: LineSel }) {
+export function UnifiedDiff({ c, wrap, hunkAction, rowAfter, onPick, sel }: { c: FileChange; wrap: boolean; hunkAction?: (hunkIndex: number) => React.ReactNode; rowAfter?: (newN: number | null | undefined, oldN: number | null | undefined) => React.ReactNode; onPick?: (p: LinePick) => void; sel?: LineSel }) {
   const wrapCls = wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre";
   const hunks = useMemo(() => c.hunks.map((h) => ({ h, rows: unifiedRows(h) })), [c]);
   return (
@@ -204,18 +242,26 @@ export function UnifiedDiff({ c, wrap, hunkAction, onPick, sel }: { c: FileChang
             </span>
           </div>
           <div className="grid" style={{ gridTemplateColumns: wrap ? "4ch 4ch minmax(0,1fr)" : "4ch 4ch max-content" }}>
-            {rows.map((r, ri) => (
-              <div key={ri} className="contents">
-                <div className="text-right pr-1.5 tabular-nums select-none sticky z-[1]" style={{ left: 0, background: numBg(r.kind) }}><span className="opacity-40">{r.oldN ?? ""}</span></div>
-                <div className="text-right pr-1.5 tabular-nums select-none sticky z-[1] agx-gutter" style={{ left: "4ch", background: numBg(r.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
-                  <LineBtn n={r.newN ?? r.oldN} side={r.newN != null ? "RIGHT" : "LEFT"} onPick={onPick} />
-                  <span className="opacity-40">{r.newN ?? ""}</span>
+            {rows.map((r, ri) => {
+              // A review comment thread anchored to this line, rendered right
+              // under it as a row spanning every column — GitHub's placement, so
+              // the note sits with the code it is about instead of at the far
+              // bottom of the file.
+              const after = rowAfter?.(r.newN, r.oldN);
+              return (
+                <div key={ri} className="contents">
+                  <div className="text-right pr-1.5 tabular-nums select-none sticky z-[1]" style={{ left: 0, background: numBg(r.kind) }}><span className="opacity-40">{r.oldN ?? ""}</span></div>
+                  <div className="text-right pr-1.5 tabular-nums select-none sticky z-[1] agx-gutter" style={{ left: "4ch", background: numBg(r.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
+                    <LineBtn n={r.newN ?? r.oldN} side={r.newN != null ? "RIGHT" : "LEFT"} onPick={onPick} />
+                    <span className="opacity-40">{r.newN ?? ""}</span>
+                  </div>
+                  <div className={`${wrapCls} px-1.5`} style={{ background: inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? "color-mix(in srgb, var(--primary) 20%, transparent)" : cellBg(r.kind), color: cellFg(r.kind) }}>
+                    <span className="select-none opacity-60">{r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "} </span><Code text={r.text} segs={r.segs} kind={r.kind} />
+                  </div>
+                  {after && <div style={{ gridColumn: "1 / -1" }}>{after}</div>}
                 </div>
-                <div className={`${wrapCls} px-1.5`} style={{ background: inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? "color-mix(in srgb, var(--primary) 20%, transparent)" : cellBg(r.kind), color: cellFg(r.kind) }}>
-                  <span className="select-none opacity-60">{r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "} </span><Code text={r.text} segs={r.segs} kind={r.kind} />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ))}
@@ -255,7 +301,7 @@ export function splitRows(h: DiffHunk): { l: Cell | null; r: Cell | null }[] {
 // long line on one side scrolls independently, with its scrollbar pinned to the
 // bottom of the pane). Vertical scroll is kept in sync between the two so rows
 // stay aligned; only the right side shows the vertical scrollbar.
-export function SplitDiff({ c, wrap, onPick, sel }: { c: FileChange; wrap: boolean; onPick?: (p: LinePick) => void; sel?: LineSel }) {
+export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; wrap: boolean; rowAfter?: (newN: number | null | undefined, oldN: number | null | undefined) => React.ReactNode; onPick?: (p: LinePick) => void; sel?: LineSel }) {
   const hunks = useMemo(() => c.hunks.map((h) => ({ h, rows: splitRows(h) })), [c]);
   const wrapCls = wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre";
   const leftRef = useRef<HTMLDivElement>(null);
@@ -284,14 +330,23 @@ export function SplitDiff({ c, wrap, onPick, sel }: { c: FileChange; wrap: boole
         </div>
         {rows.map((row, ri) => {
           const cell = which === "l" ? row.l : row.r;
+          // Anchor on the NEW-side line so both columns place the comment at the
+          // same row index and stay aligned. The two columns are independent
+          // scrollers with synced vertical scroll, so the left renders an
+          // invisible copy of the same height — without it the columns would
+          // drift apart below the comment.
+          const after = rowAfter?.(row.r?.num, row.l?.num);
           return (
-            <div key={ri} className="flex" style={{ minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
-              <div data-side={which} className="text-right pr-1.5 tabular-nums select-none shrink-0 sticky left-0 z-[1] agx-gutter" style={{ width: "3.6ch", background: numBg(cell?.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
-                <LineBtn n={cell?.num} side={which === "l" ? "LEFT" : "RIGHT"} onPick={onPick} />
-                <span className="opacity-40">{cell?.num ?? ""}</span>
+            <Fragment key={ri}>
+              <div className="flex" style={{ minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
+                <div data-side={which} className="text-right pr-1.5 tabular-nums select-none shrink-0 sticky left-0 z-[1] agx-gutter" style={{ width: "3.6ch", background: numBg(cell?.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
+                  <LineBtn n={cell?.num} side={which === "l" ? "LEFT" : "RIGHT"} onPick={onPick} />
+                  <span className="opacity-40">{cell?.num ?? ""}</span>
+                </div>
+                <div className={`${wrapCls} px-1.5`} style={{ color: cellFg(cell?.kind), background: inSel(sel ?? null, cell?.num, which === "l" ? "LEFT" : "RIGHT") ? "color-mix(in srgb, var(--primary) 20%, transparent)" : undefined }}>{cell ? <Code text={cell.text} segs={cell.segs} kind={cell.kind} /> : ""}</div>
               </div>
-              <div className={`${wrapCls} px-1.5`} style={{ color: cellFg(cell?.kind), background: inSel(sel ?? null, cell?.num, which === "l" ? "LEFT" : "RIGHT") ? "color-mix(in srgb, var(--primary) 20%, transparent)" : undefined }}>{cell ? <Code text={cell.text} segs={cell.segs} kind={cell.kind} /> : ""}</div>
-            </div>
+              {after && (which === "l" ? <div aria-hidden style={{ visibility: "hidden" }}>{after}</div> : after)}
+            </Fragment>
           );
         })}
       </div>
@@ -309,14 +364,18 @@ export function SplitDiff({ c, wrap, onPick, sel }: { c: FileChange; wrap: boole
               @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
             </div>
             <div className="grid" style={{ gridTemplateColumns: "3.6ch minmax(0,1fr) 3.6ch minmax(0,1fr)" }}>
-              {rows.map((row, ri) => (
-                <div key={ri} className="contents">
-                  <div data-side="l" className="text-right pr-1.5 tabular-nums select-none" style={{ background: row.l ? cellBg(row.l.kind) : HATCH }}><span className="opacity-40">{row.l?.num ?? ""}</span></div>
-                  <div data-side="l" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.l ? cellBg(row.l.kind) : HATCH, color: cellFg(row.l?.kind) }}>{row.l ? <Code text={row.l.text} segs={row.l.segs} kind={row.l.kind} /> : ""}</div>
-                  <div data-side="r" className="text-right pr-1.5 tabular-nums select-none border-l" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }}><span className="opacity-40">{row.r?.num ?? ""}</span></div>
-                  <div data-side="r" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, color: cellFg(row.r?.kind) }}>{row.r ? <Code text={row.r.text} segs={row.r.segs} kind={row.r.kind} /> : ""}</div>
-                </div>
-              ))}
+              {rows.map((row, ri) => {
+                const after = rowAfter?.(row.r?.num, row.l?.num);
+                return (
+                  <div key={ri} className="contents">
+                    <div data-side="l" className="text-right pr-1.5 tabular-nums select-none" style={{ background: row.l ? cellBg(row.l.kind) : HATCH }}><span className="opacity-40">{row.l?.num ?? ""}</span></div>
+                    <div data-side="l" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.l ? cellBg(row.l.kind) : HATCH, color: cellFg(row.l?.kind) }}>{row.l ? <Code text={row.l.text} segs={row.l.segs} kind={row.l.kind} /> : ""}</div>
+                    <div data-side="r" className="text-right pr-1.5 tabular-nums select-none border-l" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }}><span className="opacity-40">{row.r?.num ?? ""}</span></div>
+                    <div data-side="r" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, color: cellFg(row.r?.kind) }}>{row.r ? <Code text={row.r.text} segs={row.r.segs} kind={row.r.kind} /> : ""}</div>
+                    {after && <div style={{ gridColumn: "1 / -1" }}>{after}</div>}
+                  </div>
+                );
+              })}
             </div>
           </div>
         ))}
