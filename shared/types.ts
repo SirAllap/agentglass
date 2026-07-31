@@ -1545,6 +1545,13 @@ export interface ReachableAddress {
   tailnet: boolean;
   /** CIDR of the local subnet, used to scope the firewall command. */
   subnet: string | null;
+  /** The full base URL to open, when it is not the default `http://address:port`
+   *  — a Tailscale HTTPS name, say. Present ⇒ the QR uses this verbatim. */
+  url?: string;
+  /** Served over HTTPS (a secure context): the only kind a phone can PAIR over. */
+  secure?: boolean;
+  /** A friendlier name than the raw address, e.g. "Tailscale (HTTPS)". */
+  label?: string;
 }
 
 /** The firewall most likely to be dropping traffic, and the fix. Never run by

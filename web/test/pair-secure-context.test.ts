@@ -50,25 +50,26 @@ describe("whether this page can pair at all", () => {
      * The reported case. 100.64.0.0/10 is what Tailscale hands out, and it is
      * the route this app *recommends* — so telling somebody there to "use
      * HTTPS" without saying how is telling them to abandon the thing they
-     * already set up. `tailscale cert` gives them a real certificate for the
-     * MagicDNS name, and that is a secure context.
+     * already set up. `tailscale serve` puts Tailscale's HTTPS in front of the
+     * app on the MagicDNS name — an actual secure context — which is the
+     * concrete step, unlike `tailscale cert` alone (which only fetches files).
      */
     const why = pairingBlocked({ subtle: undefined, origin: "http://100.69.209.63:4000", isSecureContext: false })!;
-    expect(why).toContain("tailscale cert");
-    expect(why).toMatch(/ts\.net/);
+    expect(why).toContain("tailscale serve");
+    expect(why).toMatch(/HTTPS/i);
   });
 
   test("and a plain LAN address gets the other one", () => {
     const why = pairingBlocked({ subtle: undefined, origin: "http://192.168.1.9:4000", isSecureContext: false })!;
-    expect(why).not.toContain("tailscale cert");
+    expect(why).not.toContain("tailscale serve");
     expect(why).toMatch(/localhost/);
   });
 
   test("100.x that is not in the tailnet range is not called Tailscale", () => {
     // 100.128.0.0 is ordinary public space. Telling somebody to run
-    // `tailscale cert` for it sends them somewhere that cannot help.
+    // `tailscale serve` for it sends them somewhere that cannot help.
     const why = pairingBlocked({ subtle: undefined, origin: "http://100.128.0.5:4000", isSecureContext: false })!;
-    expect(why).not.toContain("tailscale cert");
+    expect(why).not.toContain("tailscale serve");
   });
 });
 

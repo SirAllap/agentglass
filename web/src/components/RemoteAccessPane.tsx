@@ -36,6 +36,7 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
   // Revoking cannot be undone and cannot be partially done, so it asks once.
   const [confirming, setConfirming] = useState(false);
   const [revokeNote, setRevokeNote] = useState<string | null>(null);
+  const [showOther, setShowOther] = useState(false);
 
   const load = useCallback(() => {
     api.remoteStatus().then(setSt).catch(() => setSt(null));
@@ -92,11 +93,20 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
 
   if (!st) return <Wrap><div className="px-3 py-2 text-[11px] t-dim2">Reading network state…</div></Wrap>;
 
-  const urls = st.urls;
-  const pick = pickIndex(st.addresses, chosen);
-  const url = urls[Math.min(pick, urls.length - 1)] ?? "";
-  const address = st.addresses[pick];
-  const live = st.exposed && st.trustLan && urls.length > 0;
+  // A phone can only pair over a secure (HTTPS) address — so when one exists it
+  // is the ONLY thing worth OFFERING on a "connect a phone" screen; the
+  // plain-HTTP LAN/tailnet rows are dead ends here (they scan to a page that
+  // cannot start the handshake). They are still listed, but tucked away, so a
+  // new user is not handed three options two of which quietly do not work.
+  const secureIdx = st.addresses.map((a, i) => (a.secure ? i : -1)).filter((i) => i >= 0);
+  const pairIdx = secureIdx.length ? secureIdx : st.addresses.map((_, i) => i);
+  const otherIdx = secureIdx.length ? st.addresses.map((_, i) => i).filter((i) => !secureIdx.includes(i)) : [];
+  const pairAddrs = pairIdx.map((i) => st.addresses[i]);
+  const pairUrls = pairIdx.map((i) => st.urls[i]);
+  const pick = Math.min(pickIndex(pairAddrs, chosen), Math.max(0, pairAddrs.length - 1));
+  const url = pairUrls[pick] ?? "";
+  const address = pairAddrs[pick];
+  const live = st.exposed && st.trustLan && pairUrls.length > 0;
 
   return (
     <Wrap>
@@ -176,11 +186,11 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
                 the other does not. Each says what it is rather than making
                 the user infer it from an address, and the choice is kept
                 (see remoteLink.ts) because the pane used to forget it. */}
-            {st.addresses.length > 1 && (
+            {(pairAddrs.length > 1 || otherIdx.length > 0) && (
               <div className="flex flex-col gap-1.5">
-                <span className="text-[10px] t-dim2 uppercase tracking-wider">Reachable at</span>
+                <span className="text-[10px] t-dim2 uppercase tracking-wider">{otherIdx.length ? "Pair a phone over" : "Reachable at"}</span>
                 <div className="flex flex-col gap-1">
-                  {st.addresses.map((a, i) => {
+                  {pairAddrs.map((a, i) => {
                     const on = i === pick;
                     return (
                       <button key={a.address} onClick={() => { setChosen(a); writePick(a); }}
@@ -196,19 +206,50 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
                         }} />
                         <span className="min-w-0 flex-1">
                           <span className="block text-[11.5px]" style={{ color: on ? "var(--text)" : "var(--text2)" }}>
-                            {a.tailnet ? "Tailscale" : a.iface}
+                            {a.label ?? (a.tailnet ? "Tailscale" : a.iface)}
+                            {a.secure && <span className="ml-1.5 text-[8.5px] px-1 py-px rounded align-middle" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)" }}>HTTPS · pairs a phone</span>}
                             <span className="t-mono text-[10.5px] t-dim2"> {a.address}</span>
                           </span>
                           <span className="block text-[10px] t-dim2">
-                            {a.tailnet
-                              ? "Works from anywhere, for devices signed into your tailnet. Encrypted end to end, which is the one this pane recommends."
-                              : "Works for anything on this network, and only there. Not encrypted — see below."}
+                            {a.secure
+                              ? "Served over HTTPS by Tailscale — a secure context, so this is the one a phone can pair over."
+                              : a.tailnet
+                                ? "Encrypted mesh, reachable anywhere your tailnet is — but plain HTTP, so a phone can't pair over it (no WebCrypto)."
+                                : "Works for anything on this network, and only there. Not encrypted — see below."}
                           </span>
                         </span>
                       </button>
                     );
                   })}
                 </div>
+                {/* The plain-HTTP addresses, kept but out of the way: a phone
+                    cannot pair over them, so offering them beside the one that
+                    works only sends new users down dead ends. */}
+                {otherIdx.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    <button onClick={() => setShowOther((v) => !v)} className="text-[10px] t-dim2 text-left hover:opacity-80 flex items-center gap-1">
+                      <span className="inline-block w-2">{showOther ? "▾" : "▸"}</span>
+                      {otherIdx.length} other address{otherIdx.length === 1 ? "" : "es"} — a phone can’t pair over {otherIdx.length === 1 ? "it" : "these"} (plain HTTP)
+                    </button>
+                    {showOther && otherIdx.map((idx) => {
+                      const a = st.addresses[idx];
+                      return (
+                        <div key={a.address} className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--border) 20%, transparent)", opacity: 0.65 }}>
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[11px] t-dim2">
+                              {a.tailnet ? "Tailscale" : a.iface}<span className="t-mono text-[10.5px]"> {a.address}</span>
+                            </span>
+                            <span className="block text-[10px] t-dim2">
+                              {a.tailnet
+                                ? "Encrypted mesh, but plain HTTP — fine for the desktop, no phone pairing."
+                                : "This network only, and not encrypted."}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 

@@ -33,6 +33,10 @@ export function PairPanel({ baseUrl }: { baseUrl: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+  const copyCmd = (c: string) => {
+    navigator.clipboard?.writeText(c).then(() => { setCopiedCmd(c); setTimeout(() => setCopiedCmd(null), 1500); }).catch(() => { /* no clipboard */ });
+  };
   /**
    * Which invitation is open, as a ref rather than only as state.
    *
@@ -115,24 +119,47 @@ export function PairPanel({ baseUrl }: { baseUrl: string }) {
    */
   const insecure = /^http:\/\//i.test(baseUrl) && !/^https?:\/\/(localhost|127\.0\.0\.1|\[?::1\]?)([:/]|$)/i.test(baseUrl);
   const tailnet = /^https?:\/\/100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(baseUrl);
+  const port = baseUrl.match(/:(\d{2,5})(?:\/|$)/)?.[1] ?? "4000";
+  const cmdBlock = (cmd: string) => (
+    <button key={cmd} onClick={() => copyCmd(cmd)} title="Click to copy"
+      className="t-mono text-[10.5px] text-left px-2 py-1.5 rounded-lg break-all w-full hover:opacity-80 flex items-center gap-2"
+      style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
+      <span className="flex-1 min-w-0">{cmd}</span>
+      <span className="shrink-0 text-[9px]" style={{ color: copiedCmd === cmd ? "var(--success)" : "var(--text3)" }}>{copiedCmd === cmd ? "✓ copied" : "⧉ copy"}</span>
+    </button>
+  );
 
   return (
     <div className="flex flex-col gap-2.5">
       {insecure && (
-        <div className="text-[10.5px] px-2.5 py-2 rounded-lg" style={{
+        <div className="flex flex-col gap-2 text-[10.5px] px-2.5 py-2.5 rounded-lg" style={{
           color: "var(--text2)",
           background: "color-mix(in srgb, var(--error) 10%, transparent)",
           border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)",
         }}>
-          <span style={{ color: "var(--error)" }}>A phone cannot pair over this address.</span>{" "}
-          Browsers give a page served over plain HTTP no WebCrypto, and pairing has to encrypt the
-          credential to the device asking for it — so the handshake cannot start, however many times
-          the phone tries.{" "}
-          {tailnet
-            ? <>You are on Tailscale already: run <span className="t-mono">tailscale cert</span> on this
-                machine and pick the <span className="t-mono">https://…ts.net</span> name above.</>
-            : <>Serve the cockpit over HTTPS, or forward the port so the phone reaches it as
-                <span className="t-mono"> http://localhost</span>.</>}
+          <div>
+            <span style={{ color: "var(--error)" }}>A phone cannot pair over this address.</span>{" "}
+            A plain-HTTP page gets no WebCrypto from the browser, and pairing has to encrypt the
+            credential to the phone — so the handshake can't even start.
+          </div>
+          {tailnet ? (
+            <>
+              <div>You are on Tailscale already — put its HTTPS in front of agentglass. Run this on the machine:</div>
+              {cmdBlock(`tailscale serve --bg ${port}`)}
+              <div className="text-[10px] t-dim2">The first run may stop for one of these. Do it, then run the command again:</div>
+              <div className="flex flex-col gap-1.5 text-[10px] t-dim2">
+                <div>• <b>“Serve is not enabled”</b> — it prints a one-click link; open it (as your tailnet admin) to turn Serve on.</div>
+                <div>• <b>“Access denied”</b> — grant permission once (or just prefix <span className="t-mono">sudo</span>):</div>
+                {cmdBlock("sudo tailscale set --operator=$USER")}
+                <div>• <b>a certificate / HTTPS error</b> — Tailscale admin console → <b>DNS</b> → enable <b>HTTPS Certificates</b>.</div>
+              </div>
+              <div>When it prints <span className="t-mono">https://…ts.net/</span>, a <b>Tailscale (HTTPS)</b> address shows up in the list above — pick it and scan its QR.</div>
+              <div className="text-[10px] t-dim2">Undo any time:</div>
+              {cmdBlock("tailscale serve reset")}
+            </>
+          ) : (
+            <div>Serve the cockpit over HTTPS, or forward the port so the phone reaches it as <span className="t-mono">http://localhost</span>.</div>
+          )}
         </div>
       )}
       <div className="flex items-center gap-2">

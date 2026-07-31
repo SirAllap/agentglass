@@ -113,8 +113,8 @@ export function pairingBlocked(
     `This page is not a secure context${where}, so the browser gives it no WebCrypto — ` +
     `and pairing cannot encrypt the credential to this device without it. ` +
     (tailnet
-      ? `You are on Tailscale already: run \`tailscale cert\` on the computer and open the ` +
-        `https://…ts.net name instead of the raw 100.x address.`
+      ? `You are on Tailscale already: on the computer run \`tailscale serve --bg <port>\`, then pick ` +
+        `the "Tailscale (HTTPS)" address it adds and re-scan.`
       : `Open the cockpit over HTTPS, or reach it as http://localhost through a forwarded port.`)
   );
 }
