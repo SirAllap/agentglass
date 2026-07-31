@@ -136,7 +136,7 @@ const VIEW_KEYS: Record<View, [string, string][]> = {
   changes: [["j/k", "file"], ["space", "stage"], ["x", "discard"], ["`", "tree/flat"], ["-/=", "fold"]],
   log: [["j/k", "commit"]],
   reflog: [["j/k", "entry"]],
-  branches: [["j/k", "branch"], ["space", "checkout"], ["d", "delete"]],
+  branches: [["j/k", "branch"], ["space", "switch"], ["d", "delete"]],
   // `space` is the harmless one on purpose — see rowAction: checkout and
   // worktree both move something on disk and stay mouse-only.
   remotes: [["j/k", "branch"], ["space", "+ local"]],
@@ -449,6 +449,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
   const [tree, setTree] = useState<WorkingTree | null>(null);
+  // Which root the tree on screen belongs to. When it isn't the current root,
+  // the header (branch, sync-behind count, push/pull state) is still showing the
+  // worktree you just switched away from — so the group can say it is recomputing
+  // instead of presenting the old numbers as if they were the new ones.
+  const [treeFor, setTreeFor] = useState("");
   const [view, setView] = useState<View>("changes");
   const [selKey, setSelKey] = useState<string | null>(null);
   const [split, setSplit] = useState(true);
@@ -585,6 +590,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const treeSeq = useRef(0); // guards stale working-tree responses (repo switches)
   const viewSeq = useRef(0); // same, for the non-Changes list views (repo/remote/view switches)
   const frameRef = useRef<HTMLDivElement>(null);
+  const firstOpen = useRef(true); // reset the pane to Changes once, not on every re-activation
 
   const all = useMemo(() => [...(tree?.staged ?? []), ...(tree?.unstaged ?? [])], [tree]);
   const selected = useMemo(() => all.find((c) => keyOf(c) === selKey) ?? all[0] ?? null, [all, selKey]);
@@ -654,14 +660,23 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const loadTree = useCallback(async (r: string) => {
     if (!r) return;
     const seq = ++treeSeq.current;
-    try { const t = await api.gitTree(r); if (seq !== treeSeq.current) return; setTree(t); if (t.error) flash(false, t.error); }
+    try { const t = await api.gitTree(r); if (seq !== treeSeq.current) return; setTree(t); setTreeFor(r); if (t.error) flash(false, t.error); }
     catch (e) { if (seq === treeSeq.current) flash(false, String(e)); }
   }, []);
   const rel = (c: GitFileChange) => (c.file_path.startsWith(root + "/") ? c.file_path.slice(root.length + 1) : c.file_path);
 
   useEffect(() => {
     if (!open) return;
-    setToast(null); setTitle(""); setBody(""); setView("changes"); setNewBranch("");
+    // Reset the transient composer state only on the FIRST open. This used to run
+    // on every activation, so stepping away to the terminal and back threw you
+    // from Remotes (or a filtered, scrolled Branches list) straight to Changes,
+    // losing the view, the filter and the row you were on — the whole pane read
+    // as reset. The view stays mounted the entire time; only its visibility
+    // changes, so there is nothing to rebuild, just data to refresh.
+    if (firstOpen.current) {
+      firstOpen.current = false;
+      setToast(null); setTitle(""); setBody(""); setView("changes"); setNewBranch("");
+    }
     api.editorCapability().then(setEditor).catch(() => setEditor({ hasNvim: false, editor: null }));
     api.gitRepos().then(({ repos }) => {
       setRepos(repos);
@@ -698,7 +713,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
         setBusyView((b) => (b === view ? null : b));
       });
     };
-    if (view === "branches") track(api.gitBranches(root), setBranchData);
+    if (view === "branches") {
+      track(api.gitBranches(root), setBranchData);
+      // Worktrees too, so a branch already checked out in one is marked and its
+      // switch OPENS that worktree instead of a `git checkout` that git refuses.
+      api.gitWorktrees(root).then((r) => { if (seq === viewSeq.current) setWorktrees(r.worktrees); }).catch(() => {});
+    }
     else if (view === "log") track(api.gitGraph(root, 500, logScope), (r) => { setGraph(r.lines); setGraphBranch(r.branch); });
     else if (view === "stashes") track(api.gitStashes(root), (r) => setStashes(r.stashes));
     else if (view === "worktrees") track(api.gitWorktrees(root), (r) => setWorktrees(r.worktrees));
@@ -886,6 +906,15 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const goneBranches = branchData.branches.filter((b) => !b.current && trackChip(b.track).gone);
   const goneCount = goneBranches.length;
   const shownBranches = onlyGone ? goneBranches : branchData.branches;
+  // The branch you are ACTUALLY on, read off the fresh working-tree poll (2.5s)
+  // rather than the branch list (10s) so the ⎇ and the disabled state track a
+  // switch — from here, the terminal, or another window — without a lag where
+  // the list still crowns the branch you just left.
+  const currentBranchName = tree?.branch?.name || branchData.current;
+  // Branch → its worktree, so the list reads like lazygit's: one list, each
+  // branch tagged when it is checked out in a worktree, and switching to it
+  // opens that worktree instead of a checkout git would refuse.
+  const wtByBranch = useMemo(() => new Map(worktrees.filter((w) => w.branch && w.branch !== "(detached)" && !w.prunable).map((w) => [w.branch, w] as const)), [worktrees]);
 
   // Merged into the trunk — the only honest reading of "its PR landed". NOT
   // `git branch -d`, which compares against whatever is checked out: from a
@@ -1147,6 +1176,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   useDismiss(repoOpen, repoPickerRef, () => { setRepoOpen(false); setRepoQuery(""); });
 
   const openWorktree = (w: GitWorktree) => { setRoot(w.path); setRepoOpen(false); setSelKey(null); setView("changes"); };
+  // The lazygit move: a branch already checked out in a worktree can't be
+  // `git checkout`ed here (git refuses a branch that is out elsewhere), so
+  // switching to it OPENS that worktree; otherwise it is a plain checkout.
+  const switchTo = (b: GitBranch) => { const wt = wtByBranch.get(b.name); if (wt && wt.path !== root) openWorktree(wt); else checkout(b.name); };
   // stashes
   const reloadStashes = () => api.gitStashes(root).then((r) => setStashes(r.stashes)).catch(() => {});
   const stashPush = async () => { if (await act(() => api.gitStashPush(root, ""), "Stashed")) reloadStashes(); };
@@ -1302,6 +1335,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
   const repoRef = repos.find((r) => r.root === root);
   const branch = tree?.branch;
+  // The header is showing another worktree's numbers until this lands.
+  const treeStale = treeFor !== root;
   /**
    * Behind a remote copy *of this branch* — the only case where merging the
    * base is the wrong move, because that copy has already merged what you are
@@ -1382,6 +1417,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // would otherwise leave it pointing past the end.
   useEffect(() => { setRowIdx((i) => (rowCount ? Math.min(i, rowCount - 1) : 0)); }, [rowCount]);
   useEffect(() => { setRowIdx(0); }, [view, root]);
+  // The current branch moved (our checkout, the terminal, another window). The
+  // working-tree poll notices before the 10s branch-list poll, so pull the list
+  // forward the moment it changes — otherwise it sits crowning the branch you
+  // just left, which reads as "it didn't switch" and blocks switching again.
+  useEffect(() => {
+    if (open && root && tree?.branch?.name) reloadBranches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree?.branch?.name]);
+  // The repo picker is a switcher: repos + worktrees + local branches. It can be
+  // opened from any view, so make sure the branch list is loaded when it is —
+  // otherwise the branches section is empty everywhere but the Branches tab.
+  useEffect(() => {
+    if (repoOpen && root) reloadBranches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repoOpen]);
   // A different repo has different remotes: carrying the selection over asks for
   // branches from a remote this one may not even have.
   useEffect(() => { setRemoteSel(""); setRemoteRows([]); setRemoteQuery(""); }, [root]);
@@ -1398,8 +1448,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     if (!writeEnabled || busy) return;
     if (view === "branches") {
       const b = shownBranches[rowIdx];
-      if (!b || b.current) return;
-      kind === "primary" ? checkout(b.name) : deleteBranch(b);
+      if (!b || b.name === currentBranchName) return;
+      kind === "primary" ? switchTo(b) : deleteBranch(b);
     } else if (view === "stashes") {
       const s = stashes[rowIdx];
       if (!s) return;
@@ -1566,6 +1616,28 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               {r.ahead > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
                             </button>
                           ))}
+                          {/* Local branches with no checkout of their own — the
+                              other half of a switcher. A worktree branch is
+                              already a WT row above; these switch by checking out
+                              in the current directory. */}
+                          {(() => {
+                            const q = repoQuery.trim().toLowerCase();
+                            const checkedOut = new Set(repos.map((r) => r.branch));
+                            const pickerBranches = branchData.branches.filter((b) => !checkedOut.has(b.name) && (!q || b.name.toLowerCase().includes(q)));
+                            if (!pickerBranches.length) return null;
+                            return (
+                              <>
+                                <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                                {pickerBranches.slice(0, 80).map((b) => (
+                                  <button key={b.name} disabled={busy || !writeEnabled} onClick={() => { checkout(b.name); setRepoOpen(false); setRepoQuery(""); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2 disabled:opacity-50">
+                                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
+                                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
+                                    {trackChip(b.track).gone && <span className="shrink-0 text-[9px] px-1 rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
+                                  </button>
+                                ))}
+                              </>
+                            );
+                          })()}
                           {!repos.length && <div className="px-3 py-2 t-dim2">no repos seen yet</div>}
                         </div>
                       </div>
@@ -1578,7 +1650,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   <div className="flex items-center gap-[9px] ml-1 min-w-0 overflow-x-auto agw-noscrollbar">
                     {VIEW_GROUPS.map((g) => <ViewGroup key={g.label} views={g.views} />)}
                   </div>
-                  <div className="ml-auto flex items-center gap-1.5 min-w-0">
+                  <div className="ml-auto flex items-center gap-1.5 min-w-0" style={{ opacity: treeStale ? 0.5 : 1, transition: "opacity .18s ease" }}>
+                    {/* Switched worktrees — say the numbers are being recomputed
+                        rather than leave the old branch's sync count sitting
+                        there looking current. */}
+                    {treeStale && <span className="animate-spin shrink-0 text-[12px]" style={{ color: "var(--text3)" }} title="Reading the branch you switched to…">⟳</span>}
                     {branch && <BranchChip branch={branch} onCopied={(n) => flash(true, `copied ${n}`)} />}
                     {/* Offered only while undoing is exact: an unpushed merge
                         at the tip, on a clean tree. Once anything is committed
@@ -1989,15 +2065,24 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     {incBranches.rows.map((b, i) => {
                       const t = trackChip(b.track);
                       const sel = i === rowIdx;
+                      // Current from the FRESH working-tree poll, not the branch
+                      // list — so the ⎇ moves the instant you switch.
+                      const isCurrent = b.name === currentBranchName;
+                      // Checked out in a worktree? Then "switch" means open that
+                      // worktree, and the row says so — lazygit's one-list model.
+                      const wt = wtByBranch.get(b.name);
+                      const wtElsewhere = wt && wt.path !== root;
                       return (
                         // The cursor wins over the current-branch tint: you need
                         // to see where the keyboard is, and "this is HEAD" is
                         // already said by the ⎇ glyph.
                         <div key={b.name} onClick={() => setRowIdx(i)} {...rowProps(sel)}
                           className="group flex items-center gap-2 px-2.5 py-1.5 rounded-md"
-                          style={sel ? rowProps(true).style : { background: b.current ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-                          <span className="w-3 text-center text-[11px] shrink-0" style={{ color: "var(--primary-hover)" }}>{b.current ? "⎇" : ""}</span>
-                          <button disabled={b.current || !writeEnabled || busy} onClick={() => checkout(b.name)} className="text-[12px] font-medium text-left shrink-0 truncate" style={{ maxWidth: 340, color: b.current ? "var(--text)" : "var(--text2)", cursor: b.current ? "default" : "pointer" }} title={b.name}>{b.name}</button>
+                          style={sel ? rowProps(true).style : { background: isCurrent ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+                          <span className="w-3 text-center text-[11px] shrink-0" style={{ color: "var(--primary-hover)" }}>{isCurrent ? "⎇" : ""}</span>
+                          <button disabled={isCurrent || !writeEnabled || busy} onClick={(e) => { e.stopPropagation(); switchTo(b); }} className="text-[12px] font-medium text-left shrink-0 truncate" style={{ maxWidth: 320, color: isCurrent ? "var(--text)" : "var(--text2)", cursor: isCurrent ? "default" : "pointer" }} title={isCurrent ? `${b.name} — you are here` : wtElsewhere ? `${b.name} — open its worktree` : `Switch to ${b.name}`}>{b.name}</button>
+                          {/* Checked out in a worktree — switching opens it. */}
+                          {wt && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${wt.path}`}>▸ {wtName(wt.path)}</span>}
                           {/* Behind before ahead — "pull this many, push that many". */}
                           {(t.ahead > 0 || t.behind > 0) && (
                             <span className="shrink-0 text-[9.5px] tabular-nums">
@@ -2013,13 +2098,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           {b.upstream && !t.gone && !t.ahead && !t.behind && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--success)" }} title={`in sync with ${b.upstream}`}>✓</span>}
                           <span className="min-w-0 flex-1 truncate text-[10px] t-dim2">{b.subject}</span>
                           <span className="shrink-0 text-[9.5px] t-dim2">{b.date}</span>
-                          {writeEnabled && !b.current && (
-                            <div className="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                              <button onClick={() => openBranchOnWeb(b)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={trackChip(b.track).gone ? "its remote branch is gone — find the pull request it came from" : "open this branch on GitHub"}>open ↗</button>
-                              <button onClick={() => mergeBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Merge ${b.name} into current`}>merge</button>
-                              <button onClick={() => rebaseBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Rebase current onto ${b.name}`}>rebase</button>
-                              <button onClick={() => renameBranch(b.name)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>rename</button>
-                              <button onClick={() => deleteBranch(b)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Delete branch">delete</button>
+                          {writeEnabled && !isCurrent && (
+                            <div className={`shrink-0 flex items-center gap-1.5 transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                              {/* The switch, first and filled — the action you came
+                                  for. "Open worktree" when it lives in one, else a
+                                  plain checkout. */}
+                              {wtElsewhere
+                                ? <button onClick={(e) => { e.stopPropagation(); openWorktree(wt!); }} disabled={busy} className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium" style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }} title={`Open ${b.name}'s worktree — ${wt!.path}`}>▸ Open worktree</button>
+                                : <button onClick={(e) => { e.stopPropagation(); checkout(b.name); }} disabled={busy} className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium" style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }} title={`Switch this checkout to ${b.name}`}>⎇ Checkout</button>}
+                              <button onClick={(e) => { e.stopPropagation(); openBranchOnWeb(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={trackChip(b.track).gone ? "its remote branch is gone — find the pull request it came from" : "open this branch on GitHub"}>open ↗</button>
+                              <button onClick={(e) => { e.stopPropagation(); mergeBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Merge ${b.name} into current`}>merge</button>
+                              <button onClick={(e) => { e.stopPropagation(); rebaseBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Rebase current onto ${b.name}`}>rebase</button>
+                              <button onClick={(e) => { e.stopPropagation(); renameBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>rename</button>
+                              <button onClick={(e) => { e.stopPropagation(); deleteBranch(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Delete branch">delete</button>
                             </div>
                           )}
                         </div>
@@ -2128,24 +2219,34 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             <span className="shrink-0 text-[9.5px] t-dim2 truncate" style={{ maxWidth: 130 }}>{b.author}</span>
                             <span className="shrink-0 text-[9.5px] t-dim2 w-20 text-right">{b.date}</span>
                             {writeEnabled && !b.local && (
-                              <div className="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                                {/* Three verbs, ordered by how much they move.
-                                    "+ local" touches nothing on disk; the other
-                                    two do, so they are never the default. */}
-                                <button onClick={() => takeRemote(b, "local")} disabled={busy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
-                                  title={`Create a local ${b.name} tracking ${b.ref}. Nothing is checked out — this working tree does not move.`}>+ local</button>
-                                <button onClick={() => takeRemote(b, "checkout")} disabled={busy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}
-                                  title={`Create a local ${b.name} tracking ${b.ref} and switch this checkout onto it.`}>checkout</button>
-                                <button onClick={() => takeRemote(b, "worktree")} disabled={busy} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
-                                  title={`Check ${b.name} out in its own directory beside this one — this working tree is untouched.`}>+ worktree</button>
+                              // Three real buttons, ordered by how much they move,
+                              // shown on the row you are on (not hover-only) so it
+                              // is obvious the actions are there and what each does.
+                              // "Checkout" is filled because it is the one that
+                              // moves this checkout; the other two are quieter
+                              // because they leave it where it is.
+                              <div className={`shrink-0 flex items-center gap-1.5 transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                                <button onClick={(e) => { e.stopPropagation(); takeRemote(b, "local"); }} disabled={busy}
+                                  className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap"
+                                  style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--success) 42%, transparent)" }}
+                                  title={`Bring “${b.name}” to local: create a local branch tracking ${b.ref}. Your current checkout stays put — nothing is switched.`}>↓ Bring local</button>
+                                <button onClick={(e) => { e.stopPropagation(); takeRemote(b, "checkout"); }} disabled={busy}
+                                  className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium"
+                                  style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
+                                  title={`Create the local branch and switch THIS checkout onto ${b.name}.`}>⎇ Checkout</button>
+                                <button onClick={(e) => { e.stopPropagation(); takeRemote(b, "worktree"); }} disabled={busy}
+                                  className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap"
+                                  style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                                  title={`Check ${b.name} out in its own folder beside this one — this checkout is untouched.`}>+ Worktree</button>
                               </div>
                             )}
                             {/* Already here: the useful action is going there,
                                 not making a second copy. */}
                             {b.local && b.worktree && b.worktree !== root && (
-                              <button onClick={() => openWorktree({ path: b.worktree!, branch: b.name, head: b.hash, current: false, bare: false, locked: false })}
-                                className="shrink-0 text-[10px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100" style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }}
-                                title={`Open ${b.worktree}`}>open</button>
+                              <button onClick={(e) => { e.stopPropagation(); openWorktree({ path: b.worktree!, branch: b.name, head: b.hash, current: false, bare: false, locked: false }); }}
+                                className={`agx-btn shrink-0 text-[10px] px-2 py-0.5 rounded whitespace-nowrap transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                                style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
+                                title={`Open its worktree — ${b.worktree}`}>▸ Open worktree</button>
                             )}
                           </div>
                         );

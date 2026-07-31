@@ -268,6 +268,67 @@ export interface Reachable {
   tailnet: boolean;
   /** CIDR of the local subnet, for the firewall command. */
   subnet: string | null;
+  /** A full base URL to use verbatim instead of `http://address:port/` — a
+   *  Tailscale HTTPS name, which is the only address a phone can pair over. */
+  url?: string;
+  /** Served over HTTPS (a secure context). */
+  secure?: boolean;
+  /** A friendlier name than the raw address. */
+  label?: string;
+}
+
+/**
+ * This machine's Tailscale identity, cached.
+ *
+ * `names` is every hostname this box answers to on its tailnet (its MagicDNS
+ * name). `https` is set only when `tailscale serve` is actually terminating TLS
+ * and proxying to our port — i.e. when a phone opening the https name would
+ * reach us — so the pane never offers a secure address that 404s.
+ *
+ * Refreshed on a timer rather than per request: the gate reads `names`
+ * synchronously on the hot path, and shelling out to `tailscale` there would
+ * add a process spawn to every request.
+ */
+let tailnet: { names: Set<string>; https: { name: string; url: string } | null } = { names: new Set(), https: null };
+export function tailnetNames(): ReadonlySet<string> { return tailnet.names; }
+
+async function tsCmd(args: string[]): Promise<string | null> {
+  const bin = Bun.which("tailscale");
+  if (!bin) return null;
+  try {
+    const p = Bun.spawn([bin, ...args], { stdout: "pipe", stderr: "ignore" });
+    const out = await new Response(p.stdout).text();
+    await p.exited;
+    return p.exitCode === 0 ? out : null;
+  } catch { return null; }
+}
+
+/** Read the tailnet name and whether serve is fronting our port. Cheap, and it
+ *  fails soft: no Tailscale, or serve not set up, just leaves nothing offered. */
+export async function refreshTailscale(port: number): Promise<void> {
+  const statusOut = await tsCmd(["status", "--json"]);
+  const names = new Set<string>();
+  let self = "";
+  if (statusOut) {
+    try {
+      const dns = JSON.parse(statusOut)?.Self?.DNSName;
+      if (typeof dns === "string" && dns) { self = dns.replace(/\.$/, "").toLowerCase(); names.add(self); }
+    } catch { /* not JSON we recognise */ }
+  }
+  let https: { name: string; url: string } | null = null;
+  const serveOut = self ? await tsCmd(["serve", "status", "--json"]) : null;
+  if (serveOut) {
+    try {
+      const web = JSON.parse(serveOut)?.Web ?? {};
+      const hits = `:${port}`;
+      for (const [hostPort, cfg] of Object.entries(web)) {
+        const handlers = (cfg as { Handlers?: Record<string, { Proxy?: string }> })?.Handlers ?? {};
+        const proxiesUs = Object.values(handlers).some((h) => typeof h?.Proxy === "string" && h.Proxy.includes(hits));
+        if (proxiesUs) { const name = hostPort.replace(/:\d+$/, "").toLowerCase(); https = { name, url: `https://${name}/` }; break; }
+      }
+    } catch { /* serve status shape changed — offer nothing rather than guess */ }
+  }
+  tailnet = { names, https };
 }
 
 const cgnat = (ip: string): boolean => {
@@ -397,7 +458,14 @@ export function remoteStatus(opts: {
   addresses?: Reachable[];
   which?: (cmd: string) => string | null;
 }): RemoteStatus {
-  const addresses = opts.addresses ?? reachableAddresses();
+  const base = opts.addresses ?? reachableAddresses();
+  // Lead with the Tailscale HTTPS name when `tailscale serve` is fronting us:
+  // it is the only address a phone can actually PAIR over (HTTPS ⇒ WebCrypto),
+  // so it belongs at the top of the QR picker, not buried under raw http IPs.
+  const secure: Reachable[] = tailnet.https
+    ? [{ address: tailnet.https.name, iface: "tailscale", tailnet: true, subnet: null, url: tailnet.https.url, secure: true, label: "Tailscale (HTTPS)" }]
+    : [];
+  const addresses = [...secure, ...base];
   const exposed = !["127.0.0.1", "::1", "localhost"].includes(opts.bind);
   return {
     exposed,
@@ -406,10 +474,10 @@ export function remoteStatus(opts: {
     trustLan: opts.trustLan,
     tokenRequired: opts.token !== null,
     webUi: opts.webUi,
-    urls: addresses.map((a) => `http://${a.address}:${opts.port}/`),
+    urls: addresses.map((a) => a.url ?? `http://${a.address}:${opts.port}/`),
     addresses,
     clients: remoteClients(),
-    devices: remoteDevices(addresses.map((a) => a.address)),
-    firewall: firewallHint(opts.port, addresses[0]?.subnet ?? null, opts.which),
+    devices: remoteDevices(base.map((a) => a.address)),
+    firewall: firewallHint(opts.port, base[0]?.subnet ?? null, opts.which),
   };
 }

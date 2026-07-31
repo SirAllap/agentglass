@@ -2423,6 +2423,22 @@ export async function submitReviewWith(
   const repo = await repoIdFor(rootIn);
   if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
 
+  // GitHub allows one pending review per pull request, so a leftover one — from
+  // the web UI, or a submit that half-failed — makes every fresh review 422
+  // "Unprocessable Entity", which is the wall this hits. Discard it first.
+  // agentglass keeps its queued comments locally and re-posts them here, so a
+  // pending review on GitHub holds nothing this submit needs; clearing it makes
+  // the submitted review exactly the drafts you queued, nothing invisible riding
+  // along. Only the author is shown their own PENDING review, so the one that
+  // comes back is ours.
+  const pend = await gh(
+    ["api", "--paginate", `repos/${repo.nameWithOwner}/pulls/${n}/reviews`, "-q", '[.[] | select(.state=="PENDING")][0].id // empty'],
+  );
+  const pendingId = pend.code === 0 ? pend.stdout.trim() : "";
+  if (pendingId) {
+    await gh(["api", "--method", "DELETE", `repos/${repo.nameWithOwner}/pulls/${n}/reviews/${pendingId}`]);
+  }
+
   const payload = JSON.stringify({ event, ...(text ? { body: text } : {}), ...(comments.length ? { comments } : {}) });
   const r = await gh(
     ["api", "--method", "POST", `repos/${repo.nameWithOwner}/pulls/${n}/reviews`, "--input", "-"],

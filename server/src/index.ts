@@ -84,7 +84,7 @@ import { activeDevices, markSeen, revokeDevice, type Scope } from "./devices.ts"
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
-import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus } from "./remote.ts";
+import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
 import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
@@ -165,6 +165,13 @@ function corsFor(req: Request): Record<string, string> {
  * private range, not merely look like one.
  */
 const isPrivate = (h: string): boolean => privateHost(h, TRUST_LAN);
+// This machine's OWN Tailscale name, trusted on the same opt-in as its tailnet
+// IP (100.64/10 already rides TRUST_LAN in privateHost): both are reachable only
+// through the authenticated, encrypted mesh, and the name is the origin a phone
+// presents once it pairs over `tailscale serve`. Detected from `tailscale
+// status`, never a wildcard — only the exact name(s) this node answers to.
+const trustedName = (h: string): boolean => TRUST_LAN && tailnetNames().has(h.toLowerCase());
+const trusted = (h: string): boolean => isPrivate(h) || trustedName(h);
 
 // Block drive-by cross-site writes: a request carrying an Origin from a real
 // website is rejected. A request with NO Origin is not a browser, so it can't
@@ -191,7 +198,7 @@ function localOrigin(req: Request): boolean {
   if (!o) return true;
   if (fromDesktopShell(o)) return true;
   try {
-    return isPrivate(new URL(o).hostname);
+    return trusted(new URL(o).hostname);
   } catch { return false; }
 }
 
@@ -224,7 +231,7 @@ function trustedCaller(req: Request): boolean {
   if (!o) return LOOPBACK_ONLY; // no origin is only safe when nobody remote can connect
   if (fromDesktopShell(o)) return true;
   try {
-    return isPrivate(new URL(o).hostname);
+    return trusted(new URL(o).hostname);
   } catch { return false; }
 }
 
@@ -243,7 +250,7 @@ function trustedCaller(req: Request): boolean {
 const ALLOWED_HOSTS = new Set(
   (process.env.AGENTGLASS_ALLOWED_HOSTS || "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean)
 );
-const trustedHost = (url: URL) => isPrivate(url.hostname) || ALLOWED_HOSTS.has(url.hostname.toLowerCase());
+const trustedHost = (url: URL) => trusted(url.hostname) || ALLOWED_HOSTS.has(url.hostname.toLowerCase());
 
 // Every git mutation nudges the clients that are showing git state. Registered
 // here rather than in gitwork so that module stays unaware of the socket.
@@ -2214,6 +2221,12 @@ if (process.env.AGENTGLASS_DIE_WITH_PARENT === "1") {
 }
 
 console.log(`🛰  agentglass server on http://${LOOPBACK_ONLY ? "localhost" : BIND}:${server.port}`);
+
+// The origin gate trusts this machine's own Tailscale name, and the Remote pane
+// offers its HTTPS URL to pair over — both read a cache filled here. First read
+// at boot; refreshed to catch `tailscale serve` being turned on or off.
+void refreshTailscale(server.port ?? PORT);
+setInterval(() => void refreshTailscale(server.port ?? PORT), 120_000);
 if (!LOOPBACK_ONLY) {
   const posture = AUTH_TOKEN ? "token-protected" : "UNAUTHENTICATED";
   console.warn(`⚠  bound to ${BIND} — this exposes a shell, git write access and docker control to the network (${posture})`);

@@ -1366,6 +1366,50 @@ export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "al
  *  write (including setBase, the only thing that changes an override) passes
  *  through. Same TTL as the trunk it mostly returns. */
 const baseCache = new Map<string, { at: number; base: string | null }>();
+/**
+ * The branch this one was cut from, when nobody recorded it — read off the shape
+ * of history rather than guessed.
+ *
+ * A base is a branch whose TIP is an ancestor of this branch (it was built on
+ * top of it) but which is NOT already in the trunk — a feature branch this one
+ * is stacked on. `git` does that filter in a single pass (`--merged <branch>
+ * --no-merged <trunk>`), so a repo with hundreds of refs still returns only the
+ * handful in the stacking chain. The closest of them — fewest commits between
+ * its tip and the branch — is the direct base; taking the smallest count also
+ * prefers the up-to-date remote copy over a stale local one (`origin/X` at 13
+ * beats a local `X` sitting 637 behind).
+ *
+ * Relative to `branch`, never to `HEAD`: `worktrees()` resolves every sibling's
+ * base from the family's MAIN checkout, so `HEAD` there is the main branch, not
+ * the sibling being asked about — reading `--merged HEAD` made every worktree
+ * infer the main branch's base and fall through to the trunk. `<branch>` names
+ * the tip we actually mean regardless of which checkout runs the query.
+ *
+ * Returns null when there is nothing between the branch and the trunk, so
+ * `baseOf` falls back to the trunk. A branch's own upstream (`origin/<self>`)
+ * and the trunk itself are never candidates.
+ */
+async function inferBase(root: string, branch: string, trunk: string | null): Promise<string | null> {
+  if (!trunk) return null;
+  const trunkShort = trunk.replace(/^origin\//, "");
+  const out = await gitAsync(root, [
+    "for-each-ref", "--merged", branch, "--no-merged", trunk,
+    "--format=%(refname:short)", "refs/heads/", "refs/remotes/origin/",
+  ]);
+  const cands = out.stdout.split("\n").map((s) => s.trim()).filter((r) => {
+    if (!r) return false;
+    const short = r.replace(/^origin\//, "");
+    return short !== branch && short !== trunkShort; // never self (local or its remote), never the trunk
+  });
+  let best: string | null = null;
+  let bestN = Infinity;
+  for (const r of cands) {
+    const n = Number((await gitAsync(root, ["rev-list", "--count", `${r}..${branch}`])).stdout.trim());
+    if (Number.isFinite(n) && n > 0 && n < bestN) { bestN = n; best = r; }
+  }
+  return best;
+}
+
 export async function baseOf(root: string, branch: string): Promise<string | null> {
   if (!branch || branch === "(detached)") return null;
   const key = `${root}\u0000${branch}`;
@@ -1380,8 +1424,12 @@ export async function baseOf(root: string, branch: string): Promise<string | nul
     base = cfg;
   } else {
     const trunk = await defaultBranch(root);
-    // A branch is not its own base; the trunk checkout simply has none.
-    base = !trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch ? null : trunk;
+    // No base recorded: infer the branch this one was stacked on (its base is
+    // THAT, not the trunk). Falls back to the trunk when there is nothing between
+    // HEAD and it. A branch is not its own base; the trunk checkout simply has
+    // none.
+    const inferred = await inferBase(root, branch, trunk);
+    base = inferred ?? (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch ? null : trunk);
   }
   if (baseCache.size > 400) baseCache.clear();
   baseCache.set(key, { at: Date.now(), base });
@@ -1768,7 +1816,19 @@ export function addWorktree(rootIn: string, pathIn: unknown, branch: string, new
     if (git(root, ["rev-parse", "--verify", "--quiet", startPoint]).code !== 0) return { ok: false, error: `${startPoint} does not exist here — fetch first` };
     from = [startPoint];
   }
-  return run(root, newBranch ? ["worktree", "add", "-b", branch, abs, ...from] : ["worktree", "add", abs, branch]);
+  const r = run(root, newBranch ? ["worktree", "add", "-b", branch, abs, ...from] : ["worktree", "add", abs, branch]);
+  // Record what the new branch was cut from, so a later "sync" merges from its
+  // REAL base instead of falling back to the trunk. Without this a card stacked
+  // on another feature branch (base = PROJ-…, not master) synced against master
+  // and pulled in changes that never belonged on it — the exact failure this
+  // config exists to prevent. Only for a genuinely new branch off a start point;
+  // `git worktree add <path> <existing-branch>` adopts a branch whose base, if
+  // any, is already recorded. `branch.*` config is shared across worktrees, so
+  // writing it from the main root is visible from the new checkout.
+  if (r.ok && newBranch && from.length) {
+    run(root, ["config", `branch.${branch}.agentglassbase`, from[0]!]);
+  }
+  return r;
 }
 /**
  * Ignored paths that are output, not work — safe to leave out of "here is what
