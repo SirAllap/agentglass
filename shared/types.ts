@@ -55,6 +55,16 @@ export interface WatchEvent {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  /**
+   * Every token class weighted by its own price and expressed in uncached input
+   * tokens — one comparable number in place of four kinds of token that differ
+   * by up to fifty times in what they cost.
+   *
+   * Derived on the server, where the price table lives, exactly as `cost_usd`
+   * already is. Optional because an older server does not send it: absent means
+   * unknown, and a reader must fall back to the raw classes rather than to 0.
+   */
+  equiv_tokens?: number;
   cost_usd: number;
   summary: string | null;
   timestamp: number; // ms
@@ -98,6 +108,9 @@ export interface SessionRollup {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  /** Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+   *  Optional: absent means an older server, not zero. */
+  equiv_tokens?: number;
   cost_usd: number;
 }
 
@@ -114,6 +127,9 @@ export interface CostByModel {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  /** Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+   *  Optional: absent means an older server, not zero. */
+  equiv_tokens?: number;
   cost_usd: number;
   sessions: number;
 }
@@ -170,6 +186,9 @@ export interface UsageDay {
   output_tokens: number;
   cache_creation_tokens: number;
   cache_read_tokens: number;
+  /** Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+   *  Optional: absent means an older server, not zero. */
+  equiv_tokens?: number;
   cost_usd: number;
   sessions: number;
   /** Mean tool duration, ms. */
@@ -257,6 +276,9 @@ export interface StatsSummary {
     output_tokens: number;
     cache_creation_tokens: number;
     cache_read_tokens: number;
+    /** Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+     *  Optional: absent means an older server, not zero. */
+    equiv_tokens?: number;
   };
   by_model: CostByModel[];
   tool_latency: ToolLatencyStat[];
@@ -447,6 +469,16 @@ export interface SessionDetail {
   cost_usd: number;
   input_tokens: number;
   output_tokens: number;
+  /**
+   * Weighted tokens in uncached-input units — see WatchEvent.equiv_tokens.
+   *
+   * The cache classes are not on this shape and never were, which is the whole
+   * reason this pane's "Tokens" stat was input+output: not a decision, just the
+   * two columns the query happened to select. They are summed in the query now
+   * and weighted into this one figure rather than added to the type, since four
+   * numbers here would only recreate the problem one field along.
+   */
+  equiv_tokens?: number;
   summary: string | null;
   tool_mix: { tool: string; n: number }[];
   subagents: { agent_id: string; agent_type: string; events: number }[];

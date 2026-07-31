@@ -5,7 +5,7 @@ import { useLive } from "../lib/useLive.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { subscribeSessionChanged } from "../lib/sessionBus.ts";
 import { useStats } from "../lib/useStats.ts";
-import { fmtUsd, fmtTokens, since } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, fmtEq, since } from "../lib/format.ts";
 import { MobileChats, type OpenChat, type Compose } from "./MobileChats.tsx";
 import { MOBILE_CSS, Sheet, Toasts, useToasts, Row, Act, useAsk } from "./mobileUi.tsx";
 import { pollWhileVisible } from "../lib/poll.ts";
@@ -867,7 +867,7 @@ export function MobileApp() {
             sub={link === "live" ? "Streaming from your machine"
               : link === "slow" ? "Reachable, but not streaming right now"
               : "Nothing is answering on this address"} />
-          <Row title="Spend today" sub={stats?.totals ? `${fmtTokens(stats.totals.input_tokens + stats.totals.output_tokens)} tokens` : "—"} right={spend} />
+          <Row title="Spend today" sub={stats?.totals ? `${fmtEq(stats.totals.equiv_tokens ?? stats.totals.input_tokens + stats.totals.output_tokens)}` : "—"} right={spend} />
           <Row title="Sessions" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.sessions) : "—"} />
           <Row title="Tool errors" sub="In the last 24 hours" right={stats?.totals ? String(stats.totals.errors) : "—"} />
         </div>

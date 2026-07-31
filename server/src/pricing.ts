@@ -185,6 +185,68 @@ export function costUsd(usage: TokenUsage, modelName: string | null | undefined)
 }
 
 /**
+ * What one token of each class costs, in uncached input tokens.
+ *
+ * A token is not a token. On Opus an output token costs five uncached input
+ * tokens, a cache write costs 1.25 and a cache read costs a tenth — a spread of
+ * fifty to one inside a single number the UI has been calling "tokens". Adding
+ * them up produces a figure that is not comparable between two sessions, or
+ * even between two turns of one session, and the direction of the error is not
+ * predictable: a cache-heavy session looks enormous and is cheap.
+ *
+ * Weighting each class by its own price and expressing the result in the
+ * cheapest one gives a number that *is* comparable, and that multiplies by a
+ * single rate to give money — which is what makes it more useful than cost
+ * alone, since cost moves whenever a provider changes its prices and this does
+ * not.
+ *
+ * Input is 1 by definition. Everything else is a ratio, so the unit survives a
+ * price table where every rate is doubled.
+ */
+export interface TokenWeights {
+  output: number;
+  cache_write: number;
+  cache_read: number;
+}
+
+/**
+ * The ratios for one model.
+ *
+ * A model with a free or absent input rate has no base to express anything in:
+ * dividing by it gives Infinity, and a headline of Infinity is worse than the
+ * raw sum it replaced. Those fall back to weights of 1, which is the same as
+ * counting tokens the old way and is the honest answer when there is no price
+ * to weight by — the caller can tell from `hasPrice` that the number is
+ * unweighted.
+ */
+export function weightsFromPrice(p: Omit<ModelPrice, "match" | "label" | "exact">): TokenWeights {
+  if (!(p.input > 0)) return { output: 1, cache_write: 1, cache_read: 1 };
+  return { output: p.output / p.input, cache_write: p.cache_write / p.input, cache_read: p.cache_read / p.input };
+}
+
+export function weightsFor(modelName: string | null | undefined): TokenWeights {
+  return weightsFromPrice(priceFor(modelName) ?? DEFAULT_PRICE);
+}
+
+/**
+ * One comparable number for a usage row.
+ *
+ * `equivalentTokens(u, m) * priceFor(m).input / 1e6` is exactly `costUsd(u, m)`
+ * when the model is priced — that identity is the point, and it is what a test
+ * pins. Rounded, because a fractional token is not a thing and every consumer
+ * formats it as a count.
+ */
+export function equivalentTokens(usage: TokenUsage, modelName: string | null | undefined): number {
+  const w = weightsFor(modelName);
+  return Math.round(
+    (usage.input_tokens ?? 0) +
+    (usage.output_tokens ?? 0) * w.output +
+    (usage.cache_creation_tokens ?? 0) * w.cache_write +
+    (usage.cache_read_tokens ?? 0) * w.cache_read
+  );
+}
+
+/**
  * What to call a model on screen.
  *
  * This used to return `priceFor(m)?.label`, which welded display naming to

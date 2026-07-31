@@ -1,5 +1,5 @@
 import { Empty } from "./mobileUi.tsx";
-import { fmtAgo, fmtUsd, fmtTokens } from "../lib/format.ts";
+import { fmtAgo, fmtUsd, fmtTokens, fmtEq } from "../lib/format.ts";
 import { orderInsights, spendByModel, spendByApp, errorRate, type SpendRow } from "./fleet.ts";
 import type { Insight, StatsSummary } from "../../../shared/types.ts";
 
@@ -102,7 +102,7 @@ export function MobileFleet({ insights, stats, onOpenInsight }: {
         <div className="mb-eyebrow" style={{ marginBottom: 9 }}>Today</div>
         <div className="mb-card p-3 flex flex-col gap-2">
           <Fig label="Spent" value={t ? fmtUsd(t.cost_usd) : "—"} />
-          <Fig label="Tokens" value={t ? fmtTokens(t.input_tokens + t.output_tokens) : "—"} />
+          <Fig label="Tokens" value={t ? fmtEq(t.equiv_tokens ?? t.input_tokens + t.output_tokens) : "—"} />
           <Fig label="Sessions" value={t ? String(t.sessions) : "—"} />
           <Fig label="Tool calls" value={t?.tool_calls != null ? String(t.tool_calls) : "—"} />
           {/* Null rather than a number, when the server did not send the

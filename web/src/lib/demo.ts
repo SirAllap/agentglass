@@ -252,13 +252,13 @@ export function stats(windowMs: number, provider?: string): StatsSummary {
     return { t, events: rint(0, Math.round(40 * busy)), errors: random() < 0.1 ? rint(1, 3) : 0, cost_usd: Number(rnd(0, 12 * busy).toFixed(3)), tokens: rint(0, Math.round(60000 * busy)) };
   });
   const summary: StatsSummary = {
-    totals: { events: si(12840) + streamed.events, sessions: si(41), tool_calls: si(6210) + streamed.tools, errors: Math.round(34 * f), cost_usd: Number((sc(4498.08) + streamed.cost).toFixed(2)), input_tokens: Math.round(9_100_000 * f), output_tokens: Math.round(640_000 * f), cache_creation_tokens: Math.round(1_200_000 * f), cache_read_tokens: Math.round(78_000_000 * f) },
+    totals: { events: si(12840) + streamed.events, sessions: si(41), tool_calls: si(6210) + streamed.tools, errors: Math.round(34 * f), cost_usd: Number((sc(4498.08) + streamed.cost).toFixed(2)), input_tokens: Math.round(9_100_000 * f), output_tokens: Math.round(640_000 * f), cache_creation_tokens: Math.round(1_200_000 * f), cache_read_tokens: Math.round(78_000_000 * f), equiv_tokens: Math.round(21_100_000 * f) },
     by_model: [
-      { model_name: "Opus", input_tokens: Math.round(4_100_000 * f), output_tokens: Math.round(300_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(2350.0), sessions: si(14) },
-      { model_name: "GPT-5", input_tokens: Math.round(3_200_000 * f), output_tokens: Math.round(240_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(1180.3), sessions: si(11) },
-      { model_name: "Sonnet", input_tokens: Math.round(900_000 * f), output_tokens: Math.round(80_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(430.2), sessions: si(6) },
-      { model_name: "Gemini Flash", input_tokens: Math.round(2_400_000 * f), output_tokens: Math.round(180_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(320.44), sessions: si(7) },
-      { model_name: "GPT-5 mini", input_tokens: Math.round(1_800_000 * f), output_tokens: Math.round(120_000 * f), cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: sc(217.14), sessions: si(3) },
+      { model_name: "Opus", input_tokens: Math.round(4_100_000 * f), output_tokens: Math.round(300_000 * f), cache_creation_tokens: Math.round(420_000 * f), cache_read_tokens: Math.round(31_000_000 * f), equiv_tokens: Math.round(9_225_000 * f), cost_usd: sc(2350.0), sessions: si(14) },
+      { model_name: "GPT-5", input_tokens: Math.round(3_200_000 * f), output_tokens: Math.round(240_000 * f), cache_creation_tokens: Math.round(300_000 * f), cache_read_tokens: Math.round(24_000_000 * f), equiv_tokens: Math.round(6_320_000 * f), cost_usd: sc(1180.3), sessions: si(11) },
+      { model_name: "Sonnet", input_tokens: Math.round(900_000 * f), output_tokens: Math.round(80_000 * f), cache_creation_tokens: Math.round(160_000 * f), cache_read_tokens: Math.round(11_000_000 * f), equiv_tokens: Math.round(2_600_000 * f), cost_usd: sc(430.2), sessions: si(6) },
+      { model_name: "Gemini Flash", input_tokens: Math.round(2_400_000 * f), output_tokens: Math.round(180_000 * f), cache_creation_tokens: Math.round(220_000 * f), cache_read_tokens: Math.round(8_000_000 * f), equiv_tokens: Math.round(2_075_000 * f), cost_usd: sc(320.44), sessions: si(7) },
+      { model_name: "GPT-5 mini", input_tokens: Math.round(1_800_000 * f), output_tokens: Math.round(120_000 * f), cache_creation_tokens: Math.round(100_000 * f), cache_read_tokens: Math.round(4_000_000 * f), equiv_tokens: Math.round(880_000 * f), cost_usd: sc(217.14), sessions: si(3) },
     ],
     tool_latency: [
       { tool_name: "Bash", calls: si(2179), timed: si(2174), errors: Math.round(22 * f), p50_ms: 186, p95_ms: 8630, max_ms: 21620, avg_ms: 640, total_ms: Math.round(1_394_560 * f) },
@@ -334,7 +334,12 @@ export function sessions(provider?: string): SessionRollup[] {
     started_at: now - rint(20, 180) * 60_000, ended_at: i % 3 === 0 ? null : now - rint(1, 20) * 60_000,
     last_seen: now - rint(0, 10) * 60_000, event_count: rint(20, 900), tool_count: rint(10, 500),
     error_count: rint(0, 6), input_tokens: rint(50_000, 1_500_000), output_tokens: rint(5000, 120_000),
-    cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: Number(rnd(0, 600).toFixed(2)),
+    // Cache reads dominate a real session by an order of magnitude, and the
+    // weighted figure is what the fleet card shows — a demo with both at zero
+    // would demonstrate the one thing this number exists to make visible by
+    // showing none of it.
+    cache_creation_tokens: rint(20_000, 300_000), cache_read_tokens: rint(2_000_000, 40_000_000),
+    equiv_tokens: rint(400_000, 6_000_000), cost_usd: Number(rnd(0, 600).toFixed(2)),
   }));
 }
 

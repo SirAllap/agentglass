@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import { Panel } from "./Panel.tsx";
-import { fmtUsd, fmtTokens } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, fmtEq, eqTitle } from "../lib/format.ts";
 import type { AgentCard, AgentStatus } from "../lib/derive.ts";
 
 const STATUS_COLOR: Record<string, string> = {
@@ -319,7 +319,7 @@ function Dossier({ b, wide, auto }: {
         </div>
         <div className="truncate" title={a.key}>{a.session_id}</div>
         {toCompact != null
-          ? <div className="flex items-center gap-2 min-w-0">{meter}<span className="tabular-nums shrink-0">{fmtTokens(a.tokens)}</span></div>
+          ? <div className="flex items-center gap-2 min-w-0">{meter}<span className="tabular-nums shrink-0" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span></div>
           : <div>ctx unknown — placed by recency</div>}
       </div>
     );

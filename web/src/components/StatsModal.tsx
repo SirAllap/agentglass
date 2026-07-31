@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { StatsSummary, UsageHistory } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
-import { fmtUsd, fmtTokens, typeColor } from "../lib/format.ts";
+import { fmtUsd, fmtTokens, fmtEq, eqTitle, typeColor } from "../lib/format.ts";
 
 const WINDOW_LABELS: [number, string][] = [
   [15 * 60_000, "last 15m"],
@@ -355,13 +355,13 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                   ) : (
                     <div className="flex flex-col">
                       <div className="grid grid-cols-[minmax(0,1fr)_repeat(3,auto)] gap-x-4 text-[9px] uppercase tracking-wider t-dim2 pb-1">
-                        <span>app</span><span className="text-right">sessions</span><span className="text-right">tokens</span><span className="text-right">cost</span>
+                        <span>app</span><span className="text-right">sessions</span><span className="text-right">tokens (eq)</span><span className="text-right">cost</span>
                       </div>
                       {apps.map((a) => (
                         <div key={a.source_app} className="grid grid-cols-[minmax(0,1fr)_repeat(3,auto)] gap-x-4 items-baseline py-1 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
                           <span className="truncate text-[11px]" style={{ color: "var(--text2)" }} title={a.source_app}>{a.source_app}</span>
                           <span className="text-[11px] tabular-nums text-right t-dim">{a.sessions}</span>
-                          <span className="text-[11px] tabular-nums text-right t-dim">{fmtTokens(a.tokens)}</span>
+                          <span className="text-[11px] tabular-nums text-right t-dim" title={eqTitle(a.tokens)}>{fmtEq(a.tokens)}</span>
                           <span className="text-[11px] tabular-nums text-right" style={{ color: "var(--success)" }}>{fmtUsd(a.cost_usd)}</span>
                         </div>
                       ))}

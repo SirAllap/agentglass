@@ -16,7 +16,7 @@ import type {
   UsageDay,
 } from "../../shared/types.ts";
 import type { NormalizedEvent } from "./ingest.ts";
-import { costUsd, modelLabel, hasPrice } from "./pricing.ts";
+import { costUsd, modelLabel, hasPrice, equivalentTokens } from "./pricing.ts";
 import { providerOf as sharedProviderOf, UNKNOWN as UNKNOWN_MODEL } from "../../shared/models.ts";
 import { workspaceRoot, scopeRoots, isWithin } from "./config.ts";
 
@@ -819,16 +819,39 @@ const eventByExternalId = db.query<any, [string, string, string]>(
 );
 const sessionById = db.query<Record<string, unknown>, [string]>(`SELECT * FROM sessions WHERE session_id = ?`);
 
+/**
+ * The one place an `events` row becomes a `WatchEvent`, which is why the
+ * weighted token figure is attached here.
+ *
+ * The client folds these rows into fleet cards itself and has no price table —
+ * that is deliberate, and it is exactly why `AgentCard.tokens` could only ever
+ * be `input + output`. Carrying the weighted figure on the event is the same
+ * trick `cost_usd` already uses: the arithmetic that needs prices happens where
+ * the prices are.
+ */
 function parseEventRow(r: any): WatchEvent {
   return {
     ...r,
+    equiv_tokens: equivalentTokens(r, r.model_name),
     payload: safeJson(r.payload),
   } as WatchEvent;
 }
 
+/**
+ * Every `SessionRollup` the app produces comes through here — the list, the
+ * socket frame, the fleet's roll-up lookup — which is why the one comparable
+ * token figure is added here rather than at three call sites that would drift.
+ *
+ * It is derived rather than stored. `equiv_tokens` is a pure function of the
+ * four columns and the model, all of which are on the row already, so it is
+ * exact for history written before the idea existed — no column, no migration,
+ * and no backfill that could be interrupted halfway.
+ */
 function parseSessionRow(r: Record<string, unknown>): SessionRollup {
   const { pricing_baseline_usd: _internal, ...session } = r;
-  return session as unknown as SessionRollup;
+  const s = session as unknown as SessionRollup;
+  s.equiv_tokens = equivalentTokens(s, s.model_name);
+  return s;
 }
 
 function safeJson(s: string): Record<string, unknown> {
@@ -1762,7 +1785,7 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
     const e = modelFold.get(label) ?? {
       model_name: label,
       input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0,
-      cost_usd: 0, sessions: 0, unpriced: false,
+      equiv_tokens: 0, cost_usd: 0, sessions: 0, unpriced: false,
     };
     // Any contributing id without a rate makes the whole row's cost partly a
     // fallback — the honest reading, since the row is one number.
@@ -1771,10 +1794,31 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
     e.output_tokens += r.output_tokens ?? 0;
     e.cache_creation_tokens += r.cache_creation_tokens ?? 0;
     e.cache_read_tokens += r.cache_read_tokens ?? 0;
+    /*
+     * Weighted here, inside the loop, against the RAW id.
+     *
+     * Two ids can fold into one label and be priced differently — that is the
+     * whole reason the fold exists — so weighting the folded row would apply
+     * one model's ratios to another's tokens. Per raw id and then summed is
+     * exact, and keeps the identity that makes this number worth leading with:
+     * equivalent tokens times the base input rate is the cost.
+     */
+    e.equiv_tokens = (e.equiv_tokens ?? 0) + equivalentTokens(r, r.model_name);
     e.cost_usd += r.cost_usd ?? 0;
     modelFold.set(label, e);
   }
   for (const [label, e] of modelFold) e.sessions = sessionsByLabel.get(label)?.size ?? 0;
+  /*
+   * The window's one comparable number, summed from the same rows the
+   * breakdown is built from.
+   *
+   * Deliberately not a separate query. The headline and the legend under it are
+   * the two figures somebody checks against each other, and computing them from
+   * two SQL statements is how they come to disagree — `modelRows` has no
+   * `model_name IS NOT NULL` filter, so this covers events with no model too,
+   * which fall to the fallback rate exactly as their cost already does.
+   */
+  const equivTotal = [...modelFold.values()].reduce((n, e) => n + (e.equiv_tokens ?? 0), 0);
   // Ordered on the way out: the query has no ORDER BY, and the panel renders
   // the array in the order it arrives, so without this the donut's slices
   // reshuffle between refreshes for no reason the viewer can see.
@@ -1821,18 +1865,49 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
   const top_skills: SkillUsage[] = skillUsageDetail(since, 12, provider).slice(0, 20);
 
   // Per-app rollup within the window.
-  const by_app: AppUsage[] = db
-    .query<AppUsage, any[]>(
-      `SELECT source_app,
+  /*
+   * Grouped by app AND model, then folded.
+   *
+   * `tokens` used to be `SUM(input_tokens + output_tokens)`, which is not a
+   * quantity: it adds a token that costs five to a token that costs a tenth and
+   * drops the cache classes entirely. Weighting needs the model, and the model
+   * is not in a group keyed on the app alone — so the group carries it and the
+   * fold puts the apps back together. The extra rows are apps × models, which
+   * is single digits times single digits.
+   */
+  const appRows = db
+    .query<any, any[]>(
+      `SELECT source_app, model_name,
               COUNT(*) AS events,
-              COUNT(DISTINCT session_id) AS sessions,
               SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) AS tool_calls,
               SUM(cost_usd) AS cost_usd,
-              SUM(input_tokens + output_tokens) AS tokens
+              SUM(input_tokens) AS input_tokens,
+              SUM(output_tokens) AS output_tokens,
+              SUM(cache_creation_tokens) AS cache_creation_tokens,
+              SUM(cache_read_tokens) AS cache_read_tokens
        FROM events WHERE timestamp >= ?${pf}
-       GROUP BY source_app ORDER BY cost_usd DESC, events DESC`
+       GROUP BY source_app, model_name`
     )
     .all(...A);
+  // `sessions` is a COUNT(DISTINCT), which does not survive a fold: a session
+  // that used two models would be counted once per model and twice in the sum.
+  const appSessions = db
+    .query<{ source_app: string; sessions: number }, any[]>(
+      `SELECT source_app, COUNT(DISTINCT session_id) AS sessions
+       FROM events WHERE timestamp >= ?${pf} GROUP BY source_app`
+    )
+    .all(...A);
+  const appFold = new Map<string, AppUsage>();
+  for (const r of appRows) {
+    const e = appFold.get(r.source_app) ?? { source_app: r.source_app, events: 0, sessions: 0, tool_calls: 0, cost_usd: 0, tokens: 0 };
+    e.events += r.events ?? 0;
+    e.tool_calls += r.tool_calls ?? 0;
+    e.cost_usd += r.cost_usd ?? 0;
+    e.tokens += equivalentTokens(r, r.model_name);
+    appFold.set(r.source_app, e);
+  }
+  for (const r of appSessions) { const e = appFold.get(r.source_app); if (e) e.sessions = r.sessions ?? 0; }
+  const by_app: AppUsage[] = [...appFold.values()].sort((a, b) => b.cost_usd - a.cost_usd || b.events - a.events);
 
   // Event-type mix within the window.
   const by_type: TypeCount[] = db
@@ -1861,7 +1936,11 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
   }
   const tlRows = db
     .query<any, any[]>(
-      `SELECT timestamp, is_error, cost_usd, input_tokens, output_tokens FROM events WHERE timestamp >= ?${pf}`
+      // model_name and both cache columns come along so the bucket's `tokens`
+      // can be weighted per row — see the fold below and equivalentTokens().
+      `SELECT timestamp, is_error, cost_usd, model_name,
+              input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens
+         FROM events WHERE timestamp >= ?${pf}`
     )
     .all(...A);
   /**
@@ -1904,7 +1983,7 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
       b.events++;
       b.errors += r.is_error;
       b.cost_usd += r.cost_usd ?? 0;
-      b.tokens += (r.input_tokens ?? 0) + (r.output_tokens ?? 0);
+      b.tokens += equivalentTokens(r, r.model_name);
     }
     heatmap[cellOf(r.timestamp)]++;
   }
@@ -1921,6 +2000,7 @@ function computeStatsSummary(windowMs: number, provider?: string, tz?: string): 
       output_tokens: tokTotals.output_tokens ?? 0,
       cache_creation_tokens: tokTotals.cache_creation_tokens ?? 0,
       cache_read_tokens: tokTotals.cache_read_tokens ?? 0,
+      equiv_tokens: equivTotal,
     },
     by_model,
     tool_latency,
@@ -2109,7 +2189,12 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
             COUNT(*) events,
             SUM(CASE WHEN hook_event_type IN ('PostToolUse','PostToolUseFailure') THEN 1 ELSE 0 END) tools,
             SUM(is_error) errors, SUM(cost_usd) cost_usd,
-            SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens
+            SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens,
+            -- Selected so the session's tokens can be weighted. Their absence
+            -- is why this pane's "Tokens" stat was input+output: not a
+            -- decision, just the two columns that happened to be here.
+            SUM(cache_creation_tokens) cache_creation_tokens,
+            SUM(cache_read_tokens) cache_read_tokens
      FROM events WHERE session_id = ?`).get(sessionId);
   if (!agg || !agg.events) return null;
 
@@ -2281,6 +2366,7 @@ export function getSession(sessionId: string): import("../../shared/types.ts").S
     cost_usd: agg.cost_usd ?? 0,
     input_tokens: agg.input_tokens ?? 0,
     output_tokens: agg.output_tokens ?? 0,
+    equiv_tokens: equivalentTokens(agg, agg.model_name),
     summary,
     tool_mix: toolMix,
     subagents: subRows.map((s) => ({ agent_id: s.agent_id, agent_type: s.agent_type || "subagent", events: s.n })),

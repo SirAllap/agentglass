@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { WatchEvent } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { friendly } from "../lib/labels.ts";
-import { fmtTime, fmtMs, fmtUsd, fmtTokens, agentKey, typeColor } from "../lib/format.ts";
+import { fmtTime, fmtMs, fmtUsd, fmtTokens, fmtEq, eqTitle, agentKey, typeColor } from "../lib/format.ts";
 
 function Row({ k, v }: { k: string; v: React.ReactNode }) {
   return (
@@ -51,7 +51,13 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
                   <Row k="Model" v={event.model_name ?? "—"} />
                   <Row k="Duration" v={event.duration_ms != null ? fmtMs(event.duration_ms) : "—"} />
                   <Row k="Cost" v={event.cost_usd > 0 ? fmtUsd(event.cost_usd) : "—"} />
-                  <Row k="Tokens" v={event.input_tokens + event.output_tokens > 0 ? `${fmtTokens(event.input_tokens)} in · ${fmtTokens(event.output_tokens)} out` : "—"} />
+                  {/* All four classes, not two.
+                      The old row was `in · out` behind an `input + output > 0`
+                      guard, so an event that only read cache rendered as an em
+                      dash while carrying real tokens and real cost. This is the
+                      breakdown the one number outside is short for, so it shows
+                      every class that is non-zero. */}
+                  <Row k="Tokens" v={<TokenBreakdown e={event} />} />
                   <Row k="Session" v={event.session_id} />
                   <Row k="Error" v={event.is_error ? <span style={{ color: "var(--error)" }}>{event.error_text ?? "Yes"}</span> : "No"} />
                 </div>
@@ -67,5 +73,29 @@ export function EventModal({ event, onClose }: { event: WatchEvent | null; onClo
         )}
       </AnimatePresence>
     </Portal>
+  );
+}
+
+/**
+ * The breakdown, which is the point of being one click deep.
+ *
+ * The lists outside this modal show a single weighted number, because four
+ * numbers cannot be compared or ranked. Here there is room, and the four are
+ * what make a cache problem diagnosable — a session whose cache writes rival
+ * its reads is re-sending a context it should be hitting.
+ */
+function TokenBreakdown({ e }: { e: WatchEvent }) {
+  const parts: string[] = [];
+  if (e.input_tokens) parts.push(`${fmtTokens(e.input_tokens)} in`);
+  if (e.output_tokens) parts.push(`${fmtTokens(e.output_tokens)} out`);
+  if (e.cache_creation_tokens) parts.push(`${fmtTokens(e.cache_creation_tokens)} cache write`);
+  if (e.cache_read_tokens) parts.push(`${fmtTokens(e.cache_read_tokens)} cache read`);
+  if (!parts.length) return <>—</>;
+  const eq = e.equiv_tokens;
+  return (
+    <span title={eq == null ? undefined : eqTitle(eq)}>
+      {eq == null ? null : <span className="tabular-nums">{fmtEq(eq)} · </span>}
+      <span className="t-dim2">{parts.join(" · ")}</span>
+    </span>
   );
 }
