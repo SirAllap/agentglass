@@ -1,5 +1,6 @@
 import type { WatchEvent, OpenToolCall, Liveness, SessionRollup } from "../../../shared/types.ts";
 import { agentKey, fmtMs, sessionTitle } from "./format.ts";
+import { providerOf, UNKNOWN } from "../../../shared/models.ts";
 import { sessionWorktree } from "./worktree.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
 import type { AgentKind } from "./agents.ts";
@@ -515,6 +516,31 @@ export const sessionIsLive = (
  * `codex exec resume` would be asked to continue a conversation it does not
  * have.
  */
+/**
+ * Which CLI could pick this session back up, or null if none of them could.
+ *
+ * Deliberately not `agentOf`, and the difference is the whole point of having
+ * both. `agentOf` answers "whose is this?" and falls back to Claude, because
+ * for labelling a session that is the overwhelmingly likely answer and being
+ * wrong costs a wrong icon. Resuming cannot use a fallback: a Gemini CLI
+ * session would be offered as a Claude one and hand `claude --resume` an id it
+ * has never seen, which fails on the first turn with nothing to explain it.
+ *
+ * So Claude is only accepted when something corroborates it. An unresolved
+ * model still counts — early Claude Code rows recorded no model, and those are
+ * exactly the old sessions worth reaching for — but a session positively
+ * identified as somebody else's (Gemini CLI, an OTel exporter this panel cannot
+ * drive) is refused rather than guessed at.
+ */
+export const resumableAgent = (
+  s: { source_app?: string | null; model_name?: string | null },
+): AgentKind | null => {
+  const a = agentOf(s);
+  if (a !== "claude") return a; // named itself; nothing to second-guess
+  const p = providerOf(s.model_name);
+  return p === "Anthropic" || p === UNKNOWN ? "claude" : null;
+};
+
 export const agentOf = (s: { source_app?: string | null; model_name?: string | null }): AgentKind => {
   const app = (s.source_app ?? "").toLowerCase();
   // Antigravity is matched on `source_app` alone, and only on `source_app`.

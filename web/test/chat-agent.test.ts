@@ -52,6 +52,44 @@ describe("agentOf", () => {
   });
 });
 
+describe("resumableAgent", () => {
+  // The resume picker used to offer Anthropic sessions only, which was right
+  // when Claude was the one agent and stayed wrong after Codex and Antigravity
+  // could both pick their own threads back up.
+  test("each agent is offered its own sessions", () => {
+    expect(derive.resumableAgent({ source_app: "my-project", model_name: "claude-opus-5" })).toBe("claude");
+    expect(derive.resumableAgent({ source_app: "codex_exec", model_name: "gpt-5.6-sol" })).toBe("codex");
+    expect(derive.resumableAgent({ source_app: "antigravity", model_name: "gemini-3.6-flash-low" })).toBe("antigravity");
+  });
+
+  test("a session no CLI here can drive is refused, not guessed at", () => {
+    // The whole reason this is not `agentOf`. That function falls back to
+    // Claude, which for a label is the likely answer and costs a wrong icon —
+    // but resuming on that guess hands `claude --resume` an id it has never
+    // seen, and the turn fails with nothing on screen to explain it.
+    expect(derive.resumableAgent({ source_app: "gemini-cli", model_name: "gemini-2.5-pro" })).toBeNull();
+    expect(derive.resumableAgent({ source_app: "some-exporter", model_name: "kimi-k2" })).toBeNull();
+    expect(derive.resumableAgent({ source_app: "x", model_name: "deepseek-v3" })).toBeNull();
+    // ...while agentOf still answers "claude" for exactly those, which is what
+    // makes them two functions rather than one.
+    expect(derive.agentOf({ source_app: "gemini-cli", model_name: "gemini-2.5-pro" })).toBe("claude");
+  });
+
+  test("a session with no model recorded is still Claude's", () => {
+    // Early Claude Code rows recorded no model, and those are exactly the old
+    // sessions somebody reaches for. Refusing them would hide the ones the
+    // picker exists for.
+    expect(derive.resumableAgent({ source_app: "my-project", model_name: null })).toBe("claude");
+    expect(derive.resumableAgent({})).toBe("claude");
+  });
+
+  test("an Antigravity session running a Claude model is still Antigravity's", () => {
+    // `agy` runs claude-opus-4-6-thinking, and handing that thread to `claude
+    // --resume` would fail. source_app decides, and it is set by this server.
+    expect(derive.resumableAgent({ source_app: "antigravity", model_name: "claude-opus-4-6-thinking" })).toBe("antigravity");
+  });
+});
+
 describe("switchAgent", () => {
   test("takes the model and the mode with it", () => {
     // Both are the agent's own vocabulary. Carrying `claude-opus-5` across would

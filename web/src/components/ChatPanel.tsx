@@ -26,8 +26,8 @@ import { quickSkills, pinnedSkills, togglePinnedSkill } from "../lib/quickSkills
 import { fmtTime } from "../lib/format.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
-import { fmtAgo, fmtUsd, fmtTokens, modelLabelOf, modelColor, providerOf } from "../lib/format.ts";
-import { sessionIsLive, agentOf } from "../lib/derive.ts";
+import { fmtAgo, fmtUsd, fmtTokens, modelLabelOf, modelColor } from "../lib/format.ts";
+import { sessionIsLive, resumableAgent } from "../lib/derive.ts";
 import { ctxLimitOf } from "../lib/contextWindow.ts";
 import { worktreeTag, sessionWorktree, sessionCwd } from "../lib/worktree.ts";
 import { useStuckBottom } from "../lib/useStuckBottom.ts";
@@ -466,6 +466,17 @@ const blockedReason = (s: SessionRollup): Blocked => (sessionCwd(s) ? null : "no
 function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: string; onPick: () => void }) {
   const why = blockedReason(s);
   const model = modelLabelOf(s.model_name);
+  // Which CLI will be handed this session. Worth showing now that three of them
+  // can appear side by side: the row opens a chat bound to that binary for
+  // life, and "Opus 5" alone no longer says which one — `agy` runs Claude
+  // models too.
+  const agent = resumableAgent(s) ?? "claude";
+  // Claude keeps its transcripts in this app's own store and Codex has a
+  // rollout on disk, so both come back with the conversation in front of you.
+  // Antigravity keeps protobuf inside SQLite, so a resumed thread arrives with
+  // the CLI holding the full context and the panel showing none of it. That is
+  // worth saying before the click, not after.
+  const noReplay = !AGENTS[agent].hasTranscript;
   // A resumable session names the worktree it ran in when that isn't the repo
   // itself — resuming lands back in that checkout, so it has to say which.
   const wt = sessionWorktree(s);
@@ -477,7 +488,10 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
     ? "Already open in this panel — picking it focuses that tab."
     : live
     ? `Running now. Opening it shows the conversation; anything you send waits until this turn ends, because a session has one writer.`
-    : `Continue this conversation in ${sessionCwd(s)}`;
+    : `Continue this ${AGENTS[agent].label} conversation in ${sessionCwd(s)}`
+      + (noReplay
+        ? `\n\n${AGENTS[agent].label} keeps no transcript this panel can read, so the reply history won't be shown — ${AGENTS[agent].cli} still has the full context and follow-ups continue the same thread.`
+        : "");
 
   return (
     <button
@@ -495,7 +509,9 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
           <span className="text-[9.5px] tabular-nums t-dim2 shrink-0">{s.session_id.slice(0, 8)}</span>
         </div>
         <div className="flex items-center gap-1.5 text-[9.5px] t-dim2">
-          <span style={{ color: modelColor(model) }}>{model}</span>
+          <span style={{ color: "var(--text3)" }}>{AGENTS[agent].label}</span>
+          <span style={{ color: modelColor(model) }}>· {model}</span>
+          {noReplay && <span title="History is not replayed for this agent">· no replay</span>}
           <span>· {fmtAgo(s.last_seen)} ago</span>
           <span>· {fmtUsd(s.cost_usd)}</span>
         </div>
@@ -512,13 +528,19 @@ function ResumeRow({ s, openChatId, onPick }: { s: SessionRollup; openChatId?: s
 }
 
 /**
- * Pick up a claude session that already exists.
+ * Pick up a session that already exists, whichever CLI made it.
  *
  * The panel could always *start* conversations, but the ones worth continuing
  * are usually the ones started somewhere else — in a terminal, or by an earlier
  * run — and until now there was no way to reach them from here. This lists what
  * the fleet has seen, most recent first, and hands the chosen session to the
  * store to resume.
+ *
+ * All three agents appear, each row naming the CLI that will be handed it,
+ * because the chat it opens is bound to that binary for life and the model name
+ * alone no longer says which — `agy` runs Claude models too. Sessions belonging
+ * to a CLI this panel cannot drive are left out entirely rather than offered and
+ * failing on the first turn.
  *
  * Running sessions are listed rather than hidden: their absence would read as
  * a bug ("I just used that one, where is it?"), where a greyed row that says
@@ -544,16 +566,19 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
   }, [onClose]);
 
   const shown = useMemo(() => {
-    // `claude --resume` only knows about claude's own transcripts, so a session
-    // recorded from another vendor's telemetry is not something we could pick
-    // up. Unknown models stay in — early claude rows have no model recorded.
-    const claudeish = (rows ?? []).filter((s) => {
-      const p = providerOf(s.model_name);
-      return p === "Anthropic" || p === "unknown";
-    });
+    // Every CLI this panel drives can pick its own sessions back up, so the
+    // list is no longer Claude's alone — it was, back when Claude was the only
+    // agent, and stayed that way after Codex and Antigravity could both resume.
+    //
+    // Still not "everything the fleet has seen": a session belonging to a CLI
+    // this panel cannot drive — a Gemini CLI run, any other OTel exporter — has
+    // nothing here that could continue it. `resumableAgent` refuses those
+    // rather than guessing, which matters because the guess would be "Claude"
+    // and `claude --resume` would fail on an id it has never seen.
+    const drivable = (rows ?? []).filter((s) => resumableAgent(s) !== null);
     const needle = q.trim().toLowerCase();
-    if (!needle) return claudeish;
-    return claudeish.filter((s) =>
+    if (!needle) return drivable;
+    return drivable.filter((s) =>
       // cwd included: with a worktree per card, the card id is in the checkout
       // path and nowhere else — searching "20343" has to find that session.
       (`${s.project_path ?? ""} ${s.cwd_path ?? ""} ${s.source_app} ${s.session_id}`).toLowerCase().includes(needle));
@@ -883,7 +908,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     return c;
   }, [active, defaultCwd, repos, workspace, enabled, codex.enabled, antigravity.enabled]);
 
-  // Adopt an existing claude session. Focusing an already-open tab rather than
+  // Adopt an existing session. Focusing an already-open tab rather than
   // opening a second one is not a nicety: two chats resuming one session id
   // would both write to that transcript, which is the same corruption the live
   // check exists to prevent.
@@ -896,7 +921,13 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
     // up: a thread id is only meaningful to the binary that minted it, so
     // opening a Codex session as a Claude chat would send `claude --resume` an
     // id it has never heard of and fail on the first turn.
-    const agent = agentOf(s);
+    //
+    // The same function the picker filters on, rather than `agentOf` — which
+    // would answer "claude" for a session belonging to no CLI here and hand it
+    // to the wrong binary. Nothing in the list should reach this, but the two
+    // must not be able to disagree.
+    const agent = resumableAgent(s);
+    if (!agent) return;
     const chat = chatResuming(s.session_id)
       ?? newChat(
         cwd,
