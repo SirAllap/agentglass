@@ -362,6 +362,44 @@ export function codexArgs(bin: string, model: string, sandbox: string, resumeId:
   return args;
 }
 
+// --- where a codex thread is running -----------------------------------------
+//
+// Codex reaches the fleet over OpenTelemetry, and those records say everything
+// about a turn except *where* it happened: the payload carries `message`,
+// `event`, `prompt`, `tool_name`, `tool_use_id` and `usage`, and no working
+// directory anywhere. So every Codex session landed with a NULL project_path,
+// and a cockpit scoped to one project — which is the default — filtered all of
+// them out. The symptom was that OpenAI never appeared in the provider list
+// while 1225 Codex events sat in the database.
+//
+// The panel knows the directory, because it is the thing that launched the
+// turn. So it is remembered here, keyed by thread, and stamped onto the OTel
+// events as they arrive (see ingestBody in index.ts).
+//
+// Deliberately *not* the same treatment Antigravity gets. That agent reports to
+// nobody, so its frames are turned into events wholesale. Codex already reports
+// its own PreToolUse, PostToolUse and Turn complete — with the tokens — so
+// doing that here would file a second copy of every turn against the same
+// thread id and double the spend it shows.
+const codexCwds = new Map<string, { cwd: string; root: string }>();
+/** Bounded: a long-running server should not accumulate a row per thread it has
+ *  ever driven. Oldest out first — a thread that has not been touched in that
+ *  many turns is not one whose events are still arriving. */
+const MAX_TRACKED_THREADS = 500;
+
+export function noteCodexCwd(threadId: string, dir: string): void {
+  if (!threadId || !SESSION_RE.test(threadId) || !dir) return;
+  if (codexCwds.has(threadId)) return;
+  if (codexCwds.size >= MAX_TRACKED_THREADS) {
+    const oldest = codexCwds.keys().next().value;
+    if (oldest) codexCwds.delete(oldest);
+  }
+  codexCwds.set(threadId, { cwd: dir, root: repoRootOf(dir) || dir });
+}
+
+/** Where this thread was launched from, if this server launched it. */
+export const codexCwd = (sessionId: string) => codexCwds.get(sessionId) ?? null;
+
 export function codexStream(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, images?: unknown): Response {
   const bin = codexBin();
   if (!bin) return err("no local `codex` CLI — install the Codex CLI to chat", 403);
@@ -388,6 +426,9 @@ export function codexStream(cwd: unknown, message: unknown, model: unknown, resu
   const rid = typeof resumeId === "string" && SESSION_RE.test(resumeId) ? resumeId : "";
 
   const args = codexArgs(bin, m, sandbox, rid);
+  // A resumed thread is already named; a new one names itself in the
+  // `thread.started` frame below.
+  if (rid) noteCodexCwd(rid, dir);
 
   // Its own process group, so stopping a turn reaches the whole job tree —
   // `codex` spawns shells of its own, and killing only the direct child would
@@ -437,11 +478,37 @@ export function codexStream(cwd: unknown, message: unknown, model: unknown, resu
           else proc.kill();
         } catch { /* gone */ }
       }, STARTUP_TIMEOUT_MS);
+      /*
+       * The only thing read out of this stream on the way past: the id Codex
+       * mints for a new thread, so its OTel events can be told where they ran.
+       * Everything else is forwarded untouched — this is not a second parser,
+       * and the frames' meaning still lives entirely in codexFrames.ts.
+       */
+      const dec = new TextDecoder();
+      let head = "";
+      let named = !!rid;
+      const catchThreadId = (chunk: Uint8Array) => {
+        if (named) return;
+        head += dec.decode(chunk, { stream: true });
+        // `thread.started` is the first frame Codex sends, so this reads a line
+        // or two and then stops looking rather than parsing the whole turn.
+        for (const line of head.split("\n")) {
+          if (!line.includes("thread.started")) continue;
+          try {
+            const o = JSON.parse(line) as { type?: string; thread_id?: unknown };
+            if (o.type === "thread.started" && typeof o.thread_id === "string") {
+              noteCodexCwd(o.thread_id, dir);
+              named = true;
+            }
+          } catch { /* a partial line; the next chunk completes it */ }
+        }
+        if (named || head.length > 8192) head = "";
+      };
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (value) { firstByte = true; clearTimeout(watchdog); controller.enqueue(value); }
+          if (value) { firstByte = true; clearTimeout(watchdog); catchThreadId(value); controller.enqueue(value); }
         }
       } catch { /* closed */ }
       clearTimeout(watchdog);

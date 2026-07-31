@@ -11,7 +11,7 @@
 // a turn but none of its words (its `UserPromptSubmit` payload is literally
 // `{"prompt":""}`), so this file on disk is the only source for them.
 import { describe, expect, test } from "bun:test";
-import { codexArgs, parseModels, parseRollout, DEFAULT_SANDBOX } from "../src/codex.ts";
+import { codexArgs, parseModels, parseRollout, noteCodexCwd, codexCwd, DEFAULT_SANDBOX } from "../src/codex.ts";
 
 const BIN = "/usr/bin/codex";
 
@@ -251,5 +251,45 @@ describe("parseRollout", () => {
 
   test("an orphaned result is dropped rather than inventing a call", () => {
     expect(parseRollout(roll({ type: "response_item", payload: { type: "custom_tool_call_output", call_id: "nobody", output: [{ text: "x" }] } }))).toEqual([]);
+  });
+});
+
+// --- where a codex thread ran ------------------------------------------------
+// Codex's OTel records carry no working directory — the payload keys are
+// `message`, `event`, `prompt`, `tool_name`, `tool_use_id` and `usage`, and
+// nothing else. So every Codex session landed with a NULL project_path and a
+// project-scoped cockpit (the default) hid all of them: 1225 Codex events in
+// the database and OpenAI absent from the provider list.
+describe("remembering where a thread was launched", () => {
+  test("a thread is located once its id is known", () => {
+    const id = "019fb8db-e77f-7021-bde5-94acd40dd97f";
+    expect(codexCwd(id)).toBeNull();
+    noteCodexCwd(id, "/repo/checkout");
+    expect(codexCwd(id)?.cwd).toBe("/repo/checkout");
+  });
+
+  test("an id that is not one is refused", () => {
+    // This is keyed on something arriving over OTLP from outside.
+    noteCodexCwd("../../etc", "/repo");
+    expect(codexCwd("../../etc")).toBeNull();
+  });
+
+  test("the first answer stands", () => {
+    // A thread does not move, and a later turn resuming it from a different
+    // checkout must not relabel everything already recorded against it.
+    const id = "019fb8e9-97de-7f60-908c-3c9950e9e443";
+    noteCodexCwd(id, "/repo/first");
+    noteCodexCwd(id, "/repo/second");
+    expect(codexCwd(id)?.cwd).toBe("/repo/first");
+  });
+
+  test("it does not grow without bound", () => {
+    // One row per thread this server has ever driven, on a process that runs
+    // for weeks, is a leak rather than a cache.
+    for (let i = 0; i < 700; i++) {
+      noteCodexCwd(`019fb8db-e77f-7021-bde5-${String(i).padStart(12, "0")}`, `/repo/${i}`);
+    }
+    expect(codexCwd("019fb8db-e77f-7021-bde5-000000000000")).toBeNull();
+    expect(codexCwd("019fb8db-e77f-7021-bde5-000000000699")?.cwd).toBe("/repo/699");
   });
 });

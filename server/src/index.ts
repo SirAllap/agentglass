@@ -70,7 +70,7 @@ import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
-import { codexStream, codexModels, codexTranscript, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
+import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
@@ -448,6 +448,18 @@ setInterval(pushOpenTools, OPEN_TOOL_TICK_MS).unref?.();
 
 /** Normalize → persist → broadcast → alert. Shared by /ingest and /v1/traces. */
 function ingestBody(body: IngestBody) {
+  // Codex's OTel records say everything about a turn except where it ran, so a
+  // cockpit scoped to a project — the default — filtered every one of them out
+  // and OpenAI never appeared in the provider list. The panel knows the
+  // directory because it launched the turn; this is where that is handed back.
+  //
+  // Only fills a gap, never overwrites: an agent that reports its own location
+  // is the better source, and this must not relabel it.
+  const payload = (body.payload ?? {}) as Record<string, unknown>;
+  if (!payload.cwd && !payload.project_path && body.session_id) {
+    const known = codexCwd(String(body.session_id));
+    if (known) body = { ...body, payload: { ...payload, cwd: known.cwd, project_path: known.root } };
+  }
   const n = normalize(body);
   // Live seam only: a skewed sender's clock must not decide which time window
   // its events land in. Backfill inserts elsewhere and keeps its real times.
