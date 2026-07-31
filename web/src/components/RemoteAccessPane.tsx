@@ -229,9 +229,10 @@ export function RemoteAccessPane({ open }: { open: boolean }) {
                     tailnet, which makes it the safer of the two routes and the one to use on wifi you do not
                     own. Each paired device still gets exactly what you granted it, and nothing more.</>
                 : <>This runs over plain HTTP, so everything between a phone and this machine is readable by
-                    anything else on the network. Pairing keeps the credential itself out of that — it is
-                    encrypted to the device that asked for it — but what it fetches afterwards is not. Fine
-                    at home. On café or airport wifi, use the Tailscale route instead.</>}
+                    anything else on the network — and a phone cannot pair over it at all. Browsers give a
+                    plain-HTTP page no WebCrypto, so the handshake that encrypts the credential to the
+                    device cannot run. Serve this over HTTPS, or forward the port so the phone reaches it
+                    as http://localhost. On café or airport wifi, use the Tailscale route regardless.</>}
             </div>
 
             <Devices st={st} onCopy={copy} copied={copied} onChanged={load} />
