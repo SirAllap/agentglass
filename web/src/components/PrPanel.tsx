@@ -2077,6 +2077,12 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLab
   // it being merged. GitHub's palette: open green, merged purple, closed grey,
   // draft grey; each with its own glyph so the state reads without the word.
   const { tint, state, glyph } = prStateBadge(d);
+  const [copied, setCopied] = useState(false);
+  const copyNumber = () => {
+    navigator.clipboard?.writeText(`#${d.number}`)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); })
+      .catch(() => { /* no clipboard permission */ });
+  };
   return (
     <div className="px-3 pt-2.5 pb-2 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
       <div className="flex items-start gap-2">
@@ -2086,7 +2092,16 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLab
             <span aria-hidden>{glyph}</span>{state}
           </span>
           <span className="text-[14px] leading-snug ml-2" style={{ color: "var(--text)" }}>
-            <span className="tabular-nums mr-1.5" style={{ color: "var(--text3)" }}>#{d.number}</span>{d.title}
+            {/* A button, not just text: clicking copies "#NNNNN" to paste as a
+                cross-reference, and it looks pressable so that is discoverable. */}
+            <button onClick={copyNumber} aria-live="polite"
+              title={copied ? "Copied!" : `Copy #${d.number}`}
+              className="agx-btn tabular-nums align-middle inline-flex items-center gap-1 mr-1.5 px-1.5 py-0.5 rounded-md text-[12px]"
+              style={{ color: copied ? "var(--success)" : "var(--text2)", border: `1px solid color-mix(in srgb, ${copied ? "var(--success) 50%" : "var(--border) 55%"}, transparent)`, background: "color-mix(in srgb, var(--border) 14%, transparent)" }}>
+              #{d.number}
+              <span aria-hidden style={{ fontSize: 10, opacity: 0.7 }}>{copied ? "✓" : "⧉"}</span>
+            </button>
+            {d.title}
           </span>
         </div>
         <Menu label="⋯" title="More actions">
