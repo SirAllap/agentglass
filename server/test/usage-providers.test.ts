@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { anthropicUsage, connectedProviders, allProviderUsage } from "../src/providerusage.ts";
+import { anthropicUsage, installedProviders, allProviderUsage } from "../src/providerusage.ts";
 import type { AgentProbe } from "../../shared/types.ts";
 import type { UsagePayload } from "../src/usage.ts";
 
@@ -194,58 +194,72 @@ describe("anthropicUsage() — pure conversion", () => {
 });
 
 /*
- * A disconnected agent is not a provider with nothing to say — it is a provider
- * the user has asked not to see. The distinction matters because the two render
- * differently: one gets a row with a sentence, the other gets no row at all.
+ * A CLI that is not on this machine is not a provider with nothing to say — it
+ * is a provider that does not apply here. The two render differently: one gets
+ * a row with a sentence, the other gets no row at all.
+ *
+ * The gate is `found`, not `connected`, and the difference is load-bearing.
+ * Connecting an agent wires its EVENTS to this server; quota comes from
+ * somewhere else entirely — Codex's session files, Claude's credentials — so a
+ * disconnected agent still has a plan that runs out, and still gets a row.
  */
-describe("connectedProviders()", () => {
+describe("installedProviders()", () => {
   /** Only the fields the filter reads; the rest of AgentProbe is irrelevant here. */
-  const probe = (id: string, connected: boolean) => ({ id, connected }) as unknown as AgentProbe;
+  const probe = (id: string, found: boolean) => ({ id, found }) as unknown as AgentProbe;
 
   test("maps each roster id to its provider", () => {
-    const on = connectedProviders([
+    const on = installedProviders([
       probe("claude-code", true), probe("codex", true), probe("antigravity", true),
     ]);
     expect([...on].sort()).toEqual(["anthropic", "antigravity", "codex"]);
   });
 
-  test("drops the ones that are disconnected", () => {
-    const on = connectedProviders([
+  test("drops the ones whose binary is not here", () => {
+    const on = installedProviders([
       probe("claude-code", true), probe("codex", false), probe("antigravity", false),
     ]);
     expect([...on]).toEqual(["anthropic"]);
   });
 
-  test("all disconnected is empty, not everything", () => {
-    const on = connectedProviders([
+  test("nothing installed is empty, not everything", () => {
+    const on = installedProviders([
       probe("claude-code", false), probe("codex", false), probe("antigravity", false),
     ]);
     expect(on.size).toBe(0);
   });
 
+  test("an installed but DISCONNECTED agent still counts", () => {
+    // The distinction this filter deliberately does not make. Quota does not
+    // travel over the event wiring, so unwiring it must not hide the number.
+    const on = installedProviders([
+      { id: "codex", found: true, connected: false } as unknown as AgentProbe,
+    ]);
+    expect([...on]).toEqual(["codex"]);
+  });
+
   test("the Gemini CLI maps to no provider — it reports no plan window", () => {
-    expect(connectedProviders([probe("gemini", true)]).size).toBe(0);
+    expect(installedProviders([probe("gemini", true)]).size).toBe(0);
   });
 });
 
 describe("allProviderUsage() with injected probes", () => {
-  const probe = (id: string, connected: boolean) => ({ id, connected }) as unknown as AgentProbe;
+  const probe = (id: string, found: boolean) => ({ id, found }) as unknown as AgentProbe;
 
-  test("returns only the connected agents' rows, in the fixed order", async () => {
+  test("returns only the installed agents' rows, in the fixed order", async () => {
     const rows = await allProviderUsage([
       probe("claude-code", false), probe("codex", false), probe("antigravity", true),
     ]);
     expect(rows.map((r) => r.provider)).toEqual(["antigravity"]);
   });
 
-  test("nothing connected yields an empty list, and never a partial row", async () => {
+  test("nothing installed yields an empty list, and never a partial row", async () => {
     const rows = await allProviderUsage([
       probe("claude-code", false), probe("codex", false), probe("antigravity", false),
     ]);
     expect(rows).toEqual([]);
   });
 
-  test("a connected Antigravity is a labelled gap, not an absence", async () => {
+  test("an installed Antigravity is a labelled gap, not an absence", async () => {
     // Deterministic here in a way the route test cannot be: the probe is
     // injected, so this holds on a machine with no `agy` installed too.
     const [agy] = await allProviderUsage([probe("antigravity", true)]);
