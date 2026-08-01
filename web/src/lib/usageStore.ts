@@ -1,4 +1,4 @@
-import { api, IS_DEMO } from "./api.ts";
+import { api } from "./api.ts";
 import type { ProviderUsage } from "../../../shared/types.ts";
 
 /**
@@ -32,7 +32,7 @@ export const usageLoaded = (): boolean => firstFetchDone;
 
 export function subscribeProviderUsage(fn: () => void): () => void {
   listeners.add(fn);
-  if (!poller && !IS_DEMO) {
+  if (!poller) {
     const load = () => api.providerUsage()
       // A failed poll leaves the last good answer standing: the meters must
       // never blink out because one request lost.

@@ -7,11 +7,30 @@
  * honest rather than merely present.
  */
 import { describe, expect, test, beforeAll } from "bun:test";
+import type { ProviderUsage } from "../../shared/types.ts";
 
 let usageStore: typeof import("../src/lib/usageStore.ts");
+let api: typeof import("../src/lib/api.ts");
+
+// Demo data matching what web/src/lib/demo.ts exports
+const demoProviderUsage = (): ProviderUsage[] => [
+  { provider: "anthropic", label: "Claude", available: false, windows: [],
+    note: "Plan usage is not available in the demo." },
+  { provider: "codex", label: "Codex", available: false, windows: [],
+    note: "Plan usage is not available in the demo." },
+  { provider: "antigravity", label: "Antigravity", available: false, windows: [],
+    note: "Antigravity's CLI does not report quota anywhere agentglass can read." },
+];
 
 beforeAll(async () => {
   (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
+
+  // Import api first so we can patch it before usageStore imports it
+  api = await import("../src/lib/api.ts");
+  // Patch the providerUsage method to return demo data instead of hitting the network
+  (api.api as any).providerUsage = () => Promise.resolve(demoProviderUsage());
+
+  // Now import usageStore - it will use the patched api
   usageStore = await import("../src/lib/usageStore.ts");
 });
 
@@ -60,5 +79,46 @@ describe("resetLabel", () => {
 
   test("nothing to say about a null reset", () => {
     expect(usageStore.resetLabel(null, NOW)).toBe("");
+  });
+});
+
+describe("subscribeProviderUsage", () => {
+  test("before first fetch resolves, the store reports not-loaded", () => {
+    usageStore.__resetUsageStore();
+    expect(usageStore.usageLoaded()).toBe(false);
+    expect(usageStore.providerUsage()).toBe(null);
+  });
+
+  test("after first fetch resolves, usageLoaded() is true and providerUsage() has length 3", async () => {
+    usageStore.__resetUsageStore();
+    let callCount = 0;
+    const unsub = usageStore.subscribeProviderUsage(() => { callCount++; });
+
+    // Wait for the fetch to complete
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(usageStore.usageLoaded()).toBe(true);
+    const usage = usageStore.providerUsage();
+    expect(usage).not.toBe(null);
+    expect(usage?.length).toBe(3);
+    expect(usage?.[0]?.provider).toBe("anthropic");
+    expect(usage?.[1]?.provider).toBe("codex");
+    expect(usage?.[2]?.provider).toBe("antigravity");
+
+    unsub();
+  });
+
+  test("unsubscribing the last listener clears the timer without throwing", async () => {
+    usageStore.__resetUsageStore();
+    const unsub = usageStore.subscribeProviderUsage(() => {});
+
+    // Wait for the fetch to complete
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    // This should not throw
+    expect(() => unsub()).not.toThrow();
+
+    // After unsubscribing, the store should be reset for the next test
+    usageStore.__resetUsageStore();
   });
 });
