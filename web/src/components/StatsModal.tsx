@@ -191,16 +191,18 @@ function UsageSection() {
             {u.observedAt && <span className="text-[10px] t-dim2 ml-auto">read {ageLabel(u.observedAt)}</span>}
           </div>
           {u.available
-            ? u.windows.map((w) => (
-                <div key={w.label} className="flex items-center gap-2 text-[10.5px]">
-                  <span className="w-12 t-dim2">{w.label}</span>
-                  <span className="tabular-nums font-semibold" style={{ color: usedColor(w.usedPercent) }}>
-                    {w.usedPercent}%
-                  </span>
-                  {w.resetsAt && <span className="t-dim2">resets {resetLabel(w.resetsAt)}</span>}
-                </div>
-              ))
-            : <span className="text-[10.5px] t-dim2">{u.note}</span>}
+            ? (u.windows.length
+              ? u.windows.map((w) => (
+                  <div key={w.label} className="flex items-center gap-2 text-[10.5px]">
+                    <span className="w-12 t-dim2">{w.label}</span>
+                    <span className="tabular-nums font-semibold" style={{ color: usedColor(w.usedPercent) }}>
+                      {w.usedPercent}%
+                    </span>
+                    {w.resetsAt && <span className="t-dim2">resets {resetLabel(w.resetsAt)}</span>}
+                  </div>
+                ))
+              : <span className="text-[10.5px] t-dim2">No quota windows reported.</span>)
+            : <span className="text-[10.5px] t-dim2">{u.note ?? "No usage note provided."}</span>}
         </div>
       ))}
     </div>
