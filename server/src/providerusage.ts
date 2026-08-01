@@ -25,7 +25,7 @@ import { probeAgents } from "./agentprobe.ts";
  * upstream limitation it is.
  */
 export const ANTIGRAVITY_NOTE =
-  "Antigravity's CLI does not report quota.";
+  "Quota not reported.";
 
 /** Strip a generic "SomeError: " prefix so a caught exception reads as a
  *  clause, not a stack trace, when it lands in front of a person. */
