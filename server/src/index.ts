@@ -32,6 +32,7 @@ import { getInsights } from "./insights.ts";
 import { vapidKeys, addSubscription, removeSubscription, removeDevice, deviceId, subscriptions } from "./pushstore.ts";
 import { getUsage } from "./usage.ts";
 import { allProviderUsage } from "./providerusage.ts";
+import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
@@ -1557,6 +1558,12 @@ const server = Bun.serve<WsData>({
     if (pathname === "/update/run" && req.method === "POST") {
       if (!desktopOnly(req)) return csrfBlocked();
       return json(await startUpdate());
+    }
+    // Spends a little quota to measure quota, so it is opt-in on the client and
+    // gated here like the other routes that run a CLI.
+    if (pathname === "/usage/codex/refresh" && req.method === "POST") {
+      if (!trustedCaller(req)) return csrfBlocked();
+      return json(await refreshCodexUsage());
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
