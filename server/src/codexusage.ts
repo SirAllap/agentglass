@@ -12,11 +12,9 @@
 // the first time somebody read it after a quiet weekend.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import type { ProviderUsage, QuotaWindow } from "../../shared/types.ts";
 import { windowLabel } from "../../shared/quota.ts";
-
-const codexHome = () => process.env.CODEX_HOME || join(homedir(), ".codex");
+import { codexHome } from "./codex.ts";
 
 /**
  * How many rollout files to open before giving up.
@@ -93,9 +91,9 @@ function lastRateLimits(path: string): { windows: QuotaWindow[]; plan?: string }
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!.trim();
     if (!line || !line.includes("rate_limits")) continue;
-    let doc: any;
+    let doc: unknown;
     try { doc = JSON.parse(line); } catch { continue; } // a truncated final write
-    const rl = doc?.payload?.rate_limits;
+    const rl = (doc as any)?.payload?.rate_limits;
     if (!rl) continue;
     const windows = [quotaWindow(rl.primary), quotaWindow(rl.secondary)].filter((w): w is QuotaWindow => !!w);
     if (!windows.length) continue;
