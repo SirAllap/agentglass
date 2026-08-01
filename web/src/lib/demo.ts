@@ -627,7 +627,7 @@ export const providerUsage = (): ProviderUsage[] => {
       observedAt: now - 3 * 3600_000,
     },
     { provider: "antigravity", label: "Antigravity", available: false, windows: [],
-      note: "Antigravity's CLI does not report quota anywhere agentglass can read." },
+      note: "Antigravity's CLI does not report quota." },
   ];
 };
 
