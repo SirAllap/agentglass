@@ -398,6 +398,11 @@ function AboutPane({ open }: { open: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  /** Why there is no status, as opposed to it not having arrived yet. Without
+   *  this the two are the same state — a failed read left the pane reading
+   *  "Reading version…" forever, which is how a 403 on /update/status went
+   *  unnoticed: it looked like a slow server rather than a refused request. */
+  const [stErr, setStErr] = useState<string | null>(null);
   // Which release's notes are being read, and what came back. Fetched here
   // because the modal is presentational — the automatic caller has to see the
   // answer before it can decide whether to open at all, so neither of them can
@@ -424,8 +429,8 @@ function AboutPane({ open }: { open: boolean }) {
     // the pane refreshes what the background check knows rather than keeping a
     // second, private answer.
     api.updateStatus()
-      .then((r) => { ingestUpdate(r); if (live) setSt(r); })
-      .catch(() => { if (live) setSt(null); });
+      .then((r) => { ingestUpdate(r); if (live) { setSt(r); setStErr(null); } })
+      .catch((e) => { if (live) { setSt(null); setStErr(String(e?.message || e) || "the server did not answer"); } });
     return () => { live = false; };
   }, [open]);
 
@@ -437,6 +442,14 @@ function AboutPane({ open }: { open: boolean }) {
     setStarted(true);
   };
 
+  if (stErr) return (
+    <Section title="About">
+      <div className="px-3 py-2 text-[11px] flex flex-col gap-1" style={{ color: "var(--text2)" }}>
+        <span>Could not read this build's version.</span>
+        <span className="text-[10px] t-dim2 break-all">{stErr}</span>
+      </div>
+    </Section>
+  );
   if (!st) return <Section title="About"><div className="px-3 py-2 text-[11px] t-dim2">Reading version…</div></Section>;
 
   const short = st.info.commit ? st.info.commit.slice(0, 7) : "unknown";

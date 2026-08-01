@@ -82,7 +82,7 @@ import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller } from "./auth.ts";
 import { activeDevices, markSeen, revokeDevice, type Scope } from "./devices.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
-import { updateStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
+import { updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
 import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
@@ -1381,16 +1381,23 @@ const server = Bun.serve<WsData>({
       const paths = url.searchParams.getAll("path").slice(0, 50);
       return json({ leftovers: await Promise.all(paths.map((p) => worktreeLeftovers(root, p))) });
     }
-    // Update: reads are gated too, since the status alone reveals the source
-    // path on disk.
+    // Update: the full status reveals the source path on disk, the remote it
+    // pulls from and the last run's log tail, so it stays desktop-only. Refusing
+    // everyone else outright was too blunt, though — the About pane reads this
+    // for the version number and nothing else offers one, so every browser tab
+    // showed a pane stuck on "Reading version…". A caller the origin gate above
+    // already admitted gets the build's identity with the provenance stripped.
     if (pathname === "/update/status") {
-      if (!desktopOnly(req)) return csrfBlocked();
-      return json(await updateStatus());
+      return json(desktopOnly(req) ? await updateStatus() : viewerStatus());
     }
-    // What changed in the release this build came from. Same desktop-only gate
-    // as the rest of /update: the build's origin and tag are in the answer.
+    // What changed in the release this build came from. Open to whoever may
+    // read the status above, for the same reason and as its other half: the
+    // About pane offers these notes whenever the build descends from a tag, so
+    // gating them left a browser with a button that could only ever fail. The
+    // answer is a published release's text, its tag, and whether it came from
+    // the clone or from github — the origin URL and the install path are not in
+    // it, and `tag` is refused unless it looks like a release.
     if (pathname === "/update/notes") {
-      if (!desktopOnly(req)) return csrfBlocked();
       return json(await releaseNotes(url.searchParams.get("tag") || undefined));
     }
     if (pathname === "/update/log") {
