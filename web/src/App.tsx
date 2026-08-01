@@ -725,6 +725,8 @@ export default function App() {
         // saying all of it, and a strip repeating it is what made the old notch
         // feel like decoration.
         quiet={dashActive}
+        // Whose plan the meters show, when no chat is focused to answer it.
+        filterProvider={filter.provider}
         needs={needs}
         needsList={needsList}
         onNeedChat={openChatFor}

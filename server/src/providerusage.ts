@@ -51,6 +51,19 @@ export function anthropicUsage(u: UsagePayload): ProviderUsage {
       resetsAt: u.seven_day.resets_at,
     });
   }
+  // Per-model weekly windows, named by whatever the API called them. They ride
+  // in the same list rather than a field of their own: every surface here draws
+  // "the windows this provider reports", and a plan that grows a new bucket
+  // next week should appear without a release. Labelled by the model, not by
+  // length, because two weekly buckets that both said "weekly" would be a row
+  // you cannot tell from the one above it.
+  for (const s of u.scoped ?? []) {
+    windows.push({
+      label: s.name, minutes: 10080,
+      usedPercent: s.utilization,
+      resetsAt: s.resets_at,
+    });
+  }
   // If available but no windows parsed, return unavailable with explanation
   if (windows.length === 0) {
     return {
