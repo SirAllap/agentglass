@@ -330,6 +330,7 @@ const realApi = {
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
   usage: () => get<UsagePayload>(`/usage`),
   providerUsage: () => get<ProviderUsage[]>(`/usage/providers`),
+  refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
   // usage_since: the epoch the call counts are known from. They are bounded
   // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
   // and is not. 0 means pruning is off and it really is all time.
@@ -714,6 +715,7 @@ const demoApi: typeof realApi = {
   skillsExportUrl: () => demo.skillsExportUri(),
   usage: () => D(demo.usage() as UsagePayload),
   providerUsage: () => D(demo.providerUsage() as ProviderUsage[]),
+  refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
   skills: () => D(demo.skills()),
   changes: () => D(demo.changes()),
   session: (id: string) => D(demo.session(id)),
