@@ -207,10 +207,12 @@ export interface UsageHistory {
   rollup_from: string | null;
 }
 
-/** Named `QuotaWindow`, not `UsageWindow`: that name is taken by the
+/** Named `QuotaWindow`, not `UsageWindow`: that name used to belong to the
  *  Anthropic-specific `{ utilization, remaining, resets_at }` in
- *  web/src/lib/api.ts, which DynamicIsland imports. Two differently-shaped
- *  types under one name, in the files that consume both, is a trap. */
+ *  web/src/lib/api.ts. Two differently-shaped types under one name, in a
+ *  file that consumed both, was a trap. That shape and its last consumer
+ *  were deleted once this feature replaced them, but the distinct name is
+ *  kept so a future `UsageWindow` cannot silently collide again. */
 export type QuotaWindow = {
   /** "5h", "weekly" — derived from the provider's window length. */
   label: string;

@@ -136,16 +136,55 @@ describe("anthropicUsage() — pure conversion", () => {
     expect(result.note).toMatch(/\./);
   });
 
-  test("available: false returns unavailable with sign-in note", () => {
+  test("no credentials returns unavailable with a sign-in note", () => {
     const payload: UsagePayload = {
       available: false,
       fetched_at: 1722470400000,
-      error: "unauthorized",
+      error: "no credentials",
     };
     const result = anthropicUsage(payload);
     expect(result.available).toBe(false);
     expect(result.windows.length).toBe(0);
     expect(result.note).toBeDefined();
     expect(result.note).toContain("sign in");
+  });
+
+  test("a 429 does not tell a signed-in user to sign in", () => {
+    const payload: UsagePayload = {
+      available: false,
+      fetched_at: 1722470400000,
+      error: "Error: HTTP 429",
+    };
+    const result = anthropicUsage(payload);
+    expect(result.available).toBe(false);
+    expect(result.note).toBeDefined();
+    expect(result.note).not.toContain("sign in");
+    expect(result.note).toMatch(/rate.?limit/i);
+    expect(result.note).toMatch(/retry|retrying/i);
+  });
+
+  test("a network/timeout failure says the endpoint could not be reached, not sign in", () => {
+    const payload: UsagePayload = {
+      available: false,
+      fetched_at: 1722470400000,
+      error: "TypeError: fetch failed",
+    };
+    const result = anthropicUsage(payload);
+    expect(result.available).toBe(false);
+    expect(result.note).toBeDefined();
+    expect(result.note).not.toContain("sign in");
+    expect(result.note).not.toMatch(/rate.?limit/i);
+    expect(result.note).toMatch(/could not reach/i);
+    // The reason is summarised, not a raw "TypeError:" prefix.
+    expect(result.note).not.toContain("TypeError:");
+  });
+
+  test("no credentials, a 429, and a network failure produce three different notes", () => {
+    const notes = [
+      anthropicUsage({ available: false, fetched_at: 0, error: "no credentials" }).note,
+      anthropicUsage({ available: false, fetched_at: 0, error: "Error: HTTP 429" }).note,
+      anthropicUsage({ available: false, fetched_at: 0, error: "TypeError: fetch failed" }).note,
+    ];
+    expect(new Set(notes).size).toBe(3);
   });
 });

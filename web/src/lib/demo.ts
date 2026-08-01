@@ -599,20 +599,37 @@ export function session(id: string): SessionDetail {
   };
 }
 
-export function usage() {
-  return { available: true, five_hour: { utilization: 34, remaining: 66, resets_at: new Date(Date.now() + 2 * 3600_000).toISOString() }, seven_day: { utilization: 61, remaining: 39, resets_at: new Date(Date.now() + 3 * 86400_000).toISOString() }, fetched_at: Date.now() };
-}
-
-/** The demo has no machine behind it, so the gauges show the shape without
- *  claiming numbers: two providers that cannot answer and one that never can. */
-export const providerUsage = (): ProviderUsage[] => [
-  { provider: "anthropic", label: "Claude", available: false, windows: [],
-    note: "Plan usage is not available in the demo." },
-  { provider: "codex", label: "Codex", available: false, windows: [],
-    note: "Plan usage is not available in the demo." },
-  { provider: "antigravity", label: "Antigravity", available: false, windows: [],
-    note: "Antigravity's CLI does not report quota anywhere agentglass can read." },
-];
+/** The demo has no machine behind it, so these are illustrative numbers
+ *  rather than a live reading — chosen to demonstrate what the feature looks
+ *  like when it has something to say, not to claim a real account behind it.
+ *  Anthropic and Codex both get plausible numbers; Antigravity stays
+ *  unavailable, because that gap is a designed part of the feature and the
+ *  demo should show it rather than paper over it. */
+export const providerUsage = (): ProviderUsage[] => {
+  const now = Date.now();
+  return [
+    {
+      provider: "anthropic", label: "Claude", available: true,
+      windows: [
+        { label: "5h", minutes: 300, usedPercent: 34, resetsAt: new Date(now + 2 * 3600_000).toISOString() },
+        { label: "weekly", minutes: 10080, usedPercent: 61, resetsAt: new Date(now + 3 * 86400_000).toISOString() },
+      ],
+      // Anthropic's reading is live, so the demo's is "now" too.
+      observedAt: now,
+    },
+    {
+      provider: "codex", label: "Codex", available: true, plan: "plus",
+      windows: [
+        { label: "weekly", minutes: 10080, usedPercent: 42, resetsAt: new Date(now + 4 * 86400_000).toISOString() },
+      ],
+      // Codex's reading is only as fresh as its last turn — a few hours old
+      // here on purpose, so the age label has something to demonstrate.
+      observedAt: now - 3 * 3600_000,
+    },
+    { provider: "antigravity", label: "Antigravity", available: false, windows: [],
+      note: "Antigravity's CLI does not report quota anywhere agentglass can read." },
+  ];
+};
 
 // --- exports: real downloadable files, generated in-browser (no server) -----
 const dataUri = (mime: string, body: string) => `data:${mime};charset=utf-8,${encodeURIComponent(body)}`;

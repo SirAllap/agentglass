@@ -599,6 +599,24 @@ import { codexUsage } from "./codexusage.ts";
 export const ANTIGRAVITY_NOTE =
   "Antigravity's CLI does not report quota anywhere agentglass can read.";
 
+> **Amended after Task 2's review (human ruling: "fix it all").** The sketch
+> below hardcodes `"5h"`/`"weekly"` and has no guard for `available: true`
+> with zero parsed windows — both were shipped as genuine defects rather than
+> deliberate simplifications, so the code now differs from this listing:
+> `anthropic()` calls `windowLabel(300)`/`windowLabel(10080)` instead of
+> hardcoding the strings, and returns `available: false` with an explanatory
+> note when Anthropic answers `available: true` but neither window parses
+> (reachable whenever `usage.ts` returns `undefined` for both fields).
+>
+> **Amended again after the final whole-branch review.** The sketch's single
+> hardcoded `"sign in to Claude Code"` note for every `!u.available` case was
+> also a defect: `usage.ts` already distinguishes "no credentials", a 429,
+> and a network/timeout throw, and telling a rate-limited or offline user to
+> sign in is a misdiagnosis. The live `anthropicUsage()` branches on
+> `u.error` and gives each case its own sentence. See
+> `server/src/providerusage.ts` for the current version; this block is kept
+> for history and should not be copied.
+
 /** Anthropic's live reading, in the shared shape. The percentages are already
  *  0..100 and already rounded by usage.ts. */
 async function anthropic(): Promise<ProviderUsage> {
@@ -821,9 +839,18 @@ export const usageOf = (p: ProviderUsage["provider"]): ProviderUsage | null =>
  *  "nothing to show" — the distinction the About pane bug was made of. */
 export const usageLoaded = (): boolean => firstFetchDone;
 
+> **Amended after Task 3's review.** `!poller && !IS_DEMO` below was a
+> shipped defect: it means `load()` never runs in demo mode, so
+> `usageLoaded()` is permanently `false`, every demo surface spins forever,
+> and the demo fixture is dead code. `UsageWidget.subscribeUsage`, the
+> pattern this was meant to port, has no `IS_DEMO` gate at all. The live
+> guard is `if (!poller) {` — no `IS_DEMO` check — and `api.providerUsage()`
+> already resolves against the demo fixture when `IS_DEMO` is set, the same
+> way every other store in this codebase works.
+
 export function subscribeProviderUsage(fn: () => void): () => void {
   listeners.add(fn);
-  if (!poller && !IS_DEMO) {
+  if (!poller) {
     const load = () => api.providerUsage()
       // A failed poll leaves the last good answer standing: the meters must
       // never blink out because one request lost.

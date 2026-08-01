@@ -74,6 +74,22 @@ says why reads as the upstream limitation it is.
 One shape for all three, so every surface renders a list instead of three
 bespoke blocks. In `shared/types.ts`:
 
+> **Amended after the final whole-branch review.** The sketch below is
+> missing a field the implementation added and depends on: `minutes`.
+> Codex's rollout file gives windows as `primary`/`secondary`, which are
+> positional and swap between plans (on a weekly-only plan `primary` IS the
+> weekly window), so ordering them "short window before long window" needs
+> the window length as a number, not the derived `label` string parsed back
+> apart. `shared/quota.ts`'s `windowLabel()` and `server/src/codexusage.ts`'s
+> sort both key on `minutes`. It is also missing from the sample below and
+> should be read as present on every `QuotaWindow`.
+>
+> The naming-rationale comment has also been overtaken by events: the
+> Anthropic-specific `UsageWindow` in `web/src/lib/api.ts` it warns about,
+> and DynamicIsland's import of it, were both deleted once this feature
+> replaced them (zero remaining consumers, verified by grep). The comment
+> below is kept for history.
+
 ```ts
 /** Named `QuotaWindow`, not `UsageWindow`: that name is taken by the
  *  Anthropic-specific `{ utilization, remaining, resets_at }` in
@@ -82,6 +98,9 @@ bespoke blocks. In `shared/types.ts`:
 export type QuotaWindow = {
   /** "5h", "weekly" — derived from the provider's window length. */
   label: string;
+  /** Window length in minutes, so consumers can order short-before-long
+   *  without parsing the label back into a number. */
+  minutes: number;
   usedPercent: number;
   /** ISO 8601, or null when the provider does not say. */
   resetsAt: string | null;
@@ -180,8 +199,18 @@ Shows one gauge: the provider in context. Context is the focused chat panel's
 agent when the workspace is open, otherwise the header's provider filter — so
 driving a Codex chat shows the Codex gauge even when the dashboard filter says
 Anthropic. No provider in context, or that provider has no reading: no gauge,
-exactly as today. The existing "rate limited, retrying" state is kept and
-becomes per-provider.
+exactly as today.
+
+> **Amended after the final whole-branch review.** The line this replaces
+> claimed "the existing 'rate limited, retrying' state is kept and becomes
+> per-provider" — untrue as shipped. The notch has no fallback branch at
+> all: this is deliberate (a pre-flight ruling scoped the three display
+> states to "everywhere with room to explain," which the notch, a glance
+> rather than an explanation, is not), so a rate-limited or offline reading
+> renders as no gauge there, same as no reading at all. The reason *does*
+> surface, in `anthropicUsage()`'s per-error notes (`server/src/providerusage.ts`):
+> on the dashboard Usage box and the Stats modal section, both of which have
+> room to show the row's `note` rather than just its meters.
 
 **Changed: `web/src/components/StatsModal.tsx`**
 
@@ -202,6 +231,14 @@ store, its helpers move with it, and the widget itself has no remaining home.
 
 > **Refresh Codex usage hourly** — runs a minimal Codex turn so the usage
 > reading stays current. Uses a small amount of the quota it measures.
+
+> **Amended after Task 9 shipped.** The label above was the sketch; the
+> shipped copy (`web/src/components/SettingsModal.tsx`) reads **"Keep Codex
+> usage current"**, with the hourly cadence and the quota cost moved into the
+> hint text: "Runs a minimal Codex turn hourly so the quota reading is not
+> stale — uses a small amount of the quota it measures." Recorded so a
+> future reader matches the string that actually ships rather than the one
+> drafted here.
 
 The help text says what it costs because it genuinely costs something: this
 consumes quota in order to measure quota. Small on a Plus plan against a weekly
