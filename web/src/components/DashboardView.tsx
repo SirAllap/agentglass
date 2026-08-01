@@ -27,6 +27,7 @@ import { CostByModel } from "./CostByModel.tsx";
 import { Latency } from "./Latency.tsx";
 import { Sessions } from "./Sessions.tsx";
 import { MissionTimeline } from "./MissionTimeline.tsx";
+import { UsageBox } from "./UsageBox.tsx";
 import { Select } from "./Select.tsx";
 import type { AgentCard, Alert } from "../lib/derive.ts";
 
@@ -157,14 +158,18 @@ export function DashboardView({
           </div>
         </div>
 
-        <div className="shrink-0 grid grid-cols-1 xl:grid-cols-3 gap-3 h-auto xl:h-[196px]">
-          <CostByModel stats={stats} />
-          <Latency stats={stats} />
-          <Sessions provider={filter.provider} />
-        </div>
-
-        <div className="shrink-0 h-[140px]">
-          <MissionTimeline stats={stats} />
+        {/* Money row and timeline share one grid so the Usage box can span
+            both. The columns line up with the cockpit above: Usage under
+            Fleet, Cost and Latency under the middle column, Sessions under
+            Alerts. */}
+        <div className="shrink-0 grid grid-cols-1 xl:grid-cols-12 gap-3 h-auto xl:grid-rows-[196px_140px]">
+          <div className="xl:col-span-3 xl:row-span-2 min-w-0 min-h-0 h-[196px] xl:h-auto">
+            <UsageBox />
+          </div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><CostByModel stats={stats} /></div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><Latency stats={stats} /></div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><Sessions provider={filter.provider} /></div>
+          <div className="xl:col-span-9 min-w-0 min-h-0 h-[140px] xl:h-auto"><MissionTimeline stats={stats} /></div>
         </div>
       </div>
     </div>
