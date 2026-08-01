@@ -43,6 +43,7 @@ import { chatEnginePref, setChatEnginePref, type ChatEnginePref } from "../lib/c
 import type { TmuxEngineInfo } from "../../../shared/types.ts";
 import type { DepReport, DepStatus } from "../../../shared/deps.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
+import { usageRefreshOn, setUsageRefreshOn } from "../lib/usageRefreshPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
 import {
@@ -1319,6 +1320,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   useEffect(() => { if (open) void isFullscreen().then(setFullscreenState); }, [open]);
 
   const [h24, setH24] = useState<boolean>(() => clock24());
+  const [usageRefresh, setUsageRefreshState] = useState<boolean>(() => usageRefreshOn());
   const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
   const [keys, setKeys] = useState(() => bindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
@@ -1748,6 +1750,12 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Toggle on={sound} onClick={onSound}
                       label="Alert sounds"
                       hint="A chime when a session errors or needs you" />
+                    {/* Says what it costs, because it costs something: this
+                        spends a little of the quota it is measuring. */}
+                    <Toggle on={usageRefresh}
+                      onClick={() => { setUsageRefreshOn(!usageRefresh); setUsageRefreshState(!usageRefresh); }}
+                      label="Keep Codex usage current"
+                      hint="Runs a minimal Codex turn hourly so the quota reading is not stale — uses a small amount of the quota it measures" />
                   </Section>
                   )}
 

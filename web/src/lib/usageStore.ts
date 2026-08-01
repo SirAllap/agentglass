@@ -1,5 +1,6 @@
 import { api } from "./api.ts";
 import type { ProviderUsage } from "../../../shared/types.ts";
+import { usageRefreshOn, shouldRefresh } from "./usageRefreshPref.ts";
 
 /**
  * Plan quota for every provider, polled once for the whole app.
@@ -36,7 +37,7 @@ export function subscribeProviderUsage(fn: () => void): () => void {
     const load = () => api.providerUsage()
       // A failed poll leaves the last good answer standing: the meters must
       // never blink out because one request lost.
-      .then((next) => { snapshot = next; })
+      .then((next) => { snapshot = next; void maybeRefreshCodex(); })
       .catch(() => { /* offline — keep what we have */ })
       .finally(() => { firstFetchDone = true; for (const l of listeners) l(); });
     load();
@@ -48,6 +49,33 @@ export function subscribeProviderUsage(fn: () => void): () => void {
     listeners.delete(fn);
     if (!listeners.size && poller) { clearInterval(poller); poller = null; }
   };
+}
+
+/** The hourly cadence the setting promises. The 5-minute poll is what notices
+ *  the moment has come, so no second timer is needed — and the floor in
+ *  shouldRefresh() is what makes a page reload cheap. */
+const REFRESH_EVERY_MS = 60 * 60_000;
+let lastPing = 0;
+
+/**
+ * Run the Codex refresh when the setting is on and the reading has gone stale.
+ *
+ * Deliberately driven by the poll rather than by its own interval: the poll is
+ * already the thing that knows how old the reading is, and a second timer would
+ * be a second source of truth about when to spend money.
+ */
+async function maybeRefreshCodex(): Promise<void> {
+  if (!usageRefreshOn()) return;
+  const codex = usageOf("codex");
+  if (!shouldRefresh(codex?.observedAt)) return;
+  const now = Date.now();
+  if (now - lastPing < REFRESH_EVERY_MS) return;
+  lastPing = now;
+  try {
+    const r = await api.refreshCodexUsage();
+    if (r.ok) snapshot = await api.providerUsage();
+  } catch { /* the reading simply stays as old as it was */ }
+  for (const l of listeners) l();
 }
 
 /** Colour escalates with consumption — the "used" mental model. */
@@ -94,5 +122,6 @@ export function ageLabel(observedAt: number | undefined, now = Date.now()): stri
 export function __resetUsageStore(): void {
   snapshot = null;
   firstFetchDone = false;
+  lastPing = 0;
   if (poller) { clearInterval(poller); poller = null; }
 }
