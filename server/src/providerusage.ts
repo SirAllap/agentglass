@@ -120,35 +120,39 @@ const AGENT_FOR: Record<ProviderUsage["provider"], string> = {
 };
 
 /**
- * The providers whose agent is connected, and so worth a row.
+ * The providers whose agent is installed on this machine, and so worth a row.
  *
- * Keyed on `connected` rather than on whether a reading happens to exist,
- * because those are different questions and the user answers the first one in
- * Settings › Agents. Disconnecting an agent means "stop showing me this",
- * which is a stronger statement than "there is nothing to show" — and it is
- * deliberately allowed to hide a reading that is still perfectly readable.
- * Codex's quota comes from its session files and Claude's from its
- * credentials, so neither actually stops being available when the wiring is
- * undone; the cockpit just stops asking on your behalf.
+ * Keyed on `found` — the binary is on the PATH — rather than on `connected`.
+ * The two answer different questions, and quota is only downstream of the
+ * first. Connecting an agent wires its events to this server: hooks for Claude,
+ * OTel for Codex. Quota comes from neither. Codex's lives in the session files
+ * its CLI writes whatever it is pointed at, and Claude's behind the OAuth
+ * credentials on disk. So an agent you have deliberately disconnected still has
+ * a plan that runs out, and hiding that number would be withholding something
+ * true about a tool you are still using.
+ *
+ * What the filter does remove is a row about a CLI that is not here at all —
+ * where the note would otherwise invite you to "run a Codex turn" with no
+ * codex binary to run it with.
  */
-export function connectedProviders(probes: AgentProbe[]): Set<ProviderUsage["provider"]> {
-  const wired = new Set(probes.filter((p) => p.connected).map((p) => p.id));
+export function installedProviders(probes: AgentProbe[]): Set<ProviderUsage["provider"]> {
+  const here = new Set(probes.filter((p) => p.found).map((p) => p.id));
   const out = new Set<ProviderUsage["provider"]>();
   for (const [provider, id] of Object.entries(AGENT_FOR)) {
-    if (wired.has(id)) out.add(provider as ProviderUsage["provider"]);
+    if (here.has(id)) out.add(provider as ProviderUsage["provider"]);
   }
   return out;
 }
 
 /**
- * `seen` is stubbed out: `connected` is decided by config files and `Bun.which`
- * alone, so the four `MAX(timestamp)` queries `probeAgents` would otherwise run
- * are work this endpoint has no use for, on a route the dashboard polls.
+ * `seen` is stubbed out: `found` is decided by `Bun.which` alone, so the four
+ * `MAX(timestamp)` queries `probeAgents` would otherwise run are work this
+ * endpoint has no use for, on a route the dashboard polls every five minutes.
  */
 export async function allProviderUsage(
   probes: AgentProbe[] = probeAgents(undefined, () => null),
 ): Promise<ProviderUsage[]> {
-  const show = connectedProviders(probes);
+  const show = installedProviders(probes);
   const rows: ProviderUsage[] = [];
   if (show.has("anthropic")) rows.push(await anthropic());
   if (show.has("codex")) rows.push(codexUsage());
