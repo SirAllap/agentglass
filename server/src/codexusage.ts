@@ -14,7 +14,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderUsage, QuotaWindow } from "../../shared/types.ts";
 import { windowLabel } from "../../shared/quota.ts";
-import { codexHome } from "./codex.ts";
+import { codexHome, CODEX_ENABLED, codexModels } from "./codex.ts";
+import { singleFlight } from "./singleflight.ts";
 
 /**
  * How many rollout files to open before giving up.
@@ -144,3 +145,50 @@ export function codexUsage(): ProviderUsage {
 
 /** Test seam: forget the cached reading. */
 export function __resetCodexUsageCache(): void { cache = null; }
+
+/**
+ * Which model the refresh ping runs on.
+ *
+ * Codex does not label a model "cheapest", so this does not guess. The list
+ * `parseModels()` produces is sorted by Codex's own `priority`, largest first,
+ * so its last entry is the smallest thing on offer. An explicit override wins,
+ * and an empty list means no `--model` flag at all rather than an invented id —
+ * a hardcoded model that is not on the user's plan is a feature that fails for
+ * everyone except the person who wrote it.
+ */
+export function usageRefreshModel(models: { id: string }[]): string | null {
+  const override = process.env.AGENTGLASS_CODEX_USAGE_MODEL;
+  if (override) return override;
+  return models.length ? models[models.length - 1]!.id : null;
+}
+
+/** How long the ping may take before we stop waiting. A turn that says "ok"
+ *  takes a couple of seconds; a minute means something is wrong with it, not
+ *  that patience will help. */
+const REFRESH_TIMEOUT_MS = 60_000;
+
+/**
+ * Run a minimal Codex turn so the rate-limit snapshot on disk is current.
+ *
+ * Single-flighted: several open tabs firing their on-load trigger at once is
+ * the normal case, and each one spawning its own turn would multiply the cost
+ * by the number of windows somebody happens to have open.
+ */
+export async function refreshCodexUsage(): Promise<{ ok: boolean; error?: string }> {
+  if (!CODEX_ENABLED) return { ok: false, error: "Codex is not available on this machine" };
+  return singleFlight("codex-usage-refresh", async () => {
+    // codexModels() is synchronous and already exported (server/src/codex.ts:127).
+    const model = usageRefreshModel(codexModels());
+    const args = ["exec", "--sandbox", "read-only"];
+    if (model) args.push("--model", model);
+    args.push("Reply with the single word: ok");
+    const proc = Bun.spawn(["codex", ...args], {
+      stdout: "ignore", stderr: "ignore", timeout: REFRESH_TIMEOUT_MS,
+    });
+    const code = await proc.exited;
+    // The turn's OUTPUT is worthless — the point is the rate_limits it wrote
+    // on its way past. Drop the cache so the next read sees the new file.
+    __resetCodexUsageCache();
+    return code === 0 ? { ok: true } : { ok: false, error: `codex exited ${code}` };
+  });
+}
