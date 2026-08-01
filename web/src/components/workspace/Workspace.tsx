@@ -31,7 +31,7 @@ const BODY = {
  *  aren't looking at keep their state without costing anything on the network.
  */
 export function Workspace({
-  open, view, onView, onClose, onSkills, chatFocusId,
+  open, view, onView, onClose, onSkills, chatFocusId, filterProvider = "",
 }: {
   open: boolean;
   view: ViewId;
@@ -39,6 +39,10 @@ export function Workspace({
   onClose: () => void;
   onSkills: () => void;
   chatFocusId?: string | null;
+  /** The dashboard's provider filter, for the notch's gauge. See the note
+   *  by the `<DynamicIsland>` call below on why it has no agent to pair with
+   *  it yet. */
+  filterProvider?: string;
 }) {
   // Same reason as App's onClose: this reaches a view's effect dependencies,
   // and a fresh arrow each render is a remount nobody asked for.
@@ -179,8 +183,20 @@ export function Workspace({
             {/* One ambient status surface for the whole overlay -- clock, plan
                 meters, live-work pulse and the events worth looking up for. It
                 hangs off the frame's top edge and covers every view, which is
-                why it lives here rather than inside any one of them. */}
-            <DynamicIsland />
+                why it lives here rather than inside any one of them.
+
+                `focusedAgent` is not wired: `chatFocusId` only fires once, when
+                a session is resumed from the Session modal, and is never
+                cleared or updated again -- it does not track which chat tab is
+                actually showing, which lives in ChatPanel's own `activeId` and
+                is mirrored into chatStore's private `activeChatId` with no
+                public reader. Threading that through would mean adding a new
+                export to chatStore.ts, a file outside this change, so the
+                gauge falls back to the dashboard's provider filter alone
+                (`filterProvider`) rather than a signal that would go stale the
+                first time someone resumes one session and then works in
+                another chat. */}
+            <DynamicIsland filterProvider={filterProvider} />
           </>
         )}
       </AnimatePresence>

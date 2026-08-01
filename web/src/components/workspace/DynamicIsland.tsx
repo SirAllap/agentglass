@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { api, type UsagePayload, type UsageWindow } from "../../lib/api.ts";
-import { subscribeUsage, usedColor, usageError, resetLabel } from "../UsageWidget.tsx";
+import { api } from "../../lib/api.ts";
+import { subscribeProviderUsage, usageOf, usedColor, resetLabel, ageLabel } from "../../lib/usageStore.ts";
+import { providerInContext } from "../../lib/providerContext.ts";
+import type { QuotaWindow } from "../../../../shared/types.ts";
+import type { AgentKind } from "../../lib/agents.ts";
 import { subscribe as subscribeChats, listChats } from "../../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../../lib/clockPref.ts";
@@ -165,18 +168,21 @@ function Pill({ cap, title, children }: { cap: string; title?: string; children:
 
 /** A plan window: how much is gone, as a bar and a number, captioned with when
  *  it comes back. "62%" alone never answered the question you actually have. */
-function MeterPill({ tag, w }: { tag: string; w: UsageWindow }) {
-  const color = usedColor(w.utilization);
-  const reset = resetLabel(w.resets_at);
+function MeterPill({ w, age }: { w: QuotaWindow; age: string }) {
+  const color = usedColor(w.usedPercent);
+  const reset = resetLabel(w.resetsAt);
+  const tag = w.label.toUpperCase();
   return (
     <Pill
       cap={reset ? `${tag} · ${reset}` : tag}
-      title={`${tag}: ${w.utilization}% used${reset ? ` — resets ${reset}` : ""}`}
+      // The age rides in the tooltip rather than the cap: a Codex reading can
+      // be days old, and a number with no age on it is a lie by omission.
+      title={`${tag}: ${w.usedPercent}% used${reset ? ` — resets ${reset}` : ""}${age ? ` (read ${age})` : ""}`}
     >
       <span className="agx-bar" style={{ width: 38 }}>
-        <i style={{ width: `${Math.min(100, Math.max(0, w.utilization))}%`, background: color }} />
+        <i style={{ width: `${Math.min(100, Math.max(0, w.usedPercent))}%`, background: color }} />
       </span>
-      <span className="agx-val" style={{ color }}>{w.utilization}%</span>
+      <span className="agx-val" style={{ color }}>{w.usedPercent}%</span>
     </Pill>
   );
 }
@@ -430,16 +436,25 @@ function HistoryRow({ n, onGone }: { n: SystemNote; onGone: () => void }) {
 
 // ---------------------------------------------------------------------------
 
-export function DynamicIsland() {
+export function DynamicIsland({
+  focusedAgent = null, filterProvider = "",
+}: {
+  focusedAgent?: AgentKind | null;
+  filterProvider?: string;
+} = {}) {
   const clock = useClock();
   const { note, behind, ahead } = useNotes();
 
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
   const waiting = useSyncExternalStore(subscribeChats, () => listChats().reduce((n, c) => n + (c.attention !== "none" ? 1 : 0), 0), () => 0);
 
-  const [u, setU] = useState<UsagePayload | null>(null);
-  useEffect(() => subscribeUsage(setU), []);
-  const rateLimited = !u?.available && usageError()?.includes("429");
+  // One gauge, for the provider in context — the agent whose chat is focused,
+  // or failing that whatever the dashboard is filtered to. The island is a
+  // glance, so three providers' meters here would be two too many.
+  const [, bumpUsage] = useState(0);
+  useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
+  const ctx = providerInContext(focusedAgent, filterProvider);
+  const u = ctx ? usageOf(ctx) : null;
 
   const anyLive = shells > 0 || waiting > 0 || behind > 0 || ahead > 0;
 
@@ -587,20 +602,16 @@ export function DynamicIsland() {
                 <Lcd text={clock.hhmm} height={20} blink={clock.colon} />
               </Pill>
 
-              {/* right: the plan windows, or a rate-limit note when the upstream
-                  is throttling us -- the meters vanishing looks like a bug. */}
+              {/* right: the plan windows for the provider in context. No
+                  fallback state here -- the notch is a glance, not an
+                  explanation, so it shows a gauge when there is one and
+                  nothing when there is not. */}
               {u?.available ? (
                 <>
                   <span className="agx-sep" />
-                  {u.five_hour && <MeterPill tag="5H" w={u.five_hour} />}
-                  {u.seven_day && <MeterPill tag="WEEK" w={u.seven_day} />}
-                </>
-              ) : rateLimited ? (
-                <>
-                  <span className="agx-sep" />
-                  <Pill cap="PLAN" title="The usage endpoint is rate-limiting us; retrying">
-                    <span className="text-[10px]" style={{ color: "color-mix(in srgb, #fff 55%, transparent)" }}>Rate-limited</span>
-                  </Pill>
+                  {u.windows.map((w) => (
+                    <MeterPill key={w.label} w={w} age={ageLabel(u.observedAt)} />
+                  ))}
                 </>
               ) : null}
             </motion.div>
