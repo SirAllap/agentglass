@@ -6,32 +6,53 @@
  * `ageLabel` carries the most weight: it is the whole reason a Codex reading is
  * honest rather than merely present.
  */
-import { describe, expect, test, beforeAll } from "bun:test";
-import type { ProviderUsage } from "../../shared/types.ts";
+import { describe, expect, test, beforeAll, afterAll, beforeEach } from "bun:test";
 
 let usageStore: typeof import("../src/lib/usageStore.ts");
 let api: typeof import("../src/lib/api.ts");
+let demo: typeof import("../src/lib/demo.ts");
 
-// Demo data matching what web/src/lib/demo.ts exports
-const demoProviderUsage = (): ProviderUsage[] => [
-  { provider: "anthropic", label: "Claude", available: false, windows: [],
-    note: "Plan usage is not available in the demo." },
-  { provider: "codex", label: "Codex", available: false, windows: [],
-    note: "Plan usage is not available in the demo." },
-  { provider: "antigravity", label: "Antigravity", available: false, windows: [],
-    note: "Antigravity's CLI does not report quota anywhere agentglass can read." },
-];
+// Store the original providerUsage so we can restore it
+let originalProviderUsage: any;
+// Track clearInterval calls for verification
+let clearIntervalCalls: number[] = [];
+// Track how many times the patched providerUsage was called
+let providerUsageCallCount = 0;
 
 beforeAll(async () => {
   (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
 
-  // Import api first so we can patch it before usageStore imports it
+  // Import modules in order
+  demo = await import("../src/lib/demo.ts");
   api = await import("../src/lib/api.ts");
-  // Patch the providerUsage method to return demo data instead of hitting the network
-  (api.api as any).providerUsage = () => Promise.resolve(demoProviderUsage());
+
+  // Save the original and create the patched version
+  originalProviderUsage = api.api.providerUsage;
+  (api.api as any).providerUsage = () => {
+    providerUsageCallCount++;
+    return Promise.resolve(demo.providerUsage());
+  };
+
+  // Patch clearInterval to track calls
+  const originalClearInterval = globalThis.clearInterval;
+  (globalThis as any).clearInterval = (id: number) => {
+    clearIntervalCalls.push(id);
+    return originalClearInterval(id);
+  };
 
   // Now import usageStore - it will use the patched api
   usageStore = await import("../src/lib/usageStore.ts");
+});
+
+afterAll(async () => {
+  // Restore the original api.providerUsage
+  (api.api as any).providerUsage = originalProviderUsage;
+});
+
+beforeEach(() => {
+  // Reset counters before each test
+  clearIntervalCalls = [];
+  providerUsageCallCount = 0;
 });
 
 const NOW = Date.parse("2026-07-31T12:00:00Z");
@@ -83,42 +104,87 @@ describe("resetLabel", () => {
 });
 
 describe("subscribeProviderUsage", () => {
-  test("before first fetch resolves, the store reports not-loaded", () => {
+  test("during fetch, the store reports loading; after resolution, loaded with data", async () => {
     usageStore.__resetUsageStore();
-    expect(usageStore.usageLoaded()).toBe(false);
-    expect(usageStore.providerUsage()).toBe(null);
+
+    // Track when the callback fires
+    const calls: number[] = [];
+    const startTime = Date.now();
+
+    // Create a controlled promise that we resolve ourselves
+    let resolveProviderUsage: ((data: any) => void) | null = null;
+    const controlledPromise = new Promise((resolve) => {
+      resolveProviderUsage = resolve;
+    });
+
+    // Temporarily replace the api with our controlled version
+    const originalPatch = api.api.providerUsage;
+    (api.api as any).providerUsage = () => controlledPromise;
+
+    try {
+      // Subscribe before the promise resolves
+      const unsub = usageStore.subscribeProviderUsage(() => {
+        calls.push(Date.now() - startTime);
+      });
+
+      // At this point, the promise is still in flight
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Store should report not-loaded while fetch is pending
+      expect(usageStore.usageLoaded()).toBe(false);
+      expect(usageStore.providerUsage()).toBe(null);
+
+      // Now resolve the promise
+      resolveProviderUsage?.(demo.providerUsage());
+
+      // Wait for the promise to resolve and callback to fire
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Now the store should report loaded with data
+      expect(usageStore.usageLoaded()).toBe(true);
+      const usage = usageStore.providerUsage();
+      expect(usage).not.toBe(null);
+      expect(usage?.length).toBe(3);
+      expect(usage?.[0]?.provider).toBe("anthropic");
+      expect(usage?.[1]?.provider).toBe("codex");
+      expect(usage?.[2]?.provider).toBe("antigravity");
+
+      // Callback should have fired at least once after resolution
+      expect(calls.length).toBeGreaterThan(0);
+
+      unsub();
+    } finally {
+      // Restore the original patch
+      (api.api as any).providerUsage = originalPatch;
+    }
   });
 
-  test("after first fetch resolves, usageLoaded() is true and providerUsage() has length 3", async () => {
+  test("unsubscribing the last listener clears the timer", async () => {
     usageStore.__resetUsageStore();
-    let callCount = 0;
-    const unsub = usageStore.subscribeProviderUsage(() => { callCount++; });
+    const initialCallCount = providerUsageCallCount;
 
-    // Wait for the fetch to complete
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    expect(usageStore.usageLoaded()).toBe(true);
-    const usage = usageStore.providerUsage();
-    expect(usage).not.toBe(null);
-    expect(usage?.length).toBe(3);
-    expect(usage?.[0]?.provider).toBe("anthropic");
-    expect(usage?.[1]?.provider).toBe("codex");
-    expect(usage?.[2]?.provider).toBe("antigravity");
-
-    unsub();
-  });
-
-  test("unsubscribing the last listener clears the timer without throwing", async () => {
-    usageStore.__resetUsageStore();
     const unsub = usageStore.subscribeProviderUsage(() => {});
 
-    // Wait for the fetch to complete
+    // Wait for the first fetch to complete
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    // This should not throw
-    expect(() => unsub()).not.toThrow();
+    // First fetch should have happened
+    expect(providerUsageCallCount).toBeGreaterThan(initialCallCount);
 
-    // After unsubscribing, the store should be reset for the next test
-    usageStore.__resetUsageStore();
+    // Now unsubscribe
+    const clearIntervalCallCountBefore = clearIntervalCalls.length;
+    unsub();
+    const clearIntervalCallCountAfter = clearIntervalCalls.length;
+
+    // clearInterval should have been called exactly once
+    expect(clearIntervalCallCountAfter).toBe(clearIntervalCallCountBefore + 1);
+
+    // Wait to verify no more calls happen (timer should be cleared)
+    const callCountBeforeWait = providerUsageCallCount;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const callCountAfterWait = providerUsageCallCount;
+
+    // No new calls should have been made after unsubscribe
+    expect(callCountAfterWait).toBe(callCountBeforeWait);
   });
 });
