@@ -20,7 +20,8 @@ import { subscribeProviderUsage, usageOf } from "../lib/usageStore.ts";
 import { providerInContext } from "../lib/providerContext.ts";
 import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
-import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
+import { subscribe as subscribeChats, listChats, getActiveChatId, getChat } from "../lib/chatStore.ts";
+import type { AgentKind } from "../lib/agents.ts";
 import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
@@ -270,9 +271,17 @@ export function TopBar({
   // or failing that whatever the dashboard is filtered to. The strip is a
   // glance, so three providers' meters here would be two too many; the
   // dashboard box and Stats are where all of them are listed side by side.
+  //
+  // Which chat is focused is read straight from chatStore rather than taken as
+  // a prop: that is the one place the live answer exists, kept current by the
+  // chat panel's own tab switching. The dashboard's filter is the fallback for
+  // when no chat is focused at all — and it is usually empty exactly while you
+  // are deep in a chat, which is why the filter alone was not enough.
+  const activeId = useSyncExternalStore(subscribeChats, getActiveChatId, () => "");
+  const focusedAgent: AgentKind | null = getChat(activeId)?.agent ?? null;
   const [, bumpUsage] = useState(0);
   useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
-  const ctx = providerInContext(null, filterProvider);
+  const ctx = providerInContext(focusedAgent, filterProvider);
   const u = ctx ? usageOf(ctx) : null;
   // A provider that has no reading to give right now — rate-limited, signed
   // out, or one that never reports at all. Worth saying out loud: a meter that
