@@ -4,11 +4,12 @@
 // CLI writes, and nothing at all — normalised so that the surfaces render a
 // list instead of three bespoke blocks. The order is fixed rather than sorted:
 // a row that moves because a number changed is a row nobody can find twice.
-import type { ProviderUsage } from "../../shared/types.ts";
+import type { ProviderUsage, AgentProbe } from "../../shared/types.ts";
 import type { UsagePayload } from "./usage.ts";
 import { getUsage } from "./usage.ts";
 import { windowLabel } from "../../shared/quota.ts";
 import { codexUsage } from "./codexusage.ts";
+import { probeAgents } from "./agentprobe.ts";
 
 /**
  * Why Antigravity has no gauge.
@@ -92,13 +93,57 @@ async function anthropic(): Promise<ProviderUsage> {
   return anthropicUsage(await getUsage());
 }
 
-export async function allProviderUsage(): Promise<ProviderUsage[]> {
-  return [
-    await anthropic(),
-    codexUsage(),
-    {
+/**
+ * Which roster entry decides whether a provider is shown at all.
+ *
+ * Only three of the four agents have quota to report — the Gemini CLI has no
+ * plan window this app can read, so it maps to nothing here rather than to an
+ * empty row.
+ */
+const AGENT_FOR: Record<ProviderUsage["provider"], string> = {
+  anthropic: "claude-code",
+  codex: "codex",
+  antigravity: "antigravity",
+};
+
+/**
+ * The providers whose agent is connected, and so worth a row.
+ *
+ * Keyed on `connected` rather than on whether a reading happens to exist,
+ * because those are different questions and the user answers the first one in
+ * Settings › Agents. Disconnecting an agent means "stop showing me this",
+ * which is a stronger statement than "there is nothing to show" — and it is
+ * deliberately allowed to hide a reading that is still perfectly readable.
+ * Codex's quota comes from its session files and Claude's from its
+ * credentials, so neither actually stops being available when the wiring is
+ * undone; the cockpit just stops asking on your behalf.
+ */
+export function connectedProviders(probes: AgentProbe[]): Set<ProviderUsage["provider"]> {
+  const wired = new Set(probes.filter((p) => p.connected).map((p) => p.id));
+  const out = new Set<ProviderUsage["provider"]>();
+  for (const [provider, id] of Object.entries(AGENT_FOR)) {
+    if (wired.has(id)) out.add(provider as ProviderUsage["provider"]);
+  }
+  return out;
+}
+
+/**
+ * `seen` is stubbed out: `connected` is decided by config files and `Bun.which`
+ * alone, so the four `MAX(timestamp)` queries `probeAgents` would otherwise run
+ * are work this endpoint has no use for, on a route the dashboard polls.
+ */
+export async function allProviderUsage(
+  probes: AgentProbe[] = probeAgents(undefined, () => null),
+): Promise<ProviderUsage[]> {
+  const show = connectedProviders(probes);
+  const rows: ProviderUsage[] = [];
+  if (show.has("anthropic")) rows.push(await anthropic());
+  if (show.has("codex")) rows.push(codexUsage());
+  if (show.has("antigravity")) {
+    rows.push({
       provider: "antigravity", label: "Antigravity", available: false,
       windows: [], note: ANTIGRAVITY_NOTE,
-    },
-  ];
+    });
+  }
+  return rows;
 }
