@@ -41,6 +41,17 @@ describe("panelState", () => {
     expect(panelState(true, sample)).toBe("rows");
   });
 
+  test("an empty array is its own state, not 'rows'", () => {
+    // Every quota-reporting agent disconnected in Settings › Agents. Mapping
+    // this onto "rows" renders a panel with nothing in it, which reads as "you
+    // have used nothing" rather than "you asked not to be shown this".
+    expect(panelState(true, [])).toBe("empty");
+  });
+
+  test("and empty does not depend on the loaded flag", () => {
+    expect(panelState(false, [])).toBe("empty");
+  });
+
   test("rows already cached before the poll reports loaded -> rows", () => {
     // Reachable once a later subscriber mounts after the first fetch already
     // populated the snapshot but before its own loaded flag microtask fires.

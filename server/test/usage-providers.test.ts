@@ -10,7 +10,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { anthropicUsage } from "../src/providerusage.ts";
+import { anthropicUsage, connectedProviders, allProviderUsage } from "../src/providerusage.ts";
+import type { AgentProbe } from "../../shared/types.ts";
 import type { UsagePayload } from "../src/usage.ts";
 
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
@@ -55,24 +56,27 @@ type Provider = {
 const providers = async (): Promise<Provider[]> =>
   (await fetch(base + "/usage/providers").then((r) => r.json())) as Provider[];
 
+/*
+ * These run against a real server whose HOME is a temp dir, so WHICH agents are
+ * connected depends on the machine — `agy` on the PATH makes Antigravity
+ * connected, an absent one does not. So nothing here asserts a specific roster;
+ * that contract is pinned deterministically in the injected-probe tests below.
+ * What these check is what must hold for whatever rows do come back.
+ */
+const ORDER = ["anthropic", "codex", "antigravity"];
+
 describe("/usage/providers", () => {
-  test("always names all three, in a stable order", async () => {
-    const list = await providers();
-    expect(list.map((p) => p.provider)).toEqual(["anthropic", "codex", "antigravity"]);
+  test("returns known providers, in the fixed order, without repeats", async () => {
+    const got = (await providers()).map((p) => p.provider);
+    for (const p of got) expect(ORDER).toContain(p);
+    expect(new Set(got).size).toBe(got.length);
+    // A filter preserves order, so the result is a subsequence of ORDER — a row
+    // that moves because a number changed is a row nobody can find twice.
+    expect(got).toEqual(ORDER.filter((p) => got.includes(p)));
   });
 
   test("every provider carries a human label", async () => {
     for (const p of await providers()) expect(p.label.length).toBeGreaterThan(0);
-  });
-
-  test("Antigravity is a labelled gap, not an absence", async () => {
-    const agy = (await providers()).find((p) => p.provider === "antigravity")!;
-    expect(agy.available).toBe(false);
-    expect(agy.windows).toEqual([]);
-    // A sentence, because it is rendered to a person.
-    const note = agy.note ?? "";
-    expect(note.length).toBeGreaterThan(10);
-    expect(note).toMatch(/\./);
   });
 
   test("a provider with nothing to say still says why", async () => {
@@ -186,5 +190,69 @@ describe("anthropicUsage() — pure conversion", () => {
       anthropicUsage({ available: false, fetched_at: 0, error: "TypeError: fetch failed" }).note,
     ];
     expect(new Set(notes).size).toBe(3);
+  });
+});
+
+/*
+ * A disconnected agent is not a provider with nothing to say — it is a provider
+ * the user has asked not to see. The distinction matters because the two render
+ * differently: one gets a row with a sentence, the other gets no row at all.
+ */
+describe("connectedProviders()", () => {
+  /** Only the fields the filter reads; the rest of AgentProbe is irrelevant here. */
+  const probe = (id: string, connected: boolean) => ({ id, connected }) as unknown as AgentProbe;
+
+  test("maps each roster id to its provider", () => {
+    const on = connectedProviders([
+      probe("claude-code", true), probe("codex", true), probe("antigravity", true),
+    ]);
+    expect([...on].sort()).toEqual(["anthropic", "antigravity", "codex"]);
+  });
+
+  test("drops the ones that are disconnected", () => {
+    const on = connectedProviders([
+      probe("claude-code", true), probe("codex", false), probe("antigravity", false),
+    ]);
+    expect([...on]).toEqual(["anthropic"]);
+  });
+
+  test("all disconnected is empty, not everything", () => {
+    const on = connectedProviders([
+      probe("claude-code", false), probe("codex", false), probe("antigravity", false),
+    ]);
+    expect(on.size).toBe(0);
+  });
+
+  test("the Gemini CLI maps to no provider — it reports no plan window", () => {
+    expect(connectedProviders([probe("gemini", true)]).size).toBe(0);
+  });
+});
+
+describe("allProviderUsage() with injected probes", () => {
+  const probe = (id: string, connected: boolean) => ({ id, connected }) as unknown as AgentProbe;
+
+  test("returns only the connected agents' rows, in the fixed order", async () => {
+    const rows = await allProviderUsage([
+      probe("claude-code", false), probe("codex", false), probe("antigravity", true),
+    ]);
+    expect(rows.map((r) => r.provider)).toEqual(["antigravity"]);
+  });
+
+  test("nothing connected yields an empty list, and never a partial row", async () => {
+    const rows = await allProviderUsage([
+      probe("claude-code", false), probe("codex", false), probe("antigravity", false),
+    ]);
+    expect(rows).toEqual([]);
+  });
+
+  test("a connected Antigravity is a labelled gap, not an absence", async () => {
+    // Deterministic here in a way the route test cannot be: the probe is
+    // injected, so this holds on a machine with no `agy` installed too.
+    const [agy] = await allProviderUsage([probe("antigravity", true)]);
+    expect(agy!.available).toBe(false);
+    expect(agy!.windows).toEqual([]);
+    // A sentence, because it is rendered to a person.
+    expect((agy!.note ?? "").length).toBeGreaterThan(10);
+    expect(agy!.note).toMatch(/\./);
   });
 });

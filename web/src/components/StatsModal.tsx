@@ -180,6 +180,7 @@ function UsageSection() {
 
   if (state === "loading") return <div className="t-dim2 text-[11px] py-3">Reading plan quota…</div>;
   if (state === "unreachable") return <div className="t-dim2 text-[11px] py-3">Could not reach the server for plan quota.</div>;
+  if (state === "empty") return <div className="t-dim2 text-[11px] py-3">No connected agent reports plan quota. Connect one in Settings › Agents.</div>;
 
   return (
     <div className="flex flex-col gap-2">

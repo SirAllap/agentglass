@@ -71,8 +71,12 @@ function Row({ u, first }: { u: ProviderUsage; first: boolean }) {
  * first poll if the server is down, and is a fourth state distinct from
  * "loading" and "have data": the server was unreachable, not merely slow.
  */
-export function panelState(loaded: boolean, rows: ProviderUsage[] | null): "loading" | "unreachable" | "rows" {
-  if (rows) return "rows";
+export function panelState(loaded: boolean, rows: ProviderUsage[] | null): "loading" | "unreachable" | "empty" | "rows" {
+  // An empty array is not "have data" — it is the answer you get when every
+  // agent with quota is disconnected in Settings. Falling into the rows branch
+  // would map it onto a panel with no rows in it, which reads as "you have used
+  // nothing" rather than "you asked not to be shown this".
+  if (rows) return rows.length ? "rows" : "empty";
   return loaded ? "unreachable" : "loading";
 }
 
@@ -86,6 +90,7 @@ export function UsageBox() {
       <div className="h-full min-h-0 overflow-y-auto agx-scroll flex flex-col">
         {state === "loading" && <span className="text-[11px] t-dim2 py-2">Reading plan quota…</span>}
         {state === "unreachable" && <span className="text-[11px] t-dim2 py-2">Could not reach the server for plan quota.</span>}
+        {state === "empty" && <span className="text-[11px] t-dim2 py-2 leading-snug">No connected agent reports plan quota. Connect one in Settings › Agents.</span>}
         {rows && rows.map((u, i) => <Row key={u.provider} u={u} first={i === 0} />)}
       </div>
     </Panel>
