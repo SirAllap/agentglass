@@ -5,7 +5,9 @@
 // list instead of three bespoke blocks. The order is fixed rather than sorted:
 // a row that moves because a number changed is a row nobody can find twice.
 import type { ProviderUsage } from "../../shared/types.ts";
+import type { UsagePayload } from "./usage.ts";
 import { getUsage } from "./usage.ts";
+import { windowLabel } from "../../shared/quota.ts";
 import { codexUsage } from "./codexusage.ts";
 
 /**
@@ -24,10 +26,10 @@ import { codexUsage } from "./codexusage.ts";
 export const ANTIGRAVITY_NOTE =
   "Antigravity's CLI does not report quota anywhere agentglass can read.";
 
-/** Anthropic's live reading, in the shared shape. The percentages are already
- *  0..100 and already rounded by usage.ts. */
-async function anthropic(): Promise<ProviderUsage> {
-  const u = await getUsage();
+/** Convert a UsagePayload into the shared ProviderUsage shape.
+ *  The percentages are already 0..100 and already rounded by usage.ts.
+ *  If available is true but no windows parsed, returns unavailable with an explanation. */
+export function anthropicUsage(u: UsagePayload): ProviderUsage {
   if (!u.available) {
     return {
       provider: "anthropic", label: "Claude", available: false, windows: [],
@@ -37,22 +39,34 @@ async function anthropic(): Promise<ProviderUsage> {
   const windows = [];
   if (u.five_hour) {
     windows.push({
-      label: "5h", minutes: 300,
+      label: windowLabel(300), minutes: 300,
       usedPercent: u.five_hour.utilization,
       resetsAt: u.five_hour.resets_at,
     });
   }
   if (u.seven_day) {
     windows.push({
-      label: "weekly", minutes: 10080,
+      label: windowLabel(10080), minutes: 10080,
       usedPercent: u.seven_day.utilization,
       resetsAt: u.seven_day.resets_at,
     });
+  }
+  // If available but no windows parsed, return unavailable with explanation
+  if (windows.length === 0) {
+    return {
+      provider: "anthropic", label: "Claude", available: false, windows: [],
+      note: "Anthropic answered without any plan windows — the usage endpoint may have changed shape.",
+    };
   }
   return {
     provider: "anthropic", label: "Claude", available: true,
     windows, observedAt: u.fetched_at,
   };
+}
+
+/** Anthropic's live reading via the shared shape. */
+async function anthropic(): Promise<ProviderUsage> {
+  return anthropicUsage(await getUsage());
 }
 
 export async function allProviderUsage(): Promise<ProviderUsage[]> {

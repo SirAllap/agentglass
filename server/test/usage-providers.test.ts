@@ -10,6 +10,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { anthropicUsage } from "../src/providerusage.ts";
+import type { UsagePayload } from "../src/usage.ts";
 
 let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -68,16 +70,82 @@ describe("/usage/providers", () => {
     expect(agy.available).toBe(false);
     expect(agy.windows).toEqual([]);
     // A sentence, because it is rendered to a person.
-    expect(agy.note ?? "").toMatch(/\s/);
+    const note = agy.note ?? "";
+    expect(note.length).toBeGreaterThan(10);
+    expect(note).toMatch(/\./);
   });
 
   test("a provider with nothing to say still says why", async () => {
     for (const p of await providers()) {
-      if (!p.available) expect(p.note ?? "").toMatch(/\s/);
+      if (!p.available) {
+        const note = p.note ?? "";
+        expect(note.length).toBeGreaterThan(10);
+        expect(note).toMatch(/\./);
+      }
     }
   });
 
   test("no filesystem path is in the answer", async () => {
     expect(JSON.stringify(await providers())).not.toContain(dir);
+  });
+});
+
+describe("anthropicUsage() — pure conversion", () => {
+  test("both windows present maps to two QuotaWindow objects with correct labels", () => {
+    const payload: UsagePayload = {
+      available: true,
+      five_hour: { utilization: 25, remaining: 75, resets_at: "2026-07-31T12:00:00Z" },
+      seven_day: { utilization: 50, remaining: 50, resets_at: "2026-08-07T00:00:00Z" },
+      fetched_at: 1722470400000,
+    };
+    const result = anthropicUsage(payload);
+    expect(result.available).toBe(true);
+    expect(result.windows.length).toBe(2);
+    expect(result.windows[0].label).toBe("5h");
+    expect(result.windows[0].minutes).toBe(300);
+    expect(result.windows[0].usedPercent).toBe(25);
+    expect(result.windows[1].label).toBe("weekly");
+    expect(result.windows[1].minutes).toBe(10080);
+    expect(result.windows[1].usedPercent).toBe(50);
+    expect(result.observedAt).toBe(1722470400000);
+  });
+
+  test("only five_hour present returns one window", () => {
+    const payload: UsagePayload = {
+      available: true,
+      five_hour: { utilization: 33, remaining: 67, resets_at: "2026-07-31T12:00:00Z" },
+      fetched_at: 1722470400000,
+    };
+    const result = anthropicUsage(payload);
+    expect(result.available).toBe(true);
+    expect(result.windows.length).toBe(1);
+    expect(result.windows[0].label).toBe("5h");
+    expect(result.windows[0].usedPercent).toBe(33);
+  });
+
+  test("available: true but neither window parsed returns unavailable with explanation", () => {
+    const payload: UsagePayload = {
+      available: true,
+      fetched_at: 1722470400000,
+    };
+    const result = anthropicUsage(payload);
+    expect(result.available).toBe(false);
+    expect(result.windows.length).toBe(0);
+    expect(result.note).toBeDefined();
+    expect((result.note ?? "").length).toBeGreaterThan(10);
+    expect(result.note).toMatch(/\./);
+  });
+
+  test("available: false returns unavailable with sign-in note", () => {
+    const payload: UsagePayload = {
+      available: false,
+      fetched_at: 1722470400000,
+      error: "unauthorized",
+    };
+    const result = anthropicUsage(payload);
+    expect(result.available).toBe(false);
+    expect(result.windows.length).toBe(0);
+    expect(result.note).toBeDefined();
+    expect(result.note).toContain("sign in");
   });
 });
