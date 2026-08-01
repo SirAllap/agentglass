@@ -39,9 +39,9 @@ export function Workspace({
   onClose: () => void;
   onSkills: () => void;
   chatFocusId?: string | null;
-  /** The dashboard's provider filter, for the notch's gauge. See the note
-   *  by the `<DynamicIsland>` call below on why it has no agent to pair with
-   *  it yet. */
+  /** The dashboard's provider filter -- the notch's gauge falls back to this
+   *  when no chat is focused. See the note by the `<DynamicIsland>` call
+   *  below for where the focused chat's agent actually comes from. */
   filterProvider?: string;
 }) {
   // Same reason as App's onClose: this reaches a view's effect dependencies,
@@ -185,17 +185,12 @@ export function Workspace({
                 hangs off the frame's top edge and covers every view, which is
                 why it lives here rather than inside any one of them.
 
-                `focusedAgent` is not wired: `chatFocusId` only fires once, when
-                a session is resumed from the Session modal, and is never
-                cleared or updated again -- it does not track which chat tab is
-                actually showing, which lives in ChatPanel's own `activeId` and
-                is mirrored into chatStore's private `activeChatId` with no
-                public reader. Threading that through would mean adding a new
-                export to chatStore.ts, a file outside this change, so the
-                gauge falls back to the dashboard's provider filter alone
-                (`filterProvider`) rather than a signal that would go stale the
-                first time someone resumes one session and then works in
-                another chat. */}
+                It reads which chat is focused straight from chatStore itself
+                (chatStore.ts's `getActiveChatId`) rather than through a prop
+                here -- that is the one place the live answer actually lives,
+                kept current by ChatPanel's own tab-switching effect. This
+                component only forwards `filterProvider`, the fallback for when
+                no chat is focused at all. */}
             <DynamicIsland filterProvider={filterProvider} />
           </>
         )}

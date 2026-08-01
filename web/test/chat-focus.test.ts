@@ -47,3 +47,19 @@ test("the request is stable between unrelated store changes", () => {
   store.update(c.id, (x) => { x.draft = "typing"; });
   expect(store.chatFocusRequest()).toBe(before);
 });
+
+// The notch's quota gauge reads which chat is active straight off this store
+// (getActiveChatId), so setActiveChatId has to do two things: record the id,
+// and tell subscribers it changed. The second is the one a getter alone would
+// miss -- without it, a subscriber outside the panel goes on showing whatever
+// chat used to be active until some unrelated chat event happens to emit.
+test("setActiveChatId is readable and tells subscribers", () => {
+  const c = store.newChat("/tmp/repo");
+  let woke = 0;
+  const off = store.subscribe(() => { woke++; });
+  try {
+    store.setActiveChatId(c.id);
+    expect(store.getActiveChatId()).toBe(c.id);
+    expect(woke).toBeGreaterThan(0);
+  } finally { off(); }
+});

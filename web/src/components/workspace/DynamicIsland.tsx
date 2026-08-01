@@ -5,7 +5,7 @@ import { subscribeProviderUsage, usageOf, usedColor, resetLabel, ageLabel } from
 import { providerInContext } from "../../lib/providerContext.ts";
 import type { QuotaWindow } from "../../../../shared/types.ts";
 import type { AgentKind } from "../../lib/agents.ts";
-import { subscribe as subscribeChats, listChats } from "../../lib/chatStore.ts";
+import { subscribe as subscribeChats, listChats, getActiveChatId, getChat } from "../../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../../lib/clockPref.ts";
 import { subscribeGitChanged } from "../../lib/gitBus.ts";
@@ -437,9 +437,8 @@ function HistoryRow({ n, onGone }: { n: SystemNote; onGone: () => void }) {
 // ---------------------------------------------------------------------------
 
 export function DynamicIsland({
-  focusedAgent = null, filterProvider = "",
+  filterProvider = "",
 }: {
-  focusedAgent?: AgentKind | null;
   filterProvider?: string;
 } = {}) {
   const clock = useClock();
@@ -451,6 +450,11 @@ export function DynamicIsland({
   // One gauge, for the provider in context — the agent whose chat is focused,
   // or failing that whatever the dashboard is filtered to. The island is a
   // glance, so three providers' meters here would be two too many.
+  //
+  // No `open` check needed: this component only exists inside the workspace,
+  // so if it is rendering, the workspace is open.
+  const activeId = useSyncExternalStore(subscribeChats, getActiveChatId, () => "");
+  const focusedAgent: AgentKind | null = getChat(activeId)?.agent ?? null;
   const [, bumpUsage] = useState(0);
   useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
   const ctx = providerInContext(focusedAgent, filterProvider);
