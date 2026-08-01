@@ -12,7 +12,7 @@ import type {
   WalkthroughResult, WalkthroughInputFile, GitRepoRef, WorkingTree, GitFileChange, GitActionResult,
   GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult,
   PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
-  UsageDay, UsageHistory, ActionRecord,
+  UsageDay, UsageHistory, ActionRecord, ProviderUsage,
 } from "../../../shared/types.ts";
 import { modelLabelOf, providerOf } from "./format.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -602,6 +602,17 @@ export function session(id: string): SessionDetail {
 export function usage() {
   return { available: true, five_hour: { utilization: 34, remaining: 66, resets_at: new Date(Date.now() + 2 * 3600_000).toISOString() }, seven_day: { utilization: 61, remaining: 39, resets_at: new Date(Date.now() + 3 * 86400_000).toISOString() }, fetched_at: Date.now() };
 }
+
+/** The demo has no machine behind it, so the gauges show the shape without
+ *  claiming numbers: two providers that cannot answer and one that never can. */
+export const providerUsage = (): ProviderUsage[] => [
+  { provider: "anthropic", label: "Claude", available: false, windows: [],
+    note: "Plan usage is not available in the demo." },
+  { provider: "codex", label: "Codex", available: false, windows: [],
+    note: "Plan usage is not available in the demo." },
+  { provider: "antigravity", label: "Antigravity", available: false, windows: [],
+    note: "Antigravity's CLI does not report quota anywhere agentglass can read." },
+];
 
 // --- exports: real downloadable files, generated in-browser (no server) -----
 const dataUri = (mime: string, body: string) => `data:${mime};charset=utf-8,${encodeURIComponent(body)}`;
