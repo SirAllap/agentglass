@@ -328,7 +328,6 @@ const realApi = {
   exportUrl: (fmt: "csv" | "json", kind: "events" | "daily" = "events") =>
     withToken(`${SERVER}/export?format=${fmt}${kind === "daily" ? "&kind=daily" : ""}`),
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
-  usage: () => get<UsagePayload>(`/usage`),
   providerUsage: () => get<ProviderUsage[]>(`/usage/providers`),
   refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
   // usage_since: the epoch the call counts are known from. They are bounded
@@ -713,7 +712,6 @@ const demoApi: typeof realApi = {
   exportUrl: (fmt: "csv" | "json", kind: "events" | "daily" = "events") =>
     kind === "daily" ? demo.dailyExportUri(fmt) : demo.eventsExportUri(fmt),
   skillsExportUrl: () => demo.skillsExportUri(),
-  usage: () => D(demo.usage() as UsagePayload),
   providerUsage: () => D(demo.providerUsage() as ProviderUsage[]),
   refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
   skills: () => D(demo.skills()),
@@ -930,15 +928,3 @@ export interface PushDevice {
   lastOkAt: number | null;
 }
 
-export interface UsageWindow {
-  utilization: number;
-  remaining: number;
-  resets_at: string | null;
-}
-export interface UsagePayload {
-  available: boolean;
-  five_hour?: UsageWindow;
-  seven_day?: UsageWindow;
-  fetched_at: number;
-  error?: string;
-}

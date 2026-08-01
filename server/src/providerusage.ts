@@ -26,6 +26,29 @@ import { codexUsage } from "./codexusage.ts";
 export const ANTIGRAVITY_NOTE =
   "Antigravity's CLI does not report quota anywhere agentglass can read.";
 
+/** Strip a generic "SomeError: " prefix so a caught exception reads as a
+ *  clause, not a stack trace, when it lands in front of a person. */
+function summarizeError(error: string): string {
+  return error.replace(/^[A-Za-z.]*Error:\s*/, "").trim() || "an unknown error";
+}
+
+/** Turn usage.ts's `error` into a sentence a person can act on.
+ *
+ *  usage.ts already tells the three failures apart — "no credentials", an
+ *  HTTP 429, or a stringified network/timeout throw — and collapsing them
+ *  into one "sign in" note misdiagnoses the other two: a rate-limited or
+ *  offline machine is not a signed-out one, and telling a signed-in user to
+ *  sign in again teaches them to ignore the note the next time it matters. */
+function anthropicFailureNote(error?: string): string {
+  if (!error || error === "no credentials") {
+    return "Could not read Anthropic plan usage — sign in to Claude Code on this machine.";
+  }
+  if (/\b429\b/.test(error)) {
+    return "Anthropic is rate-limiting its usage endpoint right now — agentglass will keep retrying.";
+  }
+  return `Could not reach Anthropic's usage endpoint (${summarizeError(error)}) — agentglass will keep retrying.`;
+}
+
 /** Convert a UsagePayload into the shared ProviderUsage shape.
  *  The percentages are already 0..100 and already rounded by usage.ts.
  *  If available is true but no windows parsed, returns unavailable with an explanation. */
@@ -33,7 +56,7 @@ export function anthropicUsage(u: UsagePayload): ProviderUsage {
   if (!u.available) {
     return {
       provider: "anthropic", label: "Claude", available: false, windows: [],
-      note: "Could not read Anthropic plan usage — sign in to Claude Code on this machine.",
+      note: anthropicFailureNote(u.error),
     };
   }
   const windows = [];
