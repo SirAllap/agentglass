@@ -31,6 +31,7 @@ import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts"
 import { getInsights } from "./insights.ts";
 import { vapidKeys, addSubscription, removeSubscription, removeDevice, deviceId, subscriptions } from "./pushstore.ts";
 import { getUsage } from "./usage.ts";
+import { allProviderUsage } from "./providerusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
@@ -912,6 +913,10 @@ const server = Bun.serve<WsData>({
 
     if (pathname === "/insights") return json({ insights: getInsights() });
     if (pathname === "/usage") return json(await getUsage()); // Anthropic plan-limit windows (only meaningful for Claude)
+    // Every provider's plan quota in one shape — the dashboard box, the Stats
+    // section and the notch all read this one answer. No desktop-only gate:
+    // there is no path on disk in the payload and nothing here can act.
+    if (pathname === "/usage/providers") return json(await allProviderUsage());
 
     // --- control plane: gate ---
     if (pathname === "/gate" && req.method === "POST") {
