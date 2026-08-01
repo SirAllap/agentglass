@@ -26,6 +26,7 @@ import { CostByModel } from "./components/CostByModel.tsx";
 import { Latency } from "./components/Latency.tsx";
 import { Sessions } from "./components/Sessions.tsx";
 import { MissionTimeline } from "./components/MissionTimeline.tsx";
+import { UsageBox } from "./components/UsageBox.tsx";
 import { EventModal } from "./components/EventModal.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { HelpLegend } from "./components/HelpLegend.tsx";
@@ -587,16 +588,18 @@ export default function App() {
           </div>
         </div>
 
-        {/* Money row — pinned */}
-        <div className="shrink-0 grid grid-cols-1 xl:grid-cols-3 gap-3 h-auto xl:h-[196px]">
-          <CostByModel stats={stats} />
-          <Latency stats={stats} />
-          <Sessions provider={filter.provider} />
-        </div>
-
-        {/* Mission timeline — pinned */}
-        <div className="shrink-0 h-[140px]">
-          <MissionTimeline stats={stats} />
+        {/* Money row and timeline share one grid so the Usage box can span
+            both. The columns line up with the cockpit above: Usage under
+            Fleet, Cost and Latency under the middle column, Sessions under
+            Alerts. */}
+        <div className="shrink-0 grid grid-cols-1 xl:grid-cols-12 gap-3 h-auto xl:grid-rows-[196px_140px]">
+          <div className="xl:col-span-3 xl:row-span-2 min-w-0 min-h-0 h-[196px] xl:h-auto">
+            <UsageBox />
+          </div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><CostByModel stats={stats} /></div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><Latency stats={stats} /></div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><Sessions provider={filter.provider} /></div>
+          <div className="xl:col-span-9 min-w-0 min-h-0 h-[140px] xl:h-auto"><MissionTimeline stats={stats} /></div>
         </div>
       </main>
 
