@@ -4,11 +4,11 @@ import type { ProviderUsage } from "../../../shared/types.ts";
 /**
  * Plan quota for every provider, polled once for the whole app.
  *
- * A module store rather than a hook, for the reason UsageWidget's own store was
- * one: the answer belongs to the app, not to whichever gauge happens to be
- * mounted. Three surfaces read this now — the dashboard box, the Stats modal
- * and the notch — and a per-component fetch would mean three timers racing an
- * endpoint that talks to a rate-limited API on our behalf.
+ * A module store rather than a hook: the answer belongs to the app, not to
+ * whichever gauge happens to be mounted. Three surfaces read this now — the
+ * dashboard box, the Stats modal and the notch — and a per-component fetch
+ * would mean three timers racing an endpoint that talks to a rate-limited API
+ * on our behalf.
  */
 
 let snapshot: ProviderUsage[] | null = null;
