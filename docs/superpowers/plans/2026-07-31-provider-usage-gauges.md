@@ -12,7 +12,7 @@
 
 - Spec: `docs/superpowers/specs/2026-07-31-provider-usage-gauges-design.md`. Read it before Task 1.
 - The new shared type is `QuotaWindow`, **never** `UsageWindow` — that name is taken by the Anthropic-specific `{ utilization, remaining, resets_at }` in `web/src/lib/api.ts:929`, which `DynamicIsland` imports.
-- Three display states must stay distinguishable everywhere: **loading** (first fetch in flight), **unavailable** (provider cannot tell us, with a reason sentence), **stale** (a real reading, with its age). Never collapse two of them.
+- Three display states must stay distinguishable **everywhere with room to explain** — the dashboard box and the Stats section: **loading** (first fetch in flight), **unavailable** (provider cannot tell us, with a reason sentence), **stale** (a real reading, with its age). Never collapse two of them there. The notch is a glance, not an explanation: it shows a gauge when there is one and nothing when there is not, and that is deliberate rather than a collapsed state.
 - A failed poll must never blank a good reading. Last-good-wins, following `server/src/usage.ts:112-120`.
 - Codex `resets_at` is **Unix seconds**, not milliseconds.
 - Antigravity is always present in the payload and always carries a `note`.
@@ -447,7 +447,7 @@ export function __resetCodexUsageCache(): void { cache = null; }
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `cd server && bun test test/codex-usage.test.ts`
-Expected: PASS, 15 tests.
+Expected: PASS, 14 tests.
 
 - [ ] **Step 7: Typecheck and commit**
 
@@ -892,7 +892,7 @@ export function __resetUsageStore(): void {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd web && bun test test/usage-store.test.ts`
-Expected: PASS, 9 tests.
+Expected: PASS, 8 tests.
 
 - [ ] **Step 6: Typecheck and commit**
 
@@ -1526,7 +1526,7 @@ Add `refreshCodexUsage` to the `codexusage.ts` import.
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd server && bun test test/codex-usage-refresh.test.ts test/codex-usage.test.ts`
-Expected: PASS, 4 tests in the refresh file and 15 in the reader's.
+Expected: PASS, 4 tests in the refresh file and 14 in the reader's.
 
 - [ ] **Step 6: Typecheck and commit**
 
