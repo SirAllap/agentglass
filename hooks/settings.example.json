@@ -2,34 +2,34 @@
   "//": "MANUAL FALLBACK. `bun run setup` wires these globally for you via hooks/install_hooks.py. Only copy by hand if you want to customize. On Windows use `py` (or `python`) instead of `python3`.",
   "//copy": "Copy these hooks into your project's .claude/settings.json (or ~/.claude/settings.json).",
   "//source-app": "Change --source-app to name this project/agent in the dashboard (the installer omits it so each project auto-labels by folder name).",
-  "//path": "Adjust the absolute path to send_event.py.",
+  "//path": "Adjust the absolute path to send_event.py. Keep the trailing `|| exit 0`: Claude Code treats exit code 2 from a hook as a block, and python exits 2 if the script is missing.",
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type SessionStart" }] }
+      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type SessionStart || exit 0" }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type UserPromptSubmit" }] }
+      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type UserPromptSubmit || exit 0" }] }
     ],
     "PreToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type PreToolUse" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type PreToolUse || exit 0" }] }
     ],
     "PostToolUse": [
-      { "matcher": "*", "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type PostToolUse" }] }
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type PostToolUse || exit 0" }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type Notification" }] }
+      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type Notification || exit 0" }] }
     ],
     "SubagentStop": [
-      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type SubagentStop --add-chat" }] }
+      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type SubagentStop --add-chat || exit 0" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type Stop --add-chat" }] }
+      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type Stop --add-chat || exit 0" }] }
     ],
     "PreCompact": [
-      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type PreCompact" }] }
+      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type PreCompact || exit 0" }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type SessionEnd --add-chat" }] }
+      { "hooks": [{ "type": "command", "command": "python3 ~/code/agentglass/hooks/send_event.py --source-app my-project --event-type SessionEnd --add-chat || exit 0" }] }
     ]
   }
 }

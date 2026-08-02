@@ -13,6 +13,11 @@ deps (stdlib only).
 Notes:
   * Idempotent — re-running re-points the send_event.py path in place and never
     duplicates entries or disturbs your other hooks (magia, guards, etc.).
+  * Worktree-safe — installing from a linked git worktree bakes the *main*
+    clone's path into the settings file, so `git worktree remove` cannot leave
+    a machine-global hook pointing at a deleted script.
+  * Fail-open — the hook command swallows a non-zero exit from the forwarder.
+    Telemetry must never gate tool execution.
   * The target settings file is backed up (`*.bak.agentglass.<timestamp>`) before
     any change, and only when there is actually a change to make.
   * `--source-app` is intentionally omitted so each project auto-labels in the
@@ -25,11 +30,11 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
-SEND_EVENT = os.path.join(HOOKS_DIR, "send_event.py")
 MARKER = "send_event.py"  # substring that identifies a hook command as ours
 
 # event -> (matcher or None, attach latest-turn usage for token/cost)
@@ -78,19 +83,64 @@ def _hook_python():
     return "py -3"
 
 
-def do_install(cfg):
+def _git_lines(cwd, *args):
+    try:
+        out = subprocess.run(["git", "-C", cwd, *args],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if out.returncode != 0:
+        return []
+    return [line for line in out.stdout.splitlines() if line.strip()]
+
+
+def forwarder_path(hooks_dir=None):
+    """Absolute path to send_event.py, resolved to the *main* clone.
+
+    The path we write is absolute and outlives this process — by default in the
+    machine-global ~/.claude/settings.json. A linked worktree is disposable:
+    `git worktree remove` deletes the script the hook points at, and from then
+    on every Claude Code session on the machine hits a dead hook. So map a
+    worktree checkout back to the main clone, which sticks around.
+    """
+    hooks_dir = hooks_dir or HOOKS_DIR
+    lines = _git_lines(hooks_dir, "rev-parse", "--path-format=absolute",
+                       "--git-common-dir", "--show-toplevel")
+    if len(lines) == 2:
+        common_dir, toplevel = lines
+        # For a linked worktree --git-common-dir points into the main clone;
+        # for a normal checkout it is just <toplevel>/.git and this is a no-op.
+        main_clone = os.path.dirname(os.path.abspath(common_dir))
+        rel = os.path.relpath(hooks_dir, os.path.abspath(toplevel))
+        candidate = os.path.normpath(os.path.join(main_clone, rel, "send_event.py"))
+        if os.path.isfile(candidate):
+            return candidate
+    return os.path.join(hooks_dir, "send_event.py")
+
+
+def _hook_command(python, send_event, event, add_usage):
+    # Quote the script path unconditionally: a clone living under a spaced
+    # path ("/Users/x/My Projects/…", "C:\Users\…") breaks the hook command
+    # on every platform, not just Windows.
+    cmd = f'{python} "{send_event}" --event-type {event}'
+    if add_usage:
+        cmd += " --add-usage"
+    # Fail open. Claude Code reads exit code 2 from a PreToolUse hook as "deny
+    # this tool call", and python exits 2 when it cannot open the script — so a
+    # forwarder that has been moved or deleted would block every tool call in
+    # every session, including the ones needed to undo it.
+    return cmd + (" || exit /b 0" if os.name == "nt" else " || exit 0")
+
+
+def do_install(cfg, send_event=None):
     """Append our forwarder to each event, first stripping any prior agentglass
     entry (so a moved clone re-points cleanly). All other hooks are preserved."""
     hooks = cfg.setdefault("hooks", {})
     python = _hook_python()
+    send_event = send_event or forwarder_path()
     for event, (matcher, add_chat) in EVENTS.items():
         arr = [e for e in hooks.get(event, []) if not _is_ours(e)]
-        # Quote the script path unconditionally: a clone living under a spaced
-        # path ("/Users/x/My Projects/…", "C:\Users\…") breaks the hook command
-        # on every platform, not just Windows.
-        cmd = f'{python} "{SEND_EVENT}" --event-type {event}'
-        if add_chat:
-            cmd += " --add-usage"
+        cmd = _hook_command(python, send_event, event, add_chat)
         entry = {"hooks": [{"type": "command", "command": cmd}]}
         if matcher is not None:
             entry["matcher"] = matcher
@@ -133,8 +183,9 @@ def main():
               "Fix it and run `bun run setup`.", file=sys.stderr)
         return 0 if args.postinstall else 1
 
+    send_event = forwarder_path()
     before = json.dumps(cfg, sort_keys=True)
-    do_uninstall(cfg) if args.uninstall else do_install(cfg)
+    do_uninstall(cfg) if args.uninstall else do_install(cfg, send_event)
     if json.dumps(cfg, sort_keys=True) == before:
         state = "removed" if args.uninstall else "already up to date"
         print(f"[agentglass] hooks {state} in {path}")
@@ -153,7 +204,10 @@ def main():
         print(f"[agentglass] hooks removed from {path}")
     else:
         print(f"[agentglass] hooks installed into {path}")
-        print(f"[agentglass] forwarder: {SEND_EVENT}")
+        print(f"[agentglass] forwarder: {send_event}")
+        if os.path.dirname(send_event) != HOOKS_DIR:
+            print(f"[agentglass] (resolved out of the worktree at {HOOKS_DIR} "
+                  "so removing it won't break your hooks)")
         print("[agentglass] start a NEW Claude Code session for it to take effect.")
     return 0
 
