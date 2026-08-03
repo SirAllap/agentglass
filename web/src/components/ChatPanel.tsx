@@ -15,6 +15,7 @@ import { CHAT_EFFORTS } from "../../../shared/types.ts";
 import type { GitRepoRef, SessionRollup, ChatEffort } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
+import { ALLOW_DEFAULT, initialAllowed } from "../lib/chatAllowlist.ts";
 import { foldPreview, hiddenLineCount, isLongMessage } from "../lib/chatFold.ts";
 import { ToolRow } from "./ToolRow.tsx";
 import { ToolFeed } from "./ToolFeed.tsx";
@@ -72,9 +73,6 @@ const MODES = [
 ];
 const CWD_KEY = "agentglass.chatCwd";
 const ALLOW_KEY = "agentglass.chatAllowedTools";
-// A starting point that covers the reading and inspection an assistant reaches
-// for constantly, without granting anything that writes or leaves the machine.
-const ALLOW_DEFAULT = "Read Glob Grep Bash(git status) Bash(git log:*) Bash(git diff:*) Bash(gh pr view:*)";
 const repoName = (p: string) => p.split("/").pop() || p;
 
 const selCls = "text-[10.5px] px-2 py-1 rounded-md outline-none";
@@ -640,7 +638,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // Shared by every chat and remembered across launches: the set of tools you
   // trust is a property of how you work, not of one conversation.
   const [allowed, setAllowed] = useState(() => {
-    try { return localStorage.getItem(ALLOW_KEY) ?? ALLOW_DEFAULT; } catch { return ALLOW_DEFAULT; }
+    try { return initialAllowed(localStorage.getItem(ALLOW_KEY)); } catch { return ALLOW_DEFAULT; }
   });
   useEffect(() => { try { localStorage.setItem(ALLOW_KEY, allowed); } catch { /* private mode */ } }, [allowed]);
   const [query, setQuery] = useState("");

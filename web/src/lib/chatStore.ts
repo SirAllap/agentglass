@@ -9,6 +9,7 @@ import { api, ChatStreamError } from "./api.ts";
 import { loadChats, saveChats } from "./chatPersist.ts";
 import { chatEnginePref } from "./chatEnginePref.ts";
 import { paneStillAsking } from "./paneScreen.ts";
+import { mergeReplayed } from "./chatReplay.ts";
 import type { ChatImage, WatchEvent, ChatEngine, ChatEffort } from "../../../shared/types.ts";
 
 /** A pasted image waiting in the composer. `url` is an object URL for the
@@ -437,8 +438,11 @@ async function hydrate(chatId: string, sessionId: string) {
     if (!msgs.length) return;
     update(chatId, (c) => {
       // Anything typed while this was in flight stays last — the reply to a
-      // resumed thread must not end up above the thread it replies to.
-      c.messages = [...msgs, ...c.messages];
+      // resumed thread must not end up above the thread it replies to. Anything
+      // older than the replay is a second copy of a turn the transcript already
+      // carries, and the transcript is the one you can check by attaching to
+      // the pane, so it is the one that wins.
+      c.messages = mergeReplayed(msgs, c.messages);
       // Everything up to here is now drawn, so the live stream picks up from
       // the far side of it rather than replaying it back on top.
       c.liveFrom = Math.max(c.liveFrom ?? 0, msgs[msgs.length - 1]?.ts ?? 0);
