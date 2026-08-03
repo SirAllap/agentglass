@@ -96,7 +96,7 @@ function attachWordDiff(rows: URow[]): void {
 }
 
 function Marked({ segs, kind }: { segs: Seg[]; kind: "del" | "add" }) {
-  const bg = kind === "del" ? "color-mix(in srgb, var(--error) 30%, transparent)" : "color-mix(in srgb, var(--success) 30%, transparent)";
+  const bg = kind === "del" ? "color-mix(in srgb, var(--error) 22%, transparent)" : "color-mix(in srgb, var(--success) 22%, transparent)";
   return <>{segs.map((s, i) => (s.hi ? <span key={i} style={{ background: bg, borderRadius: "2px" }}>{s.text}</span> : <span key={i}>{s.text}</span>))}</>;
 }
 
@@ -120,7 +120,7 @@ const Code = memo(function Code({ text, segs, kind }: { text: string; segs?: Seg
   }, [hl, lang, theme, text]);
   if (!tokens) return segs ? <Marked segs={segs} kind={kind === "del" ? "del" : "add"} /> : <>{text || " "}</>;
   const ranges = changedRanges(segs);
-  const hiBg = kind === "del" ? "color-mix(in srgb, var(--error) 32%, transparent)" : "color-mix(in srgb, var(--success) 32%, transparent)";
+  const hiBg = kind === "del" ? "color-mix(in srgb, var(--error) 23%, transparent)" : "color-mix(in srgb, var(--success) 23%, transparent)";
   const out: React.ReactNode[] = [];
   let off = 0, key = 0;
   for (const tok of tokens) {

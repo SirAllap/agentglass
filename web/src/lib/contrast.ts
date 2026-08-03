@@ -86,12 +86,15 @@ export function liftToContrast(dim: string, text: string, bg: string, target: nu
 /** What each tier has to clear, against the panel it sits on.
  *
  *  `--text2` carries body copy in a lot of places, so it is held to the AAA
- *  body ratio. `--text3` is labels and timestamps — AA. `--text4` is the
- *  quietest thing on screen and only has to be perceptible. */
+ *  body ratio. `--text3` is labels — comfortably past AA. `--text4` is the
+ *  quietest tier but still has to be read, not just sensed, so it clears AA too.
+ *  Measured against `--bg3` (see floorTiers), the darker elevated surface these
+ *  tiers actually land on — a floor tuned to `--bg2` alone left dim text failing
+ *  on tiles, hover rows and tinted grounds. */
 export const TIER_TARGET: Record<string, number> = {
   "--text2": 7,
-  "--text3": 4.5,
-  "--text4": 3,
+  "--text3": 5,
+  "--text4": 4,
 };
 
 /**
@@ -103,7 +106,10 @@ export const TIER_TARGET: Record<string, number> = {
  * one above it after the lift.
  */
 export function floorTiers(vars: Record<string, string>): Record<string, string> {
-  const text = vars["--text"], bg = vars["--bg2"] || vars["--bg"];
+  // Floor against --bg3, the darker of the elevated surfaces the dim tiers
+  // actually sit on (tiles, hover rows, chips). A tier that clears it here also
+  // clears the lighter --bg/--bg2, and comes far closer on the tinted washes.
+  const text = vars["--text"], bg = vars["--bg3"] || vars["--bg2"] || vars["--bg"];
   if (!text || !bg) return vars;
   const out = { ...vars };
   let ceiling = text;
