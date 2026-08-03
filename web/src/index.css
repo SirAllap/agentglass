@@ -164,9 +164,20 @@
    */
   .agx-veil {
     background-color: var(--veil);
+    /*
+     * Drawn from --text, not --accent, and at 9%.
+     *
+     * The backdrop's own grid is 7% of the accent, which is right for an
+     * ambient wash and invisible as a surface: on a theme whose accent is a
+     * grey (#a1a1a1 on #1e1e1e) that lands 7 units of 255 from the ground —
+     * measured, not guessed, and the reason this looked like nothing had
+     * changed. --text is the one colour guaranteed to contrast with --bg in
+     * every theme, light or dark, and 9% of it is 17 units: visible when you
+     * look at it, and not a pattern you have to read code through.
+     */
     background-image:
-      linear-gradient(color-mix(in srgb, var(--primary) 5.5%, transparent) 1px, transparent 1px),
-      linear-gradient(90deg, color-mix(in srgb, var(--primary) 5.5%, transparent) 1px, transparent 1px);
+      linear-gradient(color-mix(in srgb, var(--text) 9%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--text) 9%, transparent) 1px, transparent 1px);
     background-size: 36px 36px;
   }
 
