@@ -802,15 +802,25 @@ function keepUsefulShortcuts(win) {
     if (input.key === "F11") {
       hit(); win.setFullScreen(!win.isFullScreen()); return;
     }
-    if (ctrl && (input.key === "=" || input.key === "+")) {
-      hit(); win.webContents.setZoomLevel(win.webContents.getZoomLevel() + 0.5); return;
-    }
-    if (ctrl && input.key === "-") {
-      hit(); win.webContents.setZoomLevel(win.webContents.getZoomLevel() - 0.5); return;
-    }
-    if (ctrl && input.key === "0") {
-      hit(); win.webContents.setZoomLevel(0);
-    }
+    /*
+     * The zoom keys are NOT handled here, and that is the point.
+     *
+     * They used to be: `preventDefault()` and `setZoomLevel` right in this
+     * handler, which runs in the main process before the renderer sees the
+     * keystroke at all. So the app's own rule — the pointer decides whether you
+     * are sizing the terminal or the window — could never run, because the
+     * keystroke never arrived. Everything zoomed together, always, and no
+     * amount of work in the renderer was ever going to change that.
+     *
+     * The renderer owns them now (see lib/zoomTarget.ts) and asks this process
+     * to scale the window through `ag:setZoom` when that is what was meant.
+     * That also settles a second, quieter conflict: this used to move the zoom
+     * LEVEL while the app's own setting moves the zoom FACTOR, so the two were
+     * fighting over the same number in different units.
+     *
+     * There is no menu bar to supply a default accelerator (setApplicationMenu
+     * is null), so nothing else claims them either.
+     */
   });
 }
 
