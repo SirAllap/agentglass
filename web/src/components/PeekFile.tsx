@@ -23,7 +23,26 @@ import { themeFromCss } from "./TerminalPanel.tsx";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { termOptions } from "../lib/termPrefs.ts";
 
-export type Peek = { root: string; path: string; label?: string };
+export type Peek = {
+  root: string;
+  path: string;
+  label?: string;
+  /**
+   * Open it for editing rather than for reading.
+   *
+   * Off by default, and that default is the design. This opens from a diff and
+   * from a pull request — places you go to look, often at a copy of a branch
+   * you do not have — where an editor is one keystroke from changing a file
+   * nobody meant to touch. The file tree is the other case: your checkout, your
+   * branch, opened precisely to change something. So editing is a thing a
+   * caller says, not a thing it gets.
+   */
+  edit?: boolean;
+  /** The branch this checkout is on, shown in the title bar. Not decoration:
+   *  with five worktrees of one repository, "which one am I editing" is the
+   *  question a writable editor has to answer before you type. */
+  branch?: string;
+};
 
 export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void }) {
   const host = useRef<HTMLDivElement>(null);
@@ -72,7 +91,7 @@ export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void })
     // window an editor cannot draw into.
     requestAnimationFrame(() => fit.fit());
 
-    const ws = new WebSocket(ptyWsUrl(peek.root, term.cols, term.rows, peek.path));
+    const ws = new WebSocket(ptyWsUrl(peek.root, term.cols, term.rows, peek.path, peek.edit));
     ws.binaryType = "arraybuffer";
 
     /*
@@ -136,16 +155,20 @@ export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void })
       try { ws.close(); } catch { /* already gone */ }
       term.dispose();
     };
-  }, [peek.root, peek.path]);
+  }, [peek.root, peek.path, peek.edit]);
 
   return (
-    <Portal>
+    // Explicit, not left to mount order. The workspace is itself a portal, and
+    // two portals at the same z are stacked by whichever effect appended last —
+    // which happens to be right today and would silently invert the day this
+    // opens from something that mounts earlier.
+    <Portal z={10020}>
       {/* Escape belongs to the editor — it is a modal editor, and stealing it
           would make the pane unusable for the thing it opened. The backdrop and
           the button are the ways out that do not collide. */}
       <div className="fixed inset-0" style={{ zIndex: 9998, background: "color-mix(in srgb, var(--bg) 62%, transparent)" }}
         onClick={onClose} />
-      <div role="dialog" aria-label={`Viewing ${peek.path}`}
+      <div role="dialog" aria-label={`${peek.edit ? "Editing" : "Viewing"} ${peek.path}`}
         className="fixed rounded-xl overflow-hidden flex flex-col"
         style={{
           zIndex: 9999, top: "6vh", bottom: "6vh", left: "8vw", right: "8vw",
@@ -155,8 +178,23 @@ export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void })
         }}>
         <div className="flex items-center gap-2 px-3 py-1.5 shrink-0 text-[11px]"
           style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "var(--bg2)" }}>
+          {/* Which of the two this is, said at a glance rather than discovered
+              by trying to type. A writable editor open on the wrong worktree is
+              the failure worth making impossible to walk into, so the branch is
+              part of the claim. */}
+          <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full"
+            style={peek.edit
+              ? { color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 50%, transparent)" }
+              : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 20%, transparent)" }}>
+            {peek.edit ? "editable" : "⌦ read-only"}
+          </span>
           <span className="min-w-0 truncate" style={{ color: "var(--text)" }}>{peek.label ?? peek.path}</span>
-          <span className="ml-auto shrink-0" style={{ color: "var(--text3)" }}>:q to close</span>
+          {peek.branch && (
+            <span className="shrink-0 text-[9.5px] px-1.5 py-0.5 rounded-full truncate" style={{ maxWidth: 220, color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+              {peek.branch}
+            </span>
+          )}
+          <span className="ml-auto shrink-0" style={{ color: "var(--text3)" }}>{peek.edit ? ":wq to save and close" : ":q to close"}</span>
           <button onClick={onClose} aria-label="Close" className="agx-btn shrink-0 px-1.5 rounded"
             style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>✕</button>
         </div>

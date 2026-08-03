@@ -551,7 +551,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser";
+export type ViewId = "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -1783,3 +1783,62 @@ export interface RemoteStatus {
   devices: RemoteDevice[];
   firewall: FirewallHint | null;
 }
+
+// --- what this machine is doing, and what is in this checkout ---------------
+// Defined here rather than imported from server/src, so the web bundle names
+// the same shapes without pulling a module that reads /proc into the browser.
+// The server's machine.ts and files.ts are the authorities; these mirror them.
+
+/** One listening TCP socket. */
+export interface PortEntry {
+  port: number;
+  addr: string;
+  proc: string | null;
+  pid: number | null;
+  /** Where the process was started — the worktree, nine times out of ten. */
+  cwd: string | null;
+  /** Owned by the user running the server: the only ones we can name, and the
+   *  only ones we would ever signal. */
+  mine: boolean;
+}
+export interface PortsReport { ports: PortEntry[]; mine: number; external: number; error?: string }
+
+/** One process worth showing. */
+export interface ProcEntry {
+  pid: number;
+  ppid: number;
+  comm: string;
+  cmd: string;
+  /** Percent of one core since the previous sample, or null on the first one —
+   *  a rate needs two readings. */
+  cpu: number | null;
+  rss: number;
+  cwd: string | null;
+  /** Descended from this server (or from a tmux it started). */
+  ours: boolean;
+}
+export interface ResourceReport {
+  procs: ProcEntry[];
+  totalCpu: number | null;
+  totalRss: number;
+  oursCpu: number | null;
+  oursRss: number;
+  seen: number;
+  rated: boolean;
+}
+
+export interface SpaceDir { path: string; name: string; bytes: number; reclaimable: boolean }
+export interface SpaceReport { root: string; bytes: number; freeable: number; dirs: SpaceDir[]; error?: string }
+
+export interface FileEntry {
+  name: string;
+  rel: string;
+  dir: boolean;
+  size?: number;
+  /** Git status in this checkout: M, A, D, R, ? untracked, · something below. */
+  status?: string;
+}
+export interface TreeReport { ok: boolean; root: string; rel: string; entries: FileEntry[]; error?: string }
+export interface FindReport { ok: boolean; files: string[]; truncated: boolean; via: string; error?: string }
+export interface GrepHit { rel: string; line: number; text: string; at: number; len: number }
+export interface GrepReport { ok: boolean; hits: GrepHit[]; files: number; truncated: boolean; via: string; error?: string }

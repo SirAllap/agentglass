@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 
 /** Re-exported from shared so the server (POST /control validation) and the UI
@@ -34,6 +34,13 @@ export const VIEWS: ViewDef[] = [
   ...(HAS_BROWSER
     ? [{ id: "browser" as const, label: "Browser", key: "b", icon: BrowserIcon, hint: "A page, without leaving the app" }]
     : []),
+  // Appended, for the same reason Browser was: ⌘1..⌘N index into this order,
+  // and inserting anywhere above renumbers a chord somebody already has in
+  // their fingers. Anyone who has ever dragged the rail gets it appended to
+  // their own order regardless — loadViewOrder puts unknown views at the end —
+  // so leading with it here would only have renumbered the people who never
+  // touched it.
+  { id: "files", label: "Files", key: "e", icon: FilesIcon, hint: "Browse and search a checkout — and open a file to edit" },
 ];
 
 export const VIEW_IDS = VIEWS.map((v) => v.id);

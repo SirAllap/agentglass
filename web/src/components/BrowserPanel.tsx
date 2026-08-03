@@ -13,10 +13,11 @@
 // The guest is given nothing: no preload, no Node, its own session. That is
 // enforced in the main process (`guardWebviews`), not here — attributes in this
 // markup are a request, and `will-attach-webview` is the answer.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { BROWSER_PARTITION, HAS_BROWSER } from "../lib/desktop.ts";
 import { displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
 import { BLANK, homePage, searchEngine } from "../lib/browserPrefs.ts";
+import { browserNav, clearBrowserNav, subscribeBrowserNav } from "../lib/browserNav.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
@@ -101,6 +102,21 @@ export function BrowserView(_props: { active: boolean }) {
     setFailed(null);
     ref.current.src = next;
   }, []);
+
+  /*
+   * Somebody elsewhere asked for an address — the ports panel, usually.
+   *
+   * `useSyncExternalStore` rather than an effect with a subscription: the
+   * request carries a counter, and the counter is what makes "open :5173 again"
+   * a second request rather than a no-op. Cleared on send so a request made
+   * while this view was still mounting is not dropped.
+   */
+  const want = useSyncExternalStore(subscribeBrowserNav, browserNav, browserNav);
+  useEffect(() => {
+    if (!want || !ref.current) return;
+    go(want.url);
+    clearBrowserNav();
+  }, [want, go]);
 
   if (!HAS_BROWSER) return null;
 

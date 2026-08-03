@@ -40,6 +40,7 @@ import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
+import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
@@ -78,6 +79,10 @@ export default function App() {
   const [wsOpen, setWsOpen] = useState(false);
   const [wsView, setWsView] = useState<ViewId>(loadLastView);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Which machine tab is open, or none. One piece of state for both surfaces:
+   *  the dashboard header and the workspace rail open the same panel, and a
+   *  second copy would be a second poll of /proc. */
+  const [machine, setMachine] = useState<MachineTab | null>(null);
   const [chatFocus, setChatFocus] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
@@ -542,6 +547,7 @@ export default function App() {
         onOpenSkills={() => setSkillsOpen(true)}
         onOpenWorkspace={() => setWsOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenMachine={setMachine}
         onClear={clearFilters}
         showUsage={showUsage}
         workspace={workspace}
@@ -594,7 +600,14 @@ export default function App() {
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
-      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} onSkills={() => setSkillsOpen(true)} chatFocusId={chatFocus} />
+      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} onSkills={() => setSkillsOpen(true)}
+        onSettings={() => setSettingsOpen(true)} onMachine={setMachine} chatFocusId={chatFocus} />
+      {/* Outside the workspace on purpose: it opens from the dashboard too, and
+          it has to render above the overlay when it opens from inside it. */}
+      {machine && (
+        <MachinePanel tab={machine} onTab={setMachine} onClose={() => setMachine(null)}
+          onOpenBrowser={() => { setMachine(null); setWsView("browser"); setWsOpen(true); }} />
+      )}
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
       {/* Shows once when the app first runs a version it has not run before —
           the update button restarts into a new build and otherwise says nothing

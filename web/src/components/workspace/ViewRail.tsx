@@ -2,6 +2,7 @@ import { useSyncExternalStore, useState } from "react";
 import { VIEWS, loadViewOrder, saveViewOrder, subscribeViewOrder, type ViewId } from "./views.ts";
 import { chordFor, chordLabel, chords, subscribeBindings } from "../../lib/keybindings.ts";
 import { SkillsIcon } from "./icons.tsx";
+import { PortsIcon, ResourcesIcon } from "../Header.tsx";
 
 const EMPTY_CHORDS = {};
 
@@ -16,12 +17,22 @@ export type RailPip = { dot?: boolean; count?: number };
  *  replied) rides as a corner pip so it costs no width at all.
  */
 export function ViewRail({
-  view, onSelect, onClose, onSkills, pips,
+  view, onSelect, onClose, onSkills, onSettings, onMachine, pips,
 }: {
   view: ViewId;
   onSelect: (v: ViewId) => void;
   onClose: () => void;
   onSkills: () => void;
+  /** Preferences, reachable from in here.
+   *
+   *  The workspace covers the whole window, so until now opening it meant
+   *  giving up every control in the header — including the only route to
+   *  settings. "Close the workspace to change a setting, then open it again"
+   *  is not a workflow, it is a missing button. */
+  onSettings: () => void;
+  /** Ports and resources, the same pair the header carries, in the same order —
+   *  so the machine is looked at from one place whichever surface you are on. */
+  onMachine: (tab: "ports" | "resources") => void;
   pips?: Partial<Record<ViewId, RailPip>>;
 }) {
   // Arrow keys move between tabs, matching the tablist pattern. Without this
@@ -117,6 +128,37 @@ export function ViewRail({
       })}
 
       <div className="mt-auto pt-2 flex flex-col gap-[3px]" style={{ borderTop: "1px solid color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+        {/* The window's own controls, not the fleet's — which is why they live
+            below the divider with close, rather than among the tabs where they
+            would imply a view you can come back to. Same three, same order, as
+            the dashboard header. */}
+        <button
+          onClick={() => onMachine("ports")}
+          aria-label="Ports"
+          data-tip="Ports · what is listening, and from which checkout"
+          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+          style={{ color: "var(--text4)" }}
+        >
+          <PortsIcon size={16} />
+        </button>
+        <button
+          onClick={() => onMachine("resources")}
+          aria-label="Resources"
+          data-tip="Resources · CPU, memory and disk, by checkout"
+          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+          style={{ color: "var(--text4)" }}
+        >
+          <ResourcesIcon size={16} />
+        </button>
+        <button
+          onClick={onSettings}
+          aria-label="Settings"
+          data-tip="Settings · preferences, exports, shortcuts"
+          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+          style={{ color: "var(--text4)" }}
+        >
+          <RailGear size={16} />
+        </button>
         {/* The catalog is reference, not a view: it opens over the workspace and
             hands it straight back, so it belongs down here with close rather
             than among the tabs, where it would imply state you can return to. */}
@@ -142,5 +184,18 @@ export function ViewRail({
         </button>
       </div>
     </nav>
+  );
+}
+
+/** The same cog the header uses. Kept here rather than exported from Header
+ *  alongside the other two: that one is styled for an 8px button and this rail
+ *  draws at 16, and a shared icon that needs a size prop per caller is just two
+ *  icons with extra steps. */
+function RailGear({ size = 16 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3.1" />
+      <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
+    </svg>
   );
 }

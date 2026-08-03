@@ -56,6 +56,8 @@ import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme } from "./themesync.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
+import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
+import { fileTree, findFiles, grepFiles } from "./files.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
   startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
@@ -616,6 +618,9 @@ const server = Bun.serve<WsData>({
         // A path to open, not a command to run. Validated in ptyOpen against
         // the same scope rule the directory gets.
         view: url.searchParams.get("view") || undefined,
+        // Editing is asked for explicitly. Absent, the file opens read-only —
+        // see PtyWsData.edit for why that default is the whole point.
+        edit: url.searchParams.get("edit") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,
@@ -1529,6 +1534,29 @@ const server = Bun.serve<WsData>({
     // is the whole authorisation story. Lets the panel show install guidance for
     // a missing binary instead of the overview's daemon message. Mirrors
     // /git/capability.
+    // --- what this machine is doing: ports, processes, disk ---
+    // Plain reads behind the same origin/rebinding/token gate as everything
+    // else. Each is a spawn or a /proc walk of a few milliseconds, so they are
+    // answered live rather than cached — a stale port list is worse than a slow
+    // one, because it sends you to a server that is not there.
+    if (pathname === "/machine/ports") return json(listPorts());
+    if (pathname === "/machine/resources") return json(listResources(Number(url.searchParams.get("limit") || 40)));
+    // On demand only, and never on a poll: `du` over a checkout walks every
+    // inode in it, which is seconds on a repository with a node_modules.
+    if (pathname === "/machine/space") return json(spaceFor(url.searchParams.get("root") || ""));
+
+    // --- browsing and searching a checkout ---
+    // Their own switch, not the terminal's: an operator who turned the shell off
+    // gave up filesystem reach deliberately, and this must not hand it back a
+    // listing at a time. Same reasoning as /fs/complete — see fsbrowse.ts.
+    if (pathname.startsWith("/files/")) {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      const root = url.searchParams.get("root") || "";
+      if (pathname === "/files/tree") return json(fileTree(root, url.searchParams.get("rel") || ""));
+      if (pathname === "/files/find") return json(findFiles(root, url.searchParams.get("q") || ""));
+      if (pathname === "/files/grep") return json(grepFiles(root, url.searchParams.get("q") || ""));
+    }
+
     if (pathname === "/docker/capability") return json(await dockerCapability());
     // Single-flighted alongside the git reads: `docker ps`/`docker stats` are
     // slow spawns (seconds each) behind a short cache, and several tabs missing
@@ -1576,6 +1604,18 @@ const server = Bun.serve<WsData>({
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
       if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+    }
+
+    // The one write in the machine panel, and it signals a process. Origin
+    // checked like every other write, recorded like every other write, and
+    // refused for any pid this user does not own — see killPort.
+    if (pathname === "/machine/kill" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = killPort(b.pid);
+      noteAction(srv.requestIP(req)?.address, pathname, b, res, caller);
+      return json(res, res.ok ? 200 : 400);
     }
 
     // --- pull requests (gh-backed) ---
