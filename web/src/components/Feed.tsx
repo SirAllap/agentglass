@@ -118,12 +118,12 @@ function EventRowInner({ row, onSelect, compact }: { row: Row; onSelect?: (e: Wa
       )}
       <span className="shrink-0 font-medium" style={{ color: f.color }}>{f.verb}</span>
       {e.tool_name && (
-        <span className="chip shrink-0" style={{ color: "var(--info)", background: "color-mix(in srgb, var(--info) 14%, transparent)" }}>{e.tool_name}</span>
+        <span className="chip shrink-0" style={{ color: "var(--info)", background: "color-mix(in srgb, var(--info) 10%, transparent)" }}>{e.tool_name}</span>
       )}
-      {d && <span className="truncate t-dim min-w-0" title={d}>{d}</span>}
+      {d && <span className="truncate min-w-0" style={{ color: "var(--text2)" }} title={d}>{d}</span>}
       {running && <span className="shrink-0 t-dim2 animate-pulse">…</span>}
       {count > 1 && (
-        <span className="chip shrink-0" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>×{count}</span>
+        <span className="chip shrink-0" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>×{count}</span>
       )}
       {e.duration_ms != null && <span className="t-dim2 shrink-0">{fmtMs(e.duration_ms)}</span>}
       {e.cost_usd > 0 && <span className="shrink-0" style={{ color: "var(--success)" }}>{fmtUsd(e.cost_usd)}</span>}
@@ -166,7 +166,7 @@ function Lane({ aKey, rows, onSelect }: { aKey: string; rows: Row[]; onSelect?: 
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [rows.length, rows[rows.length - 1]?.key]);
   return (
-    <div className="flex flex-col min-w-0 min-h-0 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", background: "color-mix(in srgb, var(--bg3) 20%, transparent)" }}>
+    <div className="flex flex-col min-w-0 min-h-0 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", background: "color-mix(in srgb, var(--bg3) 88%, var(--bg))" }}>
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
         <span className="h-2 w-2 rounded-full shrink-0" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
         <span className="text-[10.5px] font-medium truncate" style={{ color: `color-mix(in srgb, ${color} 75%, var(--text))` }} title={aKey}>{aKey}</span>

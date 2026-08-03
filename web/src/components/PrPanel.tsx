@@ -149,7 +149,7 @@ function Dot({ tint, title }: { tint: string; title?: string }) {
 function Chip({ text, tint, title }: { text: string; tint: string; title?: string }) {
   return (
     <span title={title} className="shrink-0 text-[9px] px-1.5 py-px rounded-full uppercase tracking-wide"
-      style={{ color: tint, background: `color-mix(in srgb, ${tint} 14%, transparent)` }}>{text}</span>
+      style={{ color: tint, background: `color-mix(in srgb, ${tint} 10%, transparent)` }}>{text}</span>
   );
 }
 
@@ -258,7 +258,7 @@ export const MD_CSS = `
 .agx-sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--text3);transition:transform .17s,background .17s}
 .agx-sw[data-on="1"]{background:color-mix(in srgb,var(--success) 55%,transparent)}
 .agx-sw[data-on="1"]::after{transform:translateX(10px);background:var(--success)}
-.agx-hl pre{margin:0;padding:10px 12px;border-radius:8px;overflow-x:auto;background:color-mix(in srgb,#000 42%,transparent) !important;border:1px solid color-mix(in srgb,var(--text) 16%,transparent)}
+.agx-hl pre{margin:0;padding:10px 12px;border-radius:8px;overflow-x:auto;background:color-mix(in srgb,var(--bg2) 55%,var(--bg)) !important;border:1px solid color-mix(in srgb,var(--border2) 60%,transparent)}
 .agx-hl code{font-size:11.5px;line-height:1.65}
 .agx-md .agx-hl{margin:0 0 .85em}
 /* The body reads in the theme's brightest text, not a step below it. A pull
