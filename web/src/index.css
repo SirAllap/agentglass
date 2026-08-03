@@ -170,6 +170,22 @@
     background-size: 36px 36px;
   }
 
+  /*
+   * xterm paints its own viewport solid black. Ours does not.
+   *
+   * `.xterm .xterm-viewport { background-color: #000 }` ships in the library's
+   * stylesheet, with the note "on OS X this is required in order for the scroll
+   * bar to appear fully opaque". So every attempt to give the terminal a
+   * surface was being covered by an opaque rectangle from a vendor rule — which
+   * is why the panel stayed black no matter what the container or the xterm
+   * theme said. The only cost of turning it off is a scrollbar that is not
+   * fully opaque on macOS, which is a trade worth making for a terminal that
+   * sits on the app's own ground.
+   */
+  .xterm .xterm-viewport {
+    background-color: transparent !important;
+  }
+
   .panel {
     position: relative;
     /* calmer: a faint hairline instead of a heavy border; depth comes from
