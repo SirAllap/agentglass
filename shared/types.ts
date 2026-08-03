@@ -551,7 +551,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "issues";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -1842,3 +1842,41 @@ export interface TreeReport { ok: boolean; root: string; rel: string; entries: F
 export interface FindReport { ok: boolean; files: string[]; truncated: boolean; via: string; error?: string }
 export interface GrepHit { rel: string; line: number; text: string; at: number; len: number }
 export interface GrepReport { ok: boolean; hits: GrepHit[]; files: number; truncated: boolean; via: string; error?: string }
+
+// --- github issues ---------------------------------------------------------
+// Mirrors server/src/issues.ts, which is the authority.
+
+export interface IssueLabel { name: string; color: string }
+export interface IssueRow {
+  number: number;
+  title: string;
+  state: string;
+  author: string;
+  labels: IssueLabel[];
+  assignees: string[];
+  comments: number;
+  updatedAt: string;
+  url: string;
+}
+/** How work on an issue was started, and where it lives. */
+export type StartMode = "worktree" | "shell" | "claude" | "plan" | "branch";
+export interface IssueWork {
+  number: number;
+  repo: string;
+  branch: string;
+  path: string;
+  mode: StartMode;
+  window?: string;
+  startedAt: number;
+}
+export interface IssueDetail extends IssueRow {
+  body: string;
+  createdAt: string;
+  milestone: string | null;
+  work: IssueWork | null;
+}
+export interface IssuesReport { ok: boolean; issues: IssueRow[]; error?: string }
+export interface IssueStartResult {
+  ok: boolean; error?: string; work?: IssueWork; prompt?: string; cwd?: string;
+}
+export interface IssueActionResult { ok: boolean; error?: string; detail?: string; dirty?: string[] }

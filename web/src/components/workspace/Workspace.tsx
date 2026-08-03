@@ -23,6 +23,7 @@ import { ViewRail, type RailPip } from "./ViewRail.tsx";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
 import { FilesView } from "../FilesPanel.tsx";
+import { IssuesView } from "../IssuesPanel.tsx";
 import { GitView } from "../GitPanel.tsx";
 import { DiffView } from "../ChangesModal.tsx";
 import { PrView } from "../PrPanel.tsx";
@@ -178,6 +179,7 @@ function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusI
 }) {
   switch (id) {
     case "files": return <FilesView active={active} />;
+    case "issues": return <IssuesView active={active} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
     case "diff": return <DiffView active={active} />;
     case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} />;

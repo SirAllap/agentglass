@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon, IssuesIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 
 /** Re-exported from shared so the server (POST /control validation) and the UI
@@ -42,6 +42,7 @@ export const VIEWS: ViewDef[] = [
   { id: "git", label: "Git", key: "g", icon: GitIcon, hint: "Stage, commit, push/pull the working tree" },
   { id: "diff", label: "Diff", key: "d", icon: DiffIcon, hint: "Review & commit every diff the fleet made" },
   { id: "pr", label: "Pull requests", key: "p", icon: PrIcon, hint: "Review pull requests without leaving for the browser" },
+  { id: "issues", label: "Issues", key: "i", icon: IssuesIcon, hint: "Browse issues, and start a worktree from one" },
   { id: "docker", label: "Docker", key: "o", icon: DockerIcon, hint: "Containers, logs, stats & actions" },
   { id: "term", label: "Term", key: "t", icon: TerminalIcon, hint: "A real shell in any repo/worktree" },
   { id: "chat", label: "Chat", key: "c", icon: ChatIcon, hint: "Drive a Claude session in any repo/worktree", group: "utility" },

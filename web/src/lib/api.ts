@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -439,6 +439,27 @@ const realApi = {
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
+
+  // --- github issues ---
+  issuesList: (root: string, state = "open", q = "", assignee = "") =>
+    get<IssuesReport>(`/issues/list?root=${encodeURIComponent(root)}&state=${state}`
+      + `&q=${encodeURIComponent(q)}&assignee=${encodeURIComponent(assignee)}`),
+  issueDetail: (root: string, number: number) =>
+    get<{ ok: boolean; issue?: IssueDetail; error?: string }>(`/issues/detail?root=${encodeURIComponent(root)}&number=${number}`),
+  /** Everything with a worktree still on disk, so the list can say what is in
+   *  progress without asking per row. */
+  issuesWork: (repo = "") => get<{ work: IssueWork[] }>(`/issues/work?repo=${encodeURIComponent(repo)}`),
+  issueStart: (root: string, number: number, mode: StartMode) =>
+    post<IssueStartResult>("/issues/start", { root, number, mode }),
+  /** Put the worktree away. Refused while it is dirty unless `force`. */
+  issueFinish: (root: string, number: number, force = false) =>
+    post<IssueActionResult>("/issues/finish", { root, number, force }),
+  issueClaim: (root: string, number: number, comment?: string) =>
+    post<IssueActionResult>("/issues/claim", { root, number, comment }),
+  issueComment: (root: string, number: number, body: string) =>
+    post<IssueActionResult>("/issues/comment", { root, number, body }),
+  issueState: (root: string, number: number, close: boolean) =>
+    post<IssueActionResult>("/issues/state", { root, number, close }),
 
   // --- what this machine is doing: ports, processes, disk ---
   /** Every listening TCP socket, with the process behind the ones we own. */
@@ -894,6 +915,14 @@ const demoApi: typeof realApi = {
   // The demo has no machine to report on and no checkout to browse: it is a
   // fabricated dataset in a browser tab. Empty and honest beats invented — a
   // fake port list would be the one screen in the tour that lies.
+  issuesList: (_r: string, _s?: string, _q?: string, _a?: string) => D({ ok: false, issues: [], error: "not available in the demo" }),
+  issueDetail: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  issuesWork: (_repo?: string) => D({ work: [] }),
+  issueStart: (_r: string, _n: number, _m: StartMode) => D({ ok: false, error: "not available in the demo" }),
+  issueFinish: (_r: string, _n: number, _f?: boolean) => D({ ok: false, error: "not available in the demo" }),
+  issueClaim: (_r: string, _n: number, _c?: string) => D({ ok: false, error: "not available in the demo" }),
+  issueComment: (_r: string, _n: number, _b: string) => D({ ok: false, error: "not available in the demo" }),
+  issueState: (_r: string, _n: number, _c: boolean) => D({ ok: false, error: "not available in the demo" }),
   machinePorts: () => D({ ports: [], mine: 0, external: 0, error: "not available in the demo" }),
   machineResources: (_l?: number) => D({ procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false }),
   machineSpace: (_r: string) => D({ root: "", bytes: 0, freeable: 0, dirs: [], error: "not available in the demo" }),

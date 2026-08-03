@@ -12,6 +12,19 @@ const svg = {
 
 type P = { size?: number };
 
+/** A checklist: the one shape that reads as "things to do" rather than "things
+ *  that happened", which is the difference between an issue and an event. */
+export function IssuesIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M3.5 6.5l2 2 3.5-3.5" />
+      <path d="M12 7h9" />
+      <path d="M3.5 15.5l2 2 3.5-3.5" />
+      <path d="M12 16h9" />
+    </svg>
+  );
+}
+
 /** Four panes: the shape of a dashboard since the first one. */
 export function DashIcon({ size = 15 }: P) {
   return (

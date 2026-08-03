@@ -112,9 +112,9 @@ describe("the record", () => {
 
 describe("nothing writes without being recorded", () => {
   /*
-   * The three families each route through one switch, and the gate through its
-   * own handler. That is four places to instrument today — and exactly four
-   * places for a fifth to be added without one.
+   * The four families each route through one switch, and the gate through its
+   * own handler. That is five places to instrument today — and exactly five
+   * places for a sixth to be added without one.
    */
   const index = readFileSync(join(import.meta.dir, "..", "src", "index.ts"), "utf8");
 
@@ -122,7 +122,10 @@ describe("nothing writes without being recorded", () => {
     // Each family ends in a single `if (res) return json(res, …)`. Find them
     // all and require noteAction on the same line.
     const returns = index.split("\n").filter((l) => /if \(res\) .*return json\(res/.test(l));
-    expect(returns.length, "the write switches were restructured — re-check this guard").toBe(3);
+    // Four: git, docker, pull requests, issues. The number is a tripwire, not a
+    // fact about the code — when it moves, the job is to confirm the new family
+    // records rather than to edit this line and move on.
+    expect(returns.length, "the write switches were restructured — re-check this guard").toBe(4);
     for (const line of returns) {
       expect(line, "a write family answers without recording").toContain("noteAction(");
     }

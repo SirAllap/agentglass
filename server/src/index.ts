@@ -57,6 +57,9 @@ import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme } fr
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
+import {
+  listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
+} from "./issues.ts";
 import { fileTree, findFiles, grepFiles } from "./files.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -1539,6 +1542,23 @@ const server = Bun.serve<WsData>({
     // else. Each is a spawn or a /proc walk of a few milliseconds, so they are
     // answered live rather than cached — a stale port list is worse than a slow
     // one, because it sends you to a server that is not there.
+    // --- github issues ---
+    // The same `gh` plumbing the pull-request panel uses, one query along. A
+    // list, a detail, and the work started from one — see issues.ts for why
+    // starting and FINISHING are the same feature rather than two.
+    if (pathname === "/issues/list") {
+      return json(await listIssues(url.searchParams.get("root") || "", {
+        state: url.searchParams.get("state") || "open",
+        assignee: url.searchParams.get("assignee") || "",
+        search: url.searchParams.get("q") || "",
+        limit: Number(url.searchParams.get("limit") || 60),
+      }));
+    }
+    if (pathname === "/issues/detail") {
+      return json(await issueDetail(url.searchParams.get("root") || "", url.searchParams.get("number")));
+    }
+    if (pathname === "/issues/work") return json({ work: currentWork(url.searchParams.get("repo") || undefined) });
+
     if (pathname === "/machine/ports") return json(listPorts());
     if (pathname === "/machine/resources") return json(listResources(Number(url.searchParams.get("limit") || 40)));
     // On demand only, and never on a poll: `du` over a checkout walks every
@@ -1603,6 +1623,32 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+    }
+
+    /*
+     * The issue writes.
+     *
+     * Origin-checked and recorded like every other write here. `start` and
+     * `finish` touch the filesystem (a worktree, a branch); `claim`, `comment`
+     * and `state` touch GitHub. None of them takes a command from the client —
+     * the server decides what runs, which is the same rule the review prompt
+     * follows.
+     */
+    if (pathname.startsWith("/issues/") && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const root = String(b.root || "");
+      let res: { ok: boolean; error?: string; detail?: string } | null = null;
+      switch (pathname) {
+        case "/issues/start": res = await startIssue(root, b.number, b.mode); break;
+        case "/issues/finish": res = await finishIssue(root, b.number, b.force === true); break;
+        case "/issues/claim": res = await claimIssue(root, b.number, b.comment); break;
+        case "/issues/comment": res = await commentIssue(root, b.number, b.body); break;
+        case "/issues/state": res = await setIssueState(root, b.number, b.close === true); break;
+        default: res = null;
+      }
       if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 

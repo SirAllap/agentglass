@@ -569,7 +569,8 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   if (!s) return;
   // `number`/`root` ride along only for {cmd:"review"} — see below, where the
   // server builds what runs rather than taking a command string off the wire.
-  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean; number?: number; root?: string };
+  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean;
+    number?: number; root?: string; cwd?: string; prompt?: string; agent?: boolean };
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
     // A keystroke is the least ambiguous "a human is waiting on this process"
@@ -641,6 +642,38 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
         newWindowRunning(target, plan.cwd, `pr-${number}`, [bin, plan.prompt]);
         s.tmuxSweep?.();
       })();
+      return;
+    }
+
+    /*
+     * Start work on an issue in a window of the user's own tmux.
+     *
+     * The directory has already been created by the server (issues.ts cut the
+     * worktree) and the prompt was written there too — this only opens a window
+     * and, when asked, starts the agent in it. The client still never sends a
+     * command: the binary comes from claudeCode.bin() and the prompt is a single
+     * positional argument, exactly as the pull-request review does it.
+     *
+     * The scope check is owed even though the path came from us, because this
+     * socket is reachable from the UI and "we made it earlier" is not something
+     * this handler can verify.
+     */
+    if (msg.cmd === "issue") {
+      const target = s.tmux;
+      const cwd = safeAbs(msg.cwd);
+      if (!cwd || !inScope(cwd) || !existsSync(cwd)) return;
+      const name = typeof msg.name === "string" ? msg.name : "issue";
+      const prompt = typeof msg.prompt === "string" ? msg.prompt : "";
+      if (msg.agent === true && prompt) {
+        const bin = claudeCode.bin();
+        // No agent available is not a reason to open nothing: a shell in the
+        // right worktree is still most of what was asked for.
+        if (bin) newWindowRunning(target, cwd, name, [bin, prompt]);
+        else newWindowRunning(target, cwd, name, []);
+      } else {
+        newWindowRunning(target, cwd, name, []);
+      }
+      s.tmuxSweep?.();
       return;
     }
 

@@ -6,6 +6,7 @@
 // running job — reopening reattaches to the live session, scrollback intact.
 import { Fragment, useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
+import { subscribeTermIssue, termIssue, clearTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
@@ -1257,6 +1258,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     tmuxCmd("review", { root: review.root, number: review.number });
     clearTermReview();
   }, [review, tmuxActive, tmuxCmd]);
+
+  /** The same door for starting work on an issue: a worktree the server has
+   *  already cut, and a prompt it wrote. Never a command — see termIssue.ts. */
+  const issue = useSyncExternalStore(subscribeTermIssue, termIssue, termIssue);
+  useEffect(() => {
+    if (!issue || !tmuxActive) return;
+    tmuxCmd("issue", { cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent });
+    clearTermIssue();
+  }, [issue, tmuxActive, tmuxCmd]);
 
   const addShell = useCallback(() => {
     if (!root || IS_DEMO) return;
