@@ -1352,6 +1352,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
     });
   };
 
+  /** The same drop, addressed by the comment itself. A row in the diff holds
+   *  the comment, not its position in a list it never sees — and an index is
+   *  the wrong handle for something the user is pointing at. */
+  const dropDraftItem = (dc: DraftComment) => {
+    const i = myDrafts.indexOf(dc);
+    if (i >= 0) dropDraft(i);
+  };
+
   /**
    * One line comment, posted on its own.
    *
@@ -1968,7 +1976,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                   <FilesTab
                     d={d} root={root} byPath={byPath} loaded={!!diff} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
-                    drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment}
+                    drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment} onDropDraft={dropDraftItem}
                     busy={busy} onReply={doReply}
                     onApply={doApplySuggestion}
                     onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
@@ -2801,7 +2809,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
  *  rely on instead of measure. */
 const FILE_HEAD_H = 30;
 
-function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onResolve, onReply, onApply, busy }: {
+function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
   seenFiles: string[]; onSeen: (p: string) => void;
   sel: string | null; onSel: (p: string | null) => void;
@@ -2810,10 +2818,27 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
   /** Post one line comment on its own, now — the other half of what GitHub
    *  offers at the box, beside holding it for a review. */
   onPostOne: (path: string, line: number, startLine: number | undefined, side: "LEFT" | "RIGHT" | undefined, body: string) => Promise<boolean>;
+  /** Discard a pending comment from where it is shown, rather than only from
+   *  the Review tab it is otherwise buried in. */
+  onDropDraft: (d: DraftComment) => void;
   onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
 }) {
   const draftsFor = (p: string) => drafts.filter((x) => x.path === p).length;
+  /** This file's pending comments, keyed the way a diff row asks for them:
+   *  the side letter and the line, so a row can find its own without scanning
+   *  the whole list on every render. */
+  const pendingBy = (p: string) => {
+    const m = new Map<string, DraftComment[]>();
+    for (const dc of drafts) {
+      if (dc.path !== p) continue;
+      const k = `${dc.side === "LEFT" ? "L" : "R"}${dc.line}`;
+      const arr = m.get(k) ?? [];
+      arr.push(dc);
+      m.set(k, arr);
+    }
+    return m;
+  };
   // For the "+" menu's Copy link: a blob permalink at the PR head commit.
   const repoName = useContext(RepoCtx);
   const headSha = d.commits.length ? d.commits[d.commits.length - 1].oid : "";
@@ -3137,6 +3162,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
         const open = !folded.has(f.path);
         const focused = sel === f.path;
         const nd = draftsFor(f.path);
+        const pendingHere = pendingBy(f.path);
         const change = byPath.get(f.path);
         // Anchor each thread inline, under the line it is about — GitHub's
         // placement. A thread whose line is not in the diff (outdated, or a
@@ -3238,11 +3264,18 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                         onPick={(pk) => pickLine(f.path, pk)}
                         sel={selRange?.path === f.path ? selRange.sel : null}
                         permalink={repoName && headSha ? (line) => `https://github.com/${repoName}/blob/${headSha}/${f.path}#L${line}` : undefined}
-                        rowAfter={(inlineThreads.size || composing?.path === f.path) ? (newN, oldN) => {
+                        rowAfter={(inlineThreads.size || pendingHere.size || composing?.path === f.path) ? (newN, oldN) => {
                           const ts = newN != null ? inlineThreads.get(newN) : null;
+                          // A queued comment has to be visible where it was
+                          // written. It used to exist only as a number on the
+                          // file's header and a row in the Review tab, so
+                          // writing one and returning to the diff showed nothing
+                          // at all — the line looked exactly as it had before,
+                          // and the only way to check was to leave.
+                          const pend = pendingHere.get(`${newN != null ? "R" : "L"}${newN ?? oldN}`) ?? [];
                           const composeHere = composing?.path === f.path &&
                             ((composing.side === "RIGHT" && composing.line === newN) || (composing.side === "LEFT" && composing.line === oldN));
-                          if (!ts?.length && !composeHere) return null;
+                          if (!ts?.length && !pend.length && !composeHere) return null;
                           const pfx = composing?.side === "LEFT" ? "L" : "R";
                           // Bounded and pinned to the left so it reads at a sane
                           // width and stays put while the code scrolls sideways.
@@ -3259,6 +3292,24 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                               width: split ? "min(560px, 46vw)" : "min(900px, 92vw)",
                             }}>
                               {ts?.map((t) => <Thread key={t.id} t={t} inline onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
+                              {pend.map((dc, i) => (
+                                <div key={`p${i}`} className="rounded-lg overflow-hidden text-[11.5px]" style={{
+                                  background: "var(--bg2)",
+                                  border: "1px dashed color-mix(in srgb, var(--warning) 55%, transparent)",
+                                }}>
+                                  {/* Dashed and amber: this is written and not
+                                      sent. A solid card would read as posted,
+                                      which is the one thing it is not. */}
+                                  <div className="px-2.5 py-1 flex items-center gap-2 text-[10px]"
+                                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
+                                    <span>Pending — sent when you submit the review</span>
+                                    <button onClick={() => onDropDraft(dc)} title="Discard this pending comment"
+                                      className="agx-btn ml-auto px-1.5 py-0.5 rounded text-[10px]"
+                                      style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
+                                  </div>
+                                  <div className="px-2.5 py-2"><Md body={dc.body} /></div>
+                                </div>
+                              ))}
                               {composeHere && composing && (
                                 <div className="rounded-lg overflow-hidden" style={{
                                   // The one box. Sat on the panel rather than
