@@ -136,22 +136,27 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
 }
 
 type Pane = "appearance" | "prefs" | "browser" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
-const TABS: { id: Pane; label: string }[] = [
-  { id: "appearance", label: "Appearance" },
-  { id: "prefs", label: "Preferences" },
-  // Only where there is a browser to configure. The view itself is absent in a
-  // phone's browser tab, and a settings tab for something that is not there is
-  // worse than no tab: it reads as a feature that is broken rather than one
-  // that does not apply.
-  ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser" }] : []),
-  { id: "keys", label: "Shortcuts" },
-  { id: "open", label: "Open" },
-  { id: "export", label: "Export" },
-  { id: "log", label: "Activity" },
-  { id: "hooks", label: "Agents" },
-  { id: "reqs", label: "Requirements" },
-  { id: "remote", label: "Remote" },
-  { id: "about", label: "About" },
+type TabGroup = "Interface" | "Data" | "Setup" | "About";
+// Rendered in this order; a group with no matching tab is dropped, so search
+// collapses to just the sections that still have something in them.
+const TAB_GROUPS: TabGroup[] = ["Interface", "Data", "Setup", "About"];
+// `kw` are the words the search box also matches — the things people call a
+// setting that aren't in its label ("keyboard" for Shortcuts, "theme" for
+// Appearance), so the box finds a page by what it does, not just its name.
+const TABS: { id: Pane; label: string; group: TabGroup; kw: string }[] = [
+  { id: "appearance", label: "Appearance", group: "Interface", kw: "theme accent colour color font dark light mode palette" },
+  { id: "prefs", label: "Preferences", group: "Interface", kw: "display size zoom sound clock terminal renderer chat engine fullscreen" },
+  // Only where there is a browser to configure. A settings tab for something
+  // that is not there reads as a broken feature rather than one that doesn't apply.
+  ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Interface" as const, kw: "browser web page zoom" }] : []),
+  { id: "keys", label: "Shortcuts", group: "Interface", kw: "keyboard keys bindings shortcut chord rebind" },
+  { id: "log", label: "Activity", group: "Data", kw: "activity log history events feed" },
+  { id: "open", label: "Open", group: "Data", kw: "open external editor file reveal" },
+  { id: "export", label: "Export", group: "Data", kw: "export download data json csv" },
+  { id: "hooks", label: "Agents", group: "Setup", kw: "agents hooks claude code install setup" },
+  { id: "reqs", label: "Requirements", group: "Setup", kw: "requirements dependencies deps tmux git docker install" },
+  { id: "remote", label: "Remote", group: "Setup", kw: "remote access pair phone tailscale token device" },
+  { id: "about", label: "About", group: "About", kw: "about version update release notes changelog" },
 ];
 
 /**
@@ -921,6 +926,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [keys, setKeys] = useState(() => bindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
   const [pane, setPane] = useState<Pane>("prefs");
+  const [q, setQ] = useState(""); // settings search — filters the nav below
   const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
   useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
 
@@ -1030,16 +1036,32 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   {/* One page per concern instead of one long scroll: four
                       sections stacked vertically meant the shortcuts, the part
                       you come here to change, were always below the fold. */}
-                  <div className="shrink-0 w-[186px] py-2 px-2 flex flex-col gap-0.5 border-r" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
-                    {TABS.map((t) => (
-                      <button key={t.id} onClick={() => setPane(t.id)}
-                        className="w-full text-left px-2.5 py-1.5 rounded-lg text-[12px] flex items-center gap-2"
-                        style={pane === t.id
-                          ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
-                          : { color: "var(--text3)" }}>
-                        {t.label}
-                      </button>
-                    ))}
+                  <div className="shrink-0 w-[186px] py-2 px-2 flex flex-col gap-0.5 border-r agx-scroll overflow-y-auto" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+                    <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings"
+                      className="mb-1 px-2.5 py-1.5 rounded-lg text-[11px] outline-none shrink-0"
+                      style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }} />
+                    {(() => {
+                      const ql = q.trim().toLowerCase();
+                      const hit = (t: typeof TABS[number]) => !ql || (t.label + " " + t.kw).toLowerCase().includes(ql);
+                      const groups = TAB_GROUPS
+                        .map((g) => ({ g, tabs: TABS.filter((t) => t.group === g && hit(t)) }))
+                        .filter((x) => x.tabs.length);
+                      if (!groups.length) return <div className="px-2.5 py-3 text-[11px]" style={{ color: "var(--text4)" }}>No settings match “{q.trim()}”.</div>;
+                      return groups.map(({ g, tabs }) => (
+                        <div key={g} className="flex flex-col gap-0.5">
+                          <div className="px-2.5 pt-2 pb-0.5 text-[9px] uppercase tracking-[0.16em]" style={{ color: "var(--text4)" }}>{g}</div>
+                          {tabs.map((t) => (
+                            <button key={t.id} onClick={() => setPane(t.id)}
+                              className="w-full text-left px-2.5 py-1.5 rounded-lg text-[12px] flex items-center gap-2"
+                              style={pane === t.id
+                                ? { background: "color-mix(in srgb, var(--primary) 15%, transparent)", color: "var(--text)" }
+                                : { color: "var(--text3)" }}>
+                              {t.label}
+                            </button>
+                          ))}
+                        </div>
+                      ));
+                    })()}
                   </div>
 
                   <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
