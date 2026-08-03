@@ -495,19 +495,10 @@ set -g display-panes-colour "${v.text4}"
 set -g display-panes-active-colour "${v.primary}"
 set -g clock-mode-colour "${v.primary}"
 
-# The pane background: the terminal's, not a colour of our own.
-#
-# This used to name the theme's bg, so that anything a program had not drawn to
-# would match the panel behind it. That was right when the terminal painted an
-# opaque ground anyway, and it is exactly wrong now that it does not: tmux fills
-# every cell with this colour before xterm sees anything, so a copy of the
-# background here is a copy that covers the real one — and the app ends up
-# unable to see through a surface it painted itself.
-#
-# "default" means whatever the terminal's own background is, which is now
-# nothing at all — which is the point.
-set -g window-style "bg=default"
-set -g window-active-style "bg=default"
+# The pane background, so anything a program hasn't drawn to matches the panel
+# behind it instead of falling back to the terminal default.
+set -g window-style "bg=${v.bg}"
+set -g window-active-style "bg=${v.bg}"
 
 # Copy-mode selection, in the same accent the app uses for selection.
 setw -g copy-mode-match-style "bg=${v.bg3},fg=${v.warning}"

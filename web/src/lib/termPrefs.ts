@@ -72,26 +72,12 @@ export function fontAvailable(family: string): boolean {
 }
 
 /** The xterm options the current prefs resolve to. */
-export function termOptions(): { fontFamily: string; fontSize: number; cursorStyle: CursorStyle; allowTransparency: boolean } {
+export function termOptions(): { fontFamily: string; fontSize: number; cursorStyle: CursorStyle } {
   const f = TERM_FONTS.find((x) => x.id === currentTermFont());
   return {
     fontFamily: f && f.stack ? f.stack : TERM_FALLBACK,
     fontSize: currentTermSize(),
     cursorStyle: currentTermCursor(),
-    /**
-     * Let the surface behind the terminal show.
-     *
-     * Without it xterm fills every cell with the theme's background, and a
-     * "transparent" background colour is filled just as opaquely as any other —
-     * which is why two attempts at this changed nothing: the flag was being
-     * returned here and dropped on the floor by the one caller that mattered.
-     * See createSession, which reads this object field by field.
-     *
-     * It is not free — xterm composites each cell instead of filling a rect —
-     * and the renderer preference (Auto / GPU / Compatibility) is where to go
-     * if the throughput matters more than the look.
-     */
-    allowTransparency: true,
   };
 }
 
