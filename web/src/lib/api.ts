@@ -227,8 +227,11 @@ export function adoptServer(next: { origin?: string | null; token?: string | nul
 }
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
-export const ptyWsUrl = (root: string, cols: number, rows: number) =>
-  withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`);
+export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string) =>
+  withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
+    // A file to open instead of a shell. A path — the server decides what runs
+    // with it, and refuses one outside the open project.
+    + (view ? `&view=${encodeURIComponent(view)}` : ""));
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(SERVER + path, { headers: authHeaders() });

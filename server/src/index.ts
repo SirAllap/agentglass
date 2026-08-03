@@ -613,6 +613,9 @@ const server = Bun.serve<WsData>({
         kind: "pty",
         deviceId: caller?.device?.id ?? null,
         root: url.searchParams.get("root") || "",
+        // A path to open, not a command to run. Validated in ptyOpen against
+        // the same scope rule the directory gets.
+        view: url.searchParams.get("view") || undefined,
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,

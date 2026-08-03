@@ -95,7 +95,12 @@ const BRIDGE = materializeBridge(bridgeFile);
 // processes without bound. Each idle shell costs a pty and a sleeping process.
 const MAX_SESSIONS = Math.max(4, Number(process.env.AGENTGLASS_MAX_TERMINALS || 200));
 
-export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number };
+export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
+  /** A file to open in an editor instead of dropping to a shell. A PATH, never
+   *  a command: this socket is reachable from the UI, and "run this string"
+   *  would turn a terminal into arbitrary execution. The server picks what
+   *  runs; see editorFor. */
+  view?: string };
 type PtyWs = ServerWebSocket<unknown>;
 
 type Session = {
@@ -216,6 +221,25 @@ function fallbackCwd(): string {
   return "/";
 }
 
+/**
+ * What opens a file for reading.
+ *
+ * The user's own choice first — somebody who set $VISUAL meant it — then the
+ * editors most likely to be installed, and `less` last so a machine with no
+ * editor still shows the file rather than an error. Resolved from PATH, so a
+ * name that is not installed is skipped rather than spawned and failed.
+ */
+export function editorFor(env: NodeJS.ProcessEnv = process.env): string | null {
+  const asked = (env.VISUAL || env.EDITOR || "").trim();
+  const candidates = [...(asked ? [asked] : []), "nvim", "vim", "vi", "less"];
+  for (const c of candidates) {
+    // A configured $EDITOR can carry flags ("code -w"); take the binary.
+    const bin = c.split(/\s+/)[0]!;
+    if (Bun.which(bin)) return c;
+  }
+  return null;
+}
+
 /** WebSocket opened at /terminal/pty — spawn the shell and start pumping. */
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
@@ -244,6 +268,20 @@ export function ptyOpen(ws: PtyWs) {
   const { shell, args } = pickShell();
   const baseEnv = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" };
 
+  /*
+   * Opening a file rather than a shell.
+   *
+   * The path is held to the same rule the directory is: absolute, inside the
+   * open project, and actually there. A path that fails any of those does NOT
+   * fall back to opening something else — it falls back to a plain shell in the
+   * directory, because silently viewing a different file is worse than viewing
+   * none. `run` is built here from a validated path and a resolved binary, so
+   * nothing the client sent is ever interpreted as a command.
+   */
+  const wanted = d.view ? safeAbs(d.view) : null;
+  const editor = wanted && inScope(wanted) && existsSync(wanted) ? editorFor() : null;
+  const run = editor ? [...editor.split(/\s+/), wanted!] : [shell, ...args];
+
   let argv: string[];
   let mode: Session["mode"] = "pty";
   let sizeDir: string | null = null;
@@ -252,13 +290,13 @@ export function ptyOpen(ws: PtyWs) {
     sizeDir = mkdtempSync(join(tmpdir(), "agentglass-pty-"));
     writeSizeFile(sizeDir, rows, cols);
     env = { ...baseEnv, AGENTGLASS_PTY_SIZE_FILE: join(sizeDir, "size") };
-    argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, BRIDGE, shell, ...args];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, BRIDGE, ...run];
   } else if (HAS_SCRIPT) {
     env = { ...baseEnv, COLUMNS: String(cols), LINES: String(rows) };
-    argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", `exec ${shell} ${args.join(" ")}`, "/dev/null"];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", `exec ${run.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")}`, "/dev/null"];
   } else {
     mode = "pipe";
-    argv = [...(HAS_SETSID ? ["setsid"] : []), shell, "-i"];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), ...(editor ? run : [shell, "-i"])];
   }
 
   let proc: ReturnType<typeof Bun.spawn>;
