@@ -279,8 +279,15 @@ export function ptyOpen(ws: PtyWs) {
    * nothing the client sent is ever interpreted as a command.
    */
   const wanted = d.view ? safeAbs(d.view) : null;
-  const editor = wanted && inScope(wanted) && existsSync(wanted) ? editorFor() : null;
-  const run = editor ? [...editor.split(/\s+/), wanted!] : [shell, ...args];
+  // In scope, or a copy this server itself wrote: a pull request's file is
+  // fetched to a temp path precisely because it is not in the workspace, and
+  // the check has to admit that without admitting /tmp in general.
+  const viewable = !!wanted && (inScope(wanted) || wanted.startsWith(join(tmpdir(), "agentglass-pr-")));
+  const editor = viewable && existsSync(wanted!) ? editorFor() : null;
+    // Read-only when it is a fetched copy: editing a temp file is editing
+  // nothing, and an editor that lets you try is an editor that loses your work.
+  const readonly = editor && wanted!.startsWith(join(tmpdir(), "agentglass-pr-")) && /\b(nvim|vim|view)$/.test(editor.split(/\s+/)[0]!);
+  const run = editor ? [...editor.split(/\s+/), ...(readonly ? ["-R"] : []), wanted!] : [shell, ...args];
 
   let argv: string[];
   let mode: Session["mode"] = "pty";

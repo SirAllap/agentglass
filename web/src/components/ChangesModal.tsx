@@ -3,6 +3,7 @@ import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/Vi
 import { motion, AnimatePresence } from "motion/react";
 import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
+import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { CommitModal } from "./CommitModal.tsx";
 import { api } from "../lib/api.ts";
 import { buildTitles } from "../lib/derive.ts";
@@ -34,6 +35,9 @@ export const LINEBTN_CSS = '.agx-gutter{position:relative}.agx-linebtn{position:
 export const LineMenuCtx = createContext<{ permalink?: (line: number, side: DiffSide) => string | null } | null>(null);
 
 export const SCROLLBAR_CSS = '.agx-scroll{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--primary) 45%,transparent) transparent}.agx-scroll::-webkit-scrollbar{width:11px;height:11px}.agx-scroll::-webkit-scrollbar-track{background:transparent}.agx-scroll::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--primary) 38%,transparent);border-radius:999px;border:3px solid transparent;background-clip:padding-box}.agx-scroll::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--primary) 62%,transparent);background-clip:padding-box}.agx-scroll::-webkit-scrollbar-corner{background:transparent}';
+/** The directory an editor should open in. The server checks it is a repo and
+ *  in scope before using it, and falls back to the workspace root if not. */
+const rootOfPath = (p: string) => p.slice(0, p.lastIndexOf("/")) || p;
 const cellBg = (k?: string) => (k === "del" ? "color-mix(in srgb, var(--error) 13%, transparent)" : k === "add" ? "color-mix(in srgb, var(--success) 13%, transparent)" : "transparent");
 const cellFg = (k?: string) => (k === "del" ? "var(--error)" : k === "add" ? "var(--success)" : "var(--text3)");
 // Opaque variant of the row tint — for the sticky line-number gutter, so
@@ -719,6 +723,8 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const [wrap, setWrap] = useState(false);
   const [split, setSplit] = useState(true);
   const [copied, setCopied] = useState<null | "path" | "diff">(null);
+  /** A file being read whole, over the modal. */
+  const [peek, setPeek] = useState<Peek | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>(() => {
     try { const v = localStorage.getItem(GROUPBY_KEY); if (v === "session" || v === "agent" || v === "folder" || v === "tool") return v; } catch { /* ignore */ }
     return "session";
@@ -918,6 +924,8 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     else if (k === "p") { e.preventDefault(); e.stopPropagation(); jumpHunk(-1); }
     else if (k === "w") { e.preventDefault(); e.stopPropagation(); setWrap((w) => !w); }
     else if (k === "c") { e.preventDefault(); e.stopPropagation(); copy("path"); }
+    // `o` for open, beside `c` for copy: the two things you do with a path.
+    else if (k === "o" && selected) { e.preventDefault(); e.stopPropagation(); setPeek({ root: rootOfPath(selected.file_path), path: selected.file_path, label: selected.file_path }); }
     else if (k === "x") { e.preventDefault(); e.stopPropagation(); if (selected) toggleReviewed(selected.id); }
   };
 
@@ -1097,6 +1105,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             <Toggle on={wrap} onClick={() => setWrap((w) => !w)} title="Toggle line wrap (w)">Wrap</Toggle>
                             <ThemePicker value={themePref} onChange={setThemePref} error={hiliteError} />
                             <Toggle on={bold} onClick={() => setBold((b) => !b)} title="Bold keywords, functions & types (Neovim-style)">Bold</Toggle>
+                            {/* The diff answers what changed. When the answer is
+                                in what did not — the function above, the import
+                                at the top — this is the way to it, on the file
+                                already selected, without going to find a
+                                terminal and putting it in the right checkout. */}
+                            <Toggle onClick={() => setPeek({ root: rootOfPath(selected.file_path), path: selected.file_path, label: selected.file_path })}
+                              title="Open the whole file in an editor (o)">⧉ Open</Toggle>
                             <Toggle onClick={() => copy("path")} title="Copy file path (c)">{copied === "path" ? "Copied ✓" : "Path"}</Toggle>
                             <Toggle onClick={() => copy("diff")} title="Copy unified diff">{copied === "diff" ? "Copied ✓" : "Diff"}</Toggle>
                           </div>
@@ -1110,6 +1125,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           <span><b className="font-semibold">x</b> reviewed</span>
                           <span><b className="font-semibold">w</b> wrap</span>
                           <span><b className="font-semibold">c</b> copy path</span>
+                          <span><b className="font-semibold">o</b> open file</span>
                           <span className="ml-auto tabular-nums">{selected.hunks.length} hunk{selected.hunks.length === 1 ? "" : "s"}</span>
                         </div>
                       </>
@@ -1120,6 +1136,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                     )}
                   </div>
                 </div>
+      {peek && <PeekFile peek={peek} onClose={() => setPeek(null)} />}
       <CommitModal open={commitOpen} onClose={() => setCommitOpen(false)} paths={commitPaths} />
     </div>
   );
