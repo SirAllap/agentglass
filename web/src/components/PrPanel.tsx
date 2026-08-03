@@ -36,6 +36,7 @@ import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge
 import { stepFileIndex } from "../lib/prNav.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { Avatar } from "./Avatar.tsx";
+import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { parseQuery, sortRows, buildFacets, activeCount, type RepoFacets } from "../lib/prFilter.ts";
 import { getHighlighter, shikiTheme, ensureLanguage } from "../lib/highlight.ts";
 import { externalUrl, openExternal } from "../lib/externalUrl.ts";
@@ -906,6 +907,8 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
    *  page. Reset whenever another pull request is opened, or the second one
    *  would open already collapsed with its scroll at the top. */
   const [condensed, setCondensed] = useState(false);
+  /** A file being read whole, over the panel. Null when nothing is open. */
+  const [peek, setPeek] = useState<Peek | null>(null);
   const [detail, setDetail] = useState<PrDetail | null>(null);
   const [detailErr, setDetailErr] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
@@ -1977,6 +1980,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                     d={d} root={root} byPath={byPath} loaded={!!diff} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
                     drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment} onDropDraft={dropDraftItem}
+                    onPeek={(p) => setPeek({ root, path: `${root}/${p}`, label: p })}
                     busy={busy} onReply={doReply}
                     onApply={doApplySuggestion}
                     onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
@@ -2005,6 +2009,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
         </div>
         )}
       </div>
+      {peek && <PeekFile peek={peek} onClose={() => setPeek(null)} />}
       {dialog}
     </div>
     </MentionCtx.Provider>
@@ -2696,8 +2701,11 @@ function buildFileTree(files: PrFile[]): TreeNode {
   return { ...root, dirs: new Map([...root.dirs].map(([k, v]) => [k, squash(v)])) };
 }
 
-function FileTree({ node, sel, onPick, seen, drafts, depth = 0 }: {
+function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
   node: TreeNode; sel: string | null; onPick: (p: string) => void;
+  /** Open the whole file in an editor, over the panel. The diff shows what
+   *  changed; this is for the times the answer is in the part that did not. */
+  onPeek?: (p: string) => void;
   seen: (p: string) => boolean; drafts: (p: string) => number; depth?: number;
 }) {
   return (
@@ -2707,7 +2715,7 @@ function FileTree({ node, sel, onPick, seen, drafts, depth = 0 }: {
           <div className="truncate text-[10px] px-1 py-0.5" style={{ paddingLeft: 6 + depth * 10, color: "var(--text3)" }} title={dir.path}>
             {dir.name}
           </div>
-          <FileTree node={dir} sel={sel} onPick={onPick} seen={seen} drafts={drafts} depth={depth + 1} />
+          <FileTree node={dir} sel={sel} onPick={onPick} onPeek={onPeek} seen={seen} drafts={drafts} depth={depth + 1} />
         </div>
       ))}
       {node.files.map((f) => {
@@ -2715,8 +2723,13 @@ function FileTree({ node, sel, onPick, seen, drafts, depth = 0 }: {
         const on = sel === f.path;
         const n = drafts(f.path);
         return (
-          <button key={f.path} onClick={() => onPick(f.path)} title={`${f.path}${f.status ? ` · ${f.status}` : ""}`}
-            className="agx-btn w-full text-left flex items-center gap-1 py-0.5 rounded truncate hover:bg-white/5"
+          <button key={f.path} onClick={() => onPick(f.path)}
+            // Alt-click opens it whole, which is the gesture that costs nothing
+            // to learn because it costs nothing to not know.
+            onAuxClick={(e) => { if (e.button === 1 && onPeek) { e.preventDefault(); onPeek(f.path); } }}
+            title={`${f.path}${f.status ? ` · ${f.status}` : ""}${onPeek ? " · alt-click to open the whole file" : ""}`}
+            onClickCapture={(e) => { if (e.altKey && onPeek) { e.preventDefault(); e.stopPropagation(); onPeek(f.path); } }}
+            className="agx-btn w-full text-left flex items-center gap-1 py-0.5 rounded truncate hover:bg-white/5 agx-peekrow"
             style={{
               paddingLeft: 6 + depth * 10, paddingRight: 4,
               background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : undefined,
@@ -2809,7 +2822,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
  *  rely on instead of measure. */
 const FILE_HEAD_H = 30;
 
-function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onResolve, onReply, onApply, busy }: {
+function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onDropDraft, onPeek, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
   seenFiles: string[]; onSeen: (p: string) => void;
   sel: string | null; onSel: (p: string | null) => void;
@@ -2821,6 +2834,8 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
   /** Discard a pending comment from where it is shown, rather than only from
    *  the Review tab it is otherwise buried in. */
   onDropDraft: (d: DraftComment) => void;
+  /** Open a file whole, over the panel, in an editor. */
+  onPeek?: (path: string) => void;
   onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
 }) {
@@ -3154,7 +3169,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
               node={buildFileTree(shownFiles)} sel={sel}
               onPick={(path) => { onSel(path); setFolded((cur) => { const n = new Set(cur); n.delete(path); return n; }); scrollToFileStable(() => frameRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)); }}
               seen={(path) => seenFiles.includes(path)}
-              drafts={draftsFor}
+              drafts={draftsFor} onPeek={onPeek}
             />
           </aside>
         )}
@@ -3234,6 +3249,18 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                 <span className="ml-auto shrink-0 tabular-nums" style={{ color: "var(--success)" }}>+{f.additions}</span>
                 <span className="shrink-0 tabular-nums" style={{ color: "var(--error)" }}>−{f.deletions}</span>
               </button>
+              {/* The diff shows what changed. Often the answer is in the part
+                  that did not — the function three lines above, the import at
+                  the top — and reaching it meant finding a terminal, getting it
+                  into the right checkout, and typing the path, by which point
+                  you have lost the list you were working from. */}
+              {onPeek && (
+                <button onClick={() => onPeek(f.path)} title="Open the whole file in an editor"
+                  className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+                  ⧉ Open
+                </button>
+              )}
               {/* "Viewed" is state you keep for the length of a review, not a
                   one-off tick — a switch says that and a checkbox does not. */}
               <button onClick={() => seenAndFold(f.path)} title={done ? "Mark not viewed" : "Mark viewed"}

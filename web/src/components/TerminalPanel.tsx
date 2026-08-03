@@ -68,7 +68,9 @@ const repoName = (p: string) => p.split("/").pop() || p;
 const rootStyle = () => getComputedStyle(document.documentElement); // one style-recalc per read batch
 const readVar = (s: CSSStyleDeclaration, name: string, fallback: string) => s.getPropertyValue(name).trim() || fallback;
 const alpha = (hex: string, a: string) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? hex + a : hex);
-function themeFromCss() {
+/** Exported so a one-off terminal — the file peek — paints in the same colours
+ *  as the panel, rather than deriving a second palette that drifts from it. */
+export function themeFromCss() {
   const s = rootStyle();
   const bg = readVar(s, "--bg", "#0d1117");
   // The 16 ANSI colours: a theme's pinned palette when it has one, otherwise
