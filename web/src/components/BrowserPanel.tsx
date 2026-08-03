@@ -15,14 +15,9 @@
 // markup are a request, and `will-attach-webview` is the answer.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BROWSER_PARTITION, HAS_BROWSER } from "../lib/desktop.ts";
-import {
-  DEFAULT_SEARCH_ENGINE, displayUrl, normalizeNavigationUrl, type SearchEngine,
-} from "../lib/browserUrl.ts";
+import { displayUrl, normalizeNavigationUrl } from "../lib/browserUrl.ts";
+import { BLANK, homePage, searchEngine } from "../lib/browserPrefs.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
-
-const HOME_KEY = "agentglass.browser.home";
-const ENGINE_KEY = "agentglass.browser.engine";
-const DEFAULT_HOME = "https://duckduckgo.com";
 
 /** Electron's `<webview>` is not in React's JSX catalogue, and its methods are
  *  not on HTMLElement. Narrowed to the handful actually called here rather than
@@ -38,17 +33,16 @@ type WebviewEl = HTMLElement & {
   getURL(): string;
 };
 
-function readPref(key: string, fallback: string): string {
-  try { return localStorage.getItem(key) || fallback; } catch { return fallback; }
-}
-
 /** The workspace hands every view an `active`, and this one has no use for it:
  *  there is nothing to poll, and a page must keep running while you are looking
  *  at something else — that is the point of the views staying mounted. */
 export function BrowserView(_props: { active: boolean }) {
   const ref = useRef<WebviewEl | null>(null);
-  const [home] = useState(() => readPref(HOME_KEY, DEFAULT_HOME));
-  const [engine] = useState<SearchEngine>(() => readPref(ENGINE_KEY, DEFAULT_SEARCH_ENGINE) as SearchEngine);
+  // Only the *first* page is read at mount. Everything else asks
+  // `browserPrefs` at the moment it needs an answer, because this view is
+  // mounted once for the life of the app: a home page cached here would ignore
+  // every change made in settings until a restart.
+  const [firstPage] = useState(homePage);
 
   // What the page is at, and what is in the bar, are two different facts: while
   // you are typing, the page has not moved. `typed` being null means "not
@@ -98,12 +92,15 @@ export function BrowserView(_props: { active: boolean }) {
   }, []);
 
   const go = useCallback((raw: string) => {
-    const next = normalizeNavigationUrl(raw, engine);
+    // `about:blank` is not a URL the address-bar parser will hand back — it is
+    // not http(s) — but it is exactly where Home goes when the home page has
+    // been left empty, so it is passed straight through.
+    const next = raw === BLANK ? BLANK : normalizeNavigationUrl(raw, searchEngine());
     if (!next || !ref.current) return;
     setTyped(null);
     setFailed(null);
     ref.current.src = next;
-  }, [engine]);
+  }, []);
 
   if (!HAS_BROWSER) return null;
 
@@ -129,7 +126,7 @@ export function BrowserView(_props: { active: boolean }) {
         <button onClick={() => (loading ? ref.current?.stop() : ref.current?.reload())}
           title={loading ? "Stop" : "Reload"}
           className="agx-btn text-[11px] px-2 py-1 rounded" style={btn}>{loading ? "✕" : "⟳"}</button>
-        <button onClick={() => go(home)} title="Home"
+        <button onClick={() => go(homePage())} title="Home"
           className="agx-btn text-[11px] px-2 py-1 rounded" style={btn}>⌂</button>
 
         <input
@@ -168,7 +165,7 @@ export function BrowserView(_props: { active: boolean }) {
       <div className="flex-1 min-h-0">
         <webview
           ref={ref as unknown as React.Ref<HTMLElement>}
-          src={home}
+          src={firstPage}
           partition={BROWSER_PARTITION}
           allowpopups={undefined}
           style={{ width: "100%", height: "100%", background: "var(--bg)" }}

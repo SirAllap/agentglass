@@ -18,7 +18,10 @@ import { mergeActivity, gateLine, actorLabel, type ActivityRow } from "../lib/ac
 import { ingestUpdate } from "../lib/updateStore.ts";
 import { ReleaseNotesModal } from "./ReleaseNotesModal.tsx";
 import { installedNotes, type NotesTarget } from "../lib/whatsNew.ts";
-import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP } from "../lib/desktop.ts";
+import { autostartEnabled, setAutostart, isFullscreen, toggleFullscreen, IS_DESKTOP, HAS_BROWSER } from "../lib/desktop.ts";
+import { Select } from "./Select.tsx";
+import { SEARCH_ENGINE_LABELS, type SearchEngine } from "../lib/browserUrl.ts";
+import { homePageRaw, setHomePage, searchEngine, setSearchEngine } from "../lib/browserPrefs.ts";
 import { RemoteAccessPane } from "./RemoteAccessPane.tsx";
 import { RunningPanes } from "./RunningPanes.tsx";
 import { BudgetsPane } from "./BudgetsPane.tsx";
@@ -132,10 +135,15 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "appearance" | "prefs" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
+type Pane = "appearance" | "prefs" | "browser" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
 const TABS: { id: Pane; label: string }[] = [
   { id: "appearance", label: "Appearance" },
   { id: "prefs", label: "Preferences" },
+  // Only where there is a browser to configure. The view itself is absent in a
+  // phone's browser tab, and a settings tab for something that is not there is
+  // worse than no tab: it reads as a feature that is broken rather than one
+  // that does not apply.
+  ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser" }] : []),
   { id: "keys", label: "Shortcuts" },
   { id: "open", label: "Open" },
   { id: "export", label: "Export" },
@@ -145,6 +153,95 @@ const TABS: { id: Pane; label: string }[] = [
   { id: "remote", label: "Remote" },
   { id: "about", label: "About" },
 ];
+
+/**
+ * The browser view's two settings.
+ *
+ * Two, and not the eight a browser's settings screen usually carries, because
+ * the other six would be controls for things that do not exist yet — profiles,
+ * cookie import, link routing, agent driving. A toggle that saves a preference
+ * nothing reads is worse than an absent one: it reports a feature as present
+ * and broken instead of absent.
+ *
+ * State lives in localStorage rather than here, and is read back on mount, so
+ * this pane and the view cannot disagree about what was chosen.
+ */
+function BrowserPane() {
+  const [home, setHome] = useState(homePageRaw);
+  const [engine, setEngine] = useState<SearchEngine>(searchEngine);
+  const [bad, setBad] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const save = () => {
+    const stored = setHomePage(home);
+    if (stored === null) { setBad(true); setSaved(false); return; }
+    // Show what was actually stored: typing `example.com` and having the box
+    // keep saying `example.com` while the browser goes to `https://example.com/`
+    // is a small lie about what was saved.
+    setHome(homePageRaw());
+    setBad(false);
+    setSaved(true);
+  };
+
+  return (
+    <Section title="Browser">
+      <p className="px-3 pb-1 text-[11px] t-dim2">
+        The pages the browser view opens on its own. Everything else — what you have logged into,
+        what you have open — belongs to the page, not to a setting.
+      </p>
+
+      <div className="w-full flex items-start gap-3 px-3 py-2.5 rounded-lg">
+        <span className="min-w-0 flex-1">
+          <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>Home page</span>
+          <span className="block text-[10.5px] t-dim2 mt-0.5">
+            Where the view opens, and where Home goes. Leave it empty for a blank page.
+          </span>
+          {bad && (
+            <span className="block text-[10.5px] mt-1" style={{ color: "var(--error)" }}>
+              That is not an address this will open — it takes http(s), or nothing at all.
+            </span>
+          )}
+        </span>
+        <span className="shrink-0 flex items-center gap-1.5">
+          <input
+            value={home}
+            onChange={(e) => { setHome(e.target.value); setBad(false); setSaved(false); }}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); save(); } }}
+            placeholder="https://duckduckgo.com"
+            spellCheck={false}
+            className="text-[11.5px] px-2 py-1 rounded outline-none bg-transparent w-[210px]"
+            style={{
+              color: "var(--text)",
+              border: `1px solid color-mix(in srgb, ${bad ? "var(--error) 60%" : "var(--border) 55%"}, transparent)`,
+            }}
+          />
+          <button onClick={save}
+            className="agx-btn text-[11px] px-2 py-1 rounded"
+            style={{ border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", color: "var(--text2)" }}>
+            {saved ? "Saved" : "Save"}
+          </button>
+        </span>
+      </div>
+
+      <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg">
+        <span className="min-w-0 flex-1">
+          <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>Search engine</span>
+          <span className="block text-[10.5px] t-dim2 mt-0.5">
+            Used when what you type in the address bar is words rather than an address.
+          </span>
+        </span>
+        <span className="shrink-0">
+          <Select
+            value={engine}
+            options={(Object.keys(SEARCH_ENGINE_LABELS) as SearchEngine[]).map((id) => ({ value: id, label: SEARCH_ENGINE_LABELS[id] }))}
+            onChange={(v) => { setEngine(v as SearchEngine); setSearchEngine(v as SearchEngine); }}
+            align="right"
+          />
+        </span>
+      </div>
+    </Section>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -1081,6 +1178,8 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     )}
                   </Section>
                   )}
+
+                  {pane === "browser" && <BrowserPane />}
 
                   {pane === "keys" && (
                   <Section title="Shortcuts">
