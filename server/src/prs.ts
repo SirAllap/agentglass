@@ -2285,7 +2285,12 @@ export async function closePr(rootIn: unknown, number: unknown, reopen = false):
 // review this pull request with Claude
 // ---------------------------------------------------------------------------
 
-export interface ReviewPromptPlan { ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }
+/** Either a plan that can be run, or the reason there isn't one. A union
+ *  rather than one bag of optionals, so a caller that has checked `ok` gets a
+ *  cwd and a prompt that are strings — the shape it is about to execute. */
+export type ReviewPromptPlan =
+  | { ok: true; cwd: string; prompt: string; branch?: string; error?: undefined }
+  | { ok: false; error: string; cwd?: undefined; prompt?: undefined; branch?: undefined };
 
 /**
  * Hand back the prompt to review a pull request, and nothing else.

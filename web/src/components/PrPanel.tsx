@@ -34,6 +34,7 @@ import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
 import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex } from "../lib/prNav.ts";
+import { excerpt, findInDiffs, groupByFile, type Match } from "../lib/diffFind.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { Avatar } from "./Avatar.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
@@ -73,6 +74,40 @@ const VIEWS: { id: string; label: string; scope: Filter; query: string; tint?: s
 const POLL_MS = 20_000;
 const SEEN_KEY = "agentglass.pr.seen";
 const DRAFT_KEY = "agentglass.pr.drafts";
+/** The unsent review itself — the verdict you picked and the note you typed,
+ *  which used to live only in the Review tab's own state. Switching to Files to
+ *  check one more thing threw both away, and there is no worse moment to lose a
+ *  paragraph than after you have decided what it says. GitHub keeps it; so do
+ *  we, per pull request, until it is sent. */
+const REVIEW_KEY = "agentglass.pr.review";
+
+/** A review written but not yet submitted. */
+export interface ReviewDraft {
+  verb: "comment" | "approve" | "request_changes";
+  body: string;
+}
+
+/** Half-written comments, keyed by where they are being written. Neither queued
+ *  nor sent — just typed, and until now thrown away by anything that closed the
+ *  box: switching to Checks to see why it is red, and coming back to an empty
+ *  composer, is the most expensive way this panel could waste a paragraph. */
+const COMPOSE_KEY = "agentglass.pr.compose";
+const readStash = (k: string): string => { try { return (JSON.parse(localStorage.getItem(COMPOSE_KEY) || "{}") as Record<string, string>)[k] ?? ""; } catch { return ""; } };
+const writeStash = (k: string, v: string) => {
+  try {
+    const all = JSON.parse(localStorage.getItem(COMPOSE_KEY) || "{}") as Record<string, string>;
+    // Deleted first either way, so a key that is being typed into moves to the
+    // end of the object and the order below stays "least recently touched".
+    delete all[k];
+    if (v.trim()) all[k] = v;
+    // Nothing ever deletes the stash for a pull request that got merged with a
+    // half-written note still in it, so bound it: keys keep insertion order, so
+    // the ones that fall off are the ones nobody has touched in longest.
+    const keys = Object.keys(all);
+    for (const old of keys.slice(0, Math.max(0, keys.length - 80))) delete all[old];
+    localStorage.setItem(COMPOSE_KEY, JSON.stringify(all));
+  } catch { /* private mode */ }
+};
 
 /** A line comment written but not yet sent — GitHub's "pending review". */
 export interface DraftComment {
@@ -925,6 +960,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
   const [rawBots, setRawBots] = useState(true);
   const [seen, setSeen] = useState<Record<string, string[]>>(() => loadMap<string[]>(SEEN_KEY));
   const [drafts, setDrafts] = useState<Record<string, DraftComment[]>>(() => loadMap<DraftComment[]>(DRAFT_KEY));
+  const [reviews, setReviews] = useState<Record<string, ReviewDraft>>(() => loadMap<ReviewDraft>(REVIEW_KEY));
   const [diff, setDiff] = useState("");
   const [selFile, setSelFile] = useState<string | null>(null);
   const [selCommit, setSelCommit] = useState<string | null>(null);
@@ -1310,6 +1346,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
     return [...new Set([...remote, ...local])];
   }, [key, seen, detail]);
   const myDrafts = key ? (drafts[key] ?? []) : [];
+  const myReview: ReviewDraft = (key && reviews[key]) || { verb: "comment", body: "" };
+  const hasReviewDraft = !!(key && reviews[key]);
+  /** Hold the unsent review. Written through to storage on every keystroke —
+   *  the whole point is that it survives a tab switch, a closed panel and a
+   *  rebuild, and any of those can happen between one key and the next. */
+  const setMyReview = useCallback((patch: Partial<ReviewDraft>) => {
+    if (!key) return;
+    setReviews((cur) => {
+      const merged = { ...(cur[key] ?? { verb: "comment" as const, body: "" }), ...patch };
+      // An empty note with the default verdict is not a draft — it is the
+      // absence of one, and keeping it would leave a "you have a review in
+      // progress" mark on every pull request you ever opened.
+      const next = { ...cur };
+      if (!merged.body.trim() && merged.verb === "comment") delete next[key];
+      else next[key] = merged;
+      saveMap(REVIEW_KEY, next);
+      return next;
+    });
+  }, [key]);
 
   /**
    * Mark a file read, here and on GitHub.
@@ -1398,6 +1453,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
     const ok = await act("Review", () => api.prReviewWith(root, detail.number, verb, body, myDrafts));
     if (ok && key) {
       setDrafts((cur) => { const next = { ...cur, [key]: [] }; saveMap(DRAFT_KEY, next); return next; });
+      // Sent is the one thing that clears it. Anything short of that — closing
+      // the panel, switching tabs, a rebuild — leaves the draft where it was.
+      setReviews((cur) => { const next = { ...cur }; delete next[key]; saveMap(REVIEW_KEY, next); return next; });
       setTab("conversation");
     }
   };
@@ -1639,7 +1697,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
     { id: "commits", label: "Commits", n: d.commits.length },
     { id: "files", label: "Files", n: d.files.length },
     { id: "checks", label: "Checks", n: d.checks.total, warn: d.checks.failure > 0 },
-    ...(canReview ? [{ id: "review" as Tab, label: "Review", n: myDrafts.length || undefined, warn: d.viewerRequested }] : []),
+    // The dot also means "you have a review written and not sent" — otherwise a
+    // draft that survives everything else is invisible from every tab but its
+    // own, which is the same as losing it.
+    ...(canReview ? [{ id: "review" as Tab, label: "Review", n: myDrafts.length || undefined, warn: d.viewerRequested || hasReviewDraft }] : []),
   ] : [];
 
   return (
@@ -1845,6 +1906,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                 ))}
                 <div className="ml-auto flex items-center gap-1.5 px-2 shrink-0">
                   {myDrafts.length > 0 && <Chip text={`${myDrafts.length} pending`} tint="var(--warning)" title="Line comments queued but not sent" />}
+                  {hasReviewDraft && tab !== "review" && (
+                    <button onClick={() => setTab("review")} title="A review written but not sent — it is kept until you send it">
+                      <Chip text="draft review" tint="var(--primary)" />
+                    </button>
+                  )}
                   {d.viewerRequested && tab !== "review" && (
                     <Btn onClick={() => setTab("review")} primary small>Add your review</Btn>
                   )}
@@ -2007,6 +2073,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                 {tab === "review" && canReview && (
                   <ReviewTab
                     d={d} drafts={myDrafts} seen={seenFiles.length} busy={busy}
+                    draft={myReview} onDraft={setMyReview}
                     onDrop={dropDraft} onSubmit={submitReview} onGoFiles={() => setTab("files")}
                   />
                 )}
@@ -2825,6 +2892,128 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
   );
 }
 
+/**
+ * Search the code of a whole review, GitHub-style — the answer to "where else
+ * is this called?" without opening thirteen files and searching each one.
+ *
+ * Deliberately not the browser's Ctrl+F, which is blind here: files fold when
+ * you mark them viewed, diffs are lazy-mounted, and a big file is held behind a
+ * button — so most of the review is not in the DOM to be found. This searches
+ * the diffs in memory, which are all there, and then opens what it found.
+ */
+function FindBar({ value, onChange, inputRef, listRef, hits, groups, at, onGo, onClose, fileCount, loaded }: {
+  value: string; onChange: (v: string) => void;
+  inputRef: React.RefObject<HTMLInputElement>;
+  listRef: React.RefObject<HTMLDivElement>;
+  hits: Match[]; groups: { path: string; matches: Match[] }[]; at: number;
+  onGo: (i: number) => void; onClose: () => void;
+  fileCount: number; loaded: boolean;
+}) {
+  const edge = "1px solid color-mix(in srgb, var(--text) 20%, transparent)";
+  const typed = value.trim().length >= 2;
+  // The index each group's first match sits at, so a row knows its own place in
+  // the flat list without the render doing arithmetic per row.
+  let running = 0;
+  const numbered = groups.map((g) => { const from = running; running += g.matches.length; return { ...g, from }; });
+  const nav = (dir: 1 | -1) => onGo(at + dir);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 px-2 py-1.5 rounded-md"
+        style={{ background: "var(--bg)", border: edge }}>
+        <span className="shrink-0" style={{ color: "var(--primary)" }}>⌕</span>
+        <input
+          ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)}
+          placeholder={`Search the code of ${fileCount} file${fileCount === 1 ? "" : "s"}…`}
+          spellCheck={false} autoComplete="off"
+          className="flex-1 min-w-0 bg-transparent outline-none text-[11px]"
+          style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}
+          onKeyDown={(e) => {
+            // Held here rather than on the frame: while you are typing, the
+            // frame never sees a key, and Enter has to mean "next" for this to
+            // feel like every other find bar ever built.
+            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); }
+            else if (e.key === "Enter") { e.preventDefault(); nav(e.shiftKey ? -1 : 1); }
+            else if (e.key === "ArrowDown") { e.preventDefault(); nav(1); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); nav(-1); }
+          }}
+        />
+        <span className="shrink-0 tabular-nums text-[10px] px-1" style={{ color: hits.length ? "var(--text2)" : "var(--text3)" }}>
+          {!typed ? "" : hits.length ? `${at + 1} / ${hits.length}` : "no match"}
+        </span>
+        <span className="shrink-0 flex items-center gap-1">
+          <button onClick={() => nav(-1)} disabled={!hits.length} title="Previous match (⇧↵)"
+            className="agx-btn text-[11px] leading-none px-1.5 py-1 rounded"
+            style={{ border: edge, color: hits.length ? "var(--text2)" : "var(--text4)" }}>↑</button>
+          <button onClick={() => nav(1)} disabled={!hits.length} title="Next match (↵)"
+            className="agx-btn text-[11px] leading-none px-1.5 py-1 rounded"
+            style={{ border: edge, color: hits.length ? "var(--text2)" : "var(--text4)" }}>↓</button>
+          <button onClick={onClose} title="Close (Esc)"
+            className="agx-btn text-[11px] leading-none px-1.5 py-1 rounded"
+            style={{ border: edge, color: "var(--text2)" }}>✕</button>
+        </span>
+      </div>
+
+      {/* The results, not just a counter: seeing the four lines it matched is
+          usually the whole answer, and beats being teleported to the first one
+          and having to press Enter to survey the rest. */}
+      {typed && (
+        <div ref={listRef} className="agx-scroll rounded-md overflow-y-auto"
+          style={{ maxHeight: "38vh", background: "var(--bg)", border: edge }}>
+          {!hits.length ? (
+            <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>
+              {loaded ? <>Nothing matches “{value.trim()}” in this review.</> : <>Still loading the diffs — search will answer once they are in.</>}
+            </div>
+          ) : (
+            <>
+              {numbered.map((g) => (
+                <div key={g.path}>
+                  <div className="sticky top-0 z-[1] px-2.5 py-1 flex items-center gap-2"
+                    style={{ background: "color-mix(in srgb, var(--text) 7%, var(--bg))", borderBottom: "1px solid color-mix(in srgb, var(--text) 12%, transparent)" }}>
+                    <span className="truncate text-[10.5px]" style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{g.path}</span>
+                    <span className="ml-auto shrink-0 tabular-nums text-[10px]" style={{ color: "var(--text3)" }}>{g.matches.length}</span>
+                  </div>
+                  {g.matches.map((m, i) => {
+                    const idx = g.from + i;
+                    const on = idx === at;
+                    const e = excerpt(m);
+                    return (
+                      <button key={idx} data-hit={on ? "on" : undefined} onClick={() => onGo(idx)}
+                        className="w-full text-left flex items-baseline gap-2 px-2.5 py-[3px] hover:bg-white/5"
+                        style={{
+                          background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : undefined,
+                          // A rail, not a border: the row keeps its height and
+                          // the list does not jog by a pixel as you walk it.
+                          boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
+                        }}>
+                        <span className="shrink-0 tabular-nums text-[10px] w-[52px] text-right"
+                          style={{ color: m.side === "LEFT" ? "var(--error)" : "var(--text3)" }}>
+                          {m.side === "LEFT" ? "−" : ""}{m.line}
+                        </span>
+                        <span className="flex-1 min-w-0 truncate text-[10.5px]" style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>
+                          {e.before}
+                          <span style={{ background: "color-mix(in srgb, var(--primary) 38%, transparent)", color: "var(--text)", borderRadius: 2, padding: "0 1px" }}>{e.hit}</span>
+                          {e.after}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+              {/* findInDiffs stops at 500. A list that quietly ended early is
+                  how you conclude a symbol is used nowhere else. */}
+              {hits.length >= 500 && (
+                <div className="px-2.5 py-1.5 text-[10px]" style={{ color: "var(--warning)" }}>
+                  First 500 matches — narrow the search to see the rest.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The file header's exact height. Fixed rather than whatever its padding adds
  *  up to, so the one pinned bar in this view has a height the scroll maths can
  *  rely on instead of measure. */
@@ -2895,7 +3084,17 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
   // text it opened with. The composer renders inline under the line via the same
   // rowAfter slot the threads use — GitHub's placement, not a modal.
   const [composing, setComposing] = useState<{ path: string; line: number; startLine?: number; side: "LEFT" | "RIGHT"; initial?: string } | null>(null);
-  const cancelCompose = () => { setComposing(null); setSelRange(null); };
+  /** Where a half-written comment is kept: this pull request, this file, this
+   *  line. Not the range — a comment stretched over lines 12–18 is still being
+   *  written about the line you clicked. */
+  const composeStashKey = (path: string, side: "LEFT" | "RIGHT", line: number) =>
+    `${root}#${d.number}|${path}|${side === "LEFT" ? "L" : "R"}${line}`;
+  // Cancel is the one thing that means "I do not want this". Everything else —
+  // closing the box, changing tabs, a rebuild — keeps it.
+  const cancelCompose = () => {
+    if (composing) writeStash(composeStashKey(composing.path, composing.side, composing.line), "");
+    setComposing(null); setSelRange(null);
+  };
 
   /** Turn the open composer into a suggestion, seeded with the line it is
    *  about — what the menu's "Suggest change" used to do, moved to where you
@@ -2993,6 +3192,17 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
     requestAnimationFrame(align);
   };
   const [q, setQ] = useState("");
+  /*
+   * Finding a word across every file, which the browser's own Ctrl+F cannot do
+   * here: a file folds when you mark it viewed and the diff is windowed, so
+   * half the matches live in nodes that do not exist yet. "Where else is this
+   * helper called?" is the question a review asks most, and until now the only
+   * way to answer it was to open thirteen files and search each one.
+   */
+  const [find, setFind] = useState<string | null>(null);
+  const [findAt, setFindAt] = useState(0);
+  const findRef = useRef<HTMLInputElement>(null);
+  const findListRef = useRef<HTMLDivElement>(null);
   // The facet filter: extensions to leave OUT (empty = show every extension),
   // and whether files already marked viewed still show. Both scope one review of
   // one PR.
@@ -3011,9 +3221,27 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
   // typed, and the re-expansion jumped the page back to the top mid-review.
   useEffect(() => {
     setQ(""); setHiddenExts([]); setShowViewed(true); setLoadedDiffs(new Set());
+    setFind(null); setFindAt(0);
     setFolded(new Set(d.files.filter((f) => f.additions + f.deletions > BIG_FILE_LINES).map((f) => f.path)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d.number]);
+  // A file already marked viewed arrives folded. Coming back to a half-read
+  // review used to reopen every file you had already ticked off, so the eleven
+  // you were done with were back in the way and the two still to read were
+  // somewhere below them. Marking a file viewed folds it; finding it already
+  // viewed should mean the same thing.
+  //
+  // Once per file, not once per poll: `foldedOnce` is what stops the twenty
+  // second refresh from re-folding a viewed file you have deliberately opened
+  // back up to look at again.
+  const foldedOnce = useRef<Set<string>>(new Set());
+  useEffect(() => { foldedOnce.current = new Set(); }, [d.number]);
+  useEffect(() => {
+    const late = seenFiles.filter((p) => !foldedOnce.current.has(p));
+    if (!late.length) return;
+    for (const p of late) foldedOnce.current.add(p);
+    setFolded((cur) => new Set([...cur, ...late]));
+  }, [seenFiles]);
 
   const extFacets = useMemo(() => {
     const m = new Map<string, number>();
@@ -3022,6 +3250,76 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
       .sort((a, b) => b.count - a.count || a.ext.localeCompare(b.ext));
   }, [d.files]);
   const viewedCount = useMemo(() => d.files.filter((f) => seenFiles.includes(f.path)).length, [d.files, seenFiles]);
+
+  /** Matches for the current find, across every file the list is showing —
+   *  computed from the diffs already in hand, so it costs a pass over memory
+   *  and no network at all. */
+  const findHits = useMemo(() => {
+    if (!find || find.trim().length < 2) return [];
+    return findInDiffs(d.files.map((f) => ({ path: f.path, change: byPath.get(f.path) })), find);
+  }, [find, d.files, byPath]);
+  const findGroups = useMemo(() => groupByFile(findHits), [findHits]);
+
+  /** Open a match: unfold the file it is in, load the diff if it was held back,
+   *  select the line so the eye lands ON it rather than somewhere in the right
+   *  region, and scroll it under the bar. */
+  const goToMatch = useCallback((m: Match) => {
+    setFolded((cur) => { const n = new Set(cur); n.delete(m.path); return n; });
+    setLoadedDiffs((cur) => new Set(cur).add(m.path));
+    onSel(m.path);
+    setSelRange({ path: m.path, sel: { side: m.side, start: m.line, end: m.line } });
+    requestAnimationFrame(() => {
+      // Aim for the line, settle for the file. A diff below the fold is still a
+      // LazyMount placeholder when this runs, so the row does not exist yet;
+      // the aligner re-queries every frame, and picks the line up the moment it
+      // mounts. Scoped to the file — "R412" exists in most of them.
+      scrollToFileStable(() => {
+        const host = frameRef.current?.querySelector(`[data-path="${CSS.escape(m.path)}"]`);
+        return host?.querySelector(`[data-ln="${m.side === "LEFT" ? "L" : "R"}${m.line}"]`) ?? host;
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onSel]);
+
+  /** Step through the results. The index is the cursor; everything else — which
+   *  file is open, where the page is — follows from it. */
+  const goToIndex = useCallback((i: number) => {
+    if (!findHits.length) return;
+    const n = ((i % findHits.length) + findHits.length) % findHits.length;
+    setFindAt(n);
+    goToMatch(findHits[n]!);
+  }, [findHits, goToMatch]);
+
+  // A new query starts at its first hit rather than wherever the last one left
+  // the cursor, which would be an index into a list that no longer exists.
+  useEffect(() => { setFindAt(0); }, [find]);
+  // Keep the active result in view in the list as Enter walks past the bottom.
+  useEffect(() => {
+    findListRef.current?.querySelector('[data-hit="on"]')?.scrollIntoView({ block: "nearest" });
+  }, [findAt]);
+
+  /**
+   * Ctrl+F, the key everyone already presses.
+   *
+   * On `window`, not on the frame: the point is that it works wherever you are
+   * on the page, and the frame only sees keys when something inside it has
+   * focus. The browser's own find is preventDefault'd away — it cannot see
+   * folded files or unmounted rows, so leaving it in place would answer "no
+   * results" for a word that is in four files.
+   */
+  useEffect(() => {
+    const onWinKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "f" || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      // A terminal owns its own keys — a peeked file is being read in nvim, and
+      // Ctrl+F there is page-down.
+      if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
+      e.preventDefault();
+      setFind((cur) => cur ?? "");
+      requestAnimationFrame(() => { findRef.current?.focus(); findRef.current?.select(); });
+    };
+    window.addEventListener("keydown", onWinKey);
+    return () => window.removeEventListener("keydown", onWinKey);
+  }, []);
 
   const shownFiles = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -3137,7 +3435,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
           style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
           <span style={{ color: "var(--text3)" }}>⌕</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter files…"
-            className="bg-transparent outline-none text-[10.5px] w-28" style={{ color: "var(--text2)" }} />
+            className="bg-transparent outline-none text-[10.5px] w-28" style={{ color: "var(--text)" }} />
           {q && <button onClick={() => setQ("")} title="Clear" style={{ color: "var(--text3)" }}>×</button>}
         </span>
         <FilesFilterMenu
@@ -3147,6 +3445,16 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
           showViewed={showViewed} onToggleViewed={() => setShowViewed((v) => !v)}
           viewedCount={viewedCount}
         />
+        {/* The filter to its left narrows the LIST by path; this searches the
+            CODE. Two different questions, so they are two different controls —
+            and the shortcut is on the button because nobody reads a legend. */}
+        <Btn small primary={find !== null}
+          title="Search the code of every file in this review (Ctrl+F)"
+          onClick={() => {
+            if (find !== null) { setFind(null); return; }
+            setFind("");
+            requestAnimationFrame(() => findRef.current?.focus());
+          }}>⌕ Search code</Btn>
         <Btn onClick={() => onSplit(false)} small primary={!split} title="One column, with a “+ Comment” target on every line">Unified</Btn>
         <Btn onClick={() => onSplit(true)} small primary={split} title="Before and after, side by side">Split</Btn>
         <Btn onClick={() => onWrap(!wrap)} small primary={wrap} title="Wrap long lines rather than scrolling them">Wrap</Btn>
@@ -3160,8 +3468,16 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
           <Bar parts={[{ pct: d.files.length ? (seenFiles.length / d.files.length) * 100 : 0, tint: seenFiles.length === d.files.length ? "var(--success)" : "var(--primary)" }]} />
         </span>
       </div>
+      {find !== null && (
+        <FindBar
+          value={find} onChange={setFind} inputRef={findRef} listRef={findListRef}
+          hits={findHits} groups={findGroups} at={findAt}
+          onGo={goToIndex} onClose={() => { setFind(null); frameRef.current?.focus(); }}
+          fileCount={d.files.length} loaded={loaded}
+        />
+      )}
       <div className="text-[10px]" style={{ color: "var(--text3)" }}>
-        <b>j/k</b> file · <b>n/p</b> hunk · <b>x</b> viewed · <b>↵</b> fold
+        <b>j/k</b> file · <b>n/p</b> hunk · <b>x</b> viewed · <b>↵</b> fold · <b>⌃F</b> search code
         {shownFiles.length !== d.files.length && <span> · showing {shownFiles.length} of {d.files.length}</span>}
       </div>
       </div>
@@ -3406,6 +3722,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                                         was the one that quietly queued a draft.
                                         Equal weight; you read the labels. */}
                                     <Composer initial={composing.initial} autoFocus={!split} busy={busy}
+                                      stash={composeStashKey(f.path, composing.side, composing.line)}
                                       placeholder="Leave a comment — markdown works here"
                                       sendLabel={draftsFor(f.path) || drafts.length ? "Add to review" : "Start a review"}
                                       sendTitle="Hold this until you submit the review — the author is notified once, at the end"
@@ -3735,6 +4052,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
           <Composer
             onSend={async (b) => { const ok = await onReply(t, b); if (ok) setReplying(false); return ok; }}
             busy={busy} placeholder="Reply — markdown works here" sendLabel="Reply" autoFocus
+            stash={`reply|${t.id}`}
           />
         ) : (
           <button onClick={() => setReplying(true)}
@@ -3968,7 +4286,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
     </div>
   ) : null;
 
-  const composer = <Composer onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" onOpenGithub={() => openExternal(d.url)} />;
+  const composer = <Composer onSend={onComment} busy={busy} placeholder="Leave a comment — markdown works here" sendLabel="Comment" onOpenGithub={() => openExternal(d.url)} stash={`say|${d.url}`} />;
 
   if (entries.length === 0) {
     return (
@@ -4039,7 +4357,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
  * Write, preview, send. Shared by the conversation and by anywhere else that
  * takes markdown, so the two never drift into behaving differently.
  */
-function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOpenGithub, initial, autoFocus, secondary }: {
+function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOpenGithub, initial, autoFocus, secondary, stash }: {
   onSend: (body: string) => Promise<boolean>; busy: boolean; placeholder: string; sendLabel: string;
   /** What the main button promises, when the label alone cannot say it. */
   sendTitle?: string;
@@ -4057,11 +4375,31 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
   initial?: string;
   /** Focus the textarea on mount — for a composer that opened on a click. */
   autoFocus?: boolean;
+  /** Where to keep the text if it is never sent. Given a key, everything typed
+   *  here survives the box being closed, the tab being changed and the app
+   *  being rebuilt, and comes back the next time this same box is opened. */
+  stash?: string;
 }) {
-  const [text, setText] = useState(initial ?? "");
+  const [text, setText] = useState(() => (stash ? readStash(stash) : "") || initial || "");
   const [preview, setPreview] = useState(false);
   const [sending, setSending] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  /** Was there something here when the box opened? Worth saying — text that
+   *  reappears without explanation reads as a bug, not as a rescue. */
+  const [restored, setRestored] = useState(() => !!(stash && readStash(stash).trim()));
+  useEffect(() => { if (stash) writeStash(stash, text); }, [stash, text]);
+
+  // `initial` can arrive AFTER the box is open: "± Suggest" prefills a
+  // suggestion block into a composer that is already there. useState reads its
+  // argument once, so without this the button did nothing whatsoever.
+  const seeded = useRef(initial);
+  useEffect(() => {
+    if (initial == null || initial === seeded.current) return;
+    seeded.current = initial;
+    // Appended, not substituted: whatever you had already typed about the line
+    // is the reason you are suggesting a change to it.
+    setText((t) => (t.trim() ? `${t.replace(/\n+$/, "")}\n\n${initial}` : initial));
+  }, [initial]);
 
   /**
    * `@`, `#` and `:` complete.
@@ -4186,6 +4524,13 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
               style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
           )}
           <button onClick={() => setImageNote(null)} className="agx-btn shrink-0 px-1" style={{ color: "var(--text3)" }} aria-label="Dismiss">×</button>
+        </div>
+      )}
+      {restored && (
+        <div className="flex items-center gap-2 px-2.5 py-1 text-[10px]"
+          style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          <span>Picked up where you left off — this was never sent.</span>
+          <button onClick={() => setRestored(false)} className="agx-btn ml-auto shrink-0 px-1" style={{ color: "var(--text3)" }} aria-label="Dismiss">×</button>
         </div>
       )}
       {preview ? (
@@ -4500,14 +4845,19 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
  * review, and it exists so a reviewer leaves one notification rather than a
  * dozen. The comments and the verdict travel in a single request.
  */
-function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
+function ReviewTab({ d, drafts, seen, busy, draft, onDraft, onDrop, onSubmit, onGoFiles }: {
   d: PrDetail; drafts: DraftComment[]; seen: number; busy: boolean;
+  /** The unsent review, held by the panel and written to storage — not state of
+   *  this tab, which stops existing the moment you go and look at Files. */
+  draft: ReviewDraft; onDraft: (patch: Partial<ReviewDraft>) => void;
   onDrop: (i: number) => void;
   onSubmit: (verb: "approve" | "request_changes" | "comment", body: string) => void;
   onGoFiles: () => void;
 }) {
-  const [verb, setVerb] = useState<"comment" | "approve" | "request_changes">("comment");
-  const [body, setBody] = useState("");
+  const verb = draft.verb;
+  const setVerb = (v: ReviewDraft["verb"]) => onDraft({ verb: v });
+  const body = draft.body;
+  const setBody = (b: string) => onDraft({ body: b });
   const [preview, setPreview] = useState(false);
   /** Which queued comment is open. One at a time on purpose: the row of chips
    *  is the thing that has to stay a row, and opening every remark at once is

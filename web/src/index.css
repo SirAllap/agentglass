@@ -326,6 +326,23 @@
   color: var(--text);
 }
 
+/* ...except where a field has already said it is bare.
+ *
+ * Eleven fields in this app are laid inside a container that is itself the
+ * visible box — a search row with its own border and a magnifier beside the
+ * input. They mark themselves `bg-transparent`, and the baseline above then
+ * drew a second border and a second radius inside the first: the "filter files"
+ * box looked like an input wearing another input.
+ *
+ * A class beats the zero-specificity baseline, so this is the whole fix for all
+ * eleven, and it reads as the rule it is: a field that declares itself
+ * transparent has a container doing the framing. */
+input.bg-transparent,
+textarea.bg-transparent {
+  border: 0;
+  border-radius: 0;
+}
+
 /* Focus moves the edge, not just the ring: the ring is for the keyboard, and
    this is for knowing which box you are typing in. */
 :where(input, textarea):focus {

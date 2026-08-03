@@ -225,7 +225,13 @@ export function UnifiedDiff({ c, wrap, hunkAction, rowAfter, onPick, sel }: { c:
                     <LineBtn n={r.newN ?? r.oldN} side={r.newN != null ? "RIGHT" : "LEFT"} onPick={onPick} />
                     <span className="opacity-40">{r.newN ?? ""}</span>
                   </div>
-                  <div className={`${wrapCls} px-1.5`} style={{ background: inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? "color-mix(in srgb, var(--primary) 20%, transparent)" : cellBg(r.kind), color: cellFg(r.kind) }}>
+                  {/* `data-ln` names the row the way a search result does —
+                      "R412", "L88" — so a hit found across every file has
+                      somewhere to scroll to. Side follows the same rule the
+                      matcher uses: a removal exists on the left, everything
+                      else is reported where the reader will look for it. */}
+                  <div data-ln={r.newN != null ? `R${r.newN}` : r.oldN != null ? `L${r.oldN}` : undefined}
+                    className={`${wrapCls} px-1.5`} style={{ background: inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? "color-mix(in srgb, var(--primary) 20%, transparent)" : cellBg(r.kind), color: cellFg(r.kind) }}>
                     <span className="select-none opacity-60">{r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "} </span><Code text={r.text} segs={r.segs} kind={r.kind} />
                   </div>
                   {after && <div style={{ gridColumn: "1 / -1" }}>{after}</div>}
@@ -308,7 +314,8 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
           const after = rowAfter?.(row.r?.num, row.l?.num);
           return (
             <Fragment key={ri}>
-              <div className="flex" style={{ minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
+              <div data-ln={cell ? `${which === "l" ? "L" : "R"}${cell.num}` : undefined}
+                className="flex" style={{ minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
                 <div data-side={which} className="text-right pr-1.5 tabular-nums select-none shrink-0 sticky left-0 z-[1] agx-gutter" style={{ width: "3.6ch", background: numBg(cell?.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
                   <LineBtn n={cell?.num} side={which === "l" ? "LEFT" : "RIGHT"} onPick={onPick} />
                   <span className="opacity-40">{cell?.num ?? ""}</span>
@@ -339,9 +346,9 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
                 return (
                   <div key={ri} className="contents">
                     <div data-side="l" className="text-right pr-1.5 tabular-nums select-none" style={{ background: row.l ? cellBg(row.l.kind) : HATCH }}><span className="opacity-40">{row.l?.num ?? ""}</span></div>
-                    <div data-side="l" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.l ? cellBg(row.l.kind) : HATCH, color: cellFg(row.l?.kind) }}>{row.l ? <Code text={row.l.text} segs={row.l.segs} kind={row.l.kind} /> : ""}</div>
+                    <div data-side="l" data-ln={row.l ? `L${row.l.num}` : undefined} className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.l ? cellBg(row.l.kind) : HATCH, color: cellFg(row.l?.kind) }}>{row.l ? <Code text={row.l.text} segs={row.l.segs} kind={row.l.kind} /> : ""}</div>
                     <div data-side="r" className="text-right pr-1.5 tabular-nums select-none border-l" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}><span className="opacity-40">{row.r?.num ?? ""}</span></div>
-                    <div data-side="r" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, color: cellFg(row.r?.kind) }}>{row.r ? <Code text={row.r.text} segs={row.r.segs} kind={row.r.kind} /> : ""}</div>
+                    <div data-side="r" data-ln={row.r ? `R${row.r.num}` : undefined} className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, color: cellFg(row.r?.kind) }}>{row.r ? <Code text={row.r.text} segs={row.r.segs} kind={row.r.kind} /> : ""}</div>
                     {after && <div style={{ gridColumn: "1 / -1" }}>{after}</div>}
                   </div>
                 );
