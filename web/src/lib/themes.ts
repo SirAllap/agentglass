@@ -1,4 +1,5 @@
 // Applied as CSS custom properties on :root by applyTheme().
+import { floorTiers } from "./contrast.ts";
 //
 // The list leads with community-proven palettes — the ones people already read
 // code in all day (Catppuccin, GitHub, Tokyo Night, Dracula, One Dark, Gruvbox,
@@ -116,7 +117,12 @@ export function applyTheme(id: string, { sync = false } = {}) {
   const known = THEMES.find((x) => x.id === id);
   const t = known || THEMES[0];
   const root = document.documentElement;
-  for (const [k, v] of Object.entries(t.vars)) root.style.setProperty(k, v);
+  // A floor under the dim tiers before they are painted. Thirty-odd themes each
+  // picked --text2/3/4 by eye, and 555 places in this app ask for one of them —
+  // including plenty of text that is not chrome. A theme that already clears
+  // its target comes through untouched; see floorTiers.
+  const vars = floorTiers(t.vars as Record<string, string>);
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   root.setAttribute("data-theme", t.id);
   // Lay the chosen accent over the theme's primary, so it survives a switch.
   applyAccent();
