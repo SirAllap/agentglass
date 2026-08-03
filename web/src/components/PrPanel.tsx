@@ -4473,7 +4473,9 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
         </div>
       )}
 
-      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+      {/* Bounded. A review is a form, and a form stretched to a 1900px window
+          puts its label and its field at opposite ends of the desk. */}
+      <div className="rounded-lg overflow-hidden" style={{ maxWidth: 900, border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
         <div className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
           style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
           <b style={{ color: "var(--text)", fontWeight: 500 }}>Finish your review</b>
@@ -4509,7 +4511,11 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
           {/* The verdict, chosen before the note is written — it is what the
               note is for, and each option says what submitting it does rather
               than leaving you to infer it from one word. */}
-          <div className="grid gap-1.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(168px, 1fr))" }}>
+          {/* Stacked and bounded, not spread across the panel. `auto-fit` gave
+              each verdict a third of a 1900px window, so three choices sat a
+              screen apart and none of them read as a choice — GitHub keeps them
+              in a column you can take in at once, and so does this. */}
+          <div className="flex flex-col gap-1" style={{ maxWidth: 520 }}>
             {([
               ["approve", "✓ Approve", "Submit and mark the pull request approved.", "var(--success)"],
               ["request_changes", "✕ Request changes", "Submit and block the merge until they land.", "var(--error)"],
@@ -4521,16 +4527,27 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
                 <button key={id} onClick={() => setVerb(id)} disabled={off}
                   aria-pressed={on}
                   title={off ? "GitHub does not let you approve or block your own pull request" : undefined}
-                  className="agx-btn text-left rounded-lg px-2.5 py-2"
+                  className="agx-btn text-left rounded-lg px-2.5 py-2 flex items-start gap-2.5"
                   style={{
-                    border: `1px solid color-mix(in srgb, ${on ? "var(--primary) 70%" : "var(--border) 42%"}, transparent)`,
-                    background: on ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent",
+                    border: `1px solid color-mix(in srgb, ${on ? "var(--primary) 75%" : "var(--text) 14%"}, transparent)`,
+                    background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "color-mix(in srgb, var(--text) 5%, transparent)",
                     opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer",
                   }}>
-                  <b className="block text-[12px]" style={{ color: tint, fontWeight: 600 }}>{label}</b>
-                  <i className="block text-[10px] not-italic mt-0.5 leading-snug" style={{ color: "var(--text3)" }}>
-                    {off ? "Not available on your own pull request" : hint}
-                  </i>
+                  {/* A dot, because these are one choice and not three buttons.
+                      Three bordered boxes side by side say "press any of us";
+                      a filled dot says which one is already the answer. */}
+                  <span aria-hidden className="shrink-0 rounded-full mt-[3px]" style={{
+                    width: 12, height: 12,
+                    border: `1px solid color-mix(in srgb, ${on ? "var(--primary)" : "var(--text) 35%"}, transparent)`,
+                    background: on ? "var(--primary)" : "transparent",
+                    boxShadow: on ? "inset 0 0 0 2px var(--bg2)" : undefined,
+                  }} />
+                  <span className="min-w-0">
+                    <b className="block text-[12px]" style={{ color: tint, fontWeight: 600 }}>{label}</b>
+                    <i className="block text-[10px] not-italic mt-0.5 leading-snug" style={{ color: "var(--text2)" }}>
+                      {off ? "Not available on your own pull request" : hint}
+                    </i>
+                  </span>
                 </button>
               );
             })}
