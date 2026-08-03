@@ -242,9 +242,16 @@ export const MD_CSS = `
 .agx-md a{color:var(--primary);text-underline-offset:2px}
 .agx-md strong{color:var(--text);font-weight:600}
 .agx-md del{opacity:.6}
-.agx-md code{font-family:var(--diff-font,ui-monospace,monospace);font-size:.88em;background:color-mix(in srgb,var(--border) 30%,transparent);padding:.15em .4em;border-radius:4px;color:var(--text)}
+/* An inline code span, as a chip you can actually see.
+   The wash is mixed from --text, not from --border or a surface: a border is
+   whatever a theme wants it to be, and on the neutral ones it sits a hair from
+   the panel behind it, so a chip built out of it disappeared and a symbol read
+   as ordinary prose. Mixing the *text* colour into transparent always moves
+   away from the background, whichever direction the theme runs, so this is a
+   step on a dark theme and a step on a light one without a second rule. */
+.agx-md code{font-family:var(--diff-font,ui-monospace,monospace);font-size:.88em;background:color-mix(in srgb,var(--text) 13%,transparent);border:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding:.1em .4em;border-radius:5px;color:var(--text)}
 .agx-md pre{background:var(--bg);border:1px solid color-mix(in srgb,var(--border) 40%,transparent);border-radius:6px;padding:.7em .9em;overflow-x:auto;margin:0 0 .9em}
-.agx-md pre code{background:none;padding:0;font-size:.92em;line-height:1.55;color:var(--text)}
+.agx-md pre code{background:none;border:0;padding:0;font-size:.92em;line-height:1.55;color:var(--text)}
 .agx-md blockquote{margin:0 0 .9em;padding:.15em 0 .15em .9em;border-left:3px solid color-mix(in srgb,var(--primary) 45%,transparent);color:var(--text2)}
 .agx-md ul,.agx-md ol{margin:0 0 .85em;padding-left:1.5em}
 .agx-md li{margin-bottom:.3em}

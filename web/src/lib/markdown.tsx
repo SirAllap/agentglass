@@ -17,7 +17,11 @@
 import { memo, type ReactNode } from "react";
 import { externalUrl } from "./externalUrl.ts";
 
-const CODE_BG = "color-mix(in srgb, var(--bg3) 55%, transparent)";
+/* Mixed from --text rather than from a surface colour: --bg3 is a surface, and
+   on the neutral themes it sits a hair from the panel behind it, so a chip
+   built out of it is invisible. Mixing the text colour into transparent always
+   moves away from the background, whichever way the theme runs. */
+const CODE_BG = "color-mix(in srgb, var(--text) 13%, transparent)";
 
 /** Inline spans: `code`, **bold**, *italic*, [text](url). Applied in one pass so
  *  a URL containing an underscore can't be mangled into italics. */
