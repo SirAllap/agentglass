@@ -1,10 +1,9 @@
 import { memo, Fragment, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
-import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
+import type { FileChange, DiffHunk, WalkthroughResult } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
-import { CommitModal } from "./CommitModal.tsx";
 import { api } from "../lib/api.ts";
 import { buildTitles } from "../lib/derive.ts";
 import { usePoll } from "../lib/usePoll.ts";
@@ -502,7 +501,7 @@ function ReviewDot({ on, onClick, title }: { on: boolean; onClick?: (e: React.Mo
   );
 }
 
-function FileItem({ c, active, reviewed, info, onSelect, onToggleReviewed }: { c: FileChange; active: boolean; reviewed: boolean; info?: WalkthroughFile; onSelect: () => void; onToggleReviewed: () => void }) {
+function FileItem({ c, active, reviewed, onSelect, onToggleReviewed }: { c: FileChange; active: boolean; reviewed: boolean; onSelect: () => void; onToggleReviewed: () => void }) {
   const base = c.file_path.split("/").pop();
   return (
     <div
@@ -518,33 +517,24 @@ function FileItem({ c, active, reviewed, info, onSelect, onToggleReviewed }: { c
     >
       <div className="flex items-center gap-1.5">
         <ReviewDot on={reviewed} onClick={(e) => { e.stopPropagation(); onToggleReviewed(); }} title={reviewed ? "Mark unreviewed (x)" : "Mark reviewed (x)"} />
-        <TypeTag c={c} override={info?.tag} />
+        <TypeTag c={c} />
         <span className="text-[11.5px] font-medium truncate" style={{ color: reviewed ? "var(--text3)" : "var(--text)" }}>{base}</span>
         <span className="ml-auto flex items-center gap-1.5 shrink-0 text-[10px] tabular-nums">
           {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions}</span>}
           {c.deletions > 0 && <span style={{ color: "var(--error)" }}>−{c.deletions}</span>}
         </span>
       </div>
-      {info?.description ? (
-        // The clock stays even when a description takes the line: with the list
-        // grouped by day, "when" is half of what you are reading it for.
-        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] pl-[22px]" style={{ color: "var(--text3)" }}>
-          <span className="truncate min-w-0" title={info.description}>{info.description}</span>
-          <span className="ml-auto shrink-0 tabular-nums opacity-80">{fmtTime(c.timestamp)}</span>
-        </div>
-      ) : (
         <div className="flex items-center gap-1.5 mt-0.5 text-[9.5px] t-dim2 pl-[22px]">
           <span className="truncate min-w-0" title={c.file_path}>{dirOf(c.file_path)}</span>
           <span className="ml-auto shrink-0 opacity-80">{c.tool}</span>
           <span className="shrink-0">{fmtTime(c.timestamp)}</span>
         </div>
-      )}
     </div>
   );
 }
 
-function GroupBlock({ g, collapsed, selId, reviewed, descMap, onToggleCollapse, onSelect, onToggleReviewed, onToggleGroup }: {
-  g: FileGroup; collapsed: boolean; selId: number | null; reviewed: Set<number>; descMap: Map<string, WalkthroughFile>;
+function GroupBlock({ g, collapsed, selId, reviewed, onToggleCollapse, onSelect, onToggleReviewed, onToggleGroup }: {
+  g: FileGroup; collapsed: boolean; selId: number | null; reviewed: Set<number>;
   onToggleCollapse: () => void; onSelect: (id: number) => void; onToggleReviewed: (id: number) => void; onToggleGroup: (g: FileGroup, next: boolean) => void;
 }) {
   const revCount = g.items.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0);
@@ -583,7 +573,7 @@ function GroupBlock({ g, collapsed, selId, reviewed, descMap, onToggleCollapse, 
       {!collapsed && (
         <div className="mt-0.5 space-y-0.5">
           {g.items.map((c) => (
-            <FileItem key={c.id} c={c} active={c.id === selId} reviewed={reviewed.has(c.id)} info={descMap.get(c.file_path)} onSelect={() => onSelect(c.id)} onToggleReviewed={() => onToggleReviewed(c.id)} />
+            <FileItem key={c.id} c={c} active={c.id === selId} reviewed={reviewed.has(c.id)} onSelect={() => onSelect(c.id)} onToggleReviewed={() => onToggleReviewed(c.id)} />
           ))}
         </div>
       )}
@@ -738,12 +728,8 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   });
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [reviewed, setReviewed] = useState<Set<number>>(() => new Set());
-  const [commitOpen, setCommitOpen] = useState(false);
-  const [walk, setWalk] = useState<WalkthroughResult | null>(null);
-  const [walkLoading, setWalkLoading] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const walkReqSig = useRef<string | null>(null); // guards stale walkthrough responses
 
   useEffect(() => {
     if (!open) return;
@@ -822,23 +808,10 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const totals = useMemo(() => all.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }), [all]);
   const revCount = useMemo(() => all.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0), [all, reviewed]);
   const selected = useMemo(() => shown.find((c) => c.id === selId) ?? shown[0] ?? null, [shown, selId]);
-  const commitPaths = useMemo(() => [...new Set(all.map((c) => c.file_path))], [all]);
-  const walkSig = useMemo(() => changesetSig(all), [all]);
   // Shiki highlighter + theme/bold controls (shared with the git panel).
   const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(selected?.file_path);
   // Restore a cached walkthrough for the current changeset (on open / when the
   // changeset changes) so it persists across close/reopen and never re-runs.
-  useEffect(() => {
-    if (!open) return;
-    walkReqSig.current = null;
-    setWalkLoading(false);
-    setWalk(all.length ? (readWalkCache()[walkSig] ?? null) : null);
-  }, [open, walkSig]);
-  const descMap = useMemo(() => {
-    const m = new Map<string, WalkthroughFile>();
-    for (const f of walk?.files ?? []) m.set(f.path, f);
-    return m;
-  }, [walk]);
   const groupKeyOf = useMemo(() => {
     const m = new Map<number, string>();
     for (const g of groups) for (const it of g.items) m.set(it.id, g.key);
@@ -898,28 +871,6 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     }).catch(() => {});
   };
 
-  const explain = (force = false) => {
-    if (walkLoading || !all.length) return;
-    if (!force) {
-      const cached = readWalkCache()[walkSig];
-      if (cached) { setWalk(cached); return; } // instant — no LLM call
-    }
-    const reqSig = walkSig;
-    walkReqSig.current = reqSig;
-    setWalkLoading(true);
-    const files = commitPaths.map((p) => {
-      const c = all.find((x) => x.file_path === p);
-      return { path: p, tool: c?.tool, additions: c?.additions, deletions: c?.deletions, patch: c ? unifiedText(c) : "" };
-    });
-    api.walkthrough(files)
-      .then((r) => {
-        if (walkReqSig.current !== reqSig) return; // changeset moved on — drop stale result
-        setWalk(r);
-        if (r.available && !r.error) writeWalkCache(reqSig, r); // cache only good results
-      })
-      .catch((e) => { if (walkReqSig.current === reqSig) setWalk({ available: true, reviewFocus: "", files: [], error: String(e) }); })
-      .finally(() => { if (walkReqSig.current === reqSig) setWalkLoading(false); });
-  };
 
   const onKey = (e: React.KeyboardEvent) => {
     const inInput = /input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "");
@@ -962,44 +913,20 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
                       >← {backLabel || "Back"}</button>
                     )}
-                    {changes && all.length > 0 && (
-                      <button
-                        onClick={() => explain(!!walk)}
-                        disabled={walkLoading}
-                        title={walk ? "Re-run the AI walkthrough (overwrites the cached one)" : "AI walkthrough — one line per file + a review focus (cached per changeset)"}
-                        className="text-[11px] px-2.5 py-1 rounded-lg transition-colors"
-                        style={{ color: "var(--text)", background: "color-mix(in srgb, var(--info) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 28%, transparent)", opacity: walkLoading ? 0.6 : 1 }}
-                      >{walkLoading ? "✨ Explaining…" : walk ? "✨ Re-explain" : "✨ Explain"}</button>
-                    )}
-                    {changes && all.length > 0 && (
-                      <button
-                        onClick={() => setCommitOpen(true)}
-                        title="Compose a git commit from these changes"
-                        className="text-[11px] px-2.5 py-1 rounded-lg transition-colors"
-                        style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}
-                      >⎇ Commit…</button>
-                    )}
+                    {/* "Explain" and "Commit…" lived here and are gone. Both
+                        were answers to questions this view is no longer where
+                        you ask: committing belongs to the Git view, which has
+                        the staging area and the branch, and an AI walkthrough
+                        of somebody else's changeset is a chat away. What is
+                        left is what this view is actually for — reading the
+                        diff — and two fewer buttons is two fewer things to
+                        read past to get to it. */}
                     {/* only when framed as a modal — inside the workspace the
                         rail owns closing */}
                     {onClose && <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>}
                   </div>
                 </div>
 
-                {(walk?.reviewFocus || walk?.error) && (
-                  <div className="px-5 py-1.5 border-b shrink-0 text-[11px]" style={{ borderColor: "color-mix(in srgb, var(--text) 16%, transparent)", background: "color-mix(in srgb, var(--info) 6%, transparent)" }}>
-                    {walk?.reviewFocus ? (
-                      <><span className="t-dim2 uppercase tracking-wide text-[9px] mr-2">Review focus</span><span style={{ color: "var(--text)" }}>{walk.reviewFocus}</span></>
-                    ) : (
-                      <span style={{ color: "var(--warning)" }}>{walk?.error}</span>
-                    )}
-                    {/* Named, not silently missing — see GitPanel. */}
-                    {!!walk?.withheld?.length && (
-                      <div className="mt-1 text-[10px] t-dim2">
-                        Not sent: {walk.withheld.join(", ")} — credential files are kept out of the prompt.
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 <div className="flex-1 min-h-0 flex">
                   {/* master — grouped file list */}
@@ -1084,7 +1011,6 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           collapsed={collapsed.has(g.key) && !q}
                           selId={selected?.id ?? null}
                           reviewed={reviewed}
-                          descMap={descMap}
                           onToggleCollapse={() => toggleCollapse(g.key)}
                           onSelect={select}
                           onToggleReviewed={toggleReviewed}
@@ -1144,7 +1070,6 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                   </div>
                 </div>
       {peek && <PeekFile peek={peek} onClose={() => setPeek(null)} />}
-      <CommitModal open={commitOpen} onClose={() => setCommitOpen(false)} paths={commitPaths} />
     </div>
   );
 }
