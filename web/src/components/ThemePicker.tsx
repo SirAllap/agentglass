@@ -5,7 +5,6 @@ import {
   type Theme, type ThemeMode,
 } from "../lib/themes.ts";
 import { ACCENTS, currentAccent, setAccentPref } from "../lib/accent.ts";
-import { UI_FONTS, currentUiFont, setUiFont } from "../lib/uiFont.ts";
 
 /* Settings → Appearance.
  *
@@ -122,13 +121,11 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
   };
 
   const [accent, setAccentState] = useState(() => currentAccent());
-  const [font, setFontState] = useState(() => currentUiFont());
   const chooseAccent = (id: string) => {
     setAccentPref(id);
     applyTheme(current); // re-assert the theme so the overlay (or its removal) lands
     setAccentState(id);
   };
-  const chooseFont = (id: string) => { setUiFont(id); setFontState(id); };
 
   return (
     <div className="px-3 pb-2">
@@ -171,16 +168,6 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
             );
           })}
         </div>
-      </div>
-
-      {/* Font — the one monospace face the whole cockpit uses. */}
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-[11px]" style={{ color: "var(--text2)" }}>Font</span>
-        <select value={font} onChange={(e) => chooseFont(e.target.value)}
-          className="ml-auto text-[11px] px-2 py-1 rounded-md outline-none cursor-pointer"
-          style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}>
-          {UI_FONTS.map((f) => <option key={f.id || "system"} value={f.id}>{f.name}</option>)}
-        </select>
       </div>
 
       <div className="text-[9px] uppercase tracking-[0.18em] t-dim2 px-1 pb-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", paddingTop: 12 }}>Or pick a palette</div>

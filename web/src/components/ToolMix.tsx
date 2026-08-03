@@ -5,15 +5,18 @@ import { Panel } from "./Panel.tsx";
 // A curated categorical palette — distinct, high-separation hues so each
 // chunk is easy to tell apart at a glance (identity, not magnitude), assigned
 // by rank. Overflow tools collapse into a single muted "Other" segment.
+// Was a rainbow; now a monochrome ramp so the fleet's tool mix reads as one
+// serious block. The dominant slice carries the accent, the rest separate by
+// lightness alone — identity without a colour for every category.
 const RAMP = [
-  "#a78bfa", // violet
-  "#f472b6", // pink
-  "#34d399", // green
-  "#60a5fa", // blue
-  "#fbbf24", // amber
-  "#22d3ee", // cyan
-  "#a3e635", // lime
-  "#fb923c", // orange
+  "var(--primary)",
+  "color-mix(in srgb, var(--text2) 82%, var(--bg))",
+  "color-mix(in srgb, var(--text3) 82%, var(--bg))",
+  "color-mix(in srgb, var(--text4) 92%, var(--bg))",
+  "color-mix(in srgb, var(--text4) 66%, var(--bg))",
+  "color-mix(in srgb, var(--text4) 46%, var(--bg))",
+  "color-mix(in srgb, var(--border2) 88%, var(--bg))",
+  "color-mix(in srgb, var(--border) 82%, var(--bg))",
 ];
 const OTHER = "color-mix(in srgb, var(--text4) 55%, transparent)";
 const TOP = 6;
