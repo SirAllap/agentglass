@@ -2742,9 +2742,9 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
   );
 }
 
-/** The file header's exact height. Fixed, and the hunk headers below stick at
- *  it — a number inferred from padding is a bar that overlaps by two pixels on
- *  whichever theme nobody tested. */
+/** The file header's exact height. Fixed rather than whatever its padding adds
+ *  up to, so the one pinned bar in this view has a height the scroll maths can
+ *  rely on instead of measure. */
 const FILE_HEAD_H = 30;
 
 function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onResolve, onReply, onApply, busy }: {
@@ -3094,11 +3094,17 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
               overflow: "clip",
               border: `1px solid color-mix(in srgb, ${focused ? "var(--primary) 45%" : "var(--border) 30%"}, transparent)`,
               opacity: done && !open ? 0.72 : 1,
-              // Where a `@@ … @@` comes to rest: under the file's own header,
-              // not on top of it. The diff components stick their hunk headers
-              // at this variable and default it to 0, so the standalone diff
-              // viewer — which has no file header above them — is unchanged.
-              ["--agx-hunk-top" as string]: `${Math.max(0, barH - 10) + FILE_HEAD_H}px`,
+              // Hunk headers do not stick here. Two pinned bars stacked on one
+              // scroll always leave a row cut in half between them — first the
+              // `@@` sat over the file's name, then over a line of code — and
+              // there is no offset that removes it, only one that moves it.
+              // GitHub pins the file header and lets the hunks scroll, and one
+              // pinned thing per file is the shape that has no seam.
+              //
+              // The standalone diff viewer keeps its sticky hunks: it has no
+              // file header above them, so nothing to collide with. Hence a
+              // variable defaulting to `sticky` rather than a change to it.
+              ["--agx-hunk-pos" as string]: "static",
             }}>
             {/* The file's own header stays put while you read its diff — the
                 GitHub behaviour, so the code under the cursor always has a name
@@ -3108,10 +3114,6 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
             <div className="flex items-center gap-2 px-2.5 sticky z-20"
               style={{
                 top: Math.max(0, barH - 10),
-                // Fixed rather than whatever the padding happens to add up to,
-                // because the hunk headers below stick at exactly this height
-                // and a guessed number is a bar that overlaps by two pixels on
-                // some theme nobody tested.
                 height: FILE_HEAD_H,
                 background: "color-mix(in srgb, var(--border) 12%, var(--bg))",
                 borderBottom: open ? "1px solid color-mix(in srgb, var(--border) 25%, transparent)" : undefined,
