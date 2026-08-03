@@ -59,3 +59,30 @@ describe("the strip keeps answering the question it exists to answer", () => {
     expect(island).toContain('const rateLimited = !u?.available && usageError()?.includes("429")');
   });
 });
+
+// The per-model weekly window — the "Fable" bar. Drawn from whatever the API
+// called it rather than from a list of model names kept here, because a strip
+// that only knows last quarter's models quietly stops mentioning your limits.
+describe("weekly windows scoped to one model", () => {
+  const widget = read("src/components/UsageWidget.tsx");
+
+  test("the strip draws one meter per scoped window, labelled by the API", () => {
+    expect(island).toContain("u.scoped?.map((s) => <MeterPill key={s.name} tag={s.name.toUpperCase()} w={s} age={age} />)");
+    // No model name may DECIDE anything — mentioning one in a comment is fine,
+    // branching on one is the thing that goes stale.
+    expect(island).not.toMatch(/name\s*===\s*['"]/);
+    expect(island).not.toContain('tag="FABLE"');
+  });
+
+  test("the header widget draws them too, from the same field", () => {
+    expect(widget).toContain("u.scoped?.map");
+    expect(widget).toContain("label={s.name}");
+    expect(widget).not.toMatch(/name\s*===\s*['"]/);
+  });
+
+  test("they carry the same staleness marking as the rest", () => {
+    // A scoped meter going stale silently while the two beside it say so would
+    // be worse than not drawing it.
+    expect(island).toContain("w={s} age={age}");
+  });
+});

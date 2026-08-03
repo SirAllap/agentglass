@@ -884,10 +884,17 @@ export interface UsageWindow {
   remaining: number;
   resets_at: string | null;
 }
+/** A weekly window scoped to one model — the "Fable" bar. Named rather than
+ *  keyed: the label is the server's to choose, and this week's bucket is not
+ *  necessarily next week's. Mirrors server/src/usage.ts. */
+export interface UsageScopedWindow extends UsageWindow {
+  name: string;
+}
 export interface UsagePayload {
   available: boolean;
   five_hour?: UsageWindow;
   seven_day?: UsageWindow;
+  scoped?: UsageScopedWindow[];
   fetched_at: number;
   error?: string;
 }

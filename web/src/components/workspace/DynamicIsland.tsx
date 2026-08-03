@@ -611,6 +611,12 @@ export function DynamicIsland() {
                   <span className="agx-sep" />
                   {u.five_hour && <MeterPill tag="5H" w={u.five_hour} age={age} />}
                   {u.seven_day && <MeterPill tag="WEEK" w={u.seven_day} age={age} />}
+                  {/* Per-model weekly windows, labelled with whatever the API
+                      called them. Not hardcoded to "Fable": the plan that has
+                      one bucket this week can have another next week, and a
+                      strip that only knows last quarter's model names is a
+                      strip that quietly stops mentioning your limits. */}
+                  {u.scoped?.map((s) => <MeterPill key={s.name} tag={s.name.toUpperCase()} w={s} age={age} />)}
                 </>
               ) : rateLimited ? (
                 <>

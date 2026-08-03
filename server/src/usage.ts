@@ -15,10 +15,25 @@ export interface UsageWindow {
   remaining: number; // 0..100 left
   resets_at: string | null;
 }
+/**
+ * A weekly window that applies to one model rather than to everything — the
+ * "Fable" bar, today.
+ *
+ * Named rather than keyed, because the name is the server's to choose: it
+ * arrives as a `display_name` on both sources, and the plan that has one bucket
+ * this week can have another next week. Reading them generically means a new
+ * model appears on its own instead of waiting for a release here.
+ */
+export interface UsageScopedWindow extends UsageWindow {
+  name: string;
+}
+
 export interface UsagePayload {
   available: boolean;
   five_hour?: UsageWindow;
   seven_day?: UsageWindow;
+  /** Per-model weekly windows, in the order the API listed them. */
+  scoped?: UsageScopedWindow[];
   fetched_at: number;
   error?: string;
 }
@@ -108,7 +123,13 @@ async function restoreLastGood(): Promise<void> {
     const j = (await Bun.file(lastGoodPath()).json()) as UsagePayload;
     // Anything hand-edited or half-written is simply not a reading.
     if (j?.available === true && typeof j.fetched_at === "number" && (j.five_hour || j.seven_day)) {
-      lastGood = { available: true, five_hour: j.five_hour, seven_day: j.seven_day, fetched_at: j.fetched_at };
+      lastGood = {
+        available: true, five_hour: j.five_hour, seven_day: j.seven_day,
+        // Rebuilt field by field rather than spread, so a file written by a
+        // future version cannot smuggle keys into the payload we serve.
+        scoped: Array.isArray(j.scoped) ? j.scoped : undefined,
+        fetched_at: j.fetched_at,
+      };
     }
   } catch { /* no file yet, or nonsense in it: start blind, as before. */ }
 }
@@ -158,6 +179,56 @@ function win(w: any): UsageWindow | undefined {
     remaining: Math.max(0, Math.round(100 - w.utilization)),
     resets_at: w.resets_at ?? null,
   };
+}
+
+/** Shared by both sources: a percentage that has to end up on a bar. */
+function scopedOf(name: unknown, percent: unknown, resets: unknown): UsageScopedWindow | null {
+  if (typeof name !== "string" || !name.trim()) return null;
+  if (typeof percent !== "number" || !Number.isFinite(percent)) return null;
+  const used = Math.round(Math.min(100, Math.max(0, percent)));
+  return { name: name.trim(), utilization: used, remaining: 100 - used, resets_at: statuslineReset(resets) };
+}
+
+/**
+ * The per-model windows out of the usage endpoint's `limits` array.
+ *
+ * They used to be flat fields — `seven_day_opus` and friends, which still
+ * arrive and are still `null` on every account seen. The live ones moved into
+ * `limits`, where a per-model entry is `kind: "weekly_scoped"` and carries its
+ * name under `scope.model.display_name`.
+ *
+ * `is_active` is NOT a validity flag and must not be filtered on: it marks
+ * which limit is currently the binding one — `weekly_all`, usually — so the
+ * Fable entry is routinely inactive while carrying a perfectly real percent.
+ * Orca shipped that bug and left a comment about it; this is that comment.
+ */
+function scopedFromLimits(limits: unknown): UsageScopedWindow[] | undefined {
+  if (!Array.isArray(limits)) return undefined;
+  const out: UsageScopedWindow[] = [];
+  for (const l of limits) {
+    if (!l || typeof l !== "object" || (l as any).kind !== "weekly_scoped") continue;
+    const w = scopedOf((l as any).scope?.model?.display_name, (l as any).percent, (l as any).resets_at);
+    if (w) out.push(w);
+  }
+  return out.length ? out : undefined;
+}
+
+/**
+ * The same windows off a statusline payload, where the CLI has already done the
+ * work: `rate_limits.model_scoped` is a flat list of `{ display_name,
+ * utilization, resets_at }`, with the reset time converted to a string on the
+ * way out. A different shape for the same thing, so both are read here rather
+ * than one being made to look like the other somewhere upstream.
+ */
+function scopedFromModelScoped(list: unknown): UsageScopedWindow[] | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const out: UsageScopedWindow[] = [];
+  for (const m of list) {
+    if (!m || typeof m !== "object") continue;
+    const w = scopedOf((m as any).display_name, (m as any).utilization, (m as any).resets_at);
+    if (w) out.push(w);
+  }
+  return out.length ? out : undefined;
 }
 
 /**
@@ -222,7 +293,11 @@ export function ingestStatusline(raw: unknown, now: number = Date.now()): boolea
   // honestly rather than reporting a success that changed nothing.
   if (!five_hour && !seven_day) return false;
 
-  const next: UsagePayload = { available: true, five_hour, seven_day, fetched_at: now };
+  const next: UsagePayload = {
+    available: true, five_hour, seven_day,
+    scoped: scopedFromModelScoped(rl.model_scoped),
+    fetched_at: now,
+  };
   cache = next;
   cacheAt = now;
   lastGood = next;
@@ -273,6 +348,7 @@ export async function getUsage(now: number = Date.now()): Promise<UsagePayload> 
       available: true,
       five_hour: win(j.five_hour),
       seven_day: win(j.seven_day),
+      scoped: scopedFromLimits(j.limits),
       fetched_at: now,
     };
     lastGood = cache;

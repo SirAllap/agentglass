@@ -268,3 +268,104 @@ describe("a reading handed over by a live session", () => {
     expect((await usage.getUsage(T3)).available).toBe(false);
   });
 });
+
+// The per-model weekly window — the "Fable" bar.
+//
+// It arrives in two different shapes for the same fact, so both are read here:
+// the usage endpoint puts it in `limits` as a `weekly_scoped` entry naming its
+// model under `scope.model.display_name`, while a statusline payload has the
+// CLI's flatter `model_scoped`. The flat `seven_day_opus`-style fields that
+// look like the obvious home for this still arrive and are null on every
+// account seen.
+describe("weekly windows scoped to one model", () => {
+  const T4 = T0 + 80 * HOUR;
+
+  const withLimits = () => () => new Response(JSON.stringify({
+    five_hour: { utilization: 38, resets_at: "2026-08-03T16:40:00Z" },
+    seven_day: { utilization: 61, resets_at: "2026-08-05T13:00:00Z" },
+    seven_day_opus: null,
+    limits: [
+      { kind: "session", group: "session", percent: 38, scope: null, is_active: false },
+      { kind: "weekly_all", group: "weekly", percent: 61, scope: null, is_active: true },
+      // is_active false, and a real reading all the same — see below.
+      { kind: "weekly_scoped", group: "weekly", percent: 0, resets_at: null,
+        scope: { model: { id: null, display_name: "Fable" } }, is_active: false },
+    ],
+  }), { status: 200 });
+
+  test("read from the endpoint's limits array, named by the API", async () => {
+    usage.__test_forgetEverything();
+    reply = withLimits();
+    const u = await usage.getUsage(T4);
+    expect(u.scoped).toHaveLength(1);
+    expect(u.scoped?.[0]).toEqual({ name: "Fable", utilization: 0, remaining: 100, resets_at: null });
+    // The session and weekly-all entries are the same numbers as the top-level
+    // windows; taking them too would draw every bar twice.
+    expect(u.five_hour?.utilization).toBe(38);
+    expect(u.seven_day?.utilization).toBe(61);
+  });
+
+  test("`is_active: false` is not a reason to drop it", async () => {
+    // is_active marks which limit is currently BINDING — weekly_all, here — not
+    // whether the entry means anything. Filtering on it is a shipped bug in
+    // another client, and it would hide the Fable bar almost all of the time.
+    usage.__test_forgetEverything();
+    reply = withLimits();
+    expect((await usage.getUsage(T4)).scoped?.[0]?.name).toBe("Fable");
+  });
+
+  test("and it survives a restart with everything else", async () => {
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    const u = await usage.getUsage(T4 + 20 * MIN);
+    expect(u.available).toBe(true);
+    expect(u.scoped?.[0]?.name).toBe("Fable");
+  });
+
+  test("read from a statusline payload's flatter shape too", () => {
+    usage.__test_forgetEverything();
+    expect(usage.ingestStatusline({
+      rate_limits: {
+        five_hour: { used_percentage: 38 },
+        model_scoped: [
+          { display_name: "Fable", utilization: 4, resets_at: "2026-08-05T13:00:00Z" },
+          { display_name: "Opus", utilization: 12, resets_at: null },
+        ],
+      },
+    }, T4)).toBe(true);
+  });
+
+  test("what the statusline sent comes back out, in order", async () => {
+    const u = await usage.getUsage(T4);
+    expect(u.scoped?.map((s) => `${s.name}:${s.utilization}`)).toEqual(["Fable:4", "Opus:12"]);
+    expect(u.scoped?.[0]?.resets_at).toBe("2026-08-05T13:00:00.000Z");
+  });
+
+  test("unreadable entries are dropped, and none at all is absent rather than empty", async () => {
+    usage.__test_forgetEverything();
+    reply = () => new Response(JSON.stringify({
+      five_hour: { utilization: 5 },
+      limits: [
+        { kind: "weekly_scoped", percent: 3, scope: { model: {} } },        // no name
+        { kind: "weekly_scoped", percent: "some", scope: { model: { display_name: "X" } } },
+        { kind: "weekly_scoped", scope: { model: { display_name: "Y" } } }, // no percent
+        null,
+        "nonsense",
+      ],
+    }), { status: 200 });
+    const u = await usage.getUsage(T4 + 40 * MIN);
+    // Absent, not `[]` — a client rendering `scoped` should not have to tell
+    // "no scoped windows" from "an empty list of them".
+    expect(u.scoped).toBeUndefined();
+    expect(u.five_hour?.utilization).toBe(5);
+  });
+
+  test("a percentage is clamped onto the bar it has to fit", async () => {
+    usage.__test_forgetEverything();
+    reply = () => new Response(JSON.stringify({
+      five_hour: { utilization: 5 },
+      limits: [{ kind: "weekly_scoped", percent: 150, scope: { model: { display_name: "Z" } } }],
+    }), { status: 200 });
+    expect((await usage.getUsage(T4 + 80 * MIN)).scoped?.[0]?.utilization).toBe(100);
+  });
+});
