@@ -24,11 +24,15 @@ export interface Theme {
 
 export const THEMES: Theme[] = [
   // --- serious neutral defaults, the pair behind System / Dark / Light ---
-  // A faithful port of the palette Orca ships (shadcn's "neutral"): monochrome
-  // on purpose — the primary is a grey, not a brand hue — so nothing competes
-  // with the work. Semantic colours are the only chroma.
-  { id: "orca-dark", name: "Orca Dark", preview: {"primary":"#0a0a0a","secondary":"#171717","accent":"#e5e5e5"}, vars: {"--bg":"#0a0a0a","--bg2":"#171717","--bg3":"#262626","--bg4":"#404040","--text":"#fafafa","--text2":"#d4d4d4","--text3":"#a1a1a1","--text4":"#737373","--border":"#262626","--border2":"#383838","--primary":"#e5e5e5","--primary-hover":"#ffffff","--success":"#86efac","--warning":"#fbbf24","--error":"#ff6568","--info":"#60a5fa","--shadow":"rgba(0, 0, 0, 0.9)"} },
-  { id: "orca-light", name: "Orca Light", preview: {"primary":"#ffffff","secondary":"#f5f5f5","accent":"#171717"}, vars: {"--bg":"#ffffff","--bg2":"#fafafa","--bg3":"#f5f5f5","--bg4":"#eaeaea","--text":"#0a0a0a","--text2":"#262626","--text3":"#737373","--text4":"#a1a1a1","--border":"#e5e5e5","--border2":"#d4d4d4","--primary":"#171717","--primary-hover":"#000000","--success":"#15803d","--warning":"#d97706","--error":"#e40014","--info":"#2563eb","--shadow":"rgba(0, 0, 0, 0.12)"} },
+  // A monochrome pair built on the way a good neutral UI carries contrast: it
+  // separates regions by TONE, not by lines. The reading surface (the terminal)
+  // is a dark grey — never pure black — panels step up from it in even
+  // increments (#1e1e1e → #262626 → #404040), text sits bright against them
+  // (#fafafa, with #a1a1a1 for dim), and borders are a faint accent rather than
+  // the thing doing the separating. The primary is a grey, not a brand hue;
+  // semantic colours are the only chroma.
+  { id: "graphite", name: "Graphite", preview: {"primary":"#1e1e1e","secondary":"#262626","accent":"#e5e5e5"}, vars: {"--bg":"#1e1e1e","--bg2":"#262626","--bg3":"#2e2e2e","--bg4":"#404040","--text":"#fafafa","--text2":"#d4d4d4","--text3":"#a1a1a1","--text4":"#808080","--border":"#2b2b2b","--border2":"#3d3d3d","--primary":"#e5e5e5","--primary-hover":"#fafafa","--success":"#86efac","--warning":"#fbbf24","--error":"#ff6568","--info":"#60a5fa","--shadow":"rgba(0, 0, 0, 0.7)"} },
+  { id: "porcelain", name: "Porcelain", preview: {"primary":"#ffffff","secondary":"#f5f5f5","accent":"#171717"}, vars: {"--bg":"#ffffff","--bg2":"#f5f5f5","--bg3":"#ececec","--bg4":"#e2e2e2","--text":"#0a0a0a","--text2":"#383838","--text3":"#737373","--text4":"#909090","--border":"#e5e5e5","--border2":"#d4d4d4","--primary":"#171717","--primary-hover":"#000000","--success":"#15803d","--warning":"#b45309","--error":"#e40014","--info":"#2563eb","--shadow":"rgba(0, 0, 0, 0.12)"} },
 
   // --- community-proven dark palettes ---
   { id: "github-dark", name: "GitHub Dark", preview: {"primary":"#0d1117","secondary":"#161b22","accent":"#58a6ff"}, vars: {"--bg":"#0d1117","--bg2":"#161b22","--bg3":"#21262d","--bg4":"#30363d","--text":"#e6edf3","--text2":"#c9d1d9","--text3":"#8b949e","--text4":"#6e7681","--border":"#30363d","--border2":"#444c56","--primary":"#58a6ff","--primary-hover":"#79c0ff","--success":"#3fb950","--warning":"#d29922","--error":"#f85149","--info":"#58a6ff","--shadow":"rgba(1, 4, 9, 0.85)"} },
@@ -87,7 +91,7 @@ export const EXPERIMENTAL_THEME_IDS = new Set<string>([
   "midnight-purple", "dark", "dark-blue", "forest", "ember", "rosewood", "deep-sea",
   "midnight-purple-light", "light", "blue-light", "forest-light", "ember-light",
   "rosewood-light", "deep-sea-light", "nord-light",
-  // The old neutral pair — superseded as defaults by Orca Dark/Light, kept here.
+  // The old neutral pair — superseded as defaults by Graphite/Porcelain, kept here.
   "carbon", "paper",
 ]);
 
@@ -153,8 +157,8 @@ function syncTheme(t: Theme) {
  * applied — the mode is a thin layer over it, remembered so a system-mode user
  * boots into the palette the OS is on right now, not the one it was on last. */
 export type ThemeMode = "system" | "dark" | "light" | "custom";
-export const SERIOUS_DARK = "orca-dark";
-export const SERIOUS_LIGHT = "orca-light";
+export const SERIOUS_DARK = "graphite";
+export const SERIOUS_LIGHT = "porcelain";
 const MODE_KEY = "agentglass-theme-mode";
 
 export function themeMode(): ThemeMode {

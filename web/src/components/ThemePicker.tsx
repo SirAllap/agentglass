@@ -7,8 +7,8 @@ import {
 
 /* Settings → Appearance.
  *
- * Two layers, the way Orca does it: a System / Dark / Light segment that maps to
- * the two serious neutral defaults (and tracks the OS on "System"), then the
+ * Two layers: a System / Dark / Light segment that maps to the two serious
+ * neutral defaults (and tracks the OS on "System"), then the
  * full palette grid underneath for anyone who wants a specific scheme. Picking
  * from the grid drops the segment to whatever that palette is. */
 
@@ -138,7 +138,7 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
           })}
         </div>
       </div>
-      <p className="text-[10.5px] t-dim2 mb-3">A serious neutral pair — the palette Orca uses. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</p>
+      <p className="text-[10.5px] t-dim2 mb-3">A serious neutral pair. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</p>
 
       <div className="text-[9px] uppercase tracking-[0.18em] t-dim2 px-1 pb-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", paddingTop: 12 }}>Or pick a palette</div>
       <ThemePicker current={current} onChange={chooseTheme} />
