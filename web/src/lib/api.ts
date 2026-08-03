@@ -21,6 +21,13 @@ const DESKTOP_API: string | undefined =
     ? (window as unknown as { agentglass?: { apiOrigin?: string } }).agentglass?.apiOrigin
     : undefined;
 
+/** Running inside the packaged desktop shell on the host machine — the only
+ *  place from which it is safe to broadcast a theme out to the machine's tmux
+ *  and nvim on boot. A phone or a paired browser reaches the same server but
+ *  must never repaint the host's terminals just by loading; they have no
+ *  `apiOrigin`, so this is false for them. */
+export const IS_DESKTOP: boolean = !!DESKTOP_API;
+
 export let SERVER: string =
   (import.meta.env.VITE_CW_SERVER as string | undefined)?.replace(/\/$/, "") ||
   DESKTOP_API?.replace(/\/$/, "") ||
