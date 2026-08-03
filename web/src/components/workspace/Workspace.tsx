@@ -10,6 +10,7 @@ import { PrView } from "../PrPanel.tsx";
 import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { ChatView } from "../ChatPanel.tsx";
+import { BrowserView } from "../BrowserPanel.tsx";
 import { DynamicIsland, NOTCH_BAND } from "./DynamicIsland.tsx";
 
 const BODY = {
@@ -19,6 +20,10 @@ const BODY = {
   docker: DockerView,
   term: TermView,
   chat: ChatView,
+  // Renders null outside the desktop shell, and `VIEWS` drops its rail entry
+  // there too — so the map stays total for every ViewId while the view itself
+  // is honest about where it can exist.
+  browser: BrowserView,
 } as const;
 
 /** One overlay, six views.

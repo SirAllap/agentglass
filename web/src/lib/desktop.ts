@@ -10,6 +10,9 @@ import { adoptServer } from "./api.ts";
 type DesktopBridge = {
   desktop: true;
   platform: string;
+  /** Absent on shells built before the browser view existed. */
+  browser?: boolean;
+  browserPartition?: string;
   setFullscreen: (on: boolean) => Promise<boolean>;
   isFullscreen: () => Promise<boolean>;
   setZoom: (factor: number) => Promise<number>;
@@ -31,6 +34,17 @@ function bridge(): DesktopBridge | null {
 export const IS_DESKTOP = bridge() !== null;
 
 export const IS_MAC_DESKTOP = IS_DESKTOP && bridge()?.platform === "darwin";
+
+/** Whether a page can be embedded — a `<webview>`, which exists in the shell
+ *  and not in a phone's browser tab. Checked rather than assumed from
+ *  IS_DESKTOP so that an older shell, which is still the desktop app, does not
+ *  render a view it cannot fill. */
+export const HAS_BROWSER = bridge()?.browser === true;
+
+/** The session guests run in. The main process attaches a guest on this
+ *  partition and refuses every other, so it is read from the shell rather than
+ *  written down twice. */
+export const BROWSER_PARTITION = bridge()?.browserPartition ?? "";
 
 /** Whether the app is set to launch at login. Null when not applicable (a
  *  browser tab) or when the shell refuses to answer — the caller renders

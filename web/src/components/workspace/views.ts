@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon } from "./icons.tsx";
+import { HAS_BROWSER } from "../../lib/desktop.ts";
 
 /** Re-exported from shared so the server (POST /control validation) and the UI
  *  name one set of views. */
@@ -16,7 +17,13 @@ export type ViewDef = {
   hint: string;
 };
 
-/** Order is the rail's order, and ⌘1..⌘6 index into it. */
+/** Order is the rail's order, and ⌘1..⌘N index into it.
+ *
+ *  Browser is last, and conditional. Appending is the only place it could go
+ *  without renumbering chords people already have in their fingers — and it is
+ *  dropped entirely outside the desktop shell, where a `<webview>` does not
+ *  exist. A rail entry that opens an empty pane on a phone would be worse than
+ *  no entry at all. */
 export const VIEWS: ViewDef[] = [
   { id: "git", label: "Git", key: "g", icon: GitIcon, hint: "Stage, commit, push/pull the working tree" },
   { id: "diff", label: "Diff", key: "d", icon: DiffIcon, hint: "Review & commit every diff the fleet made" },
@@ -24,6 +31,9 @@ export const VIEWS: ViewDef[] = [
   { id: "docker", label: "Docker", key: "o", icon: DockerIcon, hint: "Containers, logs, stats & actions" },
   { id: "term", label: "Term", key: "t", icon: TerminalIcon, hint: "A real shell in any repo/worktree" },
   { id: "chat", label: "Chat", key: "c", icon: ChatIcon, hint: "Drive a Claude session in any repo/worktree" },
+  ...(HAS_BROWSER
+    ? [{ id: "browser" as const, label: "Browser", key: "b", icon: BrowserIcon, hint: "A page, without leaving the app" }]
+    : []),
 ];
 
 export const VIEW_IDS = VIEWS.map((v) => v.id);

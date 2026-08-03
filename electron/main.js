@@ -461,6 +461,103 @@ function setAutostart(on) {
   return app.getLoginItemSettings().openAtLogin;
 }
 
+/** The one session every browser guest shares. Named, and persisted, so logins
+ *  survive a restart — and separate from the app's own session, so browsing
+ *  never touches the cookies or storage of the `agentglass://` origin. It is
+ *  also the seam session profiles would widen, if they are ever wanted. */
+const BROWSER_PARTITION = "persist:agentglass-browser";
+
+/** http(s) only, and no credentials in the URL.
+ *
+ *  Deliberately small and deliberately here rather than shared with the web
+ *  app's address-bar parser: this is the boundary that makes `webviewTag` safe
+ *  to turn on, and a boundary you can read in one screen is worth more than one
+ *  that shares its code with an autocomplete. `main.js` is plain CommonJS with
+ *  no build step and could not import that module anyway. */
+function safeGuestUrl(src) {
+  if (typeof src !== "string" || !src) return null;
+  try {
+    const u = new URL(src);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    // `https://user:pass@host` in a src attribute is a credential-stuffing
+    // shape, never something a person typed.
+    if (u.username || u.password) return null;
+    return u.toString();
+  } catch { return null; }
+}
+
+/**
+ * Everything enabling `<webview>` costs, paid back in one place.
+ *
+ * A guest is a page the app did not write, so it gets nothing: no preload (it
+ * would inherit the `window.agentglass` bridge and with it the API token), no
+ * Node, no relaxed web security, its own session, and a src that has already
+ * been checked. Fail closed — a src or partition that is not recognised is
+ * refused rather than corrected, because a renderer bug that can choose either
+ * is the whole attack.
+ *
+ * `will-attach-webview` is the only hook that runs before the guest exists;
+ * attributes set in the markup are advisory until this handler agrees with
+ * them.
+ */
+function guardWebviews(win) {
+  win.webContents.on("will-attach-webview", (e, webPreferences, params) => {
+    const src = safeGuestUrl(params.src);
+    if (!src || webPreferences.partition !== BROWSER_PARTITION) {
+      e.preventDefault();
+      return;
+    }
+    // Both spellings: older Electron carries preloadURL alongside preload, and
+    // leaving either is how a guest ends up holding the app's bridge.
+    delete params.preload;
+    delete webPreferences.preload;
+    delete webPreferences.preloadURL;
+    webPreferences.nodeIntegration = false;
+    webPreferences.nodeIntegrationInSubFrames = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+    webPreferences.allowRunningInsecureContent = false;
+    webPreferences.enableBlinkFeatures = "";
+    webPreferences.partition = BROWSER_PARTITION;
+  });
+
+  win.webContents.on("did-attach-webview", (_e, guest) => {
+    // A guest is its own Chromium process and its key events never reach the
+    // renderer, so with a page focused every app shortcut silently stops
+    // working — the workspace cannot be switched or closed and the pane is a
+    // trap. Only the chords that move you *out* are forwarded; everything else
+    // belongs to the page, where Ctrl+L, Ctrl+F and the rest still mean what
+    // they mean in a browser.
+    guest.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown") return;
+      const mod = process.platform === "darwin" ? input.meta : input.control;
+      const jumpsOut = (mod && /^[1-9]$/.test(input.key))
+        || (mod && input.key.toLowerCase() === "w")
+        || input.key === "Escape";
+      if (!jumpsOut) return;
+      event.preventDefault();
+      win.webContents.sendInputEvent({
+        type: "keyDown",
+        keyCode: input.key,
+        modifiers: [
+          input.control && "control", input.meta && "meta",
+          input.shift && "shift", input.alt && "alt",
+        ].filter(Boolean),
+      });
+      win.webContents.focus();
+    });
+
+    // A page opening a window has nowhere to go here: there are no tabs yet, so
+    // it goes where every other external link goes.
+    guest.setWindowOpenHandler(({ url }) => {
+      const safe = safeGuestUrl(url);
+      if (safe) shell.openExternal(safe);
+      return { action: "deny" };
+    });
+  });
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440,
@@ -469,9 +566,18 @@ function createWindow() {
     title: "agentglass",
     autoHideMenuBar: true,
     icon: path.join(__dirname, "icons", "icon.png"),
-    webPreferences: { preload: path.join(__dirname, "preload.js") },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      // The browser view is a <webview>, which is off by default. See
+      // guardWebviews for what enabling it costs and what pays it back; the
+      // short version is that a guest is a DOM element here rather than a
+      // main-process rectangle, which is the only way it can live inside a
+      // workspace whose views stay mounted and merely toggle visibility.
+      webviewTag: true,
+    },
   });
   registerIpc(win);
+  guardWebviews(win);
   openLinksOutside(win);
   keepUsefulShortcuts(win);
   win.loadURL(`${APP_ORIGIN}/`);
