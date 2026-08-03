@@ -1243,6 +1243,14 @@ export interface PrCheckRollup {
 
 export interface PrLabel { name: string; color?: string }
 
+/** Somebody asked for a review. A team has no avatar and no login, so it is
+ *  named rather than pictured — the row must not draw a broken image for it. */
+export interface PrReviewer {
+  /** A user's login, or a team's name when `isTeam`. */
+  login: string;
+  isTeam?: boolean;
+}
+
 export interface PrSummary {
   number: number;
   title: string;
@@ -1262,6 +1270,10 @@ export interface PrSummary {
   assignees: string[];
   /** Milestone title, or null when the PR is on no milestone. */
   milestone: string | null;
+  /** Who has been asked to review, for the list's Reviewers column. Arrives on
+   *  the same second pass as `checks` — until then it is empty, which reads as
+   *  "not yet" rather than "nobody was asked". */
+  reviewers?: PrReviewer[];
   checks: PrCheckRollup;
   /** This checkout is on the PR's head branch — "you are here". */
   isCurrentBranch?: boolean;

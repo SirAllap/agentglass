@@ -22,7 +22,7 @@ import { inScope } from "./config.ts";
 import type {
   PrRepoId, PrSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
-  PrAuthored, PrReaction, PrEvent, PrCheckJob,
+  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer,
 } from "../../shared/types.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
@@ -430,16 +430,51 @@ export function mapSummary(p: any, withChecks: boolean): PrSummary {
   };
 }
 
+/**
+ * `reviewRequests` as the Reviewers column reads them.
+ *
+ * A requested reviewer is a User or a Team, and the two are drawn differently:
+ * a team has a `name` and no face, so it is flagged rather than sent to the
+ * avatar proxy, which would 404 and fall back to initials that look like a
+ * person. Anything else GitHub might add to that union is dropped rather than
+ * rendered as a blank face. The picture itself is derived from the login by the
+ * Avatar component, so no URL travels with the row.
+ */
+export function mapReviewers(nodes: any[] | null | undefined): PrReviewer[] {
+  const out: PrReviewer[] = [];
+  for (const n of nodes ?? []) {
+    const r = n?.requestedReviewer;
+    if (!r) continue;
+    if (typeof r.login === "string" && r.login) out.push({ login: r.login });
+    else if (typeof r.name === "string" && r.name) out.push({ login: r.name, isTeam: true });
+  }
+  return out;
+}
+
 /** One page of the list, and everything the rows need, in a single request. */
 const LIST_PAGE = 25;
 
+/**
+ * The rows, and nothing that costs more than a row is worth.
+ *
+ * `additions`, `deletions`, `changedFiles` and `reviewDecision` used to travel
+ * here, and they are why the panel took two seconds to show anything. Measured
+ * against a repository with 25 open PRs: this query costs ~0.70s without them and
+ * ~1.85s with them — the four fields make GitHub compute a diff stat per PR
+ * before it will answer with any of the list. Three of them are not even drawn
+ * on a row (only `reviewDecision` is, as the review chip); they were paying a
+ * 2.6x first-paint tax for the detail view's benefit.
+ *
+ * They now ride on SEARCH_CHECKS, which runs beside this one and is the slower
+ * of the pair — measured, adding them there costs nothing at all.
+ */
 const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
   search(query:$q, type:ISSUE, first:$first, after:$after){
     issueCount
     pageInfo{hasNextPage endCursor}
     nodes{ ... on PullRequest {
       number title url state isDraft createdAt updatedAt
-      additions deletions changedFiles baseRefName headRefName reviewDecision
+      baseRefName headRefName
       author{login}
       labels(first:10){nodes{name color}}
       assignees(first:5){nodes{login}}
@@ -449,18 +484,28 @@ const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
 }`;
 
 /**
- * The same page, but only its check rollups.
+ * The same page, but only what the rows can afford to wait for.
  *
  * Measured against this repo: the row fields cost ~730ms and `statusCheckRollup`
  * adds ~410ms on top when they travel together. Asked for separately the two
  * run at the same time, so the whole thing costs what the slower one costs
  * (~810ms) instead of their sum — and, more to the point, the rows can be put
  * on screen the moment they land rather than waiting for the checks.
+ *
+ * The diff stats and `reviewDecision` live here rather than on SEARCH_ROWS for
+ * the same reason, and because it is free: measured on that same repo this query
+ * costs ~1.00s either way, while carrying them on the rows query costs it an
+ * extra ~1.15s. This is the slower half of the pair, so the four fields land in
+ * the shadow of work that was happening anyway.
  */
 const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
   search(query:$q, type:ISSUE, first:$first, after:$after){
     nodes{ ... on PullRequest {
-      number
+      number additions deletions changedFiles reviewDecision
+      reviewRequests(first:5){nodes{requestedReviewer{
+        ... on User{login}
+        ... on Team{name}
+      }}}
       commits(last:1){nodes{commit{statusCheckRollup{
         state
         contexts(first:0){checkRunCountsByState{state count} statusContextCountsByState{state count}}
@@ -590,16 +635,30 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   onRows?.({ rows: bare, ...meta });
 
   const checksRes = await checksP;
-  const rollups = new Map<number, PrCheckRollup>();
+  // The second pass carries the costly row fields as well as the rollups, so a
+  // row is complete the moment this lands. A PR missing from the answer keeps
+  // the first-pass row: `checksLoaded` stays false, the review chip stays off,
+  // and the stats stay at zero — all of which read as "not yet", which is true.
+  type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" | "reviewDecision" | "reviewers"> };
+  const second = new Map<number, SecondPass>();
   for (const n of checksRes?.data?.search?.nodes ?? []) {
     if (!n?.number) continue;
     const roll = n.commits?.nodes?.[0]?.commit?.statusCheckRollup;
     const ctx = roll?.contexts;
-    rollups.set(n.number, rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, roll?.state));
+    second.set(n.number, {
+      rollup: rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, roll?.state),
+      stats: {
+        additions: n.additions ?? 0,
+        deletions: n.deletions ?? 0,
+        changedFiles: n.changedFiles ?? 0,
+        reviewDecision: n.reviewDecision ?? null,
+        reviewers: mapReviewers(n.reviewRequests?.nodes),
+      },
+    });
   }
   const rows: PrSummary[] = bare.map((r) => {
-    const rollup = rollups.get(r.number);
-    return rollup ? { ...r, checks: rollup, checksLoaded: true } : r;
+    const hit = second.get(r.number);
+    return hit ? { ...r, ...hit.stats, checks: hit.rollup, checksLoaded: true } : r;
   });
   return { rows, ...meta };
 }

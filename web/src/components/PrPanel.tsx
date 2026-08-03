@@ -28,8 +28,6 @@ import type {
 } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { depSpec } from "../../../shared/deps.ts";
-import { useSidebarWidth } from "../lib/sidebarWidth.ts";
-import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, LineMenuCtx, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
@@ -582,37 +580,161 @@ function Skeletons({ n = 6 }: { n?: number }) {
   );
 }
 
-function PrRow({ p, active, onSelect }: { p: PrSummary; active: boolean; onSelect: () => void }) {
-  const c = p.checks;
+/**
+ * The list's columns, as one string.
+ *
+ * The heading row and every data row read this same constant, so they cannot
+ * drift apart — headings that do not sit over their own values are worse than
+ * no headings at all.
+ */
+const PR_GRID = "78px minmax(0,1fr) 118px 112px 84px 84px";
+
+/**
+ * Row backgrounds live here rather than in a `style` prop because an inline
+ * background cannot be overridden by `:hover` — the highlighted row would be
+ * the one row in the table that did not respond to the pointer.
+ */
+const PR_ROW_CSS = `
+.agx-prrow:hover{background:color-mix(in srgb, var(--border) 16%, transparent)}
+.agx-prrow[data-active="1"]{background:color-mix(in srgb, var(--primary) 12%, transparent)}
+.agx-prrow[data-active="1"]:hover{background:color-mix(in srgb, var(--primary) 18%, transparent)}
+`;
+
+/** The state of a pull request as the one glyph the ID column has room for. */
+function rowState(p: PrSummary): { tint: string; title: string } {
+  if (p.state === "MERGED") return { tint: "var(--primary)", title: "Merged" };
+  if (p.state === "CLOSED") return { tint: "var(--text3)", title: "Closed without merging" };
+  if (p.isDraft) return { tint: "var(--text3)", title: "Draft" };
+  return { tint: "var(--success)", title: "Open" };
+}
+
+/**
+ * Who was asked to review, as faces.
+ *
+ * Empty and not-yet-known are different, and the column says so: a dash means
+ * nobody was asked, a dimmed ellipsis means the second pass has not landed. The
+ * faces come from the login through the app's avatar proxy; a team has no face
+ * and gets its initials in a flat badge rather than a portrait of nobody.
+ */
+function ReviewerStack({ p }: { p: PrSummary }) {
+  const list = p.reviewers ?? [];
+  if (list.length === 0) {
+    const pending = p.checksLoaded === false;
+    return (
+      <span className="text-[10px]" style={{ color: "var(--text3)" }}
+        title={pending ? "Still loading" : "Nobody has been asked to review"}>{pending ? "…" : "—"}</span>
+    );
+  }
+  const shown = list.slice(0, 3);
+  const rest = list.length - shown.length;
   return (
-    <button onClick={onSelect} className="w-full text-left px-2.5 py-1.5 border-b"
+    <span className="flex items-center min-w-0" title={`Review requested from ${list.map((r) => r.login).join(", ")}`}>
+      {shown.map((r, i) => (
+        <span key={r.login} className="shrink-0 rounded-full" style={{ marginLeft: i === 0 ? 0 : -5, boxShadow: "0 0 0 1.5px var(--bg2)" }}>
+          {r.isTeam
+            ? <span className="rounded-full inline-flex items-center justify-center"
+                style={{ width: 18, height: 18, background: "color-mix(in srgb, var(--primary) 24%, transparent)", color: "var(--text2)", fontSize: 7.5 }}>
+                {r.login.slice(0, 2).toUpperCase()}
+              </span>
+            : <Avatar login={r.login} size={18} />}
+        </span>
+      ))}
+      {rest > 0 && <span className="ml-1 text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>+{rest}</span>}
+    </span>
+  );
+}
+
+function ChecksCell({ p }: { p: PrSummary }) {
+  const c = p.checks;
+  const loading = p.checksLoaded === false;
+  return (
+    <span className="flex items-center gap-1.5 min-w-0">
+      <Dot tint={loading ? "var(--text3)" : stateTint(p)}
+        title={loading ? "Check states are still loading" : `${c.success} passed · ${c.failure} failed · ${c.skipped} skipped · ${c.pending} running`} />
+      <span className="text-[10.5px] tabular-nums truncate" style={{ color: loading ? "var(--text3)" : "var(--text2)" }}>
+        {/* Not yet fetched is not the same as none. Saying "no checks" here
+            would be a claim about the repository rather than about us. */}
+        {loading ? "Checks…"
+          : c.total === 0 ? "No checks"
+          : c.pending > 0 ? `${c.total - c.pending}/${c.total}`
+          : c.failure > 0 ? `${c.failure} failing` : "Green"}
+      </span>
+    </span>
+  );
+}
+
+function PrTableHead() {
+  return (
+    <div className="grid items-center gap-3 px-3 py-1.5 border-b shrink-0 sticky top-0 z-10 select-none"
       style={{
-        borderColor: "color-mix(in srgb, var(--border) 22%, transparent)",
-        background: active ? "color-mix(in srgb, var(--primary) 14%, transparent)" : "transparent",
+        gridTemplateColumns: PR_GRID,
+        borderColor: "color-mix(in srgb, var(--border) 25%, transparent)",
+        // The workspace panel this lives in is painted --bg2; a sticky heading
+        // in --bg would read as a band of the wrong colour sliding over the
+        // rows rather than as the table's own header.
+        background: "var(--bg2)",
+        color: "var(--text3)",
+        fontSize: 9,
+        letterSpacing: ".07em",
+        textTransform: "uppercase",
+      }}>
+      <span>ID</span>
+      <span>Title / context</span>
+      <span>Reviewers</span>
+      <span>Checks</span>
+      <span>Updated</span>
+      <span />
+    </div>
+  );
+}
+
+function PrRow({ p, active, onSelect, onReview }: {
+  p: PrSummary; active: boolean; onSelect: () => void; onReview: () => void;
+}) {
+  const st = rowState(p);
+  const shownLabels = p.labels.slice(0, 2);
+  return (
+    <div data-pr-row={p.number} data-active={active ? "1" : undefined} onClick={onSelect} role="button" tabIndex={-1}
+      className="grid items-center gap-3 px-3 py-2 border-b cursor-pointer agx-prrow"
+      style={{
+        gridTemplateColumns: PR_GRID,
+        borderColor: "color-mix(in srgb, var(--border) 18%, transparent)",
         boxShadow: active ? "inset 2px 0 0 var(--primary)" : undefined,
       }}>
-      <div className="flex items-center gap-1.5">
-        {p.state === "MERGED" ? <Chip text="⏣ merged" tint="var(--primary)" title="Merged" />
-          : p.state === "CLOSED" ? <Chip text="⊘ closed" tint="var(--text3)" title="Closed without merging" /> : null}
-        <span className="text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>#{p.number}</span>
-        <span className="text-[11.5px] truncate" style={{ color: "var(--text)" }}>{p.title}</span>
-        {p.isCurrentBranch && <Chip text="here" tint="var(--primary)" title="This checkout is on that branch" />}
+      <span className="flex items-center gap-1 text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>
+        <span title={st.title} style={{ color: st.tint }}>⇅</span>#{p.number}
+      </span>
+
+      <div className="min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="truncate text-[12px]" style={{ color: "var(--text)" }}>{p.title}</span>
+          {p.isCurrentBranch && <Chip text="here" tint="var(--primary)" title="This checkout is on that branch" />}
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-[10px]" style={{ color: "var(--text3)" }}>
+          <span className="truncate shrink-0" style={{ maxWidth: 140 }}>{p.author}</span>
+          {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip d={p.reviewDecision} />}
+          {shownLabels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}
+          {p.labels.length > shownLabels.length && (
+            <span className="tabular-nums shrink-0" title={p.labels.map((l) => l.name).join(", ")}>+{p.labels.length - shownLabels.length}</span>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-1.5 mt-0.5 text-[10px]" style={{ color: "var(--text3)" }}>
-        <Dot tint={p.checksLoaded === false ? "var(--text3)" : stateTint(p)}
-          title={p.checksLoaded === false ? "Check states are still loading" : `${c.success} passed · ${c.failure} failed · ${c.skipped} skipped · ${c.pending} running`} />
-        <span className="tabular-nums">
-          {/* Not yet fetched is not the same as none. Saying "no checks" here
-              would be a claim about the repository rather than about us. */}
-          {p.checksLoaded === false ? "Checks…"
-            : c.total === 0 ? "No checks"
-            : c.pending > 0 ? `${c.total - c.pending}/${c.total}`
-            : c.failure > 0 ? `${c.failure} failing` : "Green"}
-        </span>
-        {p.isDraft ? <Chip text="draft" tint="var(--text3)" /> : <ReviewChip d={p.reviewDecision} />}
-        <span className="ml-auto shrink-0">{ago(p.updatedAt)}</span>
-      </div>
-    </button>
+
+      <ReviewerStack p={p} />
+      <ChecksCell p={p} />
+      <span className="text-[10px] tabular-nums" style={{ color: "var(--text3)" }}>{ago(p.updatedAt)}</span>
+
+      {/* The row's one action, and the panel's whole reason to exist: hand the
+          pull request to the chat rather than to a browser tab. It stops the
+          click from also opening the row, which would bury the chat it just
+          opened under a detail page nobody asked for. */}
+      <button onClick={(e) => { e.stopPropagation(); onReview(); }}
+        className="agx-btn text-[10px] px-2 py-1 rounded justify-self-end whitespace-nowrap"
+        title="Hand this pull request to the chat for a local review"
+        style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text2)" }}>
+        Review →
+      </button>
+    </div>
   );
 }
 
@@ -621,7 +743,6 @@ function PrRow({ p, active, onSelect }: { p: PrSummary; active: boolean; onSelec
 // ---------------------------------------------------------------------------
 
 export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChatWith?: (cwd: string, prompt: string, title: string) => void }) {
-  const sidebarW = useSidebarWidth();
   const { ask, askText, dialog } = useDialogs();
 
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
@@ -660,10 +781,19 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   useEffect(() => { setPages([]); }, [serverQuery]);
   const [prs, setPrs] = useState<PrSummary[]>([]);
   const [listState, setListState] = useState<{ fetchedAt: number; loading: boolean; checksPending?: boolean; error?: string; needsAuth?: boolean; total?: number; hasNext?: boolean; cursor?: string | null; pageSize?: number }>({ fetchedAt: 0, loading: false });
+  // Two different things, which the panel used to conflate. `selected` is the
+  // pull request you are *in* — the list gives way to it, as a page.
+  // `rowCursor` is only where the keyboard is in the list, so j/k can walk the
+  // rows without opening (and fetching) every one it passes over. Named apart
+  // from the pagination `cursor` above, which is a GitHub page token.
   const [selected, setSelected] = useState<number | null>(null);
+  const [rowCursor, setRowCursor] = useState<number | null>(null);
   const [detail, setDetail] = useState<PrDetail | null>(null);
   const [detailErr, setDetailErr] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
+  /** Open a pull request as a page. Back returns to the list, cursor intact. */
+  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); }, []);
+  const backToList = useCallback(() => { setSelected(null); setDetailErr(""); }, []);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
   const [rawBots, setRawBots] = useState(false);
@@ -743,7 +873,13 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
       setRepo(r.repo);
       setPrs(r.prs);
       setListState({ fetchedAt: r.fetchedAt, loading: r.loading, checksPending: r.checksPending, error: r.error, needsAuth: r.needsAuth, total: r.total, hasNext: r.hasNext, cursor: r.cursor ?? null, pageSize: r.pageSize });
-      setSelected((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : r.prs[0]?.number ?? null));
+      // The keyboard cursor, never the open pull request. This lands on every
+      // poll and on every scope switch, and when the list was a column beside a
+      // detail pane, falling back to `prs[0]` only decided which one the pane
+      // previewed. Now that a pull request is a page, the same line meant
+      // picking a view — or just waiting through a refresh — opened whatever
+      // happened to be first. A row is opened when somebody opens it.
+      setRowCursor((cur) => (cur && r.prs.some((p) => p.number === cur) ? cur : null));
       // Nothing waiting on you: show your own instead of an empty pane. Once
       // only, so choosing "Needs my review" yourself is never overruled.
       if (want === "review" && stateSel === "open" && r.prs.length === 0 && !r.loading && !r.error && !fellBack.current) {
@@ -945,15 +1081,17 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
 
   const activeView = VIEWS.find((v) => v.scope === filter && v.query === query.trim());
 
-  // If the selected row is filtered out, move the selection to the first row
-  // still visible rather than leaving a phantom highlight on a hidden PR — the
-  // same reconciliation loadList does when the list itself changes. Only when a
-  // selection existed; never auto-selects out of the empty initial state.
+  // If the cursor's row is filtered out, move it to the first row still visible
+  // rather than leaving a phantom highlight on a hidden PR — the same
+  // reconciliation loadList does when the list itself changes. Only when a
+  // cursor existed; never auto-places one out of the empty initial state. The
+  // *open* pull request is deliberately left alone: you asked for that page, and
+  // a filter typed underneath it is no reason to close it.
   useEffect(() => {
-    if (selected != null && !visiblePrs.some((p) => p.number === selected)) {
-      setSelected(visiblePrs[0]?.number ?? null);
+    if (rowCursor != null && !visiblePrs.some((p) => p.number === rowCursor)) {
+      setRowCursor(visiblePrs[0]?.number ?? null);
     }
-  }, [visiblePrs, selected]);
+  }, [visiblePrs, rowCursor]);
 
   useEffect(() => {
     if (tab !== "checks" || !detail || !root) return;
@@ -971,10 +1109,15 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const listRef = useRef<HTMLDivElement>(null);
   const stepSel = (d: number) => {
     if (!visiblePrs.length) return;
-    const i = visiblePrs.findIndex((p) => p.number === selected);
+    const i = visiblePrs.findIndex((p) => p.number === rowCursor);
     const ni = i < 0 ? (d > 0 ? 0 : visiblePrs.length - 1) : (i + d + visiblePrs.length) % visiblePrs.length;
-    setSelected(visiblePrs[ni].number);
-    setTab("overview");
+    const n = visiblePrs[ni].number;
+    setRowCursor(n);
+    // Walking past the bottom of the viewport with j should not mean losing the
+    // row you are on.
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-pr-row="${n}"]`)?.scrollIntoView({ block: "nearest" });
+    });
   };
   const onListKey = (e: React.KeyboardEvent) => {
     const inInput = /input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "");
@@ -987,6 +1130,9 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     const k = e.key.toLowerCase();
     if (k === "j" || e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); stepSel(1); }
     else if (k === "k" || e.key === "ArrowUp") { e.preventDefault(); e.stopPropagation(); stepSel(-1); }
+    // The list is a page now, so the keyboard needs a way in as well as a way
+    // along: Enter opens the row the cursor is on.
+    else if (e.key === "Enter" && rowCursor != null) { e.preventDefault(); e.stopPropagation(); openPr(rowCursor); }
     else if (e.key === "Escape" && query) { e.preventDefault(); setQuery(""); }
   };
   // Make the list keyboard-ready the moment the panel opens, but never steal
@@ -1141,13 +1287,22 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     await act(reopen ? "Reopen" : "Close", () => api.prClose(root, detail.number, reopen));
   };
 
-  const doLocalReview = async () => {
-    if (!detail) return;
+  /**
+   * Hand a pull request to the chat.
+   *
+   * Takes a number so a list row can do it without opening the pull request
+   * first — the review prompt is built server-side from the number alone, so
+   * making the row load a whole detail page just to reach this would be a
+   * round trip spent on nothing.
+   */
+  const doLocalReview = async (n?: number) => {
+    const num = n ?? detail?.number;
+    if (num == null) return;
     setBusy(true);
     try {
-      const r = await api.prReviewPrompt(root, detail.number);
+      const r = await api.prReviewPrompt(root, num);
       if (!r.ok || !r.cwd || !r.prompt) { flash(false, r.error || "Could not prepare the review"); return; }
-      if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt, `Review #${detail.number}`); flash(true, `#${detail.number} is waiting in chat`); }
+      if (onOpenChatWith) { onOpenChatWith(r.cwd, r.prompt, `Review #${num}`); flash(true, `#${num} is waiting in chat`); }
       else flash(false, "The chat is not available here");
     } catch (e) { flash(false, String(e)); }
     finally { setBusy(false); }
@@ -1324,7 +1479,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     <RepoCtx.Provider value={repo?.nameWithOwner}>
     <MentionCtx.Provider value={mentions}>
     <div className="flex flex-col h-full min-h-0">
-      <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}</style>
+      <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}{PR_ROW_CSS}</style>
 
       <div className={viewHeaderClass} style={viewHeaderStyle}>
         <span className={viewTitleClass} style={{ color: "var(--text)" }}>Pull Requests</span>
@@ -1354,8 +1509,15 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
         </div>
       </div>
 
+      {/* List or pull request, never both. The list used to live in a column
+          narrow enough that a title was all it could fit, and everything worth
+          scanning — who is waiting on it, whether CI is green, how old it is —
+          had to be crushed onto a second line or dropped. Given the whole
+          width it becomes a table you can read down a column of, and the pull
+          request you pick gets the whole width in return. */}
       <div className="flex flex-1 min-h-0">
-        <div className="flex flex-col min-h-0 shrink-0" style={{ width: sidebarW }}>
+        {selected == null ? (
+        <div className="flex flex-col min-h-0 flex-1 min-w-0">
           <div className="flex gap-1 flex-wrap px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
             {VIEWS.map((v) => {
               const n = viewCount(v);
@@ -1439,8 +1601,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
               // Dimmed, not blanked, while the next scope loads: you can still
               // read what is there, and it is obvious it is being replaced.
               <div style={{ opacity: listState.loading ? 0.45 : 1, transition: "opacity .15s" }}>
+                <PrTableHead />
                 {visiblePrs.map((p) => (
-                  <PrRow key={p.number} p={p} active={p.number === selected} onSelect={() => { setSelected(p.number); setTab("overview"); }} />
+                  <PrRow key={p.number} p={p} active={p.number === rowCursor}
+                    onSelect={() => openPr(p.number)} onReview={() => doLocalReview(p.number)} />
                 ))}
               </div>
             )}
@@ -1467,22 +1631,32 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             </div>
           )}
         </div>
-
-        <SidebarGrip />
-
+        ) : (
         <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {/* The way back. A page you cannot leave is a trap, and the browser's
+              Back button is not ours to borrow — this panel lives inside an
+              app, not a tab. */}
+          <button onClick={backToList}
+            className="agx-btn flex items-center gap-1.5 px-3 py-1.5 border-b shrink-0 text-[10.5px] self-stretch justify-start"
+            style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)", color: "var(--text3)" }}>
+            <span>‹</span>
+            <span>Pull requests</span>
+            {repo && <span style={{ color: "var(--text3)", opacity: .6 }}>· {repo.nameWithOwner}</span>}
+            {selected != null && <span className="tabular-nums" style={{ color: "var(--text2)" }}>· #{selected}</span>}
+          </button>
           {!d ? (
             <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>
-              {detailErr ? detailErr
-                : selected == null ? ((listState.loading && prs.length === 0) ? "Loading pull requests…" : "Select a pull request")
-                : `Loading #${selected}…`}
+              {detailErr || `Loading #${selected}…`}
             </div>
           ) : (
             <>
+              {/* `onLocalReview` is wrapped rather than passed by reference:
+                  it lands on a click handler, and a bare reference would hand
+                  the MouseEvent in as the pull request number. */}
               <Masthead
                 d={d} busy={busy}
                 onEditTitle={doEditTitle} onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
-                onClose={doClose} onLocalReview={doLocalReview}
+                onClose={doClose} onLocalReview={() => doLocalReview()}
                 onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink}
               />
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
@@ -1520,7 +1694,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                           d={d} busy={busy} openThreads={openThreads.length}
                           conversationCount={d.comments.length + d.reviews.length + d.threads.length}
                           onEditBody={doEditBody}
-                          onLocalReview={doLocalReview} onMerge={doMerge} onClose={doClose}
+                          onLocalReview={() => doLocalReview()} onMerge={doMerge} onClose={doClose}
                           onUpdateBranch={() => act("Update branch", () => api.prUpdateBranch(root, d.number))}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
                           onAutoMerge={() => act("Auto-merge", () => api.prMerge(root, d.number, "squash", { auto: true, deleteBranch: true }))}
@@ -1650,6 +1824,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             </>
           )}
         </div>
+        )}
       </div>
       {dialog}
     </div>
