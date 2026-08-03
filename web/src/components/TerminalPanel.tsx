@@ -4,7 +4,8 @@
 // tab-completion, colors, vim/htop/lazygit. Shell sessions are kept alive in a
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
-import { Fragment, useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
@@ -1233,6 +1234,21 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     tmuxCmd("status", { visible: tmuxBar });
     try { localStorage.setItem("agentglass-tmux-bar", tmuxBar ? "on" : "off"); } catch { /* private mode */ }
   }, [tmuxActive, tmuxBar, tmuxCmd, tmuxWindows.length]);
+
+  /*
+   * A review asked for from the pull request panel.
+   *
+   * It waits here until there is a tmux to open a window in — the button can be
+   * pressed while this view has never been opened, so the socket may still be
+   * connecting, and a request dropped for arriving early would look like a
+   * button that sometimes does nothing. Cleared on send, not on arrival.
+   */
+  const review = useSyncExternalStore(subscribeTermReview, termReview, termReview);
+  useEffect(() => {
+    if (!review || !tmuxActive) return;
+    tmuxCmd("review", { root: review.root, number: review.number });
+    clearTermReview();
+  }, [review, tmuxActive, tmuxCmd]);
 
   const addShell = useCallback(() => {
     if (!root || IS_DEMO) return;

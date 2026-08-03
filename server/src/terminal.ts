@@ -158,7 +158,9 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveClient, readFrame, runAction, setStatusLine, prefixKeys, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, prefixKeys, newWindowRunning, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { prepareReviewPrompt } from "./prs.ts";
+import { claudeCode } from "./agents/claudecode.ts";
 import { applyThemeTo } from "./themesync.ts";
 
 const enc = new TextEncoder();
@@ -518,6 +520,38 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       return;
     }
     if (!s.tmux) return;
+
+    /*
+     * Open a pull request review in a window of the user's own tmux.
+     *
+     * Deliberately a review of a *number* rather than a "run this": the client
+     * sends an integer and a directory it already had, and the server builds
+     * everything that will actually execute — the same prompt the chat uses,
+     * from `prepareReviewPrompt`, which is also where the scope check lives.
+     * Handing this socket a command string instead would have turned four
+     * button actions into arbitrary execution in the user's shell.
+     */
+    if (msg.cmd === "review") {
+      const target = s.tmux;
+      const number = msg.number;
+      // Kept off `ptyMessage`'s signature: it is called for every keystroke on
+      // this socket, and making the hot path return a promise to serve one
+      // message would be a poor trade.
+      void (async () => {
+        const plan = await prepareReviewPrompt(msg.root, number);
+        if (!plan.ok) return;
+        const bin = claudeCode.bin();
+        if (!bin) return;
+        // The prompt as a single argument. Claude Code takes a positional
+        // prompt and submits it, so the window opens with the review already
+        // running rather than with something typed that nobody pressed return
+        // on.
+        newWindowRunning(target, plan.cwd, `pr-${number}`, [bin, plan.prompt]);
+        s.tmuxSweep?.();
+      })();
+      return;
+    }
+
     const action = msg.cmd as TmuxAction;
     if (!["select", "new", "kill", "rename"].includes(action)) return;
     if (!runAction(s.tmux, action, msg.window, msg.name)) return;

@@ -827,7 +827,12 @@ function PrRow({ p, active, onSelect, onReview }: {
 // panel
 // ---------------------------------------------------------------------------
 
-export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChatWith?: (cwd: string, prompt: string, title: string) => void }) {
+export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
+  active: boolean;
+  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+  /** Hand the review to the user's own tmux instead of to the chat. */
+  onReviewInTerminal?: (root: string, number: number) => void;
+}) {
   const { ask, askText, dialog } = useDialogs();
 
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
@@ -1752,6 +1757,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                 d={d} busy={busy}
                 onEditTitle={doEditTitle} onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
                 onClose={doClose} onLocalReview={() => doLocalReview()}
+                onReviewInTerminal={onReviewInTerminal && d ? () => onReviewInTerminal(root, d.number) : undefined}
                 onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink}
               />
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
@@ -2178,8 +2184,11 @@ function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: 
  * something. All three, because a menu that only closes one of those ways is
  * the kind of thing you only notice when it is stuck open over the diff.
  */
-function Menu({ label, title, children, align = "right" }: {
+function Menu({ label, title, children, align = "right", primary }: {
   label: string; title?: string; children: (close: () => void) => React.ReactNode; align?: "left" | "right";
+  /** For a menu that is an action rather than an overflow — it has to read as
+   *  the thing you came here to press, not as a place other things are kept. */
+  primary?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -2193,7 +2202,7 @@ function Menu({ label, title, children, align = "right" }: {
   }, [open]);
   return (
     <div className="relative shrink-0" ref={box}>
-      <Btn onClick={() => setOpen((v) => !v)} title={title} small>{label}</Btn>
+      <Btn onClick={() => setOpen((v) => !v)} title={title} small primary={primary}>{label}</Btn>
       {open && (
         <div className="absolute z-50 mt-1.5 rounded-lg overflow-hidden agx-menu" style={{ [align]: 0, minWidth: 216 }}>
           {children(() => setOpen(false))}
@@ -2336,9 +2345,11 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
   return { tint: "var(--success)", state: "Open", glyph: "◉" };
 }
 
-function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLabels, onReviewers, onCopyLink }: {
+function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink }: {
   d: PrDetail; busy: boolean;
   onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: () => void;
+  /** Absent when the workspace has no terminal to send it to. */
+  onReviewInTerminal?: () => void;
   onLabels: () => void; onReviewers: () => void; onCopyLink: () => void;
 }) {
   // The PR's own state, which is not the same thing as its check verdict —
@@ -2378,10 +2389,21 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLab
             agent instead of to a browser tab — and it was three clicks deep
             behind a ⋯ that also holds "Close pull request". Beside the menu
             rather than inside it. */}
-        <Btn onClick={onLocalReview} disabled={busy} primary small
-          title="Open a chat with the review prompt ready. Reads only: no checkout, nothing written to this repository">
-          ✦ Review with Claude
-        </Btn>
+        {/* Two places the same review can happen, and they are not a setting:
+            the chat renders from the transcript and keeps the pane out of
+            sight, the terminal gives you the session itself, attached, in a tab
+            beside your shells. Which one you want depends on whether you intend
+            to watch or to join in. */}
+        <Menu label="✦ Review with Claude ▾" title="Review this pull request" primary>
+          {(close) => (
+            <>
+              <MenuItem onClick={() => { close(); onLocalReview(); }}>💬 In the chat</MenuItem>
+              {onReviewInTerminal && (
+                <MenuItem onClick={() => { close(); onReviewInTerminal(); }}>▸_ In a terminal tab</MenuItem>
+              )}
+            </>
+          )}
+        </Menu>
         <Menu label="⋯" title="More actions">
           {(close) => (
             <>
