@@ -235,7 +235,7 @@ export function UnifiedDiff({ c, wrap, hunkAction, rowAfter, onPick, sel }: { c:
     <div className="agx-scroll flex-1 min-w-0 overflow-auto text-[12px] leading-[1.6]" data-vscroll style={CODE_FONT_STYLE}>
       {hunks.map(({ h, rows }, hi) => (
         <div key={hi}>
-          <div data-hunk className="sticky top-0 z-20 py-0.5 t-dim2" style={{ background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+          <div data-hunk className="sticky z-10 py-0.5 t-dim2" style={{ top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
             <span className="sticky left-0 inline-flex items-center gap-3 px-3">
               <span className="whitespace-pre">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
               {hunkAction && hunkAction(hi)}
@@ -325,7 +325,7 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
   const side = (which: "l" | "r") =>
     hunks.map(({ h, rows }, hi) => (
       <div key={hi} style={{ minWidth: "max-content" }}>
-        <div data-hunk className="sticky top-0 z-20 py-0.5 t-dim2 whitespace-pre" style={{ background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+        <div data-hunk className="sticky z-10 py-0.5 t-dim2 whitespace-pre" style={{ top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
           <span className="sticky left-0 inline-block px-3">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
         </div>
         {rows.map((row, ri) => {
@@ -360,7 +360,7 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
         <style>{SPLIT_SEL_CSS}</style>
         {hunks.map(({ h, rows }, hi) => (
           <div key={hi}>
-            <div data-hunk className="sticky top-0 z-20 px-3 py-0.5 t-dim2 whitespace-pre" style={{ background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+            <div data-hunk className="sticky z-10 px-3 py-0.5 t-dim2 whitespace-pre" style={{ top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
               @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
             </div>
             <div className="grid" style={{ gridTemplateColumns: "3.6ch minmax(0,1fr) 3.6ch minmax(0,1fr)" }}>

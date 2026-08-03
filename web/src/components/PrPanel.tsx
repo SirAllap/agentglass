@@ -878,11 +878,15 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
   // from the pagination `cursor` above, which is a GitHub page token.
   const [selected, setSelected] = useState<number | null>(null);
   const [rowCursor, setRowCursor] = useState<number | null>(null);
+  /** Whether the pull request's masthead has given its metadata back to the
+   *  page. Reset whenever another pull request is opened, or the second one
+   *  would open already collapsed with its scroll at the top. */
+  const [condensed, setCondensed] = useState(false);
   const [detail, setDetail] = useState<PrDetail | null>(null);
   const [detailErr, setDetailErr] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
   /** Open a pull request as a page. Back returns to the list, cursor intact. */
-  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); }, []);
+  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setCondensed(false); }, []);
   const backToList = useCallback(() => { setSelected(null); setDetailErr(""); }, []);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -1758,6 +1762,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                 onEditTitle={doEditTitle} onDraft={() => act(d.isDraft ? "Mark ready" : "Convert to draft", () => api.prDraft(root, d.number, !d.isDraft))}
                 onClose={doClose} onLocalReview={() => doLocalReview()}
                 onReviewInTerminal={onReviewInTerminal && d ? () => onReviewInTerminal(root, d.number) : undefined}
+                condensed={condensed}
                 onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink}
               />
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
@@ -1790,7 +1795,14 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                   column starts at the left edge and the sidebar keeps the
                   right. Files/Checks/Commits already take the full width: a
                   diff and a check list want every pixel. */}
-              <div className="flex-1 overflow-y-auto min-h-0 agx-scroll p-3">
+              <div className="flex-1 overflow-y-auto min-h-0 agx-scroll p-3"
+                onScroll={(e) => {
+                  // Hysteresis, not a threshold: a single line would flip the
+                  // masthead open and shut on every pixel of a trackpad wobble,
+                  // and it takes a row of the page with it each time.
+                  const y = e.currentTarget.scrollTop;
+                  setCondensed((was) => (was ? y > 24 : y > 72));
+                }}>
                 {(tab === "overview" || tab === "conversation") ? (
                   <div className="flex gap-4 items-start">
                     <div className="min-w-0 flex-1">
@@ -2345,11 +2357,13 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
   return { tint: "var(--success)", state: "Open", glyph: "◉" };
 }
 
-function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink }: {
+function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink, condensed }: {
   d: PrDetail; busy: boolean;
   onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: () => void;
   /** Absent when the workspace has no terminal to send it to. */
   onReviewInTerminal?: () => void;
+  /** Scrolled past the top: the metadata folds away and the title stays. */
+  condensed?: boolean;
   onLabels: () => void; onReviewers: () => void; onCopyLink: () => void;
 }) {
   // The PR's own state, which is not the same thing as its check verdict —
@@ -2432,7 +2446,14 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
 
       {/* Packed left and wrapping, not stretched to fill: six fields spread
           across a wide pane put Milestone a screen away from Author, and the
-          eye has to travel the whole width to read one header. */}
+          eye has to travel the whole width to read one header.
+
+          Folded away once you start reading. Author, branch, reviewers and the
+          rest answer questions you ask on arrival, not questions you ask while
+          scrolling a diff — and they were taking a fifth of the window to keep
+          answering them. The title, the number and the state stay, because
+          those are what tell you which pull request you are still in. */}
+      {!condensed && (
       <div className="flex flex-wrap gap-x-7 gap-y-2 mt-2.5">
         <Field label="Author"><Avatar login={d.author} size={15} />{d.author}</Field>
         <Field label="Branch">
@@ -2459,11 +2480,14 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
           {d.milestone ? <span className="truncate">{d.milestone}</span> : <span style={{ color: "var(--text3)" }}>none</span>}
         </Field>
       </div>
+      )}
 
+      {!condensed && (
       <div className="flex gap-1 flex-wrap mt-2.5 items-center">
         {d.labels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}
         <button onClick={onLabels} disabled={busy} className="agx-inline-add" style={{ borderStyle: "dashed" }}>＋ Label</button>
       </div>
+      )}
     </div>
   );
 }
@@ -2717,6 +2741,11 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
     </>
   );
 }
+
+/** The file header's exact height. Fixed, and the hunk headers below stick at
+ *  it — a number inferred from padding is a bar that overlaps by two pixels on
+ *  whichever theme nobody tested. */
+const FILE_HEAD_H = 30;
 
 function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
@@ -3065,14 +3094,28 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
               overflow: "clip",
               border: `1px solid color-mix(in srgb, ${focused ? "var(--primary) 45%" : "var(--border) 30%"}, transparent)`,
               opacity: done && !open ? 0.72 : 1,
+              // Where a `@@ … @@` comes to rest: under the file's own header,
+              // not on top of it. The diff components stick their hunk headers
+              // at this variable and default it to 0, so the standalone diff
+              // viewer — which has no file header above them — is unchanged.
+              ["--agx-hunk-top" as string]: `${Math.max(0, barH - 10) + FILE_HEAD_H}px`,
             }}>
             {/* The file's own header stays put while you read its diff — the
                 GitHub behaviour, so the code under the cursor always has a name
                 above it. Opaque (the tint mixed into --bg, not laid over
                 transparent) so the diff cannot bleed through it while pinned, and
                 pinned just under the toolbar. */}
-            <div className="flex items-center gap-2 px-2.5 py-1.5 sticky z-20"
-              style={{ top: Math.max(0, barH - 10), background: "color-mix(in srgb, var(--border) 12%, var(--bg))", borderBottom: open ? "1px solid color-mix(in srgb, var(--border) 25%, transparent)" : undefined }}>
+            <div className="flex items-center gap-2 px-2.5 sticky z-20"
+              style={{
+                top: Math.max(0, barH - 10),
+                // Fixed rather than whatever the padding happens to add up to,
+                // because the hunk headers below stick at exactly this height
+                // and a guessed number is a bar that overlaps by two pixels on
+                // some theme nobody tested.
+                height: FILE_HEAD_H,
+                background: "color-mix(in srgb, var(--border) 12%, var(--bg))",
+                borderBottom: open ? "1px solid color-mix(in srgb, var(--border) 25%, transparent)" : undefined,
+              }}>
               <button onClick={() => { onSel(f.path); toggleFold(f.path); }} className="flex-1 min-w-0 text-left flex items-center gap-2">
                 <span className="shrink-0" style={{ color: "var(--text3)" }}>{open ? "▾" : "▸"}</span>
                 <span className="truncate" style={{ ...CODE_FONT_STYLE, color: done ? "var(--text3)" : "var(--text)" }}>{f.path}</span>
