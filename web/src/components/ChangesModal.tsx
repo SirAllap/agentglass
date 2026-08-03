@@ -184,47 +184,13 @@ function inSel(sel: LineSel, n: number | null | undefined, side: DiffSide): bool
  * GitHub does a multi-line comment.
  */
 function LineBtn({ n, side, onPick }: { n: number | null | undefined; side: DiffSide; onPick?: (p: LinePick) => void }) {
-  const menu = useContext(LineMenuCtx);
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
   if (!onPick || n == null) return null;
-  const rn = side === "RIGHT" ? `R${n}` : `L${n}`;
-  const onClick = (e: React.MouseEvent) => {
-    // Shift-click keeps the fast range gesture, and with no PR context (the
-    // working-tree changes modal) there is nothing to offer but "comment", so
-    // click goes straight to it as before. Otherwise: the GitHub menu.
-    if (e.shiftKey || !menu) { onPick({ line: n, side, shift: e.shiftKey }); return; }
-    const r = ref.current!.getBoundingClientRect();
-    setPos({ top: r.bottom + 4, left: Math.min(r.left, window.innerWidth - 244) });
-    setOpen(true);
-  };
-  const Item = ({ label, glyph, onSel }: { label: string; glyph: React.ReactNode; onSel: () => void }) => (
-    <button role="menuitem" onClick={() => { onSel(); setOpen(false); }}
-      className="w-full text-left flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-white/5" style={{ color: "var(--text2)" }}>
-      <span className="grid place-items-center shrink-0" style={{ width: 16, color: "var(--text3)" }}>{glyph}</span>{label}
-    </button>
-  );
   return (
-    <>
-      <button ref={ref} onClick={onClick} data-open={open ? "1" : undefined}
-        title={`Line ${n} — comment, suggest a change; shift-click to cover a range`}
-        aria-label={`Line ${n} actions`} aria-haspopup="menu" aria-expanded={open}
-        className="agx-linebtn">+</button>
-      {open && (
-        <Portal>
-          <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
-          <div role="menu" className="fixed p-1 rounded-xl text-[11.5px]"
-            style={{ top: pos.top, left: pos.left, minWidth: 224, zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)", boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
-            <Item glyph="+" label={`Add comment on line ${rn}`} onSel={() => onPick({ line: n, side, shift: false, mode: "comment" })} />
-            <Item glyph="±" label={`Suggest change on line ${rn}`} onSel={() => onPick({ line: n, side, shift: false, mode: "suggest" })} />
-            {menu?.permalink && (
-              <Item glyph="🔗" label="Copy link" onSel={() => { const u = menu.permalink!(n, side); if (u) void navigator.clipboard?.writeText(u); }} />
-            )}
-          </div>
-        </Portal>
-      )}
-    </>
+    <button
+      onClick={(e) => onPick({ line: n, side, shift: e.shiftKey })}
+      title={`Line ${n} — comment; shift-click to cover a range`}
+      aria-label={`Comment on line ${n}`}
+      className="agx-linebtn">+</button>
   );
 }
 
