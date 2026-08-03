@@ -1,5 +1,5 @@
 import { useSyncExternalStore, useState } from "react";
-import { VIEWS, loadViewOrder, saveViewOrder, subscribeViewOrder, type ViewId } from "./views.ts";
+import { VIEWS, loadViewOrder, saveViewOrder, subscribeViewOrder, type ViewDef, type ViewId } from "./views.ts";
 import { chordFor, chordLabel, chords, subscribeBindings } from "../../lib/keybindings.ts";
 import { SkillsIcon } from "./icons.tsx";
 import { PortsIcon, ResourcesIcon } from "../Header.tsx";
@@ -61,6 +61,62 @@ export function ViewRail({
     (e.currentTarget.querySelector(`[data-view="${n.id}"]`) as HTMLElement | null)?.focus();
   };
 
+  /** One rail button. Shared by both clusters so a tooltip, a pip or a drag
+   *  handle can never exist in one and not the other. */
+  const tab = (v: ViewDef) => {
+    const on = v.id === view;
+    const pip = pips?.[v.id];
+    const Icon = v.icon;
+    return (
+      <button
+        key={v.id}
+        data-view={v.id}
+        role="tab"
+        aria-selected={on}
+        aria-label={v.label}
+        tabIndex={on ? 0 : -1}
+        onClick={() => onSelect(v.id)}
+        // Drag to reorder. HTML5 dnd rather than pointer maths: this is a
+        // single column of five, the browser already handles the pickup,
+        // the ghost and the drop, and reimplementing that by hand buys
+        // nothing here.
+        draggable
+        onDragStart={(e) => { setDragId(v.id); e.dataTransfer.effectAllowed = "move"; }}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+        onDrop={(e) => { e.preventDefault(); if (dragId) moveTo(dragId, v.id); setDragId(null); }}
+        onDragEnd={() => setDragId(null)}
+        className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
+        // The modifier binding, not the bare letter. Inside the workspace
+        // the letters no longer navigate — they belong to whatever has
+        // focus, usually a shell — and a tooltip advertising a key that
+        // does nothing is worse than no tooltip.
+        data-tip={`${v.label} · ${chordLabel(chordFor(v.id, order.map((x) => x.id)) || `mod+${order.findIndex((x) => x.id === v.id) + 1}`)}`}
+        style={{
+      color: on ? "var(--primary-hover)" : "var(--text4)",
+      background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+      // The one being dragged fades, so the gap it will leave is legible.
+      opacity: dragId === v.id ? 0.4 : undefined,
+      cursor: dragId ? "grabbing" : undefined,
+        }}
+      >
+        <Icon size={17} />
+        {/* the 3px edge marker: reads as "you are here" from the far side
+        of the screen, where a background tint alone doesn't. */}
+        {on && (
+      <span className="absolute left-[-8px] top-[9px] bottom-[9px] w-[3px] rounded-r-[3px]"
+        style={{ background: "var(--primary)" }} />
+        )}
+        {pip?.count ? (
+      <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-[3px] grid place-items-center rounded-full text-[9px] font-bold tabular-nums"
+        style={{ background: "var(--success)", color: "#06281c" }}>{pip.count}</span>
+        ) : pip?.dot ? (
+      <span className="absolute top-[7px] right-[9px] w-[6px] h-[6px] rounded-full"
+        style={{ background: "var(--success)", boxShadow: "0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent)" }} />
+        ) : null}
+      </button>
+    );
+  };
+
   return (
     <nav
       role="tablist"
@@ -72,65 +128,22 @@ export function ViewRail({
         background: "color-mix(in srgb, var(--bg) 55%, transparent)",
       }}
     >
-      {order.map((v, i) => {
-        const on = v.id === view;
-        const pip = pips?.[v.id];
-        const Icon = v.icon;
-        return (
-          <button
-            key={v.id}
-            data-view={v.id}
-            role="tab"
-            aria-selected={on}
-            aria-label={v.label}
-            tabIndex={on ? 0 : -1}
-            onClick={() => onSelect(v.id)}
-            // Drag to reorder. HTML5 dnd rather than pointer maths: this is a
-            // single column of five, the browser already handles the pickup,
-            // the ghost and the drop, and reimplementing that by hand buys
-            // nothing here.
-            draggable
-            onDragStart={(e) => { setDragId(v.id); e.dataTransfer.effectAllowed = "move"; }}
-            onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
-            onDrop={(e) => { e.preventDefault(); if (dragId) moveTo(dragId, v.id); setDragId(null); }}
-            onDragEnd={() => setDragId(null)}
-            className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
-            // The modifier binding, not the bare letter. Inside the workspace
-            // the letters no longer navigate — they belong to whatever has
-            // focus, usually a shell — and a tooltip advertising a key that
-            // does nothing is worse than no tooltip.
-            data-tip={`${v.label} · ${chordLabel(chordFor(v.id, order.map((x) => x.id)) || `mod+${i + 1}`)}`}
-            style={{
-              color: on ? "var(--primary-hover)" : "var(--text4)",
-              background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
-              // The one being dragged fades, so the gap it will leave is legible.
-              opacity: dragId === v.id ? 0.4 : undefined,
-              cursor: dragId ? "grabbing" : undefined,
-            }}
-          >
-            <Icon size={17} />
-            {/* the 3px edge marker: reads as "you are here" from the far side
-                of the screen, where a background tint alone doesn't. */}
-            {on && (
-              <span className="absolute left-[-8px] top-[9px] bottom-[9px] w-[3px] rounded-r-[3px]"
-                style={{ background: "var(--primary)" }} />
-            )}
-            {pip?.count ? (
-              <span className="absolute top-[5px] right-[6px] min-w-[14px] h-[14px] px-[3px] grid place-items-center rounded-full text-[9px] font-bold tabular-nums"
-                style={{ background: "var(--success)", color: "#06281c" }}>{pip.count}</span>
-            ) : pip?.dot ? (
-              <span className="absolute top-[7px] right-[9px] w-[6px] h-[6px] rounded-full"
-                style={{ background: "var(--success)", boxShadow: "0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent)" }} />
-            ) : null}
-          </button>
-        );
-      })}
+      {order.filter((v) => v.group !== "utility").map((v) => tab(v))}
 
       <div className="mt-auto pt-2 flex flex-col gap-[3px]" style={{ borderTop: "1px solid color-mix(in srgb, var(--primary) 10%, transparent)" }}>
-        {/* The window's own controls, not the fleet's — which is why they live
-            below the divider with close, rather than among the tabs where they
-            would imply a view you can come back to. Same three, same order, as
-            the dashboard header. */}
+        {/* The views you visit rather than work in — the dashboard, a web page,
+            a conversation — sit with the app's own controls instead of among
+            the tools. Not a demotion: it is the difference between "where I am
+            working" and "what I am looking at", and mixing the two is what made
+            the rail a list of eight things with no shape. */}
+        {order.filter((v) => v.group === "utility").map((v) => tab(v))}
+
+        {/* A second hairline, because the three below are not views at all:
+            they open OVER whatever you are in and hand it straight back. A
+            divider is the cheapest way to say "these do not change where you
+            are", and without it the cluster reads as six tabs of which three
+            mysteriously never highlight. */}
+        <span className="my-0.5 mx-2 h-px shrink-0" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)" }} />
         <button
           onClick={() => onMachine("ports")}
           aria-label="Ports"

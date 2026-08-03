@@ -15,6 +15,16 @@ export type ViewDef = {
   key: string;
   icon: ComponentType<{ size?: number }>;
   hint: string;
+  /**
+   * Where this lives in the rail.
+   *
+   * "utility" sits at the bottom with settings, ports and resources; everything
+   * else is at the top. The line is not importance, it is what you are doing
+   * with the window: the top is where you WORK — the tree, the diff, the shell,
+   * the containers — and the bottom is what you go and LOOK at. Mixing the two
+   * is what made the rail a column of eight things with no shape.
+   */
+  group?: "utility";
 };
 
 /** Order is the rail's order, and ⌘1..⌘N index into it.
@@ -28,15 +38,15 @@ export const VIEWS: ViewDef[] = [
   // First, and it leads for a reason: this is the app's own screen — the fleet,
   // the spend, the history — and it used to BE the app. It is a view now, but a
   // view you can always get back to in one key.
-  { id: "dash", label: "Dashboard", key: "1", icon: DashIcon, hint: "The fleet, the spend and the history — every panel, unchanged" },
+  { id: "dash", label: "Dashboard", key: "1", icon: DashIcon, hint: "The fleet, the spend and the history — every panel, unchanged", group: "utility" },
   { id: "git", label: "Git", key: "g", icon: GitIcon, hint: "Stage, commit, push/pull the working tree" },
   { id: "diff", label: "Diff", key: "d", icon: DiffIcon, hint: "Review & commit every diff the fleet made" },
   { id: "pr", label: "Pull requests", key: "p", icon: PrIcon, hint: "Review pull requests without leaving for the browser" },
   { id: "docker", label: "Docker", key: "o", icon: DockerIcon, hint: "Containers, logs, stats & actions" },
   { id: "term", label: "Term", key: "t", icon: TerminalIcon, hint: "A real shell in any repo/worktree" },
-  { id: "chat", label: "Chat", key: "c", icon: ChatIcon, hint: "Drive a Claude session in any repo/worktree" },
+  { id: "chat", label: "Chat", key: "c", icon: ChatIcon, hint: "Drive a Claude session in any repo/worktree", group: "utility" },
   ...(HAS_BROWSER
-    ? [{ id: "browser" as const, label: "Browser", key: "b", icon: BrowserIcon, hint: "A page, without leaving the app" }]
+    ? [{ id: "browser" as const, label: "Browser", key: "b", icon: BrowserIcon, hint: "A page, without leaving the app", group: "utility" as const }]
     : []),
   // Appended, for the same reason Browser was: ⌘1..⌘N index into this order,
   // and inserting anywhere above renumbers a chord somebody already has in

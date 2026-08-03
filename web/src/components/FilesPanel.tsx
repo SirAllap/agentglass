@@ -162,6 +162,11 @@ function Tree({ root, active, onOpen }: { root: string; active: boolean; onOpen:
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  /** The row the keyboard is on, by path. A path rather than an index: opening
+   *  a folder inserts rows above the cursor, and an index would slide out from
+   *  under it. */
+  const [cursor, setCursor] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async (rel: string) => {
     const r = await api.filesTree(root, rel);
@@ -176,70 +181,110 @@ function Tree({ root, active, onOpen }: { root: string; active: boolean; onOpen:
     load("").finally(() => setLoading(false));
   }, [active, load]);
 
-  const toggle = (rel: string) => {
+  const expand = useCallback((rel: string) => {
     setOpen((cur) => {
-      const next = new Set(cur);
-      if (next.has(rel)) next.delete(rel);
-      else { next.add(rel); if (!levels[rel]) void load(rel); }
-      return next;
+      if (cur.has(rel)) return cur;
+      if (!levels[rel]) void load(rel);
+      return new Set(cur).add(rel);
+    });
+  }, [levels, load]);
+  const collapse = (rel: string) => setOpen((cur) => { const n = new Set(cur); n.delete(rel); return n; });
+  const toggle = (rel: string) => (open.has(rel) ? collapse(rel) : expand(rel));
+
+  /**
+   * Every row that is currently on screen, flattened in reading order.
+   *
+   * The tree is drawn from this rather than by recursing during render, which
+   * is what makes j/k possible at all: "the next row" is a question about the
+   * flattened list, and a recursive render never has one.
+   *
+   * `last` is one flag per ancestor — whether that ancestor was the final child
+   * of its own parent — and it is what decides between a pipe that keeps going
+   * and blank space. See fileIcons.guides.
+   */
+  const rows = useMemo(() => {
+    const out: { e: FileEntry; last: boolean[] }[] = [];
+    const walk = (rel: string, last: boolean[]) => {
+      const list = levels[rel] ?? [];
+      list.forEach((e, i) => {
+        const mine = [...last, i === list.length - 1];
+        out.push({ e, last: mine });
+        if (e.dir && open.has(e.rel)) walk(e.rel, mine);
+      });
+    };
+    walk("", []);
+    return out;
+  }, [levels, open]);
+
+  const at = rows.findIndex((r) => r.e.rel === cursor);
+  const cur = at >= 0 ? rows[at] : null;
+
+  /** Move the cursor and keep it on screen. `block: "nearest"` so walking down
+   *  a long tree scrolls a row at a time rather than jumping the view. */
+  const go = (i: number) => {
+    const next = rows[Math.max(0, Math.min(rows.length - 1, i))];
+    if (!next) return;
+    setCursor(next.e.rel);
+    requestAnimationFrame(() => {
+      boxRef.current?.querySelector(`[data-row="${CSS.escape(next.e.rel)}"]`)?.scrollIntoView({ block: "nearest" });
     });
   };
+
+  /**
+   * The four keys everybody already has in their fingers.
+   *
+   * j/k down and up. `h` closes the folder you are in, and when you are already
+   * on something closed it goes to the PARENT — which is what makes h the way
+   * out of a deep tree rather than a key that does nothing half the time. `l`
+   * opens a folder, steps into an open one, and opens a file. Enter does what
+   * clicking does.
+   */
+  const onKey = (e: React.KeyboardEvent) => {
+    if (/input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "")) return;
+    const k = e.key;
+    if (!rows.length) return;
+    if (k === "j" || k === "ArrowDown") { e.preventDefault(); go(at < 0 ? 0 : at + 1); return; }
+    if (k === "k" || k === "ArrowUp") { e.preventDefault(); go(at < 0 ? 0 : at - 1); return; }
+    if (k === "g") { e.preventDefault(); go(0); return; }
+    if (k === "G") { e.preventDefault(); go(rows.length - 1); return; }
+    if (!cur) { if (k === "l" || k === "h" || k === "Enter") { e.preventDefault(); go(0); } return; }
+
+    if (k === "h" || k === "ArrowLeft") {
+      e.preventDefault();
+      if (cur.e.dir && open.has(cur.e.rel)) { collapse(cur.e.rel); return; }
+      // Out to the parent. The parent is the last row above this one that is
+      // shallower — the flattened list already knows, so no path arithmetic.
+      for (let i = at - 1; i >= 0; i--) {
+        if (rows[i]!.last.length < cur.last.length) { go(i); return; }
+      }
+      return;
+    }
+    if (k === "l" || k === "ArrowRight") {
+      e.preventDefault();
+      if (!cur.e.dir) { onOpen(cur.e.rel); return; }
+      if (!open.has(cur.e.rel)) { expand(cur.e.rel); return; }
+      go(at + 1); // already open — step into it
+      return;
+    }
+    if (k === "Enter" || k === "o") {
+      e.preventDefault();
+      if (cur.e.dir) toggle(cur.e.rel); else onOpen(cur.e.rel);
+    }
+  };
+
+  // Focus the tree when this view comes up, so the keys work without a click.
+  useEffect(() => {
+    if (!active) return;
+    const id = requestAnimationFrame(() => boxRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [active]);
 
   if (error) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>;
   if (loading && !levels[""]) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading the checkout…</div>;
 
-  /**
-   * The rows, drawn the way nvim-tree draws them.
-   *
-   * `last` carries one flag per ancestor — was that ancestor the final child of
-   * its own parent — which is what decides between a pipe that keeps going and
-   * blank space. Without it the guides are just indentation with extra
-   * characters, and the eye cannot follow a nested folder back to its parent.
-   */
-  const rows = (rel: string, last: boolean[]): React.ReactNode[] => {
-    const list = levels[rel] ?? [];
-    return list.flatMap((e, i) => {
-      const isOpen = open.has(e.rel);
-      const mine = [...last, i === list.length - 1];
-      const icon = iconFor(e.name, e.dir, isOpen);
-      const quiet = isNoise(e.name, e.dir);
-      const row = (
-        <button key={e.rel} onClick={() => (e.dir ? toggle(e.rel) : onOpen(e.rel))}
-          className="w-full text-left flex items-center py-[2px] text-[12px] leading-[1.5] hover:bg-white/5"
-          style={{ paddingLeft: 14, paddingRight: 16 }}
-          title={e.dir ? e.rel : `${e.rel}${e.size != null ? ` · ${bytes(e.size)}` : ""}`}>
-          {/* One pre-formatted string rather than a span per level: the guides
-              are drawn with box characters in a monospaced face, so they line
-              up by construction and cost one text node instead of six. */}
-          <span className="shrink-0 whitespace-pre select-none" style={{ color: "color-mix(in srgb, var(--text) 22%, transparent)" }}>
-            {guides(mine)}
-          </span>
-          <span className="shrink-0 w-[1.6em] text-center" style={{ color: quiet ? "var(--text4)" : icon.tint }}>{icon.glyph}</span>
-          <span className="truncate" style={{
-            color: quiet ? "var(--text4)" : e.dir ? "var(--primary)" : "var(--text2)",
-            fontWeight: e.dir && !quiet ? 500 : 400,
-          }}>{e.name}</span>
-          {/* The right edge earns its keep: what changed, and how big it is.
-              A row of nothing but a filename in a 1900px window is what made
-              this look like a list somebody forgot to finish. */}
-          <span className="ml-auto shrink-0 flex items-center gap-3 pl-4">
-            {e.status && (
-              <span className="text-[10px] tabular-nums" style={{ color: MARK_TINT[e.status] ?? "var(--text4)" }}
-                title={e.status === "·" ? "something below this has changed" : `git status: ${e.status}`}>
-                {e.status === "·" ? "•" : e.status}
-              </span>
-            )}
-            {e.size != null && <span className="text-[10px] tabular-nums w-[62px] text-right" style={{ color: "var(--text4)" }}>{bytes(e.size)}</span>}
-          </span>
-        </button>
-      );
-      return isOpen ? [row, ...rows(e.rel, mine)] : [row];
-    });
-  };
-
   const top = levels[""] ?? [];
   return (
-    <div className="py-1">
+    <div ref={boxRef} tabIndex={-1} onKeyDown={onKey} className="py-1 outline-none">
       {/* The checkout's own name at the head of the tree, the way an editor
           roots its explorer — so a screenshot of this says which repository it
           is without the header being in frame. */}
@@ -248,9 +293,51 @@ function Tree({ root, active, onOpen }: { root: string; active: boolean; onOpen:
         <span className="font-medium truncate">{rootName}</span>
         <span className="ml-auto text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
           {top.filter((e) => e.dir).length} dirs · {top.filter((e) => !e.dir).length} files
+          <span className="ml-3" style={{ color: "var(--text4)" }}><b>j/k</b> move · <b>h/l</b> fold · <b>↵</b> open</span>
         </span>
       </div>
-      {rows("", [])}
+
+      {rows.map(({ e, last }) => {
+        const isOpen = open.has(e.rel);
+        const icon = iconFor(e.name, e.dir, isOpen);
+        const quiet = isNoise(e.name, e.dir);
+        const on = cursor === e.rel;
+        return (
+          <button key={e.rel} data-row={e.rel}
+            onClick={() => { setCursor(e.rel); if (e.dir) toggle(e.rel); else onOpen(e.rel); }}
+            className="w-full text-left flex items-center py-[2px] text-[12px] leading-[1.5] hover:bg-white/5"
+            style={{
+              paddingLeft: 14, paddingRight: 16,
+              background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : undefined,
+              boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
+            }}
+            title={e.dir ? e.rel : `${e.rel}${e.size != null ? ` · ${bytes(e.size)}` : ""}`}>
+            {/* One pre-formatted string rather than a span per level: the guides
+                are drawn with box characters in a monospaced face, so they line
+                up by construction and cost one text node instead of six. */}
+            <span className="shrink-0 whitespace-pre select-none" style={{ color: "color-mix(in srgb, var(--text) 22%, transparent)" }}>
+              {guides(last)}
+            </span>
+            <span className="shrink-0 w-[1.6em] text-center" style={{ color: quiet ? "var(--text4)" : icon.tint }}>{icon.glyph}</span>
+            <span className="truncate" style={{
+              color: quiet ? "var(--text4)" : e.dir ? "var(--primary)" : "var(--text2)",
+              fontWeight: e.dir && !quiet ? 500 : 400,
+            }}>{e.name}</span>
+            {/* The right edge earns its keep: what changed, and how big it is.
+                A row of nothing but a filename in a 1900px window is what made
+                this look like a list somebody forgot to finish. */}
+            <span className="ml-auto shrink-0 flex items-center gap-3 pl-4">
+              {e.status && (
+                <span className="text-[10px] tabular-nums" style={{ color: MARK_TINT[e.status] ?? "var(--text4)" }}
+                  title={e.status === "·" ? "something below this has changed" : `git status: ${e.status}`}>
+                  {e.status === "·" ? "•" : e.status}
+                </span>
+              )}
+              {e.size != null && <span className="text-[10px] tabular-nums w-[62px] text-right" style={{ color: "var(--text4)" }}>{bytes(e.size)}</span>}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
