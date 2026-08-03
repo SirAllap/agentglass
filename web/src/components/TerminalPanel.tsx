@@ -84,7 +84,10 @@ function themeFromCss() {
   });
   return {
     background: bg,
-    foreground: readVar(s, "--text2", "#c8ccd4"),
+    // The terminal's default text is the theme's PRIMARY text, not the dimmer
+    // secondary — uncoloured output should read as bright/white (like a proper
+    // editor surface), not the washed-out grey that --text2 gave it.
+    foreground: readVar(s, "--text", "#e6edf3"),
     cursor: readVar(s, "--primary", "#a78bfa"),
     cursorAccent: bg,
     selectionBackground: alpha(readVar(s, "--primary", "#a78bfa"), "44"),
