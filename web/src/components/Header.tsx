@@ -5,7 +5,6 @@ import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStore.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { IS_MAC_DESKTOP } from "../lib/desktop.ts";
-import { ThemeSwitcher } from "./ThemeSwitcher.tsx";
 import { UsageWidget } from "./UsageWidget.tsx";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
@@ -95,7 +94,7 @@ function MoreMenu({ onOpen }: { onOpen: () => void }) {
 }
 
 export function Header({
-  conn, windowMs, onWindow, retentionDays, apps, types, providers, filter, onFilter, theme, onTheme,
+  conn, windowMs, onWindow, retentionDays, apps, types, providers, filter, onFilter,
   sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenWorkspace, onOpenSettings, onClear, showUsage,
   workspace, onOpenProject,
 }: {
@@ -109,8 +108,6 @@ export function Header({
   providers: string[];
   filter: { app: string; type: string; provider: string };
   onFilter: (f: { app: string; type: string; provider: string }) => void;
-  theme: string;
-  onTheme: (id: string) => void;
   sound: boolean;
   onSound: () => void;
   onOpenPalette: () => void;
@@ -275,7 +272,6 @@ export function Header({
         {/* Skills demoted to a plain icon */}
         <IconBtn title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></IconBtn>
         <MoreMenu onOpen={onOpenSettings} />
-        <ThemeSwitcher current={theme} onChange={onTheme} />
       </div>
     </header>
   );

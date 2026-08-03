@@ -534,8 +534,6 @@ export default function App() {
         providers={providers}
         filter={filter}
         onFilter={setFilter}
-        theme={theme}
-        onTheme={setTheme}
         sound={sound}
         onSound={() => setSound((s) => !s)}
         onOpenPalette={() => setPaletteOpen(true)}
@@ -611,6 +609,8 @@ export default function App() {
         onZoom={zoom}
         onOpenStats={() => setStatsOpen(true)}
         onOpenHelp={() => setHelpOpen(true)}
+        theme={theme}
+        onTheme={setTheme}
       />
       <SessionModal
         sessionId={sessionView?.id ?? null}
