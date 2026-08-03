@@ -11,6 +11,7 @@ import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { ChatView } from "../ChatPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
+import { requestTermReview } from "../../lib/termReview.ts";
 import { DynamicIsland, NOTCH_BAND } from "./DynamicIsland.tsx";
 
 const BODY = {
@@ -71,6 +72,13 @@ export function Workspace({
     setActiveChatId(chat.id);
     requestChatFocus(chat.id);
     onView("chat");
+  }, [onView]);
+  /** Send a pull request review to the user's own tmux, and go there to watch
+   *  it. Left as a request rather than called directly: the terminal view owns
+   *  the socket, and may not be mounted when the button is pressed. */
+  const reviewInTerminal = useCallback((root: string, number: number) => {
+    requestTermReview(root, number);
+    onView("term");
   }, [onView]);
   const frameRef = useRef<HTMLDivElement>(null);
 
@@ -172,7 +180,7 @@ export function Workspace({
                           active={active}
                           {...(v.id === "chat" ? { focusId: chatFocusId, onClose } : {})}
                           {...(v.id === "git" ? { onOpenChat: openChat } : {})}
-                          {...(v.id === "pr" ? { onOpenChatWith: openChatWith } : {})}
+                          {...(v.id === "pr" ? { onOpenChatWith: openChatWith, onReviewInTerminal: reviewInTerminal } : {})}
                           {...(v.id === "term" ? { onClose } : {})}
                         />
                       </div>

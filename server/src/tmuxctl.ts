@@ -382,6 +382,27 @@ function statusInConfig(t: TmuxTarget): string {
  * too. `set-option -u` puts each one back exactly as their config had it,
  * rather than guessing at a default.
  */
+/**
+ * A new window in the user's own tmux, already running something.
+ *
+ * Separate from `runAction`'s `new` on purpose. That one opens an empty window
+ * and is driven by a button; this one opens a window with a command in it, and
+ * a command is a much larger thing to hand a websocket. So `argv` is never
+ * client text: the caller builds it from something the server itself resolved.
+ *
+ * Passed as separate arguments rather than a shell string — tmux runs a bare
+ * string through the user's login shell, and this one is fish on the machine
+ * where that was last discovered the hard way.
+ */
+export function newWindowRunning(t: TmuxTarget, cwd: string, name: string, argv: string[]): boolean {
+  const clean = sanitizeWindowName(name);
+  return tmux(t.socket, [
+    "new-window", "-t", t.id, "-c", cwd,
+    ...(clean ? ["-n", clean] : []),
+    ...argv,
+  ]) !== null;
+}
+
 export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
   if (visible) {
     // Give everything back, and do not stop at the first failure: a session that
