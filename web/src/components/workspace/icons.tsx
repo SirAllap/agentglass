@@ -12,6 +12,18 @@ const svg = {
 
 type P = { size?: number };
 
+/** Four panes: the shape of a dashboard since the first one. */
+export function DashIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="3" y="3" width="7.5" height="7.5" rx="1.4" />
+      <rect x="13.5" y="3" width="7.5" height="4.5" rx="1.4" />
+      <rect x="13.5" y="10.5" width="7.5" height="10.5" rx="1.4" />
+      <rect x="3" y="13.5" width="7.5" height="7.5" rx="1.4" />
+    </svg>
+  );
+}
+
 /**
  * A tree: a stem with three branches, each ending in a leaf.
  *

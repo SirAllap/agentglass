@@ -17,11 +17,10 @@ export type RailPip = { dot?: boolean; count?: number };
  *  replied) rides as a corner pip so it costs no width at all.
  */
 export function ViewRail({
-  view, onSelect, onClose, onSkills, onSettings, onMachine, pips,
+  view, onSelect, onSkills, onSettings, onMachine, pips,
 }: {
   view: ViewId;
   onSelect: (v: ViewId) => void;
-  onClose: () => void;
   onSkills: () => void;
   /** Preferences, reachable from in here.
    *
@@ -170,17 +169,6 @@ export function ViewRail({
           style={{ color: "var(--text4)" }}
         >
           <SkillsIcon size={16} />
-        </button>
-        <button
-          onClick={onClose}
-          aria-label="Close workspace"
-          data-tip="Close · esc"
-          className="agw-tip relative h-10 w-full grid place-items-center rounded-[10px] transition-colors"
-          style={{ color: "var(--text4)" }}
-        >
-          <svg viewBox="0 0 24 24" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
-            <path d="M6 6l12 12M18 6L6 18" />
-          </svg>
         </button>
       </div>
     </nav>

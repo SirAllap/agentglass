@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { ViewId } from "../../../../shared/types.ts";
-import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon } from "./icons.tsx";
+import { GitIcon, DiffIcon, DockerIcon, TerminalIcon, ChatIcon, PrIcon, BrowserIcon, FilesIcon, DashIcon } from "./icons.tsx";
 import { HAS_BROWSER } from "../../lib/desktop.ts";
 
 /** Re-exported from shared so the server (POST /control validation) and the UI
@@ -25,6 +25,10 @@ export type ViewDef = {
  *  exist. A rail entry that opens an empty pane on a phone would be worse than
  *  no entry at all. */
 export const VIEWS: ViewDef[] = [
+  // First, and it leads for a reason: this is the app's own screen — the fleet,
+  // the spend, the history — and it used to BE the app. It is a view now, but a
+  // view you can always get back to in one key.
+  { id: "dash", label: "Dashboard", key: "1", icon: DashIcon, hint: "The fleet, the spend and the history — every panel, unchanged" },
   { id: "git", label: "Git", key: "g", icon: GitIcon, hint: "Stage, commit, push/pull the working tree" },
   { id: "diff", label: "Diff", key: "d", icon: DiffIcon, hint: "Review & commit every diff the fleet made" },
   { id: "pr", label: "Pull requests", key: "p", icon: PrIcon, hint: "Review pull requests without leaving for the browser" },

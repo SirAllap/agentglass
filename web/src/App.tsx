@@ -14,18 +14,8 @@ import { actionFor } from "./lib/keybindings.ts";
 import { currentScale, nudgeScale, resetScale } from "./lib/uiScale.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
 import { useAlertSound } from "./lib/useSound.ts";
-import { Header } from "./components/Header.tsx";
-import { Kpis } from "./components/Kpis.tsx";
-import { Throughput } from "./components/Throughput.tsx";
-import { ToolMix } from "./components/ToolMix.tsx";
-import { Radar } from "./components/Radar.tsx";
-import { Alerts } from "./components/Alerts.tsx";
-import { Fleet } from "./components/Fleet.tsx";
-import { Feed } from "./components/Feed.tsx";
-import { CostByModel } from "./components/CostByModel.tsx";
-import { Latency } from "./components/Latency.tsx";
-import { Sessions } from "./components/Sessions.tsx";
-import { MissionTimeline } from "./components/MissionTimeline.tsx";
+import { TopBar } from "./components/TopBar.tsx";
+import { DashboardView } from "./components/DashboardView.tsx";
 import { EventModal } from "./components/EventModal.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { HelpLegend } from "./components/HelpLegend.tsx";
@@ -73,11 +63,22 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
-  // One overlay replaced five modals. `wsView` is which view it shows, and it
-  // survives closing — reopening lands you where you left off, because
-  // switching views is the thing you do constantly.
-  const [wsOpen, setWsOpen] = useState(false);
+  /**
+   * Which view the shell is showing.
+   *
+   * There is no `wsOpen` any more. The workspace was a modal you opened over a
+   * dashboard nobody used; it is the window now, so the only state left is
+   * WHICH view — and that is remembered across restarts, because landing where
+   * you left off is the whole point of not having a front door.
+   */
   const [wsView, setWsView] = useState<ViewId>(loadLastView);
+  /** The dashboard is a view like any other, and this is what makes it free
+   *  when it is not the one on screen. */
+  const dashActive = wsView === "dash";
+  /** Where ⌘\ goes back to. Without it, toggling off the dashboard would have
+   *  to pick a view, and picking one for you is how you lose your place. */
+  const lastNonDash = useRef<ViewId>(wsView === "dash" ? "term" : wsView);
+  if (wsView !== "dash") lastNonDash.current = wsView;
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Which machine tab is open, or none. One piece of state for both surfaces:
    *  the dashboard header and the workspace rail open the same panel, and a
@@ -92,12 +93,6 @@ export default function App() {
   const [scale, setScale] = useState(currentScale);
   const [workspace, setWorkspace] = useState<string | null>(null);
 
-  // Stable, and it has to be. This is passed down to the terminal, whose mount
-  // effect lists it as a dependency — an inline arrow is a new identity on
-  // every render of this component, which made that effect tear down and
-  // re-run, detaching and re-appending the live xterm DOM. Measured at eleven
-  // times in twenty seconds on a completely idle app.
-  const closeWorkspace = useCallback(() => setWsOpen(false), []);
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
 
@@ -114,8 +109,6 @@ export default function App() {
     projectOpen || sessionView !== null || selected !== null;
   const anyPanelOpenRef = useRef(anyPanelOpen);
   anyPanelOpenRef.current = anyPanelOpen;
-  const wsOpenRef = useRef(wsOpen);
-  wsOpenRef.current = wsOpen;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
   // The catalog is the one panel that can open *over* the workspace, from the
@@ -134,7 +127,11 @@ export default function App() {
   // reading a session meant scrolling a few hundred rows on the same CPU that
   // was still sweeping a radar and pulsing a ring per live agent behind the
   // dim. Same treatment, same attribute.
-  const covered = wsOpen || anyPanelOpen;
+  //
+  // The workspace is no longer one of the cases: it does not cover the
+  // dashboard any more, it REPLACES it — a view that is not on screen is not
+  // mounted, so there is nothing left of it to freeze.
+  const covered = anyPanelOpen || !dashActive;
   useEffect(() => {
     document.documentElement.dataset.ws = covered ? "1" : "0";
   }, [covered]);
@@ -145,12 +142,11 @@ export default function App() {
   // socket's buffer instead gives the panel you are actually reading the main
   // thread to itself, and uncovering flushes it in one go.
   //
-  // NOT while the workspace is open, even though it covers the dashboard just
-  // as thoroughly: the chat panel inside it is a live view fed by these very
-  // events, and holding them would freeze a streaming answer mid-word. A modal
-  // over the workspace (the skills catalog opens there) is left alone for the
-  // same reason.
-  const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen && !wsOpen);
+  // Only for a modal, and never merely because the dashboard is not the view
+  // on screen: the chat panel is a live view fed by these very events, the
+  // fleet spine reads them in every view, and holding them would freeze a
+  // streaming answer mid-word.
+  const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
   // The live socket is the app's only real-time source, and until now the chat
   // panel was the one view that never saw it — a resumed session sat frozen on
   // whatever had been true when you opened it while the agent kept working.
@@ -198,23 +194,31 @@ export default function App() {
   // Poll on an interval — NOT on every event. Passing lastEvent.id as `bump`
   // used to refetch /stats on every single event (a per-event server query +
   // full chart re-render). The 4s interval is plenty for a summary.
-  const { stats } = useStats(windowMs, undefined, filter.provider);
+  // Only while the dashboard is the view on screen. It is the app's dearest
+  // poll and it feeds nothing else — see useStats for the numbers.
+  const { stats } = useStats(windowMs, undefined, filter.provider, dashActive);
 
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
 
-  // Filter options change rarely (a new app/event type) — poll slowly, and only
-  // take the new object when it actually differs. Setting state to a fresh copy
-  // of the same data still commits the whole tree; on a poll that answers
-  // identically almost every time, that is a free re-render of the cockpit.
+  /**
+   * The facet lists, for the command palette — fetched when it opens.
+   *
+   * This used to be a 20-second poll for the life of the process, feeding two
+   * dropdowns in the app header. The header is gone and those dropdowns live
+   * inside the dashboard now, which fetches its own; all that is left here is
+   * the palette, which is shut almost always and stale never — a list of source
+   * apps changes when somebody installs a new agent, not between two ticks.
+   *
+   * `keepIfSame` still guards the write: the palette can be opened repeatedly,
+   * and a fresh object with identical contents re-renders the whole tree.
+   */
   useEffect(() => {
-    const take = keepIfSame(setOpts); // once per effect — inside load() its memory would reset each call
-    const load = () => api.filterOptions().then(take).catch(() => {});
-    load();
-    const id = setInterval(load, 20_000);
-    return () => clearInterval(id);
-  }, []);
+    if (!paletteOpen) return;
+    const take = keepIfSame(setOpts);
+    api.filterOptions().then(take).catch(() => {});
+  }, [paletteOpen]);
 
   // Statuses are functions of the clock, not only of the buffer: a session
   // mid-build emits nothing for minutes, and without a tick its card would
@@ -294,6 +298,26 @@ export default function App() {
     [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider, titles]
   );
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
+  /**
+   * The one thing the top bar interrupts for.
+   *
+   * An alert used to live in a panel on a screen nobody opened, which is an
+   * archive rather than an alert. Here it takes the middle of the strip and
+   * carries its own way in, so "an agent is waiting on you" cannot be missed
+   * from any view — and says nothing at all when there is nothing to say.
+   */
+  const needs = useMemo(() => {
+    if (!alerts.length) return null;
+    const first = alerts[0]!;
+    // `agent` is the card key the alert was raised from, so the name shown is
+    // the session's own rather than a uuid the reader has never seen.
+    const who = agents.find((a) => a.key === first.agent);
+    const label = who?.title || who?.source_app || first.agent;
+    return {
+      count: alerts.length,
+      label: alerts.length > 1 ? `${label} +${alerts.length - 1} need you` : `${label} needs you`,
+    };
+  }, [alerts, agents]);
   useAlertSound(alerts.length, sound);
 
   // Demo builds only: hand the fleet to whoever is showing this build inside a
@@ -339,7 +363,6 @@ export default function App() {
         if (target) {
           e.preventDefault();
           setWsView(target);
-          setWsOpen(true);
           return;
         }
       }
@@ -363,10 +386,16 @@ export default function App() {
             const i = railIds.indexOf(cur);
             return railIds[(i + (k === "]" ? 1 : railIds.length - 1)) % railIds.length]!;
           });
-          setWsOpen(true);
           return;
         }
-        if (k === "\\") { e.preventDefault(); setWsOpen((o) => !o); return; }
+        // ⌘\ used to open and close the workspace. There is nothing to open —
+        // it goes to the dashboard and back instead, which is the closest thing
+        // left to "show me the app rather than the work".
+        if (k === "\\") {
+          e.preventDefault();
+          setWsView((cur) => (cur === "dash" ? lastNonDash.current : "dash"));
+          return;
+        }
       }
       // F11, the way every desktop app binds it. Outside the modifier block —
       // it carries none — and before the bailout below, which would otherwise
@@ -380,15 +409,13 @@ export default function App() {
       // because a focused textarea can swallow it before it reaches here.
       if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
-        // Peel one layer at a time: the catalog opened from the rail sits on
-        // top of the workspace, so it goes first and the workspace stays.
-        if (wsOpenRef.current && skillsOpenRef.current) { setSkillsOpen(false); return; }
+        // Escape closes whatever is ON the shell. It never closes the shell —
+        // there is nothing behind it to go back to any more.
         setSelected(null);
         setPaletteOpen(false);
         setHelpOpen(false);
         setStatsOpen(false);
         setSkillsOpen(false);
-        setWsOpen(false);
         setSearchOpen(false);
         setSessionView(null);
         return;
@@ -416,10 +443,9 @@ export default function App() {
       //
       // There is no version of "is this keystroke meant for the app or for the
       // shell" that a heuristic answers reliably, so the rule is positional
-      // instead of behavioural. Inside the workspace, navigation carries a
-      // modifier — ⌘1..5, ⌘\, ⌘[/] — which no shell will ever consume, and the
-      // rail is a click away.
-      const canNavigate = focusFree && !anyPanelOpenRef.current && !wsOpenRef.current;
+      // instead of behavioural. Navigation carries a modifier — ⌘1..N, ⌘[/] —
+      // which no shell will ever consume, and the rail is a click away.
+      const canNavigate = focusFree && !anyPanelOpenRef.current;
       if (!canNavigate) return;
 
       // Which action owns this letter, according to the user's bindings —
@@ -438,7 +464,6 @@ export default function App() {
         const view = action.slice(5) as ViewId;
         e.preventDefault();
         setWsView(view);
-        setWsOpen(true);
         return;
       }
 
@@ -470,10 +495,12 @@ export default function App() {
       switch (cmd.cmd) {
         case "view":
           setWsView(cmd.to);
-          setWsOpen(true);
           break;
         case "workspace":
-          setWsOpen((o) => (cmd.open === undefined ? !o : cmd.open));
+          // No overlay to toggle any more: an external controller asking for
+          // "the workspace" gets the last view that was not the dashboard,
+          // which is what it was asking to see.
+          setWsView((cur) => (cur === "dash" ? lastNonDash.current : cur));
           break;
         case "esc":
           // The same peel Escape does, minus the focus guards — a remote command
@@ -483,7 +510,6 @@ export default function App() {
           setHelpOpen(false);
           setStatsOpen(false);
           setSkillsOpen(false);
-          setWsOpen(false);
           setSearchOpen(false);
           setSessionView(null);
           break;
@@ -505,7 +531,6 @@ export default function App() {
           // this works whether or not the chat view is already up.
           latchChatIntent(cmd.do);
           setWsView("chat");
-          setWsOpen(true);
           break;
       }
     });
@@ -529,84 +554,49 @@ export default function App() {
       <ServerBanner />
       <GitMissingBanner />
 
-      <Header
-        conn={conn}
-        windowMs={windowMs}
-        onWindow={setWindowMs}
-        retentionDays={stats?.retention_days}
-        apps={opts.source_apps}
-        types={opts.hook_event_types}
-        providers={providers}
-        filter={filter}
-        onFilter={setFilter}
-        sound={sound}
-        onSound={() => setSound((s) => !s)}
-        onOpenPalette={() => setPaletteOpen(true)}
-        onOpenHelp={() => setHelpOpen(true)}
-        onOpenStats={() => setStatsOpen(true)}
-        onOpenSkills={() => setSkillsOpen(true)}
-        onOpenWorkspace={() => setWsOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenMachine={setMachine}
-        onClear={clearFilters}
-        showUsage={showUsage}
+      <TopBar
         workspace={workspace}
         onOpenProject={() => setProjectOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
+        // On the dashboard the readings step back: the screen below is already
+        // saying all of it, and a strip repeating it is what made the old notch
+        // feel like decoration.
+        quiet={dashActive}
+        needs={needs}
+        onGoNeeds={() => setWsView("dash")}
       />
 
-      <main className="flex-1 min-h-0 p-3 flex flex-col gap-3 overflow-auto tall:overflow-hidden">
-        <div className="shrink-0">
-          <Kpis stats={stats} agents={agents} startedAt={startedAt} epm={epm} />
-        </div>
-
-        {/* Cockpit — fills the viewport on a tall screen; on short laptops it
-            keeps readable panel heights and the page scrolls instead. */}
-        <div className="shrink-0 min-h-0 tall:flex-1 grid grid-cols-1 xl:grid-cols-12 gap-3">
-          <div className="xl:col-span-3 min-w-0 min-h-0 h-[420px] xl:h-[520px] tall:h-auto">
-            <Fleet agents={agents} activeApp={filter.app} onSelect={(a) => setSessionView({ id: a.session_id, app: a.source_app })} />
-          </div>
-
-          {/* Phones: auto-height rows with fixed chart/feed heights — the
-              desktop 520px box clipped Throughput/ToolMix to slivers. */}
-          <div className="xl:col-span-6 min-w-0 min-h-0 grid grid-rows-[auto_400px] sm:grid-rows-[minmax(0,150px)_minmax(0,1fr)] gap-3 h-auto sm:h-[520px] tall:h-auto">
-            <div className="grid grid-cols-1 sm:grid-cols-2 auto-rows-[150px] sm:auto-rows-auto gap-3 min-w-0 min-h-0">
-              <Throughput events={visibleEvents} />
-              <ToolMix events={visibleEvents} />
-            </div>
-            <div className="min-w-0 min-h-0">
-              <Feed events={events} filter={filter} sessionProvider={sessionProvider} onSelect={setSelected} onClearFilter={clearFilters} />
-            </div>
-          </div>
-
-          <div className="xl:col-span-3 min-w-0 min-h-0 grid grid-rows-[3fr_2fr] gap-3 h-[420px] xl:h-[520px] tall:h-auto">
-            <Radar agents={agents} onSelect={(a) => setFilter((f) => ({ ...f, app: a.source_app }))} />
-            <Alerts alerts={alerts} agents={agents} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
-          </div>
-        </div>
-
-        {/* Money row — pinned */}
-        <div className="shrink-0 grid grid-cols-1 xl:grid-cols-3 gap-3 h-auto xl:h-[196px]">
-          <CostByModel stats={stats} />
-          <Latency stats={stats} />
-          <Sessions provider={filter.provider} />
-        </div>
-
-        {/* Mission timeline — pinned */}
-        <div className="shrink-0 h-[140px]">
-          <MissionTimeline stats={stats} />
-        </div>
-      </main>
+      <Workspace
+        view={wsView} onView={setWsView}
+        onSkills={() => setSkillsOpen(true)}
+        onSettings={() => setSettingsOpen(true)}
+        onMachine={setMachine}
+        chatFocusId={chatFocus}
+        agents={agents}
+        dashboard={(active) => (
+          <DashboardView
+            active={active}
+            events={events} visibleEvents={visibleEvents}
+            agents={agents} alerts={alerts} stats={stats}
+            sessionProvider={sessionProvider} providers={providers}
+            windowMs={windowMs} onWindow={setWindowMs}
+            filter={filter} onFilter={setFilter} onClearFilter={clearFilters}
+            retentionDays={stats?.retention_days}
+            startedAt={startedAt} epm={epm}
+            onSelectEvent={setSelected}
+            onSelectSession={setSessionView}
+          />
+        )}
+      />
 
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
-      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} onSkills={() => setSkillsOpen(true)}
-        onSettings={() => setSettingsOpen(true)} onMachine={setMachine} chatFocusId={chatFocus} />
-      {/* Outside the workspace on purpose: it opens from the dashboard too, and
-          it has to render above the overlay when it opens from inside it. */}
+      {/* App-level, not inside a view: it is about the machine, not about
+          whatever you happen to be looking at. */}
       {machine && (
         <MachinePanel tab={machine} onTab={setMachine} onClose={() => setMachine(null)}
-          onOpenBrowser={() => { setMachine(null); setWsView("browser"); setWsOpen(true); }} />
+          onOpenBrowser={() => { setMachine(null); setWsView("browser"); }} />
       )}
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
       {/* Shows once when the app first runs a version it has not run before —
@@ -644,7 +634,6 @@ export default function App() {
           });
           setChatFocus(chat.id);
           setWsView("chat");
-          setWsOpen(true);
         }}
       />
       <CommandPalette
@@ -657,12 +646,12 @@ export default function App() {
         onTheme={setTheme}
         onStats={() => setStatsOpen(true)}
         onSkills={() => setSkillsOpen(true)}
-        onChanges={() => { setWsView("diff"); setWsOpen(true); }}
-        onGit={() => { setWsView("git"); setWsOpen(true); }}
-        onPr={() => { setWsView("pr"); setWsOpen(true); }}
-        onDocker={() => { setWsView("docker"); setWsOpen(true); }}
-        onTerminal={() => { setWsView("term"); setWsOpen(true); }}
-        onChat={() => { setWsView("chat"); setWsOpen(true); }}
+        onChanges={() => setWsView("diff")}
+        onGit={() => setWsView("git")}
+        onPr={() => setWsView("pr")}
+        onDocker={() => setWsView("docker")}
+        onTerminal={() => setWsView("term")}
+        onChat={() => setWsView("chat")}
         onSearch={() => setSearchOpen(true)}
         onClear={clearFilters}
         onZoom={zoom}

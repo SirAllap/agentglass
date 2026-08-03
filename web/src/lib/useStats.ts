@@ -21,9 +21,21 @@ function pollFor(windowMs: number): number {
   return 30_000;                                    // 30d / all time
 }
 
-/** Poll /stats on an interval, optionally scoped to a provider. Pass
- *  `intervalMs` only to override the window-derived rate. */
-export function useStats(windowMs: number, intervalMs?: number, provider = "") {
+/**
+ * Poll /stats on an interval, optionally scoped to a provider.
+ *
+ * `enabled` is the whole reason this has a flag: /stats is the single most
+ * expensive thing the client asks for — aggregates over every event in range,
+ * every four seconds — and it feeds exactly one screen. It used to run for the
+ * life of the process regardless of whether that screen was in front of
+ * anybody, which on a normal day is about 900 requests an hour for numbers
+ * nobody read. Off, this holds the last answer rather than clearing it, so
+ * coming back shows the previous reading for the instant before the fresh one
+ * lands instead of an empty panel.
+ *
+ * Pass `intervalMs` only to override the window-derived rate.
+ */
+export function useStats(windowMs: number, intervalMs?: number, provider = "", enabled = true) {
   const [stats, setStats] = useState<StatsSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,10 +51,11 @@ export function useStats(windowMs: number, intervalMs?: number, provider = "") {
 
   const every = intervalMs ?? pollFor(windowMs);
   useEffect(() => {
+    if (!enabled) return;
     load();
     const id = setInterval(load, every);
     return () => clearInterval(id);
-  }, [load, every]);
+  }, [load, every, enabled]);
 
   return { stats, error };
 }
