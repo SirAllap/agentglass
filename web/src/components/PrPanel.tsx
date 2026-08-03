@@ -145,9 +145,13 @@ function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, sm
   const edge = danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : primary ? "var(--primary)" : "var(--border)";
   return (
     <button onClick={onClick} disabled={disabled} title={title}
-      className={`agx-btn rounded disabled:opacity-40 ${small ? "text-[10px] px-2 py-0.5" : "text-[10.5px] px-2.5 py-1"}`}
+      className={`agx-btn rounded whitespace-nowrap disabled:opacity-40 ${small ? "text-[10px] px-2 py-0.5" : "text-[10.5px] px-2.5 py-1"}`}
       style={{
-        color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : "var(--text2)",
+        // A plain button's label was --text2, a tier meant for labels beside
+        // things — so "Comment" sat at the contrast of a caption next to the
+        // button it competes with. It is a control: it reads at full strength,
+        // and the border is what says it is the quieter of the two.
+        color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : "var(--text)",
         background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
         border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : warn ? 55 : 50}%, transparent)`,
         cursor: disabled ? "not-allowed" : "pointer",
@@ -3268,7 +3272,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                                           return ok;
                                         },
                                       }} />
-                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Cancel</button>
+                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>Cancel</button>
                                   </div>
                                 </div>
                               )}
@@ -4070,7 +4074,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial,
       )}
       <div className="flex items-center gap-2 px-2.5 py-2"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · <b>@</b> people · <b>#</b> issues · <b>:</b> emoji · drop a text file · ⌘↵ to send</span>
+        <span className="text-[10px]" style={{ color: "var(--text2)" }}>Markdown · <b>@</b> people · <b>#</b> issues · <b>:</b> emoji · drop a text file · ⌘↵ to send</span>
         <span className="ml-auto flex items-center gap-1.5">
           {secondary && (
             <Btn onClick={() => send(secondary.onSend)} disabled={sending || busy || !text.trim()} small
