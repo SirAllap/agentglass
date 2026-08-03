@@ -136,7 +136,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "appearance" | "prefs" | "terminal" | "browser" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
+type Pane = "appearance" | "prefs" | "terminal" | "notifications" | "browser" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
 type TabGroup = "Interface" | "Data" | "Setup" | "About";
 // Rendered in this order; a group with no matching tab is dropped, so search
 // collapses to just the sections that still have something in them.
@@ -151,6 +151,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string }[] = [
   // Only where there is a browser to configure. A settings tab for something
   // that is not there reads as a broken feature rather than one that doesn't apply.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Interface" as const, kw: "browser web page zoom" }] : []),
+  { id: "notifications", label: "Notifications", group: "Interface", kw: "notifications sound alert desktop notify quiet chime ping" },
   { id: "keys", label: "Shortcuts", group: "Interface", kw: "keyboard keys bindings shortcut chord rebind" },
   { id: "log", label: "Activity", group: "Data", kw: "activity log history events feed" },
   { id: "open", label: "Open", group: "Data", kw: "open external editor file reveal" },
@@ -1137,9 +1138,6 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Toggle on={fullscreen} onClick={async () => setFullscreenState(await toggleFullscreen())}
                       label="Fullscreen"
                       hint="Hide the window frame — F11 anywhere" />
-                    <Toggle on={sound} onClick={onSound}
-                      label="Alert sounds"
-                      hint="A chime when a session errors or needs you" />
                     {autostart !== null && (
                       <Toggle on={autostart} onClick={async () => {
                         const next = await setAutostart(!autostart);
@@ -1222,6 +1220,14 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         <RunningPanes open={open} />
                       </div>
                     )}
+                  </Section>
+                  )}
+
+                  {pane === "notifications" && (
+                  <Section title="Notifications">
+                    <Toggle on={sound} onClick={onSound}
+                      label="Alert sounds"
+                      hint="A chime when a session errors or needs you" />
                     <Choice<SysNotifyMode>
                       label="Desktop notifications on the notch"
                       hint="Slack and the rest, mirrored onto the strip you can still see in fullscreen"
