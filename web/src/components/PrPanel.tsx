@@ -3297,12 +3297,22 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                                         are building. Before, everything queued —
                                         so a one-line "typo here" needed a whole
                                         review submitted around it. */}
+                                    {/* Neither button is filled, which is what
+                                        GitHub does and the reason its pair does
+                                        not mislead. Ours had the fill on "Add to
+                                        review" — the one that posts nothing —
+                                        so the button that looked like the action
+                                        was the one that quietly queued a draft.
+                                        Equal weight; you read the labels. */}
                                     <Composer initial={composing.initial} autoFocus={!split} busy={busy}
-                                      placeholder="Leave a comment — markdown works here" sendLabel="Add to review"
+                                      placeholder="Leave a comment — markdown works here"
+                                      sendLabel={draftsFor(f.path) || drafts.length ? "Add to review" : "Start a review"}
+                                      sendTitle="Hold this until you submit the review — the author is notified once, at the end"
+                                      quiet
                                       onSend={async (b) => { onAddDraft(f.path, composing.line, composing.startLine, composing.side, b); cancelCompose(); return true; }}
                                       secondary={{
                                         label: "Comment",
-                                        title: "Post this comment now, on its own",
+                                        title: "Post this now, on its own — the author is notified straight away",
                                         onSend: async (b) => {
                                           const ok = await onPostOne(f.path, composing.line, composing.startLine, composing.side, b);
                                           if (ok) cancelCompose();
@@ -3928,8 +3938,13 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
  * Write, preview, send. Shared by the conversation and by anywhere else that
  * takes markdown, so the two never drift into behaving differently.
  */
-function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial, autoFocus, secondary }: {
+function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOpenGithub, initial, autoFocus, secondary }: {
   onSend: (body: string) => Promise<boolean>; busy: boolean; placeholder: string; sendLabel: string;
+  /** What the main button promises, when the label alone cannot say it. */
+  sendTitle?: string;
+  /** Do not fill the main button. For a pair of equally weighted outcomes,
+   *  where filling one is a claim about which you meant. */
+  quiet?: boolean;
   /** A second way to send the same text. On a line comment that is "post this
    *  one now" beside "hold it for the review" — two outcomes GitHub offers at
    *  the box, and which this had collapsed into one. */
@@ -4111,7 +4126,13 @@ function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial,
       )}
       <div className="flex items-center gap-2 px-2.5 py-2"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-        <span className="text-[10px]" style={{ color: "var(--text2)" }}>Markdown · <b>@</b> people · <b>#</b> issues · <b>:</b> emoji · drop a text file · ⌘↵ to send</span>
+        {/* With two outcomes, "to send" stops being an answer. The shortcut goes to
+            the reversible one on purpose: a queued comment can be dropped before
+            the review is submitted, and a posted one has already notified
+            somebody. */}
+        <span className="text-[10px]" style={{ color: "var(--text2)" }}>
+          Markdown · <b>@</b> people · <b>#</b> issues · <b>:</b> emoji · drop a text file · ⌘↵ {secondary ? `for ${sendLabel.toLowerCase()}` : "to send"}
+        </span>
         <span className="ml-auto flex items-center gap-1.5">
           {secondary && (
             <Btn onClick={() => send(secondary.onSend)} disabled={sending || busy || !text.trim()} small
@@ -4119,8 +4140,8 @@ function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial,
               {secondary.label}
             </Btn>
           )}
-          <Btn onClick={() => send()} disabled={sending || busy || !text.trim()} primary small
-            title={!text.trim() ? "Write something first" : undefined}>
+          <Btn onClick={() => send()} disabled={sending || busy || !text.trim()} primary={!quiet} small
+            title={!text.trim() ? "Write something first" : sendTitle}>
             {sending ? "Sending…" : sendLabel}
           </Btn>
         </span>
