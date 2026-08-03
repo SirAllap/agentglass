@@ -26,6 +26,16 @@ export function DiffIcon({ size = 15 }: P) {
 }
 
 /** Two commits reconciling into one line — a pull request, not a branch. */
+export function BrowserIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18" />
+      <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18Z" />
+    </svg>
+  );
+}
+
 export function PrIcon({ size = 15 }: P) {
   return (
     <svg {...svg} width={size} height={size}>

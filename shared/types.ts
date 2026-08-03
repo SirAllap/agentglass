@@ -551,7 +551,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "git" | "diff" | "pr" | "docker" | "term" | "chat";
+export type ViewId = "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),

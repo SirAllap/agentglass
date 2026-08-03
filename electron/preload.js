@@ -8,6 +8,14 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("agentglass", {
   desktop: true,
   platform: process.platform,
+  // A <webview> exists here and does not in a phone's browser tab, so the
+  // browser view asks before it draws itself. Announced as a capability rather
+  // than inferred from `desktop`, because the two can come apart: an older
+  // shell is still the desktop app and has no guest to give.
+  browser: true,
+  /** The session every guest shares. The renderer must not invent this string:
+   *  the main process refuses to attach a guest on any other partition. */
+  browserPartition: "persist:agentglass-browser",
   // Where the sidecar listens. The renderer is served from agentglass://app,
   // whose hostname says nothing about the API — without this the web app would
   // derive `http://app:4000` from location.hostname and reach nothing.
