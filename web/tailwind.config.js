@@ -11,7 +11,17 @@ export default {
         tall: { raw: "(min-width: 1280px) and (min-height: 860px)" },
       },
       fontFamily: {
-        mono: ["JetBrainsMono Nerd Font", "JetBrains Mono", "ui-monospace", "monospace"],
+        // The whole app is set in this, so it is the one that decides how
+        // agentglass reads. The order is the platform's own monospace first —
+        // SF Mono on a Mac, whatever `ui-monospace` resolves to elsewhere —
+        // rather than a bundled personality. Nerd Font sits at the back purely
+        // for glyph coverage: an agent CLI prints powerline and icon
+        // codepoints that a stock monospace does not carry, and per-glyph
+        // fallback means those come from it while the letters do not.
+        mono: [
+          "SF Mono", "SFMono-Regular", "ui-monospace", "Cascadia Code", "Menlo", "Consolas",
+          "Liberation Mono", "JetBrainsMono Nerd Font Mono", "monospace",
+        ],
         // Section titles pair a clean sans against the mono data for hierarchy.
         sans: ["ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "Roboto", "Helvetica", "Arial", "sans-serif"],
       },

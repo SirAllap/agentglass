@@ -32,7 +32,7 @@ import { useDialogs } from "./ConfirmDialog.tsx";
 import { SCROLLBAR_CSS, LINEBTN_CSS, CODE_FONT_STYLE, UnifiedDiff, SplitDiff, Toggle, LineMenuCtx, type LinePick, type LineSel } from "./ChangesModal.tsx";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { Select } from "./Select.tsx";
-import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
+import { parseBody, parseUnifiedDiff, newLineNumbers, diffKind, parseShieldBadge, type MdBlock, type ParsedFile } from "../lib/prBody.ts";
 import { stepFileIndex } from "../lib/prNav.ts";
 import { PrFilterBar } from "./PrFilterBar.tsx";
 import { Avatar } from "./Avatar.tsx";
@@ -236,11 +236,15 @@ export const MD_CSS = `
 .agx-md .agx-task li{display:flex;gap:.55em;align-items:flex-start}
 .agx-md .agx-box{flex:none;width:13px;height:13px;margin-top:.28em;border-radius:3px;border:1px solid color-mix(in srgb,var(--border) 70%,transparent);display:inline-flex;align-items:center;justify-content:center;font-size:9px;line-height:1}
 .agx-md .agx-box[data-on="1"]{background:var(--primary);border-color:var(--primary);color:var(--bg)}
-.agx-md .agx-tw{overflow-x:auto;margin:0 0 .9em;max-width:100%}
-.agx-md table{border-collapse:collapse;font-size:.95em}
-.agx-md th{text-align:left;padding:.4em .8em;background:color-mix(in srgb,var(--border) 22%,transparent);color:var(--text);font-weight:600;border:1px solid color-mix(in srgb,var(--border) 40%,transparent);white-space:nowrap}
-.agx-md td{padding:.4em .8em;border:1px solid color-mix(in srgb,var(--border) 30%,transparent);vertical-align:top}
-.agx-md tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--border) 10%,transparent)}
+/* A grid of boxes is how a spreadsheet looks, not how a table reads. Rules
+   between rows only, a banded head, and one rounded edge around the whole
+   thing — the shape GitHub settled on, and the one a coverage report needs to
+   be scannable down a column. */
+.agx-md .agx-tw{overflow-x:auto;margin:0 0 .9em;max-width:100%;border:1px solid color-mix(in srgb,var(--border) 38%,transparent);border-radius:8px}
+.agx-md table{border-collapse:collapse;font-size:.95em;width:100%}
+.agx-md th{text-align:left;padding:.55em .9em;background:color-mix(in srgb,var(--border) 22%,transparent);color:var(--text);font-weight:600;border:0;border-bottom:1px solid color-mix(in srgb,var(--border) 38%,transparent);white-space:nowrap}
+.agx-md td{padding:.5em .9em;border:0;border-bottom:1px solid color-mix(in srgb,var(--border) 22%,transparent);vertical-align:top}
+.agx-md tbody tr:last-child td{border-bottom:0}
 .agx-md .agx-details{margin:0 0 .9em;border:1px solid color-mix(in srgb,var(--border) 40%,transparent);border-radius:6px;padding:.5em .8em;background:color-mix(in srgb,var(--border) 8%,transparent)}
 .agx-md .agx-details>summary{cursor:pointer;color:var(--text);font-weight:600;list-style:revert}
 .agx-md .agx-details>div{margin-top:.7em}
@@ -284,6 +288,38 @@ function Suggestion({ text }: { text: string }) {
   );
 }
 
+/** shields.io's own colour words, as this app's palette. */
+const SHIELD_TINT: Record<string, string> = {
+  brightgreen: "var(--success)", green: "var(--success)", success: "var(--success)",
+  yellow: "var(--warning)", yellowgreen: "var(--warning)", orange: "var(--warning)", important: "var(--warning)",
+  red: "var(--error)", critical: "var(--error)",
+  blue: "var(--info)", informational: "var(--info)", lightblue: "var(--info)",
+  lightgrey: "var(--text3)", lightgray: "var(--text3)", grey: "var(--text3)", gray: "var(--text3)", inactive: "var(--text3)",
+};
+
+/**
+ * A CI badge, drawn from its URL.
+ *
+ * Two tones, like the real thing: the label sits on a neutral ground and the
+ * value takes the colour, so `Coverage 75%` reads as one object and the number
+ * is what the eye lands on. An unknown colour word falls back to a hex value if
+ * shields was given one, and to the accent otherwise — never to nothing.
+ */
+function ShieldPill({ label, value, color }: { label: string; value: string; color: string }) {
+  const tint = SHIELD_TINT[(color || "").toLowerCase()]
+    ?? (/^[0-9a-f]{3,8}$/i.test(color) ? `#${color}` : "var(--primary)");
+  return (
+    <span className="inline-flex items-stretch rounded overflow-hidden align-middle mb-2 text-[10px] leading-none"
+      title={label ? `${label}: ${value}` : value}>
+      {label && (
+        <span className="px-1.5 py-1" style={{ background: "color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}>{label}</span>
+      )}
+      <span className="px-1.5 py-1 font-semibold"
+        style={{ background: tint, color: "var(--bg)" }}>{value}</span>
+    </span>
+  );
+}
+
 function Block({ b }: { b: MdBlock }) {
   if (b.kind === "heading") {
     const H = (["h1", "h2", "h3", "h4", "h5", "h6"][b.level - 1] ?? "h6") as "h1";
@@ -294,6 +330,11 @@ function Block({ b }: { b: MdBlock }) {
   if (b.kind === "code") return <CodeBlock text={b.text} lang={b.lang} />;
   if (b.kind === "quote") return <blockquote dangerouslySetInnerHTML={{ __html: b.html }} />;
   if (b.kind === "image") {
+    // A shields.io badge is text pretending to be a picture. Drawn rather than
+    // fetched: the proxy does not allow that host, so every CI comment opened
+    // with a broken image where its headline number should have been.
+    const badge = parseShieldBadge(b.src);
+    if (badge) return <ShieldPill {...badge} />;
     return (
       <figure>
         <img src={api.prAssetUrl(b.src)} alt={b.alt} loading="lazy" />
@@ -796,7 +837,12 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   const backToList = useCallback(() => { setSelected(null); setDetailErr(""); }, []);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [rawBots, setRawBots] = useState(false);
+  // Automation comments render in full by default now that they render as
+  // markdown rather than as their own source: the fold stays folded, so a 40 KB
+  // coverage report is a badge and a summary line until you open it, which is
+  // what the digest was protecting against in the first place. The digest is
+  // still a click away for a timeline of nothing but CI.
+  const [rawBots, setRawBots] = useState(true);
   const [seen, setSeen] = useState<Record<string, string[]>>(() => loadMap<string[]>(SEEN_KEY));
   const [drafts, setDrafts] = useState<Record<string, DraftComment[]>>(() => loadMap<DraftComment[]>(DRAFT_KEY));
   const [diff, setDiff] = useState("");
@@ -1680,14 +1726,18 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                 </div>
               </div>
 
-              {/* Prose on the left at a fixed reading width, metadata on the
-                  right — the arrangement GitHub uses, and the reason the body
-                  no longer hugs the left edge with the whole right half of the
-                  panel empty. Files/Checks/Commits keep the full width: a diff
-                  and a check list want every pixel. */}
+              {/* Prose on the left, metadata on the right — the arrangement
+                  GitHub uses. There is no centred measure any more: capped at
+                  1180 and centred, a wide window put a third of the panel of
+                  empty gutter down the left-hand side while the description
+                  wrapped early. The body fills what it is given (the 78ch
+                  measure came out of MD_CSS for the same reason), so the
+                  column starts at the left edge and the sidebar keeps the
+                  right. Files/Checks/Commits already take the full width: a
+                  diff and a check list want every pixel. */}
               <div className="flex-1 overflow-y-auto min-h-0 agx-scroll p-3">
                 {(tab === "overview" || tab === "conversation") ? (
-                  <div className="flex gap-4 items-start mx-auto" style={{ maxWidth: 1180 }}>
+                  <div className="flex gap-4 items-start">
                     <div className="min-w-0 flex-1">
                       {tab === "overview" ? (
                         <Overview
@@ -2017,8 +2067,6 @@ function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: 
   // previous one and offers to save it over the one you are looking at.
   useEffect(() => { setEditing(false); setPreview(false); setText(d.body); }, [d.number, d.body]);
 
-  const done = d.checklist.filter((i) => i.checked).length;
-
   const save = async () => {
     if (text === d.body) { setEditing(false); return; }
     setSaving(true);
@@ -2067,14 +2115,9 @@ function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: 
         <span className="ml-auto"><Btn onClick={() => setEditing(true)} disabled={busy} small>✎ Edit</Btn></span>
       </div>
       <div className="p-3">
-        {d.checklist.length > 0 && (
-          <div className="flex items-center gap-2 mb-3 text-[10.5px]" style={{ color: done === d.checklist.length ? "var(--success)" : "var(--text3)" }}>
-            <span className="tabular-nums shrink-0">{done} of {d.checklist.length} done</span>
-            <span className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-              <span className="block h-full rounded-full" style={{ width: `${(done / d.checklist.length) * 100}%`, background: done === d.checklist.length ? "var(--success)" : "var(--primary)" }} />
-            </span>
-          </div>
-        )}
+        {/* No checklist meter. The boxes are right there, ticked or not, three
+            lines below — a bar counting them said nothing the list did not, and
+            it said it above the description, where the description should be. */}
         {d.body.trim() ? <Md body={d.body} /> : <div className="text-[11px]" style={{ color: "var(--text3)" }}>No description.</div>}
       </div>
     </section>
@@ -2183,7 +2226,7 @@ function PrSidebar({ d, onLabels, onReviewers, onAssignees, onMilestone }: {
   onLabels: () => void; onReviewers: () => void; onAssignees: () => void; onMilestone: () => void;
 }) {
   return (
-    <aside className="shrink-0 w-[210px] pl-4 hidden lg:block" style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
+    <aside className="shrink-0 w-[248px] pl-4 hidden lg:block" style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
       <SidebarSection title="Reviewers" onEdit={onReviewers}>
         <SidebarPeople logins={d.reviewers} empty="No reviewers" />
       </SidebarSection>
@@ -3122,6 +3165,15 @@ function Reactions({ nodeId, reactions, onReact }: {
   nodeId?: string; reactions?: PrReaction[]; onReact?: (nodeId: string, content: string, on: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  // Eight emoji at ~26px plus the padding; enough to keep the row on screen
+  // when the button sits near the right edge.
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    setPos({ top: r.bottom + 6, left: Math.max(6, Math.min(r.left, window.innerWidth - 240)) });
+  }, [open]);
   const has = reactions ?? [];
   if (!onReact || !nodeId) {
     if (!has.length) return null;
@@ -3148,13 +3200,26 @@ function Reactions({ nodeId, reactions, onReact }: {
           </button>
         );
       })}
-      <div className="relative">
-        <button onClick={() => setOpen((v) => !v)} title="Add a reaction" aria-label="Add a reaction"
-          className="agx-btn text-[10px] px-1.5 py-0.5 rounded-full"
-          style={{ border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>☺ +</button>
-        {open && (
-          <div className="absolute z-20 mt-1 flex gap-0.5 p-1 rounded-lg"
-            style={{ background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 12px 30px -14px rgba(0,0,0,.7)" }}>
+      <button ref={btnRef} onClick={() => setOpen((v) => !v)} title="Add a reaction" aria-label="Add a reaction"
+        aria-haspopup="menu" aria-expanded={open}
+        className="agx-btn text-[10px] px-1.5 py-0.5 rounded-full"
+        style={{ border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>☺ +</button>
+      {/* Through a portal, like every other menu here. Absolutely positioned it
+          was a child of the comment card, and the card clips its own rounded
+          corners — so the picker opened *inside* the comment and came out as a
+          sliver. Fixed coordinates off the button keep it beside the button
+          while belonging to nobody's overflow. */}
+      {open && (
+        <Portal>
+          <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
+          <div role="menu" className="fixed flex gap-0.5 p-1 rounded-lg"
+            style={{
+              top: pos.top, left: pos.left, zIndex: 9999,
+              background: "color-mix(in srgb, var(--bg2) 97%, black)",
+              border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+              boxShadow: "0 24px 60px -18px rgba(0,0,0,.7)",
+              backdropFilter: "blur(18px)",
+            }}>
             {REACTION_EMOJI.map((e) => {
               const mine = has.find((r) => r.content === e.content)?.viewerHasReacted ?? false;
               return (
@@ -3164,8 +3229,8 @@ function Reactions({ nodeId, reactions, onReact }: {
               );
             })}
           </div>
-        )}
-      </div>
+        </Portal>
+      )}
     </div>
   );
 }
@@ -3430,18 +3495,23 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   busy: boolean;
 }) {
   const [newest, setNewest] = useState(false);
+  const [who, setWho] = useState<"all" | "human" | "bot">("all");
   const kb = Math.round(lanes.bots.reduce((n, c) => n + c.body.length, 0) / 1024);
   const reviewAuthors = new Set(lanes.humans.map((r) => r.author));
   const orphanThreads = d.threads.filter((t) => !reviewAuthors.has(t.comments[0]?.author ?? ""));
 
-  type Entry = { at: string; key: string; node: React.ReactNode; body: React.ReactNode };
+  /** Who said it, so the timeline can be narrowed to one kind of voice. An
+   *  `event` is nobody speaking — a push, a label — and belongs to neither
+   *  side, so it shows in the whole timeline and in no filtered view. */
+  type Lane = "human" | "bot" | "event";
+  type Entry = { at: string; key: string; lane: Lane; node: React.ReactNode; body: React.ReactNode };
   const entries: Entry[] = [];
 
   for (const [i, r] of lanes.humans.entries()) {
     const mine = d.threads.filter((t) => t.comments[0]?.author === r.author);
     const tone = r.state === "CHANGES_REQUESTED" ? "chg" : r.state === "APPROVED" ? "appr" : undefined;
     entries.push({
-      at: r.submittedAt, key: `r${i}`,
+      at: r.submittedAt, key: `r${i}`, lane: "human",
       node: <span style={{ color: tone === "chg" ? "var(--error)" : tone === "appr" ? "var(--success)" : "var(--text3)" }}>
         {r.state === "CHANGES_REQUESTED" ? "✕" : r.state === "APPROVED" ? "✓" : "💬"}</span>,
       body: (
@@ -3464,21 +3534,21 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const c of lanes.humanComments) {
     entries.push({
-      at: c.createdAt, key: `c${c.id}`, node: <span style={{ color: "var(--text3)" }}>💬</span>,
+      at: c.createdAt, key: `c${c.id}`, lane: "human", node: <span style={{ color: "var(--text3)" }}>💬</span>,
       body: <Card who={c.author} when={ago(c.createdAt)} url={c.url}
         edited={c.editedAt} assoc={c.association} nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}><Md body={c.body} /></Card>,
     });
   }
   for (const t of orphanThreads) {
     entries.push({
-      at: t.comments[0]?.createdAt ?? "", key: `t${t.id}`,
+      at: t.comments[0]?.createdAt ?? "", key: `t${t.id}`, lane: "human",
       node: <span style={{ color: t.isResolved ? "var(--success)" : "var(--warning)" }}>{t.isResolved ? "✓" : "○"}</span>,
       body: <Thread t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />,
     });
   }
   for (const [i, r] of lanes.botReviews.entries()) {
     entries.push({
-      at: r.submittedAt, key: `br${i}`, node: <span style={{ color: "var(--info)" }}>⌬</span>,
+      at: r.submittedAt, key: `br${i}`, lane: "bot", node: <span style={{ color: "var(--info)" }}>⌬</span>,
       body: <Card who={r.author} when={ago(r.submittedAt)} url={r.url} tone="bot"
         nodeId={r.nodeId} reactions={r.reactions} onReact={onReact}
         chip={<Chip text="automation" tint="var(--info)" />}><Md body={r.body} /></Card>,
@@ -3486,12 +3556,18 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   }
   for (const c of lanes.bots) {
     entries.push({
-      at: c.createdAt, key: `b${c.id}`, node: <span style={{ color: "var(--info)" }}>⌬</span>,
+      at: c.createdAt, key: `b${c.id}`, lane: "bot", node: <span style={{ color: "var(--info)" }}>⌬</span>,
       body: (
         <Card who={c.author} when={ago(c.createdAt)} url={c.url} tone="bot" chip={<Chip text="automation" tint="var(--info)" />}
           nodeId={c.nodeId} reactions={c.reactions} onReact={onReact}>
+          {/* Rendered, not dumped. In full these used to be a <pre> of the raw
+              source, so a coverage report arrived as `<!-- Pytest Coverage
+              Comment -->` and a wall of pipe characters — the one shape of
+              comment that most needs a table to be a table. It goes through the
+              same Md as everything else: the table renders, the <details> folds,
+              and the shields.io badge becomes a pill instead of a broken image. */}
           {raw
-            ? <pre className="overflow-x-auto text-[10px] max-h-72 agx-scroll" style={{ ...CODE_FONT_STYLE, color: "var(--text3)" }}>{c.body}</pre>
+            ? <Md body={c.body} />
             : <span style={{ color: "var(--text2)" }}>{c.digest || "(Nothing worth pulling out)"}</span>}
         </Card>
       ),
@@ -3503,13 +3579,20 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
   // — the force-push that invalidated a review simply is not there.
   for (const [i, e] of d.timeline.entries()) {
     entries.push({
-      at: e.at, key: `e${i}`,
+      at: e.at, key: `e${i}`, lane: "event",
       node: <span style={{ color: EVENT_TINT[e.kind] ?? "var(--text3)" }}>{EVENT_GLYPH[e.kind] ?? "•"}</span>,
       body: <TimelineEvent e={e} />,
     });
   }
 
   entries.sort((a, b) => (newest ? b.at.localeCompare(a.at) : a.at.localeCompare(b.at)));
+
+  // Events are not remarks, so they are not counted — Humans plus Bots adds up
+  // to All, which is the sum a reader checks. They still show in the whole
+  // timeline, where the push that invalidated a review is part of the story.
+  const humanCount = entries.filter((e) => e.lane === "human").length;
+  const botCount = entries.filter((e) => e.lane === "bot").length;
+  const shown = who === "all" ? entries : entries.filter((e) => e.lane === who);
 
   /* The events between the comments. GitHub has no timestamp on either of these
      — "opened" is not on the detail payload and a force-push is a boolean —
@@ -3559,10 +3642,32 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
         <Btn small onClick={() => setNewest(false)} primary={!newest}>Oldest</Btn>
         <Btn small onClick={() => setNewest(true)} primary={newest}>Newest</Btn>
       </div>
+      {/* Whose remarks. On a real pull request the machines outnumber the people
+          two to one, and the review that blocks the merge is somewhere under
+          forty coverage reports — "Humans" is the whole reason this tab is
+          readable. Counts are on the buttons because an empty result should be
+          predictable before it is clicked, not a surprise after — and a
+          "Humans 0" is the most useful thing this row can say, so it shows
+          wherever there is automation at all rather than only where both sides
+          spoke. */}
+      {botCount > 0 && (
+        <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+          {([["all", "All", humanCount + botCount], ["human", "Humans", humanCount], ["bot", "Bots", botCount]] as const).map(([id, label, n]) => (
+            <button key={id} onClick={() => setWho(id)}
+              className="agx-btn flex-1 text-[10.5px] py-1.5 flex items-center justify-center gap-1.5"
+              style={{
+                color: who === id ? "var(--text)" : "var(--text3)",
+                background: who === id ? "color-mix(in srgb, var(--border) 30%, transparent)" : "transparent",
+              }}>
+              {label}<span className="tabular-nums opacity-70">{n}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="agx-tl">
         {!newest && opened}
         {newest && forced}
-        {entries.map((e) => (
+        {shown.map((e) => (
           <div key={e.key} className="agx-ev">
             <span className="agx-node">{e.node}</span>
             {e.body}

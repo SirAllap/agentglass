@@ -91,7 +91,12 @@ function themeFromCss() {
     ...ansi,
   };
 }
-const TERM_FONT = '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", Menlo, Monaco, "Roboto Mono", Consolas, "Liberation Mono", monospace';
+/* Same order as the rest of the app, so the terminal and the panel around it
+   are not set in two different faces. The Nerd Font stays in the list — behind
+   the stock monospaces rather than in front of them — because prompts and agent
+   CLIs print powerline and icon codepoints no stock monospace carries, and
+   per-glyph fallback picks it up for exactly those and nothing else. */
+const TERM_FONT = '"SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Monaco, Consolas, "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace';
 
 
 // --- persistent per-repo shell sessions (outlive the panel) ------------------

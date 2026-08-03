@@ -16,7 +16,7 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 
 const HATCH = "repeating-linear-gradient(45deg, transparent, transparent 5px, color-mix(in srgb, var(--border) 10%, transparent) 5px, color-mix(in srgb, var(--border) 10%, transparent) 6px)";
 // Typical diff/coding font stack (honors an app --font-mono override if set).
-const DIFF_FONT = 'var(--font-mono, "JetBrainsMono Nerd Font Mono"), "JetBrainsMono Nerd Font", "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", "Menlo", "Monaco", "Roboto Mono", "Consolas", "Liberation Mono", monospace';
+const DIFF_FONT = 'var(--font-mono, "SF Mono"), SFMono-Regular, ui-monospace, "Cascadia Code", "Menlo", "Monaco", "Consolas", "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace';
 // Diff font + programming ligatures (== -> => etc.) — JetBrains Mono & friends.
 export const CODE_FONT_STYLE = { fontFamily: DIFF_FONT, fontFeatureSettings: '"calt" 1, "liga" 1' } as const;
 // Confine text selection to the side the drag started on (split view) so

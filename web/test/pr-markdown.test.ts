@@ -297,3 +297,110 @@ describe("which viewer a changed file needs", () => {
     expect(diffKind("src/png-encoder.ts", 0)).toBe("none");
   });
 });
+
+// A CI comment is the shape markdown rendering actually has to survive: the
+// body is machine-written, the fold carries the only content anyone wants, and
+// the markers the bot uses to find its own comment later are not for reading.
+describe("a coverage bot's comment", () => {
+  // What github-actions' pytest-coverage-comment really emits: a marker, then
+  // badge and fold pressed onto one line.
+  const BOT = [
+    "<!-- Pytest Coverage Comment: vaptt-unit-tests | vaptt -->",
+    '<a href="https://github.com/acme/orbit/blob/abc/README.md"><img alt="Coverage" src="https://img.shields.io/badge/Coverage-75%25-yellow.svg"></a><details><summary>Coverage (vaptt)</summary>',
+    "",
+    "| File | Stmts |",
+    "| --- | --- |",
+    "| models.py | 188 |",
+    "",
+    "</details>",
+    "<!-- Sticky Pull Request Commentpatch-coverage-vaptt -->",
+  ].join("\n");
+
+  test("the machine markers do not reach the screen", () => {
+    const html = JSON.stringify(parseBody(BOT));
+    expect(html).not.toContain("Pytest Coverage Comment");
+    expect(html).not.toContain("Sticky Pull Request");
+  });
+
+  test("a fold pressed onto the end of another line is still a fold", () => {
+    const blocks = parseBody(BOT);
+    const det = blocks.find((b) => b.kind === "details");
+    expect(det).toBeDefined();
+    expect((det as Extract<MdBlock, { kind: "details" }>).summary).toBe("Coverage (vaptt)");
+  });
+
+  test("the badge on that same line survives it", () => {
+    const img = parseBody(BOT).find((b) => b.kind === "image");
+    expect(img).toBeDefined();
+    expect((img as Extract<MdBlock, { kind: "image" }>).src).toContain("img.shields.io");
+  });
+
+  test("the table inside the fold is a table, not a row of pipes", () => {
+    const det = parseBody(BOT).find((b) => b.kind === "details") as Extract<MdBlock, { kind: "details" }>;
+    const table = det.blocks.find((b) => b.kind === "table");
+    expect(table).toBeDefined();
+    expect((table as Extract<MdBlock, { kind: "table" }>).head).toEqual(["File", "Stmts"]);
+  });
+
+  test("a comment that is part of a sentence is left alone", () => {
+    // Only whole-line comments are noise; this one is someone showing syntax.
+    const blocks = parseBody("Write <!-- like this --> to hide a note");
+    expect(JSON.stringify(blocks)).toContain("like this");
+  });
+});
+
+// The coverage bots write their table as HTML, on one line, inside the fold —
+// so it never met the pipe-table rule and arrived on screen as its own source.
+describe("an HTML table from a bot", () => {
+  const T = '<table><tr><th>File</th><th>Stmts</th><th>Cover</th></tr><tbody>'
+    + '<tr><td><a href="https://github.com/acme/orbit/blob/abc/constants.py">constants.py</a></td><td>17</td><td>100%</td></tr>'
+    + '<tr><td><b>TOTAL</b></td><td><b>2471</b></td><td><b>75%</b></td></tr>'
+    + '</tbody></table>';
+
+  test("it becomes a table block, not a paragraph of tags", () => {
+    const t = parseBody(T).find((b) => b.kind === "table") as Extract<MdBlock, { kind: "table" }>;
+    expect(t).toBeDefined();
+    expect(t.head).toEqual(["File", "Stmts", "Cover"]);
+    expect(t.rows).toHaveLength(2);
+  });
+
+  test("a link in a cell stays a link", () => {
+    const t = parseBody(T).find((b) => b.kind === "table") as Extract<MdBlock, { kind: "table" }>;
+    expect(t.rows[0]![0]).toContain("constants.py");
+    expect(t.rows[0]![0]).toContain("<a href=");
+  });
+
+  test("bold in a cell stays bold", () => {
+    const t = parseBody(T).find((b) => b.kind === "table") as Extract<MdBlock, { kind: "table" }>;
+    expect(t.rows[1]![0]).toContain("<strong>TOTAL</strong>");
+  });
+
+  test("a cell cannot smuggle markup in", () => {
+    // The cells are rendered with dangerouslySetInnerHTML, so this is the one
+    // that matters: everything goes through renderInline, which escapes first.
+    const t = parseBody('<table><tr><td><img src=x onerror="alert(1)"></td></tr></table>')
+      .find((b) => b.kind === "table") as Extract<MdBlock, { kind: "table" }>;
+    expect(JSON.stringify(t)).not.toContain("onerror");
+    expect(JSON.stringify(t)).not.toContain("<img");
+  });
+
+  test("a javascript: href in a cell becomes text, never an anchor", () => {
+    const t = parseBody('<table><tr><td><a href="javascript:alert(1)">x</a></td></tr></table>')
+      .find((b) => b.kind === "table") as Extract<MdBlock, { kind: "table" }>;
+    expect(JSON.stringify(t)).not.toContain("<a href");
+    expect(JSON.stringify(t)).not.toContain("javascript:");
+    expect(t.head).toEqual(["x"]);
+  });
+
+  test("a table with no <th> promotes its first row rather than losing it", () => {
+    const t = parseBody("<table><tr><td>a</td><td>b</td></tr><tr><td>1</td><td>2</td></tr></table>")
+      .find((b) => b.kind === "table") as Extract<MdBlock, { kind: "table" }>;
+    expect(t.head).toEqual(["a", "b"]);
+    expect(t.rows).toEqual([["1", "2"]]);
+  });
+
+  test("text after </table> is not swallowed", () => {
+    const blocks = parseBody("<table><tr><td>a</td></tr></table>trailing words");
+    expect(JSON.stringify(blocks)).toContain("trailing words");
+  });
+});
