@@ -542,7 +542,7 @@ function ImageDiff({ root, number, path, status }: {
   }, [root, number, path, status]);
 
   if (err) return <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>{err}</div>;
-  if (!sides) return <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the image…</div>;
+  if (!sides) return <Loading label="Loading the image…" size={18} />;
   const pane = (label: string, src?: string, tint?: string) => (
     <div className="flex-1 min-w-0 p-3 flex flex-col gap-1.5 items-start">
       <span className="text-[9.5px] uppercase tracking-wider" style={{ color: tint ?? "var(--text3)" }}>{label}</span>
@@ -600,6 +600,36 @@ function DiffPane({ file, split, wrap, onPick, sel, expand, rowAfter, permalink 
  *  A spinner says "wait"; these say "a list is coming, roughly this shape",
  *  which is the difference between a pane that feels slow and one that feels
  *  broken. `prefers-reduced-motion` drops the shimmer, not the placeholder. */
+/**
+ * Waiting, said properly.
+ *
+ * A line of text in the top-left corner of an otherwise empty pane does not
+ * read as "working" — it reads as the whole answer, and a wrong-looking one.
+ * A spinner in the middle of the space it is going to fill says where the
+ * content will be and that something is still happening.
+ *
+ * Reduced motion gets a pulse rather than nothing: a ring that has stopped
+ * turning reads as a spinner that has hung, which is the opposite of the
+ * message.
+ */
+const LOADING_CSS = `
+@keyframes agxspin{to{transform:rotate(360deg)}}
+@keyframes agxbreathe{0%,100%{opacity:.3}50%{opacity:.85}}
+.agx-spin{border-radius:50%;border:2px solid color-mix(in srgb,var(--border) 55%,transparent);border-top-color:var(--primary);animation:agxspin .7s linear infinite}
+@media (prefers-reduced-motion:reduce){.agx-spin{animation:agxbreathe 1.6s ease-in-out infinite}}
+`;
+
+function Loading({ label, fill, size = 22 }: { label: string; fill?: boolean; size?: number }) {
+  return (
+    <div role="status" aria-live="polite"
+      className={`flex flex-col items-center justify-center gap-2.5 ${fill ? "flex-1 min-h-0 self-stretch" : "w-full py-6"}`}
+      style={{ color: "var(--text3)" }}>
+      <span className="agx-spin shrink-0" style={{ width: size, height: size }} />
+      <span className="text-[10.5px]">{label}</span>
+    </div>
+  );
+}
+
 function Skeletons({ n = 6 }: { n?: number }) {
   return (
     <div aria-hidden>
@@ -1525,7 +1555,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
     <RepoCtx.Provider value={repo?.nameWithOwner}>
     <MentionCtx.Provider value={mentions}>
     <div className="flex flex-col h-full min-h-0">
-      <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}{PR_ROW_CSS}</style>
+      <style>{SCROLLBAR_CSS}{LINEBTN_CSS}{MD_CSS}{PR_ROW_CSS}{LOADING_CSS}</style>
 
       <div className={viewHeaderClass} style={viewHeaderStyle}>
         <span className={viewTitleClass} style={{ color: "var(--text)" }}>Pull Requests</span>
@@ -1691,9 +1721,11 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
             {selected != null && <span className="tabular-nums" style={{ color: "var(--text2)" }}>· #{selected}</span>}
           </button>
           {!d ? (
-            <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>
-              {detailErr || `Loading #${selected}…`}
-            </div>
+            // An error is a message and belongs at the top where messages go; a
+            // wait belongs in the middle of the space it is about to fill.
+            detailErr
+              ? <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{detailErr}</div>
+              : <Loading label={`Loading #${selected}…`} fill />
           ) : (
             <>
               {/* `onLocalReview` is wrapped rather than passed by reference:
@@ -1825,7 +1857,7 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
                               </button>
                               {selCommit === c.oid && (
                                 <div className="my-2">
-                                  {commitBusy ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>Loading the diff…</div>
+                                  {commitBusy ? <Loading label="Loading the diff…" size={18} />
                                     : commitFiles.length === 0 ? <div className="text-[10.5px] p-2" style={{ color: "var(--text3)" }}>This commit changed nothing textual</div>
                                     : <FileStack files={commitFiles} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap} />}
                                 </div>
@@ -3037,7 +3069,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                       the image put every PNG down the text path and rendered an
                       empty diff pane, which is why the image viewer never
                       appeared at all. */}
-                  {!loaded ? <div className="p-3 text-[10.5px]" style={{ color: "var(--text3)" }}>Loading the diff…</div>
+                  {!loaded ? <Loading label="Loading the diff…" size={18} />
                     : diffKind(f.path, change?.hunks.length ?? 0) === "image"
                       ? <ImageDiff root={root} number={d.number} path={f.path} status={f.status} />
                     : change?.hunks.length ? (
