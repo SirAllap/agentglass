@@ -476,6 +476,10 @@ const BROWSER_PARTITION = "persist:agentglass-browser";
  *  no build step and could not import that module anyway. */
 function safeGuestUrl(src) {
   if (typeof src !== "string" || !src) return null;
+  // The empty page. It is what "leave the home page blank" means, it carries no
+  // content and no origin, and refusing it would make that setting a guest that
+  // never attaches.
+  if (src === "about:blank") return src;
   try {
     const u = new URL(src);
     if (u.protocol !== "http:" && u.protocol !== "https:") return null;
