@@ -336,7 +336,7 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
                   <div key={ri} className="contents">
                     <div data-side="l" className="text-right pr-1.5 tabular-nums select-none" style={{ background: row.l ? cellBg(row.l.kind) : HATCH }}><span className="opacity-40">{row.l?.num ?? ""}</span></div>
                     <div data-side="l" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.l ? cellBg(row.l.kind) : HATCH, color: cellFg(row.l?.kind) }}>{row.l ? <Code text={row.l.text} segs={row.l.segs} kind={row.l.kind} /> : ""}</div>
-                    <div data-side="r" className="text-right pr-1.5 tabular-nums select-none border-l" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }}><span className="opacity-40">{row.r?.num ?? ""}</span></div>
+                    <div data-side="r" className="text-right pr-1.5 tabular-nums select-none border-l" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}><span className="opacity-40">{row.r?.num ?? ""}</span></div>
                     <div data-side="r" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, color: cellFg(row.r?.kind) }}>{row.r ? <Code text={row.r.text} segs={row.r.segs} kind={row.r.kind} /> : ""}</div>
                     {after && <div style={{ gridColumn: "1 / -1" }}>{after}</div>}
                   </div>
@@ -355,7 +355,7 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
       <div ref={leftRef} data-side="l" className="agx-scroll flex-1 min-w-0" style={{ overflowX: "auto", overflowY: "hidden" }} onWheel={onLeftWheel}>
         {side("l")}
       </div>
-      <div ref={rightRef} data-side="r" data-vscroll className="agx-scroll flex-1 min-w-0 border-l" style={{ overflow: "auto", borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }} onScroll={syncTop}>
+      <div ref={rightRef} data-side="r" data-vscroll className="agx-scroll flex-1 min-w-0 border-l" style={{ overflow: "auto", borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }} onScroll={syncTop}>
         {side("r")}
       </div>
     </div>
@@ -632,7 +632,7 @@ export function ThemePicker({ value, onChange, error }: { value: string; onChang
       {open && (
         <div
           className="agx-scroll absolute right-0 mt-1 rounded-lg py-1 text-[10.5px] shadow-2xl"
-          style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
+          style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
         >
           <Row id="auto" name="Auto (app theme)" />
           <div className="px-2.5 pt-1.5 pb-0.5 text-[8.5px] uppercase tracking-wider t-dim2">Dark</div>
@@ -944,7 +944,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         onClick={onBack}
                         title={backLabel || "Back"}
                         className="text-[11px] px-2.5 py-1 rounded-lg transition-colors"
-                        style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                        style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
                       >← {backLabel || "Back"}</button>
                     )}
                     {changes && all.length > 0 && (
@@ -971,7 +971,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                 </div>
 
                 {(walk?.reviewFocus || walk?.error) && (
-                  <div className="px-5 py-1.5 border-b shrink-0 text-[11px]" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--info) 6%, transparent)" }}>
+                  <div className="px-5 py-1.5 border-b shrink-0 text-[11px]" style={{ borderColor: "color-mix(in srgb, var(--text) 16%, transparent)", background: "color-mix(in srgb, var(--info) 6%, transparent)" }}>
                     {walk?.reviewFocus ? (
                       <><span className="t-dim2 uppercase tracking-wide text-[9px] mr-2">Review focus</span><span style={{ color: "var(--text)" }}>{walk.reviewFocus}</span></>
                     ) : (
@@ -994,7 +994,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         value={q} onChange={(e) => setQ(e.target.value)}
                         placeholder="Filter by file path…"
                         className="w-full px-3 py-1.5 rounded-lg text-[11px] outline-none"
-                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text)" }}
                       />
                       {/* One row, one height. `flex-wrap` rather than letting a
                           chip grow: on a narrow panel the row wraps as a row,
@@ -1085,7 +1085,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                   <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                     {selected ? (
                       <>
-                        <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                        <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}>
                           <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={selected.file_path}>{selected.file_path}</span>
                           <span className="shrink-0 text-[10.5px] tabular-nums flex items-center gap-1.5">
                             {selected.additions > 0 && <span style={{ color: "var(--success)" }}>+{selected.additions}</span>}
@@ -1104,7 +1104,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         <div ref={paneRef} className="flex-1 min-h-0 flex relative" style={{ background: "var(--bg)" }}>
                           <HiliteCtx.Provider value={selected.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000 ? { ...hilite, theme: null } : hilite}>{split ? <SplitDiff c={selected} wrap={wrap} /> : <UnifiedDiff c={selected} wrap={wrap} />}</HiliteCtx.Provider>
                         </div>
-                        <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                        <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}>
                           <span><b className="font-semibold">j/k</b> file</span>
                           <span><b className="font-semibold">n/p</b> hunk</span>
                           <span><b className="font-semibold">x</b> reviewed</span>
@@ -1140,7 +1140,7 @@ export function ChangesModal({ open, onClose, ...rest }: Omit<DiffViewProps, "ac
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
                 className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 <DiffView active={open} onClose={onClose} {...rest} />
               </motion.div>

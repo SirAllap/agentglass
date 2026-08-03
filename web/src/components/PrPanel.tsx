@@ -201,7 +201,7 @@ export const MD_CSS = `
 .agx-tl::before{content:"";position:absolute;left:9px;top:6px;bottom:6px;width:2px;border-radius:2px;background:color-mix(in srgb,var(--border) 42%,transparent)}
 .agx-ev{position:relative;margin-bottom:10px}
 .agx-ev:last-child{margin-bottom:0}
-.agx-node{position:absolute;left:-26px;top:6px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid color-mix(in srgb,var(--border) 50%,transparent)}
+.agx-node{position:absolute;left:-26px;top:6px;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:9px;background:var(--bg);border:2px solid color-mix(in srgb,var(--text) 24%,transparent)}
 /* A small event — opened, force-pushed, review requested. It sits on the same
    rail as the comments but weighs a fraction of one, because it is context
    rather than something anybody said. */
@@ -213,7 +213,7 @@ export const MD_CSS = `
 .agx-mi:hover{background:color-mix(in srgb,var(--primary) 12%,transparent);color:var(--text)}
 .agx-mi:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
 /* the "＋" that adds a reviewer or a label, inline with the values it extends */
-.agx-inline-add{font-size:10px;padding:1px 6px;border-radius:5px;color:var(--text3);border:1px solid color-mix(in srgb,var(--border) 50%,transparent);transition:color .13s,border-color .13s,background .13s}
+.agx-inline-add{font-size:10px;padding:1px 6px;border-radius:5px;color:var(--text3);border:1px solid color-mix(in srgb,var(--text) 24%,transparent);transition:color .13s,border-color .13s,background .13s}
 .agx-inline-add:hover:not(:disabled){color:var(--primary);border-color:var(--primary);background:color-mix(in srgb,var(--primary) 10%,transparent)}
 .agx-inline-add:disabled{opacity:.4;cursor:not-allowed}
 /* the viewed switch on a file header — a checkbox does not read as a state you
@@ -222,7 +222,7 @@ export const MD_CSS = `
 .agx-sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--text3);transition:transform .17s,background .17s}
 .agx-sw[data-on="1"]{background:color-mix(in srgb,var(--success) 55%,transparent)}
 .agx-sw[data-on="1"]::after{transform:translateX(10px);background:var(--success)}
-.agx-hl pre{margin:0;padding:10px 12px;border-radius:8px;overflow-x:auto;background:color-mix(in srgb,#000 42%,transparent) !important;border:1px solid color-mix(in srgb,var(--border) 30%,transparent)}
+.agx-hl pre{margin:0;padding:10px 12px;border-radius:8px;overflow-x:auto;background:color-mix(in srgb,#000 42%,transparent) !important;border:1px solid color-mix(in srgb,var(--text) 16%,transparent)}
 .agx-hl code{font-size:11.5px;line-height:1.65}
 .agx-md .agx-hl{margin:0 0 .85em}
 /* The body reads in the theme's brightest text, not a step below it. A pull
@@ -235,8 +235,8 @@ export const MD_CSS = `
 .agx-md>*:last-child{margin-bottom:0}
 .agx-md p{margin:0 0 .85em}
 .agx-md h1,.agx-md h2,.agx-md h3,.agx-md h4,.agx-md h5,.agx-md h6{color:var(--text);font-weight:600;line-height:1.3;margin:1.5em 0 .5em}
-.agx-md h1{font-size:1.45em;padding-bottom:.25em;border-bottom:1px solid color-mix(in srgb,var(--border) 35%,transparent)}
-.agx-md h2{font-size:1.25em;padding-bottom:.25em;border-bottom:1px solid color-mix(in srgb,var(--border) 28%,transparent)}
+.agx-md h1{font-size:1.45em;padding-bottom:.25em;border-bottom:1px solid color-mix(in srgb,var(--text) 16%,transparent)}
+.agx-md h2{font-size:1.25em;padding-bottom:.25em;border-bottom:1px solid color-mix(in srgb,var(--text) 16%,transparent)}
 .agx-md h3{font-size:1.1em}
 .agx-md h4,.agx-md h5,.agx-md h6{font-size:1em;color:var(--text2)}
 .agx-md a{color:var(--primary);text-underline-offset:2px}
@@ -250,7 +250,7 @@ export const MD_CSS = `
    away from the background, whichever direction the theme runs, so this is a
    step on a dark theme and a step on a light one without a second rule. */
 .agx-md code{font-family:var(--diff-font,ui-monospace,monospace);font-size:.88em;background:color-mix(in srgb,var(--text) 13%,transparent);border:1px solid color-mix(in srgb,var(--text) 12%,transparent);padding:.1em .4em;border-radius:5px;color:var(--text)}
-.agx-md pre{background:var(--bg);border:1px solid color-mix(in srgb,var(--border) 40%,transparent);border-radius:6px;padding:.7em .9em;overflow-x:auto;margin:0 0 .9em}
+.agx-md pre{background:var(--bg);border:1px solid color-mix(in srgb,var(--text) 16%,transparent);border-radius:6px;padding:.7em .9em;overflow-x:auto;margin:0 0 .9em}
 .agx-md pre code{background:none;border:0;padding:0;font-size:.92em;line-height:1.55;color:var(--text)}
 .agx-md blockquote{margin:0 0 .9em;padding:.15em 0 .15em .9em;border-left:3px solid color-mix(in srgb,var(--primary) 45%,transparent);color:var(--text2)}
 .agx-md ul,.agx-md ol{margin:0 0 .85em;padding-left:1.5em}
@@ -258,18 +258,18 @@ export const MD_CSS = `
 .agx-md li::marker{color:var(--primary)}
 .agx-md .agx-task{list-style:none;padding-left:0}
 .agx-md .agx-task li{display:flex;gap:.55em;align-items:flex-start}
-.agx-md .agx-box{flex:none;width:13px;height:13px;margin-top:.28em;border-radius:3px;border:1px solid color-mix(in srgb,var(--border) 70%,transparent);display:inline-flex;align-items:center;justify-content:center;font-size:9px;line-height:1}
+.agx-md .agx-box{flex:none;width:13px;height:13px;margin-top:.28em;border-radius:3px;border:1px solid color-mix(in srgb,var(--text) 24%,transparent);display:inline-flex;align-items:center;justify-content:center;font-size:9px;line-height:1}
 .agx-md .agx-box[data-on="1"]{background:var(--primary);border-color:var(--primary);color:var(--bg)}
 /* A grid of boxes is how a spreadsheet looks, not how a table reads. Rules
    between rows only, a banded head, and one rounded edge around the whole
    thing — the shape GitHub settled on, and the one a coverage report needs to
    be scannable down a column. */
-.agx-md .agx-tw{overflow-x:auto;margin:0 0 .9em;max-width:100%;border:1px solid color-mix(in srgb,var(--border) 38%,transparent);border-radius:8px}
+.agx-md .agx-tw{overflow-x:auto;margin:0 0 .9em;max-width:100%;border:1px solid color-mix(in srgb,var(--text) 16%,transparent);border-radius:8px}
 .agx-md table{border-collapse:collapse;font-size:.95em;width:100%}
-.agx-md th{text-align:left;padding:.55em .9em;background:color-mix(in srgb,var(--border) 22%,transparent);color:var(--text);font-weight:600;border:0;border-bottom:1px solid color-mix(in srgb,var(--border) 38%,transparent);white-space:nowrap}
-.agx-md td{padding:.5em .9em;border:0;border-bottom:1px solid color-mix(in srgb,var(--border) 22%,transparent);vertical-align:top;color:var(--text)}
+.agx-md th{text-align:left;padding:.55em .9em;background:color-mix(in srgb,var(--border) 22%,transparent);color:var(--text);font-weight:600;border:0;border-bottom:1px solid color-mix(in srgb,var(--text) 16%,transparent);white-space:nowrap}
+.agx-md td{padding:.5em .9em;border:0;border-bottom:1px solid color-mix(in srgb,var(--text) 11%,transparent);vertical-align:top;color:var(--text)}
 .agx-md tbody tr:last-child td{border-bottom:0}
-.agx-md .agx-details{margin:0 0 .9em;border:1px solid color-mix(in srgb,var(--border) 40%,transparent);border-radius:6px;padding:.5em .8em;background:color-mix(in srgb,var(--border) 8%,transparent)}
+.agx-md .agx-details{margin:0 0 .9em;border:1px solid color-mix(in srgb,var(--text) 16%,transparent);border-radius:6px;padding:.5em .8em;background:color-mix(in srgb,var(--border) 8%,transparent)}
 .agx-md .agx-details>summary{cursor:pointer;color:var(--text);font-weight:600;list-style:revert}
 .agx-md .agx-details>div{margin-top:.7em}
 .agx-md .agx-suggestion{margin:0 0 .9em;border:1px solid color-mix(in srgb,var(--success) 45%,transparent);border-radius:6px;overflow:hidden}
@@ -279,9 +279,9 @@ export const MD_CSS = `
 .agx-md .agx-suggestion pre{margin:0;border:0;border-radius:0;background:color-mix(in srgb,var(--success) 6%,transparent)}
 .agx-md .agx-alert{margin:0 0 .9em;padding:.6em .9em;border-left:3px solid;border-radius:0 6px 6px 0;display:flex;flex-direction:column;gap:.3em}
 .agx-md .agx-alert>b{font-size:.82em;letter-spacing:.06em}
-.agx-md hr{border:0;border-top:1px solid color-mix(in srgb,var(--border) 40%,transparent);margin:1.2em 0}
+.agx-md hr{border:0;border-top:1px solid color-mix(in srgb,var(--text) 16%,transparent);margin:1.2em 0}
 .agx-md figure{margin:0 0 .9em}
-.agx-md figure img{max-width:100%;border-radius:6px;border:1px solid color-mix(in srgb,var(--border) 40%,transparent);display:block}
+.agx-md figure img{max-width:100%;border-radius:6px;border:1px solid color-mix(in srgb,var(--text) 16%,transparent);display:block}
 .agx-md figcaption{font-size:.85em;color:var(--text3);margin-top:.35em}
 `;
 
@@ -571,7 +571,7 @@ function ImageDiff({ root, number, path, status }: {
     <div className="flex-1 min-w-0 p-3 flex flex-col gap-1.5 items-start">
       <span className="text-[9.5px] uppercase tracking-wider" style={{ color: tint ?? "var(--text3)" }}>{label}</span>
       {src
-        ? <img src={src} alt="" className="max-w-full rounded" style={{ maxHeight: 320, border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", background: "repeating-conic-gradient(color-mix(in srgb, var(--border) 22%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px" }} />
+        ? <img src={src} alt="" className="max-w-full rounded" style={{ maxHeight: 320, border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "repeating-conic-gradient(color-mix(in srgb, var(--border) 22%, transparent) 0% 25%, transparent 0% 50%) 50% / 16px 16px" }} />
         : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>—</span>}
     </div>
   );
@@ -639,7 +639,7 @@ function DiffPane({ file, split, wrap, onPick, sel, expand, rowAfter, permalink 
 const LOADING_CSS = `
 @keyframes agxspin{to{transform:rotate(360deg)}}
 @keyframes agxbreathe{0%,100%{opacity:.3}50%{opacity:.85}}
-.agx-spin{border-radius:50%;border:2px solid color-mix(in srgb,var(--border) 55%,transparent);border-top-color:var(--primary);animation:agxspin .7s linear infinite}
+.agx-spin{border-radius:50%;border:2px solid color-mix(in srgb,var(--text) 24%,transparent);border-top-color:var(--primary);animation:agxspin .7s linear infinite}
 @media (prefers-reduced-motion:reduce){.agx-spin{animation:agxbreathe 1.6s ease-in-out infinite}}
 `;
 
@@ -660,7 +660,7 @@ function Skeletons({ n = 6 }: { n?: number }) {
       <style>{`@keyframes agxpulse{0%,100%{opacity:.35}50%{opacity:.7}}
 @media (prefers-reduced-motion:reduce){.agx-sk{animation:none!important}}`}</style>
       {Array.from({ length: n }, (_, i) => (
-        <div key={i} className="px-2.5 py-2 border-b" style={{ borderColor: "color-mix(in srgb, var(--border) 22%, transparent)" }}>
+        <div key={i} className="px-2.5 py-2 border-b" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
           <div className="agx-sk rounded" style={{
             height: 8, width: `${58 + ((i * 13) % 34)}%`, background: "color-mix(in srgb, var(--border) 55%, transparent)",
             animation: `agxpulse 1.4s ease-in-out ${i * 0.09}s infinite`,
@@ -777,7 +777,7 @@ function PrTableHead() {
     <div className="grid items-center gap-3 px-3 py-1.5 border-b shrink-0 sticky top-0 z-10 select-none"
       style={{
         gridTemplateColumns: PR_GRID,
-        borderColor: "color-mix(in srgb, var(--border) 25%, transparent)",
+        borderColor: "color-mix(in srgb, var(--text) 11%, transparent)",
         // The workspace panel this lives in is painted --bg2; a sticky heading
         // in --bg would read as a band of the wrong colour sliding over the
         // rows rather than as the table's own header.
@@ -807,7 +807,7 @@ function PrRow({ p, active, onSelect, onReview }: {
       className="grid items-center gap-3 px-3 py-2 border-b cursor-pointer agx-prrow"
       style={{
         gridTemplateColumns: PR_GRID,
-        borderColor: "color-mix(in srgb, var(--border) 18%, transparent)",
+        borderColor: "color-mix(in srgb, var(--text) 11%, transparent)",
         boxShadow: active ? "inset 2px 0 0 var(--primary)" : undefined,
       }}>
       <span className="flex items-center gap-1 text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>
@@ -840,7 +840,7 @@ function PrRow({ p, active, onSelect, onReview }: {
       <button onClick={(e) => { e.stopPropagation(); onReview(); }}
         className="agx-btn text-[10px] px-2 py-1 rounded justify-self-end whitespace-nowrap"
         title="Hand this pull request to the chat for a local review"
-        style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text2)" }}>
+        style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>
         Review →
       </button>
     </div>
@@ -1682,7 +1682,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
       <div className="flex flex-1 min-h-0">
         {selected == null ? (
         <div className="flex flex-col min-h-0 flex-1 min-w-0">
-          <div className="flex gap-1 flex-wrap px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+          <div className="flex gap-1 flex-wrap px-2 py-1.5 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
             {VIEWS.map((v) => {
               const n = viewCount(v);
               const on = activeView?.id === v.id;
@@ -1702,11 +1702,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
             })}
             {!activeView && (
               <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0 self-center"
-                style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)" }}>Custom</span>
+                style={{ color: "var(--text3)", border: "1px dashed color-mix(in srgb, var(--text) 16%, transparent)" }}>Custom</span>
             )}
             {/* Open / Closed / All — the state axis. "Closed" holds merged +
                 closed, like GitHub's own Closed tab. */}
-            <div className="ml-auto flex rounded-full overflow-hidden shrink-0 self-center" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+            <div className="ml-auto flex rounded-full overflow-hidden shrink-0 self-center" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
               {STATES.map((s) => (
                 <button key={s.id} onClick={() => setStateSel(s.id)} title={`Show ${s.label.toLowerCase()} pull requests`}
                   className="agx-btn text-[10px] px-2 py-0.5"
@@ -1778,10 +1778,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
               to say so. Cursors only move forward, so Previous walks a stack. */}
           {repo && (listState.hasNext || pages.length > 0) && (
             <div className="flex items-center gap-2 px-2 py-1.5 border-t shrink-0 text-[10px]"
-              style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)", color: "var(--text3)" }}>
+              style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
               <button onClick={() => setPages((p) => p.slice(0, -1))} disabled={pages.length === 0 || listState.loading}
                 className="agx-btn px-2 py-0.5 rounded disabled:opacity-35"
-                style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text2)" }}>‹ Previous</button>
+                style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>‹ Previous</button>
               <span className="tabular-nums">
                 Page {pages.length + 1}
                 {listState.total != null && listState.pageSize
@@ -1791,7 +1791,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
               <button onClick={() => { if (listState.cursor) setPages((p) => [...p, listState.cursor!]); }}
                 disabled={!listState.hasNext || !listState.cursor || listState.loading}
                 className="agx-btn ml-auto px-2 py-0.5 rounded disabled:opacity-35"
-                style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text2)" }}>Next ›</button>
+                style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>Next ›</button>
             </div>
           )}
         </div>
@@ -1802,7 +1802,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
               app, not a tab. */}
           <button onClick={backToList}
             className="agx-btn flex items-center gap-1.5 px-3 py-1.5 border-b shrink-0 text-[10.5px] self-stretch justify-start"
-            style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)", color: "var(--text3)" }}>
+            style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)", color: "var(--text3)" }}>
             <span>‹</span>
             <span>Pull requests</span>
             {repo && <span style={{ color: "var(--text3)", opacity: .6 }}>· {repo.nameWithOwner}</span>}
@@ -1827,7 +1827,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                 condensed={condensed}
                 onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink}
               />
-              <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--border) 25%, transparent)" }}>
+              <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
                 {TABS.map((t) => (
                   <button key={t.id} onClick={() => setTab(t.id)} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
                     style={{
@@ -1902,9 +1902,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                         {/* Grouped by the day they landed, as GitHub does — a
                             long branch reads as a history rather than a list. */}
                         <div className="text-[10px] uppercase tracking-wider mb-1 pl-1" style={{ color: "var(--text3)" }}>{day}</div>
-                        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 24%, transparent)" }}>
+                        <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
                           {list.map((c, i) => (
-                            <div key={c.oid} style={i ? { borderTop: "1px solid color-mix(in srgb, var(--border) 16%, transparent)" } : undefined}>
+                            <div key={c.oid} style={i ? { borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" } : undefined}>
                               <button onClick={() => openCommit(selCommit === c.oid ? "" : c.oid)}
                                 className="agx-btn w-full text-left flex items-center gap-2 px-2.5 py-2"
                                 style={{
@@ -1925,7 +1925,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                                         title={openMsgs.has(c.oid) ? "Hide the full message" : "Show the full commit message"}
                                         aria-expanded={openMsgs.has(c.oid)}
                                         className="agx-btn ml-1.5 align-middle text-[10px] px-1.5 rounded leading-none"
-                                        style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>…</button>
+                                        style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>…</button>
                                     )}
                                   </span>
                                   {c.body?.trim() && openMsgs.has(c.oid) && (
@@ -2057,7 +2057,7 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
           not finished working it out" on a pull request that merged an hour ago.
           What is left is what GitHub leaves: what happened, and reopen. */}
       {d.state !== "OPEN" ? (
-        <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
           <div className="flex gap-2.5 items-start p-3">
             <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
               style={{ width: 26, height: 26, background: d.state === "MERGED" ? "var(--primary)" : "color-mix(in srgb, var(--text3) 60%, transparent)", color: "var(--bg)" }}>
@@ -2075,14 +2075,14 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
-            style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+            style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
             {d.state === "CLOSED" && <Btn onClick={onClose} disabled={busy} title="Put it back to open, with its comments and reviews intact">↺ Reopen</Btn>}
             <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
-              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open on GitHub ↗</a>
+              style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open on GitHub ↗</a>
           </div>
         </section>
       ) : (
-      <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
+      <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
         <div className="flex gap-2.5 items-start p-3">
           <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
             style={{ width: 26, height: 26, background: canMerge ? "var(--success)" : "var(--error)", color: "var(--bg)" }}>
@@ -2098,7 +2098,7 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
           </span>
         </div>
 
-        <div style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+        <div style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
           {d.reviewDecision === "CHANGES_REQUESTED" && (
             <Reason tint="var(--error)" glyph="✕"><b style={{ color: "var(--text)", fontWeight: 500 }}>Changes requested</b> by a reviewer with write access</Reason>
           )}
@@ -2116,7 +2116,7 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap px-3 py-2.5"
-          style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+          style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
           {/* All three methods GitHub offers, not just squash. Which one a repo
               wants is a real decision — a release branch is merged, a tidy
               feature is squashed — and hard-coding squash made the other two
@@ -2161,7 +2161,7 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
       <div className="flex gap-1.5 flex-wrap items-center">
         <Btn onClick={onLocalReview} disabled={busy} primary title="Open a chat with the review prompt ready. Reads only: no checkout, nothing written to this repository">Review with Claude</Btn>
         <a href={externalUrl(d.url)} target="_blank" rel="noreferrer noopener" className="text-[10.5px] px-2.5 py-1 rounded"
-          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open on GitHub ↗</a>
+          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open on GitHub ↗</a>
       </div>
 
       {/* Where to go next. Overview answers "can this land"; the conversation is
@@ -2206,8 +2206,8 @@ function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: 
 
   if (editing) {
     return (
-      <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
-        <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+      <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+        <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
           <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
           <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
         </div>
@@ -2225,7 +2225,7 @@ function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: 
           />
         )}
         <div className="flex items-center gap-1.5 px-2.5 py-2"
-          style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+          style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
           <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · ⌘↵ save · Esc cancel</span>
           <span className="ml-auto flex gap-1.5">
             <Btn onClick={() => { setText(d.body); setEditing(false); }} disabled={saving} small>Cancel</Btn>
@@ -2237,9 +2237,9 @@ function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: 
   }
 
   return (
-    <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
+    <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
       <div className="flex items-center gap-2 px-3 py-1.5"
-        style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>description</span>
         <span className="ml-auto"><Btn onClick={() => setEditing(true)} disabled={busy} small>✎ Edit</Btn></span>
       </div>
@@ -2327,7 +2327,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  */
 function SidebarSection({ title, onEdit, children }: { title: string; onEdit?: () => void; children: React.ReactNode }) {
   return (
-    <div className="py-2.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
+    <div className="py-2.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
       <div className="flex items-center gap-2 mb-1.5">
         <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>{title}</span>
         {onEdit && (
@@ -2360,7 +2360,7 @@ function PrSidebar({ d, onLabels, onReviewers, onAssignees, onMilestone }: {
   onLabels: () => void; onReviewers: () => void; onAssignees: () => void; onMilestone: () => void;
 }) {
   return (
-    <aside className="shrink-0 w-[248px] pl-4 hidden lg:block" style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
+    <aside className="shrink-0 w-[248px] pl-4 hidden lg:block" style={{ borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
       <SidebarSection title="Reviewers" onEdit={onReviewers}>
         <SidebarPeople people={d.reviewers} empty="No reviewers" />
       </SidebarSection>
@@ -2440,7 +2440,7 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
       .catch(() => { /* no clipboard permission */ });
   };
   return (
-    <div className="px-3 pt-2.5 pb-2 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+    <div className="px-3 pt-2.5 pb-2 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <span className="text-[9.5px] px-1.5 py-0.5 rounded-full align-middle inline-flex items-center gap-1"
@@ -2557,7 +2557,7 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
 function Reason({ tint, glyph, children, action }: { tint: string; glyph: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-[11.5px]"
-      style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}>
+      style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
       <span className="shrink-0 w-3.5 text-center" style={{ color: tint }}>{glyph}</span>
       <span className="min-w-0">{children}</span>
       {action && <span className="ml-auto shrink-0 text-[10px]">{action}</span>}
@@ -2575,7 +2575,7 @@ function DiffToolbar({ path, add, del, split, wrap, onSplit, onWrap, right }: {
 }) {
   return (
     <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px] shrink-0"
-      style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
+      style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 10%, transparent)" }}>
       {path && <span className="truncate" style={{ color: "var(--text)" }}>{path}</span>}
       {add != null && <span className="tabular-nums shrink-0" style={{ color: "var(--success)" }}>+{add}</span>}
       {del != null && <span className="tabular-nums shrink-0" style={{ color: "var(--error)" }}>−{del}</span>}
@@ -2596,7 +2596,7 @@ function FileStack({ files, split, wrap, onSplit, onWrap }: {
     <div className="flex flex-col gap-2">
       {files.map((f, i) => (
         <div key={f.file_path} className="rounded overflow-hidden flex flex-col"
-          style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", maxHeight: 520 }}>
+          style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", maxHeight: 520 }}>
           <DiffToolbar path={f.file_path} add={f.additions} del={f.deletions}
             split={split} wrap={wrap} onSplit={i === 0 ? onSplit : onSplit} onWrap={onWrap} />
           <div className="flex-1 min-h-0 flex">
@@ -2772,7 +2772,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
         <Portal>
           <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
           <div role="menu" className="fixed p-1.5 rounded-xl flex flex-col overflow-hidden text-[11px]"
-            style={{ top: pos.top, left: pos.left, minWidth: 216, maxHeight: "min(60vh, 420px)", zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)", boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
+            style={{ top: pos.top, left: pos.left, minWidth: 216, maxHeight: "min(60vh, 420px)", zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
             <div className="px-2 pt-1 pb-1 text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>File extensions</div>
             <div className="flex flex-col gap-0.5 overflow-y-auto agw-noscrollbar">
               {facets.map((f) => {
@@ -2789,7 +2789,7 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
             </div>
             <button role="menuitemcheckbox" aria-checked={showViewed} onClick={onToggleViewed}
               className="mt-1 px-2 py-1.5 rounded-lg text-left flex items-center gap-2 hover:bg-white/5"
-              style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+              style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
               <span aria-hidden className="shrink-0 grid place-items-center text-[9px]" style={box(showViewed)}>{showViewed ? "✓" : ""}</span>
               <span className="flex-1" style={{ color: "var(--text2)" }}>Viewed files</span>
               <span className="tabular-nums shrink-0 text-[10px]" style={{ color: "var(--text3)" }}>{viewedCount}</span>
@@ -3108,10 +3108,10 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
           12px the scroll container insets above it (its p-3) in the same tone,
           so nothing bleeds through while it is pinned. */}
       <div ref={barRef} className="flex flex-col gap-1 sticky top-0 z-30 -mx-3 px-3 py-2"
-        style={{ background: "var(--bg2)", boxShadow: "0 -12px 0 var(--bg2)", borderBottom: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+        style={{ background: "var(--bg2)", boxShadow: "0 -12px 0 var(--bg2)", borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="flex items-center gap-1.5 px-2 py-1 rounded shrink-0"
-          style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+          style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
           <span style={{ color: "var(--text3)" }}>⌕</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter files…"
             className="bg-transparent outline-none text-[10.5px] w-28" style={{ color: "var(--text2)" }} />
@@ -3149,7 +3149,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
       <div className="flex gap-3 items-start">
         {shownFiles.length > 4 && (
           <aside className="shrink-0 w-[190px] sticky top-[68px] z-10 max-h-[calc(100vh-160px)] overflow-y-auto agx-scroll hidden md:block pr-1"
-            style={{ borderRight: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
+            style={{ borderRight: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
             <FileTree
               node={buildFileTree(shownFiles)} sel={sel}
               onPick={(path) => { onSel(path); setFolded((cur) => { const n = new Set(cur); n.delete(path); return n; }); scrollToFileStable(() => frameRef.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)); }}
@@ -3332,7 +3332,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                                   // diff by a shadow the way every other
                                   // floating surface in this app is.
                                   background: "var(--bg2)",
-                                  border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+                                  border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
                                   boxShadow: "0 12px 30px -14px var(--shadow)",
                                 }}>
                                   {/* The line's own actions live here, beside the
@@ -3342,7 +3342,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                                       you, not before you have seen it. */}
                                   <div className="px-3 py-2 text-[11px] flex items-center gap-2" style={{
                                     background: "color-mix(in srgb, var(--border) 22%, transparent)",
-                                    borderBottom: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                                    borderBottom: "1px solid color-mix(in srgb, var(--text) 16%, transparent)",
                                     color: "var(--text)",
                                   }}>
                                     <span className="min-w-0 truncate">
@@ -3350,11 +3350,11 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                                     </span>
                                     <span className="ml-auto flex items-center gap-1 shrink-0">
                                       <button onClick={() => suggestHere(f, composing)} title="Prefill a suggestion block with this line"
-                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>± Suggest</button>
+                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>± Suggest</button>
                                       <button onClick={() => { if (repoName && headSha) void navigator.clipboard?.writeText(`https://github.com/${repoName}/blob/${headSha}/${f.path}#L${composing.line}`); }}
                                         disabled={!repoName || !headSha}
                                         title="Copy a link to this line on GitHub"
-                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>🔗</button>
+                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>🔗</button>
                                     </span>
                                   </div>
                                   <div className="p-2.5 flex flex-col gap-2">
@@ -3385,7 +3385,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                                           return ok;
                                         },
                                       }} />
-                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)" }}>Cancel</button>
+                                    <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Cancel</button>
                                   </div>
                                 </div>
                               )}
@@ -3416,7 +3416,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                 conversation tab to read them, which is the wrong way round
                 while you are looking at the code they are about. */}
             {open && belowThreads.length > 0 && (
-              <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
+              <div className="px-2.5 py-2 flex flex-col gap-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 6%, transparent)" }}>
                 {/* Not anchored to a visible line — outdated threads, or ones on
                     context the diff does not reach — so they live under the file
                     rather than inline. */}
@@ -3450,7 +3450,7 @@ function GhLink({ href, title }: { href: string; title: string }) {
   return (
     <a href={safe} target="_blank" rel="noreferrer noopener" title={title}
       className="shrink-0 text-[10px] px-1 rounded"
-      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>↗</a>
+      style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>↗</a>
   );
 }
 
@@ -3498,7 +3498,7 @@ function Reactions({ nodeId, reactions, onReact }: {
     if (!has.length) return null;
     return (
       <div className="flex gap-1 flex-wrap mt-2">
-        {has.map((r) => <span key={r.content} className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text2)" }}>{REACTION_EMOJI.find((e) => e.content === r.content)?.glyph ?? "•"} {r.count}</span>)}
+        {has.map((r) => <span key={r.content} className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text2)" }}>{REACTION_EMOJI.find((e) => e.content === r.content)?.glyph ?? "•"} {r.count}</span>)}
       </div>
     );
   }
@@ -3522,7 +3522,7 @@ function Reactions({ nodeId, reactions, onReact }: {
       <button ref={btnRef} onClick={() => setOpen((v) => !v)} title="Add a reaction" aria-label="Add a reaction"
         aria-haspopup="menu" aria-expanded={open}
         className="agx-btn text-[10px] px-1.5 py-0.5 rounded-full"
-        style={{ border: "1px dashed color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text3)" }}>☺ +</button>
+        style={{ border: "1px dashed color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text3)" }}>☺ +</button>
       {/* Through a portal, like every other menu here. Absolutely positioned it
           was a child of the comment card, and the card clips its own rounded
           corners — so the picker opened *inside* the comment and came out as a
@@ -3535,7 +3535,7 @@ function Reactions({ nodeId, reactions, onReact }: {
             style={{
               top: pos.top, left: pos.left, zIndex: 9999,
               background: "color-mix(in srgb, var(--bg2) 97%, black)",
-              border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)",
               boxShadow: "0 24px 60px -18px rgba(0,0,0,.7)",
               backdropFilter: "blur(18px)",
             }}>
@@ -3573,7 +3573,7 @@ function Card({ who, chip, when, tone, url, edited, assoc, nodeId, reactions, on
     <div className="rounded-md overflow-hidden mb-2"
       style={{ border: `1px solid color-mix(in srgb, ${edge} ${tone ? 40 : 28}%, transparent)` }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
-        style={{ background: `color-mix(in srgb, ${edge} ${tone ? 10 : 14}%, transparent)`, borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+        style={{ background: `color-mix(in srgb, ${edge} ${tone ? 10 : 14}%, transparent)`, borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
         <Avatar login={who} size={17} />
         <b style={{ color: "var(--text)", fontWeight: 500 }}>{who}</b>
         <AssocChip a={assoc} />
@@ -3623,7 +3623,7 @@ function ThreadSnippet({ hunk, line }: { hunk?: string; line?: number | null }) 
 
   if (!hunk?.trim()) return null;
   return (
-    <div className="text-[10.5px]" style={{ ...CODE_FONT_STYLE, borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+    <div className="text-[10.5px]" style={{ ...CODE_FONT_STYLE, borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
       {rows.map((r, i) => (
         <div key={i} className="flex" style={{
           background: r.text.startsWith("+") ? "color-mix(in srgb, var(--success) 10%, transparent)"
@@ -3662,9 +3662,9 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
   );
   return (
     <SuggestCtx.Provider value={suggest}>
-    <div className={`rounded-md overflow-hidden ${inline ? "" : "mb-2"}`} style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
+    <div className={`rounded-md overflow-hidden ${inline ? "" : "mb-2"}`} style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
       <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
-        style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+        style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
         <span className="truncate" style={{ color: "var(--primary)" }}>
           {inline
             ? (t.startLine && t.line && t.startLine !== t.line ? `Lines ${t.startLine}–${t.line}` : t.line ? `Line ${t.line}` : "Comment")
@@ -3692,7 +3692,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
           <Md body={c.body} />
         </div>
       ))}
-      <div className="flex flex-col gap-2 px-3 py-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
+      <div className="flex flex-col gap-2 px-3 py-2" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
         {/* Reply with the full markdown composer — Write/Preview, mentions, the
             lot — the same box GitHub gives you, not a one-line prompt. Collapsed
             to a slim affordance until you mean it. */}
@@ -3704,7 +3704,7 @@ function Thread({ t, onResolve, onReply, onApply, busy, inline }: {
         ) : (
           <button onClick={() => setReplying(true)}
             className="agx-btn w-full text-left px-3 py-1.5 rounded-lg text-[11px]"
-            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)", background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
+            style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", background: "color-mix(in srgb, var(--border) 8%, transparent)" }}>
             Reply…
           </button>
         ))}
@@ -3843,7 +3843,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
               : <span style={{ color: "var(--text3)" }}>({r.state.toLowerCase().replace("_", " ")}, no note)</span>}
           </Card>
           {mine.length > 0 && (
-            <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            <div className="pl-3 ml-2" style={{ borderLeft: "2px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
               {mine.map((t) => <Thread key={t.id} t={t} onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
             </div>
           )}
@@ -3970,7 +3970,7 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
           wherever there is automation at all rather than only where both sides
           spoke. */}
       {botCount > 0 && (
-        <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+        <div className="flex mb-3 rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
           {([["all", "All", humanCount + botCount], ["human", "Humans", humanCount], ["bot", "Bots", botCount]] as const).map(([id, label, n]) => (
             <button key={id} onClick={() => setWho(id)}
               className="agx-btn flex-1 text-[10.5px] py-1.5 flex items-center justify-center gap-1.5"
@@ -4135,14 +4135,14 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => { e.preventDefault(); void takeFiles([...e.dataTransfer.files]); }}
       onPaste={(e) => { const fs = [...e.clipboardData.files]; if (fs.length) { e.preventDefault(); void takeFiles(fs); } }}
-      style={{ border: "1px solid color-mix(in srgb, var(--border) 38%, transparent)" }}>
-      <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+      style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
         <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
         <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
       </div>
       {imageNote && (
         <div className="flex items-center gap-2 px-2.5 py-1.5 text-[10.5px]"
-          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
           <span className="min-w-0 truncate">
             <b>{imageNote}</b> can't be attached from here — GitHub has no public upload API for attachments.
           </span>
@@ -4177,7 +4177,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
           />
           {ac && matches.length > 0 && (
             <div className="absolute left-3 bottom-2 z-20 rounded-lg overflow-hidden"
-              style={{ background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 14px 34px -16px rgba(0,0,0,.75)" }}>
+              style={{ background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 14px 34px -16px rgba(0,0,0,.75)" }}>
               {matches.map((m, i) => (
                 <button key={m.label} onMouseEnter={() => setAcIdx(i)} onClick={() => take(i)}
                   className="agx-btn w-full text-left flex items-center gap-2 px-2.5 py-1 text-[11px]"
@@ -4191,7 +4191,7 @@ function Composer({ onSend, busy, placeholder, sendLabel, sendTitle, quiet, onOp
         </div>
       )}
       <div className="flex items-center gap-2 px-2.5 py-2"
-        style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         {/* With two outcomes, "to send" stops being an answer. The shortcut goes to
             the reversible one on purpose: a queued comment can be dropped before
             the review is submitted, and a posted one has already notified
@@ -4296,18 +4296,18 @@ function JobLog({ root, name, jobs }: { root: string; name: string; jobs: PrChec
   return (
     <div className="px-2.5 pb-2">
       <button onClick={() => setOpen((v) => !v)} className="agx-btn text-[10px] px-2 py-0.5 rounded"
-        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
+        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>
         {open ? "▾ Hide log" : "▸ Show log"}
       </button>
       {open && (
-        <div className="mt-1.5 rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+        <div className="mt-1.5 rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
           {err ? <div className="p-2 text-[10.5px]" style={{ color: "var(--error)" }}>{err}</div>
             : text === null ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>Reading the log…</div>
             : steps.length === 0 ? <div className="p-2 text-[10.5px]" style={{ color: "var(--text3)" }}>The log is empty.</div>
             : steps.map((st, i) => {
               const on = openSteps.has(i);
               return (
-                <div key={i} style={i ? { borderTop: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" } : undefined}>
+                <div key={i} style={i ? { borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" } : undefined}>
                   <button onClick={() => setOpenSteps((c) => { const n = new Set(c); if (n.has(i)) n.delete(i); else n.add(i); return n; })}
                     className="agx-btn w-full text-left flex items-center gap-2 px-2 py-1 text-[10.5px]"
                     style={{ background: st.failed ? "color-mix(in srgb, var(--error) 10%, transparent)" : "transparent" }}>
@@ -4351,7 +4351,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
 
   return (
     <div className="text-[11px] flex flex-col gap-2">
-      <div className="flex items-center gap-3 p-3 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
+      <div className="flex items-center gap-3 p-3 rounded-lg" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
         <span className="shrink-0 rounded-full flex items-center justify-center text-[13px]"
           style={{ width: 26, height: 26, background: c.failure > 0 ? "var(--error)" : c.pending > 0 ? "var(--warning)" : "var(--success)", color: "var(--bg)" }}>
           {c.failure > 0 ? "✕" : c.pending > 0 ? "•" : "✓"}
@@ -4381,7 +4381,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
         const bad = list.filter((k) => k.state === "failure").length;
         const good = list.filter((k) => k.state === "success").length;
         return (
-          <div key={name} className="rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 28%, transparent)" }}>
+          <div key={name} className="rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
             <button onClick={() => setOpenGroups((o) => ({ ...o, [name]: !isOpen }))}
               className="w-full text-left flex items-center gap-2 px-2.5 py-1.5"
               style={{ background: "color-mix(in srgb, var(--border) 14%, transparent)" }}>
@@ -4396,7 +4396,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
               const id = `${name}::${k.name}::${i}`;
               const expanded = bad && openCheck === id;
               return (
-                <div key={id} style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 16%, transparent)", background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
+                <div key={id} style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: bad ? "color-mix(in srgb, var(--error) 7%, transparent)" : undefined }}>
                   {/* A failing check is the one row on this tab you came for, so
                       it is the one row that opens into somewhere to go next. */}
                   <button onClick={() => bad && setOpenCheck(expanded ? null : id)} disabled={!bad}
@@ -4413,7 +4413,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
                       {onAsk && <Btn onClick={() => onAsk(k)} primary small title="Check the pull request out locally and hand the failure to Claude">✦ Ask Claude why</Btn>}
                       {k.url && (
                         <a href={externalUrl(k.url)} target="_blank" rel="noreferrer noopener" className="agx-btn text-[10px] px-2 py-0.5 rounded"
-                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>Open run ↗</a>
+                          style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)" }}>Open run ↗</a>
                       )}
                       <Btn onClick={onRerun} disabled={busy} small title="Re-run every failing check on this pull request">↻ Re-run failed</Btn>
                       {/* GitHub offers all three, and "the whole run failed
@@ -4444,7 +4444,7 @@ function Checks({ d, root, jobs, onRerun, onRerunJobs, onAsk, busy }: { d: PrDet
 
       {skippedCount > 0 && (
         <button onClick={() => setShowSkipped((v) => !v)} className="text-[10px] px-2.5 py-1.5 rounded self-start"
-          style={{ color: "var(--text2)", border: "1px dashed color-mix(in srgb, var(--border) 50%, transparent)" }}>
+          style={{ color: "var(--text2)", border: "1px dashed color-mix(in srgb, var(--text) 24%, transparent)" }}>
           {showSkipped ? "Hide" : "Show"} {skippedCount} skipped
         </button>
       )}
@@ -4503,7 +4503,7 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
           edge where the eye ends up anyway. */}
       <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
         <div className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
-          style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
+          style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
           <b style={{ color: "var(--text)", fontWeight: 500 }}>Finish your review</b>
           <span style={{ color: "var(--text3)" }}>#{d.number}</span>
           <button onClick={onGoFiles} className="ml-auto tabular-nums text-[10px]" style={{ color: seen < d.files.length ? "var(--primary)" : "var(--text3)" }}>
@@ -4627,13 +4627,12 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
                 {body.trim() ? <Md body={body} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
               </div>
             ) : (
-              /* The one element that keeps a measure: this is prose, and prose
-                 set to the full width of a wide window loses the start of the
-                 next line on every wrap. Characters, not pixels, so it holds
-                 when the display size or the font changes. */
+              /* Full width, like everything else in the strip. A reading
+                 measure was the right instinct and the wrong place for it: the
+                 card reaches the edge and a field stopping short of it reads as
+                 a mistake, not as care. A summary is a line or two anyway. */
               <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2}
                 placeholder="Summary — optional, markdown works here."
-                style={{ maxWidth: "96ch" }}
                 className="w-full rounded-md p-2.5 text-[11.5px] resize-y" />
             )}
           </div>
