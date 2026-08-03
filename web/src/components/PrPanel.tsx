@@ -152,10 +152,18 @@ function Btn({ children, onClick, disabled, danger, primary, ok, warn, title, sm
         // button it competes with. It is a control: it reads at full strength,
         // and the border is what says it is the quieter of the two.
         color: primary ? "var(--bg)" : danger ? "var(--error)" : ok ? "var(--success)" : warn ? "var(--warning)" : "var(--text)",
-        background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
-        border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : warn ? 55 : 50}%, transparent)`,
+        background: primary ? "var(--primary)" : warn ? "color-mix(in srgb, var(--warning) 16%, transparent)"
+          // A quiet button still needs an edge you can find. Transparent on a
+          // panel, with a border mixed at half strength, was a label with a
+          // suggestion of a box — on the neutral themes, where --border is
+          // close to the surface it sits on, it vanished entirely.
+          : "color-mix(in srgb, var(--border) 30%, transparent)",
+        border: `1px solid color-mix(in srgb, ${edge} ${primary ? 100 : warn ? 55 : 85}%, transparent)`,
         cursor: disabled ? "not-allowed" : "pointer",
-        fontWeight: primary || warn ? 500 : 400,
+        // The filled one carries the weight. On a neutral theme --primary is a
+        // grey, so fill alone does not separate the two — the label has to say
+        // which is which as well.
+        fontWeight: primary ? 600 : warn ? 500 : 500,
       }}>{children}</button>
   );
 }
@@ -3232,16 +3240,38 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                           // Bounded and pinned to the left so it reads at a sane
                           // width and stays put while the code scrolls sideways.
                           return (
-                            <div className="flex flex-col gap-2 my-1" style={{ position: "sticky", left: 0, width: split ? "min(560px, 46vw)" : "min(900px, 92vw)", padding: "8px", background: "color-mix(in srgb, var(--info) 6%, var(--bg))", borderTop: "1px solid color-mix(in srgb, var(--border) 22%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
+                            <div className="flex flex-col gap-2 my-1.5 px-2" style={{
+                              // A positioning wrapper and nothing else. It used
+                              // to carry a tinted background and rules of its
+                              // own, so a composer sat as a box inside a
+                              // slightly wider box — two frames, neither
+                              // aligned to the other, which is most of why this
+                              // read as older than the app around it. One
+                              // visible container: the card below.
+                              position: "sticky", left: 0,
+                              width: split ? "min(560px, 46vw)" : "min(900px, 92vw)",
+                            }}>
                               {ts?.map((t) => <Thread key={t.id} t={t} inline onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
                               {composeHere && composing && (
-                                <div className="rounded-md overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
+                                <div className="rounded-lg overflow-hidden" style={{
+                                  // The one box. Sat on the panel rather than
+                                  // on a tint of its own, and lifted off the
+                                  // diff by a shadow the way every other
+                                  // floating surface in this app is.
+                                  background: "var(--bg2)",
+                                  border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
+                                  boxShadow: "0 12px 30px -14px var(--shadow)",
+                                }}>
                                   {/* The line's own actions live here, beside the
                                       box, rather than in a menu you had to get
                                       through to reach the box. Suggesting is a
                                       thing you decide with the code in front of
                                       you, not before you have seen it. */}
-                                  <div className="px-2.5 py-1.5 text-[10.5px] flex items-center gap-2" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary)" }}>
+                                  <div className="px-3 py-2 text-[11px] flex items-center gap-2" style={{
+                                    background: "color-mix(in srgb, var(--border) 22%, transparent)",
+                                    borderBottom: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
+                                    color: "var(--text)",
+                                  }}>
                                     <span className="min-w-0 truncate">
                                       {composing.startLine ? `Comment on lines ${pfx}${composing.startLine}–${composing.line}` : `Add a comment on line ${pfx}${composing.line}`}
                                     </span>
@@ -3254,7 +3284,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                                         className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>🔗</button>
                                     </span>
                                   </div>
-                                  <div className="p-2 flex flex-col gap-2">
+                                  <div className="p-2.5 flex flex-col gap-2">
                                     {/* Two outcomes, the way GitHub has them: post
                                         this one now, or hold it for the review you
                                         are building. Before, everything queued —
