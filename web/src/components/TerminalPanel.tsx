@@ -22,6 +22,8 @@ import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 import { wantsWebgl, fallBackToDom } from "../lib/termRenderer.ts";
 import { isFindChord } from "../lib/termKeys.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
+import { THEMES } from "../lib/themes.ts";
+import { deriveAnsi } from "../lib/termPalette.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -67,16 +69,26 @@ const alpha = (hex: string, a: string) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? hex +
 function themeFromCss() {
   const s = rootStyle();
   const bg = readVar(s, "--bg", "#0d1117");
+  // The 16 ANSI colours: a theme's pinned palette when it has one, otherwise
+  // derived from the same UI colours the rest of the panel already follows — so
+  // switching theme repaints the terminal's own output too, not just its frame.
+  const id = document.documentElement.getAttribute("data-theme") || "";
+  const ansi = THEMES.find((t) => t.id === id)?.ansi ?? deriveAnsi({
+    bg,
+    text: readVar(s, "--text", "#e6edf3"),
+    primary: readVar(s, "--primary", "#a78bfa"),
+    error: readVar(s, "--error", "#f06c75"),
+    success: readVar(s, "--success", "#98c379"),
+    warning: readVar(s, "--warning", "#e5c07b"),
+    info: readVar(s, "--info", "#61afef"),
+  });
   return {
     background: bg,
     foreground: readVar(s, "--text2", "#c8ccd4"),
     cursor: readVar(s, "--primary", "#a78bfa"),
     cursorAccent: bg,
     selectionBackground: alpha(readVar(s, "--primary", "#a78bfa"), "44"),
-    black: "#5b6472", red: "#f06c75", green: "#98c379", yellow: "#e5c07b",
-    blue: "#61afef", magenta: "#c678dd", cyan: "#56b6c2", white: "#c8ccd4",
-    brightBlack: "#7f8896", brightRed: "#ff7b86", brightGreen: "#b5e08f", brightYellow: "#f0d08a",
-    brightBlue: "#82c0ff", brightMagenta: "#d79be8", brightCyan: "#7fd6df", brightWhite: "#ffffff",
+    ...ansi,
   };
 }
 const TERM_FONT = '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", Menlo, Monaco, "Roboto Mono", Consolas, "Liberation Mono", monospace';
@@ -254,7 +266,15 @@ function applyThemeLive(s: Sess): () => void {
     // Coalesced: a theme switch rewrites several properties in one tick, and
     // re-theming a terminal forces a full repaint of every cell.
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => { try { s.term.options.theme = themeFromCss(); } catch { /* disposed */ } });
+    raf = requestAnimationFrame(() => {
+      try {
+        s.term.options.theme = themeFromCss();
+        // The WebGL renderer caches cells in a texture atlas and won't always
+        // repaint already-drawn scrollback on a theme swap; force it. On the DOM
+        // renderer this is a cheap no-op beyond the redraw it would do anyway.
+        s.term.refresh(0, s.term.rows - 1);
+      } catch { /* disposed */ }
+    });
   };
   const mo = new MutationObserver(restyle);
   mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "class"] });
