@@ -27,6 +27,7 @@ import { RunningPanes } from "./RunningPanes.tsx";
 import { BudgetsPane } from "./BudgetsPane.tsx";
 import { AgentsPane } from "./AgentsPane.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
+import { TERM_FONTS, CURSORS, fontAvailable, currentTermFont, currentTermSize, currentTermCursor, setTermFont, setTermSize, setTermCursor, SIZE_MIN, SIZE_MAX, type CursorStyle } from "../lib/termPrefs.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { externalUrl } from "../lib/externalUrl.ts";
@@ -135,7 +136,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "appearance" | "prefs" | "browser" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
+type Pane = "appearance" | "prefs" | "terminal" | "browser" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
 type TabGroup = "Interface" | "Data" | "Setup" | "About";
 // Rendered in this order; a group with no matching tab is dropped, so search
 // collapses to just the sections that still have something in them.
@@ -145,7 +146,8 @@ const TAB_GROUPS: TabGroup[] = ["Interface", "Data", "Setup", "About"];
 // Appearance), so the box finds a page by what it does, not just its name.
 const TABS: { id: Pane; label: string; group: TabGroup; kw: string }[] = [
   { id: "appearance", label: "Appearance", group: "Interface", kw: "theme accent colour color font dark light mode palette" },
-  { id: "prefs", label: "Preferences", group: "Interface", kw: "display size zoom sound clock terminal renderer chat engine fullscreen" },
+  { id: "prefs", label: "Preferences", group: "Interface", kw: "display size zoom sound clock renderer chat engine fullscreen" },
+  { id: "terminal", label: "Terminal", group: "Interface", kw: "terminal font size cursor typography monospace face" },
   // Only where there is a browser to configure. A settings tab for something
   // that is not there reads as a broken feature rather than one that doesn't apply.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Interface" as const, kw: "browser web page zoom" }] : []),
@@ -927,6 +929,9 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [capturing, setCapturing] = useState<ActionId | null>(null);
   const [pane, setPane] = useState<Pane>("prefs");
   const [q, setQ] = useState(""); // settings search — filters the nav below
+  const [termFont, setTermFontState] = useState(() => currentTermFont());
+  const [termSize, setTermSizeState] = useState(() => currentTermSize());
+  const [termCursor, setTermCursorState] = useState<CursorStyle>(() => currentTermCursor());
   const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
   useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
 
@@ -1073,6 +1078,48 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         here, where a control this heavy isn't in the way. */}
                     <p className="px-3 pb-1 text-[11px] t-dim2">One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.</p>
                     <AppearancePane current={theme} onChange={onTheme} />
+                  </Section>
+                  )}
+                  {pane === "terminal" && (
+                  <Section title="Terminal">
+                    <div className="px-3 pt-1 pb-2">
+                      <div className="text-[12px] mb-2" style={{ color: "var(--text)" }}>Font</div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {TERM_FONTS.map((f) => {
+                          const avail = fontAvailable(f.family);
+                          const on = termFont === f.id;
+                          return (
+                            <button key={f.id || "sys"} disabled={!avail}
+                              onClick={() => { setTermFont(f.id); setTermFontState(f.id); }}
+                              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px] text-left"
+                              style={{
+                                background: on ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)",
+                                border: `1px solid ${on ? "var(--primary)" : "transparent"}`,
+                                opacity: avail ? 1 : 0.45, cursor: avail ? "pointer" : "not-allowed",
+                                fontFamily: f.stack || undefined,
+                              }}>
+                              <span className="truncate" style={{ color: "var(--text2)" }}>{f.name}</span>
+                              {!avail ? <span className="ml-auto text-[9px] shrink-0 t-dim2">not installed</span>
+                                : on ? <span className="ml-auto shrink-0" style={{ color: "var(--primary-hover)" }}>✓</span> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] t-dim2 mt-2">Only fonts installed on this machine are selectable — the terminal measures the real face, and a missing one is what made the grid go haywire before.</p>
+                    </div>
+                    <Stepper
+                      label="Font size"
+                      hint="Applies live to every open terminal."
+                      value={`${termSize}px`}
+                      onDec={() => { const n = Math.max(SIZE_MIN, termSize - 1); setTermSize(n); setTermSizeState(n); }}
+                      onInc={() => { const n = Math.min(SIZE_MAX, termSize + 1); setTermSize(n); setTermSizeState(n); }}
+                      canDec={termSize > SIZE_MIN} canInc={termSize < SIZE_MAX} />
+                    <Choice<CursorStyle>
+                      label="Cursor"
+                      hint="The shape that marks where you're typing."
+                      value={termCursor}
+                      onPick={(v) => { setTermCursor(v); setTermCursorState(v); }}
+                      options={CURSORS} />
                   </Section>
                   )}
                   {pane === "prefs" && (

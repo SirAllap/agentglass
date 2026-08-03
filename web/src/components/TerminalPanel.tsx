@@ -24,6 +24,7 @@ import { isFindChord } from "../lib/termKeys.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
 import { THEMES } from "../lib/themes.ts";
 import { deriveAnsi } from "../lib/termPalette.ts";
+import { termOptions } from "../lib/termPrefs.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -277,6 +278,15 @@ function applyThemeLive(s: Sess): () => void {
     raf = requestAnimationFrame(() => {
       try {
         s.term.options.theme = themeFromCss();
+        // Terminal typography rides the same observer (termPrefs pings a root
+        // var when font/size/cursor change). Font and size change the cell box,
+        // so refit when either moves.
+        const o = termOptions();
+        const needFit = s.term.options.fontFamily !== o.fontFamily || s.term.options.fontSize !== o.fontSize;
+        if (s.term.options.fontFamily !== o.fontFamily) s.term.options.fontFamily = o.fontFamily;
+        if (s.term.options.fontSize !== o.fontSize) s.term.options.fontSize = o.fontSize;
+        if (s.term.options.cursorStyle !== o.cursorStyle) s.term.options.cursorStyle = o.cursorStyle;
+        if (needFit) fitTerm(s);
         // The WebGL renderer caches cells in a texture atlas and won't always
         // repaint already-drawn scrollback on a theme swap; force it. On the DOM
         // renderer this is a cheap no-op beyond the redraw it would do anyway.
@@ -410,11 +420,13 @@ function reconnected(s: Sess) {
 /** A brand-new shell for `root`. Repos hold as many as you open. */
 function createSession(root: string): Sess {
   evictLru(root);
+  const tp = termOptions();
   const term = new Terminal({
-    fontFamily: readVar(rootStyle(), "--font-mono", "") ? `var(--font-mono), ${TERM_FONT}` : TERM_FONT,
-    fontSize: 13,
+    fontFamily: tp.fontFamily,
+    fontSize: tp.fontSize,
     lineHeight: 1.2,
     cursorBlink: true,
+    cursorStyle: tp.cursorStyle,
     /*
      * Scrollback, and why it is not ten thousand any more.
      *
