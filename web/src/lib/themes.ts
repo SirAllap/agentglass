@@ -10,6 +10,7 @@
 
 import { SERVER, authHeaders, IS_DESKTOP } from "./api.ts";
 import type { AnsiPalette } from "./termPalette.ts";
+import { applyAccent } from "./accent.ts";
 
 export interface Theme {
   id: string;
@@ -117,6 +118,8 @@ export function applyTheme(id: string, { sync = false } = {}) {
   const root = document.documentElement;
   for (const [k, v] of Object.entries(t.vars)) root.style.setProperty(k, v);
   root.setAttribute("data-theme", t.id);
+  // Lay the chosen accent over the theme's primary, so it survives a switch.
+  applyAccent();
   // Only ever persist a theme that exists. An id we don't recognise still gets
   // painted in the fallback, but writing that fallback back to storage would
   // turn one bad read into the permanent loss of a real choice.

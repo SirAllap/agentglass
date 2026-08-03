@@ -8,6 +8,7 @@ import { ticketFromUrl, clearTicketFromUrl } from "./lib/pairing.ts";
 import { phoneLayoutNow } from "./lib/viewport.ts";
 import { followServerChanges } from "./lib/desktop.ts";
 import { applyTheme, initialTheme, watchThemeStorage, watchSystemTheme } from "./lib/themes.ts";
+import { applyUiFont } from "./lib/uiFont.ts";
 import { restoreScale } from "./lib/uiScale.ts";
 import "./index.css";
 
@@ -21,6 +22,8 @@ applyTheme(initialTheme(), { sync: IS_DESKTOP });
 watchThemeStorage();
 // When the mode is "System", follow the OS between the two serious defaults live.
 watchSystemTheme();
+// The saved monospace face, applied to --font-mono for the whole cockpit.
+applyUiFont();
 // The webview always launches at 100%, so the saved zoom has to be re-asked for
 // on every start. Fire-and-forget: it resolves a tick later and the window
 // reflows into it, which is far less jarring than blocking the first paint.
