@@ -44,6 +44,19 @@ contextBridge.exposeInMainWorld("agentglass", {
     ipcRenderer.on("ag:server-changed", h);
     return () => ipcRenderer.removeListener("ag:server-changed", h);
   },
+  // The window's own controls, because the frame that used to carry them is
+  // gone. See main.js for why.
+  winMinimize: () => ipcRenderer.invoke("ag:winMinimize"),
+  winToggleMaximize: () => ipcRenderer.invoke("ag:winToggleMaximize"),
+  winClose: () => ipcRenderer.invoke("ag:winClose"),
+  winIsMaximized: () => ipcRenderer.invoke("ag:winIsMaximized"),
+  /** Told, not polled: the window manager can maximise this window without
+   *  asking us, and a glyph that guesses is a glyph that lies. */
+  onWinState: (fn) => {
+    const h = (_e, max) => fn(!!max);
+    ipcRenderer.on("ag:winState", h);
+    return () => ipcRenderer.removeListener("ag:winState", h);
+  },
   setFullscreen: (on) => ipcRenderer.invoke("ag:setFullscreen", on),
   isFullscreen: () => ipcRenderer.invoke("ag:isFullscreen"),
   setZoom: (factor) => ipcRenderer.invoke("ag:setZoom", factor),

@@ -21,10 +21,70 @@ import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
+import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
 
 export const TOP_BAR_H = 30;
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
+
+/** Anything clickable inside a drag region has to opt out of it, or the window
+ *  moves instead of the button firing. */
+const NO_DRAG = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
+
+/**
+ * Minimise, maximise, close — drawn by the app because the window is frameless.
+ *
+ * Deliberately in this app's own language rather than an imitation of the
+ * platform's: hairline glyphs on transparent, the same hover wash every icon
+ * button here uses, and close going red only under the cursor. A convincing
+ * copy of a GTK or Windows control sitting on our own bar would land in the
+ * uncanny valley from both directions; something that plainly belongs to this
+ * app does not have to compete.
+ *
+ * Renders nothing at all where the shell still has a system title bar (macOS
+ * keeps its traffic lights) or where there is no window to control (a browser
+ * tab). Three buttons that do nothing would be worse than the frame we removed.
+ */
+function WindowControls() {
+  const [max, setMax] = useState(false);
+  useEffect(() => {
+    if (!WINDOW_CONTROLS) return;
+    void WINDOW_CONTROLS.isMaximized().then(setMax).catch(() => {});
+    return WINDOW_CONTROLS.subscribe(setMax);
+  }, []);
+  if (!WINDOW_CONTROLS || IS_MAC_DESKTOP) return null;
+
+  const btn = "grid place-items-center rounded transition-colors";
+  const box = { width: 26, height: 20, color: "var(--text3)", ...NO_DRAG } as React.CSSProperties;
+  return (
+    <span className="flex items-center gap-0.5 shrink-0 ml-1 -mr-1.5">
+      <button onClick={WINDOW_CONTROLS.minimize} aria-label="Minimise" title="Minimise"
+        className={`${btn} hover:bg-white/10 hover:text-[var(--text)]`} style={box}>
+        <svg viewBox="0 0 12 12" width={11} height={11} fill="none" stroke="currentColor" strokeWidth={1.1}><path d="M2.5 6h7" /></svg>
+      </button>
+      <button onClick={WINDOW_CONTROLS.toggleMaximize} aria-label={max ? "Restore" : "Maximise"} title={max ? "Restore" : "Maximise"}
+        className={`${btn} hover:bg-white/10 hover:text-[var(--text)]`} style={box}>
+        {max ? (
+          // Two offset squares: the window comes back OUT of full width, which
+          // one square cannot say.
+          <svg viewBox="0 0 12 12" width={11} height={11} fill="none" stroke="currentColor" strokeWidth={1.1}>
+            <rect x="2" y="4" width="6" height="6" rx="1" /><path d="M4.4 4V3a1 1 0 0 1 1-1H9a1 1 0 0 1 1 1v3.6a1 1 0 0 1-1 1H8" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 12 12" width={11} height={11} fill="none" stroke="currentColor" strokeWidth={1.1}>
+            <rect x="2.5" y="2.5" width="7" height="7" rx="1" />
+          </svg>
+        )}
+      </button>
+      <button onClick={WINDOW_CONTROLS.close} aria-label="Close" title="Close"
+        className={`${btn} hover:text-white`} style={box}
+        onMouseEnter={(e) => { e.currentTarget.style.background = "var(--error)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
+        <svg viewBox="0 0 12 12" width={11} height={11} fill="none" stroke="currentColor" strokeWidth={1.1}><path d="M3 3l6 6M9 3l-6 6" /></svg>
+      </button>
+    </span>
+  );
+}
 
 /** The window's own clock. A second's resolution is pointless at this size, so
  *  it ticks per minute — and stops when the tab is hidden, because nobody reads
@@ -50,9 +110,15 @@ function useMinuteClock(): string {
 
 /** A reading: what it is, then what it says. Inline, on one baseline — see the
  *  note at the top of this file for why that is the whole point. */
-function Item({ cap, children, title, dim }: { cap?: string; children: React.ReactNode; title?: string; dim?: boolean }) {
+function Item({ cap, children, title, dim, hideUnder }: {
+  cap?: string; children: React.ReactNode; title?: string; dim?: boolean;
+  /** Drop below this breakpoint rather than squeezing the row. A strip that
+   *  wraps to two lines on a narrow window is worse than one that says less. */
+  hideUnder?: "sm" | "md";
+}) {
+  const vis = hideUnder === "md" ? "hidden md:flex" : hideUnder === "sm" ? "hidden sm:flex" : "flex";
   return (
-    <span className="flex items-center gap-1.5 shrink-0" title={title} style={{ opacity: dim ? 0.45 : 1, transition: "opacity .15s" }}>
+    <span className={`${vis} items-center gap-1.5 shrink-0`} title={title} style={{ opacity: dim ? 0.45 : 1, transition: "opacity .15s" }}>
       {cap && <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text4)" }}>{cap}</span>}
       {children}
     </span>
@@ -101,21 +167,27 @@ export function TopBar({
 
   return (
     <div
-      className="flex items-center gap-2.5 px-2.5 shrink-0 relative select-none"
+      className="flex flex-nowrap items-center gap-2.5 px-2.5 shrink-0 relative select-none overflow-hidden whitespace-nowrap"
       style={{
         height: TOP_BAR_H,
+        // The traffic lights live in this strip on macOS and belong to the
+        // system, so the first control starts after them. The old header did
+        // the same for the same reason; it is not a Mac tax on other platforms.
+        paddingLeft: IS_MAC_DESKTOP ? 78 : undefined,
         background: alarm ? "color-mix(in srgb, var(--warning) 10%, var(--bg2))" : "var(--bg2)",
         borderBottom: alarm ? "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" : edge(13),
         transition: "background .18s, border-color .18s",
-        // Electron: this strip is the window's drag handle. Every control below
-        // marks itself no-drag, or it would be a decoration you cannot click.
+        // This strip IS the title bar: the window is frameless (see
+        // electron/main.js), so dragging it is the only way to move the window.
+        // Every control in it marks itself no-drag, or it would be a button you
+        // cannot press.
         WebkitAppRegion: "drag",
       } as React.CSSProperties}
     >
       {/* ── who and where ─────────────────────────────────────────── */}
       <button onClick={onOpenProject} className="flex items-center gap-1.5 shrink-0 min-w-0 rounded px-1 -mx-1"
         title={workspace ? `${workspace}\nClick to switch project` : "Open a project — everything here scopes itself to its folder"}
-        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+        style={NO_DRAG}>
         <span className="text-[10.5px] font-bold" style={{ color: "var(--text)" }}>agent<span style={{ color: "var(--primary)" }}>glass</span></span>
         <span className="shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
         <span className="text-[10px] truncate" style={{ color: workspace ? "var(--text2)" : "var(--text4)", maxWidth: 170 }}>
@@ -132,8 +204,8 @@ export function TopBar({
               color: "var(--warning)",
               border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)",
               background: "color-mix(in srgb, var(--warning) 14%, transparent)",
-              WebkitAppRegion: "no-drag",
-            } as React.CSSProperties}>
+              ...NO_DRAG,
+            }}>
             <span className="rounded-full" style={{ width: 6, height: 6, background: "var(--warning)" }} />
             <span className="text-[10px] font-semibold truncate" style={{ maxWidth: 260 }}>{needs!.label}</span>
             <span className="text-[9px] opacity-75">ir ⏎</span>
@@ -164,13 +236,13 @@ export function TopBar({
         ) : (
           <>
             {five && (
-              <Item cap="5h" dim={quiet} title={`${five.utilization}% of the 5-hour window`}>
+              <Item cap="5h" dim={quiet} hideUnder="md" title={`${five.utilization}% of the 5-hour window`}>
                 <Meter pct={five.utilization} tint={five.utilization >= 80 ? "var(--error)" : "var(--warning)"} />
                 <b className="text-[9.5px] tabular-nums" style={{ color: "var(--text2)" }}>{five.utilization}%</b>
               </Item>
             )}
             {week && (
-              <Item cap="week" dim={quiet} title={`${week.utilization}% of the weekly window`}>
+              <Item cap="week" dim={quiet} hideUnder="sm" title={`${week.utilization}% of the weekly window`}>
                 <Meter pct={week.utilization} tint={week.utilization >= 80 ? "var(--error)" : "var(--warning)"} />
                 <b className="text-[9.5px] tabular-nums" style={{ color: "var(--text2)" }}>{week.utilization}%</b>
               </Item>
@@ -179,8 +251,8 @@ export function TopBar({
         )}
         <span className="shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
         <button onClick={onOpenPalette} title="Search anything (⌘K)"
-          className="text-[9.5px] px-1.5 py-[1px] rounded shrink-0"
-          style={{ color: "var(--text3)", border: edge(16), WebkitAppRegion: "no-drag" } as React.CSSProperties}>⌘K</button>
+          className="hidden sm:block text-[9.5px] px-1.5 py-[1px] rounded shrink-0"
+          style={{ color: "var(--text3)", border: edge(16), ...NO_DRAG }}>⌘K</button>
         <b className="text-[11px] tabular-nums tracking-[0.03em] shrink-0" style={{ color: "var(--text)" }}>{time}</b>
         {/* An update is worth noticing on the way past, never worth pulling the
             eye off a running fleet. */}
@@ -188,6 +260,7 @@ export function TopBar({
           <span title={`${upd?.branch} is available to install — Settings → About`} className="rounded-full shrink-0"
             style={{ width: 6, height: 6, background: "var(--success)" }} />
         )}
+        <WindowControls />
       </div>
     </div>
   );

@@ -21,7 +21,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
-import { FleetSpine } from "./FleetSpine.tsx";
 import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
 import { FilesView } from "../FilesPanel.tsx";
 import { GitView } from "../GitPanel.tsx";
@@ -32,7 +31,6 @@ import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.
 import { ChatView } from "../ChatPanel.tsx";
 import { BrowserView } from "../BrowserPanel.tsx";
 import { requestTermReview } from "../../lib/termReview.ts";
-import type { AgentCard } from "../../lib/derive.ts";
 
 /**
  * Views that keep running with the door shut.
@@ -45,8 +43,20 @@ import type { AgentCard } from "../../lib/derive.ts";
  */
 const KEEP_RUNNING = new Set<ViewId>(["term", "chat"]);
 
+/*
+ * There is no fleet column here, and there was one for about an hour.
+ *
+ * The argument for it was "know what each agent is doing without leaving the
+ * work". Built and used, it did not hold: the dashboard's own session panel
+ * already says all of it and says it better, most rows on a real machine are
+ * `tmp · SessionStart` rather than anything actionable, and it charged 190px of
+ * every view for the privilege. The one thing it was genuinely for — noticing
+ * that something wants you — belongs to the top bar, which interrupts from
+ * every view and costs no width at all.
+ */
+
 export function Workspace({
-  view, onView, onSkills, onSettings, onMachine, chatFocusId, agents, dashboard,
+  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard,
 }: {
   view: ViewId;
   onView: (v: ViewId) => void;
@@ -54,8 +64,6 @@ export function Workspace({
   onSettings: () => void;
   onMachine: (tab: "ports" | "resources") => void;
   chatFocusId?: string | null;
-  /** For the spine. Derived once at the app root, where the socket is. */
-  agents: AgentCard[];
   /** The dashboard is a view like any other, but its data lives at the root
    *  (the live socket feeds the chat store too), so it arrives already built
    *  and is handed its own `active` here like everything else. */
@@ -128,12 +136,6 @@ export function Workspace({
     <div ref={frameRef} tabIndex={-1} className="flex-1 min-h-0 flex outline-none">
       <ViewRail view={view} onSelect={onView} onSkills={onSkills}
         onSettings={onSettings} onMachine={onMachine} pips={pips} />
-
-      {/* The fleet, beside the work rather than instead of it. Selecting an
-          agent takes you to the dashboard for now — the per-agent view is the
-          next piece, and sending you somewhere honest beats sending you
-          somewhere that half-works. */}
-      <FleetSpine agents={agents} onOpenDash={() => onView("dash")} onSelect={() => onView("dash")} />
 
       <div className="relative flex-1 min-w-0">
         {mounted.map((v) => {

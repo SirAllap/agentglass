@@ -22,6 +22,14 @@ type DesktopBridge = {
   setRemote?: (on: boolean) => Promise<boolean>;
   revokeRemote?: () => Promise<boolean>;
   onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null }) => void) => () => void;
+  /** The window's own controls. Optional because an older shell still has a
+   *  system title bar and does not need them — and because a renderer that
+   *  assumed they were there would draw three dead buttons in a browser tab. */
+  winMinimize?: () => Promise<void>;
+  winToggleMaximize?: () => Promise<boolean>;
+  winClose?: () => Promise<void>;
+  winIsMaximized?: () => Promise<boolean>;
+  onWinState?: (fn: (max: boolean) => void) => () => void;
 };
 
 function bridge(): DesktopBridge | null {
@@ -209,3 +217,23 @@ export function followServerChanges(): () => void {
     window.dispatchEvent(new CustomEvent("agentglass:server-changed"));
   });
 }
+
+/**
+ * The window's minimise / maximise / close, when this shell draws its own.
+ *
+ * Null in a browser tab and on a shell old enough to still have a system title
+ * bar, which is exactly when the buttons must not be drawn: three controls that
+ * do nothing are worse than a title bar.
+ */
+export const WINDOW_CONTROLS = (() => {
+  const b = bridge();
+  if (!b?.winMinimize || !b.winToggleMaximize || !b.winClose) return null;
+  return {
+    minimize: () => { void b.winMinimize!().catch(() => {}); },
+    toggleMaximize: () => { void b.winToggleMaximize!().catch(() => {}); },
+    close: () => { void b.winClose!().catch(() => {}); },
+    isMaximized: () => b.winIsMaximized?.() ?? Promise.resolve(false),
+    /** Subscribe to changes the window manager made without asking us. */
+    subscribe: (fn: (max: boolean) => void) => b.onWinState?.(fn) ?? (() => {}),
+  };
+})();

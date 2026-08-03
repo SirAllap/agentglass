@@ -397,6 +397,22 @@ async function restartSidecar() {
 // --- desktop capabilities the UI calls through the preload bridge ------------
 
 function registerIpc(win) {
+  // The window controls the app now draws for itself. Trivial, and they have to
+  // exist: `frame: false` removed the only other way to do any of them.
+  ipcMain.handle("ag:winMinimize", () => { win.minimize(); });
+  ipcMain.handle("ag:winToggleMaximize", () => {
+    if (win.isMaximized()) win.unmaximize(); else win.maximize();
+    return win.isMaximized();
+  });
+  ipcMain.handle("ag:winClose", () => { win.close(); });
+  ipcMain.handle("ag:winIsMaximized", () => win.isMaximized());
+  // Maximising by dragging to an edge, or by a keyboard shortcut the window
+  // manager owns, does not go through us — so the glyph is told rather than
+  // inferred, or it would say "maximise" on a maximised window.
+  for (const ev of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
+    win.on(ev, () => { try { win.webContents.send("ag:winState", win.isMaximized()); } catch { /* torn down */ } });
+  }
+
   ipcMain.handle("ag:setFullscreen", (_e, on) => { win.setFullScreen(!!on); return win.isFullScreen(); });
   ipcMain.handle("ag:isFullscreen", () => win.isFullScreen());
   ipcMain.handle("ag:setZoom", (_e, f) => { win.webContents.setZoomFactor(f); return f; });
@@ -569,6 +585,24 @@ function createWindow() {
     backgroundColor: "#0f0a1a",
     title: "agentglass",
     autoHideMenuBar: true,
+    /*
+     * No system title bar. The app draws its own.
+     *
+     * The strip at the top of this window already carries the project, the
+     * fleet, the plan meters and the clock; a second bar above it holding
+     * nothing but three buttons is 30px of chrome saying nothing. So the buttons
+     * move in with everything else and the strip becomes the drag region.
+     *
+     * macOS keeps its traffic lights — they are a system affordance people
+     * expect exactly where they are, and `hiddenInset` leaves them in place over
+     * our own bar, which pads itself past them. Everywhere else the window is
+     * frameless and the buttons below are the whole story, which is why they are
+     * wired rather than decorative: with `frame: false` there is no other way to
+     * minimise, maximise or close.
+     */
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" }
+      : { frame: false }),
     icon: path.join(__dirname, "icons", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),

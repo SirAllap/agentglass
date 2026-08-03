@@ -572,7 +572,6 @@ export default function App() {
         onSettings={() => setSettingsOpen(true)}
         onMachine={setMachine}
         chatFocusId={chatFocus}
-        agents={agents}
         dashboard={(active) => (
           <DashboardView
             active={active}
