@@ -1451,7 +1451,11 @@ export interface PrDetail extends PrSummary {
   /** Parsed out of the body — unchecked boxes are a merge signal on repos
    *  whose template carries a real checklist. */
   checklist: PrChecklistItem[];
-  reviewers: string[];
+  /** Same shape the row carries, and required here because the detail always
+   *  fetches them. It used to be a bare `string[]`, which `extends PrSummary`
+   *  made a compile error the moment the row learned about teams — and, before
+   *  that, meant the sidebar asked the avatar proxy for a portrait of a team. */
+  reviewers: PrReviewer[];
   assignees: string[];
   reviews: PrReview[];
   comments: PrComment[];

@@ -861,7 +861,7 @@ const PR_482_DETAIL: PrDetail = {
     { checked: true, text: "Backfill script for `orders_2024`" },
     { checked: false, text: "Soak on staging for 24h" },
   ],
-  reviewers: ["you", "jkwan"], assignees: ["rmoreno"],
+  reviewers: [{ login: "you" }, { login: "jkwan" }], assignees: ["rmoreno"],
   reviews: [
     { author: "rmoreno", isBot: false, state: "CHANGES_REQUESTED", submittedAt: ago(118),
       body: "One blocker on legacy carts — see the thread on `pricing.ts`. Everything else reads well." },
@@ -904,7 +904,7 @@ const PR_EXTRA: Record<number, Partial<PrDetail>> = {
   479: {
     body: "Memoises the price table for the life of a request. p95 on `/checkout` goes 73ms → 41ms on staging.",
     mergeable: "MERGEABLE", mergeState: "CLEAN",
-    reviewers: ["rmoreno"],
+    reviewers: [{ login: "rmoreno" }],
     reviews: [{ author: "rmoreno", isBot: false, state: "APPROVED", submittedAt: ago(50), body: "Nice. Ship it." }],
     files: [
       { path: "src/services/pricing.ts", additions: 28, deletions: 9, status: "modified", comments: 0 },
@@ -932,7 +932,7 @@ const PR_EXTRA: Record<number, Partial<PrDetail>> = {
   468: {
     body: "The checkout e2e fails about one run in nine under parallel load. Serialises the fixture teardown.",
     mergeable: "MERGEABLE", mergeState: "UNSTABLE",
-    reviewers: ["you"],
+    reviewers: [{ login: "you" }],
     reviews: [{ author: "t-okafor", isBot: false, state: "CHANGES_REQUESTED", submittedAt: ago(280),
       body: "Serialising teardown hides it rather than fixing it — the fixture leaks a connection." }],
     files: [

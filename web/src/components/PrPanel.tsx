@@ -23,7 +23,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { Portal } from "./Portal.tsx";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type {
-  PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrCheck, GitRepoRef, FileChange,
+  PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
   PrReaction, PrAuthorAssociation, PrEvent, PrCommit, PrFile, PrCheckJob,
 } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
@@ -687,6 +687,25 @@ function rowState(p: PrSummary): { tint: string; title: string } {
  * faces come from the login through the app's avatar proxy; a team has no face
  * and gets its initials in a flat badge rather than a portrait of nobody.
  */
+/**
+ * One requested reviewer's face.
+ *
+ * A team has no avatar and no login, so asking the proxy for a portrait of
+ * "platform" returns a broken image; it gets its initials in a flat badge
+ * instead. Shared by the three places that draw a reviewer, which used to
+ * disagree — only the list knew teams existed, because only the list was given
+ * a shape that could say so.
+ */
+function ReviewerFace({ r, size }: { r: PrReviewer; size: number }) {
+  if (!r.isTeam) return <Avatar login={r.login} size={size} />;
+  return (
+    <span className="rounded-full inline-flex items-center justify-center shrink-0" title={`${r.login} (team)`}
+      style={{ width: size, height: size, fontSize: size * 0.42, color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 24%, transparent)" }}>
+      {r.login.slice(0, 2).toUpperCase()}
+    </span>
+  );
+}
+
 function ReviewerStack({ p }: { p: PrSummary }) {
   const list = p.reviewers ?? [];
   if (list.length === 0) {
@@ -702,12 +721,7 @@ function ReviewerStack({ p }: { p: PrSummary }) {
     <span className="flex items-center min-w-0" title={`Review requested from ${list.map((r) => r.login).join(", ")}`}>
       {shown.map((r, i) => (
         <span key={r.login} className="shrink-0 rounded-full" style={{ marginLeft: i === 0 ? 0 : -5, boxShadow: "0 0 0 1.5px var(--bg2)" }}>
-          {r.isTeam
-            ? <span className="rounded-full inline-flex items-center justify-center"
-                style={{ width: 18, height: 18, background: "color-mix(in srgb, var(--primary) 24%, transparent)", color: "var(--text2)", fontSize: 7.5 }}>
-                {r.login.slice(0, 2).toUpperCase()}
-              </span>
-            : <Avatar login={r.login} size={18} />}
+          <ReviewerFace r={r} size={18} />
         </span>
       ))}
       {rest > 0 && <span className="ml-1 text-[10px] tabular-nums shrink-0" style={{ color: "var(--text3)" }}>+{rest}</span>}
@@ -1473,7 +1487,10 @@ export function PrView({ active, onOpenChatWith }: { active: boolean; onOpenChat
   };
   const doReviewers = async () => {
     if (!detail) return;
-    const cur = detail.reviewers;
+    // Logins, which is what the endpoint takes. A team arrives here under its
+    // name for want of anywhere better to put it — exactly as it did when this
+    // list was strings, so nothing about requesting one changes here.
+    const cur = detail.reviewers.map((r) => r.login);
     const next = await askText({
       title: `Reviewers on #${detail.number}`, confirmLabel: "Save",
       input: { label: "Comma-separated logins — remove one by deleting it", initial: cur.join(", ") },
@@ -2240,13 +2257,15 @@ function SidebarSection({ title, onEdit, children }: { title: string; onEdit?: (
   );
 }
 
-function SidebarPeople({ logins, empty }: { logins: string[]; empty: string }) {
-  if (!logins.length) return <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{empty}</span>;
+/** Reviewers and assignees are both lists of people. Only a reviewer can be a
+ *  team, so an assignee is one with nothing to flag. */
+function SidebarPeople({ people, empty }: { people: PrReviewer[]; empty: string }) {
+  if (!people.length) return <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>{empty}</span>;
   return (
     <div className="flex flex-col gap-1">
-      {logins.map((l) => (
-        <span key={l} className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
-          <Avatar login={l} size={16} />{l}
+      {people.map((p) => (
+        <span key={p.login} className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text2)" }}>
+          <ReviewerFace r={p} size={16} />{p.login}
         </span>
       ))}
     </div>
@@ -2260,10 +2279,10 @@ function PrSidebar({ d, onLabels, onReviewers, onAssignees, onMilestone }: {
   return (
     <aside className="shrink-0 w-[248px] pl-4 hidden lg:block" style={{ borderLeft: "1px solid color-mix(in srgb, var(--border) 20%, transparent)" }}>
       <SidebarSection title="Reviewers" onEdit={onReviewers}>
-        <SidebarPeople logins={d.reviewers} empty="No reviewers" />
+        <SidebarPeople people={d.reviewers} empty="No reviewers" />
       </SidebarSection>
       <SidebarSection title="Assignees" onEdit={onAssignees}>
-        <SidebarPeople logins={d.assignees} empty="No one assigned" />
+        <SidebarPeople people={d.assignees.map((login) => ({ login }))} empty="No one assigned" />
       </SidebarSection>
       <SidebarSection title="Labels" onEdit={onLabels}>
         {d.labels.length
@@ -2398,7 +2417,7 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLab
         <Field label="Reviewers">
           {d.reviewers.length === 0
             ? <span style={{ color: "var(--text3)" }}>nobody yet</span>
-            : d.reviewers.map((r) => <span key={r} className="flex items-center gap-1"><Avatar login={r} size={14} />{r}</span>)}
+            : d.reviewers.map((r) => <span key={r.login} className="flex items-center gap-1"><ReviewerFace r={r} size={14} />{r.login}</span>)}
           <button onClick={onReviewers} disabled={busy} title="Request a review" className="agx-inline-add">＋</button>
         </Field>
         <Field label="Assignee">

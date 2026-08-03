@@ -1518,7 +1518,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     mergeable: p.mergeable || "UNKNOWN",
     mergeState: mergeStateOf(p.mergeStateStatus, !!p.isDraft),
     checklist: parseChecklist(p.body || ""),
-    reviewers: (p.reviewRequests?.nodes || []).map((n: any) => n.requestedReviewer?.login || n.requestedReviewer?.name).filter(Boolean),
+    reviewers: mapReviewers(p.reviewRequests?.nodes),
     assignees: (p.assignees?.nodes || []).map((n: any) => n.login),
     reviews, comments, threads, commits, files,
     forcePushedSinceReview,
