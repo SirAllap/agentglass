@@ -36,6 +36,7 @@ import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
 import { loadViewOrder, type ViewId } from "./workspace/views.ts";
+import { ThemePicker } from "./ThemePicker.tsx";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
   return (
@@ -131,8 +132,9 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "prefs" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
+type Pane = "appearance" | "prefs" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
 const TABS: { id: Pane; label: string }[] = [
+  { id: "appearance", label: "Appearance" },
   { id: "prefs", label: "Preferences" },
   { id: "keys", label: "Shortcuts" },
   { id: "open", label: "Open" },
@@ -799,10 +801,11 @@ function RequirementsPane({ open }: { open: boolean }) {
   );
 }
 
-export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp }: {
+export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp, theme, onTheme }: {
   open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
   scale: number; onZoom: (dir: 1 | -1 | 0) => void;
   onOpenStats: () => void; onOpenHelp: () => void;
+  theme: string; onTheme: (id: string) => void;
 }) {
   // Launch-at-login belongs to the installed app, so the row exists only in the
   // desktop window — and only once the shell has confirmed the current state,
@@ -943,6 +946,16 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   </div>
 
                   <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+                  {pane === "appearance" && (
+                  <Section title="Appearance">
+                    {/* The theme drives everything — app chrome, the terminal's
+                        own palette, and on the desktop it is synced out to tmux
+                        and nvim too. It used to live in the masthead; it belongs
+                        here, where a control this heavy isn't in the way. */}
+                    <p className="px-3 pb-1 text-[11px] t-dim2">One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.</p>
+                    <ThemePicker current={theme} onChange={onTheme} />
+                  </Section>
+                  )}
                   {pane === "prefs" && (
                   <Section title="Preferences">
                     {/* Desktop only, like launch-at-login: in a browser tab the

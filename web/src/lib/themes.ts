@@ -70,6 +70,28 @@ export const THEMES: Theme[] = [
 export const DEFAULT_THEME = "github-dark";
 
 /**
+ * The decorative and second-flavour palettes, demoted behind a "more themes"
+ * disclosure in the picker — kept for tinkering, never removed. Anything NOT in
+ * this set is a curated default, so a new serious theme shows up front with no
+ * extra flag, the same way the rest of this file avoids per-theme booleans.
+ */
+export const EXPERIMENTAL_THEME_IDS = new Set<string>([
+  "github-dark-dimmed", "catppuccin-macchiato", "catppuccin-frappe",
+  "midnight-purple", "dark", "dark-blue", "forest", "ember", "rosewood", "deep-sea",
+  "midnight-purple-light", "light", "blue-light", "forest-light", "ember-light",
+  "rosewood-light", "deep-sea-light", "nord-light",
+]);
+
+/** Dark by the luminance of its background — no per-theme flag needed. Shared by
+ *  the picker to split each list into a dark run and a light one. */
+export function isDarkTheme(t: Theme): boolean {
+  const hex = (t.vars["--bg"] ?? "#000").replace("#", "");
+  const v = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex;
+  const n = parseInt(v, 16);
+  return 0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255) < 128;
+}
+
+/**
  * Paint the app in a theme.
  *
  * `sync` carries the palette out to tmux and nvim, and defaults to off because
