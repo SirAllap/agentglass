@@ -297,6 +297,41 @@
  * top, which on a dark panel lands well under anything legible — and it is the
  * one line of text in an empty field, so it is the only thing there to read.
  * `opacity: 1` because the UA sets one and the colour alone would not win. */
+/* A field that looks like a field.
+ *
+ * Of the 49 text inputs in this app, 26 declared no surface at all: transparent
+ * on the panel, with whatever border the component happened to give it. On the
+ * neutral themes that is an invisible box — the Review tab's comment area was a
+ * placeholder floating on the page with no edge anywhere.
+ *
+ * Both the wash and the edge are mixed from --text rather than from a surface
+ * or a border colour, for the reason the inline code chip is: mixing the text
+ * colour into transparent always moves away from the background, whichever
+ * direction the theme runs, so one rule covers the light themes and the dark
+ * ones.
+ *
+ * `:where()` so this has zero specificity. It is a floor, not a policy: every
+ * component that styles its own field still wins, and the 23 that already do
+ * are untouched.
+ */
+:where(
+  input:not([type]),
+  input[type="text"], input[type="search"], input[type="url"],
+  input[type="email"], input[type="number"], input[type="password"],
+  textarea
+) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 6px;
+  color: var(--text);
+}
+
+/* Focus moves the edge, not just the ring: the ring is for the keyboard, and
+   this is for knowing which box you are typing in. */
+:where(input, textarea):focus {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
 :where(textarea, input)::placeholder {
   color: var(--text3);
   opacity: 1;
