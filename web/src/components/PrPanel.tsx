@@ -2373,6 +2373,15 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLab
             {d.title}
           </span>
         </div>
+        {/* Out of the menu and onto the masthead. This is the one action here
+            that is the reason the panel exists — handing a pull request to an
+            agent instead of to a browser tab — and it was three clicks deep
+            behind a ⋯ that also holds "Close pull request". Beside the menu
+            rather than inside it. */}
+        <Btn onClick={onLocalReview} disabled={busy} primary small
+          title="Open a chat with the review prompt ready. Reads only: no checkout, nothing written to this repository">
+          ✦ Review with Claude
+        </Btn>
         <Menu label="⋯" title="More actions">
           {(close) => (
             <>
@@ -2388,7 +2397,6 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onLab
               <MenuSep />
               <MenuItem onClick={() => { close(); onCopyLink(); }}>🔗 Copy link</MenuItem>
               <MenuItem onClick={() => { close(); openExternal(d.url); }}>↗ Open on GitHub</MenuItem>
-              <MenuItem onClick={() => { close(); onLocalReview(); }}>✦ Review with Claude</MenuItem>
               {d.state !== "MERGED" && <>
                 <MenuSep />
                 <MenuItem onClick={() => { close(); onClose(); }} danger={d.state !== "CLOSED"}>
