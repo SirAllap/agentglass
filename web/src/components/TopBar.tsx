@@ -246,9 +246,27 @@ export function TopBar({
         <span className="text-[8px]" style={{ color: "var(--text4)" }}>▾</span>
       </button>
 
-      {/* ── the middle: state, or the thing that wants you ────────── */}
-      <div className="flex-1 min-w-0 flex items-center justify-center gap-3 overflow-hidden">
-        {alarm ? (
+      {/* The live state belongs with what it is about — this project, these
+          shells — not adrift in the middle of the bar. */}
+      <Item cap="live" dim={quiet} title={`${shells} shell${shells === 1 ? "" : "s"} running`}>
+        <span className="rounded-full" style={{ width: 6, height: 6, background: shells ? "var(--success)" : "color-mix(in srgb, var(--text) 22%, transparent)" }} />
+        <b className="text-[10.5px] tabular-nums" style={{ color: "var(--text)" }}>{shells}</b>
+      </Item>
+      {waiting > 0 && (
+        <Item cap="chats" dim={quiet} title="Chats that replied while you were elsewhere">
+          <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success)" }}>{waiting}</b>
+        </Item>
+      )}
+
+      {/* ── the middle: nothing, until something wants you ─────────── */}
+      {/* Absolutely centred rather than a flex remainder between two groups of
+          different widths, which is centred on the leftover space and therefore
+          on nothing. When the bar is calm this is empty on purpose: a strip
+          whose middle always has something in it has nowhere left to put the
+          one thing that matters. */}
+      <div className="flex-1 min-w-0" />
+      {alarm && (
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ top: 0, bottom: 0 }}>
           <button onClick={onGoNeeds} className="flex items-center gap-2 px-2.5 py-[1px] rounded-full shrink-0"
             style={{
               color: "var(--warning)",
@@ -258,22 +276,10 @@ export function TopBar({
             }}>
             <span className="rounded-full" style={{ width: 6, height: 6, background: "var(--warning)" }} />
             <span className="text-[10px] font-semibold truncate" style={{ maxWidth: 260 }}>{needs!.label}</span>
-            <span className="text-[9px] opacity-75">ir ⏎</span>
+            <span className="text-[9px] opacity-75">go ⏎</span>
           </button>
-        ) : (
-          <>
-            <Item cap="live" dim={quiet} title={`${shells} shell${shells === 1 ? "" : "s"} running`}>
-              <span className="rounded-full" style={{ width: 6, height: 6, background: shells ? "var(--success)" : "color-mix(in srgb, var(--text) 22%, transparent)" }} />
-              <b className="text-[10.5px] tabular-nums" style={{ color: "var(--text)" }}>{shells}</b>
-            </Item>
-            {waiting > 0 && (
-              <Item cap="chats" dim={quiet} title="Chats that replied while you were elsewhere">
-                <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success)" }}>{waiting}</b>
-              </Item>
-            )}
-          </>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* ── the plan, the clock, the way in ───────────────────────── */}
       <div className="flex items-center gap-2.5 shrink-0">

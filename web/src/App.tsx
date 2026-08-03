@@ -11,7 +11,8 @@ import { subscribeControl } from "./lib/controlBus.ts";
 import { latchChatIntent } from "./lib/chatIntent.ts";
 import type { ControlCmd } from "../../shared/types.ts";
 import { actionFor } from "./lib/keybindings.ts";
-import { currentScale, nudgeScale, resetScale } from "./lib/uiScale.ts";
+import { currentScale } from "./lib/uiScale.ts";
+import { zoomAtPointer, type ZoomResult } from "./lib/zoomTarget.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
 import { useAlertSound } from "./lib/useSound.ts";
 import { TopBar } from "./components/TopBar.tsx";
@@ -31,6 +32,7 @@ import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
+import { ZoomToast } from "./components/ZoomToast.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
@@ -91,6 +93,8 @@ export default function App() {
   // Mirrors the window's zoom for the settings row to read. The scale itself
   // lives in lib/uiScale.ts, applied before this component ever mounts.
   const [scale, setScale] = useState(currentScale);
+  /** The last zoom, for the pill that says what changed and how big it is. */
+  const [zoomed, setZoomed] = useState<(ZoomResult & { n: number }) | null>(null);
   const [workspace, setWorkspace] = useState<string | null>(null);
 
   const [projectOpen, setProjectOpen] = useState(false);
@@ -333,8 +337,22 @@ export default function App() {
   // Zoom steps through a fixed ladder rather than taking a target, so every
   // caller (keys, settings, palette) lands on the same rungs. uiScale owns the
   // real value; this only echoes it back for display.
+  /**
+   * Zoom whatever the pointer is over: the terminal's font over a terminal, the
+   * window everywhere else.
+   *
+   * One gesture for what used to be two unrelated ones — Ctrl+/Ctrl− scaled the
+   * window, and the terminal's size was a stepper in Settings → Terminal. So
+   * making the shell readable also blew up the UI, and making the UI readable
+   * shrank nothing you were reading. There is no mode to be in: you are already
+   * pointing at the thing you want bigger.
+   */
   const zoom = useCallback((dir: 1 | -1 | 0) => {
-    setScale(dir === 0 ? resetScale() : nudgeScale(dir));
+    const r = zoomAtPointer(dir);
+    // `n` increments so holding the key reads as one adjustment rather than a
+    // stack of identical toasts — see ZoomToast.
+    setZoomed((cur) => ({ ...r, n: (cur?.n ?? 0) + 1 }));
+    if (r.what === "app") setScale(currentScale());
   }, []);
 
   // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, single-letter panels, Esc closes
@@ -369,9 +387,9 @@ export default function App() {
 
       if ((e.metaKey || e.ctrlKey) && !e.altKey) {
         const k = e.key;
-        if (k === "=" || k === "+") { e.preventDefault(); setScale(nudgeScale(1)); return; }
-        if (k === "-" || k === "_") { e.preventDefault(); setScale(nudgeScale(-1)); return; }
-        if (k === "0") { e.preventDefault(); setScale(resetScale()); return; }
+        if (k === "=" || k === "+") { e.preventDefault(); zoom(1); return; }
+        if (k === "-" || k === "_") { e.preventDefault(); zoom(-1); return; }
+        if (k === "0") { e.preventDefault(); zoom(0); return; }
 
         // Workspace navigation, and the reason it carries a modifier: these
         // have to work while the caret sits in the chat composer or a commit
@@ -524,7 +542,11 @@ export default function App() {
           setTheme((cur) => nextThemeId(cur, cmd));
           break;
         case "zoom":
-          setScale(cmd.dir === 0 ? resetScale() : nudgeScale(cmd.dir));
+          // Through the same door as the keys, so a remote controller and a
+          // keystroke cannot disagree about what "zoom" means. There is no
+          // pointer in a remote command, so it lands on the window — which is
+          // what an external controller can sensibly mean by it.
+          zoom(cmd.dir);
           break;
         case "chat":
           // Latch before opening: the panel drains the mailbox on mount, so
@@ -602,6 +624,7 @@ export default function App() {
           the update button restarts into a new build and otherwise says nothing
           about what changed. */}
       <WhatsNew />
+      <ZoomToast zoom={zoomed} />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

@@ -32,7 +32,9 @@ export const CURSORS: { v: CursorStyle; label: string }[] = [
 
 export const SIZE_MIN = 9;
 export const SIZE_MAX = 22;
-const DEFAULT_SIZE = 13;
+/** Exported so anything that resets the size resets it to the same number the
+ *  settings page calls default. */
+export const DEFAULT_SIZE = 13;
 
 const FONT_KEY = "agentglass-term-font";
 const SIZE_KEY = "agentglass-term-size";

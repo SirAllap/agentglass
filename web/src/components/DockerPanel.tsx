@@ -243,7 +243,7 @@ function DetailPane({ tab, env, config, top, error }: {
   }
   return (
     <pre className="agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre m-0"
-      style={{ ...CODE_FONT_STYLE, background: "var(--veil)", color: "var(--text2)" }}>{text}</pre>
+      style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{text}</pre>
   );
 }
 
@@ -671,7 +671,7 @@ export function DockerView({ active }: { active: boolean }) {
                           {tab === "env" || tab === "config" || tab === "top" ? (
                             <DetailPane tab={tab} env={env} config={config} top={top} error={detailErr} />
                           ) : tab === "logs" ? (
-                            <pre ref={logRef} onScroll={(e) => { const el = e.currentTarget; stuckBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 28; }} className="agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre-wrap break-all" style={{ ...CODE_FONT_STYLE, background: "var(--veil)", color: "var(--text2)" }}>{logs
+                            <pre ref={logRef} onScroll={(e) => { const el = e.currentTarget; stuckBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 28; }} className="agx-veil agx-scroll flex-1 min-h-0 overflow-auto text-[11px] leading-[1.55] px-4 py-2 whitespace-pre-wrap break-all" style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{logs
                               ? logs.split("\n").map((l, i) => <LogLine key={i} line={l} />)
                               : "…"}</pre>
                           ) : (

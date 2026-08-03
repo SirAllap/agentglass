@@ -1052,7 +1052,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             <Toggle onClick={() => copy("diff")} title="Copy unified diff">{copied === "diff" ? "Copied ✓" : "Diff"}</Toggle>
                           </div>
                         </div>
-                        <div ref={paneRef} className="flex-1 min-h-0 flex relative" style={{ background: "var(--veil)" }}>
+                        <div ref={paneRef} className="flex-1 min-h-0 flex relative agx-veil">
                           <HiliteCtx.Provider value={selected.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000 ? { ...hilite, theme: null } : hilite}>{split ? <SplitDiff c={selected} wrap={wrap} /> : <UnifiedDiff c={selected} wrap={wrap} />}</HiliteCtx.Provider>
                         </div>
                         <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}>

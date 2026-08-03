@@ -994,7 +994,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
         <span className="ml-auto text-[9px] t-dim2 shrink-0">Drag to resize</span>
         <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="Hide the console (the shell keeps running)">✕</button>
       </div>
-      <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--veil)" }} onClick={() => sess?.term.focus()} />
+      <div ref={slot} className="flex-1 min-h-0 agx-veil" onClick={() => sess?.term.focus()} />
     </div>
   );
 }
@@ -1597,7 +1597,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 )}
 
                 {/* the terminals — one slot per visible pane */}
-                <div className="flex-1 min-h-0 relative" style={{ background: "var(--veil)" }}>
+                <div className="flex-1 min-h-0 relative agx-veil">
                   {/* The gap survives — it separates two panes and is doing real
                       work. The outer padding does not: with one pane it is pure
                       dead margin, and a full-screen TUI is drawn right to the
@@ -1622,7 +1622,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         // edge, so tmux's frame and vim's status line come out
                         // visibly chewed. Only round it when the pane is ours
                         // to decorate.
-                        className={`min-w-0 min-h-0 overflow-hidden ${tmuxActive ? "" : "rounded-lg"}`}
+                        className={`agx-veil min-w-0 min-h-0 overflow-hidden ${tmuxActive ? "" : "rounded-lg"}`}
                         style={{
                           // The terminal's ground. xterm can only draw whole
                           // character cells, so a container that isn't an exact
@@ -1632,7 +1632,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           // different tone from the cells. Since the cells are
                           // now transparent, this IS the terminal's background,
                           // and the strip matches by construction.
-                          background: "var(--veil)",
                           border: paneIds.length > 1 && i === focusIdx
                             ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)"
                             : "1px solid transparent",

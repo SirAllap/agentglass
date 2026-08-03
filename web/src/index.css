@@ -140,7 +140,34 @@
       linear-gradient(color-mix(in srgb, var(--primary) 7%, transparent) 1px, transparent 1px),
       linear-gradient(90deg, color-mix(in srgb, var(--primary) 7%, transparent) 1px, transparent 1px);
     background-size: 36px 36px;
-    mask-image: radial-gradient(120% 100% at 50% 0%, black, transparent 80%);
+    /* It used to fade out by 80% of the viewport height, which put the bottom
+       fifth of every window — and most of any full-height view — on a flat
+       ground. Now it only softens at the very edge, so the texture is a
+       property of the window rather than of its top corner. */
+    mask-image: radial-gradient(150% 130% at 50% 0%, black 70%, transparent);
+  }
+
+  /*
+   * A working surface: the veil, and the grid drawn ON it.
+   *
+   * The first attempt put the veil on and expected the backdrop to show
+   * through. It does not, and the reason is measurable rather than a matter of
+   * taste: `.aurora-grid` is 7% of the accent and masked to nothing below 80%
+   * of the viewport height, so under a 78% veil a line lands at about 1.5%
+   * effective opacity, in a region where the mask has already removed it. A
+   * veil over nothing is just the ground.
+   *
+   * So the texture is painted here instead of peered at. Same 36px pitch as the
+   * backdrop, so the two read as one surface where they meet, and no dependence
+   * on stacking contexts, masks or what happens to be behind — which is what
+   * makes it identical in the terminal, the diff and a log pane.
+   */
+  .agx-veil {
+    background-color: var(--veil);
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--primary) 5.5%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--primary) 5.5%, transparent) 1px, transparent 1px);
+    background-size: 36px 36px;
   }
 
   .panel {
@@ -286,6 +313,14 @@
 :root[data-ws="1"] [style*="ping-ring"] {
   animation-play-state: paused !important;
 }
+/* The zoom pill's entrance. Short, and only on the way in: it is replaced by
+   the next press, and an exit would leave the old number on screen while the
+   new one is already true. */
+@keyframes agx-zoom-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 @keyframes ping-ring {
   0% { transform: scale(0.6); opacity: 0.8; }
   100% { transform: scale(2.4); opacity: 0; }
