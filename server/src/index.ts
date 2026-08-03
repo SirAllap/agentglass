@@ -30,7 +30,7 @@ import { noteAction, actorOf } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { vapidKeys, addSubscription, removeSubscription, removeDevice, deviceId, subscriptions } from "./pushstore.ts";
-import { getUsage } from "./usage.ts";
+import { getUsage, ingestStatusline } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
@@ -891,6 +891,31 @@ const server = Bun.serve<WsData>({
 
     if (pathname === "/insights") return json({ insights: getInsights() });
     if (pathname === "/usage") return json(await getUsage()); // Anthropic plan-limit windows (only meaningful for Claude)
+
+    /*
+     * A live Claude Code session handing over the plan windows it got for free
+     * with its last API response — see hooks/statusline.sh and usage.ts.
+     *
+     * Authenticated like everything else rather than joining the tokenless
+     * intake sinks. Those are append-only telemetry from a process that has no
+     * way to carry a secret; this one does — it runs as the user and reads the
+     * same token file the server does. And unlike an event, what arrives here
+     * *replaces* what the meters say, so on a server bound to anything but
+     * loopback a tokenless version would let anyone on the network decide what
+     * this machine believes about its own plan.
+     */
+    if (pathname === "/statusline" && req.method === "POST") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      // `used: false` is a real answer, not a failure: most payloads carry no
+      // rate_limits at all (the CLI only sends them for subscriber sessions,
+      // and only after the first response of the session).
+      return json({ ok: true, used: ingestStatusline(body) });
+    }
 
     // --- control plane: gate ---
     if (pathname === "/gate" && req.method === "POST") {

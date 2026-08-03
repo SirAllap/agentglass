@@ -161,6 +161,76 @@ function win(w: any): UsageWindow | undefined {
 }
 
 /**
+ * When a window resets, however the CLI chose to say it.
+ *
+ * Seconds since the epoch is what it sends today; a string is accepted so a
+ * schema change degrades to a missing reset time rather than to a date in
+ * 1970 or in the year 58,000. A number that is plainly milliseconds is read as
+ * milliseconds for the same reason — guessing wrong here puts "resets in 45
+ * years" on a status strip.
+ */
+function statuslineReset(v: unknown): string | null {
+  if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+    const ms = v > 1e12 ? v : v * 1000;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }
+  if (typeof v === "string" && v.trim()) {
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? null : new Date(t).toISOString();
+  }
+  return null;
+}
+
+/** One window out of a statusline payload. `used_percentage` is what the CLI
+ *  sends; `utilization` is accepted as the usage endpoint's name for the same
+ *  number, so one schema drifting toward the other costs nothing. */
+function statuslineWindow(w: any): UsageWindow | undefined {
+  if (!w || typeof w !== "object") return undefined;
+  const raw = typeof w.used_percentage === "number" ? w.used_percentage
+    : typeof w.utilization === "number" ? w.utilization
+    : null;
+  if (raw === null || !Number.isFinite(raw)) return undefined;
+  const used = Math.round(Math.min(100, Math.max(0, raw)));
+  return { utilization: used, remaining: 100 - used, resets_at: statuslineReset(w.resets_at) };
+}
+
+/**
+ * A reading handed over by a live Claude Code session instead of fetched.
+ *
+ * Claude Code pipes `rate_limits` to its statusLine command on every turn,
+ * carried on the Messages API response it already made — the same account-wide
+ * numbers this module otherwise pays the usage endpoint for, for free. That
+ * makes this the preferred source and the poll above the fallback, which is the
+ * point: the endpoint is tight enough to answer 429 to a third call inside four
+ * minutes, and a machine running agents all day is asking it constantly.
+ *
+ * Accepting one also postpones the next fetch by a full TTL. Free numbers are
+ * a reason not to spend budget, not a reason to spend it sooner.
+ *
+ * `failures` is deliberately left alone. It tracks how the endpoint has been
+ * treating us, and a session handing us numbers says nothing about that —
+ * resetting the backoff here would send us back at it every ten seconds the
+ * moment the sessions went quiet.
+ */
+export function ingestStatusline(raw: unknown, now: number = Date.now()): boolean {
+  const rl = (raw as any)?.rate_limits;
+  if (!rl || typeof rl !== "object") return false;
+  const five_hour = statuslineWindow(rl.five_hour);
+  const seven_day = statuslineWindow(rl.seven_day);
+  // Neither window readable is not a reading. Saying so lets the route answer
+  // honestly rather than reporting a success that changed nothing.
+  if (!five_hour && !seven_day) return false;
+
+  const next: UsagePayload = { available: true, five_hour, seven_day, fetched_at: now };
+  cache = next;
+  cacheAt = now;
+  lastGood = next;
+  persistLastGood(next);
+  return true;
+}
+
+/**
  * @param now Injected clock. Every decision here is a function of time — the
  *   TTL, the backoff, how long a reading outlives the fetch that got it — and a
  *   day-long window is not something a test can wait for.

@@ -30,9 +30,12 @@ let usage: typeof import("../src/usage.ts");
 const realFetch = globalThis.fetch;
 /** What the endpoint answers next. */
 let reply: () => Response = () => new Response("{}", { status: 500 });
+/** How many times the endpoint was actually asked — the point of the free feed
+ *  is that accepting one means not asking. */
+let calls = 0;
 
 beforeAll(async () => {
-  globalThis.fetch = (async () => reply()) as unknown as typeof fetch;
+  globalThis.fetch = (async () => { calls++; return reply(); }) as unknown as typeof fetch;
   usage = await import("../src/usage.ts");
 });
 afterAll(() => { globalThis.fetch = realFetch; });
@@ -165,5 +168,103 @@ describe("across a restart", () => {
       reply = failing(429);
       expect((await usage.getUsage(T2 + 4 * 24 * HOUR)).available).toBe(false);
     }
+  });
+});
+
+// The reading that costs nothing.
+//
+// Claude Code pipes `rate_limits` to its statusLine command on every turn,
+// carried on the Messages API response it already made. hooks/statusline.sh
+// forwards it here, which is the same account-wide numbers the endpoint above
+// answers with — except this copy is free, and the endpoint answers 429 to a
+// third call inside four minutes.
+describe("a reading handed over by a live session", () => {
+  const T3 = T0 + 60 * HOUR;
+  const statusline = (five: unknown, seven?: unknown) => ({
+    model: { display_name: "Opus" },
+    rate_limits: { five_hour: five, seven_day: seven },
+  });
+
+  test("both windows, with the reset time the CLI sends", async () => {
+    usage.__test_forgetEverything();
+    // resets_at arrives as seconds since the epoch.
+    const at = Math.floor((T3 + 3 * HOUR) / 1000);
+    expect(usage.ingestStatusline(
+      statusline({ used_percentage: 13, resets_at: at }, { used_percentage: 51 }), T3,
+    )).toBe(true);
+
+    calls = 0;
+    const u = await usage.getUsage(T3);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(13);
+    expect(u.five_hour?.remaining).toBe(87);
+    expect(u.five_hour?.resets_at).toBe(new Date(at * 1000).toISOString());
+    expect(u.seven_day?.utilization).toBe(51);
+    // The whole point: nothing was asked of the endpoint.
+    expect(calls).toBe(0);
+  });
+
+  test("accepting one postpones the next fetch by a full TTL", async () => {
+    // Free numbers are a reason not to spend budget, not a reason to spend it
+    // sooner. Ten minutes on, still nothing asked.
+    calls = 0;
+    reply = failing(429);
+    expect((await usage.getUsage(T3 + 10 * MIN)).five_hour?.utilization).toBe(13);
+    expect(calls).toBe(0);
+  });
+
+  test("it is what a restart finds", async () => {
+    usage.__test_forgetEverything();
+    calls = 0;
+    reply = failing(429);
+    const u = await usage.getUsage(T3 + 20 * MIN);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(13);
+    expect(u.fetched_at).toBe(T3);
+  });
+
+  test("`utilization` is accepted as the endpoint's name for the same number", () => {
+    usage.__test_forgetEverything();
+    expect(usage.ingestStatusline(statusline({ utilization: 7 }), T3)).toBe(true);
+  });
+
+  test("a percentage outside 0..100 is clamped rather than drawn off the end", async () => {
+    usage.__test_forgetEverything();
+    usage.ingestStatusline(statusline({ used_percentage: 140 }, { used_percentage: -3 }), T3);
+    const u = await usage.getUsage(T3);
+    expect(u.five_hour?.utilization).toBe(100);
+    expect(u.seven_day?.utilization).toBe(0);
+  });
+
+  test("a reset time in milliseconds is not read as the year 58,000", async () => {
+    usage.__test_forgetEverything();
+    const ms = T3 + HOUR;
+    usage.ingestStatusline(statusline({ used_percentage: 5, resets_at: ms }), T3);
+    expect((await usage.getUsage(T3)).five_hour?.resets_at).toBe(new Date(ms).toISOString());
+
+    // And an ISO string, should the schema ever drift to one.
+    usage.__test_forgetEverything();
+    usage.ingestStatusline(statusline({ used_percentage: 5, resets_at: "2026-08-05T12:00:00Z" }), T3);
+    expect((await usage.getUsage(T3)).five_hour?.resets_at).toBe("2026-08-05T12:00:00.000Z");
+  });
+
+  test("a payload with nothing in it changes nothing", async () => {
+    usage.__test_forgetEverything();
+    for (const junk of [
+      null, undefined, {}, { rate_limits: null }, { rate_limits: {} },
+      statusline(undefined, undefined),
+      statusline({ used_percentage: "lots" }),
+      statusline({ resets_at: 123 }),
+    ]) {
+      expect(usage.ingestStatusline(junk, T3)).toBe(false);
+    }
+    // Nothing was accepted, so there is still no reading to show — the feed
+    // cannot half-fill the meters with a payload it could not read. The file
+    // has to be cleared for that to mean anything: a reading persisted earlier
+    // would be restored here, correctly, and hide the very thing being asked.
+    await Bun.write(onDisk, "");
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    expect((await usage.getUsage(T3)).available).toBe(false);
   });
 });
