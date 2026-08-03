@@ -17,6 +17,7 @@ import type { FileEntry, GitRepoRef, GrepHit } from "../../../shared/types.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { FOLDER, FOLDER_OPEN, guides, iconFor, isNoise } from "../lib/fileIcons.ts";
 
 /** How a row is drawn depends only on this, so the tree and the search results
  *  cannot drift apart. */
@@ -156,6 +157,7 @@ function FilesBody({ root, branch, active }: { root: string; branch: string; act
  * after — which is also what makes a deep tree cheap to walk back through.
  */
 function Tree({ root, active, onOpen }: { root: string; active: boolean; onOpen: (rel: string) => void }) {
+  const rootName = root.split("/").filter(Boolean).pop() ?? root;
   const [levels, setLevels] = useState<Record<string, FileEntry[]>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -186,41 +188,94 @@ function Tree({ root, active, onOpen }: { root: string; active: boolean; onOpen:
   if (error) return <div className="p-5 text-[11.5px]" style={{ color: "var(--error)" }}>{error}</div>;
   if (loading && !levels[""]) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading the checkout…</div>;
 
-  const rows = (rel: string, depth: number): React.ReactNode[] =>
-    (levels[rel] ?? []).flatMap((e) => {
+  /**
+   * The rows, drawn the way nvim-tree draws them.
+   *
+   * `last` carries one flag per ancestor — was that ancestor the final child of
+   * its own parent — which is what decides between a pipe that keeps going and
+   * blank space. Without it the guides are just indentation with extra
+   * characters, and the eye cannot follow a nested folder back to its parent.
+   */
+  const rows = (rel: string, last: boolean[]): React.ReactNode[] => {
+    const list = levels[rel] ?? [];
+    return list.flatMap((e, i) => {
       const isOpen = open.has(e.rel);
+      const mine = [...last, i === list.length - 1];
+      const icon = iconFor(e.name, e.dir, isOpen);
+      const quiet = isNoise(e.name, e.dir);
       const row = (
         <button key={e.rel} onClick={() => (e.dir ? toggle(e.rel) : onOpen(e.rel))}
-          className="w-full text-left flex items-center gap-2 py-[3px] text-[11.5px] hover:bg-white/5"
-          style={{ paddingLeft: 20 + depth * 14, paddingRight: 20 }}
+          className="w-full text-left flex items-center py-[2px] text-[12px] leading-[1.5] hover:bg-white/5"
+          style={{ paddingLeft: 14, paddingRight: 16 }}
           title={e.dir ? e.rel : `${e.rel}${e.size != null ? ` · ${bytes(e.size)}` : ""}`}>
-          <span className="shrink-0 w-3 text-center" style={{ color: "var(--text3)" }}>{e.dir ? (isOpen ? "▾" : "▸") : ""}</span>
-          <span className="truncate" style={{ color: e.dir ? "var(--text)" : "var(--text2)" }}>{e.name}</span>
-          {e.status && (
-            <span className="ml-auto shrink-0 text-[9.5px]" style={{ color: MARK_TINT[e.status] ?? "var(--text4)" }}
-              title={e.status === "·" ? "something below this has changed" : `git status: ${e.status}`}>{e.status}</span>
-          )}
+          {/* One pre-formatted string rather than a span per level: the guides
+              are drawn with box characters in a monospaced face, so they line
+              up by construction and cost one text node instead of six. */}
+          <span className="shrink-0 whitespace-pre select-none" style={{ color: "color-mix(in srgb, var(--text) 22%, transparent)" }}>
+            {guides(mine)}
+          </span>
+          <span className="shrink-0 w-[1.6em] text-center" style={{ color: quiet ? "var(--text4)" : icon.tint }}>{icon.glyph}</span>
+          <span className="truncate" style={{
+            color: quiet ? "var(--text4)" : e.dir ? "var(--primary)" : "var(--text2)",
+            fontWeight: e.dir && !quiet ? 500 : 400,
+          }}>{e.name}</span>
+          {/* The right edge earns its keep: what changed, and how big it is.
+              A row of nothing but a filename in a 1900px window is what made
+              this look like a list somebody forgot to finish. */}
+          <span className="ml-auto shrink-0 flex items-center gap-3 pl-4">
+            {e.status && (
+              <span className="text-[10px] tabular-nums" style={{ color: MARK_TINT[e.status] ?? "var(--text4)" }}
+                title={e.status === "·" ? "something below this has changed" : `git status: ${e.status}`}>
+                {e.status === "·" ? "•" : e.status}
+              </span>
+            )}
+            {e.size != null && <span className="text-[10px] tabular-nums w-[62px] text-right" style={{ color: "var(--text4)" }}>{bytes(e.size)}</span>}
+          </span>
         </button>
       );
-      return isOpen ? [row, ...rows(e.rel, depth + 1)] : [row];
+      return isOpen ? [row, ...rows(e.rel, mine)] : [row];
     });
+  };
 
-  return <div className="py-1">{rows("", 0)}</div>;
+  const top = levels[""] ?? [];
+  return (
+    <div className="py-1">
+      {/* The checkout's own name at the head of the tree, the way an editor
+          roots its explorer — so a screenshot of this says which repository it
+          is without the header being in frame. */}
+      <div className="flex items-center gap-2 px-3 py-1 text-[12px]" style={{ color: "var(--text)" }}>
+        <span style={{ color: FOLDER_OPEN.tint }}>{FOLDER_OPEN.glyph}</span>
+        <span className="font-medium truncate">{rootName}</span>
+        <span className="ml-auto text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>
+          {top.filter((e) => e.dir).length} dirs · {top.filter((e) => !e.dir).length} files
+        </span>
+      </div>
+      {rows("", [])}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- search ----
 
-/** The tail of a path, which is what you are scanning for, with the directory
- *  kept but quieted — twelve rows all called `models.py` are told apart by the
- *  part in front, so it cannot be dropped. */
+/**
+ * One result: the file it is in, and whatever the caller wants under it.
+ *
+ * The whole path is kept — twelve results all called `models.py` are told apart
+ * only by what is in front — but quieted, and the name carries its own icon and
+ * its language's colour. A hundred grey rows is a wall you read linearly; the
+ * same hundred with a yellow Python glyph every few lines is a list you scan.
+ */
 function PathRow({ rel, onOpen, children }: { rel: string; onOpen: (rel: string) => void; children?: React.ReactNode }) {
   const cut = rel.lastIndexOf("/");
+  const name = rel.slice(cut + 1);
+  const icon = iconFor(name, false);
   return (
-    <button onClick={() => onOpen(rel)} className="w-full text-left px-5 py-1.5 hover:bg-white/5" title={rel}
+    <button onClick={() => onOpen(rel)} className="w-full text-left px-4 py-1.5 hover:bg-white/5" title={rel}
       style={{ borderBottom: edge(7) }}>
-      <div className="text-[11px] truncate">
-        {cut >= 0 && <span style={{ color: "var(--text3)" }}>{rel.slice(0, cut + 1)}</span>}
-        <span style={{ color: "var(--text)" }}>{rel.slice(cut + 1)}</span>
+      <div className="text-[11.5px] truncate flex items-baseline gap-1.5">
+        <span className="shrink-0" style={{ color: icon.tint }}>{icon.glyph}</span>
+        {cut >= 0 && <span style={{ color: "var(--text4)" }}>{rel.slice(0, cut + 1)}</span>}
+        <span style={{ color: icon.tint, fontWeight: 500 }}>{name}</span>
       </div>
       {children}
     </button>
@@ -271,8 +326,10 @@ function ContentHits({ root, q, onOpen }: { root: string; q: string; onOpen: (re
         <PathRow key={g.rel} rel={g.rel} onOpen={onOpen}>
           <div className="mt-1 flex flex-col gap-[1px]">
             {g.hits.map((h, i) => (
-              <div key={i} className="flex items-baseline gap-2 text-[10.5px]">
-                <span className="shrink-0 tabular-nums w-[46px] text-right" style={{ color: "var(--text4)" }}>{h.line}</span>
+              <div key={i} className="flex items-baseline gap-2 text-[11px]">
+                {/* The line number is a coordinate, not prose — its own tint,
+                    so the eye can run down the column without reading it. */}
+                <span className="shrink-0 tabular-nums w-[46px] text-right" style={{ color: "var(--info)", opacity: .75 }}>{h.line}</span>
                 <span className="flex-1 min-w-0 truncate" style={{ color: "var(--text2)" }}>
                   {h.len > 0 ? (
                     <>

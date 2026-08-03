@@ -12,13 +12,23 @@ const svg = {
 
 type P = { size?: number };
 
-/** A folder with a page in front of it: browsing a tree, not a repository. */
+/**
+ * A tree: a stem with three branches, each ending in a leaf.
+ *
+ * It was a folder with a page in front of it, which at 17px was neither — the
+ * two outlines overlapped into a smudge. This is the one shape in the rail
+ * nothing else is using, it is literally what the view draws, and it survives
+ * being small because it is four strokes and three dots.
+ */
 export function FilesIcon({ size = 15 }: P) {
   return (
     <svg {...svg} width={size} height={size}>
-      <path d="M3 6a1 1 0 0 1 1-1h4l2 2h5a1 1 0 0 1 1 1v3" />
-      <path d="M8 12h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z" />
-      <path d="M10 15h4M10 18h4" />
+      <path d="M6 4v14" />
+      <path d="M6 8h5M6 13h5M6 18h5" />
+      <circle cx="13.5" cy="8" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="13.5" cy="13" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="13.5" cy="18" r="1.6" fill="currentColor" stroke="none" />
+      <circle cx="6" cy="4" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   );
 }

@@ -10,7 +10,7 @@
 //
 // One surface, reachable from the dashboard and from inside the workspace,
 // because "is 5173 still up?" is a question you have while looking at anything.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import type { GitRepoRef, PortEntry, PortsReport, ProcEntry, ResourceReport, SpaceReport } from "../../../shared/types.ts";
@@ -60,7 +60,10 @@ export function MachinePanel({ tab, onTab, onClose, onOpenBrowser }: {
           <button onClick={onClose} aria-label="Close" className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[11px]"
             style={{ color: "var(--text2)", border: edge(18) }}>✕</button>
         </div>
-        <div className="flex-1 min-h-0 agx-scroll overflow-y-auto">
+        {/* Not a scroller itself: each tab owns its own scrolling, because
+            Resources pins a footer under one and a scroller here would push
+            that footer off the bottom instead. */}
+        <div className="flex-1 min-h-0 flex flex-col">
           {tab === "ports" ? <Ports onOpenBrowser={onOpenBrowser} /> : <Resources />}
         </div>
       </div>
@@ -111,8 +114,8 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
   if (data.error) return <Note tint="var(--warning)">{data.error}</Note>;
 
   return (
-    <div>
-      {note && <div className="px-3 py-1.5 text-[10.5px]" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>{note}</div>}
+    <div className="flex-1 min-h-0 agx-scroll overflow-y-auto">
+      {note && <div className="px-3.5 py-1.5 text-[10.5px]" style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>{note}</div>}
 
       <Group label="Yours" count={mine.length} />
       {mine.length === 0 && <Note>Nothing of yours is listening right now.</Note>}
@@ -145,21 +148,33 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
 
 function Row({ p, actions, dim }: { p: PortEntry; actions?: React.ReactNode; dim?: boolean }) {
   return (
-    <div className="group flex items-center gap-3 px-3 py-1.5" style={{ borderBottom: edge(7) }}>
-      <span className="tabular-nums shrink-0 w-[54px] text-[12.5px]"
-        style={{ color: dim ? "var(--text3)" : "var(--text)", fontWeight: dim ? 400 : 600 }}>{p.port}</span>
+    <div className="group flex items-center gap-3 px-3.5 py-1.5 hover:bg-white/5" style={{ borderBottom: edge(7) }}>
+      {/* A live socket, marked the way a running shell is marked everywhere
+          else here. Ours get the colour; the system's stay grey, because the
+          point of the section is which is which. */}
+      <span className="shrink-0 w-2 grid place-items-center">
+        <span style={{ width: 6, height: 6, borderRadius: 999, display: "block", background: dim ? "color-mix(in srgb, var(--text) 22%, transparent)" : "var(--success)" }} />
+      </span>
+      <span className="tabular-nums shrink-0 w-[52px] text-[13px]"
+        style={{ color: dim ? "var(--text3)" : "var(--primary)", fontWeight: dim ? 400 : 600 }}>{p.port}</span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[11.5px]" style={{ color: dim ? "var(--text2)" : "var(--text)" }}>
+        <span className="block truncate text-[11.5px]" style={{ color: dim ? "var(--text2)" : "var(--text)", fontWeight: dim ? 400 : 500 }}>
           {p.proc ?? "—"}
         </span>
-        <span className="block truncate text-[10px]" style={{ color: "var(--text3)" }}>
+        <span className="block truncate text-[10px]" style={{ color: "var(--text4)" }}>
           {p.addr}:{p.port}
           {p.pid != null && ` · pid ${p.pid}`}
-          {/* The cwd is the whole reason this beats `ss`: it names the checkout
-              the process was started in. */}
-          {p.cwd && ` · ${p.cwd.split("/").slice(-2).join("/")}`}
         </span>
       </span>
+      {/* The cwd is the whole reason this beats `ss`: it names the checkout the
+          process was started in, which is the fact you actually wanted. */}
+      {p.cwd && (
+        <span className="shrink-0 truncate text-[10px] px-1.5 py-0.5 rounded-full max-w-[190px]"
+          title={p.cwd}
+          style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
+          {p.cwd.split("/").filter(Boolean).pop()}
+        </span>
+      )}
       {actions && <span className="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">{actions}</span>}
     </div>
   );
@@ -167,126 +182,236 @@ function Row({ p, actions, dim }: { p: PortEntry; actions?: React.ReactNode; dim
 
 // ------------------------------------------------------------- resources ----
 
+/** How many samples the sparklines remember. At one poll every 2.5s that is
+ *  about a minute — long enough to see a build start, short enough that the
+ *  line is about now rather than about the session. */
+const HISTORY = 24;
+
 function Resources() {
   const [data, setData] = useState<ResourceReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  const [shut, setShut] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState<Set<string>>(new Set());
+  /** CPU over time, per group key. A ref rather than state: it is written on
+   *  every poll and read during the render that poll already caused, so making
+   *  it state would be a second render for a number nobody is waiting on. */
+  const history = useRef<Map<string, number[]>>(new Map());
+
+  const load = useCallback(() => {
+    api.machineResources()
+      .then((d) => { setData(d); setError(null); })
+      .catch((e) => setError(String(e)));
+  }, []);
 
   useEffect(() => {
-    const load = () => api.machineResources().then((d) => { setData(d); setError(null); }).catch((e) => setError(String(e)));
     load();
     const id = setInterval(load, POLL_MS);
     api.gitRepos().then(({ repos: r }) => setRepos(r)).catch(() => {});
     return () => clearInterval(id);
-  }, []);
+  }, [load]);
 
   /**
-   * Ours, grouped by the checkout each process was started in.
+   * Ours, as a tree: project → checkout → process.
    *
-   * The cwd does the grouping, and the repo list only supplies the NAME — so a
-   * process in a directory nobody has registered as a project still gets a row
-   * under its own path rather than disappearing into "other".
+   * Grouping by the raw cwd produced rows called "serallap", "dist" and
+   * "electron" — the directory a process happened to be started in, which is
+   * not a thing anybody is looking for. The repo list turns those into the two
+   * questions actually being asked: which PROJECT, and which CHECKOUT of it.
+   * Anything in no known checkout lands in one "Elsewhere" row rather than
+   * inventing a group per directory.
    */
-  const groups = useMemo(() => {
-    const byRoot = new Map<string, { label: string; branch: string; procs: ProcEntry[]; cpu: number; rss: number }>();
+  const tree = useMemo(() => {
+    type Leaf = { key: string; label: string; procs: ProcEntry[]; cpu: number; rss: number };
+    type Node = { key: string; label: string; kids: Leaf[]; cpu: number; rss: number };
+    const byProject = new Map<string, Node>();
+    const mkNode = (key: string): Node => ({ key, label: base(key), kids: [], cpu: 0, rss: 0 });
+    const loose: Leaf = { key: "~elsewhere", label: "Elsewhere", procs: [], cpu: 0, rss: 0 };
+
     for (const p of data?.procs ?? []) {
       if (!p.ours) continue;
       const repo = bestRepo(repos, p.cwd);
-      const key = repo?.root ?? p.cwd ?? "—";
-      const g = byRoot.get(key) ?? {
-        label: repo ? (repo.worktreeOf ? repo.branch : repo.name) : (p.cwd?.split("/").pop() ?? "elsewhere"),
-        branch: repo?.branch ?? "",
-        procs: [], cpu: 0, rss: 0,
-      };
-      g.procs.push(p);
-      g.cpu += p.cpu ?? 0;
-      g.rss += p.rss;
-      byRoot.set(key, g);
+      if (!repo) { loose.procs.push(p); loose.cpu += p.cpu ?? 0; loose.rss += p.rss; continue; }
+      const projectRoot = repo.worktreeOf ?? repo.root;
+      const node = byProject.get(projectRoot) ?? mkNode(projectRoot);
+      let leaf = node.kids.find((k) => k.key === repo.root);
+      if (!leaf) {
+        // A worktree IS its branch — that is what it was cut for. The main
+        // checkout is named by its directory, with the branch as an aside.
+        leaf = { key: repo.root, label: repo.worktreeOf ? repo.branch : base(repo.root), procs: [], cpu: 0, rss: 0 };
+        node.kids.push(leaf);
+      }
+      leaf.procs.push(p); leaf.cpu += p.cpu ?? 0; leaf.rss += p.rss;
+      node.cpu += p.cpu ?? 0; node.rss += p.rss;
+      byProject.set(projectRoot, node);
     }
-    return [...byRoot.entries()].map(([root, g]) => ({ root, ...g })).sort((a, b) => b.rss - a.rss);
+
+    const nodes = [...byProject.values()];
+    for (const n of nodes) n.kids.sort((a, b) => b.rss - a.rss);
+    nodes.sort((a, b) => b.rss - a.rss);
+    if (loose.procs.length) nodes.push({ key: loose.key, label: loose.label, kids: [loose], cpu: loose.cpu, rss: loose.rss });
+    return nodes;
   }, [data, repos]);
+
+  // Record this sample against every key on screen, so a line that appears
+  // later still starts empty rather than borrowing somebody else's shape.
+  if (data?.rated) {
+    for (const n of tree) {
+      push(history.current, n.key, n.cpu);
+      for (const k of n.kids) push(history.current, k.key, k.cpu);
+    }
+  }
 
   if (error) return <Note tint="var(--error)">{error}</Note>;
   if (!data) return <Note>Reading /proc…</Note>;
 
   const otherRss = Math.max(0, data.totalRss - data.oursRss);
   const otherCpu = data.totalCpu != null && data.oursCpu != null ? Math.max(0, data.totalCpu - data.oursCpu) : null;
+  const live = (data.procs ?? []).filter((p) => p.ours).length;
+  const flip = (key: string) => setShut((cur) => { const n = new Set(cur); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
   return (
-    <div>
-      <div className="flex items-baseline gap-3 px-3 py-2.5" style={{ borderBottom: edge(12) }}>
-        <span className="text-[19px] tabular-nums" style={{ color: "var(--text)" }}>
-          {data.oursCpu != null ? data.oursCpu.toFixed(1) : "—"}<span className="text-[12px]" style={{ color: "var(--text3)" }}>%</span>
-        </span>
-        <span className="text-[19px] tabular-nums" style={{ color: "var(--text)" }}>{gb(data.oursRss)}</span>
-        <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-          agentglass and everything it started
-          {/* Said, not hidden: the first sample after opening this has nothing
-              to compare against, and a "0.0%" that means "no reading yet" is a
-              lie a panel like this must not tell. */}
-          {!data.rated && " · CPU needs a second sample"}
-        </span>
-      </div>
-
-      <div className="grid px-3 py-1 text-[9.5px] uppercase tracking-wider"
-        style={{ gridTemplateColumns: "minmax(0,1fr) 68px 84px", color: "var(--text3)", borderBottom: edge(10) }}>
-        <span>Name</span><span className="text-right">CPU</span><span className="text-right">RSS</span>
-      </div>
-
-      {groups.length === 0 && <Note>Nothing of ours is running.</Note>}
-      {groups.map((g) => (
-        <div key={g.root}>
-          <Line label={g.label} cpu={g.cpu} rss={g.rss} depth={0} title={g.root} strong
-            aside={g.branch && g.branch !== g.label ? g.branch : undefined} />
-          {g.procs.slice(0, 12).map((p) => (
-            <Line key={p.pid} label={p.comm} cpu={p.cpu ?? 0} rss={p.rss} depth={1}
-              title={`${p.cmd || p.comm}\npid ${p.pid}\n${p.cwd ?? ""}`} aside={`pid ${p.pid}`} />
-          ))}
-          {g.procs.length > 12 && (
-            <div className="px-3 py-1 text-[10px]" style={{ color: "var(--text3)", paddingLeft: 34 }}>
-              …and {g.procs.length - 12} more in this checkout
-            </div>
-          )}
+    <div className="flex flex-col min-h-0 flex-1">
+      <div className="flex-1 min-h-0 agx-scroll overflow-y-auto">
+        <div className="flex items-baseline gap-3 px-3.5 py-3" style={{ borderBottom: edge(12) }}>
+          <span className="text-[22px] tabular-nums leading-none" style={{ color: "var(--text)" }}>
+            {data.oursCpu != null ? data.oursCpu.toFixed(1) : "—"}<span className="text-[12px]" style={{ color: "var(--text3)" }}>%</span>
+          </span>
+          <span className="text-[22px] tabular-nums leading-none" style={{ color: "var(--text)" }}>
+            {gb(data.oursRss).replace(" GB", "")}<span className="text-[12px]" style={{ color: "var(--text3)" }}> GB</span>
+          </span>
+          <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
+            Σ RSS · {live} process{live === 1 ? "" : "es"} of ours
+            {/* Said, not hidden: the first sample after opening has nothing to
+                compare against, and a "0.0%" that means "no reading yet" is a
+                lie a panel like this must not tell. */}
+            {!data.rated && " · CPU needs a second sample"}
+          </span>
+          <button onClick={load} title="Sample again now"
+            className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[11px]"
+            style={{ color: "var(--text2)", border: edge(18) }}>⟳</button>
         </div>
-      ))}
 
-      {/* One line, not four hundred: a browser's tab processes are not what this
-          panel is for, and the only thing worth knowing about them is how much
-          of the machine they leave. */}
-      <Line label="The rest of this machine" cpu={otherCpu ?? 0} rss={otherRss} depth={0} dim
-        aside={`${data.seen} processes seen`} />
+        <div className="grid px-3.5 py-1 text-[9.5px] uppercase tracking-wider"
+          style={{ gridTemplateColumns: COLS, color: "var(--text3)", borderBottom: edge(10) }}>
+          <span>Name</span><span /><span className="text-right">CPU</span><span className="text-right">RSS</span>
+        </div>
 
+        {tree.length === 0 && <Note>Nothing of ours is running.</Note>}
+        {tree.map((n) => {
+          const closed = shut.has(n.key);
+          return (
+            <div key={n.key}>
+              <Line label={n.label} cpu={n.cpu} rss={n.rss} depth={0} title={n.key} kind="project"
+                caret={closed ? "▸" : "▾"} onClick={() => flip(n.key)} spark={history.current.get(n.key)} />
+              {!closed && n.kids.map((k) => {
+                const kShut = shut.has(k.key);
+                const all = showAll.has(k.key);
+                const shown = all ? k.procs : k.procs.slice(0, 8);
+                return (
+                  <div key={k.key}>
+                    <Line label={k.label} cpu={k.cpu} rss={k.rss} depth={1} title={k.key} kind="checkout"
+                      caret={kShut ? "▸" : "▾"} onClick={() => flip(k.key)} spark={history.current.get(k.key)} />
+                    {!kShut && shown.map((p) => (
+                      <Line key={p.pid} label={p.comm} cpu={p.cpu ?? 0} rss={p.rss} depth={2} kind="proc"
+                        title={`${p.cmd || p.comm}\npid ${p.pid}\n${p.cwd ?? ""}`} aside={`pid ${p.pid}`} />
+                    ))}
+                    {!kShut && k.procs.length > shown.length && (
+                      <button onClick={() => setShowAll((c) => new Set(c).add(k.key))}
+                        className="w-full text-left px-3.5 py-1 text-[10px] hover:bg-white/5"
+                        style={{ paddingLeft: 3.5 * 4 + 2 * 16, color: "var(--primary)" }}>
+                        show {k.procs.length - shown.length} more in this checkout
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+
+        {/* One line, not four hundred: a browser's tab processes are not what
+            this panel is for, and the only thing worth knowing about them is
+            how much of the machine they leave. */}
+        <Line label="The rest of this machine" cpu={otherCpu ?? 0} rss={otherRss} depth={0} kind="other"
+          aside={`${data.seen} processes seen`} />
+      </div>
+
+      {/* Pinned, not appended. It was the last thing in a list that is ninety
+          rows long on this machine, which is the same as not shipping it. */}
       <Space repos={repos} />
     </div>
   );
 }
 
-function Line({ label, cpu, rss, depth, title, aside, strong, dim }: {
-  label: string; cpu: number; rss: number; depth: number; title?: string;
-  aside?: string; strong?: boolean; dim?: boolean;
+/** Name · sparkline · CPU · RSS. One grid, declared once, so a header and a row
+ *  cannot drift out of alignment. */
+const COLS = "minmax(0,1fr) 62px 66px 84px";
+
+function Line({ label, cpu, rss, depth, title, aside, kind, caret, onClick, spark }: {
+  label: string; cpu: number; rss: number; depth: number; title?: string; aside?: string;
+  kind: "project" | "checkout" | "proc" | "other";
+  caret?: string; onClick?: () => void; spark?: number[];
 }) {
   // Above a whole core, a number stops being a reading and becomes a finding.
   const hot = cpu >= 80;
+  const tint = kind === "other" ? "var(--text3)" : kind === "proc" ? "var(--text2)" : "var(--text)";
+  const Row = onClick ? "button" : "div";
   return (
-    <div className="grid items-center px-3 py-[3px] text-[11px]"
-      style={{ gridTemplateColumns: "minmax(0,1fr) 68px 84px", borderBottom: edge(6) }} title={title}>
-      <span className="min-w-0 flex items-center gap-2" style={{ paddingLeft: depth * 16 }}>
+    <Row
+      {...(onClick ? { onClick, type: "button" as const } : {})}
+      className={`grid items-center w-full text-left px-3.5 py-[3px] text-[11.5px] ${onClick ? "hover:bg-white/5" : ""}`}
+      style={{ gridTemplateColumns: COLS, borderBottom: edge(6) }} title={title}>
+      <span className="min-w-0 flex items-center gap-1.5" style={{ paddingLeft: depth * 16 }}>
+        {caret
+          ? <span className="shrink-0 w-3 text-[9px]" style={{ color: "var(--text3)" }}>{caret}</span>
+          : kind === "proc"
+            // A live process, marked the way a running shell is marked
+            // everywhere else in this app.
+            ? <span className="shrink-0 w-3 grid place-items-center"><span style={{ width: 5, height: 5, borderRadius: 999, background: "var(--success)", display: "block" }} /></span>
+            : <span className="shrink-0 w-3" />}
         <span className="truncate" style={{
-          color: dim ? "var(--text3)" : strong ? "var(--text)" : "var(--text2)",
-          fontWeight: strong ? 500 : 400,
+          color: tint,
+          fontWeight: kind === "project" ? 600 : kind === "checkout" ? 500 : 400,
+          letterSpacing: kind === "project" ? ".06em" : undefined,
+          textTransform: kind === "project" ? "uppercase" : undefined,
+          fontSize: kind === "project" ? 10.5 : undefined,
         }}>{label}</span>
-        {aside && <span className="shrink-0 text-[9.5px] truncate" style={{ color: "var(--text4)", maxWidth: 180 }}>{aside}</span>}
+        {aside && <span className="shrink-0 text-[9.5px] truncate" style={{ color: "var(--text4)", maxWidth: 190 }}>{aside}</span>}
       </span>
-      <span className="text-right tabular-nums" style={{ color: hot ? "var(--warning)" : dim ? "var(--text3)" : "var(--text2)" }}>
+      <span className="justify-self-end pr-1">{spark && spark.length > 2 ? <Spark values={spark} hot={hot} /> : null}</span>
+      <span className="text-right tabular-nums" style={{ color: hot ? "var(--warning)" : kind === "other" ? "var(--text3)" : "var(--text2)" }}>
         {cpu.toFixed(1)}%
       </span>
-      <span className="text-right tabular-nums" style={{ color: dim ? "var(--text3)" : "var(--text2)" }}>{mb(rss)}</span>
-    </div>
+      <span className="text-right tabular-nums" style={{ color: kind === "other" ? "var(--text3)" : "var(--text2)" }}>{mb(rss)}</span>
+    </Row>
   );
 }
 
 /**
- * Where a checkout's disk went.
+ * CPU over the last minute.
+ *
+ * Scaled to its own maximum, not to 100%: a group that idles between 0.2% and
+ * 0.9% is flat against a full core and its shape — which is the whole point of
+ * a sparkline — would be invisible. The number beside it carries the magnitude;
+ * this carries the movement.
+ */
+function Spark({ values, hot }: { values: number[]; hot: boolean }) {
+  const max = Math.max(0.5, ...values);
+  const step = 58 / Math.max(1, values.length - 1);
+  const d = values.map((v, i) => `${i * step},${13 - (v / max) * 11}`).join(" ");
+  return (
+    <svg width={60} height={14} viewBox="0 0 60 14" preserveAspectRatio="none" aria-hidden>
+      <polyline points={d} fill="none" strokeWidth={1.2} stroke={hot ? "var(--warning)" : "var(--success)"} strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/**
+ * Where a checkout's disk went — pinned to the bottom of the panel.
+ *
+ * Pinned, not appended: on this machine the process tree above is ninety rows,
+ * and a footer at the end of ninety rows is a footer nobody has ever seen.
  *
  * Asked for, never polled: `du` walks every inode under the directory, which is
  * seconds on a repository with a node_modules in it. And it reports only — a
@@ -298,49 +423,98 @@ function Space({ repos }: { repos: GitRepoRef[] }) {
   const [root, setRoot] = useState("");
   const [data, setData] = useState<SpaceReport | null>(null);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => { setRoot((cur) => cur || repos[0]?.root || ""); }, [repos]);
 
   const scan = async () => {
     if (!root) return;
     setBusy(true);
-    try { setData(await api.machineSpace(root)); } catch (e) { setData({ root, bytes: 0, freeable: 0, dirs: [], error: String(e) }); }
+    setOpen(true);
+    try { setData(await api.machineSpace(root)); }
+    catch (e) { setData({ root, bytes: 0, freeable: 0, dirs: [], error: String(e) }); }
     finally { setBusy(false); }
   };
 
   return (
-    <div className="px-3 py-2.5" style={{ borderTop: edge(14), background: "color-mix(in srgb, var(--text) 4%, transparent)" }}>
-      <div className="flex items-center gap-2 text-[11px] flex-wrap">
-        <span style={{ color: "var(--text)" }}>Disk</span>
-        <select value={root} onChange={(e) => { setRoot(e.target.value); setData(null); }}
+    <div className="shrink-0" style={{ borderTop: edge(16), background: "color-mix(in srgb, var(--text) 5%, transparent)" }}>
+      <div className="flex items-center gap-2 px-3.5 py-2 text-[11px] flex-wrap">
+        <span style={{ color: "var(--text3)" }}>⛁</span>
+        <span style={{ color: "var(--text)", fontWeight: 500 }}>Disk</span>
+        <select value={root} onChange={(e) => { setRoot(e.target.value); setData(null); setOpen(false); }}
           className="text-[10.5px] px-1.5 py-0.5 rounded outline-none min-w-0"
-          style={{ background: "var(--bg)", color: "var(--text2)", border: edge(20), maxWidth: 260 }}>
-          {repos.map((r) => <option key={r.root} value={r.root}>{r.worktreeOf ? r.branch : r.name}</option>)}
+          style={{ background: "var(--bg)", color: "var(--text2)", border: edge(20), maxWidth: 240 }}>
+          {repos.map((r) => <option key={r.root} value={r.root}>{r.worktreeOf ? r.branch : base(r.root)}</option>)}
         </select>
-        <button onClick={() => void scan()} disabled={busy || !root}
-          className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
-          style={{ color: "var(--text2)", border: edge(20) }}>{busy ? "Measuring…" : "⟳ Measure"}</button>
         {data && !data.error && (
           <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>
-            {mb(data.bytes)} · <span style={{ color: "var(--success)" }}>{mb(data.freeable)} rebuildable</span>
+            <b style={{ color: "var(--text2)", fontWeight: 500 }}>{mb(data.bytes)}</b>
+            {data.freeable > 0 && <> · <b style={{ color: "var(--success)", fontWeight: 500 }}>{mb(data.freeable)}</b> rebuildable</>}
           </span>
         )}
+        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+          {data && !data.error && (
+            <button onClick={() => setOpen((o) => !o)} className="agx-btn text-[10.5px] px-2 py-0.5 rounded"
+              style={{ color: "var(--text2)", border: edge(20) }}>{open ? "Hide" : "Show"} the breakdown</button>
+          )}
+          <button onClick={() => void scan()} disabled={busy || !root}
+            className="agx-btn text-[10.5px] px-2 py-0.5 rounded disabled:opacity-50"
+            style={busy
+              ? { color: "var(--text3)", border: edge(20) }
+              : { color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}>
+            {busy ? "Measuring…" : data ? "⟳ Measure again" : "⟳ Measure"}
+          </button>
+        </span>
       </div>
-      {data?.error && <div className="mt-1.5 text-[10.5px]" style={{ color: "var(--error)" }}>{data.error}</div>}
-      {data && !data.error && (
-        <div className="mt-2 flex flex-col gap-[2px]">
-          {data.dirs.slice(0, 8).map((d) => (
-            <div key={d.path} className="flex items-center gap-2 text-[10.5px]">
-              <span className="truncate min-w-0 flex-1" style={{ color: d.reclaimable ? "var(--warning)" : "var(--text2)" }}>{d.name}</span>
-              {d.reclaimable && <span className="shrink-0 text-[9px]" style={{ color: "var(--text4)" }}>rebuildable</span>}
-              <span className="shrink-0 tabular-nums w-[74px] text-right" style={{ color: "var(--text2)" }}>{mb(d.bytes)}</span>
-            </div>
-          ))}
-          <div className="mt-1 text-[9.5px]" style={{ color: "var(--text4)" }}>
+
+      {!data && !busy && (
+        <div className="px-3.5 pb-2 text-[10px]" style={{ color: "var(--text4)" }}>
+          Nothing is measured until you ask — `du` reads every file under the checkout, which takes seconds.
+        </div>
+      )}
+      {data?.error && <div className="px-3.5 pb-2 text-[10.5px]" style={{ color: "var(--error)" }}>{data.error}</div>}
+
+      {data && !data.error && open && (
+        <div className="px-3.5 pb-2.5">
+          <div className="grid gap-1.5 mb-2" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))" }}>
+            <Card k="On disk" v={mb(data.bytes)} />
+            <Card k="Rebuildable" v={mb(data.freeable)} tint="var(--success)" />
+            <Card k="Biggest" v={data.dirs[0] ? `${data.dirs[0].name}` : "—"} small />
+          </div>
+          <div className="flex flex-col gap-[3px]">
+            {data.dirs.slice(0, 8).map((d) => (
+              <div key={d.path} className="flex items-center gap-2 text-[10.5px]">
+                {/* A bar, because "676 MB" and "3 MB" in a column of numbers is
+                    a comparison you have to do in your head. */}
+                <span className="shrink-0 rounded-full" style={{
+                  width: 44, height: 4,
+                  background: "color-mix(in srgb, var(--text) 12%, transparent)",
+                }}>
+                  <span className="block h-full rounded-full" style={{
+                    width: `${Math.max(2, Math.round((d.bytes / Math.max(1, data.dirs[0]!.bytes)) * 100))}%`,
+                    background: d.reclaimable ? "var(--warning)" : "var(--primary)",
+                  }} />
+                </span>
+                <span className="truncate min-w-0 flex-1" style={{ color: d.reclaimable ? "var(--warning)" : "var(--text2)" }}>{d.name}</span>
+                {d.reclaimable && <span className="shrink-0 text-[9px]" style={{ color: "var(--text4)" }}>rebuildable</span>}
+                <span className="shrink-0 tabular-nums w-[74px] text-right" style={{ color: "var(--text2)" }}>{mb(d.bytes)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-1.5 text-[9.5px]" style={{ color: "var(--text4)" }}>
             Read only — nothing here deletes anything.
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function Card({ k, v, tint, small }: { k: string; v: string; tint?: string; small?: boolean }) {
+  return (
+    <div className="rounded-md px-2 py-1.5 min-w-0" style={{ border: edge(14) }}>
+      <div className="text-[9.5px] truncate" style={{ color: "var(--text3)" }}>{k}</div>
+      <div className={`${small ? "text-[10.5px]" : "text-[13px]"} tabular-nums truncate`} style={{ color: tint ?? "var(--text)" }}>{v}</div>
     </div>
   );
 }
@@ -352,7 +526,7 @@ const Note = ({ children, tint }: { children: React.ReactNode; tint?: string }) 
 
 function Group({ label, count, hint }: { label: string; count: number; hint?: string }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1 text-[10px] uppercase tracking-wider"
+    <div className="flex items-center gap-2 px-3.5 py-1.5 text-[10px] uppercase tracking-wider"
       style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 5%, transparent)", borderBottom: edge(10) }}>
       <span>{label}</span>
       {hint && <span className="normal-case tracking-normal text-[9.5px] truncate" style={{ color: "var(--text4)" }}>{hint}</span>}
@@ -383,6 +557,18 @@ function bestRepo(repos: GitRepoRef[], cwd: string | null): GitRepoRef | null {
     if (!best || r.root.length > best.root.length) best = r;
   }
   return best;
+}
+
+/** The last segment of a path — the name a directory is actually called. */
+const base = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
+
+/** Append a sample to a bounded history. Bounded here rather than at the reader
+ *  so a panel left open for an hour does not hold an hour of numbers. */
+function push(m: Map<string, number[]>, key: string, v: number): void {
+  const arr = m.get(key) ?? [];
+  arr.push(v);
+  if (arr.length > HISTORY) arr.splice(0, arr.length - HISTORY);
+  m.set(key, arr);
 }
 
 const mb = (n: number) => n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GB` : `${Math.round(n / 1024 ** 2)} MB`;
