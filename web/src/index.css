@@ -280,6 +280,28 @@
   border-radius: 6px;
 }
 
+/* ...but drawn inside a field that fills its container.
+ *
+ * A text field is laid out edge to edge inside the box that holds it, so an
+ * outline offset outwards is painted over — and past — that box's own border:
+ * focusing the comment composer put a ring around the outside of the card it
+ * lives in. Negative offset keeps the same signal, on the inside, where there
+ * is room for it. */
+:where(textarea, input, select):focus-visible {
+  outline-offset: -2px;
+}
+
+/* A placeholder at a contrast we chose.
+ *
+ * Chromium's default is a grey derived from the text colour with an opacity on
+ * top, which on a dark panel lands well under anything legible — and it is the
+ * one line of text in an empty field, so it is the only thing there to read.
+ * `opacity: 1` because the UA sets one and the colour alone would not win. */
+:where(textarea, input)::placeholder {
+  color: var(--text3);
+  opacity: 1;
+}
+
 /* Workspace rail.
  *
  * The rail is icon-only, so the tooltip is not decoration — it is the only
