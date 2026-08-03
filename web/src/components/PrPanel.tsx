@@ -4474,6 +4474,13 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
   const [verb, setVerb] = useState<"comment" | "approve" | "request_changes">("comment");
   const [body, setBody] = useState("");
   const [preview, setPreview] = useState(false);
+  /** Which queued comment is open. One at a time on purpose: the row of chips
+   *  is the thing that has to stay a row, and opening every remark at once is
+   *  the layout this replaced. */
+  const [openDraft, setOpenDraft] = useState<number | null>(null);
+  // Dropping one renumbers the rest, so an index held across that change points
+  // at somebody else's remark. Closed whenever the queue changes length.
+  useEffect(() => { setOpenDraft(null); }, [drafts.length]);
   const nothing = !body.trim() && drafts.length === 0;
 
   return (
@@ -4500,121 +4507,126 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
           </button>
         </div>
 
-        <div className="p-3 flex flex-col gap-2">
+        <div className="p-3 flex flex-col gap-2.5">
+          {/* Queued comments as chips, one open at a time.
+              Listed in full, this panel grew with the review: eleven cards and
+              the verdict was a scroll away from the evidence it is about. A
+              chip says where a remark landed — which is what you check when
+              scanning — and opening one is how you re-read it. */}
           {drafts.length > 0 ? (
-            /* The same block the diff shows, for the same comments. They were
-               listed here as one line of raw source each — backticks and all —
-               so the remark you are about to send read nothing like the remark
-               you wrote, and a long one was clipped into a strip. Each is its
-               own card now: where it lands, then the text rendered the way it
-               will be rendered. */
             <div className="flex flex-col gap-2">
-              <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--warning)" }}>
-                {drafts.length} pending comment{drafts.length === 1 ? "" : "s"} — sent with this review
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] uppercase tracking-wider shrink-0 mr-1" style={{ color: "var(--warning)" }}>Pending</span>
+                {drafts.map((c, i) => {
+                  const on = openDraft === i;
+                  const where = `${c.path.split("/").pop()}:${c.startLine && c.startLine !== c.line ? `${c.startLine}–${c.line}` : c.line}`;
+                  return (
+                    <button key={i} onClick={() => setOpenDraft(on ? null : i)} aria-expanded={on}
+                      // The full path in the title: the chip is short because a
+                      // row of them has to stay a row, and two files in a pull
+                      // request are called models.py more often than not.
+                      title={`${c.path}:${c.line}`}
+                      className="agx-btn text-[10.5px] px-2 py-0.5 rounded-full shrink-0"
+                      style={{
+                        color: "var(--warning)",
+                        border: `1px ${on ? "solid" : "dashed"} color-mix(in srgb, var(--warning) 55%, transparent)`,
+                        background: on ? "color-mix(in srgb, var(--warning) 16%, transparent)" : "transparent",
+                        ...CODE_FONT_STYLE,
+                      }}>
+                      {where} {on ? "▴" : "▾"}
+                    </button>
+                  );
+                })}
               </div>
-              {drafts.map((c, i) => (
-                <div key={i} className="rounded-lg overflow-hidden text-[11.5px]" style={{
+              {openDraft != null && drafts[openDraft] && (
+                <div className="rounded-lg overflow-hidden text-[11.5px]" style={{
                   background: "var(--bg2)",
                   border: "1px dashed color-mix(in srgb, var(--warning) 55%, transparent)",
                 }}>
                   <div className="px-2.5 py-1 flex items-center gap-2 text-[10px]"
                     style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
-                    {/* The whole path, not just the basename: two files in a
-                        pull request are called models.py more often than not. */}
                     <span className="min-w-0 truncate" style={{ ...CODE_FONT_STYLE }}>
-                      {c.path}:{c.startLine && c.startLine !== c.line ? `${c.startLine}–${c.line}` : c.line}
+                      {drafts[openDraft].path}:{drafts[openDraft].startLine && drafts[openDraft].startLine !== drafts[openDraft].line
+                        ? `${drafts[openDraft].startLine}–${drafts[openDraft].line}` : drafts[openDraft].line}
                     </span>
-                    <button onClick={() => onDrop(i)} title="Discard this pending comment"
+                    <button onClick={() => { const i = openDraft; setOpenDraft(null); onDrop(i); }}
+                      title="Discard this pending comment"
                       className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
                       style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
                   </div>
-                  <div className="px-2.5 py-2"><Md body={c.body} /></div>
+                  <div className="px-2.5 py-2"><Md body={drafts[openDraft].body} /></div>
                 </div>
-              ))}
+              )}
             </div>
           ) : (
             <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
               No line comments queued. Open <button onClick={onGoFiles} style={{ color: "var(--primary)" }}>files</button> and
-              use “+ Comment” on a hunk to attach one to a line.
+              use the “+” on a line to attach one.
             </div>
           )}
 
-          {/* The verdict, chosen before the note is written — it is what the
-              note is for, and each option says what submitting it does rather
-              than leaving you to infer it from one word. */}
-          {/* Stacked and bounded, not spread across the panel. `auto-fit` gave
-              each verdict a third of a 1900px window, so three choices sat a
-              screen apart and none of them read as a choice — GitHub keeps them
-              in a column you can take in at once, and so does this. */}
-          <div className="flex flex-col gap-1" style={{ maxWidth: 520 }}>
-            {([
-              ["approve", "✓ Approve", "Submit and mark the pull request approved.", "var(--success)"],
-              ["request_changes", "✕ Request changes", "Submit and block the merge until they land.", "var(--error)"],
-              ["comment", "💬 Comment", "Submit without a verdict.", "var(--text)"],
-            ] as const).map(([id, label, hint, tint]) => {
-              const on = verb === id;
-              const off = id !== "comment" && d.viewerDidAuthor;
-              return (
-                <button key={id} onClick={() => setVerb(id)} disabled={off}
-                  aria-pressed={on}
-                  title={off ? "GitHub does not let you approve or block your own pull request" : undefined}
-                  className="agx-btn text-left rounded-lg px-2.5 py-2 flex items-start gap-2.5"
-                  style={{
-                    border: `1px solid color-mix(in srgb, ${on ? "var(--primary) 75%" : "var(--text) 14%"}, transparent)`,
-                    background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "color-mix(in srgb, var(--text) 5%, transparent)",
-                    opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer",
-                  }}>
-                  {/* A dot, because these are one choice and not three buttons.
-                      Three bordered boxes side by side say "press any of us";
-                      a filled dot says which one is already the answer. */}
-                  <span aria-hidden className="shrink-0 rounded-full mt-[3px]" style={{
-                    width: 12, height: 12,
-                    border: `1px solid color-mix(in srgb, ${on ? "var(--primary)" : "var(--text) 35%"}, transparent)`,
-                    background: on ? "var(--primary)" : "transparent",
-                    boxShadow: on ? "inset 0 0 0 2px var(--bg2)" : undefined,
-                  }} />
-                  <span className="min-w-0">
-                    <b className="block text-[12px]" style={{ color: tint, fontWeight: 600 }}>{label}</b>
-                    <i className="block text-[10px] not-italic mt-0.5 leading-snug" style={{ color: "var(--text2)" }}>
-                      {off ? "Not available on your own pull request" : hint}
-                    </i>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="flex gap-0 text-[10.5px]" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
-            {(["write", "preview"] as const).map((m) => (
-              <button key={m} onClick={() => setPreview(m === "preview")} className="px-3 py-1"
-                style={{
-                  color: (m === "preview") === preview ? "var(--text)" : "var(--text3)",
-                  borderBottom: `2px solid ${(m === "preview") === preview ? "var(--primary)" : "transparent"}`,
-                }}>{m === "preview" ? "Preview" : "Write"}</button>
-            ))}
-          </div>
-
-          {preview ? (
-            <div className="rounded p-2.5 min-h-[80px]" style={{ border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }}>
-              {body.trim() ? <Md body={body} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
+          {/* The verdict and the send, on one row. A three-way switch says these
+              are one choice; three stacked cards took six rows to say the same
+              thing and pushed the button that ends the review off the fold. */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+              {([
+                ["approve", "✓ Approve", "Submit and mark the pull request approved.", "var(--success)"],
+                ["request_changes", "✕ Request changes", "Submit and block the merge until they land.", "var(--error)"],
+                ["comment", "💬 Comment", "Submit without a verdict.", "var(--text)"],
+              ] as const).map(([id, label, hint, tint], n) => {
+                const on = verb === id;
+                const off = id !== "comment" && d.viewerDidAuthor;
+                return (
+                  <button key={id} onClick={() => setVerb(id)} disabled={off} aria-pressed={on}
+                    title={off ? "GitHub does not let you approve or block your own pull request" : hint}
+                    className="agx-btn text-[11px] px-3 py-1.5 whitespace-nowrap"
+                    style={{
+                      color: on ? tint : "var(--text2)",
+                      fontWeight: on ? 650 : 400,
+                      background: on ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
+                      borderLeft: n === 0 ? undefined : "1px solid color-mix(in srgb, var(--text) 14%, transparent)",
+                      boxShadow: on ? "inset 0 -2px 0 var(--primary)" : undefined,
+                      opacity: off ? 0.4 : 1, cursor: off ? "not-allowed" : "pointer",
+                    }}>{label}</button>
+                );
+              })}
             </div>
-          ) : (
-            <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5}
-              placeholder="Leave a comment — markdown works here."
-              className="w-full rounded p-2.5 text-[11.5px] bg-transparent resize-y"
-              style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", outline: "none" }} />
-          )}
-
-          <div className="flex items-center gap-2 pt-1">
-            <span className="text-[10px]" style={{ color: "var(--text3)" }}>
-              {verb !== "approve" && nothing
-                ? "Nothing to submit yet — write a note, or queue a line comment from Files."
-                : `Posted publicly to your team${drafts.length ? `, with ${drafts.length} line comment${drafts.length === 1 ? "" : "s"} — one notification, not ${drafts.length + 1}` : ""}.`}
-            </span>
             <span className="ml-auto">
               <Btn onClick={() => onSubmit(verb, body)} disabled={busy || (verb !== "approve" && nothing)} primary
                 title={verb !== "approve" && nothing ? "Say something, or queue a line comment" : undefined}>Submit review</Btn>
             </span>
+          </div>
+
+          {/* Optional, and it says so. The note is the one part of a review you
+              can leave out — the comments already carry the substance — and a
+              five-row box with no label implied the opposite. */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              {(["write", "preview"] as const).map((m) => (
+                <button key={m} onClick={() => setPreview(m === "preview")} className="text-[10.5px] px-2 py-0.5 rounded"
+                  style={{
+                    color: (m === "preview") === preview ? "var(--text)" : "var(--text3)",
+                    background: (m === "preview") === preview ? "color-mix(in srgb, var(--text) 10%, transparent)" : "transparent",
+                  }}>{m === "preview" ? "Preview" : "Write"}</button>
+              ))}
+              <span className="ml-auto text-[10px]" style={{ color: "var(--text3)" }}>
+                {verb !== "approve" && nothing
+                  ? "Say something, or queue a line comment from Files."
+                  : drafts.length
+                    ? `${drafts.length} line comment${drafts.length === 1 ? "" : "s"} go with it — one notification, not ${drafts.length + 1}.`
+                    : "Posted publicly to your team."}
+              </span>
+            </div>
+            {preview ? (
+              <div className="rounded-md p-2.5 min-h-[56px]" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+                {body.trim() ? <Md body={body} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
+              </div>
+            ) : (
+              <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2}
+                placeholder="Summary — optional, markdown works here."
+                className="w-full rounded-md p-2.5 text-[11.5px] resize-y" />
+            )}
           </div>
         </div>
       </div>
