@@ -22,7 +22,7 @@
    * applyTheme writes --bg inline on the root and this resolves against it at
    * use time.
    */
-  --veil: color-mix(in srgb, var(--bg) 78%, transparent);
+  --veil: color-mix(in srgb, var(--bg) 64%, transparent);
   /** For what sits ON the veil and still has to read as its own surface — a
    *  hunk header, a gutter, a pinned row. */
   --veil2: color-mix(in srgb, var(--bg) 88%, transparent);
@@ -136,9 +136,13 @@
     position: fixed;
     inset: 0;
     z-index: -1;
+    /* From --text, not the accent. A theme whose accent is a grey (#a1a1a1 on
+       #1e1e1e) put these lines seven units of 255 from the ground — invisible
+       on its own and gone entirely under a veil. --text is the one colour that
+       contrasts with --bg in every theme, light or dark. */
     background-image:
-      linear-gradient(color-mix(in srgb, var(--primary) 7%, transparent) 1px, transparent 1px),
-      linear-gradient(90deg, color-mix(in srgb, var(--primary) 7%, transparent) 1px, transparent 1px);
+      linear-gradient(color-mix(in srgb, var(--text) 11%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--text) 11%, transparent) 1px, transparent 1px);
     background-size: 36px 36px;
     /* It used to fade out by 80% of the viewport height, which put the bottom
        fifth of every window — and most of any full-height view — on a flat
@@ -162,39 +166,20 @@
    * on stacking contexts, masks or what happens to be behind — which is what
    * makes it identical in the terminal, the diff and a log pane.
    */
+  /*
+   * A working surface: the app's ground, thinned.
+   *
+   * It used to paint a grid of its own, and that was the whole mistake — two
+   * grids of the same pitch with different origins do not line up, so where a
+   * terminal met the window the pattern jumped. Obvious in a screenshot and
+   * impossible to fix by tuning, because the second grid was the bug.
+   *
+   * There is one grid in this app. It is fixed to the viewport (.aurora-grid),
+   * so anything translucent laid over it shows the SAME lines in the SAME
+   * places, continuous across every panel edge, for free.
+   */
   .agx-veil {
     background-color: var(--veil);
-    /*
-     * Drawn from --text, not --accent, and at 9%.
-     *
-     * The backdrop's own grid is 7% of the accent, which is right for an
-     * ambient wash and invisible as a surface: on a theme whose accent is a
-     * grey (#a1a1a1 on #1e1e1e) that lands 7 units of 255 from the ground —
-     * measured, not guessed, and the reason this looked like nothing had
-     * changed. --text is the one colour guaranteed to contrast with --bg in
-     * every theme, light or dark, and 9% of it is 17 units: visible when you
-     * look at it, and not a pattern you have to read code through.
-     */
-    background-image:
-      linear-gradient(color-mix(in srgb, var(--text) 9%, transparent) 1px, transparent 1px),
-      linear-gradient(90deg, color-mix(in srgb, var(--text) 9%, transparent) 1px, transparent 1px);
-    background-size: 36px 36px;
-  }
-
-  /*
-   * xterm hardcodes its viewport to #000. The theme does not.
-   *
-   * `.xterm .xterm-viewport { background-color: #000 }` ships in the library's
-   * stylesheet, with the note "on OS X this is required in order for the scroll
-   * bar to appear fully opaque". Black is right for exactly one theme; on any
-   * other it is a strip of pure black along whatever the cells do not cover,
-   * and on a light theme it is a black bar down the side of a white terminal.
-   * Transparent instead, so what shows is the container — which is set to the
-   * theme's own ground. The only cost is a scrollbar that is not fully opaque
-   * on macOS.
-   */
-  .xterm .xterm-viewport {
-    background-color: transparent !important;
   }
 
   .panel {
