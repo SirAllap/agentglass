@@ -4495,9 +4495,13 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
         </div>
       )}
 
-      {/* Bounded. A review is a form, and a form stretched to a 1900px window
-          puts its label and its field at opposite ends of the desk. */}
-      <div className="rounded-lg overflow-hidden" style={{ maxWidth: 900, border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
+      {/* Full width, now that it is a strip rather than a form. The cap was
+          right for the old stacked layout — a five-row field and three cards
+          spread across a 1900px window put a label and its input at opposite
+          ends of the desk. This one has nothing to spread: the chips fill a row
+          and wrap, the verdict stays its own size, and the send goes to the far
+          edge where the eye ends up anyway. */}
+      <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
         <div className="flex items-center gap-2 px-3 py-1.5 text-[11px]"
           style={{ background: "color-mix(in srgb, var(--border) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>
           <b style={{ color: "var(--text)", fontWeight: 500 }}>Finish your review</b>
@@ -4623,8 +4627,13 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
                 {body.trim() ? <Md body={body} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
               </div>
             ) : (
+              /* The one element that keeps a measure: this is prose, and prose
+                 set to the full width of a wide window loses the start of the
+                 next line on every wrap. Characters, not pixels, so it holds
+                 when the display size or the font changes. */
               <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2}
                 placeholder="Summary — optional, markdown works here."
+                style={{ maxWidth: "96ch" }}
                 className="w-full rounded-md p-2.5 text-[11.5px] resize-y" />
             )}
           </div>
