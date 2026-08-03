@@ -213,7 +213,12 @@ export const MD_CSS = `
 .agx-hl pre{margin:0;padding:10px 12px;border-radius:8px;overflow-x:auto;background:color-mix(in srgb,#000 42%,transparent) !important;border:1px solid color-mix(in srgb,var(--border) 30%,transparent)}
 .agx-hl code{font-size:11.5px;line-height:1.65}
 .agx-md .agx-hl{margin:0 0 .85em}
-.agx-md{margin:0;line-height:1.7;font-size:12.5px;color:var(--text2)}
+/* The body reads in the theme's brightest text, not a step below it. A pull
+   request description is the longest thing anybody reads in this app, and it
+   was set in --text2 — a grey chosen for labels, against a dark panel. The
+   dimmer tiers still exist and still recede; they are for eyebrows, timestamps
+   and hints, which is what "secondary" was supposed to mean. */
+.agx-md{margin:0;line-height:1.7;font-size:12.5px;color:var(--text)}
 .agx-md>*:first-child{margin-top:0}
 .agx-md>*:last-child{margin-bottom:0}
 .agx-md p{margin:0 0 .85em}
@@ -227,8 +232,8 @@ export const MD_CSS = `
 .agx-md del{opacity:.6}
 .agx-md code{font-family:var(--diff-font,ui-monospace,monospace);font-size:.88em;background:color-mix(in srgb,var(--border) 30%,transparent);padding:.15em .4em;border-radius:4px;color:var(--text)}
 .agx-md pre{background:var(--bg);border:1px solid color-mix(in srgb,var(--border) 40%,transparent);border-radius:6px;padding:.7em .9em;overflow-x:auto;margin:0 0 .9em}
-.agx-md pre code{background:none;padding:0;font-size:.92em;line-height:1.55;color:var(--text2)}
-.agx-md blockquote{margin:0 0 .9em;padding:.15em 0 .15em .9em;border-left:3px solid color-mix(in srgb,var(--primary) 45%,transparent);color:var(--text3)}
+.agx-md pre code{background:none;padding:0;font-size:.92em;line-height:1.55;color:var(--text)}
+.agx-md blockquote{margin:0 0 .9em;padding:.15em 0 .15em .9em;border-left:3px solid color-mix(in srgb,var(--primary) 45%,transparent);color:var(--text2)}
 .agx-md ul,.agx-md ol{margin:0 0 .85em;padding-left:1.5em}
 .agx-md li{margin-bottom:.3em}
 .agx-md li::marker{color:var(--primary)}
@@ -243,7 +248,7 @@ export const MD_CSS = `
 .agx-md .agx-tw{overflow-x:auto;margin:0 0 .9em;max-width:100%;border:1px solid color-mix(in srgb,var(--border) 38%,transparent);border-radius:8px}
 .agx-md table{border-collapse:collapse;font-size:.95em;width:100%}
 .agx-md th{text-align:left;padding:.55em .9em;background:color-mix(in srgb,var(--border) 22%,transparent);color:var(--text);font-weight:600;border:0;border-bottom:1px solid color-mix(in srgb,var(--border) 38%,transparent);white-space:nowrap}
-.agx-md td{padding:.5em .9em;border:0;border-bottom:1px solid color-mix(in srgb,var(--border) 22%,transparent);vertical-align:top}
+.agx-md td{padding:.5em .9em;border:0;border-bottom:1px solid color-mix(in srgb,var(--border) 22%,transparent);vertical-align:top;color:var(--text)}
 .agx-md tbody tr:last-child td{border-bottom:0}
 .agx-md .agx-details{margin:0 0 .9em;border:1px solid color-mix(in srgb,var(--border) 40%,transparent);border-radius:6px;padding:.5em .8em;background:color-mix(in srgb,var(--border) 8%,transparent)}
 .agx-md .agx-details>summary{cursor:pointer;color:var(--text);font-weight:600;list-style:revert}
@@ -2495,7 +2500,7 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
 function Reason({ tint, glyph, children, action }: { tint: string; glyph: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-[11.5px]"
-      style={{ color: "var(--text2)", borderBottom: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}>
+      style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}>
       <span className="shrink-0 w-3.5 text-center" style={{ color: tint }}>{glyph}</span>
       <span className="min-w-0">{children}</span>
       {action && <span className="ml-auto shrink-0 text-[10px]">{action}</span>}
@@ -3576,8 +3581,8 @@ const EVENT_TINT: Record<string, string> = {
 
 /** One non-comment event, written the way GitHub words it. */
 function TimelineEvent({ e }: { e: PrEvent }) {
-  const who = <b style={{ color: "var(--text2)" }}>{e.actor || "somebody"}</b>;
-  const mono = (t: string) => <code style={{ ...CODE_FONT_STYLE, color: "var(--text2)" }}>{t}</code>;
+  const who = <b style={{ color: "var(--text)" }}>{e.actor || "somebody"}</b>;
+  const mono = (t: string) => <code style={{ ...CODE_FONT_STYLE, color: "var(--text)" }}>{t}</code>;
   const said = (() => {
     switch (e.kind) {
       case "force-push": return <>{who} force-pushed {e.detail ? mono(e.detail) : null}</>;
