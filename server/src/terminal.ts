@@ -100,7 +100,19 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    *  a command: this socket is reachable from the UI, and "run this string"
    *  would turn a terminal into arbitrary execution. The server picks what
    *  runs; see editorFor. */
-  view?: string };
+  view?: string;
+  /**
+   * Open that file for EDITING rather than for reading.
+   *
+   * Two different intents, and they must not be one flag with a default. Read
+   * is what a diff and a pull request want — you are looking at somebody's
+   * code, often a copy of a branch you do not even have. Write is what a file
+   * tree wants — it is your checkout and the reason you opened it is to change
+   * it. Defaulting to write would make every glance at a review one keystroke
+   * away from editing a file nobody meant to touch; defaulting to read (as it
+   * does) makes the editable case say so.
+   */
+  edit?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
 
 type Session = {
@@ -284,18 +296,25 @@ export function ptyOpen(ws: PtyWs) {
    * nothing the client sent is ever interpreted as a command.
    */
   const wanted = d.view ? safeAbs(d.view) : null;
+  const tempCopy = !!wanted && wanted.startsWith(join(tmpdir(), "agentglass-pr-"));
   // In scope, or a copy this server itself wrote: a pull request's file is
   // fetched to a temp path precisely because it is not in the workspace, and
   // the check has to admit that without admitting /tmp in general.
-  const viewable = !!wanted && (inScope(wanted) || wanted.startsWith(join(tmpdir(), "agentglass-pr-")));
+  const viewable = !!wanted && (inScope(wanted) || tempCopy);
   const editor = viewable && existsSync(wanted!) ? editorFor() : null;
-    /*
-   * Always read-only, not only for the fetched copies.
+  /*
+   * Read-only unless the caller asked for an editor, and never for a copy.
    *
-   * This opens from a diff and from a pull request — places you go to *look* —
-   * on whatever file a list happened to be showing. An editor there is one
-   * keystroke from changing a file nobody meant to touch, in a worktree that
-   * may be somebody else's, with no diff to notice it in.
+   * Opened from a diff or a pull request — places you go to *look* — an editor
+   * is one keystroke from changing a file nobody meant to touch, in a worktree
+   * that may be somebody else's, with no diff to notice it in. So read is the
+   * default and write is a request.
+   *
+   * The temp copy is read-only whatever the caller asked, and that is not
+   * caution: it is a fetched snapshot of a branch under /tmp, so a save there
+   * writes to a file that will be deleted, having changed nothing anybody will
+   * ever see. Refusing the edit is the honest answer; accepting it silently is
+   * not.
    *
    * `-R` marks the buffer read-only; `-M` also takes 'modifiable' and 'write'
    * away, so it refuses the edit rather than refusing the save. Neither is a
@@ -303,7 +322,8 @@ export function ptyOpen(ws: PtyWs) {
    * against the accident, not a cage around somebody who means it.
    */
   const bin = editor ? editor.split(/\s+/)[0]! : "";
-  const readonlyFlags = /\b(nvim|vim|view)$/.test(bin) ? ["-R", "-M"] : [];
+  const readOnly = !d.edit || tempCopy;
+  const readonlyFlags = readOnly && /\b(nvim|vim|view)$/.test(bin) ? ["-R", "-M"] : [];
   const run = editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : [shell, ...args];
 
   let argv: string[];

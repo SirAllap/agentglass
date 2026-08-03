@@ -12,6 +12,17 @@ const svg = {
 
 type P = { size?: number };
 
+/** A folder with a page in front of it: browsing a tree, not a repository. */
+export function FilesIcon({ size = 15 }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <path d="M3 6a1 1 0 0 1 1-1h4l2 2h5a1 1 0 0 1 1 1v3" />
+      <path d="M8 12h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1z" />
+      <path d="M10 15h4M10 18h4" />
+    </svg>
+  );
+}
+
 export function GitIcon({ size = 15 }: P) {
   return <svg {...svg} width={size} height={size}><path d="M12 3v6M12 15v6" /><circle cx="12" cy="12" r="3" /></svg>;
 }

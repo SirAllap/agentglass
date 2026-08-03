@@ -4,6 +4,7 @@ import { Portal } from "../Portal.tsx";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
+import { FilesView } from "../FilesPanel.tsx";
 import { GitView } from "../GitPanel.tsx";
 import { DiffView } from "../ChangesModal.tsx";
 import { PrView } from "../PrPanel.tsx";
@@ -15,6 +16,7 @@ import { requestTermReview } from "../../lib/termReview.ts";
 import { DynamicIsland, NOTCH_BAND } from "./DynamicIsland.tsx";
 
 const BODY = {
+  files: FilesView,
   git: GitView,
   diff: DiffView,
   pr: PrView,
@@ -37,13 +39,19 @@ const BODY = {
  *  aren't looking at keep their state without costing anything on the network.
  */
 export function Workspace({
-  open, view, onView, onClose, onSkills, chatFocusId,
+  open, view, onView, onClose, onSkills, onSettings, onMachine, chatFocusId,
 }: {
   open: boolean;
   view: ViewId;
   onView: (v: ViewId) => void;
   onClose: () => void;
   onSkills: () => void;
+  /** Preferences and the machine panel, from inside an overlay that covers the
+   *  header those buttons otherwise live in. Passed through rather than owned
+   *  here: both are app-level modals, and two copies of one modal is two
+   *  copies of its state. */
+  onSettings: () => void;
+  onMachine: (tab: "ports" | "resources") => void;
   chatFocusId?: string | null;
 }) {
   // Same reason as App's onClose: this reaches a view's effect dependencies,
@@ -150,7 +158,8 @@ export function Workspace({
                   boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)",
                 }}
               >
-                <ViewRail view={view} onSelect={onView} onClose={onClose} onSkills={onSkills} pips={pips} />
+                <ViewRail view={view} onSelect={onView} onClose={onClose} onSkills={onSkills}
+                  onSettings={onSettings} onMachine={onMachine} pips={pips} />
 
                 <div className="relative flex-1 min-w-0">
                   {VIEWS.map((v) => {

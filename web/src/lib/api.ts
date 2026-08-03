@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -227,11 +227,16 @@ export function adoptServer(next: { origin?: string | null; token?: string | nul
 }
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
-export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string) =>
+export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string, edit = false) =>
   withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
     // A file to open instead of a shell. A path — the server decides what runs
     // with it, and refuses one outside the open project.
-    + (view ? `&view=${encodeURIComponent(view)}` : ""));
+    + (view ? `&view=${encodeURIComponent(view)}` : "")
+    // Editable, rather than the read-only default. Asked for explicitly because
+    // the two intents are different: a pull request is somebody else's code in
+    // a temp copy, a file tree is your checkout. The server refuses this for a
+    // temp copy however loudly the client asks.
+    + (view && edit ? "&edit=1" : ""));
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(SERVER + path, { headers: authHeaders() });
@@ -434,6 +439,23 @@ const realApi = {
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
+
+  // --- what this machine is doing: ports, processes, disk ---
+  /** Every listening TCP socket, with the process behind the ones we own. */
+  machinePorts: () => get<PortsReport>("/machine/ports"),
+  /** Every process this user owns, with the ones descended from this server
+   *  marked. `limit` caps only the rest of the machine — ours all come back. */
+  machineResources: (limit = 40) => get<ResourceReport>(`/machine/resources?limit=${limit}`),
+  /** Where a checkout's disk went, one level down. A `du` walk: seconds on a
+   *  repository with a node_modules, so it is asked for, never polled. */
+  machineSpace: (root: string) => get<SpaceReport>(`/machine/space?root=${encodeURIComponent(root)}`),
+  /** SIGTERM a process we started. Refused for anything this user does not own. */
+  machineKill: (pid: number) => post<{ ok: boolean; error?: string; detail?: string }>("/machine/kill", { pid }),
+
+  // --- browsing and searching a checkout ---
+  filesTree: (root: string, rel = "") => get<TreeReport>(`/files/tree?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}`),
+  filesFind: (root: string, q: string) => get<FindReport>(`/files/find?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
+  filesGrep: (root: string, q: string) => get<GrepReport>(`/files/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
   /** Where this server is reachable from another device, whether one has
    *  arrived, and which firewall is the likely reason if none has. */
   remoteStatus: () => get<RemoteStatus>("/remote/status"),
@@ -869,6 +891,16 @@ const demoApi: typeof realApi = {
   prReviewPrompt: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prCommitDiff: (_r: string, _s: string) => D({ ok: false, error: "not available in the demo" }),
   prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
+  // The demo has no machine to report on and no checkout to browse: it is a
+  // fabricated dataset in a browser tab. Empty and honest beats invented — a
+  // fake port list would be the one screen in the tour that lies.
+  machinePorts: () => D({ ports: [], mine: 0, external: 0, error: "not available in the demo" }),
+  machineResources: (_l?: number) => D({ procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false }),
+  machineSpace: (_r: string) => D({ root: "", bytes: 0, freeable: 0, dirs: [], error: "not available in the demo" }),
+  machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
+  filesTree: (_r: string, _rel?: string) => D({ ok: false, root: "", rel: "", entries: [], error: "not available in the demo" }),
+  filesFind: (_r: string, _q: string) => D({ ok: false, files: [], truncated: false, via: "", error: "not available in the demo" }),
+  filesGrep: (_r: string, _q: string) => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "not available in the demo" }),
 };
 
 export const api = IS_DEMO ? demoApi : realApi;
