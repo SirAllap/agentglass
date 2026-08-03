@@ -6,7 +6,20 @@
 // as punctuation. The escaping tests are the ones with teeth — a body is a
 // string a stranger wrote.
 import { describe, expect, test } from "bun:test";
-import { parseBody, renderInline, stripTags, diffKind } from "../src/lib/prBody.ts";
+import { parseBody, renderInline, stripTags, diffKind, type MdBlock } from "../src/lib/prBody.ts";
+
+/** Everything a tree of blocks would put on screen, flattened. What the
+ *  `<details>` tests want to assert is mostly about where text ended up — inside
+ *  the fold, outside it, or leaked through as escaped tags. */
+function allText(blocks: MdBlock[]): string {
+  return blocks.map((b) => {
+    if (b.kind === "details") return `${b.summary}\n${allText(b.blocks)}`;
+    if (b.kind === "list") return b.items.map((i) => i.html).join("\n");
+    if (b.kind === "table") return [...b.head, ...b.rows.flat()].join("\n");
+    if (b.kind === "code" || b.kind === "suggestion") return b.text;
+    return "html" in b ? b.html : "";
+  }).join("\n");
+}
 
 describe("<details>", () => {
   test("folds into a details block, with its summary and its inner markdown", () => {
@@ -51,6 +64,100 @@ describe("<details>", () => {
     // nesting were mishandled, "after" would be swallowed.
     expect(blocks[0]!.kind).toBe("details");
     expect(blocks[blocks.length - 1]!.kind).toBe("para");
+  });
+
+  // Every case below is a shape the old "the tag sits alone on its line" rule
+  // could not see. They are not exotic: the first is the form GitHub documents,
+  // and it arrived from a real pull request body as three paragraphs of escaped
+  // tags with the payload permanently unfolded.
+  test("the opener and its summary on one line — the form GitHub documents", () => {
+    const blocks = parseBody([
+      "<details><summary><b>Full 200 payload (FE mock)</b></summary>",
+      "",
+      "```json",
+      '{ "eligibility": "self_serve" }',
+      "```",
+      "",
+      "</details>",
+      "",
+      "Notes: the allowance is locally shrunk.",
+    ].join("\n"));
+    const d = blocks[0]!;
+    expect(d.kind).toBe("details");
+    if (d.kind !== "details") throw new Error("not details");
+    // The markup around the title is taken off, as it is for a summary of its own.
+    expect(d.summary).toBe("Full 200 payload (FE mock)");
+    expect(d.blocks.some((b) => b.kind === "code")).toBe(true);
+    // The prose after the fold stays outside it, and no tag reaches the screen.
+    expect(blocks[blocks.length - 1]!.kind).toBe("para");
+    expect(allText(blocks)).toContain("locally shrunk");
+    expect(allText(blocks)).not.toContain("&lt;details");
+    expect(allText(blocks)).not.toContain("&lt;/details");
+    expect(allText(blocks)).not.toContain("&lt;summary");
+  });
+
+  test("attributes on the opener change nothing — <details open> still folds", () => {
+    const blocks = parseBody('<details open class="x"><summary>Payload</summary>\n\nbody\n\n</details>');
+    const d = blocks[0]!;
+    expect(d.kind).toBe("details");
+    if (d.kind !== "details") throw new Error("not details");
+    expect(d.summary).toBe("Payload");
+  });
+
+  test("a closer pressed against the last word does not swallow what follows", () => {
+    // Only a `</details>` alone on its line used to close the fold, so this one
+    // never matched: the depth never came back to zero and every paragraph after
+    // the fold was dragged inside it.
+    const blocks = parseBody("<details>\n<summary>Payload</summary>\nfolded</details>\n\nafter the fold");
+    expect(blocks).toHaveLength(2);
+    const d = blocks[0]!;
+    if (d.kind !== "details") throw new Error("not details");
+    expect(allText(d.blocks)).toContain("folded");
+    expect(allText(d.blocks)).not.toContain("after the fold");
+    expect(blocks[1]!.kind).toBe("para");
+  });
+
+  test("a whole fold on one line, and two of them on the same line", () => {
+    const blocks = parseBody("<details><summary>one</summary>first</details><details><summary>two</summary>second</details>");
+    expect(blocks.filter((b) => b.kind === "details")).toHaveLength(2);
+    const [a, b] = blocks.filter((x) => x.kind === "details");
+    if (a?.kind !== "details" || b?.kind !== "details") throw new Error("not details");
+    expect(a.summary).toBe("one");
+    expect(allText(a.blocks)).toContain("first");
+    expect(b.summary).toBe("two");
+    expect(allText(b.blocks)).toContain("second");
+    // and neither fold took the other's contents
+    expect(allText(a.blocks)).not.toContain("second");
+  });
+
+  test("a summary broken over several lines still names the fold", () => {
+    // Line-at-a-time, this matched nothing: the fold came out called "Details"
+    // and its title leaked into the body as a stray paragraph.
+    const blocks = parseBody("<details>\n<summary>\n  Coverage report\n</summary>\n\nbody\n</details>");
+    const d = blocks[0]!;
+    expect(d.kind).toBe("details");
+    if (d.kind !== "details") throw new Error("not details");
+    expect(d.summary).toBe("Coverage report");
+    expect(allText(d.blocks)).not.toContain("Coverage report");
+    expect(allText(d.blocks)).toContain("body");
+  });
+
+  test("an untitled fold does not borrow the name of the one nested inside it", () => {
+    const blocks = parseBody("<details>\n\n<details><summary>inner</summary>deep</details>\n\n</details>");
+    const d = blocks[0]!;
+    expect(d.kind).toBe("details");
+    if (d.kind !== "details") throw new Error("not details");
+    expect(d.summary).toBe("Details");
+    const kid = d.blocks.find((b) => b.kind === "details");
+    expect(kid?.kind === "details" ? kid.summary : null).toBe("inner");
+  });
+
+  test("a fold that is never closed keeps the rest, the way a browser would", () => {
+    const blocks = parseBody("<details><summary>Payload</summary>\n\nfolded\n\nstill folded");
+    expect(blocks).toHaveLength(1);
+    const d = blocks[0]!;
+    if (d.kind !== "details") throw new Error("not details");
+    expect(allText(d.blocks)).toContain("still folded");
   });
 });
 

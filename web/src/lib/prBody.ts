@@ -131,6 +131,32 @@ export type MdBlock =
   | { kind: "suggestion"; text: string }
   | { kind: "rule" };
 
+/**
+ * Where the `</details>` closing an already-open `<details>` sits, counting
+ * nested pairs — as offsets into the text, not a line number.
+ *
+ * Scanning for the tag instead of matching a line shape is the whole point. The
+ * rule used to be "the tag sits alone on its line", and the shapes people
+ * actually write do not oblige: `<details><summary>…</summary>` on one line is
+ * the form GitHub's own documentation shows and the form every bot emits, and a
+ * `</details>` pressed against the last word of the fold is just as common. Both
+ * fell through to the paragraph rule and put escaped tags on screen — the
+ * collapsed part of a collapsed comment being the one thing that did not work.
+ *
+ * Null when the fold is never closed. That is not an error: an unclosed
+ * `<details>` owns the rest of the document, which is what a browser's parser
+ * does with it too.
+ */
+function matchingClose(text: string): { start: number; end: number } | null {
+  const re = /<(\/?)details\b[^>]*>/gi;
+  let depth = 1;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (!m[1]) { depth++; continue; }
+    if (--depth === 0) return { start: m.index, end: m.index + m[0].length };
+  }
+  return null;
+}
+
 /** A table cell is markdown too. Returning the raw text put `**Drift**` on
  *  screen with its asterisks — the bold that a RED/GREEN comparison leans on
  *  was exactly what stopped rendering. */
@@ -155,22 +181,42 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
 
     // <details>: take everything up to the matching </details> and parse it as
     // its own little document, so a folded bot comment keeps its lists and code.
-    const det = line.match(/^\s*<details[^>]*>\s*$/i);
+    //
+    // The fold is handled as text from the opening tag onwards rather than line
+    // by line, because none of the three things that go wrong are line-shaped:
+    // the opener carries its `<summary>` on the same line, the closer is stuck
+    // to the last word, the `<summary>` wraps over three lines. See
+    // `matchingClose`.
+    const det = line.match(/^\s*<details\b[^>]*>/i);
     if (det) {
       flushPara();
+      const rest = [line.slice(det[0].length), ...lines.slice(i + 1)].join("\n");
+      const close = matchingClose(rest);
+      const raw = close ? rest.slice(0, close.start) : rest;
+
+      // The summary, wherever it wrapped — and only this fold's own. A
+      // `<summary>` that comes after a nested `<details>` belongs to that one,
+      // and titling the outer fold with the inner's name is worse than leaving
+      // it untitled.
       let summary = "";
-      const inner: string[] = [];
-      let depth = 1;
-      i++;
-      for (; i < lines.length; i++) {
-        const l = lines[i]!;
-        if (/^\s*<details[^>]*>\s*$/i.test(l)) depth++;
-        if (/^\s*<\/details>\s*$/i.test(l)) { depth--; if (depth === 0) break; }
-        const sum = l.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i);
-        if (sum && !summary) { summary = stripTags(sum[1]!).trim(); continue; }
-        inner.push(l);
+      let inner = raw;
+      const sum = raw.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/i);
+      const nested = raw.search(/<details\b/i);
+      if (sum && sum.index !== undefined && (nested < 0 || sum.index < nested)) {
+        summary = stripTags(sum[1]!).replace(/\s+/g, " ").trim();
+        inner = raw.slice(0, sum.index) + raw.slice(sum.index + sum[0].length);
       }
-      out.push({ kind: "details", summary: summary || "Details", blocks: parseBody(inner.join("\n"), autolinkRepo) });
+
+      out.push({ kind: "details", summary: summary || "Details", blocks: parseBody(inner, autolinkRepo) });
+
+      // Never closed: the fold has taken the rest of the document with it.
+      if (!close) break;
+      // Otherwise resume at whatever followed `</details>`, which is the tail of
+      // a line as often as it is the next one — so the line is rewritten to that
+      // tail and read again. Two folds on one line come out as two folds.
+      const eaten = rest.slice(0, close.end).split("\n").length - 1;
+      lines[i + eaten] = rest.slice(close.end).split("\n")[0]!;
+      i += eaten - 1;
       continue;
     }
 
