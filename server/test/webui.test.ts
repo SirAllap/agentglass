@@ -118,9 +118,45 @@ describe("resolveDist", () => {
     }
   });
 
+  /**
+   * AGENTGLASS_WEB_DIR, set or unset for the length of one case.
+   *
+   * `resolveDist`'s first parameter *defaults* to that variable, and in
+   * JavaScript passing `undefined` explicitly is precisely what triggers a
+   * default parameter — so a case that means "unset" has to actually unset it.
+   * It was not doing so, and the variable is exported into every shell on a
+   * machine with the desktop app installed: the assertion passed in CI, where
+   * nothing sets it, and failed on the one kind of box that ships the thing it
+   * is about.
+   */
+  function withWebDirEnv<T>(value: string | null, fn: () => T): T {
+    const saved = process.env.AGENTGLASS_WEB_DIR;
+    if (value === null) delete process.env.AGENTGLASS_WEB_DIR;
+    else process.env.AGENTGLASS_WEB_DIR = value;
+    try {
+      return fn();
+    } finally {
+      if (saved === undefined) delete process.env.AGENTGLASS_WEB_DIR;
+      else process.env.AGENTGLASS_WEB_DIR = saved;
+    }
+  }
+
   test("blank and unset fall through to the fallback", () => {
-    expect(resolveDist(undefined, dist)).toBe(dist);
-    expect(resolveDist("   ", dist)).toBe(dist);
+    withWebDirEnv(null, () => {
+      expect(resolveDist(undefined, dist)).toBe(dist);
+      // A blank string never reached the default anyway — only `undefined`
+      // does — but it is the other way the override arrives empty.
+      expect(resolveDist("   ", dist)).toBe(dist);
+    });
+  });
+
+  test("omitted, it reads AGENTGLASS_WEB_DIR — which is what the default is for", () => {
+    // The contract the default parameter exists to provide, and which nothing
+    // covered: the packaged sidecar passes no argument and is found by the
+    // variable the desktop shell exported for it.
+    withWebDirEnv(dist, () => {
+      expect(resolveDist(undefined, "/nonexistent/fallback")).toBe(dist);
+    });
   });
 
   test("null when neither the override nor the fallback holds a build", () => {
