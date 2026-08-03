@@ -1333,6 +1333,36 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
     });
   };
 
+  /**
+   * One line comment, posted on its own.
+   *
+   * Sent as a COMMENT review carrying a single comment and no body, because
+   * that is the request this panel already knows how to make and it lands the
+   * remark on the line immediately. It shows on GitHub as a review with one
+   * comment rather than as a lone comment — the difference is a line in the
+   * timeline, not in where the remark ends up or who is notified.
+   *
+   * Deliberately does NOT touch the draft queue: this is the escape hatch for
+   * "one typo, right here", which is exactly the case where being made to open
+   * and submit a whole review is the wrong shape.
+   */
+  const postOneComment = async (
+    path: string, line: number, startLine: number | undefined,
+    side: "LEFT" | "RIGHT" | undefined, body: string,
+  ): Promise<boolean> => {
+    if (!body.trim()) return false;
+    setBusy(true);
+    try {
+      const r = await api.prReviewWith(root, selected!, "comment", "", [
+        { path, line, ...(startLine && startLine !== line ? { startLine } : {}), ...(side ? { side } : {}), body },
+      ]);
+      flash(r.ok, r.ok ? "Comment posted" : (r.error || "Could not post the comment"));
+      if (r.ok) void loadDetail(selected!, true);
+      return r.ok;
+    } catch (e) { flash(false, String(e)); return false; }
+    finally { setBusy(false); }
+  };
+
   const submitReview = async (verb: "approve" | "request_changes" | "comment", body: string) => {
     if (!detail) return;
     const ok = await act("Review", () => api.prReviewWith(root, detail.number, verb, body, myDrafts));
@@ -1919,7 +1949,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                   <FilesTab
                     d={d} root={root} byPath={byPath} loaded={!!diff} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
-                    drafts={myDrafts} onAddDraft={addDraft}
+                    drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment}
                     busy={busy} onReply={doReply}
                     onApply={doApplySuggestion}
                     onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
@@ -2752,12 +2782,15 @@ function FilesFilterMenu({ facets, hiddenExts, onToggleExt, onClearExts, showVie
  *  rely on instead of measure. */
 const FILE_HEAD_H = 30;
 
-function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onResolve, onReply, onApply, busy }: {
+function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, split, wrap, onSplit, onWrap, drafts, onAddDraft, onPostOne, onResolve, onReply, onApply, busy }: {
   d: PrDetail; root: string; byPath: Map<string, FileChange>; loaded: boolean;
   seenFiles: string[]; onSeen: (p: string) => void;
   sel: string | null; onSel: (p: string | null) => void;
   split: boolean; wrap: boolean; onSplit: (v: boolean) => void; onWrap: (v: boolean) => void;
   drafts: DraftComment[]; onAddDraft: (path: string, line: number, startLine?: number, side?: "LEFT" | "RIGHT", body?: string) => void;
+  /** Post one line comment on its own, now — the other half of what GitHub
+   *  offers at the box, beside holding it for a review. */
+  onPostOne: (path: string, line: number, startLine: number | undefined, side: "LEFT" | "RIGHT" | undefined, body: string) => Promise<boolean>;
   onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
 }) {
@@ -2796,6 +2829,15 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
   // rowAfter slot the threads use — GitHub's placement, not a modal.
   const [composing, setComposing] = useState<{ path: string; line: number; startLine?: number; side: "LEFT" | "RIGHT"; initial?: string } | null>(null);
   const cancelCompose = () => { setComposing(null); setSelRange(null); };
+
+  /** Turn the open composer into a suggestion, seeded with the line it is
+   *  about — what the menu's "Suggest change" used to do, moved to where you
+   *  can decide it with the code in front of you. */
+  const suggestHere = (f: PrFile, c: NonNullable<typeof composing>) => {
+    const body = lineTextAt(f.path, c.line, c.side);
+    setComposing({ ...c, initial: `\`\`\`suggestion\n${body}\n\`\`\`\n` });
+  };
+
   const pickLine = (path: string, pk: LinePick) => {
     const cur = selRange?.path === path ? selRange.sel : null;
     if (pk.shift && cur && cur.side === pk.side) {
@@ -3190,13 +3232,42 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
                               {ts?.map((t) => <Thread key={t.id} t={t} inline onResolve={onResolve} onReply={onReply} onApply={onApply} busy={busy} />)}
                               {composeHere && composing && (
                                 <div className="rounded-md overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>
-                                  <div className="px-2.5 py-1.5 text-[10.5px]" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary)" }}>
-                                    {composing.startLine ? `Comment on lines ${pfx}${composing.startLine}–${composing.line}` : `Add a comment on line ${pfx}${composing.line}`}
+                                  {/* The line's own actions live here, beside the
+                                      box, rather than in a menu you had to get
+                                      through to reach the box. Suggesting is a
+                                      thing you decide with the code in front of
+                                      you, not before you have seen it. */}
+                                  <div className="px-2.5 py-1.5 text-[10.5px] flex items-center gap-2" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", color: "var(--primary)" }}>
+                                    <span className="min-w-0 truncate">
+                                      {composing.startLine ? `Comment on lines ${pfx}${composing.startLine}–${composing.line}` : `Add a comment on line ${pfx}${composing.line}`}
+                                    </span>
+                                    <span className="ml-auto flex items-center gap-1 shrink-0">
+                                      <button onClick={() => suggestHere(f, composing)} title="Prefill a suggestion block with this line"
+                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>± Suggest</button>
+                                      <button onClick={() => { if (repoName && headSha) void navigator.clipboard?.writeText(`https://github.com/${repoName}/blob/${headSha}/${f.path}#L${composing.line}`); }}
+                                        disabled={!repoName || !headSha}
+                                        title="Copy a link to this line on GitHub"
+                                        className="agx-btn px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>🔗</button>
+                                    </span>
                                   </div>
                                   <div className="p-2 flex flex-col gap-2">
+                                    {/* Two outcomes, the way GitHub has them: post
+                                        this one now, or hold it for the review you
+                                        are building. Before, everything queued —
+                                        so a one-line "typo here" needed a whole
+                                        review submitted around it. */}
                                     <Composer initial={composing.initial} autoFocus={!split} busy={busy}
-                                      placeholder="Leave a comment — markdown works here" sendLabel="Comment"
-                                      onSend={async (b) => { onAddDraft(f.path, composing.line, composing.startLine, composing.side, b); cancelCompose(); return true; }} />
+                                      placeholder="Leave a comment — markdown works here" sendLabel="Add to review"
+                                      onSend={async (b) => { onAddDraft(f.path, composing.line, composing.startLine, composing.side, b); cancelCompose(); return true; }}
+                                      secondary={{
+                                        label: "Comment",
+                                        title: "Post this comment now, on its own",
+                                        onSend: async (b) => {
+                                          const ok = await onPostOne(f.path, composing.line, composing.startLine, composing.side, b);
+                                          if (ok) cancelCompose();
+                                          return ok;
+                                        },
+                                      }} />
                                     <button onClick={cancelCompose} className="agx-btn self-start px-2 py-0.5 rounded text-[10px]" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Cancel</button>
                                   </div>
                                 </div>
@@ -3816,8 +3887,12 @@ function Conversation({ d, lanes, raw, onRaw, onResolve, onReply, onComment, onR
  * Write, preview, send. Shared by the conversation and by anywhere else that
  * takes markdown, so the two never drift into behaving differently.
  */
-function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial, autoFocus }: {
+function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial, autoFocus, secondary }: {
   onSend: (body: string) => Promise<boolean>; busy: boolean; placeholder: string; sendLabel: string;
+  /** A second way to send the same text. On a line comment that is "post this
+   *  one now" beside "hold it for the review" — two outcomes GitHub offers at
+   *  the box, and which this had collapsed into one. */
+  secondary?: { label: string; title?: string; onSend: (body: string) => Promise<boolean> };
   /** Opens this pull request on GitHub — the only place an image can actually
    *  be attached. */
   onOpenGithub?: () => void;
@@ -3922,10 +3997,13 @@ function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial,
     setImageNote(null);
   };
 
-  const send = async () => {
+  /** `which` lets the second button reuse everything around sending — the
+   *  guard, the spinner, the clear-on-success — instead of a copy of it that
+   *  drifts. */
+  const send = async (which: (body: string) => Promise<boolean> = onSend) => {
     if (!text.trim() || sending) return;
     setSending(true);
-    const ok = await onSend(text);
+    const ok = await which(text);
     setSending(false);
     if (ok) { setText(""); setPreview(false); }
   };
@@ -3993,8 +4071,14 @@ function Composer({ onSend, busy, placeholder, sendLabel, onOpenGithub, initial,
       <div className="flex items-center gap-2 px-2.5 py-2"
         style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · <b>@</b> people · <b>#</b> issues · <b>:</b> emoji · drop a text file · ⌘↵ to send</span>
-        <span className="ml-auto">
-          <Btn onClick={send} disabled={sending || busy || !text.trim()} primary small
+        <span className="ml-auto flex items-center gap-1.5">
+          {secondary && (
+            <Btn onClick={() => send(secondary.onSend)} disabled={sending || busy || !text.trim()} small
+              title={!text.trim() ? "Write something first" : secondary.title}>
+              {secondary.label}
+            </Btn>
+          )}
+          <Btn onClick={() => send()} disabled={sending || busy || !text.trim()} primary small
             title={!text.trim() ? "Write something first" : undefined}>
             {sending ? "Sending…" : sendLabel}
           </Btn>
