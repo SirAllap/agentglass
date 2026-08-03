@@ -155,12 +155,16 @@ export function promptTitle(prompt: string | null | undefined): string {
 const clipTitle = (t: string, max: number): string =>
   t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
 
-// Deterministic color from a string (agent lanes, model chips).
+// Deterministic colour from a string (agent lanes, model chips). Near-neutral
+// on purpose: a whisper of hue for identity, but low enough saturation that a
+// dashboard full of them reads as greys, not a rainbow. Lightness carries most
+// of the separation.
 export function hashColor(s: string): string {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   const hue = ((h % 360) + 360) % 360;
-  return `hsl(${hue} 70% 65%)`;
+  const light = 54 + (Math.abs(h >> 8) % 22); // 54–75%
+  return `hsl(${hue} 12% ${light}%)`;
 }
 
 // Event-type accent colors.
@@ -186,11 +190,14 @@ export const typeColor = (t: string) => TYPE_COLORS[t] ?? "#64748b";
 // coming from the price row it matched.
 export { modelLabelOf, providerOf } from "../../../shared/models.ts";
 
+// Concrete (the cost donut is SVG, where a CSS var in `fill` would not resolve)
+// and near-neutral: models separate by lightness, not hue, so the donut and the
+// session bars stop being pink/blue/green and read as a quiet greyscale.
 export const MODEL_COLORS: Record<string, string> = {
-  Opus: "#f472b6",
-  Sonnet: "#60a5fa",
-  Haiku: "#34d399",
-  Fable: "#c084fc",
-  unknown: "#64748b",
+  Opus: "#b6b7bd",
+  Sonnet: "#8d8e95",
+  Haiku: "#6f7077",
+  Fable: "#585960",
+  unknown: "#54555c",
 };
 export const modelColor = (m: string) => MODEL_COLORS[m] ?? hashColor(m);

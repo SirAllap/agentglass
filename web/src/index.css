@@ -32,10 +32,7 @@
   body {
     background-color: var(--bg);
     color: var(--text);
-    /* Honour a chosen --font-mono across the whole cockpit; fall back to the
-       platform stack (the same one Tailwind's font-mono uses) when unset. */
-    font-family: var(--font-mono, "SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Consolas, "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace);
-    @apply antialiased overflow-hidden;
+    @apply font-mono antialiased overflow-hidden;
   }
   /*
    * The phone application scrolls; the cockpit does not.
@@ -91,9 +88,10 @@
     inset: 0;
     z-index: -1;
     overflow: hidden;
+    /* One faint wash, tied to the accent (a neutral grey by default) — no more
+       blue --info glow. Serious dark stays serious; the accent does the colour. */
     background:
-      radial-gradient(50% 40% at 78% -8%, color-mix(in srgb, var(--primary) 30%, transparent), transparent),
-      radial-gradient(45% 35% at 8% 4%, color-mix(in srgb, var(--info) 22%, transparent), transparent);
+      radial-gradient(46% 34% at 82% -10%, color-mix(in srgb, var(--primary) 7%, transparent), transparent);
   }
   /* Static ambient glows. No filter: a radial-gradient is already soft, so the
      glow is baked into the gradient itself instead of a blur() pass — that
@@ -105,14 +103,11 @@
     width: 64vmax;
     height: 64vmax;
     border-radius: 50%;
-    opacity: 0.5;
-    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 40%, transparent), transparent 66%);
+    opacity: 0.28;
+    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 9%, transparent), transparent 66%);
   }
-  .aurora::after {
-    background: radial-gradient(circle, color-mix(in srgb, var(--info) 38%, transparent), transparent 66%);
-    left: 55%;
-    top: 30%;
-  }
+  /* The old second glow was the blue one; drop it entirely. */
+  .aurora::after { display: none; }
   .aurora-grid {
     position: fixed;
     inset: 0;
