@@ -2298,28 +2298,43 @@ export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown): P
   // review to a sha rather than a branch name means a push mid-review does not
   // quietly swap the code underneath it.
   const head = pr.commits[pr.commits.length - 1]?.oid || pr.headRefName;
-  const openThreads = pr.threads.filter((t) => !t.isResolved);
+
+  /*
+   * The number, and what to do with it.
+   *
+   * This used to paste the whole pull request into the chat: title, base and
+   * head, file and line counts, four thousand characters of description, every
+   * open review thread, and a specification of the report format. It filled the
+   * panel — a wall of text you had to scroll past to reach the answer, all of it
+   * describing something the agent can read for itself in one command.
+   *
+   * So it says which pull request and gets out of the way. `gh pr view` carries
+   * the title, the body and the threads; `gh pr diff` carries the change. The
+   * two things worth stating are the ones the agent cannot find out on its own:
+   * that this is read-only, and that the checkout it is sitting in is not this
+   * pull request.
+   */
+  const asked = pr.viewerRequested && !pr.viewerDidAuthor;
   const prompt = [
-    `Review pull request #${pr.number} of ${repo.nameWithOwner}: "${pr.title}".`,
+    `Pull request #${pr.number} of ${repo.nameWithOwner}.`,
     ``,
-    `Read-only: do not change any files, do not commit, do not push, and do not post anything to GitHub. Report back here.`,
+    `Read-only: change nothing, commit nothing, push nothing, and post nothing to GitHub. Answer here.`,
     ``,
-    `Base branch: ${pr.baseRefName}. Head: ${pr.headRefName} at ${head}. ${pr.changedFiles} files, +${pr.additions} −${pr.deletions}.`,
+    `  gh pr view ${pr.number}`,
+    `  gh pr diff ${pr.number}`,
     ``,
-    `The diff:  gh pr diff ${pr.number}`,
-    `A file as the pull request leaves it:  gh api "repos/${repo.nameWithOwner}/contents/<path>?ref=${head}" -H "Accept: application/vnd.github.raw"`,
+    // Worth its line: without it the obvious move is to read the working tree,
+    // which is the same project on a different commit — the surroundings, not
+    // the change.
+    `This checkout is the same project but not this pull request (it is at whatever you have checked out). Read the change from the commands above; use the working tree only for the surroundings.`,
     ``,
-    `This working directory is the same project, but not this pull request: it is on whatever you have checked out, and may be behind. Use it for the surroundings rather than for the change itself — other callers of a helper the diff touches, the tests that cover the path, the convention the change is meant to follow — and read the changed code from the two commands above.`,
-    ``,
-    `## What the author says`,
-    pr.body.slice(0, 4000) || "(no description)",
-    ``,
-    openThreads.length ? `## Review comments still open\n${openThreads.map((t) => `- ${t.path}${t.line ? `:${t.line}` : ""} — ${t.comments[0]?.body.slice(0, 200) ?? ""}`).join("\n")}` : "",
-    ``,
-    `## What I want`,
-    `Find real defects: incorrect logic, unhandled cases, race conditions, missing test coverage for the behaviour being changed.`,
-    `Check whether changed helpers have other callers, and whether the tests actually exercise the new path.`,
-    `Report each finding as: file:line, one sentence on the defect, and a concrete failure case. Say plainly if you find nothing serious.`,
+    `What is this pull request about?`,
+    // Only when it is actually your review that is being waited on. Asking for a
+    // verdict on a pull request nobody asked you to review is how a chat you
+    // opened to understand something turns into one arguing with it.
+    asked
+      ? `\nMy review has been requested on it, so go through the diff as well: what the changes do, and anything that looks wrong. Pinned at ${head}.`
+      : "",
   ].filter((l) => l !== "").join("\n");
 
   return { ok: true, cwd: root, prompt, branch: pr.headRefName };
