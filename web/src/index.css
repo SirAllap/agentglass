@@ -386,9 +386,16 @@
      when the inbox attaches beneath. */
   transition: box-shadow 0.18s ease, border-color 0.18s ease, border-radius 0.18s ease;
   /* A ceiling, or one long message drags the strip out to the width of the
-     screen. Comfortably wider than the resting readout, so closing never
-     squeezes the pills -- it only stops the inbox from growing sideways. */
-  max-width: min(92vw, 560px);
+     screen. It must stay comfortably wider than the RESTING readout, so that
+     closing the inbox never squeezes the pills -- it only stops the inbox from
+     growing sideways.
+     That readout is no longer a fixed set. Alongside the 5-hour and weekly
+     meters the plan can report per-model weekly windows (the "Fable" bar), so
+     the resting row grew by a pill and 560px started clipping it: the third
+     meter arrived cut off mid-caption, which reads as a rendering fault rather
+     than as a limit worth knowing. Raised to fit that row with a pill of head
+     room, and the vw term still keeps a narrow window honest. */
+  max-width: min(92vw, 760px);
 }
 /* It is ambient information, not a control, so hovering firms up the hairline
    rather than offering a button. The pill under the pointer answers with a

@@ -86,3 +86,22 @@ describe("weekly windows scoped to one model", () => {
     expect(island).toContain("w={s} age={age}");
   });
 });
+
+// The strip has to be able to draw what it now reports.
+describe("the notch has room for the meters it can carry", () => {
+  const css = read("src/index.css");
+
+  test("its ceiling clears the resting readout, scoped meters included", () => {
+    // The ceiling exists to stop a long notification dragging the strip across
+    // the screen; it was set when the readout was two meters, and the per-model
+    // window made it three. At 560px the third arrived clipped mid-caption,
+    // which reads as a rendering fault rather than as a limit worth knowing.
+    const m = css.match(/\.agx-notch\s*\{[\s\S]*?max-width:\s*min\(92vw,\s*(\d+)px\)/);
+    expect(m).toBeTruthy();
+    expect(Number(m![1])).toBeGreaterThanOrEqual(700);
+  });
+
+  test("and it is still bounded, so a message cannot drag it off the screen", () => {
+    expect(css).toContain("max-width: min(92vw,");
+  });
+});
