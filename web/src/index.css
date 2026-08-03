@@ -32,7 +32,10 @@
   body {
     background-color: var(--bg);
     color: var(--text);
-    @apply font-mono antialiased overflow-hidden;
+    /* Honour a chosen --font-mono across the whole cockpit; fall back to the
+       platform stack (the same one Tailwind's font-mono uses) when unset. */
+    font-family: var(--font-mono, "SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Consolas, "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace);
+    @apply antialiased overflow-hidden;
   }
   /*
    * The phone application scrolls; the cockpit does not.

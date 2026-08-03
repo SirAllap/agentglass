@@ -1,9 +1,11 @@
 import { useState } from "react";
 import {
-  THEMES, pickTheme, isDarkTheme, EXPERIMENTAL_THEME_IDS,
+  THEMES, pickTheme, applyTheme, isDarkTheme, EXPERIMENTAL_THEME_IDS,
   themeMode, applyThemeMode, persistThemeMode, SERIOUS_DARK, SERIOUS_LIGHT,
   type Theme, type ThemeMode,
 } from "../lib/themes.ts";
+import { ACCENTS, currentAccent, setAccentPref } from "../lib/accent.ts";
+import { UI_FONTS, currentUiFont, setUiFont } from "../lib/uiFont.ts";
 
 /* Settings → Appearance.
  *
@@ -119,6 +121,15 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
     onChange(id);
   };
 
+  const [accent, setAccentState] = useState(() => currentAccent());
+  const [font, setFontState] = useState(() => currentUiFont());
+  const chooseAccent = (id: string) => {
+    setAccentPref(id);
+    applyTheme(current); // re-assert the theme so the overlay (or its removal) lands
+    setAccentState(id);
+  };
+  const chooseFont = (id: string) => { setUiFont(id); setFontState(id); };
+
   return (
     <div className="px-3 pb-2">
       <div className="flex items-center gap-2 mb-1.5">
@@ -139,6 +150,38 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
         </div>
       </div>
       <p className="text-[10.5px] t-dim2 mb-3">A serious neutral pair. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</p>
+
+      {/* Accent — a colour laid over the theme's grey primary, for the things
+          that read as "live". "Theme" (dashed) is no override. */}
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-[11px]" style={{ color: "var(--text2)" }}>Accent</span>
+        <div className="ml-auto flex items-center gap-1.5">
+          {ACCENTS.map((a) => {
+            const on = accent === a.id;
+            const isDefault = !a.primary;
+            return (
+              <button key={a.id || "theme"} onClick={() => chooseAccent(a.id)} title={a.name}
+                className="w-5 h-5 rounded-full transition-transform hover:scale-110"
+                style={{
+                  background: isDefault ? "transparent" : a.primary,
+                  border: isDefault ? "1.5px dashed color-mix(in srgb, var(--text4) 80%, transparent)" : "none",
+                  outline: on ? "2px solid var(--text)" : "none",
+                  outlineOffset: "1.5px",
+                }} />
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Font — the one monospace face the whole cockpit uses. */}
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-[11px]" style={{ color: "var(--text2)" }}>Font</span>
+        <select value={font} onChange={(e) => chooseFont(e.target.value)}
+          className="ml-auto text-[11px] px-2 py-1 rounded-md outline-none cursor-pointer"
+          style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}>
+          {UI_FONTS.map((f) => <option key={f.id || "system"} value={f.id}>{f.name}</option>)}
+        </select>
+      </div>
 
       <div className="text-[9px] uppercase tracking-[0.18em] t-dim2 px-1 pb-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", paddingTop: 12 }}>Or pick a palette</div>
       <ThemePicker current={current} onChange={chooseTheme} />
