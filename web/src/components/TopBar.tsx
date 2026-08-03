@@ -193,8 +193,8 @@ export function TopBar({
    * exactly what made the old notch feel decorative.
    */
   quiet?: boolean;
-  /** Something wants you: how many, and the one to jump to. */
-  needs: { count: number; label: string } | null;
+  /** Something wants you: how many, which one, and where it lives. */
+  needs: { count: number; label: string; sessionId: string; app: string } | null;
   onGoNeeds: () => void;
 }) {
   const time = useMinuteClock();
@@ -276,7 +276,11 @@ export function TopBar({
             }}>
             <span className="rounded-full" style={{ width: 6, height: 6, background: "var(--warning)" }} />
             <span className="text-[10px] font-semibold truncate" style={{ maxWidth: 260 }}>{needs!.label}</span>
-            <span className="text-[9px] opacity-75">go ⏎</span>
+            {/* No key advertised. Enter belongs to whatever has focus — a
+                shell, a composer — and binding it globally would take it from
+                them; promising it and not binding it is worse. The chip is the
+                gesture. */}
+            <span className="text-[9px] opacity-75">go →</span>
           </button>
         </div>
       )}

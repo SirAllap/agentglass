@@ -320,8 +320,30 @@ export default function App() {
     return {
       count: alerts.length,
       label: alerts.length > 1 ? `${label} +${alerts.length - 1} need you` : `${label} needs you`,
+      // WHERE it is, not just that it exists. Without this the bar was an alarm
+      // with nowhere to go — see goToNeeds.
+      sessionId: who?.session_id ?? "",
+      app: who?.source_app ?? "",
     };
   }, [alerts, agents]);
+
+  /**
+   * Take me to the agent that is waiting.
+   *
+   * It used to go to the dashboard, which is not a destination — the dashboard
+   * shows the same alert in a panel, so the button spent a click to repeat
+   * itself. An alarm whose action is "look at the alarm again" is furniture.
+   *
+   * So it goes to the session: its chat if one is open in this app, and its
+   * transcript otherwise, which is the surface that can read what it said and
+   * offers to resume it. Both are places you can actually answer from.
+   */
+  const goToNeeds = useCallback(() => {
+    if (!needs?.sessionId) return;
+    const chat = chatResuming(needs.sessionId);
+    if (chat) { setChatFocus(chat.id); setWsView("chat"); return; }
+    setSessionView({ id: needs.sessionId, app: needs.app });
+  }, [needs]);
   useAlertSound(alerts.length, sound);
 
   // Demo builds only: hand the fleet to whoever is showing this build inside a
@@ -585,7 +607,7 @@ export default function App() {
         // feel like decoration.
         quiet={dashActive}
         needs={needs}
-        onGoNeeds={() => setWsView("dash")}
+        onGoNeeds={goToNeeds}
       />
 
       <Workspace
