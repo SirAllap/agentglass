@@ -4,7 +4,7 @@
 //
 // This uses an unofficial endpoint (the one Claude Code's `/usage` calls). It may
 // change; failures degrade gracefully to { available: false }.
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -66,6 +66,76 @@ export const staleWindowFor = (status: number | null): number =>
 
 let lastGood: UsagePayload | null = null;
 
+/**
+ * The last good reading, kept on disk between runs.
+ *
+ * Holding it only in memory made the day-long window above worth nothing in
+ * practice: the reading dies with the process, and this process is restarted
+ * every time the desktop app is rebuilt or relaunched. Measured on the machine
+ * this was written for — a rebuild at 13:51, and by 13:59 the strip said
+ * "Rate-limited" while the endpoint answered 429 to every attempt to earn the
+ * first reading back. A fresh process starting blind into a burst of 429s has
+ * nothing to show and no way to get anything, which is the exact hole the
+ * grace window was supposed to close.
+ *
+ * Resolved per call rather than at import, like `configPath()` and for the same
+ * reason: a test that redirects XDG_CONFIG_HOME after the module loads must get
+ * its own directory, not the developer's.
+ */
+function lastGoodPath(): string {
+  return join(
+    process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
+    "agentglass",
+    "usage-last.json",
+  );
+}
+
+/** Under `bun test`, only a scratch directory may be touched — the same rule
+ *  config.ts applies, so no suite reads or overwrites a real reading. */
+const OFF_LIMITS = process.env.NODE_ENV === "test"
+  && !(process.env.XDG_CONFIG_HOME ?? "").startsWith(tmpdir());
+
+let restored = false;
+/** Read once per process, and only to seed `lastGood` — never to answer a
+ *  request directly. What comes back is subject to the same staleness rules as
+ *  a reading this process took itself; a file from last week is as dead as a
+ *  memory from last week. */
+async function restoreLastGood(): Promise<void> {
+  if (restored) return;
+  restored = true;
+  if (OFF_LIMITS) return;
+  try {
+    const j = (await Bun.file(lastGoodPath()).json()) as UsagePayload;
+    // Anything hand-edited or half-written is simply not a reading.
+    if (j?.available === true && typeof j.fetched_at === "number" && (j.five_hour || j.seven_day)) {
+      lastGood = { available: true, five_hour: j.five_hour, seven_day: j.seven_day, fetched_at: j.fetched_at };
+    }
+  } catch { /* no file yet, or nonsense in it: start blind, as before. */ }
+}
+
+/** Fire and forget. A reading that fails to persist is worth less on the next
+ *  boot, which is not worth failing a request over. */
+function persistLastGood(u: UsagePayload): void {
+  if (OFF_LIMITS) return;
+  Bun.write(lastGoodPath(), JSON.stringify(u)).catch(() => {});
+}
+
+/**
+ * Everything a restart takes with it.
+ *
+ * Exported for the test that has to simulate one: the whole point of the file
+ * on disk is what happens across a boundary a single process cannot otherwise
+ * cross, and "restart the server" is not something a unit test can do.
+ */
+export function __test_forgetEverything(): void {
+  cache = null;
+  cacheAt = 0;
+  lastGood = null;
+  failures = 0;
+  retryAfterMs = 0;
+  restored = false;
+}
+
 /** Carries the status through the throw, so a failure is classified from what
  *  the server said rather than pattern-matched back out of a message. */
 class UsageHttpError extends Error {
@@ -96,6 +166,9 @@ function win(w: any): UsageWindow | undefined {
  *   day-long window is not something a test can wait for.
  */
 export async function getUsage(now: number = Date.now()): Promise<UsagePayload> {
+  // Before the first attempt, so a process that boots into a burst of 429s
+  // still has yesterday's answer rather than no answer.
+  await restoreLastGood();
   const backoff = Math.max(
     retryAfterMs,
     Math.min(ERROR_TTL_MAX, ERROR_TTL * 2 ** Math.max(0, failures - 1)),
@@ -133,6 +206,7 @@ export async function getUsage(now: number = Date.now()): Promise<UsagePayload> 
       fetched_at: now,
     };
     lastGood = cache;
+    persistLastGood(cache);
     failures = 0;
     retryAfterMs = 0;
   } catch (e) {

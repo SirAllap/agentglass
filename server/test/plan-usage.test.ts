@@ -19,8 +19,12 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "agx-plan-usage-"));
 const creds = join(dir, "credentials.json");
 writeFileSync(creds, JSON.stringify({ claudeAiOauth: { accessToken: "test-token" } }));
-// Read when the module loads, so it has to be set before the import below.
+// Read when the module loads, so both have to be set before the import below.
+// The config home is a scratch directory on purpose: the module refuses to read
+// or write a real reading under `bun test` unless pointed at one.
 process.env.CLAUDE_CREDENTIALS = creds;
+process.env.XDG_CONFIG_HOME = dir;
+const onDisk = join(dir, "agentglass", "usage-last.json");
 
 let usage: typeof import("../src/usage.ts");
 const realFetch = globalThis.fetch;
@@ -111,5 +115,55 @@ describe("an ordinary failure is not given a day", () => {
     reply = failing(500);
     const u = await usage.getUsage(T1 + 32 * MIN);
     expect(u.available).toBe(false);
+  });
+});
+
+// A grace window measured in hours is worth nothing if the reading it protects
+// dies with the process, and this process restarts every time the desktop app
+// is rebuilt. Measured on the machine this was written for: a rebuild at 13:51,
+// and by 13:59 the strip read "Rate-limited" while the endpoint answered 429 to
+// every attempt to earn the first reading back. Starting blind into a burst of
+// 429s is unrecoverable by definition — there is nothing to show and no way to
+// get anything to show.
+describe("across a restart", () => {
+  const T2 = T0 + 40 * HOUR;
+
+  test("a good reading is written down, and a restart still has it", async () => {
+    usage.__test_forgetEverything();
+    reply = ok(7, 44);
+    expect((await usage.getUsage(T2)).available).toBe(true);
+    expect(await Bun.file(onDisk).json()).toMatchObject({ available: true, fetched_at: T2 });
+
+    // The restart itself: everything this process knew is gone, and the
+    // endpoint is in no mood to replace it.
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    const u = await usage.getUsage(T2 + 5 * MIN);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(7);
+    expect(u.seven_day?.utilization).toBe(44);
+    // Dated to the read it came from, not to the boot that found it, so the
+    // strip still says how old it is.
+    expect(u.fetched_at).toBe(T2);
+    expect(u.error).toContain("429");
+  });
+
+  test("a reading from days ago is not resurrected", async () => {
+    // The file is not a licence to show anything forever: what comes off disk
+    // faces the same staleness rules as what never left memory.
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    expect((await usage.getUsage(T2 + 3 * 24 * HOUR)).available).toBe(false);
+  });
+
+  test("a half-written or hand-edited file starts blind rather than inventing one", async () => {
+    // Every one of these is something a crash mid-write or a curious person
+    // with an editor can leave behind.
+    for (const junk of ["", "{", "{}", "null", '{"available":false}', '{"available":true}', '{"available":true,"fetched_at":"soon"}']) {
+      await Bun.write(onDisk, junk);
+      usage.__test_forgetEverything();
+      reply = failing(429);
+      expect((await usage.getUsage(T2 + 4 * 24 * HOUR)).available).toBe(false);
+    }
   });
 });
