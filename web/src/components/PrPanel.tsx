@@ -3026,6 +3026,21 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, spli
       if (wasViewed) next.delete(path); else next.add(path);
       return next;
     });
+    // Marking a file viewed collapses it, and everything under it jumps up by
+    // however tall it was — so the file you move on to arrives already scrolled
+    // to wherever the last one happened to end. Put the next one at the top,
+    // which is the only place a file you have not read yet should start.
+    //
+    // Only on the way in: unfolding is you going back to look at something, and
+    // moving the page under that would be taking the click away from you.
+    if (wasViewed) return;
+    const i = shownFiles.findIndex((f) => f.path === path);
+    // The last file has no next — hold the one just folded, rather than
+    // throwing the page to the bottom of a list that has just got shorter.
+    const target = shownFiles[i + 1]?.path ?? path;
+    requestAnimationFrame(() => {
+      scrollToFileStable(() => document.querySelector(`[data-path="${target}"]`));
+    });
   };
   const allFolded = shownFiles.length > 0 && shownFiles.every((f) => folded.has(f.path));
 
@@ -4487,17 +4502,33 @@ function ReviewTab({ d, drafts, seen, busy, onDrop, onSubmit, onGoFiles }: {
 
         <div className="p-3 flex flex-col gap-2">
           {drafts.length > 0 ? (
-            <div className="rounded overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
-              <div className="px-2.5 py-1 text-[10px] uppercase tracking-wider"
-                style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>
+            /* The same block the diff shows, for the same comments. They were
+               listed here as one line of raw source each — backticks and all —
+               so the remark you are about to send read nothing like the remark
+               you wrote, and a long one was clipped into a strip. Each is its
+               own card now: where it lands, then the text rendered the way it
+               will be rendered. */
+            <div className="flex flex-col gap-2">
+              <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--warning)" }}>
                 {drafts.length} pending comment{drafts.length === 1 ? "" : "s"} — sent with this review
               </div>
               {drafts.map((c, i) => (
-                <div key={i} className="flex items-start gap-2 px-2.5 py-1.5 text-[11px]"
-                  style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}>
-                  <span className="shrink-0" style={{ ...CODE_FONT_STYLE, color: "var(--primary)" }}>{c.path.split("/").pop()}:{c.startLine && c.startLine !== c.line ? `${c.startLine}-${c.line}` : c.line}</span>
-                  <span className="min-w-0 flex-1" style={{ color: "var(--text2)" }}>{c.body}</span>
-                  <button onClick={() => onDrop(i)} className="shrink-0 text-[10px]" style={{ color: "var(--error)" }}>Drop</button>
+                <div key={i} className="rounded-lg overflow-hidden text-[11.5px]" style={{
+                  background: "var(--bg2)",
+                  border: "1px dashed color-mix(in srgb, var(--warning) 55%, transparent)",
+                }}>
+                  <div className="px-2.5 py-1 flex items-center gap-2 text-[10px]"
+                    style={{ background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
+                    {/* The whole path, not just the basename: two files in a
+                        pull request are called models.py more often than not. */}
+                    <span className="min-w-0 truncate" style={{ ...CODE_FONT_STYLE }}>
+                      {c.path}:{c.startLine && c.startLine !== c.line ? `${c.startLine}–${c.line}` : c.line}
+                    </span>
+                    <button onClick={() => onDrop(i)} title="Discard this pending comment"
+                      className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px]"
+                      style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 45%, transparent)" }}>Drop</button>
+                  </div>
+                  <div className="px-2.5 py-2"><Md body={c.body} /></div>
                 </div>
               ))}
             </div>
