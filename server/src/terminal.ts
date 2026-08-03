@@ -108,6 +108,11 @@ type Session = {
   mode: "pty" | "pipe";
   grouped: boolean;
   sizeDir: string | null; // tmp dir holding the resize file (pty_bridge mode)
+  /** The temp dir holding a pull request's fetched copy of a file, when this
+   *  session is one of those. Removed with the session: a viewer that leaves a
+   *  directory behind every time it opens is a slow leak nobody notices until
+   *  /tmp is full of them. */
+  viewDir: string | null;
   closed: boolean;
   exited: boolean;
   killTimer: ReturnType<typeof setTimeout> | null;
@@ -284,10 +289,22 @@ export function ptyOpen(ws: PtyWs) {
   // the check has to admit that without admitting /tmp in general.
   const viewable = !!wanted && (inScope(wanted) || wanted.startsWith(join(tmpdir(), "agentglass-pr-")));
   const editor = viewable && existsSync(wanted!) ? editorFor() : null;
-    // Read-only when it is a fetched copy: editing a temp file is editing
-  // nothing, and an editor that lets you try is an editor that loses your work.
-  const readonly = editor && wanted!.startsWith(join(tmpdir(), "agentglass-pr-")) && /\b(nvim|vim|view)$/.test(editor.split(/\s+/)[0]!);
-  const run = editor ? [...editor.split(/\s+/), ...(readonly ? ["-R"] : []), wanted!] : [shell, ...args];
+    /*
+   * Always read-only, not only for the fetched copies.
+   *
+   * This opens from a diff and from a pull request — places you go to *look* —
+   * on whatever file a list happened to be showing. An editor there is one
+   * keystroke from changing a file nobody meant to touch, in a worktree that
+   * may be somebody else's, with no diff to notice it in.
+   *
+   * `-R` marks the buffer read-only; `-M` also takes 'modifiable' and 'write'
+   * away, so it refuses the edit rather than refusing the save. Neither is a
+   * sandbox — `:set ma` still exists — and that is the right level: a guard
+   * against the accident, not a cage around somebody who means it.
+   */
+  const bin = editor ? editor.split(/\s+/)[0]! : "";
+  const readonlyFlags = /\b(nvim|vim|view)$/.test(bin) ? ["-R", "-M"] : [];
+  const run = editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : [shell, ...args];
 
   let argv: string[];
   let mode: Session["mode"] = "pty";
@@ -316,7 +333,12 @@ export function ptyOpen(ws: PtyWs) {
     return;
   }
 
-  const session: Session = { proc, mode, grouped: HAS_SETSID, sizeDir, closed: false, exited: false, killTimer: null };
+  // Only ours, and only the directory we made — never the file's own folder,
+  // which for a working-tree peek is somebody's repository.
+  const viewDir = editor && wanted!.startsWith(join(tmpdir(), "agentglass-pr-"))
+    ? wanted!.slice(0, wanted!.lastIndexOf("/"))
+    : null;
+  const session: Session = { proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null };
   sessions.set(ws, session);
   ctl(ws, { t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir });
 
@@ -630,6 +652,7 @@ function cleanup(ws: PtyWs, s: Session) {
   // user's real terminal, and nothing there would point back at us.
   if (s.tmuxStatusHiddenOn) { setStatusLine(s.tmuxStatusHiddenOn, true); s.tmuxStatusHiddenOn = null; }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
+  if (s.viewDir) { try { rmSync(s.viewDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.viewDir = null; }
 }
 
 /** Hang up every live shell and remove their temp dirs. Called when the server

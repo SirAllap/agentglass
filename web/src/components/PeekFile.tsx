@@ -21,6 +21,7 @@ import { Portal } from "./Portal.tsx";
 import { ptyWsUrl } from "../lib/api.ts";
 import { themeFromCss } from "./TerminalPanel.tsx";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
+import { termOptions } from "../lib/termPrefs.ts";
 
 export type Peek = { root: string; path: string; label?: string };
 
@@ -47,15 +48,22 @@ export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void })
     const term = new Terminal({
       convertEol: true,
       cursorBlink: true,
-      fontSize: 12.5,
-      fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-mono")
-        || '"SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace',
+      // The terminal's own resolved preferences, not a font stack written out
+      // again here. Mine omitted the Nerd Font entirely, so every glyph a
+      // statusline draws came out as a tofu box — and it would have drifted
+      // from the terminal's size and family the first time either changed.
+      ...termOptions(),
       theme: themeFromCss(),
       scrollback: 5000,
     });
     // Registered before anything is written: the first thing an editor sends is
     // the mode query xterm 6.0.0 dies on.
     const decrqm = answerDecrqm(term as never);
+    // No WebGL renderer here, unlike the panel. That one draws from a texture
+    // atlas built out of a single face, which is exactly where a Nerd Font
+    // glyph borrowed from the back of the stack goes missing; the DOM renderer
+    // falls back per glyph the way the browser does everywhere else. A file
+    // viewer is not the surface that needs the throughput.
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
