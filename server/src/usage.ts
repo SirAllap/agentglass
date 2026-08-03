@@ -284,6 +284,32 @@ function statuslineWindow(w: any): UsageWindow | undefined {
  * resetting the backoff here would send us back at it every ten seconds the
  * moment the sessions went quiet.
  */
+/**
+ * The per-model windows a statusline payload does not carry, kept from the last
+ * reading that did.
+ *
+ * Captured from a live session: the CLI sends `rate_limits` with `five_hour`
+ * and `seven_day` and nothing else, while the usage endpoint reports a scoped
+ * weekly window for the same account in the same minute. So the free feed is
+ * the *fresher* source and the poll is the *fuller* one, and since accepting a
+ * feed postpones the poll by a TTL, letting an ingest blank the scoped windows
+ * means the bar they draw would essentially never appear.
+ *
+ * Carrying them is honest because of what they are: weekly windows, moving by
+ * fractions of a percent an hour. Bounded by the same day-long window a
+ * rate-limited reading gets — past that they are dropped rather than shown,
+ * for the same reason.
+ *
+ * Deliberately NOT solved by forcing the poll to run anyway: that would spend
+ * the endpoint budget this whole feed exists to stop spending, to refresh a
+ * number that changes weekly.
+ */
+function carriedScoped(now: number): UsageScopedWindow[] | undefined {
+  const prev = lastGood;
+  if (!prev?.scoped?.length) return undefined;
+  return now - prev.fetched_at < RATE_LIMITED_STALE_MAX ? prev.scoped : undefined;
+}
+
 export function ingestStatusline(raw: unknown, now: number = Date.now()): boolean {
   const rl = (raw as any)?.rate_limits;
   if (!rl || typeof rl !== "object") return false;
@@ -295,7 +321,7 @@ export function ingestStatusline(raw: unknown, now: number = Date.now()): boolea
 
   const next: UsagePayload = {
     available: true, five_hour, seven_day,
-    scoped: scopedFromModelScoped(rl.model_scoped),
+    scoped: scopedFromModelScoped(rl.model_scoped) ?? carriedScoped(now),
     fetched_at: now,
   };
   cache = next;

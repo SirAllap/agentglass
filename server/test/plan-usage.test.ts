@@ -369,3 +369,56 @@ describe("weekly windows scoped to one model", () => {
     expect((await usage.getUsage(T4 + 80 * MIN)).scoped?.[0]?.utilization).toBe(100);
   });
 });
+
+// The feed is the fresher source; the poll is the fuller one.
+//
+// Captured from a live session: the CLI's `rate_limits` carries five_hour and
+// seven_day and nothing else, while the endpoint reports a scoped weekly window
+// for the same account in the same minute. Since accepting a feed postpones the
+// poll by a TTL, an ingest that blanked the scoped windows would mean the bar
+// they draw never appears at all.
+describe("the scoped windows survive the feed that cannot see them", () => {
+  const T5 = T0 + 120 * HOUR;
+  const polled = () => () => new Response(JSON.stringify({
+    five_hour: { utilization: 30 },
+    seven_day: { utilization: 50 },
+    limits: [{ kind: "weekly_scoped", percent: 2, resets_at: null, scope: { model: { display_name: "Fable" } } }],
+  }), { status: 200 });
+  // Exactly what a real session sends: no model_scoped at all.
+  const fromSession = (five: number) => ({ rate_limits: { five_hour: { used_percentage: five }, seven_day: { used_percentage: 50 } } });
+
+  test("a poll brings them, a session's payload does not blank them", async () => {
+    usage.__test_forgetEverything();
+    reply = polled();
+    expect((await usage.getUsage(T5)).scoped?.[0]?.name).toBe("Fable");
+
+    expect(usage.ingestStatusline(fromSession(31), T5 + MIN)).toBe(true);
+    const u = await usage.getUsage(T5 + MIN);
+    // The fresh numbers are the session's…
+    expect(u.five_hour?.utilization).toBe(31);
+    // …and the scoped window it knows nothing about is still there.
+    expect(u.scoped?.[0]).toEqual({ name: "Fable", utilization: 2, remaining: 98, resets_at: null });
+  });
+
+  test("carried across many ingests, the way a real session feeds", async () => {
+    for (let i = 0; i < 5; i++) usage.ingestStatusline(fromSession(32 + i), T5 + (2 + i) * MIN);
+    expect((await usage.getUsage(T5 + 7 * MIN)).scoped?.[0]?.utilization).toBe(2);
+  });
+
+  test("a payload that DOES carry them wins over what was kept", async () => {
+    usage.ingestStatusline({
+      rate_limits: {
+        five_hour: { used_percentage: 40 },
+        model_scoped: [{ display_name: "Fable", utilization: 9, resets_at: null }],
+      },
+    }, T5 + 10 * MIN);
+    expect((await usage.getUsage(T5 + 10 * MIN)).scoped?.[0]?.utilization).toBe(9);
+  });
+
+  test("but not carried forever — a day out they are dropped, not shown", async () => {
+    // Same bound a rate-limited reading gets, for the same reason: past it the
+    // number is no longer a fact about this week.
+    expect(usage.ingestStatusline(fromSession(45), T5 + 25 * HOUR)).toBe(true);
+    expect((await usage.getUsage(T5 + 25 * HOUR)).scoped).toBeUndefined();
+  });
+});
