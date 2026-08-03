@@ -547,7 +547,9 @@ export function ptyOpen(ws: PtyWs) {
 export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   const s = sessions.get(ws);
   if (!s) return;
-  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean };
+  // `number`/`root` ride along only for {cmd:"review"} — see below, where the
+  // server builds what runs rather than taking a command string off the wire.
+  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean; number?: number; root?: string };
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
     // A keystroke is the least ambiguous "a human is waiting on this process"
@@ -601,11 +603,14 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     if (msg.cmd === "review") {
       const target = s.tmux;
       const number = msg.number;
+      // A review of nothing, in nowhere, is not a request this can serve.
+      if (typeof number !== "number" || !msg.root) return;
+      const root = msg.root;
       // Kept off `ptyMessage`'s signature: it is called for every keystroke on
       // this socket, and making the hot path return a promise to serve one
       // message would be a poor trade.
       void (async () => {
-        const plan = await prepareReviewPrompt(msg.root, number);
+        const plan = await prepareReviewPrompt(root, number);
         if (!plan.ok) return;
         const bin = claudeCode.bin();
         if (!bin) return;
