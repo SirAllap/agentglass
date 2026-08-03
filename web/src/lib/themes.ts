@@ -8,7 +8,7 @@
 // Grouping into dark/light is by --bg luminance (see ThemeSwitcher), so a new
 // entry needs no flag — just put a dark bg in the dark run and a light one below.
 
-import { SERVER } from "./api.ts";
+import { SERVER, authHeaders } from "./api.ts";
 import type { AnsiPalette } from "./termPalette.ts";
 
 export interface Theme {
@@ -102,9 +102,14 @@ export function pickTheme(id: string) {
 }
 
 function syncTheme(t: Theme) {
+  // authHeaders, not a bare content-type: `/theme/sync` sits behind the same
+  // token gate as every other route, so a token-protected server (any box with
+  // remote access on) answered 401 and dropped the sync on the floor. Without
+  // this, tmux and nvim silently kept whatever palette was last written while a
+  // token was not yet required — days stale, and never a visible error.
   void fetch(`${SERVER}/theme/sync`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ name: t.name, vars: t.vars }),
   }).catch(() => { /* no server (the static demo), or it declined */ });
 }

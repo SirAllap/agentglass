@@ -38,3 +38,15 @@ describe("IS_DESKTOP marks the local desktop shell", () => {
     expect(api).toMatch(/IS_DESKTOP[^\n]*=\s*!!\s*DESKTOP_API/);
   });
 });
+
+describe("the theme sync authenticates like every other request", () => {
+  const themes = src("../src/lib/themes.ts");
+
+  test("syncTheme sends the token, not a bare content-type", () => {
+    // /theme/sync is behind the same token gate as every route. A raw fetch
+    // without authHeaders 401s on any box with remote access on, and the sync
+    // is dropped silently — which is how tmux/nvim went days stale.
+    expect(themes).toMatch(/import \{[^}]*\bauthHeaders\b[^}]*\} from "\.\/api\.ts"/);
+    expect(themes).toMatch(/fetch\(`\$\{SERVER\}\/theme\/sync`,[\s\S]*?headers:\s*authHeaders\(/);
+  });
+});
