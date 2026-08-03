@@ -537,10 +537,23 @@ function createSession(root: string): Sess {
     if (sel) navigator.clipboard?.writeText(sel).catch(() => { /* no clipboard permission */ });
   });
   const holder = document.createElement("div");
-  // Opaque themed backing, so any frame where the renderer paints nothing (a
-  // WebGL context loss, a swap to the DOM renderer) shows the terminal's own
-  // background colour instead of a white flash.
-  holder.style.cssText = "width:100%;height:100%;background:var(--bg)";
+  /*
+   * The terminal's surface, and the reason the veil took five attempts.
+   *
+   * This element is created here rather than in JSX, has no class, and carried
+   * `background: var(--bg)` — an opaque themed backing so that any frame where
+   * the renderer paints nothing (a WebGL context loss, a swap to the DOM
+   * renderer) showed the terminal's colour instead of a white flash. Entirely
+   * reasonable, and invisible to anyone reading the JSX: every attempt to make
+   * the terminal transparent was being covered by one unclassed div, one level
+   * below the container being veiled.
+   *
+   * It keeps the job — a backing that is always painted — and takes the app's
+   * surface to do it with, so the flash it guards against still cannot happen
+   * and the grid is what shows through the cells.
+   */
+  holder.className = "agx-veil";
+  holder.style.cssText = "width:100%;height:100%";
   const id = `t${++seq}-${Date.now().toString(36)}`;
   const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxSession: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
@@ -1015,7 +1028,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
         <span className="ml-auto text-[9px] t-dim2 shrink-0">Drag to resize</span>
         <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="Hide the console (the shell keeps running)">✕</button>
       </div>
-      <div ref={slot} className="flex-1 min-h-0 agx-veil" onClick={() => sess?.term.focus()} />
+      <div ref={slot} className="flex-1 min-h-0" onClick={() => sess?.term.focus()} />
     </div>
   );
 }
@@ -1618,7 +1631,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 )}
 
                 {/* the terminals — one slot per visible pane */}
-                <div className="flex-1 min-h-0 relative agx-veil">
+                <div className="flex-1 min-h-0 relative">
                   {/* The gap survives — it separates two panes and is doing real
                       work. The outer padding does not: with one pane it is pure
                       dead margin, and a full-screen TUI is drawn right to the
@@ -1643,7 +1656,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         // edge, so tmux's frame and vim's status line come out
                         // visibly chewed. Only round it when the pane is ours
                         // to decorate.
-                        className={`agx-veil min-w-0 min-h-0 overflow-hidden ${tmuxActive ? "" : "rounded-lg"}`}
+                        className={`min-w-0 min-h-0 overflow-hidden ${tmuxActive ? "" : "rounded-lg"}`}
                         style={{
                           // No background here: the class above is the terminal's
                           // surface and the cells are transparent, so the strip
