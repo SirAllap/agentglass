@@ -88,15 +88,20 @@ export function themeFromCss() {
     info: readVar(s, "--info", "#61afef"),
   });
   return {
-    // The theme's own ground, solid.
-    //
-    // It was transparent for a while so the app's grid would read through the
-    // terminal. Two things killed that idea and both are facts rather than
-    // taste: tmux fills every cell with a background of its own (`window-style
-    // bg=#1e1e1e` here), so under tmux — which is how this terminal is actually
-    // used — nothing showed through anyway; and compositing every cell instead
-    // of filling a rect is a real cost on the surface with the most output.
-    background: bg,
+    /*
+     * Nothing. The container behind is the terminal's surface.
+     *
+     * `bg` is still read above, because the ANSI palette is derived from it —
+     * this only stops xterm painting a ground of its own over the one the app
+     * already drew.
+     *
+     * One thing this cannot fix, and it is worth knowing before wondering:
+     * tmux paints its OWN background into every cell when `window-style` names
+     * a colour (`bg=#1e1e1e` on this machine). No amount of transparency here
+     * shows through a background the program on the other end drew; `bg=default`
+     * in the tmux config is the only thing that changes it.
+     */
+    background: "#00000000",
     // The terminal's default text is the theme's PRIMARY text, not the dimmer
     // secondary — uncoloured output should read as bright/white (like a proper
     // editor surface), not the washed-out grey that --text2 gave it.
@@ -298,6 +303,10 @@ function applyThemeLive(s: Sess): () => void {
         if (s.term.options.fontFamily !== o.fontFamily) s.term.options.fontFamily = o.fontFamily;
         if (s.term.options.fontSize !== o.fontSize) s.term.options.fontSize = o.fontSize;
         if (s.term.options.cursorStyle !== o.cursorStyle) s.term.options.cursorStyle = o.cursorStyle;
+        // Settable at runtime, and kept in step here for the same reason the
+        // rest are: whatever termOptions decides is what the terminal is,
+        // including on a session that was created before it decided it.
+        if (s.term.options.allowTransparency !== o.allowTransparency) s.term.options.allowTransparency = o.allowTransparency;
         if (needFit) fitTerm(s);
         // The WebGL renderer caches cells in a texture atlas and won't always
         // repaint already-drawn scrollback on a theme swap; force it. On the DOM
@@ -434,11 +443,19 @@ function createSession(root: string): Sess {
   evictLru(root);
   const tp = termOptions();
   const term = new Terminal({
-    fontFamily: tp.fontFamily,
-    fontSize: tp.fontSize,
+    /*
+     * Spread, not picked apart field by field.
+     *
+     * This used to name `fontFamily`, `fontSize` and `cursorStyle` one at a
+     * time, so `allowTransparency` — added to termOptions and correctly picked
+     * up by the file viewer, which spreads — never reached the terminal
+     * anybody actually uses. It cost two rounds of "why is it still opaque?"
+     * and the answer was never in the CSS. Anything termOptions decides now
+     * arrives here by construction.
+     */
+    ...tp,
     lineHeight: 1.2,
     cursorBlink: true,
-    cursorStyle: tp.cursorStyle,
     /*
      * Scrollback, and why it is not ten thousand any more.
      *
@@ -998,7 +1015,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
         <span className="ml-auto text-[9px] t-dim2 shrink-0">Drag to resize</span>
         <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="Hide the console (the shell keeps running)">✕</button>
       </div>
-      <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--bg)" }} onClick={() => sess?.term.focus()} />
+      <div ref={slot} className="flex-1 min-h-0 agx-veil" onClick={() => sess?.term.focus()} />
     </div>
   );
 }
@@ -1601,7 +1618,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 )}
 
                 {/* the terminals — one slot per visible pane */}
-                <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}>
+                <div className="flex-1 min-h-0 relative agx-veil">
                   {/* The gap survives — it separates two panes and is doing real
                       work. The outer padding does not: with one pane it is pure
                       dead margin, and a full-screen TUI is drawn right to the
@@ -1626,15 +1643,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         // edge, so tmux's frame and vim's status line come out
                         // visibly chewed. Only round it when the pane is ours
                         // to decorate.
-                        className={`min-w-0 min-h-0 overflow-hidden ${tmuxActive ? "" : "rounded-lg"}`}
+                        className={`agx-veil min-w-0 min-h-0 overflow-hidden ${tmuxActive ? "" : "rounded-lg"}`}
                         style={{
-                          // Match the terminal's own background. xterm can only
-                          // draw whole character cells, so a container that
-                          // isn't an exact multiple of the cell size leaves a
-                          // strip of remainder down the right and along the
-                          // bottom — a few pixels wide, and glaringly obvious
-                          // when it is a different tone from the cells.
-                          background: "var(--bg)",
+                          // No background here: the class above is the terminal's
+                          // surface and the cells are transparent, so the strip
+                          // of remainder xterm leaves when the container is not
+                          // an exact multiple of the cell size matches the cells
+                          // by construction rather than by being kept in step.
                           border: paneIds.length > 1 && i === focusIdx
                             ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)"
                             : "1px solid transparent",

@@ -78,12 +78,20 @@ export function termOptions(): { fontFamily: string; fontSize: number; cursorSty
     fontFamily: f && f.stack ? f.stack : TERM_FALLBACK,
     fontSize: currentTermSize(),
     cursorStyle: currentTermCursor(),
-    // Off. It was on so the app's backdrop could read through the terminal,
-    // and it earned nothing: tmux paints every cell itself, so under the way
-    // this terminal is actually used there was nothing to see through to — and
-    // compositing every cell rather than filling a rect is a real cost on the
-    // surface that produces the most output in the app.
-    allowTransparency: false,
+    /**
+     * Let the surface behind the terminal show.
+     *
+     * Without it xterm fills every cell with the theme's background, and a
+     * "transparent" background colour is filled just as opaquely as any other —
+     * which is why two attempts at this changed nothing: the flag was being
+     * returned here and dropped on the floor by the one caller that mattered.
+     * See createSession, which reads this object field by field.
+     *
+     * It is not free — xterm composites each cell instead of filling a rect —
+     * and the renderer preference (Auto / GPU / Compatibility) is where to go
+     * if the throughput matters more than the look.
+     */
+    allowTransparency: true,
   };
 }
 
