@@ -23,8 +23,21 @@ export type Peek = { root: string; path: string; label?: string };
 export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void }) {
   const host = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
+  /*
+   * `onClose` is a new function on every render of the parent, and it was in
+   * this effect's dependencies — so the whole terminal was torn down and rebuilt
+   * on any re-render, and the teardown's own `ws.close()` fired `onclose`, which
+   * called `onClose`. The window opened, the parent re-rendered, and it shut
+   * itself: "closed before the connection is established" in the console.
+   *
+   * The callback lives in a ref so the effect depends only on which file it is
+   * showing, and a flag tells our own teardown apart from the editor exiting.
+   */
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
 
   useEffect(() => {
+    let ours = false;
     const el = host.current;
     if (!el) return;
     const term = new Terminal({
@@ -61,7 +74,9 @@ export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void })
     // Closing the editor closes the window: `:q` is how you leave a file, and
     // having to then close a dead pane by hand would be a second gesture for
     // one intention.
-    ws.onclose = () => onClose();
+    // The editor exited — `:q`, or it never started. Ours is a re-render or an
+    // unmount, and must not be reported as the user finishing with the file.
+    ws.onclose = () => { if (!ours) closeRef.current(); };
 
     const onData = term.onData((d) => send(d));
     const ro = new ResizeObserver(() => {
@@ -73,12 +88,13 @@ export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void })
     requestAnimationFrame(() => term.focus());
 
     return () => {
+      ours = true;
       ro.disconnect();
       onData.dispose();
       try { ws.close(); } catch { /* already gone */ }
       term.dispose();
     };
-  }, [peek.root, peek.path, onClose]);
+  }, [peek.root, peek.path]);
 
   return (
     <Portal>

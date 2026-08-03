@@ -64,7 +64,7 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
+  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
 } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
@@ -1650,6 +1650,9 @@ const server = Bun.serve<WsData>({
       switch (pathname) {
         case "/prs/review": res = await submitReview(root, n, b.verb, b.body); break;
         case "/prs/review-with": res = await submitReviewWith(root, n, b.verb, b.body, b.comments); break;
+        // A pull request's version of a file, on disk, so it can be opened. The
+        // working tree cannot answer for a branch that is not checked out here.
+        case "/prs/file-temp": res = await prFileToTemp(root, n, b.path); break;
         case "/prs/comment": res = await addComment(root, n, b.body); break;
         case "/prs/reply": res = await replyToThread(root, n, b.commentId, b.body); break;
         case "/prs/thread-resolved": res = await setThreadResolved(root, b.threadId, b.resolved); break;

@@ -14,8 +14,8 @@
 // 3. Writes are public. A stray `gh pr merge` is not a UI bug, it is a deploy,
 //    so every mutation goes through `writeGuard` and the irreversible ones are
 //    named separately from the rest.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { inScope } from "./config.ts";
@@ -1882,6 +1882,38 @@ export async function deleteComment(rootIn: unknown, nodeId: unknown, kind: unkn
  * what an image diff needs, in the other shape: the raw bytes of a binary file
  * on each side, which the unified diff cannot represent at all.
  */
+/**
+ * A pull request's version of one file, on disk, read-only.
+ *
+ * The working tree cannot answer this: a pull request from somebody else is on
+ * a branch that is not checked out here, so the path either does not exist or
+ * holds a different version of itself — and opening that while calling it the
+ * pull request's file is the quiet kind of wrong.
+ *
+ * Fetched at the head commit into a temp file. Deliberately NOT `git fetch`:
+ * bringing the branch down would write refs into somebody's repository to
+ * satisfy a look, and this needs no repository at all.
+ */
+export async function prFileToTemp(rootIn: unknown, numberIn: unknown, pathIn: unknown): Promise<{ ok: true; file: string; sha: string } | { ok: false; error: string }> {
+  const n = Number(numberIn);
+  const path = typeof pathIn === "string" ? pathIn : "";
+  if (!Number.isInteger(n) || n <= 0 || !path) return { ok: false, error: "invalid file" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const pr = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]);
+  const sha = pr?.head?.sha;
+  const from = pr?.head?.repo?.full_name || repo.nameWithOwner;
+  if (!sha) return { ok: false, error: "could not resolve the pull request's head" };
+  const r = await gh(["api", `repos/${from}/contents/${encodeURI(path)}?ref=${sha}`, "-H", "Accept: application/vnd.github.raw"]);
+  if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "GitHub would not return that file" };
+  // Named for what it is, and kept out of the repository: a stray file inside a
+  // checkout would show up in somebody's `git status` an hour later.
+  const dir = mkdtempSync(join(tmpdir(), "agentglass-pr-"));
+  const file = join(dir, `${sha.slice(0, 7)}-${path.split("/").pop() || "file"}`);
+  writeFileSync(file, r.stdout);
+  return { ok: true, file, sha };
+}
+
 export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   path?: unknown; side?: unknown; from?: unknown; to?: unknown;
 }): Promise<{ ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }> {

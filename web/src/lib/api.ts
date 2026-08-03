@@ -566,6 +566,11 @@ const realApi = {
   prReact: (root: string, commentId: number, content = "+1") => post<PrActionResult>("/prs/react", { root, commentId, content }),
   prEdit: (root: string, number: number, patch: { title?: string; body?: string; base?: string }) => post<PrActionResult>("/prs/edit", { root, number, ...patch }),
   prLabels: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/labels", { root, number, add, remove }),
+  /** A pull request's version of a file, written to a temp copy so it can be
+   *  opened. The working tree holds whatever branch you have out, which for
+   *  somebody else's pull request is a different file wearing the same path. */
+  prFileTemp: (root: string, number: number, path: string) =>
+    post<{ ok: boolean; file?: string; sha?: string; error?: string }>("/prs/file-temp", { root, number, path }),
   prReviewers: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/reviewers", { root, number, add, remove }),
   prDraft: (root: string, number: number, draft: boolean) => post<PrActionResult>("/prs/draft", { root, number, draft }),
   prUpdateBranch: (root: string, number: number) => post<PrActionResult>("/prs/update-branch", { root, number }),
@@ -840,6 +845,7 @@ const demoApi: typeof realApi = {
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
   prDiff: (_root: string, number: number) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
+  prFileTemp: (_r: string, _n: number, _p: string) => D({ ok: false as const, error: "not available in the demo" }),
   prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),
   prReviewWith: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string, _c: unknown[]) => D(demoPrAction()),
   prComment: (_r: string, _n: number, _b: string) => D(demoPrAction()),

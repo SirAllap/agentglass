@@ -1980,7 +1980,15 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                     d={d} root={root} byPath={byPath} loaded={!!diff} seenFiles={seenFiles} onSeen={toggleSeen}
                     sel={selFile} onSel={setSelFile} split={split} wrap={wrap} onSplit={setSplit} onWrap={setWrap}
                     drafts={myDrafts} onAddDraft={addDraft} onPostOne={postOneComment} onDropDraft={dropDraftItem}
-                    onPeek={(p) => setPeek({ root, path: `${root}/${p}`, label: p })}
+                    onPeek={async (p) => {
+                      // The pull request's copy, not the checkout's. A branch
+                      // you do not have out means the path is either missing or
+                      // a different version of itself, and opening that under
+                      // this file's name is the quiet kind of wrong.
+                      const r = await api.prFileTemp(root, d.number, p);
+                      if (!r.ok || !r.file) { flash(false, r.error || "Could not fetch that file from GitHub"); return; }
+                      setPeek({ root, path: r.file, label: `${p} · #${d.number} @ ${r.sha?.slice(0, 7)} · read-only` });
+                    }}
                     busy={busy} onReply={doReply}
                     onApply={doApplySuggestion}
                     onResolve={(t) => act(t.isResolved ? "Unresolve" : "Resolve", () => api.prSetThreadResolved(root, t.id, !t.isResolved))}
