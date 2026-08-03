@@ -1145,7 +1145,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     </div>
                     <Stepper
                       label="Font size"
-                      hint="Applies live to every open terminal."
+                      hint={`Applies live to every open terminal, and is remembered. ${MOD_KEY}+ / ${MOD_KEY}− with the pointer over a terminal does the same without touching the window.`}
                       value={`${termSize}px`}
                       onDec={() => { const n = Math.max(SIZE_MIN, termSize - 1); setTermSize(n); setTermSizeState(n); }}
                       onInc={() => { const n = Math.min(SIZE_MAX, termSize + 1); setTermSize(n); setTermSizeState(n); }}
@@ -1165,7 +1165,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     {IS_DESKTOP && (
                       <Stepper
                         label="Display size"
-                        hint={`Scales the whole window — ${MOD_KEY}+ / ${MOD_KEY}− anywhere, ${MOD_KEY}0 to reset`}
+                        hint={`Scales the whole window, and is remembered. ${MOD_KEY}+ / ${MOD_KEY}− anywhere, ${MOD_KEY}0 to reset — except over a terminal, where the same keys size the terminal instead and leave the window alone.`}
                         value={fmtScale(scale)}
                         onDec={() => onZoom(-1)} onInc={() => onZoom(1)}
                         canDec={canZoomOut()} canInc={canZoomIn()} />

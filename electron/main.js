@@ -20,7 +20,7 @@
 // origin and no port to contend for. Only one instance runs now (see the lock
 // below), but the origin is what makes the store survive a restart.
 
-const { app, BrowserWindow, Menu, ipcMain, protocol, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, protocol, screen, shell } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -107,6 +107,62 @@ let mainWindow = null;
 // sidecar can never disagree about what the secret is.
 const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "agentglass");
 const REMOTE_CFG = path.join(CONFIG_DIR, "remote.json");
+const WINDOW_CFG = path.join(CONFIG_DIR, "window.json");
+
+/**
+ * Where the window was, and how.
+ *
+ * Every launch used to open a fresh 1440x900 in the middle of the screen, so a
+ * maximised window and a chosen size lasted exactly one session. The display
+ * scale already survives a restart (localStorage, re-applied on boot) and the
+ * terminal's font size survives on its own — the window itself was the one
+ * thing that forgot.
+ *
+ * Bounds AND state, because they are different answers: unmaximising a restored
+ * window has to put it somewhere, and "somewhere" should be where it was before
+ * it was maximised rather than a default in the middle of the screen.
+ */
+function readWindowState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(WINDOW_CFG, "utf8"));
+    return {
+      width: Number(s.width) || 1440,
+      height: Number(s.height) || 900,
+      x: Number.isFinite(s.x) ? s.x : undefined,
+      y: Number.isFinite(s.y) ? s.y : undefined,
+      max: s.max === true,
+      full: s.full === true,
+    };
+  } catch {
+    return { width: 1440, height: 900, max: false, full: false };
+  }
+}
+
+function saveWindowState(win) {
+  try {
+    if (win.isDestroyed()) return;
+    const full = win.isFullScreen();
+    const max = win.isMaximized();
+    // `getNormalBounds` rather than `getBounds`: while maximised or fullscreen
+    // the latter is the screen, and saving that would make "restore" a no-op
+    // for ever after — the window would come back maximised-sized and then have
+    // nowhere to unmaximise to.
+    const b = win.getNormalBounds();
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(WINDOW_CFG, JSON.stringify({ ...b, max, full }, null, 2) + "\n");
+  } catch { /* a window state is not worth failing a close over */ }
+}
+
+/** Is this rectangle still on a screen that exists? A window saved on a second
+ *  monitor and reopened without it would otherwise come back off-screen, with
+ *  no way to drag it into view. */
+function onSomeDisplay(b, screen) {
+  if (b.x === undefined || b.y === undefined) return false;
+  return screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y;
+  });
+}
 const TOKEN_PATH = path.join(CONFIG_DIR, "token");
 
 function remoteEnabled() {
@@ -624,9 +680,12 @@ function guardWebviews(win) {
 }
 
 function createWindow() {
+  const st = readWindowState();
+  const place = onSomeDisplay(st, screen) ? { x: st.x, y: st.y } : {};
   const win = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: st.width,
+    height: st.height,
+    ...place,
     backgroundColor: "#0f0a1a",
     title: "agentglass",
     autoHideMenuBar: true,
@@ -663,8 +722,28 @@ function createWindow() {
   guardWebviews(win);
   openLinksOutside(win);
   keepUsefulShortcuts(win);
+  // Restored before the page loads, so the window does not visibly snap into
+  // place a beat after it appears.
+  if (st.full) win.setFullScreen(true);
+  else if (st.max) win.maximize();
+
   win.loadURL(`${APP_ORIGIN}/`);
   mainWindow = win;
+
+  // Saved on every settle rather than only on close: a crash, a kill or a
+  // reboot are exactly the times you would most like the window to come back
+  // where it was. Debounced, because a drag or a resize fires continuously.
+  let saveTimer = null;
+  const remember = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveWindowState(win), 400);
+  };
+  for (const ev of ["resize", "move", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
+    win.on(ev, remember);
+  }
+  // And once more on the way out, unthrottled: the debounce would otherwise be
+  // cancelled by the process ending.
+  win.on("close", () => { clearTimeout(saveTimer); saveWindowState(win); });
   win.on("closed", () => { if (mainWindow === win) mainWindow = null; });
 }
 
