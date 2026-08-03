@@ -20,6 +20,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Portal } from "./Portal.tsx";
 import { ptyWsUrl } from "../lib/api.ts";
 import { themeFromCss } from "./TerminalPanel.tsx";
+import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 
 export type Peek = { root: string; path: string; label?: string };
 
@@ -52,6 +53,9 @@ export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void })
       theme: themeFromCss(),
       scrollback: 5000,
     });
+    // Registered before anything is written: the first thing an editor sends is
+    // the mode query xterm 6.0.0 dies on.
+    const decrqm = answerDecrqm(term as never);
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
@@ -118,6 +122,7 @@ export function PeekFile({ peek, onClose }: { peek: Peek; onClose: () => void })
 
     return () => {
       ours = true;
+      decrqm.dispose();
       ro.disconnect();
       onData.dispose();
       try { ws.close(); } catch { /* already gone */ }

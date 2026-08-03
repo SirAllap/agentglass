@@ -15,6 +15,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
@@ -461,6 +462,11 @@ function createSession(root: string): Sess {
    * refuses anything that is not http(s), which matters more here than
    * anywhere else — the text being linkified is whatever a program printed.
    */
+  // Same guard as the file viewer. A shell here usually has tmux in front of
+  // it, which answers DECRQM itself — but a bare shell running `nvim` does not,
+  // and then xterm 6.0.0 throws inside its own parser and the screen stops
+  // updating. See xtermDecrqm.
+  answerDecrqm(term as never);
   term.loadAddon(new WebLinksAddon((_e, uri) => { openExternal(uri); }));
   /*
    * Draw on the GPU when the machine will let us.
