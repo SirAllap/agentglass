@@ -52,6 +52,15 @@ let cacheAt = 0;
  * accuracy — it buys a larger share of a budget that isn't ours to spend.
  */
 const TTL = 15 * 60_000;
+/**
+ * How long the endpoint may go unasked while a live session keeps the meters
+ * fed. See the use site: a feed cannot postpone the poll past this, because
+ * only the poll can see the per-model windows.
+ */
+const POLL_FLOOR = 60 * 60_000;
+/** When the network was last actually attempted — distinct from `cacheAt`,
+ *  which a free reading also moves. */
+let lastFetchAt = 0;
 // On failure, retry sooner than the happy path — but back off, because the
 // most common failure here is a 429 and retrying every ten seconds against a
 // rate limiter is what *keeps* you rate-limited. Doubling from 10s to a 5m
@@ -151,6 +160,7 @@ function persistLastGood(u: UsagePayload): void {
 export function __test_forgetEverything(): void {
   cache = null;
   cacheAt = 0;
+  lastFetchAt = 0;
   lastGood = null;
   failures = 0;
   retryAfterMs = 0;
@@ -345,7 +355,25 @@ export async function getUsage(now: number = Date.now()): Promise<UsagePayload> 
     Math.min(ERROR_TTL_MAX, ERROR_TTL * 2 ** Math.max(0, failures - 1)),
   );
   const ttl = cache?.available ? TTL : backoff;
-  if (cache && now - cacheAt < ttl) return cache;
+  // The feed is the fresher source and the poll is the fuller one, so the poll
+  // gets a floor of its own that a feed cannot push out. Without it, a session
+  // posting every fifteen seconds moves `cacheAt` forward forever and the
+  // endpoint is never asked again — which is fine for the two windows the feed
+  // carries and fatal for the scoped ones it does not: that bar would never
+  // appear at all on a machine with an agent running. Once an hour, against a
+  // budget that answers 429 to three calls in four minutes, is the cheapest
+  // cadence that keeps every field honest.
+  // Only the floor, with no backoff clause: `lastFetchAt` is stamped on the
+  // attempt, so a failing endpoint gets one extra try an hour out of this and
+  // not one per caller. Anding in the backoff looked prudent and was wrong —
+  // a feed arriving in the same millisecond made `now - cacheAt` zero and the
+  // floor could never fire at all.
+  const overdue = now - lastFetchAt >= POLL_FLOOR;
+  if (cache && now - cacheAt < ttl && !overdue) return cache;
+
+  // Stamped on the attempt, not on success: a run of 429s must not have the
+  // floor firing at every caller on the way past.
+  lastFetchAt = now;
 
   const t = await token();
   if (!t) {

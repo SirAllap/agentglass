@@ -187,6 +187,12 @@ describe("a reading handed over by a live session", () => {
 
   test("both windows, with the reset time the CLI sends", async () => {
     usage.__test_forgetEverything();
+    // A poll first, so the hourly floor is satisfied and this case is about the
+    // ingest alone. On a genuinely cold process the floor fires straight away
+    // — deliberately, since that is how the scoped windows get in early rather
+    // than an hour after boot.
+    reply = ok(1, 1);
+    await usage.getUsage(T3 - MIN);
     // resets_at arrives as seconds since the epoch.
     const at = Math.floor((T3 + 3 * HOUR) / 1000);
     expect(usage.ingestStatusline(
@@ -206,7 +212,13 @@ describe("a reading handed over by a live session", () => {
 
   test("accepting one postpones the next fetch by a full TTL", async () => {
     // Free numbers are a reason not to spend budget, not a reason to spend it
-    // sooner. Ten minutes on, still nothing asked.
+    // sooner. Ten minutes on, still nothing asked — the poll's hourly floor is
+    // a separate rule and is pinned in its own describe below, so this one
+    // starts from a fetch of its own rather than inheriting an old one.
+    usage.__test_forgetEverything();
+    reply = ok(13, 51);
+    await usage.getUsage(T3);
+    usage.ingestStatusline(statusline({ used_percentage: 13 }, { used_percentage: 51 }), T3);
     calls = 0;
     reply = failing(429);
     expect((await usage.getUsage(T3 + 10 * MIN)).five_hour?.utilization).toBe(13);
@@ -418,7 +430,64 @@ describe("the scoped windows survive the feed that cannot see them", () => {
   test("but not carried forever — a day out they are dropped, not shown", async () => {
     // Same bound a rate-limited reading gets, for the same reason: past it the
     // number is no longer a fact about this week.
+    // A day out, the hourly floor will also want a poll — pin it to a failure
+    // so nothing can supply the scoped windows and this stays a question about
+    // what was carried.
+    reply = failing(429);
     expect(usage.ingestStatusline(fromSession(45), T5 + 25 * HOUR)).toBe(true);
     expect((await usage.getUsage(T5 + 25 * HOUR)).scoped).toBeUndefined();
+  });
+});
+
+// The poll has a floor a feed cannot push out.
+//
+// An ingest moves `cacheAt`, deliberately — free numbers are a reason not to
+// spend budget. But a session posting every fifteen seconds moves it forever,
+// and only the poll can see the per-model windows, so without a floor that bar
+// never appears at all on a machine with an agent running.
+describe("a live feed cannot silence the endpoint forever", () => {
+  const T6 = T0 + 200 * HOUR;
+  const feed = (n: number) => ({ rate_limits: { five_hour: { used_percentage: n }, seven_day: { used_percentage: 50 } } });
+  const withScoped = () => () => new Response(JSON.stringify({
+    five_hour: { utilization: 10 }, seven_day: { utilization: 20 },
+    limits: [{ kind: "weekly_scoped", percent: 6, resets_at: null, scope: { model: { display_name: "Fable" } } }],
+  }), { status: 200 });
+
+  test("a session feeding non-stop still lets the poll through once an hour", async () => {
+    usage.__test_forgetEverything();
+    reply = withScoped();
+    await usage.getUsage(T6);            // the first poll
+    calls = 0;
+
+    // Fifty minutes of a session posting every fifteen seconds. None of it
+    // should reach the network.
+    for (let t = 0; t < 50 * MIN; t += 15_000) {
+      usage.ingestStatusline(feed(11), T6 + t);
+      await usage.getUsage(T6 + t);
+    }
+    expect(calls).toBe(0);
+
+    // Past the hour, the next look goes and asks.
+    usage.ingestStatusline(feed(12), T6 + 61 * MIN);
+    await usage.getUsage(T6 + 61 * MIN);
+    expect(calls).toBe(1);
+  });
+
+  test("and that is how the scoped window gets in at all", async () => {
+    // The point of the floor: the feed cannot carry this, so if the poll never
+    // runs it is never seen.
+    const u = await usage.getUsage(T6 + 61 * MIN);
+    expect(u.scoped?.[0]).toEqual({ name: "Fable", utilization: 6, remaining: 94, resets_at: null });
+  });
+
+  test("a failing endpoint is not hammered by the floor", async () => {
+    // Stamped on the attempt rather than on success, so a run of 429s past the
+    // hour does not fire at every single caller.
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    await usage.getUsage(T6 + 2 * HOUR);
+    calls = 0;
+    for (let i = 0; i < 20; i++) await usage.getUsage(T6 + 2 * HOUR + i * 1000);
+    expect(calls).toBe(0);
   });
 });
