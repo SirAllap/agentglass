@@ -36,7 +36,7 @@ import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
          chordFor, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
 import { loadViewOrder, type ViewId } from "./workspace/views.ts";
-import { ThemePicker } from "./ThemePicker.tsx";
+import { AppearancePane } from "./ThemePicker.tsx";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
   return (
@@ -953,7 +953,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         and nvim too. It used to live in the masthead; it belongs
                         here, where a control this heavy isn't in the way. */}
                     <p className="px-3 pb-1 text-[11px] t-dim2">One palette for the whole cockpit — chrome, terminal, and (on the desktop) your tmux and nvim follow it.</p>
-                    <ThemePicker current={theme} onChange={onTheme} />
+                    <AppearancePane current={theme} onChange={onTheme} />
                   </Section>
                   )}
                   {pane === "prefs" && (

@@ -1,13 +1,16 @@
 import { useState } from "react";
-import { THEMES, pickTheme, isDarkTheme, EXPERIMENTAL_THEME_IDS, type Theme } from "../lib/themes.ts";
+import {
+  THEMES, pickTheme, isDarkTheme, EXPERIMENTAL_THEME_IDS,
+  themeMode, applyThemeMode, persistThemeMode, SERIOUS_DARK, SERIOUS_LIGHT,
+  type Theme, type ThemeMode,
+} from "../lib/themes.ts";
 
-/* The theme picker, as it lives in Settings → Appearance.
+/* Settings → Appearance.
  *
- * Split from the old header dropdown for two reasons: the masthead should not
- * carry a control this heavy, and thirty-five palettes in one flat list read as
- * a toy. The curated run — one strong pick per well-known family, plus the
- * accessibility and neutral palettes — is what shows; the decorative and
- * second-flavour ones sit behind a disclosure, present but not shouting. */
+ * Two layers, the way Orca does it: a System / Dark / Light segment that maps to
+ * the two serious neutral defaults (and tracks the OS on "System"), then the
+ * full palette grid underneath for anyone who wants a specific scheme. Picking
+ * from the grid drops the segment to whatever that palette is. */
 
 function Swatch({ t }: { t: Theme }) {
   return (
@@ -37,9 +40,8 @@ function ThemeBtn({ t, current, onPick }: { t: Theme; current: string; onPick: (
   );
 }
 
-/** One list, split into its dark run and its light run — empty runs are dropped
- *  so the experimental section doesn't show a bare "light" header with nothing
- *  under it. */
+/** One list, split into its dark run and its light run — empty runs dropped so
+ *  the experimental section never shows a bare header with nothing under it. */
 function Grid({ items, current, onPick }: { items: Theme[]; current: string; onPick: (id: string) => void }) {
   const groups = [
     { label: "dark", items: items.filter(isDarkTheme) },
@@ -59,22 +61,24 @@ function Grid({ items, current, onPick }: { items: Theme[]; current: string; onP
   );
 }
 
+/** The palette grid alone — curated run plus a disclosure for the rest. Dumb by
+ *  design: it reports a pick and applies nothing, so its parent stays the single
+ *  place that decides what "picking a theme" means. */
 export function ThemePicker({ current, onChange }: { current: string; onChange: (id: string) => void }) {
   const [showExperimental, setShowExperimental] = useState(false);
   const curated = THEMES.filter((t) => !EXPERIMENTAL_THEME_IDS.has(t.id));
   const experimental = THEMES.filter((t) => EXPERIMENTAL_THEME_IDS.has(t.id));
-  const pick = (id: string) => { pickTheme(id); onChange(id); };
 
   return (
-    <div className="px-3 pb-2">
-      <Grid items={curated} current={current} onPick={pick} />
+    <div>
+      <Grid items={curated} current={current} onPick={onChange} />
 
       <button
         onClick={() => setShowExperimental((v) => !v)}
         className="mt-1 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px]"
         style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", background: "color-mix(in srgb, var(--bg3) 22%, transparent)", color: "var(--text3)" }}
       >
-        <span className="tabular-nums" style={{ color: "var(--text2)" }}>More themes</span>
+        <span style={{ color: "var(--text2)" }}>More themes</span>
         <span className="t-dim2">experimental · {experimental.length}</span>
         <span className="ml-auto t-dim2">{showExperimental ? "▴" : "▾"}</span>
       </button>
@@ -82,9 +86,62 @@ export function ThemePicker({ current, onChange }: { current: string; onChange: 
       {showExperimental && (
         <div className="mt-2">
           <p className="px-1 pb-1.5 text-[10.5px] t-dim2">Decorative and second-flavour palettes, kept for tinkering.</p>
-          <Grid items={experimental} current={current} onPick={pick} />
+          <Grid items={experimental} current={current} onPick={onChange} />
         </div>
       )}
+    </div>
+  );
+}
+
+const MODES: { m: ThemeMode; label: string }[] = [
+  { m: "system", label: "System" },
+  { m: "dark", label: "Dark" },
+  { m: "light", label: "Light" },
+];
+
+/** The whole Appearance page: mode segment on top, palette grid below. Owns the
+ *  one decision — a mode click applies the matching serious theme, a grid click
+ *  applies that palette and re-labels the segment — and keeps app state in step
+ *  through `onChange`. */
+export function AppearancePane({ current, onChange }: { current: string; onChange: (id: string) => void }) {
+  const [mode, setMode] = useState<ThemeMode>(() => themeMode());
+
+  const chooseMode = (m: ThemeMode) => {
+    const id = applyThemeMode(m);
+    setMode(m);
+    if (id) onChange(id);
+  };
+  const chooseTheme = (id: string) => {
+    pickTheme(id);
+    const m: ThemeMode = id === SERIOUS_DARK ? "dark" : id === SERIOUS_LIGHT ? "light" : "custom";
+    persistThemeMode(m);
+    setMode(m);
+    onChange(id);
+  };
+
+  return (
+    <div className="px-3 pb-2">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[11px]" style={{ color: "var(--text2)" }}>Mode</span>
+        <div className="ml-auto flex p-0.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+          {MODES.map(({ m, label }) => {
+            const on = mode === m;
+            return (
+              <button key={m} onClick={() => chooseMode(m)}
+                className="px-3 py-1 rounded-md text-[11px] transition-colors"
+                style={on
+                  ? { background: "var(--bg2)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
+                  : { color: "var(--text3)" }}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <p className="text-[10.5px] t-dim2 mb-3">A serious neutral pair — the palette Orca uses. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</p>
+
+      <div className="text-[9px] uppercase tracking-[0.18em] t-dim2 px-1 pb-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", paddingTop: 12 }}>Or pick a palette</div>
+      <ThemePicker current={current} onChange={chooseTheme} />
     </div>
   );
 }

@@ -8,7 +8,7 @@
 // Grouping into dark/light is by --bg luminance (see ThemeSwitcher), so a new
 // entry needs no flag — just put a dark bg in the dark run and a light one below.
 
-import { SERVER, authHeaders } from "./api.ts";
+import { SERVER, authHeaders, IS_DESKTOP } from "./api.ts";
 import type { AnsiPalette } from "./termPalette.ts";
 
 export interface Theme {
@@ -23,6 +23,13 @@ export interface Theme {
 }
 
 export const THEMES: Theme[] = [
+  // --- serious neutral defaults, the pair behind System / Dark / Light ---
+  // A faithful port of the palette Orca ships (shadcn's "neutral"): monochrome
+  // on purpose — the primary is a grey, not a brand hue — so nothing competes
+  // with the work. Semantic colours are the only chroma.
+  { id: "orca-dark", name: "Orca Dark", preview: {"primary":"#0a0a0a","secondary":"#171717","accent":"#e5e5e5"}, vars: {"--bg":"#0a0a0a","--bg2":"#171717","--bg3":"#262626","--bg4":"#404040","--text":"#fafafa","--text2":"#d4d4d4","--text3":"#a1a1a1","--text4":"#737373","--border":"#262626","--border2":"#383838","--primary":"#e5e5e5","--primary-hover":"#ffffff","--success":"#86efac","--warning":"#fbbf24","--error":"#ff6568","--info":"#60a5fa","--shadow":"rgba(0, 0, 0, 0.9)"} },
+  { id: "orca-light", name: "Orca Light", preview: {"primary":"#ffffff","secondary":"#f5f5f5","accent":"#171717"}, vars: {"--bg":"#ffffff","--bg2":"#fafafa","--bg3":"#f5f5f5","--bg4":"#eaeaea","--text":"#0a0a0a","--text2":"#262626","--text3":"#737373","--text4":"#a1a1a1","--border":"#e5e5e5","--border2":"#d4d4d4","--primary":"#171717","--primary-hover":"#000000","--success":"#15803d","--warning":"#d97706","--error":"#e40014","--info":"#2563eb","--shadow":"rgba(0, 0, 0, 0.12)"} },
+
   // --- community-proven dark palettes ---
   { id: "github-dark", name: "GitHub Dark", preview: {"primary":"#0d1117","secondary":"#161b22","accent":"#58a6ff"}, vars: {"--bg":"#0d1117","--bg2":"#161b22","--bg3":"#21262d","--bg4":"#30363d","--text":"#e6edf3","--text2":"#c9d1d9","--text3":"#8b949e","--text4":"#6e7681","--border":"#30363d","--border2":"#444c56","--primary":"#58a6ff","--primary-hover":"#79c0ff","--success":"#3fb950","--warning":"#d29922","--error":"#f85149","--info":"#58a6ff","--shadow":"rgba(1, 4, 9, 0.85)"} },
   { id: "github-dark-dimmed", name: "GitHub Dark Dimmed", preview: {"primary":"#22272e","secondary":"#2d333b","accent":"#6cb6ff"}, vars: {"--bg":"#22272e","--bg2":"#2d333b","--bg3":"#373e47","--bg4":"#444c56","--text":"#cdd9e5","--text2":"#adbac7","--text3":"#768390","--text4":"#636e7b","--border":"#444c56","--border2":"#545d68","--primary":"#6cb6ff","--primary-hover":"#96d0ff","--success":"#57ab5a","--warning":"#c69026","--error":"#e5534b","--info":"#6cb6ff","--shadow":"rgba(0, 0, 0, 0.8)"} },
@@ -80,6 +87,8 @@ export const EXPERIMENTAL_THEME_IDS = new Set<string>([
   "midnight-purple", "dark", "dark-blue", "forest", "ember", "rosewood", "deep-sea",
   "midnight-purple-light", "light", "blue-light", "forest-light", "ember-light",
   "rosewood-light", "deep-sea-light", "nord-light",
+  // The old neutral pair — superseded as defaults by Orca Dark/Light, kept here.
+  "carbon", "paper",
 ]);
 
 /** Dark by the luminance of its background — no per-theme flag needed. Shared by
@@ -136,7 +145,64 @@ function syncTheme(t: Theme) {
   }).catch(() => { /* no server (the static demo), or it declined */ });
 }
 
+/* System / Dark / Light — the mode toggle above the palette grid.
+ *
+ * "system" tracks the OS and flips between the two serious neutral defaults;
+ * "dark"/"light" pin one of them; picking any named palette from the grid drops
+ * the mode to "custom". The chosen theme id is still what gets persisted and
+ * applied — the mode is a thin layer over it, remembered so a system-mode user
+ * boots into the palette the OS is on right now, not the one it was on last. */
+export type ThemeMode = "system" | "dark" | "light" | "custom";
+export const SERIOUS_DARK = "orca-dark";
+export const SERIOUS_LIGHT = "orca-light";
+const MODE_KEY = "agentglass-theme-mode";
+
+export function themeMode(): ThemeMode {
+  try { const m = localStorage.getItem(MODE_KEY); if (m === "system" || m === "dark" || m === "light") return m; } catch {}
+  return "custom";
+}
+
+function systemIsDark(): boolean {
+  try { return window.matchMedia("(prefers-color-scheme: dark)").matches; } catch { return true; }
+}
+
+/** The theme id a mode resolves to right now (null for "custom"). */
+export function resolveThemeMode(mode: ThemeMode): string | null {
+  if (mode === "dark") return SERIOUS_DARK;
+  if (mode === "light") return SERIOUS_LIGHT;
+  if (mode === "system") return systemIsDark() ? SERIOUS_DARK : SERIOUS_LIGHT;
+  return null;
+}
+
+/** Remember the mode without re-applying — used when a grid pick is itself one
+ *  of the serious pair, so the segment stays in step without a double paint. */
+export function persistThemeMode(mode: ThemeMode): void {
+  try { if (mode === "custom") localStorage.removeItem(MODE_KEY); else localStorage.setItem(MODE_KEY, mode); } catch {}
+}
+
+/** Choose System/Dark/Light: remember it and apply the matching serious theme.
+ *  Returns the applied id so the caller can keep its own state in step. */
+export function applyThemeMode(mode: ThemeMode): string | null {
+  persistThemeMode(mode);
+  const id = resolveThemeMode(mode);
+  if (id) pickTheme(id);
+  return id;
+}
+
+/** Re-apply on OS change while in system mode. Call once at boot. */
+export function watchSystemTheme(): void {
+  try {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+      if (themeMode() !== "system") return;
+      applyTheme(systemIsDark() ? SERIOUS_DARK : SERIOUS_LIGHT, { sync: IS_DESKTOP });
+    });
+  } catch { /* no matchMedia (headless) */ }
+}
+
 export function initialTheme(): string {
+  // System mode resolves live off the OS; pinned modes and custom picks are
+  // whatever was last written to the theme key (applyThemeMode/pickTheme wrote it).
+  if (themeMode() === "system") return resolveThemeMode("system") ?? DEFAULT_THEME;
   try { return localStorage.getItem("agentglass-theme") || DEFAULT_THEME; } catch { return DEFAULT_THEME; }
 }
 
