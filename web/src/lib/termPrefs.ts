@@ -13,14 +13,16 @@
  */
 const TERM_FALLBACK = `"SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Consolas, "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace`;
 
-export interface TermFont { id: string; name: string; family: string; stack: string }
+// `bundled` faces ship with the app (see web/src/fonts.ts), so they're always
+// available — no OS install, and the availability probe can be skipped for them.
+export interface TermFont { id: string; name: string; family: string; stack: string; bundled?: boolean }
 export const TERM_FONTS: TermFont[] = [
   { id: "", name: "System default", family: "", stack: "" },
-  { id: "jetbrains", name: "JetBrains Mono", family: "JetBrains Mono", stack: `"JetBrains Mono", "JetBrainsMono Nerd Font Mono", ${TERM_FALLBACK}` },
-  { id: "fira", name: "Fira Code", family: "Fira Code", stack: `"Fira Code", "FiraCode Nerd Font", ${TERM_FALLBACK}` },
-  { id: "cascadia", name: "Cascadia Code", family: "Cascadia Code", stack: `"Cascadia Code", "CaskaydiaCove Nerd Font", ${TERM_FALLBACK}` },
-  { id: "plex", name: "IBM Plex Mono", family: "IBM Plex Mono", stack: `"IBM Plex Mono", ${TERM_FALLBACK}` },
-  { id: "source", name: "Source Code Pro", family: "Source Code Pro", stack: `"Source Code Pro", ${TERM_FALLBACK}` },
+  { id: "jetbrains", name: "JetBrains Mono", family: "JetBrains Mono", bundled: true, stack: `"JetBrains Mono", "JetBrainsMono Nerd Font Mono", ${TERM_FALLBACK}` },
+  { id: "fira", name: "Fira Code", family: "Fira Code", bundled: true, stack: `"Fira Code", "FiraCode Nerd Font", ${TERM_FALLBACK}` },
+  { id: "cascadia", name: "Cascadia Code", family: "Cascadia Code", bundled: true, stack: `"Cascadia Code", "CaskaydiaCove Nerd Font", ${TERM_FALLBACK}` },
+  { id: "plex", name: "IBM Plex Mono", family: "IBM Plex Mono", bundled: true, stack: `"IBM Plex Mono", ${TERM_FALLBACK}` },
+  { id: "source", name: "Source Code Pro", family: "Source Code Pro", bundled: true, stack: `"Source Code Pro", ${TERM_FALLBACK}` },
 ];
 
 export type CursorStyle = "block" | "bar" | "underline";

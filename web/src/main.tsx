@@ -10,6 +10,7 @@ import { followServerChanges } from "./lib/desktop.ts";
 import { applyTheme, initialTheme, watchThemeStorage, watchSystemTheme } from "./lib/themes.ts";
 import { restoreScale } from "./lib/uiScale.ts";
 import "./index.css";
+import "./fonts.ts"; // bundled monospace faces — see fonts.ts
 
 // Re-broadcast on boot, not only on a deliberate pick: the persisted theme IS
 // the user's last deliberate choice, and without this the machine's tmux/nvim

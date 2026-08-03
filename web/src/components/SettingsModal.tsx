@@ -1086,7 +1086,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       <div className="text-[12px] mb-2" style={{ color: "var(--text)" }}>Font</div>
                       <div className="grid grid-cols-2 gap-1.5">
                         {TERM_FONTS.map((f) => {
-                          const avail = fontAvailable(f.family);
+                          const avail = f.bundled || fontAvailable(f.family);
                           const on = termFont === f.id;
                           return (
                             <button key={f.id || "sys"} disabled={!avail}
@@ -1105,7 +1105,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                           );
                         })}
                       </div>
-                      <p className="text-[10px] t-dim2 mt-2">Only fonts installed on this machine are selectable — the terminal measures the real face, and a missing one is what made the grid go haywire before.</p>
+                      <p className="text-[10px] t-dim2 mt-2">These faces ship with agentglass — no install needed, and they render the same on any machine.</p>
                     </div>
                     <Stepper
                       label="Font size"
