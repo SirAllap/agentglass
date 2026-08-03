@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { api, type UsagePayload, type UsageWindow } from "../../lib/api.ts";
 import { subscribeUsage, usedColor, usageError, resetLabel } from "../UsageWidget.tsx";
+import { stalenessLabel } from "../../lib/usageAge.ts";
 import { subscribe as subscribeChats, listChats } from "../../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../../lib/clockPref.ts";
@@ -165,18 +166,24 @@ function Pill({ cap, title, children }: { cap: string; title?: string; children:
 
 /** A plan window: how much is gone, as a bar and a number, captioned with when
  *  it comes back. "62%" alone never answered the question you actually have. */
-function MeterPill({ tag, w }: { tag: string; w: UsageWindow }) {
+/**
+ * `age` is set only when the reading has stopped refreshing. It takes the
+ * caption over from the reset time and dims the number, so a stale meter is
+ * legible as stale at a glance without ever ceasing to answer the question it
+ * is there to answer.
+ */
+function MeterPill({ tag, w, age }: { tag: string; w: UsageWindow; age?: string | null }) {
   const color = usedColor(w.utilization);
   const reset = resetLabel(w.resets_at);
   return (
     <Pill
-      cap={reset ? `${tag} · ${reset}` : tag}
-      title={`${tag}: ${w.utilization}% used${reset ? ` — resets ${reset}` : ""}`}
+      cap={age ? `${tag} · ${age} old` : reset ? `${tag} · ${reset}` : tag}
+      title={`${tag}: ${w.utilization}% used${reset ? ` — resets ${reset}` : ""}${age ? ` — could not refresh, last read ${age} ago` : ""}`}
     >
       <span className="agx-bar" style={{ width: 38 }}>
         <i style={{ width: `${Math.min(100, Math.max(0, w.utilization))}%`, background: color }} />
       </span>
-      <span className="agx-val" style={{ color }}>{w.utilization}%</span>
+      <span className="agx-val" style={{ color, opacity: age ? 0.55 : 1 }}>{w.utilization}%</span>
     </Pill>
   );
 }
@@ -440,6 +447,10 @@ export function DynamicIsland() {
   const [u, setU] = useState<UsagePayload | null>(null);
   useEffect(() => subscribeUsage(setU), []);
   const rateLimited = !u?.available && usageError()?.includes("429");
+  // How old the numbers are, and only once that is worth saying. The clock
+  // beside them already re-renders this strip, so the age keeps itself honest
+  // without a timer of its own.
+  const age = u?.available ? stalenessLabel(u.fetched_at) : null;
 
   const anyLive = shells > 0 || waiting > 0 || behind > 0 || ahead > 0;
 
@@ -587,18 +598,24 @@ export function DynamicIsland() {
                 <Lcd text={clock.hhmm} height={20} blink={clock.colon} />
               </Pill>
 
-              {/* right: the plan windows, or a rate-limit note when the upstream
-                  is throttling us -- the meters vanishing looks like a bug. */}
+              {/* right: the plan windows. They keep their last numbers through a
+                  burst of 429s and say how old they are instead of vanishing.
+                  The endpoint limits per account and every Claude Code session
+                  on this machine draws on the same budget, so being throttled is
+                  a normal afternoon rather than a fault, and a true percentage
+                  half an hour old beats the word "Rate-limited" -- which is now
+                  left for the one case it honestly describes: throttled before
+                  there was ever a reading to keep. */}
               {u?.available ? (
                 <>
                   <span className="agx-sep" />
-                  {u.five_hour && <MeterPill tag="5H" w={u.five_hour} />}
-                  {u.seven_day && <MeterPill tag="WEEK" w={u.seven_day} />}
+                  {u.five_hour && <MeterPill tag="5H" w={u.five_hour} age={age} />}
+                  {u.seven_day && <MeterPill tag="WEEK" w={u.seven_day} age={age} />}
                 </>
               ) : rateLimited ? (
                 <>
                   <span className="agx-sep" />
-                  <Pill cap="PLAN" title="The usage endpoint is rate-limiting us; retrying">
+                  <Pill cap="PLAN" title="Rate-limited before there was a reading to show; retrying">
                     <span className="text-[10px]" style={{ color: "color-mix(in srgb, #fff 55%, transparent)" }}>Rate-limited</span>
                   </Pill>
                 </>

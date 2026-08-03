@@ -25,11 +25,18 @@ export interface UsagePayload {
 
 let cache: UsagePayload | null = null;
 let cacheAt = 0;
-// Matched to the client's poll interval. A shorter TTL here just means the
-// first of several open surfaces pays a network call the others don't need —
-// and against a rate-limited endpoint, every avoidable call is one that can
-// cost the whole feature.
-const TTL = 5 * 60_000;
+/*
+ * Fifteen minutes, and this is the only cadence that reaches Anthropic — the
+ * browser polls this server, which costs nothing and is why it can stay quick.
+ *
+ * The endpoint limits per account and limits hard: measured on one machine,
+ * three calls inside four minutes was enough to be answered 429, with every
+ * Claude Code session open at the time drawing on the same budget. What is
+ * being asked about is a five-hour window and a seven-day one, so a
+ * fifteen-minute picture of them is the same picture. A shorter TTL buys no
+ * accuracy — it buys a larger share of a budget that isn't ours to spend.
+ */
+const TTL = 15 * 60_000;
 // On failure, retry sooner than the happy path — but back off, because the
 // most common failure here is a 429 and retrying every ten seconds against a
 // rate limiter is what *keeps* you rate-limited. Doubling from 10s to a 5m
@@ -39,8 +46,31 @@ const ERROR_TTL_MAX = 5 * 60_000;
 let failures = 0;
 /** Honour an explicit Retry-After over our own guess — the server knows. */
 let retryAfterMs = 0;
-const STALE_MAX = 30 * 60_000; // stop serving stale data after 30m
+/**
+ * How long a good reading stays worth showing once fetching starts failing.
+ *
+ * Half an hour for an ordinary failure. A full day when the failure is a 429,
+ * because a 429 from this endpoint is not an outage — it is a busy Tuesday. The
+ * limit is per account and shared with every Claude Code session on the
+ * machine, so throttling arrives in bursts all day while the numbers being
+ * throttled barely move. Expiring the reading after half an hour swapped two
+ * true, slightly old percentages for the word "Rate-limited", which is the one
+ * thing that strip can say that tells you nothing at all about your plan.
+ */
+const STALE_MAX = 30 * 60_000;
+const RATE_LIMITED_STALE_MAX = 24 * 3_600_000;
+
+/** Exported for the test that would otherwise have to wait a day to run. */
+export const staleWindowFor = (status: number | null): number =>
+  status === 429 ? RATE_LIMITED_STALE_MAX : STALE_MAX;
+
 let lastGood: UsagePayload | null = null;
+
+/** Carries the status through the throw, so a failure is classified from what
+ *  the server said rather than pattern-matched back out of a message. */
+class UsageHttpError extends Error {
+  constructor(readonly status: number) { super(`HTTP ${status}`); }
+}
 
 async function token(): Promise<string | null> {
   try {
@@ -60,8 +90,12 @@ function win(w: any): UsageWindow | undefined {
   };
 }
 
-export async function getUsage(): Promise<UsagePayload> {
-  const now = Date.now();
+/**
+ * @param now Injected clock. Every decision here is a function of time — the
+ *   TTL, the backoff, how long a reading outlives the fetch that got it — and a
+ *   day-long window is not something a test can wait for.
+ */
+export async function getUsage(now: number = Date.now()): Promise<UsagePayload> {
   const backoff = Math.max(
     retryAfterMs,
     Math.min(ERROR_TTL_MAX, ERROR_TTL * 2 ** Math.max(0, failures - 1)),
@@ -71,7 +105,7 @@ export async function getUsage(): Promise<UsagePayload> {
 
   const t = await token();
   if (!t) {
-    cache = degrade(now, "no credentials");
+    cache = degrade(now, "no credentials", null);
     cacheAt = now;
     return cache;
   }
@@ -89,7 +123,7 @@ export async function getUsage(): Promise<UsagePayload> {
       // and ignoring it is how a client earns a longer ban.
       const ra = Number(r.headers.get("retry-after"));
       retryAfterMs = r.status === 429 && Number.isFinite(ra) && ra > 0 ? Math.min(ra * 1000, ERROR_TTL_MAX) : 0;
-      throw new Error(`HTTP ${r.status}`);
+      throw new UsageHttpError(r.status);
     }
     const j = (await r.json()) as any;
     cache = {
@@ -103,7 +137,7 @@ export async function getUsage(): Promise<UsagePayload> {
     retryAfterMs = 0;
   } catch (e) {
     failures++;
-    cache = degrade(now, String(e));
+    cache = degrade(now, String(e), e instanceof UsageHttpError ? e.status : null);
   }
   cacheAt = now;
   return cache;
@@ -111,9 +145,12 @@ export async function getUsage(): Promise<UsagePayload> {
 
 /** On failure, fall back to the last good reading (marked with its original
  *  fetched_at) instead of hiding the meters; only report unavailable when the
- *  stale data is too old to be meaningful. */
-function degrade(now: number, error: string): UsagePayload {
-  if (lastGood && now - lastGood.fetched_at < STALE_MAX) {
+ *  stale data is too old to be meaningful — which depends on why the fetch
+ *  failed, see `staleWindowFor`. The error travels with the stale payload so
+ *  the client can say how old the numbers are rather than implying they are
+ *  live. */
+function degrade(now: number, error: string, status: number | null): UsagePayload {
+  if (lastGood && now - lastGood.fetched_at < staleWindowFor(status)) {
     return { ...lastGood, error };
   }
   return { available: false, fetched_at: now, error };
