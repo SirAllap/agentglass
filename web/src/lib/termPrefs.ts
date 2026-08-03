@@ -70,12 +70,21 @@ export function fontAvailable(family: string): boolean {
 }
 
 /** The xterm options the current prefs resolve to. */
-export function termOptions(): { fontFamily: string; fontSize: number; cursorStyle: CursorStyle } {
+export function termOptions(): { fontFamily: string; fontSize: number; cursorStyle: CursorStyle; allowTransparency: boolean } {
   const f = TERM_FONTS.find((x) => x.id === currentTermFont());
   return {
     fontFamily: f && f.stack ? f.stack : TERM_FALLBACK,
     fontSize: currentTermSize(),
     cursorStyle: currentTermCursor(),
+    // The window has a wash and a grid behind everything, and a terminal that
+    // paints its own opaque ground hides both. With this the cell background is
+    // genuinely nothing and the container's veil is what you see through the
+    // text — which is why the two must agree; see --veil in index.css.
+    //
+    // It is not free: xterm composites every cell instead of filling a rect,
+    // and the renderer preference (Auto / GPU / Compatibility) is there for
+    // anyone who would rather have the throughput.
+    allowTransparency: true,
   };
 }
 

@@ -406,11 +406,56 @@ function registerIpc(win) {
   });
   ipcMain.handle("ag:winClose", () => { win.close(); });
   ipcMain.handle("ag:winIsMaximized", () => win.isMaximized());
-  // Maximising by dragging to an edge, or by a keyboard shortcut the window
-  // manager owns, does not go through us — so the glyph is told rather than
-  // inferred, or it would say "maximise" on a maximised window.
-  for (const ev of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
-    win.on(ev, () => { try { win.webContents.send("ag:winState", win.isMaximized()); } catch { /* torn down */ } });
+  ipcMain.handle("ag:winState", () => ({ max: win.isMaximized(), full: win.isFullScreen() }));
+
+  /*
+   * The app menu, on demand.
+   *
+   * There is deliberately no menu BAR — see the note at setApplicationMenu(null):
+   * this app embeds a real terminal where Alt is part of ordinary use, and an
+   * auto-hiding bar kept dropping over the UI mid-keystroke. Removing it took
+   * the accelerators with it, and `frame: false` then took the last visible
+   * trace of a menu away entirely.
+   *
+   * So it is built here, popped from the "⋯" in our own top bar, and never
+   * installed as the application menu. Alt still does nothing; the menu exists
+   * only while you are pointing at it. Roles rather than hand-written handlers,
+   * so copy/paste/zoom behave exactly as the platform's own would.
+   */
+  ipcMain.handle("ag:appMenu", (_e, x, y) => {
+    const menu = Menu.buildFromTemplate([
+      { label: "Edit", submenu: [
+        { role: "undo" }, { role: "redo" }, { type: "separator" },
+        { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" },
+      ] },
+      { label: "View", submenu: [
+        { role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" }, { type: "separator" },
+        { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" },
+        { role: "togglefullscreen" },
+      ] },
+      { label: "Window", submenu: [
+        { role: "minimize" },
+        { label: win.isMaximized() ? "Restore" : "Maximise", click: () => (win.isMaximized() ? win.unmaximize() : win.maximize()) },
+        { type: "separator" },
+        { role: "close" },
+      ] },
+      { type: "separator" },
+      { label: "Quit agentglass", role: "quit" },
+    ]);
+    // Anchored under the button that opened it, not at the pointer: a menu that
+    // appears wherever the cursor happened to be does not read as belonging to
+    // the control you pressed.
+    menu.popup({ window: win, x: Math.round(x), y: Math.round(y) });
+  });
+  // Maximising by dragging to an edge, going fullscreen with F11, or anything
+  // else the window manager owns does not go through us — so the renderer is
+  // TOLD rather than left to infer, or the glyph says "maximise" on a maximised
+  // window and the clock hides itself at the wrong moment.
+  for (const ev of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen", "restore"]) {
+    win.on(ev, () => {
+      try { win.webContents.send("ag:winState", { max: win.isMaximized(), full: win.isFullScreen() }); }
+      catch { /* torn down */ }
+    });
   }
 
   ipcMain.handle("ag:setFullscreen", (_e, on) => { win.setFullScreen(!!on); return win.isFullScreen(); });

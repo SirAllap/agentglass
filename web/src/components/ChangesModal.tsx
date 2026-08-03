@@ -41,7 +41,10 @@ const cellBg = (k?: string) => (k === "del" ? "color-mix(in srgb, var(--error) 1
 const cellFg = (k?: string) => (k === "del" ? "var(--error)" : k === "add" ? "var(--success)" : "var(--text3)");
 // Opaque variant of the row tint — for the sticky line-number gutter, so
 // scrolling code passes behind it instead of showing through.
-const numBg = (k?: string) => (k === "del" ? "color-mix(in srgb, var(--error) 13%, var(--bg))" : k === "add" ? "color-mix(in srgb, var(--success) 13%, var(--bg))" : "var(--bg)");
+/** The gutter's ground. Tinted for a changed line, and the denser veil
+ *  otherwise — it sits on the pane's own veil and still has to read as a column
+ *  of its own, which flat --bg did by being opaque and now cannot. */
+const numBg = (k?: string) => (k === "del" ? "color-mix(in srgb, var(--error) 13%, var(--bg))" : k === "add" ? "color-mix(in srgb, var(--success) 13%, var(--bg))" : "var(--veil2)");
 const kindOf = (tag: string): "ctx" | "del" | "add" => (tag === "+" ? "add" : tag === "-" ? "del" : "ctx");
 
 // --- word-level (intra-line) diff --------------------------------------------
@@ -1049,7 +1052,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             <Toggle onClick={() => copy("diff")} title="Copy unified diff">{copied === "diff" ? "Copied ✓" : "Diff"}</Toggle>
                           </div>
                         </div>
-                        <div ref={paneRef} className="flex-1 min-h-0 flex relative" style={{ background: "var(--bg)" }}>
+                        <div ref={paneRef} className="flex-1 min-h-0 flex relative" style={{ background: "var(--veil)" }}>
                           <HiliteCtx.Provider value={selected.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000 ? { ...hilite, theme: null } : hilite}>{split ? <SplitDiff c={selected} wrap={wrap} /> : <UnifiedDiff c={selected} wrap={wrap} />}</HiliteCtx.Provider>
                         </div>
                         <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}>

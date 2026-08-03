@@ -50,10 +50,14 @@ contextBridge.exposeInMainWorld("agentglass", {
   winToggleMaximize: () => ipcRenderer.invoke("ag:winToggleMaximize"),
   winClose: () => ipcRenderer.invoke("ag:winClose"),
   winIsMaximized: () => ipcRenderer.invoke("ag:winIsMaximized"),
-  /** Told, not polled: the window manager can maximise this window without
-   *  asking us, and a glyph that guesses is a glyph that lies. */
+  winState: () => ipcRenderer.invoke("ag:winState"),
+  /** Pop the app menu under the "⋯" in our own bar. There is no menu bar —
+   *  see main.js — so this is the only route to it. */
+  appMenu: (x, y) => ipcRenderer.invoke("ag:appMenu", x, y),
+  /** Told, not polled: the window manager can maximise or fullscreen this
+   *  window without asking us, and a glyph that guesses is a glyph that lies. */
   onWinState: (fn) => {
-    const h = (_e, max) => fn(!!max);
+    const h = (_e, st) => fn({ max: !!st?.max, full: !!st?.full });
     ipcRenderer.on("ag:winState", h);
     return () => ipcRenderer.removeListener("ag:winState", h);
   },

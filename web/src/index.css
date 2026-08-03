@@ -3,6 +3,30 @@
 @tailwind utilities;
 
 :root {
+  /*
+   * The veil.
+   *
+   * The window has an animated wash and a grid behind everything, and until now
+   * every working surface painted flat --bg over it — so the backdrop existed
+   * only in the margins. This is the tone those surfaces use instead: the same
+   * ground, thinned enough that the grid reads through it and not so far that
+   * code loses its contrast.
+   *
+   * One variable rather than a number per component, because the seam between
+   * two surfaces at slightly different opacities is far more visible than either
+   * of them being a shade off — and the terminal in particular puts an xterm
+   * canvas directly against its own container, where a mismatch shows as a
+   * bright strip down the right-hand edge.
+   *
+   * A color-mix of --bg rather than a fixed rgba, so it follows every theme:
+   * applyTheme writes --bg inline on the root and this resolves against it at
+   * use time.
+   */
+  --veil: color-mix(in srgb, var(--bg) 78%, transparent);
+  /** For what sits ON the veil and still has to read as its own surface — a
+   *  hunk header, a gutter, a pinned row. */
+  --veil2: color-mix(in srgb, var(--bg) 88%, transparent);
+
   /* fallback (github-dark, the default) until applyTheme() runs */
   --bg: #0d1117;
   --bg2: #161b22;

@@ -88,7 +88,11 @@ export function themeFromCss() {
     info: readVar(s, "--info", "#61afef"),
   });
   return {
-    background: bg,
+    // Nothing, deliberately. The surface behind the terminal is what shows —
+    // the app's grid and wash — and the container carries the veil that keeps
+    // the text readable over it. `bg` is still read above because the ANSI
+    // palette is derived from it.
+    background: "#00000000",
     // The terminal's default text is the theme's PRIMARY text, not the dimmer
     // secondary — uncoloured output should read as bright/white (like a proper
     // editor surface), not the washed-out grey that --text2 gave it.
@@ -990,7 +994,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
         <span className="ml-auto text-[9px] t-dim2 shrink-0">Drag to resize</span>
         <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="Hide the console (the shell keeps running)">✕</button>
       </div>
-      <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--bg)" }} onClick={() => sess?.term.focus()} />
+      <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--veil)" }} onClick={() => sess?.term.focus()} />
     </div>
   );
 }
@@ -1593,7 +1597,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                 )}
 
                 {/* the terminals — one slot per visible pane */}
-                <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}>
+                <div className="flex-1 min-h-0 relative" style={{ background: "var(--veil)" }}>
                   {/* The gap survives — it separates two panes and is doing real
                       work. The outer padding does not: with one pane it is pure
                       dead margin, and a full-screen TUI is drawn right to the
@@ -1620,13 +1624,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         // to decorate.
                         className={`min-w-0 min-h-0 overflow-hidden ${tmuxActive ? "" : "rounded-lg"}`}
                         style={{
-                          // Match the terminal's own background. xterm can only
-                          // draw whole character cells, so a container that
-                          // isn't an exact multiple of the cell size leaves a
-                          // strip of remainder down the right and along the
-                          // bottom — a few pixels wide, and glaringly obvious
-                          // when it shows the panel behind it instead.
-                          background: "var(--bg)",
+                          // The terminal's ground. xterm can only draw whole
+                          // character cells, so a container that isn't an exact
+                          // multiple of the cell size leaves a strip of
+                          // remainder down the right and along the bottom — a
+                          // few pixels wide, and glaringly obvious if it is a
+                          // different tone from the cells. Since the cells are
+                          // now transparent, this IS the terminal's background,
+                          // and the strip matches by construction.
+                          background: "var(--veil)",
                           border: paneIds.length > 1 && i === focusIdx
                             ? "1px solid color-mix(in srgb, var(--primary) 45%, transparent)"
                             : "1px solid transparent",

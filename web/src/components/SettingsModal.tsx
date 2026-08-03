@@ -136,7 +136,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "appearance" | "prefs" | "terminal" | "notifications" | "browser" | "keys" | "open" | "export" | "log" | "hooks" | "reqs" | "remote" | "about";
+type Pane = "appearance" | "prefs" | "terminal" | "chat" | "notifications" | "browser" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "reqs" | "remote" | "about";
 type TabGroup = "Interface" | "Data" | "Setup" | "About";
 // Rendered in this order; a group with no matching tab is dropped, so search
 // collapses to just the sections that still have something in them.
@@ -144,15 +144,19 @@ const TAB_GROUPS: TabGroup[] = ["Interface", "Data", "Setup", "About"];
 // `kw` are the words the search box also matches — the things people call a
 // setting that aren't in its label ("keyboard" for Shortcuts, "theme" for
 // Appearance), so the box finds a page by what it does, not just its name.
+const LAST_PANE_KEY = "agentglass.settings.pane";
+
 const TABS: { id: Pane; label: string; group: TabGroup; kw: string }[] = [
+  { id: "prefs", label: "Preferences", group: "Interface", kw: "display size zoom sound clock fullscreen start login" },
   { id: "appearance", label: "Appearance", group: "Interface", kw: "theme accent colour color font dark light mode palette" },
-  { id: "prefs", label: "Preferences", group: "Interface", kw: "display size zoom sound clock renderer chat engine fullscreen" },
-  { id: "terminal", label: "Terminal", group: "Interface", kw: "terminal font size cursor typography monospace face" },
+  { id: "terminal", label: "Terminal", group: "Interface", kw: "terminal font size cursor typography monospace face renderer gpu" },
+  { id: "chat", label: "Chat", group: "Interface", kw: "chat engine tmux panes warm cli claude how new chats run" },
   // Only where there is a browser to configure. A settings tab for something
   // that is not there reads as a broken feature rather than one that doesn't apply.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Interface" as const, kw: "browser web page zoom" }] : []),
   { id: "notifications", label: "Notifications", group: "Interface", kw: "notifications sound alert desktop notify quiet chime ping" },
   { id: "keys", label: "Shortcuts", group: "Interface", kw: "keyboard keys bindings shortcut chord rebind" },
+  { id: "budgets", label: "Budgets", group: "Data", kw: "budget spend cost limit money threshold" },
   { id: "log", label: "Activity", group: "Data", kw: "activity log history events feed" },
   { id: "open", label: "Open", group: "Data", kw: "open external editor file reveal" },
   { id: "export", label: "Export", group: "Data", kw: "export download data json csv" },
@@ -928,7 +932,22 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
   const [keys, setKeys] = useState(() => bindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
-  const [pane, setPane] = useState<Pane>("prefs");
+  /**
+   * Which page is showing — remembered across opens.
+   *
+   * It used to be hardcoded to "prefs" regardless of the list order, so the
+   * dialog always opened on the second item for no reason anybody could see.
+   * Settings is a place you come back to for the same thing twice, so it now
+   * lands where you left it, defaulting to the first page on a fresh install.
+   */
+  const [pane, setPane] = useState<Pane>(() => {
+    try {
+      const saved = localStorage.getItem(LAST_PANE_KEY);
+      if (saved && TABS.some((t) => t.id === saved)) return saved as Pane;
+    } catch { /* private mode */ }
+    return TABS[0]!.id;
+  });
+  useEffect(() => { try { localStorage.setItem(LAST_PANE_KEY, pane); } catch { /* ignore */ } }, [pane]);
   const [q, setQ] = useState(""); // settings search — filters the nav below
   const [termFont, setTermFontState] = useState(() => currentTermFont());
   const [termSize, setTermSizeState] = useState(() => currentTermSize());
@@ -1019,7 +1038,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
               <motion.div
                 initial={{ opacity: 0, scale: 0.96, y: 12 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.97, y: 8 }}
                 transition={{ type: "spring", stiffness: 340, damping: 30 }}
-                className="w-[1040px] max-w-[95vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
+                className="w-[1240px] max-w-[96vw] rounded-2xl flex flex-col pointer-events-auto overflow-hidden"
                 // Fixed, not max: with tabs the pane's height would otherwise
                 // change with whichever section you picked, and a dialog that
                 // resizes under the cursor is disorienting in a way a little
@@ -1031,7 +1050,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                 // wrapping into something you have to scroll to read. The vh
                 // caps keep it a dialog on a laptop screen rather than a
                 // full-screen takeover.
-                                style={{ height: "min(86vh, 760px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
+                                style={{ height: "min(92vh, 900px)", background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}>
 
                 <div className="flex items-center gap-3 px-5 py-3 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Settings</span>
@@ -1083,6 +1102,22 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   )}
                   {pane === "terminal" && (
                   <Section title="Terminal">
+                    {/* GPU (WebGL) is faster on heavy output, but on some Linux
+                        GPU/compositor stacks it can leave the terminal blank
+                        white — so Auto uses it everywhere except Linux, where it
+                        picks Compatibility. Switch to Compatibility by hand if a
+                        shell ever goes blank; it applies to newly opened shells. */}
+                    <Choice<RendererPref>
+                      label="Terminal renderer"
+                      hint="GPU is faster; Compatibility is the safe choice if the terminal ever goes blank. Applies to newly opened shells."
+                      value={renderer}
+                      onPick={(v) => { setRenderer(v); setRendererPref(v); }}
+                      options={[
+                        { v: "auto", label: "Auto" },
+                        { v: "gpu", label: "GPU" },
+                        { v: "dom", label: "Compatibility" },
+                      ]} />
+
                     <div className="px-3 pt-1 pb-2">
                       <div className="text-[12px] mb-2" style={{ color: "var(--text)" }}>Font</div>
                       <div className="grid grid-cols-2 gap-1.5">
@@ -1153,25 +1188,19 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         leaving you wondering whether you imagined it. */}
                     <Choice<"12" | "24">
                       label="Clock"
-                      hint="How the workspace strip shows the time"
+                      hint="The top bar shows the time in fullscreen, where the desktop's own clock is hidden"
                       value={h24 ? "24" : "12"}
                       onPick={(v) => { setClock24(v === "24"); setH24(v === "24"); }}
                       options={[{ v: "12", label: "12h" }, { v: "24", label: "24h" }]} />
-                    {/* GPU (WebGL) is faster on heavy output, but on some Linux
-                        GPU/compositor stacks it can leave the terminal blank
-                        white — so Auto uses it everywhere except Linux, where it
-                        picks Compatibility. Switch to Compatibility by hand if a
-                        shell ever goes blank; it applies to newly opened shells. */}
-                    <Choice<RendererPref>
-                      label="Terminal renderer"
-                      hint="GPU is faster; Compatibility is the safe choice if the terminal ever goes blank. Applies to newly opened shells."
-                      value={renderer}
-                      onPick={(v) => { setRenderer(v); setRendererPref(v); }}
-                      options={[
-                        { v: "auto", label: "Auto" },
-                        { v: "gpu", label: "GPU" },
-                        { v: "dom", label: "Compatibility" },
-                      ]} />
+                  </Section>
+                  )}
+
+                  {/* The engine and the memory it costs, together. Both used to
+                      sit under "Preferences", which is where settings go when
+                      nobody has decided where they belong — a page that mixes
+                      window zoom with how a CLI is spawned is a drawer. */}
+                  {pane === "chat" && (
+                  <Section title="Chat">
                     {/* Two genuinely different bargains, so the row names both
                         rather than implying one is simply better. Panes are
                         faster per turn and attachable from a real terminal;
@@ -1201,6 +1230,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         { v: "process", label: "Separate" },
                         { v: "tmux", label: "tmux panes" },
                       ]} />
+                    {tmuxEngine?.available && (
+                      <div className="flex flex-col gap-1.5 pt-1">
+                        <span className="text-[10px] t-dim2 uppercase tracking-wider">Warm CLIs running now</span>
+                        <RunningPanes open={open} />
+                      </div>
+                    )}
+                  </Section>
+                  )}
+
+                  {pane === "budgets" && (
+                  <Section title="Budgets">
                     {/* A limit you chose, so the spend insights stop firing on
                         constants — which are noise on a project that genuinely
                         costs that and silence on one where a tenth would be
@@ -1214,12 +1254,6 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                         decides how much memory is resident on this machine an
                         hour from now, and until this list existed the only
                         place to see that was a terminal. */}
-                    {tmuxEngine?.available && (
-                      <div className="flex flex-col gap-1.5 pt-1">
-                        <span className="text-[10px] t-dim2 uppercase tracking-wider">Warm CLIs running now</span>
-                        <RunningPanes open={open} />
-                      </div>
-                    )}
                   </Section>
                   )}
 

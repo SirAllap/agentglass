@@ -29,7 +29,9 @@ type DesktopBridge = {
   winToggleMaximize?: () => Promise<boolean>;
   winClose?: () => Promise<void>;
   winIsMaximized?: () => Promise<boolean>;
-  onWinState?: (fn: (max: boolean) => void) => () => void;
+  winState?: () => Promise<{ max: boolean; full: boolean }>;
+  appMenu?: (x: number, y: number) => Promise<void>;
+  onWinState?: (fn: (st: { max: boolean; full: boolean }) => void) => () => void;
 };
 
 function bridge(): DesktopBridge | null {
@@ -232,8 +234,13 @@ export const WINDOW_CONTROLS = (() => {
     minimize: () => { void b.winMinimize!().catch(() => {}); },
     toggleMaximize: () => { void b.winToggleMaximize!().catch(() => {}); },
     close: () => { void b.winClose!().catch(() => {}); },
-    isMaximized: () => b.winIsMaximized?.() ?? Promise.resolve(false),
+    /** Maximised AND fullscreen, in one answer — they are different states and
+     *  two different parts of the bar care about them. */
+    state: () => b.winState?.() ?? Promise.resolve({ max: false, full: false }),
+    /** The app menu, popped under a point in window coordinates. Null-safe:
+     *  an older shell has a real menu bar and needs no button for it. */
+    menu: b.appMenu ? (x: number, y: number) => { void b.appMenu!(x, y).catch(() => {}); } : null,
     /** Subscribe to changes the window manager made without asking us. */
-    subscribe: (fn: (max: boolean) => void) => b.onWinState?.(fn) ?? (() => {}),
+    subscribe: (fn: (st: { max: boolean; full: boolean }) => void) => b.onWinState?.(fn) ?? (() => {}),
   };
 })();

@@ -14,7 +14,7 @@
 // It sits on --bg2 with a hairline, like every other toolbar in this app,
 // rather than on the near-black the notch needed to read as "carved out of the
 // screen". That is what makes it belong to the theme instead of floating over it.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api, type UsagePayload } from "../lib/api.ts";
 import { subscribeUsage, usageError } from "./UsageWidget.tsx";
 import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
@@ -22,6 +22,7 @@ import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
 import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
+import { Logo } from "./Logo.tsx";
 
 export const TOP_BAR_H = 30;
 
@@ -45,13 +46,7 @@ const NO_DRAG = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
  * keeps its traffic lights) or where there is no window to control (a browser
  * tab). Three buttons that do nothing would be worse than the frame we removed.
  */
-function WindowControls() {
-  const [max, setMax] = useState(false);
-  useEffect(() => {
-    if (!WINDOW_CONTROLS) return;
-    void WINDOW_CONTROLS.isMaximized().then(setMax).catch(() => {});
-    return WINDOW_CONTROLS.subscribe(setMax);
-  }, []);
+function WindowControls({ max }: { max: boolean }) {
   if (!WINDOW_CONTROLS || IS_MAC_DESKTOP) return null;
 
   const btn = "grid place-items-center rounded transition-colors";
@@ -108,6 +103,56 @@ function useMinuteClock(): string {
   return `${hh}:${String(now.getMinutes()).padStart(2, "0")}`;
 }
 
+/**
+ * The "⋯" that opens the app menu.
+ *
+ * There is no menu bar in this app and there is deliberately not going to be
+ * one: it embeds a real terminal where Alt is part of ordinary use, and an
+ * auto-hiding bar kept dropping over the UI mid-keystroke. Removing the frame
+ * then took away the last visible trace of a menu, along with the only obvious
+ * route to reload, zoom, devtools and quit — so it comes back here, as a
+ * button, popped by the main process under this exact spot and gone the moment
+ * you look away.
+ */
+function AppMenuButton() {
+  const ref = useRef<HTMLButtonElement>(null);
+  if (!WINDOW_CONTROLS?.menu) return null;
+  return (
+    <button ref={ref} aria-label="Menu" title="Menu"
+      onClick={() => {
+        const r = ref.current?.getBoundingClientRect();
+        // Under the button, flush with its left edge — a menu that opens where
+        // the pointer happened to be does not read as belonging to the control
+        // you pressed.
+        WINDOW_CONTROLS!.menu!(r ? r.left : 8, r ? r.bottom : TOP_BAR_H);
+      }}
+      className="shrink-0 grid place-items-center rounded hover:bg-white/10"
+      style={{ width: 20, height: 18, color: "var(--text3)", ...NO_DRAG }}>
+      <svg viewBox="0 0 16 16" width={13} height={13} fill="currentColor" aria-hidden>
+        <circle cx="3" cy="8" r="1.3" /><circle cx="8" cy="8" r="1.3" /><circle cx="13" cy="8" r="1.3" />
+      </svg>
+    </button>
+  );
+}
+
+/**
+ * Maximised, and fullscreen.
+ *
+ * Both are pushed from the main process rather than polled: a window manager
+ * maximises on a drag to the edge and F11 goes fullscreen without either passing
+ * through us, and a bar that guesses shows the wrong glyph and hides the clock
+ * at the wrong moment.
+ */
+function useWindowState(): { max: boolean; full: boolean } {
+  const [st, setSt] = useState({ max: false, full: false });
+  useEffect(() => {
+    if (!WINDOW_CONTROLS) return;
+    void WINDOW_CONTROLS.state().then(setSt).catch(() => {});
+    return WINDOW_CONTROLS.subscribe(setSt);
+  }, []);
+  return st;
+}
+
 /** A reading: what it is, then what it says. Inline, on one baseline — see the
  *  note at the top of this file for why that is the whole point. */
 function Item({ cap, children, title, dim, hideUnder }: {
@@ -153,6 +198,7 @@ export function TopBar({
   onGoNeeds: () => void;
 }) {
   const time = useMinuteClock();
+  const win = useWindowState();
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
   const waiting = useSyncExternalStore(subscribeChats, () => listChats().reduce((n, c) => n + (c.attention !== "none" ? 1 : 0), 0), () => 0);
   const upd = useSyncExternalStore(subscribeUpdate, updateState, updateState);
@@ -185,12 +231,16 @@ export function TopBar({
       } as React.CSSProperties}
     >
       {/* ── who and where ─────────────────────────────────────────── */}
+      {/* The mark, not the word. At this height the wordmark was eight
+          characters of the one thing on screen nobody needs to be told, and the
+          logo says it in a sixth of the width — which is width the project name
+          gets instead. */}
+      <Logo size={17} className="shrink-0" title="agentglass" style={{ pointerEvents: "none" }} />
+      <AppMenuButton />
       <button onClick={onOpenProject} className="flex items-center gap-1.5 shrink-0 min-w-0 rounded px-1 -mx-1"
         title={workspace ? `${workspace}\nClick to switch project` : "Open a project — everything here scopes itself to its folder"}
         style={NO_DRAG}>
-        <span className="text-[10.5px] font-bold" style={{ color: "var(--text)" }}>agent<span style={{ color: "var(--primary)" }}>glass</span></span>
-        <span className="shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
-        <span className="text-[10px] truncate" style={{ color: workspace ? "var(--text2)" : "var(--text4)", maxWidth: 170 }}>
+        <span className="text-[10.5px] truncate" style={{ color: workspace ? "var(--text)" : "var(--text4)", maxWidth: 190 }}>
           {workspace ? workspace.split("/").filter(Boolean).pop() : "all repos"}
         </span>
         <span className="text-[8px]" style={{ color: "var(--text4)" }}>▾</span>
@@ -253,14 +303,21 @@ export function TopBar({
         <button onClick={onOpenPalette} title="Search anything (⌘K)"
           className="hidden sm:block text-[9.5px] px-1.5 py-[1px] rounded shrink-0"
           style={{ color: "var(--text3)", border: edge(16), ...NO_DRAG }}>⌘K</button>
-        <b className="text-[11px] tabular-nums tracking-[0.03em] shrink-0" style={{ color: "var(--text)" }}>{time}</b>
+        {/* Only in fullscreen. Windowed, the desktop already has a clock two
+            centimetres away and a second one is furniture; fullscreen is
+            exactly when that one is gone, which is when this earns its place.
+            Outside the desktop shell there is no fullscreen to detect and no
+            chrome being hidden, so it simply shows. */}
+        {(!WINDOW_CONTROLS || win.full) && (
+          <b className="text-[11px] tabular-nums tracking-[0.03em] shrink-0" style={{ color: "var(--text)" }}>{time}</b>
+        )}
         {/* An update is worth noticing on the way past, never worth pulling the
             eye off a running fleet. */}
         {updateAvailable() && (
           <span title={`${upd?.branch} is available to install — Settings → About`} className="rounded-full shrink-0"
             style={{ width: 6, height: 6, background: "var(--success)" }} />
         )}
-        <WindowControls />
+        <WindowControls max={win.max} />
       </div>
     </div>
   );
