@@ -142,7 +142,9 @@ describe("which renderer draws the rules", () => {
   // canvas draws those glyphs itself and has no GL context to lose.
   let r: typeof import("../src/lib/termRenderer.ts");
   beforeAll(async () => { r = await import("../src/lib/termRenderer.ts"); });
-  beforeEach(() => { mem.clear(); });
+  // Through the global, not through `mem`: whichever test file installed the
+  // storage stub first owns it, and the module under test reads that one.
+  beforeEach(() => { localStorage.removeItem("agentglass.term.webgl"); });
 
   it("draws on canvas wherever the GPU renderer is not used", () => {
     Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }, configurable: true });
@@ -158,7 +160,7 @@ describe("which renderer draws the rules", () => {
 
   it("still honours someone who asked for the DOM renderer", () => {
     Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }, configurable: true });
-    mem.set("agentglass.term.webgl", "dom");
+    localStorage.setItem("agentglass.term.webgl", "dom");
     expect(r.wantsCanvas()).toBe(false);
   });
 });
