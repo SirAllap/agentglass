@@ -19,6 +19,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 
 let dir: string, base: string, socket: string, proc: ReturnType<typeof Bun.spawn> | null = null;
 
@@ -76,7 +77,7 @@ afterAll(() => {
   // behind is what turns a unique name into a fixed one for whoever reuses the
   // temp directory name next, and it is how the old fixed socket ended up
   // holding a server for hours.
-  try { Bun.spawnSync(["tmux", "-L", socket, "kill-server"], { stdout: "ignore", stderr: "ignore" }); } catch { /* never started one */ }
+  try { Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", socket, "kill-server"], { stdout: "ignore", stderr: "ignore" }); } catch { /* never started one */ }
   // And the socket file itself: tmux leaves it behind, so a suite that only
   // killed the server still littered /tmp with one dead socket per run.
   try { rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? ""}`, socket), { force: true }); } catch { /* nothing to remove */ }
@@ -170,7 +171,7 @@ describe("with a pane genuinely running", () => {
   // `beforeAll` is what names it. Naming it twice is how the two halves of this
   // file drifted onto different servers in the first place.
   const tmuxOk = Bun.spawnSync(["tmux", "-V"]).exitCode === 0;
-  const tmux = (...args: string[]) => Bun.spawnSync(["tmux", "-L", socket, ...args]);
+  const tmux = (...args: string[]) => Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", socket, ...args]);
 
   test.skipIf(!tmuxOk)("a pane no open chat points at is named an orphan", async () => {
     tmux("new-session", "-d", "-s", A, "sleep", "300");
