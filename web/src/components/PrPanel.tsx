@@ -922,22 +922,39 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   /*
    * Somebody sent us here looking for one particular pull request.
    *
-   * The search alone was not enough, and the failure was quiet: the view opens
-   * on "Needs my review" and falls back to "Mine", so a number belonging to a
-   * colleague's pull request produced "No open pull requests of yours" — a true
-   * sentence about the wrong question. The bucket has to travel with the query.
+   * Two things have to be true at once and the first attempt only managed one.
    *
-   * `all` for both, including state: a card's pull request is frequently merged
-   * already, and being told it does not exist because it is closed is the same
-   * dead end wearing different words.
+   * It has to FIND the thing: this view opens on "needs my review", falls back
+   * to "mine", and defaults to open — so a colleague's merged pull request was
+   * filtered out before the search could match it, and the panel said "no open
+   * pull requests of yours", which is a true sentence about a question nobody
+   * asked. So the arrival widens both to `all`.
+   *
+   * And it must not COST anything: widening them is a change to how this view
+   * is set up, and the first version left it that way. Coming back later, the
+   * counts read 111 and 16199 instead of 18 and 389 — somebody's working view,
+   * quietly replaced by the side effect of looking up one card. So what was
+   * there is remembered and put back the moment the search is cleared.
    */
+  const beforeJump = useRef<{ filter: Filter; state: StateSel } | null>(null);
   useEffect(() => {
     if (!active || !jumpTo) return;
+    if (!beforeJump.current) beforeJump.current = { filter, state: stateSel };
     setQuery(jumpTo);
     setFilter("all");
     setStateSel("all");
     fellBack.current = true; // and do not let the empty-list fallback move us
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, jumpTo]);
+
+  // Clearing the search is the signal that the errand is over.
+  useEffect(() => {
+    if (query || !beforeJump.current) return;
+    const was = beforeJump.current;
+    beforeJump.current = null;
+    setFilter(was.filter);
+    setStateSel(was.state);
+  }, [query]);
   // The query filters the rows already loaded LIVE and client-side (visiblePrs),
   // so typing is instant. The SERVER copy — which re-runs `gh` to search across
   // the pages the client does not hold — is debounced off it. Before this, every

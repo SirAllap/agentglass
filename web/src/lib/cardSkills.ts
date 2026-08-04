@@ -97,3 +97,15 @@ export function skillModes(argumentHint: string | null | undefined): string[] {
   }
   return out;
 }
+
+/**
+ * The short name a team calls a card by.
+ *
+ * These titles start `T16 - …`, and "waiting on T2" is a sentence somebody can
+ * act on where "waiting on ABC-21016" is a lookup. Falls back to the id when a
+ * title has no such prefix, because inventing one would be worse than the id.
+ */
+export function shortName(title: string, fallback: string): string {
+  const m = /^([A-Za-z]{1,3}\d{1,4})\s*[-–—:]/.exec((title || "").trim());
+  return m?.[1] ?? fallback;
+}

@@ -101,3 +101,21 @@ describe("the modes a skill advertises", () => {
     expect(skillModes("[a | b] [b | c]")).toEqual(["a", "b", "c"]);
   });
 });
+
+describe("the short name a team uses", () => {
+  const { shortName } = require("../src/lib/cardSkills.ts") as typeof import("../src/lib/cardSkills.ts");
+
+  it("takes the prefix the title already carries", () => {
+    // "waiting on T2" is something to act on; "waiting on ABC-21016" is a
+    // lookup somebody has to perform before the sentence means anything.
+    expect(shortName("T16 - Non-destructive transition service", "ABC-1")).toBe("T16");
+    expect(shortName("T2 – Upgrade endpoint", "ABC-1")).toBe("T2");
+    expect(shortName("QA9: verify the thing", "ABC-1")).toBe("QA9");
+  });
+
+  it("falls back to the id rather than inventing a name", () => {
+    for (const t of ["Fix the login bug", "", "12345 - numeric only", "A very long prefix - x"]) {
+      expect(shortName(t, "ABC-1"), JSON.stringify(t)).toBe("ABC-1");
+    }
+  });
+});

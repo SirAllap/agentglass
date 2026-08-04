@@ -193,6 +193,27 @@ export interface ProviderTask {
   mine?: boolean;
   /** Sprint points, ClickUp's own numeric field. Null when unset. */
   points?: number | null;
+  /** Estimate, in hours. The API answers milliseconds; nobody plans in those. */
+  estimateHours?: number | null;
+  /** Logged against it, in hours. */
+  spentHours?: number | null;
+  /** When it was created, and when it last moved. `updated` is the precondition
+   *  for writes; this is the same number as a local day, for reading. */
+  created?: number;
+  /** Its own start date, where the board uses them. */
+  start?: string | null;
+  /**
+   * What has to finish before this can, and what is waiting on it.
+   *
+   * The single most actionable thing on an engineering board and the one the
+   * panel was not showing: 28 of 30 cards on a real one have dependencies. Held
+   * as ids here and resolved against the board's own rows, so no extra call is
+   * made to say "blocked by T12".
+   */
+  waitsOn?: string[];
+  blocks?: string[];
+  /** How many subtasks it has, so a card with hidden work says so. */
+  subtasks?: number;
   /** Custom field values worth showing, already resolved from ids to names. */
   custom?: { id: string; name: string; value: string }[];
 }
