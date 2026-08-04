@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
 import { useStats } from "./lib/useStats.ts";
@@ -23,7 +23,7 @@ import { HelpLegend } from "./components/HelpLegend.tsx";
 import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
-import { VIEW_IDS, loadViewOrder, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import { VIEW_IDS, visibleIds, isVisibleView, moveView, loadRail, subscribeRail, SHIPPED_RAIL, loadLastView, type ViewId } from "./components/workspace/views.ts";
 import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import { chordFromEvent, viewForChord } from "./lib/keybindings.ts";
@@ -81,6 +81,38 @@ export default function App() {
    *  to pick a view, and picking one for you is how you lose your place. */
   const lastNonDash = useRef<ViewId>(wsView === "dash" ? "term" : wsView);
   if (wsView !== "dash") lastNonDash.current = wsView;
+  /** Hiding the view you are standing in cannot leave you standing in it.
+   *
+   *  It is the one rail edit with nowhere to go afterwards: no tab is
+   *  highlighted, ⌘[ has no position to count from, and the only way back is a
+   *  menu two clicks away. Step to the first tab that is still there instead —
+   *  and to ⌘\'s fallback if the whole rail has been emptied, which is a
+   *  layout the user is allowed to make and the app still has to survive. */
+  const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
+  /**
+   * Go to a view, putting it back on the rail if it is not on one.
+   *
+   * Every route to a view that is not the rail itself — a dashboard card, "open
+   * this in the browser", a chord somebody bound by hand, a command from the
+   * phone. Hiding a view says "stop showing me this tab", and the honest
+   * reading of asking for it by name afterwards is that you changed your mind.
+   * The alternative is a button that does nothing, which is indistinguishable
+   * from a broken one, and a workspace showing a view with no tab lit is how
+   * you end up unable to get back.
+   */
+  const goView = useCallback((v: ViewId) => {
+    if (!isVisibleView(v)) moveView(v, "work");
+    setWsView(v);
+  }, []);
+  useEffect(() => {
+    const visible = visibleIds();
+    // ⌘\'s way back, checked whether or not it is where you are: hiding the
+    // view it points at is silent until the day you press it.
+    if (!visible.includes(lastNonDash.current)) {
+      lastNonDash.current = visible.find((v) => v !== "dash") ?? "term";
+    }
+    if (!visible.includes(wsView) && visible[0]) setWsView(visible[0]);
+  }, [rail, wsView]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** Which machine tab is open, or none. One piece of state for both surfaces:
    *  the dashboard header and the workspace rail open the same panel, and a
@@ -341,7 +373,7 @@ export default function App() {
   const goToNeeds = useCallback(() => {
     if (!needs?.sessionId) return;
     const chat = chatResuming(needs.sessionId);
-    if (chat) { setChatFocus(chat.id); setWsView("chat"); return; }
+    if (chat) { setChatFocus(chat.id); goView("chat"); return; }
     setSessionView({ id: needs.sessionId, app: needs.app });
   }, [needs]);
   useAlertSound(alerts.length, sound);
@@ -399,10 +431,10 @@ export default function App() {
       // cannot be bound, so nothing here can shadow zoom or the palette.
       const chord = chordFromEvent(e);
       if (chord) {
-        const target = viewForChord(chord, loadViewOrder().map((v) => v.id));
+        const target = viewForChord(chord);
         if (target) {
           e.preventDefault();
-          setWsView(target);
+          goView(target);
           return;
         }
       }
@@ -416,15 +448,18 @@ export default function App() {
         // Workspace navigation, and the reason it carries a modifier: these
         // have to work while the caret sits in the chat composer or a commit
         // message, where a bare letter is just a letter.
-        // The user's rail order, not the shipped one: the rail labels each
-        // icon with the number that reaches it, and a tooltip that stops being
-        // true after a reorder is worse than no tooltip.
-        const railIds = loadViewOrder().map((v) => v.id);
+        // The user's rail, not the shipped one: the rail labels each icon with
+        // the number that reaches it, and a tooltip that stops being true after
+        // a reorder is worse than no tooltip. Both drawers, since cycling is
+        // "the next tab along" — but nothing they have hidden, which is not a
+        // tab any more.
+        const cycle = visibleIds();
         if (k === "[" || k === "]") {
           e.preventDefault();
+          if (!cycle.length) return;
           setWsView((cur) => {
-            const i = railIds.indexOf(cur);
-            return railIds[(i + (k === "]" ? 1 : railIds.length - 1)) % railIds.length]!;
+            const i = cycle.indexOf(cur);
+            return cycle[(i + (k === "]" ? 1 : cycle.length - 1) + cycle.length) % cycle.length]!;
           });
           return;
         }
@@ -433,7 +468,10 @@ export default function App() {
         // left to "show me the app rather than the work".
         if (k === "\\") {
           e.preventDefault();
-          setWsView((cur) => (cur === "dash" ? lastNonDash.current : "dash"));
+          // The ref, not `dashActive`: this handler is subscribed once with an
+          // empty dep array, so a render value read here would be the one from
+          // the mount and ⌘\ would toggle against a view you left long ago.
+          goView(wsViewRef.current === "dash" ? lastNonDash.current : "dash");
           return;
         }
       }
@@ -503,7 +541,7 @@ export default function App() {
       if (action?.startsWith("view.")) {
         const view = action.slice(5) as ViewId;
         e.preventDefault();
-        setWsView(view);
+        goView(view);
         return;
       }
 
@@ -534,7 +572,7 @@ export default function App() {
     return subscribeControl((cmd) => {
       switch (cmd.cmd) {
         case "view":
-          setWsView(cmd.to);
+          goView(cmd.to);
           break;
         case "workspace":
           // No overlay to toggle any more: an external controller asking for
@@ -574,7 +612,7 @@ export default function App() {
           // Latch before opening: the panel drains the mailbox on mount, so
           // this works whether or not the chat view is already up.
           latchChatIntent(cmd.do);
-          setWsView("chat");
+          goView("chat");
           break;
       }
     });
@@ -639,7 +677,7 @@ export default function App() {
           whatever you happen to be looking at. */}
       {machine && (
         <MachinePanel tab={machine} onTab={setMachine} onClose={() => setMachine(null)}
-          onOpenBrowser={() => { setMachine(null); setWsView("browser"); }} />
+          onOpenBrowser={() => { setMachine(null); goView("browser"); }} />
       )}
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
       {/* Shows once when the app first runs a version it has not run before —
@@ -677,7 +715,7 @@ export default function App() {
             title: s.summary?.slice(0, 40) || `${s.source_app}:${s.session_id.slice(0, 8)}`,
           });
           setChatFocus(chat.id);
-          setWsView("chat");
+          goView("chat");
         }}
       />
       <CommandPalette
@@ -690,12 +728,12 @@ export default function App() {
         onTheme={setTheme}
         onStats={() => setStatsOpen(true)}
         onSkills={() => setSkillsOpen(true)}
-        onChanges={() => setWsView("diff")}
-        onGit={() => setWsView("git")}
-        onPr={() => setWsView("pr")}
-        onDocker={() => setWsView("docker")}
-        onTerminal={() => setWsView("term")}
-        onChat={() => setWsView("chat")}
+        onChanges={() => goView("diff")}
+        onGit={() => goView("git")}
+        onPr={() => goView("pr")}
+        onDocker={() => goView("docker")}
+        onTerminal={() => goView("term")}
+        onChat={() => goView("chat")}
         onSearch={() => setSearchOpen(true)}
         onClear={clearFilters}
         onZoom={zoom}
