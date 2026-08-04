@@ -7,7 +7,21 @@
 // because a test that spawns tmux is a test that fails on a machine without it.
 // What is unit-tested is everything that turns tmux's text into our shapes, and
 // everything that decides whether a command is allowed to run at all.
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
+
+// A socket meant to have nothing on it — unique per run, because "nothing is
+// listening on this name" is an assumption and not a fact. See tmuxIsolated for
+// what a fixed one cost once.
+const DEAD_SOCKET = `agx-tabs-dead-${process.pid}`;
+// Even a failed connection leaves the socket file, so the run that named it
+// takes it away again rather than leaving one per run in /tmp.
+afterAll(() => {
+  try {
+    rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? ""}`, DEAD_SOCKET), { force: true });
+  } catch { /* nothing to remove */ }
+});
 import { parseWindows, parseFrame, socketFromArgv, runAction, sanitizeWindowName, prefixKeys, setStatusLine, type TmuxTarget } from "../src/tmuxctl.ts";
 
 describe("reading tmux's window list", () => {
@@ -119,7 +133,7 @@ describe("what a tab strip is allowed to ask for", () => {
   // The terminal socket already carries a shell, so this cannot widen anything
   // — but it must not become a way to run arbitrary tmux commands either. Each
   // of these is refused before tmux is invoked at all.
-  const t: TmuxTarget = { pid: 1, socket: ["-L", "nonexistent-agx-test"], session: "s", id: "$0" };
+  const t: TmuxTarget = { pid: 1, socket: ["-L", DEAD_SOCKET], session: "s", id: "$0" };
 
   test("an action outside the four is refused", () => {
     expect((runAction as unknown as (t: TmuxTarget, a: string) => boolean)(t, "kill-server")).toBe(false);
@@ -173,7 +187,7 @@ describe("borrowing the status line", () => {
   // `display-message` — with no row allocated it draws them over the top line
   // of the shell instead. What is unit-testable without a tmux server is the
   // bookkeeping: whether we claim to have borrowed something we did not.
-  const t: TmuxTarget = { pid: 1, socket: ["-L", "nonexistent-agx-test"], session: "s", id: "$0" };
+  const t: TmuxTarget = { pid: 1, socket: ["-L", DEAD_SOCKET], session: "s", id: "$0" };
 
   test("an unreachable server is not reported as borrowed", () => {
     // The caller remembers what it borrowed so it can give it back on the way
@@ -192,7 +206,7 @@ describe("the prefix the panel advertises", () => {
   // would light up for everyone except the people who rebound it, who are the
   // ones who use tmux enough to have missed the indicator in the first place.
   test("an unreachable server yields no prefix rather than a guessed one", () => {
-    const t: TmuxTarget = { pid: 1, socket: ["-L", "nonexistent-agx-test"], session: "s", id: "$0" };
+    const t: TmuxTarget = { pid: 1, socket: ["-L", DEAD_SOCKET], session: "s", id: "$0" };
     expect(prefixKeys(t)).toEqual([]);
   });
 });

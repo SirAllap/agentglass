@@ -21,8 +21,14 @@
 //
 // Runs against its own tmux server on a private socket — never the developer's.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 
-const SOCK = ["-L", "agx-bartest"];
+import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
+
+// Own socket AND an empty config — see tmuxIsolated. Unique per run, or a
+// leftover server from a previous one is what this talks to.
+const SOCK = [...TMUX_ISOLATED, "-L", `agx-bartest-${process.pid}`];
 const has = !!Bun.which("tmux");
 
 const raw = (args: string[]) =>
@@ -42,7 +48,15 @@ beforeAll(async () => {
   ctl = await import("../src/tmuxctl.ts");
 });
 
-afterAll(() => { if (has) raw(["kill-server"]); });
+afterAll(() => {
+  if (!has) return;
+  raw(["kill-server"]);
+  // tmux leaves the socket file behind when the server exits, so killing the
+  // server alone still drops one dead socket per run into /tmp.
+  try {
+    rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? ""}`, SOCK[SOCK.length - 1]), { force: true });
+  } catch { /* nothing to remove */ }
+});
 
 const win = (n: string) => out(["list-windows", "-t", "bartest", "-F", "#{window_name}\t#{window_id}\t#{window_index}"])
   .split("\n").map((l) => l.split("\t")).find((c) => c[0] === n)!;
