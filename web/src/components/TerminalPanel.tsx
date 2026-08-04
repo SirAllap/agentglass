@@ -1111,8 +1111,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [wtQuery, setWtQuery] = useState("");
   const [wtShowAll, setWtShowAll] = useState(false);
   /** The worktree the focused pane's agent is in, read from its output — shown
-   *  as a fixed strip above the tmux bar and pinned atop the picker. */
+   *  compact in the status bar and pinned atop the picker. */
   const [detectedWt, setDetectedWt] = useState<GitRepoRef | null>(null);
+  /** The tmux window the current detection belongs to, so a read that comes up
+   *  empty keeps the last worktree (the agent just stopped printing paths)
+   *  rather than flickering it away — but switching windows starts fresh. */
+  const detectedWinRef = useRef("");
   const wtRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
@@ -1186,8 +1190,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     const project = here?.worktreeOf || here?.root || root;
     const cands = repos.filter((r) => r.worktreeOf && (r.worktreeOf || r.root) === project);
     const run = () => {
-      const d = detectPaneWorktree(sessions.get(paneIds[focusIdx] ?? "")?.term, cands);
-      setDetectedWt((prev) => (prev?.root === d?.root ? prev : d));
+      const s = sessions.get(paneIds[focusIdx] ?? "");
+      const win = s?.tmuxWindows?.find((w) => w.active)?.id ?? "";
+      const d = detectPaneWorktree(s?.term, cands);
+      // Sticky: a pane's worktree does not vanish because the agent stopped
+      // printing its path, so only a fresh detection replaces it. When the
+      // focused window changes, take whatever the new one reads — even nothing,
+      // so an idle window does not keep wearing its neighbour's worktree.
+      if (win !== detectedWinRef.current) { detectedWinRef.current = win; setDetectedWt(d); }
+      else if (d) setDetectedWt((prev) => (prev?.root === d.root ? prev : d));
     };
     run();
     const id = setInterval(run, 4000);
@@ -1633,8 +1644,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       {wtOpen && (() => {
                         const project = here?.worktreeOf || here?.root || root;
                         const ACTIVE_MS = 3 * 60 * 60 * 1000; // dirty, or touched within 3h — where an agent actually is
+                        // Worktrees only — the parent repo (the main checkout, on
+                        // its trunk) is where the shell's own cwd sits, not a
+                        // checkout you jump to from a button called Worktree, and
+                        // filtering the diff by its folder would match everything.
                         const all = repos
-                          .filter((r) => (r.worktreeOf || r.root) === project)
+                          .filter((r) => r.worktreeOf && (r.worktreeOf || r.root) === project)
                           .sort((a, b) => (b.dirty - a.dirty) || (b.touchedAt - a.touchedAt) || dirName(a.root).localeCompare(dirName(b.root)));
                         const active = all.filter((r) => r.dirty > 0 || (r.touchedAt > 0 && Date.now() - r.touchedAt < ACTIVE_MS));
                         const q = wtQuery.trim().toLowerCase();
@@ -1922,23 +1937,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   )}
                 </div>
 
-                {/* The focused pane's worktree, offered right where you are
-                    looking — read from the agent's own output, so it appears the
-                    moment there is a checkout to open and gets out of the way
-                    when there is not. Its changes are one click from here. */}
-                {detectedWt && (
-                  <div className="shrink-0 flex items-center gap-2 px-4 py-1 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--primary) 9%, transparent)" }}>
-                    <span className="shrink-0 text-[8px] uppercase tracking-wider px-1 py-[2px] rounded" title="Read from this pane's agent output" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
-                    <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${detectedWt.branch}\n${detectedWt.root}`}>
-                      <span className="truncate text-[11px] font-medium" style={{ color: "var(--text)" }}>{detectedWt.branch}</span>
-                      <span className="truncate text-[9px]" style={{ color: "var(--text3)" }}>{dirName(detectedWt.root)}</span>
-                    </span>
-                    {detectedWt.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${detectedWt.dirty} changed file${detectedWt.dirty === 1 ? "" : "s"}`}>●{detectedWt.dirty}</span>}
-                    <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn shrink-0 px-2.5 py-0.5 rounded text-[10.5px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open in Source control">Git</button>
-                    <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn shrink-0 px-2.5 py-0.5 rounded text-[10.5px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open its changes in File changes">Diff</button>
-                  </div>
-                )}
-
                 {/* status line */}
                 <div className="shrink-0 flex items-center gap-3 px-4 py-1.5 border-t text-[9.5px] t-dim2" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                   {/* Under tmux the panel's own advice is wrong — its tabs and
@@ -1964,7 +1962,21 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   ) : (
                     <span>Real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
                   )}
-                  <span className="ml-auto">{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
+                  <span className="ml-auto flex items-center gap-2 shrink-0">
+                    {/* The focused pane's worktree, offered right in the bar —
+                        read from the agent's output, one click to its changes. */}
+                    {detectedWt && (
+                      <span className="flex items-center gap-1.5" title={`This pane's worktree — ${detectedWt.branch}\n${detectedWt.root}`}>
+                        <span className="px-1 rounded text-[8px] uppercase tracking-wider" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>this pane</span>
+                        <span className="truncate max-w-[180px]" style={{ color: "var(--text2)" }}>{dirName(detectedWt.root)}</span>
+                        {detectedWt.dirty > 0 && <span className="tabular-nums" style={{ color: "var(--warning)" }}>●{detectedWt.dirty}</span>}
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn px-1.5 py-[1px] rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git</button>
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn px-1.5 py-[1px] rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                        <span className="t-dim2">·</span>
+                      </span>
+                    )}
+                    <span>{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
+                  </span>
                 </div>
     </div>
   );
