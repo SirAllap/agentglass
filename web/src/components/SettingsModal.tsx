@@ -8,7 +8,7 @@
 //
 // Here each kind gets its own section, toggles look like toggles and say what
 // they control, and downloads say what you actually get.
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
@@ -38,8 +38,11 @@ import type { TmuxEngineInfo } from "../../../shared/types.ts";
 import type { DepReport, DepStatus } from "../../../shared/deps.ts";
 import { clock24, setClock24 } from "../lib/clockPref.ts";
 import { bindings, rebind, resetBindings, subscribeBindings, isCustomised, LABELS, DEFAULTS, type ActionId,
-         chordFor, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
-import { loadViewOrder, type ViewId } from "./workspace/views.ts";
+         chordFor, hasCustomChord, rebindChord, clearChord, resetChords, chordsCustomised, chordFromEvent, chordLabel } from "../lib/keybindings.ts";
+import {
+  loadRail, subscribeRail, moveView, resetRail, railIds, railCustomised, SHIPPED_RAIL,
+  type RailPlace, type ViewId,
+} from "./workspace/views.ts";
 import { AppearancePane } from "./ThemePicker.tsx";
 
 function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
@@ -136,7 +139,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "appearance" | "prefs" | "terminal" | "chat" | "notifications" | "browser" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "reqs" | "remote" | "about";
+type Pane = "appearance" | "prefs" | "terminal" | "chat" | "notifications" | "browser" | "rail" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "reqs" | "remote" | "about";
 type TabGroup = "Interface" | "Data" | "Setup" | "About";
 // Rendered in this order; a group with no matching tab is dropped, so search
 // collapses to just the sections that still have something in them.
@@ -155,6 +158,9 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string }[] = [
   // that is not there reads as a broken feature rather than one that doesn't apply.
   ...(HAS_BROWSER ? [{ id: "browser" as const, label: "Browser", group: "Interface" as const, kw: "browser web page zoom" }] : []),
   { id: "notifications", label: "Notifications", group: "Interface", kw: "notifications sound alert desktop notify quiet chime ping" },
+  // Next to Shortcuts on purpose: which drawer a view sits in is what decides
+  // whether it has a number, so the two pages answer one question between them.
+  { id: "rail", label: "Rail", group: "Interface", kw: "rail sidebar views order icons hide show reorder tabs drawer group arrange" },
   { id: "keys", label: "Shortcuts", group: "Interface", kw: "keyboard keys bindings shortcut chord rebind" },
   { id: "budgets", label: "Budgets", group: "Data", kw: "budget spend cost limit money threshold" },
   { id: "log", label: "Activity", group: "Data", kw: "activity log history events feed" },
@@ -255,6 +261,108 @@ function BrowserPane() {
   );
 }
 
+const PLACE_LABEL: Record<RailPlace, string> = { work: "Top group", utility: "Bottom group", hidden: "Hidden" };
+const PLACE_NOTE: Record<RailPlace, string> = {
+  work: "Where you work. The only group the numbers count through — ⌘1 to ⌘9, in this order.",
+  utility: "What you go and look at, down with settings and ports. No numbers here; record a combination on the Shortcuts page if one of these needs a key.",
+  hidden: "Off the rail. Nothing is lost — put one back from here, or from the ＋ at the foot of the rail.",
+};
+
+/**
+ * The rail's layout, in a list.
+ *
+ * The rail itself is the fast way to do this — pick an icon up and drop it
+ * where you want it — but a drag is a poor way to say "and this one I never
+ * want to see again", it is unavailable to anyone not using a mouse, and it
+ * cannot show you the thing that actually changes when you move a view between
+ * groups: its number. So the same three drawers, spelled out, with the key each
+ * row currently answers to written next to it.
+ */
+function RailPane() {
+  const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
+  const ids = railIds(rail);
+
+  return (
+    <Section title="Rail">
+      {(Object.keys(PLACE_LABEL) as RailPlace[]).map((place) => (
+        <div key={place} className="pb-1">
+          <div className="px-3 pt-3 pb-1.5">
+            <div className="text-[11.5px]" style={{ color: "var(--text)" }}>{PLACE_LABEL[place]}</div>
+            <div className="text-[10px] t-dim2 mt-0.5">{PLACE_NOTE[place]}</div>
+          </div>
+
+          {rail[place].length === 0 ? (
+            <div className="px-3 py-2 text-[10.5px] t-dim2">
+              {place === "hidden" ? "Nothing put away." : "Empty — drag something here, or use the buttons on the right."}
+            </div>
+          ) : rail[place].map((v, i) => {
+            const Icon = v.icon;
+            const chord = chordFor(v.id);
+            return (
+              <div key={v.id} className="w-full flex items-center gap-3 px-3 py-1.5 rounded-lg hover:bg-white/5">
+                <span className="shrink-0 grid place-items-center w-5" style={{ color: "var(--text2)" }}><Icon size={15} /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[12.5px] truncate" style={{ color: "var(--text)" }}>{v.label}</span>
+                  <span className="block text-[10.5px] t-dim2 truncate">{v.hint}</span>
+                </span>
+                <span className="shrink-0 text-[10px] tabular-nums w-[52px] text-right"
+                  style={{ color: chord ? "var(--text2)" : undefined, opacity: chord ? 0.75 : 0.35 }}>
+                  {chord ? chordLabel(chord) : "—"}
+                </span>
+                {/* Order only matters where the rail draws it, and in the top
+                    group it also decides which number you get. */}
+                <span className="shrink-0 flex items-center gap-0.5 w-[46px]">
+                  {place !== "hidden" && (
+                    <>
+                      <MiniBtn label="Move up" disabled={i === 0} onClick={() => moveView(v.id, place, i - 1)}>↑</MiniBtn>
+                      <MiniBtn label="Move down" disabled={i === rail[place].length - 1} onClick={() => moveView(v.id, place, i + 1)}>↓</MiniBtn>
+                    </>
+                  )}
+                </span>
+                <span className="shrink-0 flex items-center gap-1">
+                  {(Object.keys(PLACE_LABEL) as RailPlace[]).map((p) => (
+                    <button key={p} onClick={() => moveView(v.id, p, p === "work" ? ids.work.length : 0)}
+                      disabled={p === place}
+                      title={p === place ? `Already in ${PLACE_LABEL[p].toLowerCase()}` : `Move to ${PLACE_LABEL[p].toLowerCase()}`}
+                      className="chip text-[10px] px-2 py-0.5"
+                      style={p === place
+                        ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 55%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", cursor: "default" }
+                        : { color: "var(--text2)", opacity: 0.7 }}>
+                      {p === "work" ? "Top" : p === "utility" ? "Bottom" : "Hidden"}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+
+      <div className="px-3 pt-3 pb-1 flex items-center gap-3">
+        <span className="text-[10px] t-dim2 flex-1">
+          On the rail itself: <b style={{ color: "var(--text2)" }}>drag</b> an icon between the groups — a gap opens where it will land — or drop it on the dashed square at the bottom to put it away. <b style={{ color: "var(--text2)" }}>Right-click</b> any icon for the same moves, and <b style={{ color: "var(--text2)" }}>Alt+↑/↓</b> does it from the keyboard.
+        </span>
+        {railCustomised() && (
+          <button onClick={resetRail} className="text-[10.5px] px-2 py-1 rounded-lg shrink-0"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            Reset the rail
+          </button>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function MiniBtn({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button aria-label={label} title={label} disabled={disabled} onClick={onClick}
+      className="w-[20px] h-[20px] grid place-items-center rounded-md text-[11px] hover:bg-white/10"
+      style={{ color: "var(--text2)", opacity: disabled ? 0.25 : 0.8 }}>
+      {children}
+    </button>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="px-2 py-2">
@@ -293,16 +401,21 @@ function KeyRow({ id, keyName, capturing, onCapture, error, chord }: {
         <span className="shrink-0 flex items-center gap-1.5">
           <span className="text-[9px] t-dim2 w-[52px] text-right">anywhere</span>
           <button onClick={chord.onCapture}
+            // An empty key is a view outside the top group, where numbers do
+            // not reach. Still clickable: recording one is exactly how you give
+            // a bottom-drawer or hidden view a key of its own.
             title={chord.custom
               ? `${chordLabel(chord.key)} opens this — click to record another, ✕ to go back to its rail position`
-              : `${chordLabel(chord.key)} opens this, from its position in the rail — click to record your own`}
+              : chord.key
+                ? `${chordLabel(chord.key)} opens this, from its position in the top group — click to record your own`
+                : "Only the top group is numbered — click to record a combination for this one"}
             className="chip text-[10px] tabular-nums min-w-[74px] text-center"
             style={chord.capturing
               ? { color: "var(--primary-hover)", borderColor: "color-mix(in srgb, var(--primary) 60%, transparent)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }
               : chord.custom
                 ? { color: "var(--primary-hover)" }
                 : { color: "var(--text2)", opacity: 0.6 }}>
-            {chord.capturing ? "Hold a combo…" : chordLabel(chord.key)}
+            {chord.capturing ? "Hold a combo…" : chord.key ? chordLabel(chord.key) : "—"}
           </button>
           <span className="w-3 shrink-0">
             {chord.custom && !chord.capturing && (
@@ -932,6 +1045,10 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [renderer, setRenderer] = useState<RendererPref>(() => rendererPref());
   const [keys, setKeys] = useState(() => bindings());
   const [capturing, setCapturing] = useState<ActionId | null>(null);
+  // The Shortcuts page reads chordFor, which now answers out of the rail: move
+  // a view between groups on the Rail page and every number on this one shifts.
+  // Without this the two pages sit side by side disagreeing.
+  useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
   /**
    * Which page is showing — remembered across opens.
    *
@@ -987,7 +1104,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
       // never be part of a binding at all.
       const chord = chordFromEvent(e);
       if (!chord) return; // modifiers alone, or a bare key — keep listening
-      const r = rebindChord(capturingChord, chord, loadViewOrder().map((v) => v.id));
+      const r = rebindChord(capturingChord, chord);
       if (r.ok) { setCapturingChord(null); setKeyError(null); }
       else setKeyError({ id: `view.${capturingChord}`, msg: r.error });
     };
@@ -1290,19 +1407,20 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
 
                   {pane === "browser" && <BrowserPane />}
 
+                  {pane === "rail" && <RailPane />}
+
                   {pane === "keys" && (
                   <Section title="Shortcuts">
                     {(Object.keys(DEFAULTS) as ActionId[]).map((id) => {
                       const view = id.startsWith("view.") ? (id.slice(5) as ViewId) : null;
-                      const order = loadViewOrder().map((v) => v.id);
                       return (
                         <KeyRow key={id} id={id} keyName={keys[id]}
                           capturing={capturing === id}
                           error={keyError?.id === id ? keyError.msg : null}
                           onCapture={() => { setKeyError(null); setCapturingChord(null); setCapturing((c) => (c === id ? null : id)); }}
                           chord={view ? {
-                            key: chordFor(view, order),
-                            custom: chordFor(view, order) !== `mod+${order.indexOf(view) + 1}`,
+                            key: chordFor(view),
+                            custom: hasCustomChord(view),
                             capturing: capturingChord === view,
                             onCapture: () => { setKeyError(null); setCapturing(null); setCapturingChord((c) => (c === view ? null : view)); },
                             onClear: () => { clearChord(view); setKeys({ ...bindings() }); },

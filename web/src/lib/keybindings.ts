@@ -1,4 +1,4 @@
-import { VIEWS, type ViewId } from "../components/workspace/views.ts";
+import { VIEWS, workIds, type ViewId } from "../components/workspace/views.ts";
 
 /**
  * The single-letter shortcuts, and the ability to change them.
@@ -194,38 +194,54 @@ export function chords(): Partial<Record<ViewId, string>> {
   return chordCache;
 }
 
-/** What actually reaches a view: the custom chord, else its rail position. */
-export function chordFor(id: ViewId, order: ViewId[]): string {
+/**
+ * What actually reaches a view: the custom chord, else its position in the
+ * work drawer — and nothing at all if it is not in the work drawer.
+ *
+ * The rail reads the layout itself rather than taking an order to index into.
+ * There are two lists it could plausibly be handed now (the top drawer, or
+ * everything the rail draws) and only one of them is right, so passing the
+ * wrong one was a bug waiting at five call sites.
+ */
+export function chordFor(id: ViewId): string {
   const custom = chords()[id];
   if (custom) return custom;
-  const i = order.indexOf(id);
+  const i = workIds().indexOf(id);
   return i >= 0 && i < 9 ? `mod+${i + 1}` : "";
 }
+
+/** Whether this view's chord was chosen rather than inherited from position. */
+export const hasCustomChord = (id: ViewId): boolean => !!chords()[id];
 
 /**
  * Which view a chord opens, or null.
  *
  * Custom chords resolve first, so binding mod+2 to chat takes that key from
- * whatever sits second in the rail rather than being shadowed by it — the
- * explicit choice has to beat the implicit one, or setting it looks broken.
+ * whatever sits second in the work drawer rather than being shadowed by it —
+ * the explicit choice has to beat the implicit one, or setting it looks broken.
+ *
+ * A hidden view still answers to a chord somebody bound to it by hand. Hiding
+ * takes a view off the rail, not out of the app, and the caller's job is to put
+ * it back on the way in — a key that silently does nothing is a worse answer
+ * than a tab reappearing.
  */
-export function viewForChord(chord: string, order: ViewId[]): ViewId | null {
+export function viewForChord(chord: string): ViewId | null {
   const map = chords();
-  for (const id of order) if (map[id] === chord) return id;
+  for (const v of VIEWS) if (map[v.id] === chord) return v.id;
   const m = /^mod\+([1-9])$/.exec(chord);
   if (m) {
-    const at = order[Number(m[1]) - 1];
+    const at = workIds()[Number(m[1]) - 1];
     // A position whose view has its own chord is no longer reachable by number.
     if (at && !map[at]) return at;
   }
   return null;
 }
 
-export function rebindChord(id: ViewId, chord: string, order: ViewId[]): RebindResult {
+export function rebindChord(id: ViewId, chord: string): RebindResult {
   if (!VALID_CHORD.test(chord)) return { ok: false, error: "hold a modifier — Ctrl, Alt or both" };
   if (CHORD_RESERVED.has(chord)) return { ok: false, error: `${chordLabel(chord)} belongs to the app` };
-  const taken = order.find((v) => v !== id && chordFor(v, order) === chord);
-  if (taken) return { ok: false, error: `already opens ${taken}` };
+  const taken = VIEWS.find((v) => v.id !== id && chordFor(v.id) === chord);
+  if (taken) return { ok: false, error: `already opens ${taken.label}` };
   chordCache = { ...chords(), [id]: chord };
   persistChords();
   return { ok: true };
