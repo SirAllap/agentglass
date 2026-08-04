@@ -948,9 +948,13 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
   const [detail, setDetail] = useState<PrDetail | null>(null);
   const [detailErr, setDetailErr] = useState("");
   const [tab, setTab] = useState<Tab>("overview");
+  /** The description editor has taken the whole column. Lifted out of
+   *  <Description> so the shell can hide the masthead, tabs and sidebar behind
+   *  it — editing a body is a mode, not a box wedged into the read view. */
+  const [editingBody, setEditingBody] = useState(false);
   /** Open a pull request as a page. Back returns to the list, cursor intact. */
-  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setCondensed(false); }, []);
-  const backToList = useCallback(() => { setSelected(null); setDetailErr(""); }, []);
+  const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setCondensed(false); setEditingBody(false); }, []);
+  const backToList = useCallback(() => { setSelected(null); setDetailErr(""); setEditingBody(false); }, []);
 
   /**
    * "Open this pull request", asked from somewhere that cannot reach this panel.
@@ -1884,7 +1888,26 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
           )}
         </div>
         ) : (
-        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        <div className="relative flex-1 flex flex-col min-w-0 min-h-0">
+          {/* Editing the description is a full-column mode: the editor covers
+              the masthead, tabs, sidebar and footer, because none of them help
+              you write, and the textarea wants every pixel of height. The
+              overlay is `absolute inset-0` over a column that already has a
+              definite height, so `h-full` inside it fills without a page
+              scroll — the whole point of taking over. */}
+          {editingBody && d && (
+            <div className="absolute inset-0 z-30 flex flex-col" style={{ background: "var(--bg)" }}>
+              <BodyEditor
+                key={d.number}
+                prNumber={d.number}
+                initial={d.body}
+                busy={busy}
+                onOpenGithub={() => openExternal(d.url)}
+                onCancel={() => setEditingBody(false)}
+                onSave={async (body) => { const ok = await doEditBody(body); if (ok) setEditingBody(false); return ok; }}
+              />
+            </div>
+          )}
           {/* The way back. A page you cannot leave is a trap, and the browser's
               Back button is not ours to borrow — this panel lives inside an
               app, not a tab. */}
@@ -1965,7 +1988,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                         <Overview
                           d={d} busy={busy} openThreads={openThreads.length}
                           conversationCount={d.comments.length + d.reviews.length + d.threads.length}
-                          onEditBody={doEditBody}
+                          onEditRequest={() => setEditingBody(true)}
                           onLocalReview={() => doLocalReview()} onMerge={doMerge} onClose={doClose}
                           onUpdateBranch={() => act("Update branch", () => api.prUpdateBranch(root, d.number))}
                           onRerun={() => act("Re-run checks", () => api.prRerun(root, d.number))}
@@ -2137,11 +2160,11 @@ const MERGE_WHY: Record<string, string> = {
   UNKNOWN: "GitHub has not finished working it out",
 };
 
-function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onEditBody }: {
+function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMerge, onClose, onUpdateBranch, onRerun, onAutoMerge, onCancelAutoMerge, onDraft, onGoThreads, onEditRequest }: {
   d: PrDetail; busy: boolean; openThreads: number; conversationCount: number;
   onLocalReview: () => void; onMerge: (method: MergeMethod) => void; onClose: () => void; onUpdateBranch: () => void;
   onRerun: () => void; onAutoMerge: () => void; onCancelAutoMerge: () => void; onDraft: () => void; onGoThreads: () => void;
-  onEditBody: (body: string) => Promise<boolean>;
+  onEditRequest: () => void;
 }) {
   const c = d.checks;
   const [mergeMethod, setMergeMethod] = useState<MergeMethod>("squash");
@@ -2260,7 +2283,7 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
       </section>
       )}
 
-      <Description d={d} busy={busy} onSave={onEditBody} />
+      <Description d={d} busy={busy} onEdit={onEditRequest} />
 
       <div className="flex gap-1.5 flex-wrap items-center">
         <Btn onClick={onLocalReview} disabled={busy} primary title="Open a chat with the review prompt ready. Reads only: no checkout, nothing written to this repository">Review with Claude</Btn>
@@ -2291,61 +2314,15 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
  * Write/Preview rather than a bare textarea: a description is markdown, and
  * finding out how it renders by saving it and looking is not a review flow.
  */
-function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: (body: string) => Promise<boolean> }) {
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(d.body);
-  const [preview, setPreview] = useState(false);
-  const [saving, setSaving] = useState(false);
-  // A new pull request means a new body; without this the editor keeps the
-  // previous one and offers to save it over the one you are looking at.
-  useEffect(() => { setEditing(false); setPreview(false); setText(d.body); }, [d.number, d.body]);
-
-  const save = async () => {
-    if (text === d.body) { setEditing(false); return; }
-    setSaving(true);
-    const ok = await onSave(text);
-    setSaving(false);
-    if (ok) setEditing(false);
-  };
-
-  if (editing) {
-    return (
-      <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
-        <div className="flex items-center gap-1 px-2 py-1.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
-          <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
-          <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
-        </div>
-        {preview ? (
-          <div className="p-3 min-h-[160px]">{text.trim() ? <Md body={text} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}</div>
-        ) : (
-          <textarea
-            value={text} onChange={(e) => setText(e.target.value)} autoFocus
-            onKeyDown={(e) => {
-              if (e.key === "Escape") { setText(d.body); setEditing(false); }
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
-            }}
-            className="w-full p-3 text-[12px] outline-none resize-y agx-scroll"
-            style={{ ...CODE_FONT_STYLE, minHeight: 160, background: "transparent", color: "var(--text2)", lineHeight: 1.6 }}
-          />
-        )}
-        <div className="flex items-center gap-1.5 px-2.5 py-2"
-          style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
-          <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · ⌘↵ save · Esc cancel</span>
-          <span className="ml-auto flex gap-1.5">
-            <Btn onClick={() => { setText(d.body); setEditing(false); }} disabled={saving} small>Cancel</Btn>
-            <Btn onClick={save} disabled={saving || busy} primary small>{saving ? "Saving…" : "Save"}</Btn>
-          </span>
-        </div>
-      </section>
-    );
-  }
-
+function Description({ d, busy, onEdit }: { d: PrDetail; busy: boolean; onEdit: () => void }) {
   return (
     <section className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}>
       <div className="flex items-center gap-2 px-3 py-1.5"
         style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
         <span className="text-[9.5px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>description</span>
-        <span className="ml-auto"><Btn onClick={() => setEditing(true)} disabled={busy} small>✎ Edit</Btn></span>
+        {/* Opening the editor is the shell's to do — it takes the whole column,
+            so the click has to leave this box entirely. */}
+        <span className="ml-auto"><Btn onClick={onEdit} disabled={busy} small>✎ Edit</Btn></span>
       </div>
       <div className="p-3">
         {/* No checklist meter. The boxes are right there, ticked or not, three
@@ -2354,6 +2331,203 @@ function Description({ d, busy, onSave }: { d: PrDetail; busy: boolean; onSave: 
         {d.body.trim() ? <Md body={d.body} /> : <div className="text-[11px]" style={{ color: "var(--text3)" }}>No description.</div>}
       </div>
     </section>
+  );
+}
+
+/** One toolbar key. `onMouseDown`-preventDefault is the whole trick: a plain
+ *  click would blur the textarea first, wiping the selection the transform
+ *  needs — so the button never takes focus, and the caret stays where it was. */
+function TB({ children, title, onClick }: { children: React.ReactNode; title: string; onClick: () => void }) {
+  return (
+    <button type="button" title={title} onMouseDown={(e) => e.preventDefault()} onClick={onClick}
+      className="agx-btn rounded flex items-center justify-center text-[11px] w-7 h-7 shrink-0"
+      style={{ color: "var(--text2)" }}>
+      {children}
+    </button>
+  );
+}
+function TBSep() {
+  return <span className="mx-1 h-4 w-px shrink-0" style={{ background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />;
+}
+
+/**
+ * The description editor, full-column. A GitHub-style formatting toolbar, and a
+ * textarea that fills every pixel of height it is handed and cannot be dragged
+ * bigger or smaller — the height belongs to the column, not to a resize grip.
+ * Write/Preview and Cancel/Save stay pinned however long the body runs.
+ *
+ * Images still cannot be uploaded (GitHub has no public attachment API), so the
+ * paperclip says so and offers the one thing that works — the same call the
+ * comment composer makes.
+ */
+function BodyEditor({ prNumber, initial, busy, onSave, onCancel, onOpenGithub }: {
+  prNumber: number; initial: string; busy: boolean;
+  onSave: (body: string) => Promise<boolean>; onCancel: () => void; onOpenGithub: () => void;
+}) {
+  const [text, setText] = useState(initial);
+  const [preview, setPreview] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [attachNote, setAttachNote] = useState<string | null>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const dirty = text !== initial;
+
+  const save = async () => {
+    if (!dirty) { onCancel(); return; }
+    setSaving(true);
+    // The parent flips edit-mode off when this resolves true; on false we stay
+    // put with the text intact so nothing typed is lost to a failed save.
+    await onSave(text);
+    setSaving(false);
+  };
+
+  /** Every toolbar button ends here: read the selection, transform it, write it
+   *  back, then re-select so you can keep typing. Without the reselect the caret
+   *  jumps to the end and the toolbar is a one-click-only affair. */
+  const edit = (fn: (sel: string, start: number, end: number) => { text: string; start: number; end: number }) => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const r = fn(text.slice(s, e), s, e);
+    setText(r.text);
+    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(r.start, r.end); });
+  };
+
+  const wrap = (mark: string, ph = "text") => edit((sel, s, e) => {
+    const body = sel || ph;
+    const out = text.slice(0, s) + mark + body + mark + text.slice(e);
+    const start = s + mark.length;
+    return { text: out, start, end: start + body.length };
+  });
+
+  const code = () => edit((sel, s, e) => {
+    const before = text.slice(0, s), after = text.slice(e);
+    if (sel.includes("\n") || sel === "") {
+      const body = sel || "code";
+      const out = before + "```\n" + body + "\n```" + after;
+      const start = before.length + 4;
+      return { text: out, start, end: start + body.length };
+    }
+    const out = before + "`" + sel + "`" + after;
+    return { text: out, start: s + 1, end: s + 1 + sel.length };
+  });
+
+  const link = () => edit((sel, s, e) => {
+    const label = sel || "text";
+    const out = text.slice(0, s) + "[" + label + "](url)" + text.slice(e);
+    const start = s + 1 + label.length + 2; // caret lands on `url`
+    return { text: out, start, end: start + 3 };
+  });
+
+  /** Line-prefix tools (headings, quote, lists). A toggle: if every touched
+   *  line already carries its prefix, strip it — same as GitHub's toolbar. */
+  const prefixLines = (mark: (i: number) => string) => edit((sel, s, e) => {
+    const startOfLine = text.lastIndexOf("\n", s - 1) + 1;
+    const head = text.slice(0, startOfLine);
+    const block = text.slice(startOfLine, e);
+    const after = text.slice(e);
+    const lines = block.split("\n");
+    const marks = lines.map((_, i) => mark(i));
+    const on = lines.every((l, i) => l.startsWith(marks[i]));
+    const out = lines.map((l, i) => on ? l.slice(marks[i].length) : marks[i] + l).join("\n");
+    return { text: head + out + after, start: startOfLine, end: startOfLine + out.length };
+  });
+
+  const mention = () => edit((sel, s, e) => {
+    const out = text.slice(0, s) + "@" + sel + text.slice(e);
+    return { text: out, start: s + 1, end: s + 1 + sel.length };
+  });
+
+  // Drag/paste: a text file drops in as a fenced block; an image cannot (no
+  // public GitHub upload API), so it says so and points at GitHub — same shape
+  // as the comment composer, and as the paperclip below.
+  const TEXTY = /\.(md|txt|log|json|jsonc|ya?ml|toml|ini|csv|tsv|diff|patch|ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|c|h|cpp|cs|sh|bash|zsh|sql|html?|css|scss|xml)$/i;
+  const takeFiles = async (files: File[]) => {
+    if (!files.length) return;
+    const img = files.find((f) => f.type.startsWith("image/"));
+    if (img) { setAttachNote(img.name); return; }
+    const parts: string[] = [];
+    for (const f of files.slice(0, 4)) {
+      if (!TEXTY.test(f.name) && !f.type.startsWith("text/")) continue;
+      const lang = (f.name.split(".").pop() ?? "").toLowerCase();
+      parts.push(`**${f.name}**\n\n\`\`\`${lang}\n${(await f.text()).slice(0, 60_000)}\n\`\`\``);
+    }
+    if (parts.length) setText((t) => (t ? t + "\n\n" : "") + parts.join("\n\n"));
+  };
+
+  return (
+    <div className="flex flex-col h-full min-h-0"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => { e.preventDefault(); void takeFiles([...e.dataTransfer.files]); }}
+      onPaste={(e) => { const fs = [...e.clipboardData.files]; if (fs.length) { e.preventDefault(); void takeFiles(fs); } }}>
+      <div className="flex items-center gap-2 px-3 py-2 shrink-0"
+        style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        <span className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>Editing description</span>
+        <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>· #{prNumber}</span>
+        {dirty && <span className="text-[8.5px] uppercase tracking-[.13em]" style={{ color: "var(--warning)" }}>unsaved</span>}
+        <span className="ml-auto flex gap-1">
+          <Btn onClick={() => setPreview(false)} small primary={!preview}>Write</Btn>
+          <Btn onClick={() => setPreview(true)} small primary={preview}>Preview</Btn>
+        </span>
+      </div>
+
+      {!preview && (
+        <div className="flex items-center gap-0.5 px-2 py-1 shrink-0 flex-wrap"
+          style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          <TB title="Heading" onClick={() => prefixLines(() => "### ")}>H</TB>
+          <TB title="Bold" onClick={() => wrap("**")}><b>B</b></TB>
+          <TB title="Italic" onClick={() => wrap("_")}><i>I</i></TB>
+          <TBSep />
+          <TB title="Quote" onClick={() => prefixLines(() => "> ")}>&ldquo;</TB>
+          <TB title="Code" onClick={code}>&lt;/&gt;</TB>
+          <TB title="Link" onClick={link}>🔗</TB>
+          <TBSep />
+          <TB title="Numbered list" onClick={() => prefixLines((i) => `${i + 1}. `)}>1.</TB>
+          <TB title="Bulleted list" onClick={() => prefixLines(() => "- ")}>•</TB>
+          <TB title="Task list" onClick={() => prefixLines(() => "- [ ] ")}>☑</TB>
+          <TBSep />
+          <TB title="Attach an image" onClick={() => setAttachNote("An image")}>📎</TB>
+          <TB title="Mention" onClick={mention}>@</TB>
+        </div>
+      )}
+
+      {attachNote && (
+        <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px] shrink-0"
+          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          <span className="min-w-0 truncate"><b>{attachNote}</b> can't be attached from here — GitHub has no public upload API for attachments.</span>
+          <button onClick={onOpenGithub} className="agx-btn ml-auto shrink-0 px-2 py-0.5 rounded"
+            style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>Attach on GitHub ↗</button>
+          <button onClick={() => setAttachNote(null)} className="agx-btn shrink-0 px-1" style={{ color: "var(--text3)" }} aria-label="Dismiss">×</button>
+        </div>
+      )}
+
+      {preview ? (
+        <div className="flex-1 min-h-0 overflow-y-auto agx-scroll p-3">
+          {text.trim() ? <Md body={text} /> : <span className="text-[11px]" style={{ color: "var(--text3)" }}>Nothing to preview.</span>}
+        </div>
+      ) : (
+        <textarea
+          ref={taRef}
+          value={text}
+          autoFocus
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void save(); }
+          }}
+          className="flex-1 min-h-0 w-full p-3 text-[12px] outline-none resize-none agx-scroll"
+          style={{ ...CODE_FONT_STYLE, background: "transparent", color: "var(--text2)", lineHeight: 1.6 }}
+        />
+      )}
+
+      <div className="flex items-center gap-1.5 px-3 py-2 shrink-0"
+        style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", background: "color-mix(in srgb, var(--border) 12%, transparent)" }}>
+        <span className="text-[10px]" style={{ color: "var(--text3)" }}>Markdown · ⌘↵ save · Esc cancel</span>
+        <span className="ml-auto flex gap-1.5">
+          <Btn onClick={onCancel} disabled={saving} small>Cancel</Btn>
+          <Btn onClick={save} disabled={saving || busy || !dirty} primary small>{saving ? "Saving…" : "Save"}</Btn>
+        </span>
+      </div>
+    </div>
   );
 }
 
