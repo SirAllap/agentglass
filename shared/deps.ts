@@ -17,8 +17,8 @@
 export type DepPlatform = "linux" | "darwin" | "win32";
 
 export type DepId =
-  | "git" | "claude" | "python" | "tmux" | "gh" | "docker" | "nvim"
-  | "setsid" | "script" | "dbus-monitor" | "notify-send" | "opener" | "pkexec" | "bash";
+  | "git" | "claude" | "python" | "tmux" | "gh" | "docker" | "nvim" | "task"
+  | "setsid" | "script" | "ss" | "dbus-monitor" | "notify-send" | "opener" | "pkexec" | "bash";
 
 export interface DepSpec {
   id: DepId;
@@ -81,6 +81,12 @@ export const DEPS: DepSpec[] = [
     note: "The CLI on its own is not enough: the daemon has to be running for the panel to show anything.",
   },
   {
+    id: "task", bin: "task", title: "Taskwarrior", required: false,
+    what: "The half of the Tasks view that is yours: the local list you add to, edit and tick off. GitHub issues are read over the network and arrive either way.",
+    url: "https://taskwarrior.org/download/",
+    note: "Its absence is the quiet kind — the view opens, the issues load, and the list you were expecting is simply not there. Which is why it is on this page.",
+  },
+  {
     id: "nvim", bin: "nvim", title: "Neovim", required: false,
     what: "Sends a file straight to a running editor from the diff and file panels, and keeps it on the app's theme.",
     url: "https://neovim.io",
@@ -101,6 +107,13 @@ export const DEPS: DepSpec[] = [
     what: "The terminal's fallback pseudo-terminal, used when Python 3 is absent.",
     url: "https://github.com/util-linux/util-linux",
     platforms: ["linux"],
+  },
+  {
+    id: "ss", bin: "ss", title: "ss (iproute2)", required: false,
+    what: "The Ports panel: what is listening on this machine, and which checkout it belongs to.",
+    url: "https://github.com/iproute2/iproute2",
+    platforms: ["linux"],
+    note: "Ships with iproute2 and is present on almost every Linux, which is why its absence is confusing rather than obvious: the panel simply lists nothing.",
   },
   {
     id: "dbus-monitor", bin: "dbus-monitor", title: "D-Bus tools", required: false,

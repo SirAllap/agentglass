@@ -17,6 +17,7 @@ import { ghCapability } from "./prs.ts";
 import { tmuxCapability } from "./tmuxpane.ts";
 import { notifyCapability } from "./notifications.ts";
 import { HAS_NVIM } from "./editor.ts";
+import { taskCapability } from "./tasks.ts";
 import { PTY_BACKEND } from "./terminal.ts";
 
 /** The interpreter the hook forwarder is written against, resolved the way
@@ -76,6 +77,20 @@ async function probe(spec: DepSpec): Promise<{ status: DepStatus; detail?: strin
     }
     case "nvim":
       return HAS_NVIM ? ok() : missing("not on PATH");
+    case "task": {
+      // Reuses the panel's own probe rather than running `task` again here:
+      // one answer, one cache, and no second place for the wording to drift.
+      // The `configured` half is the whole reason this case exists — an
+      // installed Taskwarrior that has never been set up is not a missing
+      // install, it is one question away from working, and it hangs rather
+      // than fails if anything ever pipes it a stdin. Same shape as gh's
+      // "installed but not logged in".
+      const c = await taskCapability();
+      if (!c.available) return missing(c.reason || "not on PATH");
+      return c.configured
+        ? ok(c.version)
+        : attention(c.reason || "installed, but its data store has not been created yet — run `task` once and answer its setup question");
+    }
     case "dbus-monitor": {
       const c = notifyCapability();
       // `supported` folds two causes together, and only one of them is an
