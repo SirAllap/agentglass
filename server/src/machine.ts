@@ -16,7 +16,7 @@
 // Deliberately read-only except for one thing, and that one thing (`kill`) will
 // only ever touch a process this user owns.
 
-import { readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, readlinkSync, statSync, statfsSync } from "node:fs";
 
 /** One listening TCP socket. */
 export interface PortEntry {
@@ -34,6 +34,14 @@ export interface PortEntry {
    * exactly when killing it is our business.
    */
   mine: boolean;
+  /** Seconds since it started, or null when /proc would not say. */
+  ageSec: number | null;
+  /** Its ancestry runs through an agent's tool-call shell — a fact about who
+   *  started it, not a verdict about whether it should still be running. */
+  fromAgent: boolean;
+  /** Its working directory is gone: the checkout it was serving was deleted
+   *  underneath it. */
+  cwdGone: boolean;
 }
 
 export interface PortsReport {
@@ -71,6 +79,8 @@ export interface ResourceReport {
   procs: ProcEntry[];
   totalCpu: number | null;
   totalRss: number;
+  /** The machine as a whole, so "ours" has something to be a share OF. */
+  machine: MachineTotals;
   /** The same two numbers for our own subtree. The difference between these and
    *  the totals is "everything else on this machine", which the panel shows as
    *  one collapsed line rather than four hundred rows of browser tab. */
@@ -171,7 +181,17 @@ export function parsePorts(out: string): PortsReport {
     const key = `${addr}:${port}:${pid ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    ports.push({ port, addr, proc, pid, cwd: mine && pid != null ? cwdOf(pid) : null, mine });
+    // Only for processes we own: /proc says nothing useful about anybody
+    // else's, and asking is how a ports panel turns into a machine audit.
+    const cwd = mine && pid != null ? cwdOf(pid) : null;
+    ports.push({
+      port, addr, proc, pid, cwd, mine,
+      ageSec: mine && pid != null ? ageSecOf(pid) : null,
+      fromAgent: mine && pid != null ? startedByAgent(pid) : false,
+      // A null cwd is unknown, not gone — an unreadable link and a deleted
+      // directory are different facts and only one of them is a verdict.
+      cwdGone: cwd != null && !existsSync(cwd),
+    });
   }
 
   // Ours first and by port, then everything else by port: the list is read
@@ -215,6 +235,119 @@ export function killPort(pidIn: unknown): { ok: boolean; error?: string; detail?
  * a pid that got recycled between samples cannot inherit a stranger's ticks.
  */
 const lastTicks = new Map<number, { ticks: number; at: number; start: number }>();
+/**
+ * What the whole machine is doing, not just our share of it.
+ *
+ * The panel could say "our 67 processes are using 4.26 GB" and leave you with
+ * no idea whether that was most of the machine or a rounding error. These are
+ * the numbers a system monitor opens with, so the app does not have to be the
+ * reason you go and open one.
+ *
+ * Every field is a file read. Nothing here shells out, because this rides the
+ * same poll as the process list and a spawn per refresh for numbers sitting in
+ * /proc would be a spawn for nothing.
+ */
+export interface MachineTotals {
+  /** Busy percent across all cores, 0..100. Null on the first sample — a rate
+   *  needs two readings, the same reason a process's CPU starts null. */
+  cpu: number | null;
+  cores: number;
+  memUsed: number;
+  memTotal: number;
+  swapUsed: number;
+  swapTotal: number;
+  /** The hottest zone the kernel exposes, in °C, or null where it exposes
+   *  none — a VM and a laptop are different machines about this. */
+  tempC: number | null;
+  /** One-minute load. Reported beside CPU rather than instead of it: they
+   *  disagree usefully, since load counts waiting for disk and CPU does not. */
+  load1: number;
+  diskFree: number;
+  diskTotal: number;
+}
+
+/** The previous /proc/stat reading. Busy percent is a difference between two
+ *  samples; a single one only says what the machine has done since boot. */
+let cpuPrev: { total: number; idle: number; at: number } | null = null;
+
+function cpuTotals(): { cpu: number | null; cores: number } {
+  let cores = 1;
+  try {
+    const stat = readFileSync("/proc/stat", "utf8");
+    // Field order is fixed: user nice system idle iowait irq softirq steal…
+    // idle + iowait is the not-working half; everything else is work.
+    const first = stat.split("\n", 1)[0]!.trim().split(/\s+/).slice(1).map(Number);
+    cores = stat.split("\n").filter((l) => /^cpu\d/.test(l)).length || 1;
+    const total = first.reduce((n, v) => n + (Number.isFinite(v) ? v : 0), 0);
+    const idle = (first[3] ?? 0) + (first[4] ?? 0);
+    const now = Date.now();
+    const prev = cpuPrev;
+    cpuPrev = { total, idle, at: now };
+    if (!prev || now - prev.at > SAMPLE_STALE_MS) return { cpu: null, cores };
+    const dt = total - prev.total;
+    const di = idle - prev.idle;
+    // A counter that went backwards means the machine suspended or the file
+    // was read mid-update; a negative percentage is worse than no number.
+    if (dt <= 0 || di < 0) return { cpu: null, cores };
+    return { cpu: Math.min(100, Math.max(0, ((dt - di) / dt) * 100)), cores };
+  } catch { return { cpu: null, cores }; }
+}
+
+/** °C from the hottest thermal zone. Kernels report millidegrees, and some
+ *  expose zones that read zero or nonsense — those are dropped rather than
+ *  averaged in, because one bogus zone would drag a real reading down. */
+function hottestC(): number | null {
+  try {
+    let best: number | null = null;
+    for (const zone of readdirSync("/sys/class/thermal")) {
+      if (!zone.startsWith("thermal_zone")) continue;
+      const raw = Number(readFileSync(`/sys/class/thermal/${zone}/temp`, "utf8").trim());
+      if (!Number.isFinite(raw) || raw <= 0) continue;
+      const c = raw > 1000 ? raw / 1000 : raw;
+      if (c > 0 && c < 150 && (best === null || c > best)) best = c;
+    }
+    return best;
+  } catch { return null; }
+}
+
+export function machineTotals(): MachineTotals {
+  const { cpu, cores } = cpuTotals();
+  let memTotal = 0, memAvail = 0, swapTotal = 0, swapFree = 0;
+  try {
+    for (const line of readFileSync("/proc/meminfo", "utf8").split("\n")) {
+      const m = line.match(/^(\w+):\s+(\d+) kB/);
+      if (!m) continue;
+      const v = Number(m[2]) * 1024;
+      if (m[1] === "MemTotal") memTotal = v;
+      // MemAvailable, not MemFree: the kernel's own estimate of what a new
+      // process could actually get. MemFree counts cache as used and reads
+      // alarmingly low on a machine that is behaving perfectly.
+      else if (m[1] === "MemAvailable") memAvail = v;
+      else if (m[1] === "SwapTotal") swapTotal = v;
+      else if (m[1] === "SwapFree") swapFree = v;
+    }
+  } catch { /* not Linux, or /proc is not mounted */ }
+
+  let load1 = 0;
+  try { load1 = Number(readFileSync("/proc/loadavg", "utf8").split(" ")[0]) || 0; } catch { /* absent */ }
+
+  let diskFree = 0, diskTotal = 0;
+  try {
+    const fs = statfsSync("/");
+    diskTotal = Number(fs.blocks) * Number(fs.bsize);
+    // bavail, not bfree: bfree includes the blocks reserved for root, which a
+    // user cannot have and should not be shown as free.
+    diskFree = Number(fs.bavail) * Number(fs.bsize);
+  } catch { /* older runtimes have no statfs */ }
+
+  return {
+    cpu, cores,
+    memUsed: Math.max(0, memTotal - memAvail), memTotal,
+    swapUsed: Math.max(0, swapTotal - swapFree), swapTotal,
+    tempC: hottestC(), load1, diskFree, diskTotal,
+  };
+}
+
 /** Older than this and the previous sample is not a comparison, it is history. */
 const SAMPLE_STALE_MS = 30_000;
 
@@ -229,7 +362,7 @@ export function listResources(limit = 40): ResourceReport {
   const now = Date.now();
   const rows: ProcEntry[] = [];
   let pids: string[];
-  try { pids = readdirSync("/proc"); } catch { return { procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false }; }
+  try { pids = readdirSync("/proc"); } catch { return { procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false, machine: machineTotals() }; }
 
   let rated = false;
   for (const name of pids) {
@@ -299,7 +432,7 @@ export function listResources(limit = 40): ResourceReport {
     r.cmd = cmdlineOf(r.pid);
   }
   kept.sort((a, b) => Number(b.ours) - Number(a.ours) || b.rss - a.rss);
-  return { procs: kept, totalCpu, totalRss, oursCpu, oursRss, seen, rated };
+  return { procs: kept, totalCpu, totalRss, oursCpu, oursRss, seen, rated, machine: machineTotals() };
 }
 
 /**
@@ -405,6 +538,95 @@ function ownedByMe(pid: number): boolean {
  *  which is the only reason any of this is more useful than `top`. */
 function cwdOf(pid: number): string | null {
   try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return null; }
+}
+
+/**
+ * How long a process has been up, in seconds.
+ *
+ * Field 22 of /proc/<pid>/stat is its start time in clock ticks since boot, so
+ * the age is uptime minus that. Read rather than shelled out to `ps` because
+ * this runs per listening socket on a poll, and a spawn per row for a number
+ * already sitting in a file is a spawn for nothing.
+ *
+ * The command name in field 2 is parenthesised and may itself contain spaces
+ * or brackets, so the fields are counted from the LAST `)` — splitting the
+ * whole line on whitespace is the classic way to read this file wrong.
+ */
+export function ageSecOf(pid: number): number | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    // stat[22] is the 22nd field overall; fields 1 and 2 are before the split.
+    const ticks = Number(rest[19]);
+    if (!Number.isFinite(ticks)) return null;
+    const uptime = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]);
+    if (!Number.isFinite(uptime)) return null;
+    // 100 Hz is the value Linux has shipped for every architecture this runs
+    // on; there is no syscall to read it from a process that is not us.
+    const age = Math.round(uptime - ticks / 100);
+    return age >= 0 ? age : null;
+  } catch { return null; }
+}
+
+/** The mark a coding agent's tool call leaves on the shell it runs commands in.
+ *  Matched on the path rather than the word "claude", which appears in half the
+ *  command lines on a machine like this one. */
+const AGENT_SHELL = /\.claude\/shell-snapshots\//;
+
+/**
+ * Did an agent's tool call start this?
+ *
+ * Walks up the parents rather than looking only at the immediate one: a server
+ * launched as `setsid env … bun run …` sits at least one wrapper below the
+ * shell, and the wrapper is what carries the mark.
+ *
+ * Bounded, and it has to be. The walk stops at init, at a repeat (a wrong ppid
+ * is a cycle waiting to happen), and at a fixed depth — this runs on a poll,
+ * and an unbounded loop over /proc on a poll is a hang nobody would attribute
+ * to a ports panel.
+ *
+ * Measured before it was written: agentglass's own installed server comes back
+ * false, because relaunching detaches it to systemd — the ancestry is
+ * agentglass-server, the Electron shell, systemd. A dev server left behind by
+ * a session comes back true. Had that not held, the signal would have been
+ * worthless and this function would not exist.
+ *
+ * WHAT IT CANNOT DO, and this is not a defect to be fixed later: the evidence
+ * lives in the ancestry, so it dies with it. A server started through `setsid`
+ * whose launching shell has since exited is reparented to init, and the chain
+ * that led back to the agent is simply gone — measured on exactly such a
+ * process, which came back false while a sibling that kept its shell came back
+ * true. So a false here means "nothing says an agent started this", never
+ * "a person did". The age beside it is what covers that gap: whatever started
+ * it, a listener that has been up for four hours is the one worth looking at.
+ */
+/** One step up the tree. The seam exists so the walk can be tested against a
+ *  process tree that is written down rather than one that has to be running. */
+export type ProcStep = (pid: number) => { cmdline: string; ppid: number } | null;
+
+const procFromSlashProc: ProcStep = (pid) => {
+  try {
+    const m = readFileSync(`/proc/${pid}/status`, "utf8").match(/^PPid:\s+(\d+)/m);
+    if (!m) return null;
+    return { cmdline: cmdlineOf(pid), ppid: Number(m[1]) };
+  } catch { return null; }
+};
+
+export function startedByAgent(pid: number, step: ProcStep = procFromSlashProc): boolean {
+  const seen = new Set<number>();
+  let cur = pid;
+  for (let depth = 0; depth < 8 && cur > 1; depth++) {
+    if (seen.has(cur)) return false;
+    seen.add(cur);
+    const info = step(cur);
+    if (!info) return false;
+    // Skips depth 0 on purpose: the process itself is the server, and matching
+    // its own command line would only ever be a false positive.
+    if (depth > 0 && AGENT_SHELL.test(info.cmdline)) return true;
+    if (!Number.isInteger(info.ppid) || info.ppid <= 1) return false;
+    cur = info.ppid;
+  }
+  return false;
 }
 
 /** Enough of the command line to tell two `node`s apart, and no more: a webpack

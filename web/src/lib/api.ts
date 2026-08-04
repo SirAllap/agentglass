@@ -997,7 +997,12 @@ const demoApi: typeof realApi = {
   issueComment: (_r: string, _n: number, _b: string) => D({ ok: false, error: "not available in the demo" }),
   issueState: (_r: string, _n: number, _c: boolean) => D({ ok: false, error: "not available in the demo" }),
   machinePorts: () => D({ ports: [], mine: 0, external: 0, error: "not available in the demo" }),
-  machineResources: (_l?: number) => D({ procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false }),
+  // Zeroed rather than invented: the demo has no machine to report on, and a
+  // plausible-looking 40% would be a lie the panel has no way to caveat.
+  machineResources: (_l?: number) => D({
+    procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false,
+    machine: { cpu: null, cores: 0, memUsed: 0, memTotal: 0, swapUsed: 0, swapTotal: 0, tempC: null, load1: 0, diskFree: 0, diskTotal: 0 },
+  }),
   machineSpace: (_r: string) => D({ root: "", bytes: 0, freeable: 0, dirs: [], error: "not available in the demo" }),
   machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
   filesTree: (_r: string, _rel?: string) => D({ ok: false, root: "", rel: "", entries: [], error: "not available in the demo" }),

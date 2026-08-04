@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
-import type { GitRepoRef, PortEntry, PortsReport, ProcEntry, ResourceReport, SpaceReport } from "../../../shared/types.ts";
+import type { GitRepoRef, MachineTotals, PortEntry, PortsReport, ProcEntry, ResourceReport, SpaceReport } from "../../../shared/types.ts";
 import { HAS_BROWSER } from "../lib/desktop.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import { requestBrowserNav } from "../lib/browserNav.ts";
@@ -146,28 +146,148 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
   );
 }
 
+/** One reading, with the bar that makes a percentage legible at a glance. */
+function Stat({ label, value, pct, tint }: { label: string; value: string; pct?: number | null; tint?: string }) {
+  return (
+    <span className="flex flex-col gap-1 min-w-0">
+      <span className="flex items-baseline gap-1.5">
+        <span className="text-[9px] uppercase tracking-wider shrink-0" style={{ color: "var(--text4)" }}>{label}</span>
+        <span className="text-[11.5px] tabular-nums truncate" style={{ color: "var(--text)" }}>{value}</span>
+      </span>
+      {/* Absent, not empty, when there is nothing to plot: a bar drawn at zero
+          reads as "idle", which is the opposite of "we have not measured yet". */}
+      {pct != null && (
+        <span className="block h-[3px] rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>
+          <span className="block h-full rounded-full"
+            style={{ width: `${Math.min(100, Math.max(0, pct))}%`, background: tint ?? "var(--primary)" }} />
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Warm at 80, hot at 90 — the point is that a number you must not ignore does
+ *  not look like one you may. */
+const heat = (pct: number) =>
+  pct >= 90 ? "var(--error)" : pct >= 80 ? "var(--warning)" : "var(--primary)";
+
+/** "24.9 / 30.5 GB" — one unit, one decimal, said once. The long form spelled
+ *  GB twice and truncated, and the hundredths were never actionable. */
+const pair = (used: number, total: number) =>
+  `${(used / 1e9).toFixed(1)} / ${(total / 1e9).toFixed(1)} GB`;
+
+function MachineStrip({ m }: { m: MachineTotals }) {
+  const memPct = m.memTotal ? (m.memUsed / m.memTotal) * 100 : null;
+  const swapPct = m.swapTotal ? (m.swapUsed / m.swapTotal) * 100 : null;
+  const diskUsed = m.diskTotal - m.diskFree;
+  const diskPct = m.diskTotal ? (diskUsed / m.diskTotal) * 100 : null;
+  if (!m.memTotal && !m.diskTotal && m.cpu == null) return null;
+  return (
+    <div className="px-3.5 py-2.5 flex items-start gap-5" style={{ borderBottom: edge(10) }}>
+      <span className="text-[9px] uppercase tracking-wider shrink-0 pt-0.5" style={{ color: "var(--text4)" }}>
+        This<br />machine
+      </span>
+      <span className="grid gap-x-5 gap-y-2 flex-1 min-w-0" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(148px, 1fr))" }}>
+        <Stat label="CPU" pct={m.cpu} tint={m.cpu != null ? heat(m.cpu) : undefined}
+          value={m.cpu != null ? `${m.cpu.toFixed(0)}% of ${m.cores}` : "sampling…"} />
+        <Stat label="Memory" pct={memPct} tint={memPct != null ? heat(memPct) : undefined}
+          value={m.memTotal ? pair(m.memUsed, m.memTotal) : "—"} />
+        {/* Shown only where there is any. A swap row reading 0% on a machine
+            with none is furniture. */}
+        {m.swapTotal > 0 && (
+          <Stat label="Swap" pct={swapPct} tint={swapPct != null ? heat(swapPct) : undefined}
+            value={pair(m.swapUsed, m.swapTotal)} />
+        )}
+        <Stat label="Disk" pct={diskPct} tint={diskPct != null ? heat(diskPct) : undefined}
+          value={m.diskTotal ? `${(m.diskFree / 1e9).toFixed(0)} GB free` : "—"} />
+        <Stat label="Load" value={m.load1.toFixed(2)} />
+        {m.tempC != null && (
+          <Stat label="Temp" value={`${m.tempC.toFixed(0)} °C`}
+            pct={Math.min(100, (m.tempC / 100) * 100)} tint={heat(m.tempC)} />
+        )}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The columns of a port row, reserved rather than negotiated.
+ *
+ * Flex sized every cell from its contents, so a row with two badges put its
+ * checkout pill somewhere else than a row with one, and pointing at a row made
+ * the action buttons appear and shove everything left. Nothing was wrong with
+ * any single row; the list had no shape.
+ *
+ * So each thing gets a column and keeps it. The last one is the important one:
+ * it is there whether the row has buttons or not, which is what stops the
+ * hover from moving anything. Same fix, and the same reason, as the lists in
+ * Source control.
+ */
+export const PORT_GRID = "8px 52px minmax(0, 1fr) 186px 132px 76px";
+
+/** "4h41m" — coarse on purpose. The question this answers is "did this start
+ *  just now or has it been sitting here", and to the second is noise. */
+function forAge(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return m ? `${h}h${m}m` : `${h}h`;
+}
+
 function Row({ p, actions, dim }: { p: PortEntry; actions?: React.ReactNode; dim?: boolean }) {
   return (
-    <div className="group flex items-center gap-3 px-3.5 py-1.5 hover:bg-white/5" style={{ borderBottom: edge(7) }}>
+    <div className="group grid items-center gap-3 px-3.5 py-1.5 hover:bg-white/5"
+      style={{ borderBottom: edge(7), gridTemplateColumns: PORT_GRID }}>
       {/* A live socket, marked the way a running shell is marked everywhere
           else here. Ours get the colour; the system's stay grey, because the
           point of the section is which is which. */}
-      <span className="shrink-0 w-2 grid place-items-center">
+      <span className="grid place-items-center">
         <span style={{ width: 6, height: 6, borderRadius: 999, display: "block", background: dim ? "color-mix(in srgb, var(--text) 22%, transparent)" : "var(--success)" }} />
       </span>
-      <span className="tabular-nums shrink-0 w-[52px] text-[13px]"
+      <span className="tabular-nums text-[13px]"
         style={{ color: dim ? "var(--text3)" : "var(--primary)", fontWeight: dim ? 400 : 600 }}>{p.port}</span>
-      <span className="min-w-0 flex-1">
+      <span className="min-w-0">
         <span className="block truncate text-[11.5px]" style={{ color: dim ? "var(--text2)" : "var(--text)", fontWeight: dim ? 400 : 500 }}>
           {p.proc ?? "—"}
         </span>
         <span className="block truncate text-[10px]" style={{ color: "var(--text4)" }}>
           {p.addr}:{p.port}
           {p.pid != null && ` · pid ${p.pid}`}
+          {p.ageSec != null && ` · up ${forAge(p.ageSec)}`}
         </span>
       </span>
       {/* The cwd is the whole reason this beats `ss`: it names the checkout the
           process was started in, which is the fact you actually wanted. */}
+      {/* Who started this, for a port nobody remembers taking.
+          Deliberately a statement of fact and not a warning: an agent starts a
+          server on purpose constantly, and a panel that called every one of
+          them a leak would be wrong most of the time and ignored the rest. The
+          age beside it is what makes it decidable — a minute old is a session
+          working, four hours old is a session that ended without tidying up. */}
+      <span className="flex items-center justify-end gap-1.5 min-w-0">
+      {p.fromAgent && (
+        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title="Started by a coding agent's tool call, not launched by hand. Check the age before assuming it is still wanted."
+          // Grey, and chosen rather than inherited: amber would fire on the dev
+          // server a session started a minute ago and is still using, and a
+          // badge that cries wolf on the common case stops being read by the
+          // time it matters. The age next to it does the arguing.
+          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text3) 30%, transparent)" }}>
+          agent-started
+        </span>
+      )}
+      {/* This one IS a verdict, and it is safe to make: whatever it was serving
+          has been deleted underneath it. */}
+      {p.cwdGone && (
+        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title="Its working directory no longer exists — the checkout it was serving has been removed."
+          style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
+          checkout gone
+        </span>
+      )}
+      </span>
+      <span className="flex items-center justify-end min-w-0">
       {p.cwd && (
         <span className="shrink-0 truncate text-[10px] px-1.5 py-0.5 rounded-full max-w-[190px]"
           title={p.cwd}
@@ -175,7 +295,12 @@ function Row({ p, actions, dim }: { p: PortEntry; actions?: React.ReactNode; dim
           {p.cwd.split("/").filter(Boolean).pop()}
         </span>
       )}
-      {actions && <span className="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">{actions}</span>}
+      </span>
+      {/* The column exists whether or not this row has buttons, and whether or
+          not the pointer is over it. Fading them in is the only thing hover
+          does — a row that re-flows the moment you point at it is the defect
+          the Source control lists had, and it is the same fix. */}
+      <span className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">{actions}</span>
     </div>
   );
 }
@@ -291,6 +416,14 @@ function Resources() {
             className="agx-btn ml-auto shrink-0 px-1.5 py-0.5 rounded text-[11px]"
             style={{ color: "var(--text2)", border: edge(18) }}>⟳</button>
         </div>
+
+        {/* The whole machine, above our share of it.
+            Without this the panel could say "our 67 processes hold 4.26 GB"
+            and leave you unable to tell whether that was most of the box or a
+            rounding error — which is exactly when people go and open a system
+            monitor instead. Every number here is a file in /proc or /sys, read
+            on the same poll as the process list. */}
+        <MachineStrip m={data.machine} />
 
         <div className="grid px-3.5 py-1 text-[9.5px] uppercase tracking-wider"
           style={{ gridTemplateColumns: COLS, color: "var(--text3)", borderBottom: edge(10) }}>

@@ -1819,6 +1819,22 @@ export interface PortEntry {
   /** Owned by the user running the server: the only ones we can name, and the
    *  only ones we would ever signal. */
   mine: boolean;
+  /** Seconds since it started, or null when /proc would not say. Age is the
+   *  difference between "the dev server I just started" and "something that
+   *  has been holding a port since this morning". */
+  ageSec: number | null;
+  /**
+   * Its ancestry runs through an agent's tool-call shell.
+   *
+   * A fact, not a verdict: an agent starts a server on purpose all the time.
+   * What it buys is the answer to "who started this, then" for a process
+   * nobody in front of the screen remembers launching — which is the whole
+   * question you ask when a port is taken and you do not know by what.
+   */
+  fromAgent: boolean;
+  /** Its working directory is gone. Whatever checkout it was serving has been
+   *  deleted underneath it, so nothing it is doing can still matter. */
+  cwdGone: boolean;
 }
 export interface PortsReport { ports: PortEntry[]; mine: number; external: number; error?: string }
 
@@ -1836,8 +1852,25 @@ export interface ProcEntry {
   /** Descended from this server (or from a tmux it started). */
   ours: boolean;
 }
+export interface MachineTotals {
+  /** Busy percent across all cores, 0..100; null on the first sample. */
+  cpu: number | null;
+  cores: number;
+  memUsed: number;
+  memTotal: number;
+  swapUsed: number;
+  swapTotal: number;
+  /** Hottest thermal zone in °C, or null where the kernel exposes none. */
+  tempC: number | null;
+  load1: number;
+  diskFree: number;
+  diskTotal: number;
+}
+
 export interface ResourceReport {
   procs: ProcEntry[];
+  /** The whole machine, so the panel can say what share of it is ours. */
+  machine: MachineTotals;
   totalCpu: number | null;
   totalRss: number;
   oursCpu: number | null;
