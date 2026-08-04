@@ -185,7 +185,12 @@ export type SortKey = "recent" | "name" | "track";
  */
 const ROW_GRID = {
   display: "grid",
-  gridTemplateColumns: "14px minmax(0, 22rem) minmax(0, 1fr) auto var(--gitrow-actions, 0px)",
+  // The NAME takes the flexible track, not the commit subject. It was the
+  // other way round, which spent the wide column on "Merge remote-tracking
+  // branch 'origin/…' into …" — the same sentence on half the rows — while
+  // truncating the one thing you are scanning for. The subject keeps a
+  // generous but capped lane and a tooltip for the rest.
+  gridTemplateColumns: "14px minmax(0, 1fr) minmax(0, 30rem) auto var(--gitrow-actions, 0px)",
   alignItems: "center",
   columnGap: "0.5rem",
 } as const;
@@ -2346,8 +2351,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         const sel = i === rowIdx;
                         return (
                           <div key={b.ref} onClick={() => setRowIdx(i)} {...rowProps(sel)}
-                            className="group flex items-center gap-2 px-2.5 py-1.5 rounded-md">
-                            <span className="shrink-0 text-[11.5px] font-medium truncate" style={{ maxWidth: 380, color: b.local ? "var(--text)" : "var(--text2)" }} title={b.ref}>{b.name}</span>
+                            className="group px-2.5 py-1.5 rounded-md"
+                            style={{ ...ROW_GRID, gridTemplateColumns: "minmax(0, 1fr) auto 5rem minmax(0, 22rem) 11rem 5.5rem var(--gitrow-actions, 0px)", ...rowProps(sel).style, ["--gitrow-actions" as string]: writeEnabled ? "17rem" : "0px" }}>
+                            <span className="text-[11.5px] font-medium truncate min-w-0" style={{ color: b.local ? "var(--text)" : "var(--text2)" }} title={b.ref}>{b.name}</span>
                             {/* Whether you already have it is the whole reason
                                 this list is worth reading. A checkout that has
                                 it out is stronger still — that is where the
@@ -2357,10 +2363,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               : b.local
                                 ? <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }} title={b.tracking ? "you have this branch, tracking this remote one" : "you have a local branch of this name — it tracks something else"}>{b.tracking ? "local" : "local ≠"}</span>
                                 : null}
-                            <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{b.hash}</span>
-                            <span className="min-w-0 flex-1 truncate text-[10px] t-dim2" title={b.subject}>{b.subject}</span>
-                            <span className="shrink-0 text-[9.5px] t-dim2 truncate" style={{ maxWidth: 130 }}>{b.author}</span>
-                            <span className="shrink-0 text-[9.5px] t-dim2 w-20 text-right">{b.date}</span>
+                            <span className="text-[9.5px] tabular-nums t-dim2">{b.hash}</span>
+                            <span className="min-w-0 truncate text-[10px] t-dim2" title={b.subject}>{b.subject}</span>
+                            <span className="text-[9.5px] t-dim2 truncate min-w-0 text-right" title={b.author}>{b.author}</span>
+                            <span className="text-[9.5px] t-dim2 text-right whitespace-nowrap">{b.date}</span>
+                            <span className="flex items-center justify-end gap-1.5">
                             {writeEnabled && !b.local && (
                               // Three real buttons, ordered by how much they move,
                               // shown on the row you are on (not hover-only) so it
@@ -2391,6 +2398,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                 style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }}
                                 title={`Open its worktree — ${b.worktree}`}>▸ Open worktree</button>
                             )}
+                            </span>
                           </div>
                         );
                       })}
