@@ -319,7 +319,14 @@ export default function App() {
     const label = who?.title || who?.source_app || first.agent;
     return {
       count: alerts.length,
-      label: alerts.length > 1 ? `${label} +${alerts.length - 1} need you` : `${label} needs you`,
+      // The name alone. It used to carry "needs you" as well, which spends the
+      // width the reason needs to say something you can already see from the
+      // amber strip it is sitting in.
+      label,
+      // WHAT it wants. The alert has always known — a permission request names
+      // its tool, a notification carries its message — and deriveAlerts used to
+      // replace all of it with one constant string. See becauseOf().
+      because: first.text,
       // WHERE it is, not just that it exists. Without this the bar was an alarm
       // with nowhere to go — see goToNeeds.
       sessionId: who?.session_id ?? "",

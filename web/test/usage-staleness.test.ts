@@ -7,7 +7,13 @@ import { readFileSync } from "node:fs";
 import { stalenessLabel, STALE_AFTER_MS } from "../src/lib/usageAge.ts";
 
 const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
-const island = read("src/components/workspace/DynamicIsland.tsx");
+// The top bar, not the notch. These assertions were pointed at DynamicIsland,
+// which the shell rethink orphaned — so they went on passing about a file
+// nothing mounted while the surface that replaced it quietly lost both the
+// staleness marking and the per-model windows. A test aimed at dead code is
+// worse than no test: it reports that a property holds when nothing is checking
+// the thing that has it.
+const bar = read("src/components/TopBar.tsx");
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -40,23 +46,23 @@ describe("saying how old a reading is", () => {
 
 describe("the strip keeps answering the question it exists to answer", () => {
   test("the meters take the age rather than being replaced by a word", () => {
-    expect(island).toContain('<MeterPill tag="5H" w={u.five_hour} age={age} />');
-    expect(island).toContain('<MeterPill tag="WEEK" w={u.seven_day} age={age} />');
+    expect(bar).toContain('<PlanMeter tag="5h" pct={five.utilization} age={age}');
+    expect(bar).toContain('<PlanMeter tag="week" pct={week.utilization} age={age}');
     // The age comes from when the reading was taken, which is what the server
     // preserves across a failed refresh.
-    expect(island).toContain("stalenessLabel(u.fetched_at)");
+    expect(bar).toContain("stalenessLabel(u.fetched_at)");
   });
 
   test("a stale meter is legible as stale without losing its number", () => {
-    expect(island).toContain("${tag} · ${age} old");
-    expect(island).toContain("opacity: age ? 0.55 : 1");
+    expect(bar).toContain("${tag} · ${age} old");
+    expect(bar).toContain("opacity: age ? 0.55 : 1");
   });
 
-  test('"Rate-limited" is only reachable with no reading at all', () => {
+  test('"rate-limited" is only reachable with no reading at all', () => {
     // It lives in the `!u?.available` arm. The fix is not that the word is
     // gone, it is that the server almost always has something for the other
     // arm — so the word now means what it says.
-    expect(island).toContain('const rateLimited = !u?.available && usageError()?.includes("429")');
+    expect(bar).toContain('const rateLimited = !u?.available && usageError()?.includes("429")');
   });
 });
 
@@ -67,11 +73,12 @@ describe("weekly windows scoped to one model", () => {
   const widget = read("src/components/UsageWidget.tsx");
 
   test("the strip draws one meter per scoped window, labelled by the API", () => {
-    expect(island).toContain("u.scoped?.map((s) => <MeterPill key={s.name} tag={s.name.toUpperCase()} w={s} age={age} />)");
+    expect(bar).toContain("u?.scoped?.map((s) => (");
+    expect(bar).toContain("tag={s.name} pct={s.utilization} age={age}");
     // No model name may DECIDE anything — mentioning one in a comment is fine,
     // branching on one is the thing that goes stale.
-    expect(island).not.toMatch(/name\s*===\s*['"]/);
-    expect(island).not.toContain('tag="FABLE"');
+    expect(bar).not.toMatch(/name\s*===\s*['"]/);
+    expect(bar).not.toContain('tag="FABLE"');
   });
 
   test("the header widget draws them too, from the same field", () => {
@@ -82,26 +89,33 @@ describe("weekly windows scoped to one model", () => {
 
   test("they carry the same staleness marking as the rest", () => {
     // A scoped meter going stale silently while the two beside it say so would
-    // be worse than not drawing it.
-    expect(island).toContain("w={s} age={age}");
+    // be worse than not drawing it. Checked as "no meter is drawn without it"
+    // rather than by naming the three we happen to have today.
+    const meters = bar.match(/<PlanMeter[^>]*>/g) ?? [];
+    expect(meters.length).toBeGreaterThanOrEqual(3);
+    for (const m of meters) expect(m).toContain("age={age}");
   });
 });
 
-// The strip has to be able to draw what it now reports.
-describe("the notch has room for the meters it can carry", () => {
-  const css = read("src/index.css");
+// The bar is one 30px row that must not wrap, so everything variable-length in
+// it is bounded. The notch enforced this with a max-width on the strip itself;
+// the bar has no strip to cap, so each thing that can grow caps itself.
+describe("nothing in the bar can drag it off the screen", () => {
+  const notes = read("src/components/TopBarNotes.tsx");
 
-  test("its ceiling clears the resting readout, scoped meters included", () => {
-    // The ceiling exists to stop a long notification dragging the strip across
-    // the screen; it was set when the readout was two meters, and the per-model
-    // window made it three. At 560px the third arrived clipped mid-caption,
-    // which reads as a rendering fault rather than as a limit worth knowing.
-    const m = css.match(/\.agx-notch\s*\{[\s\S]*?max-width:\s*min\(92vw,\s*(\d+)px\)/);
-    expect(m).toBeTruthy();
-    expect(Number(m![1])).toBeGreaterThanOrEqual(700);
+  test("a passing message is bounded and truncates", () => {
+    expect(notes).toContain('maxWidth: "min(46vw, 460px)"');
+    expect(notes).toContain("truncate");
   });
 
-  test("and it is still bounded, so a message cannot drag it off the screen", () => {
-    expect(css).toContain("max-width: min(92vw,");
+  test("so is the chip that says what wants you", () => {
+    // Its reason is the agent's own text, which is the one string here with no
+    // length anyone controls.
+    expect(bar).toContain('maxWidth: "min(52vw, 520px)"');
+  });
+
+  test("the row never wraps, whatever is in it", () => {
+    expect(bar).toContain("flex-nowrap");
+    expect(bar).toContain("whitespace-nowrap");
   });
 });
