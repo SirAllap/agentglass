@@ -278,37 +278,28 @@ export function tidyReport(root: string): TidyReport {
     ],
   });
 
-  // ---- remote-tracking refs -------------------------------------------------
-  const remotes = git(root, ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]);
-  const refCount = remotes.code === 0 ? remotes.stdout.split("\n").filter(Boolean).length : 0;
-  add({
-    id: "remotes", all: refCount > 200 ? [`${refCount} remote-tracking refs`] : [],
-    title: "Remote-tracking branches",
-    what: "Copies of branches as they were on the remote — one per branch anyone has ever pushed. A prune drops the ones the remote has deleted since your last fetch, which may be none.",
-    command: "git fetch --prune",
-    note: "Touches nothing local: it only forgets remote branches the remote itself no longer has.",
-    /**
-     * The one finding that cannot know its own answer without doing the work,
-     * and it used to pretend otherwise.
-     *
-     * The count is of refs you HAVE, not of refs that are stale — the only
-     * thing that knows which are stale is the remote. Presented as something
-     * to clean up, it read as a promise: run this and the number drops. On a
-     * repository where nothing was stale it ran, changed nothing, and looked
-     * broken. So the card says what the number is and what the command can and
-     * cannot know.
-     */
-    why: "`git for-each-ref refs/remotes` counted them. That is how many copies you have — NOT how many are stale. Only the remote knows which of its branches are gone, which is why finding out means fetching.",
-    effect: "Fetches, then drops the copies of remote branches the remote no longer has. If the remote has deleted nothing since your last fetch, it correctly removes nothing and the count stays where it is.",
-    risk: "None to your work: these are copies of other people's branches, not your branches or your commits. The realistic outcome is that it removes nothing, which is the command agreeing with you rather than failing.",
-    diagram: [
-      "  refs/remotes/origin/*   what you have  ─┐",
-      "                                          ├─ the difference is",
-      "  branches origin has now  ───────────────┘   what --prune drops",
-      "",
-      "  the difference is often zero, and that is a clean result",
-    ],
-  });
+  /**
+   * There is no remote-tracking finding, and it is worth saying why here so
+   * nobody adds one back.
+   *
+   * There was one. It counted `refs/remotes` and offered `git fetch --prune`
+   * on anything over two hundred. On a real checkout that read 869 and looked
+   * like a pile of rubbish to sweep — and the user swept it, twice, and the
+   * number did not move. It was right not to: asked directly, the remote has
+   * 867 branches, and `git remote prune --dry-run` would remove none. The
+   * count was of refs you HAVE, and the card was presenting it as refs that
+   * are STALE. Those are different numbers and only the remote knows the
+   * second one.
+   *
+   * Rewording it was the first attempt and it was not enough. A card with a
+   * button is a claim that there is something to do, and no amount of hedging
+   * text below the button unsays it. This module's own rule already covers the
+   * case — a finding with nothing in it is absent, not empty — and this one
+   * was exempt from it only because it counted the wrong thing.
+   *
+   * A busy repository is not a dirty one. If this comes back it needs a signal
+   * that can tell those apart, and the only one that can is the remote.
+   */
 
   return { root, base, findings };
 }

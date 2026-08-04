@@ -179,6 +179,27 @@ describe("what it reports", () => {
     expect(r.findings).toEqual([]);
   });
 
+  test("there is no finding for remote-tracking refs", () => {
+    /**
+     * Pinned because it was there, and because the reason it went is subtle
+     * enough to be re-added in good faith.
+     *
+     * It counted refs/remotes and offered `git fetch --prune` above a
+     * threshold. On a real checkout that read 869; the user ran the prune
+     * twice and the number never moved, because the remote genuinely has 867
+     * branches and none were stale. The count was of refs you HAVE presented
+     * as refs that are STALE, and rewording it was not enough — a card with a
+     * button is a claim that there is something to do.
+     *
+     * A busy repository is not a dirty one. Anything that comes back here
+     * needs a signal that can tell those apart.
+     */
+    expect(tidyReport(repo).findings.some((f) => /remote-tracking/i.test(f.title))).toBe(false);
+    for (const f of tidyReport(repo).findings) {
+      expect(f.command ?? "").not.toContain("fetch --prune");
+    }
+  });
+
   test("findings with nothing in them are absent, not empty", () => {
     // An empty section per category is furniture, and furniture is what
     // teaches people to skim past the section that matters.
