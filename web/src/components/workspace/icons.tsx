@@ -85,17 +85,21 @@ export function GitIcon({ size = 15 }: P) {
  *
  * The old one was the branch icon with an extra curve — same nodes, same
  * sweep — so at rail size Git and Diff were the same smudge twice. This one
- * reads as a comparison because both arms turn back on themselves.
+ * reads as a comparison because both arms turn back on themselves: the figure
+ * is the same rotated 180°, which is what "compare" looks like.
+ *
+ * And it has no arrowheads, which the first attempt did. At 56px they were
+ * arrows; at the 17px the rail actually draws, three extra strokes each landed
+ * on top of the nodes and the whole thing went to mush — "parece un logo
+ * hecho". The elbows alone carry the meaning, and they survive being small.
  */
 export function DiffIcon({ size = 15 }: P) {
   return (
     <svg {...svg} width={size} height={size}>
-      <circle cx="5" cy="6" r="3" />
-      <circle cx="19" cy="18" r="3" />
-      <path d="M12 6h3a2 2 0 0 1 2 2v7" />
-      <path d="M14.5 8.5 17 6l2.5 2.5" />
-      <path d="M12 18H9a2 2 0 0 1-2-2V9" />
-      <path d="M9.5 15.5 7 18l-2.5-2.5" />
+      <circle cx="6" cy="6" r="3" />
+      <circle cx="18" cy="18" r="3" />
+      <path d="M11 6h5a2 2 0 0 1 2 2v7" />
+      <path d="M13 18H8a2 2 0 0 1-2-2V9" />
     </svg>
   );
 }
@@ -131,18 +135,22 @@ export function PrIcon({ size = 15 }: P) {
  *
  * It was an isometric cube, which is the universal glyph for "a package" — npm,
  * cargo, a release artifact, a box. True of Docker and true of nine other
- * things, so it identified nothing. The stack over a waterline is the shape
- * people actually recognise, and it stays a shape rather than a texture when it
- * is small: five rectangles and one curve.
+ * things, so it identified nothing. The stack over a hull is the shape people
+ * actually recognise.
+ *
+ * Three containers, not five, and the hull is one closed shape rather than a
+ * whale with a tail. The tail was the giveaway that this was drawn at 56px and
+ * judged there: at 17 it detached from the body and read as a missing piece —
+ * "le falta un trozo". What is left is four shapes, all of them bigger than a
+ * stroke is wide.
  */
 export function DockerIcon({ size = 15 }: P) {
   return (
     <svg {...svg} width={size} height={size} strokeWidth={1.7}>
-      <rect x="3" y="10.5" width="4" height="4" rx="0.6" />
-      <rect x="8" y="10.5" width="4" height="4" rx="0.6" />
-      <rect x="13" y="10.5" width="4" height="4" rx="0.6" />
-      <rect x="8" y="6" width="4" height="4" rx="0.6" />
-      <path d="M2 17.5c1.6 1.6 4 2.2 6.6 2.2 4.6 0 8.4-2.2 9.6-6.4 1.4.5 2.8.3 3.8-.6-1.3-1.1-3-1-3.9-.4" />
+      <rect x="3.5" y="10" width="4.6" height="4.6" rx="0.7" />
+      <rect x="9.4" y="10" width="4.6" height="4.6" rx="0.7" />
+      <rect x="9.4" y="4.8" width="4.6" height="4.6" rx="0.7" />
+      <path d="M2 16.8h17.5a4.6 4.6 0 0 1-4.6 4.2H7.4A5.4 5.4 0 0 1 2 16.8Z" />
     </svg>
   );
 }
