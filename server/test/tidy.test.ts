@@ -160,6 +160,47 @@ describe("the commands it is willing to hand over", () => {
   });
 });
 
+describe("what a finding has to be able to explain", () => {
+  /**
+   * Pressing a button that deletes branches is consent, and consent to
+   * something nobody explained is not consent. The row used to say what it had
+   * found and then hand over a shell — not what the command would do, not what
+   * evidence put the row there, and not what happens when it goes wrong.
+   */
+  test("every finding answers why, what and what-could-go-wrong", () => {
+    for (const f of tidyReport(repo).findings) {
+      // The evidence, not a restatement of the title: this is the half that
+      // makes the finding checkable rather than trusted.
+      expect(f.why.length).toBeGreaterThan(40);
+      expect(f.effect.length).toBeGreaterThan(20);
+      expect(f.risk.length).toBeGreaterThan(20);
+    }
+  });
+
+  test("the evidence names the command that produced it", () => {
+    // "git said this" beats "we think this", and it lets somebody go and check.
+    for (const f of tidyReport(repo).findings) expect(f.why).toContain("git ");
+  });
+
+  test("anything with a button has a drawing", () => {
+    // The situations here are all shapes — something still pointing at
+    // something that is gone — and a shape is read faster than its sentence.
+    for (const f of tidyReport(repo).findings) {
+      if (!f.command) continue;
+      expect(f.diagram.length).toBeGreaterThan(1);
+    }
+  });
+
+  test("the stashes finding explains its own refusal instead of going quiet", () => {
+    const s = find(tidyReport(repo), "stashes");
+    expect(s?.command).toBeNull();
+    expect(s?.risk).toContain("no way back");
+    // It still gets a drawing: the point being made is visual — nothing else
+    // in the repository points at it.
+    expect(s?.diagram.length).toBeGreaterThan(1);
+  });
+});
+
 describe("the guard that makes those rules total", () => {
   /**
    * Why this exists instead of more assertions over the report.

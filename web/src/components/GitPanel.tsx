@@ -6,7 +6,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExt
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
-import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile, TidyReport } from "../../../shared/types.ts";
+import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { BasePicker } from "./BasePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
@@ -39,6 +39,59 @@ type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "st
  * reflog are two readings of "history", so each pair sits under one heading and
  * you tab between them rather than hunting along a row of eight equal buttons.
  */
+/** One labelled block of the explanation. Small on purpose: three short
+ *  answers get read, one paragraph does not. */
+function Says({ label, children, tint }: { label: string; children: React.ReactNode; tint?: string }) {
+  return (
+    <span className="block">
+      <span className="block text-[9px] uppercase tracking-wider mb-0.5" style={{ color: "var(--text4)" }}>{label}</span>
+      <span className="block text-[10.5px] leading-relaxed" style={{ color: tint ?? "var(--text2)" }}>{children}</span>
+    </span>
+  );
+}
+
+/**
+ * What will happen, and why this was picked out — before any shell opens.
+ *
+ * The tab could already say what a finding was; it could not say what the
+ * command would do, or what evidence put the row there, or what happens when
+ * it goes wrong. Those are exactly the three things somebody needs in order to
+ * agree to a command that changes their repository, and asking them to agree
+ * without them is not really asking.
+ *
+ * The drawing is not decoration. Every situation here is a shape — something
+ * still pointing at something that is gone — and a shape is read faster than
+ * the sentence describing it.
+ */
+function TidyExplain({ f, onArm, onCancel }: { f: TidyFinding; onArm: () => void; onCancel: () => void }) {
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)", background: "color-mix(in srgb, var(--primary) 5%, transparent)" }}>
+      {f.diagram.length > 0 && (
+        <pre className="px-3 pt-3 pb-1 text-[10.5px] leading-[1.5] whitespace-pre overflow-x-auto agx-scroll m-0"
+          style={{ color: "var(--text3)" }}>{f.diagram.join("\n")}</pre>
+      )}
+      <div className="px-3 py-2.5 grid gap-2.5" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))" }}>
+        <Says label="Why this was picked out">{f.why}</Says>
+        <Says label="What the command does">{f.effect}</Says>
+        {/* Tinted, because the worst case is the one thing here somebody might
+            skip — and on most of these rows the worst case is a refusal, which
+            is worth knowing before it happens and reads as a failure. */}
+        <Says label="What can go wrong" tint="var(--warning)">{f.risk}</Says>
+      </div>
+      <div className="px-3 pb-3 flex items-center gap-2 flex-wrap">
+        <code className="flex-1 min-w-0 truncate text-[11px] px-2 py-1 rounded" title={f.command ?? ""}
+          style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 50%, transparent)" }}>{f.command}</code>
+        <button onClick={onCancel} className="shrink-0 text-[10.5px] px-2 py-1 rounded-lg"
+          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Cancel</button>
+        <button onClick={onArm} className="shrink-0 text-[10.5px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+          style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 20%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>
+          {"Type it into a shell →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * What has piled up in this checkout, and the command that would clear it.
  *
@@ -50,6 +103,9 @@ type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "st
  */
 function TidyView({ report, root, busy }: { report: TidyReport | null; root: string; busy: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
+  // Two steps, because they answer different questions: `open` is "explain
+  // this to me", `armed` is "now give me the command".
+  const [armed, setArmed] = useState<string | null>(null);
   if (busy && !report) return <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>Looking through the checkout…</div>;
   if (!report) return null;
   if (report.error) return <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{report.error}</div>;
@@ -61,7 +117,13 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
       {report.findings.map((f) => {
         const total = f.items.length + f.extra;
         return (
-          <div key={f.id} className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+          // `shrink-0` and it is load-bearing: this is a flex column, and a
+          // flex child is allowed to shrink below its own content. Expanding a
+          // card was squashing it instead — the explanation's last sentence
+          // and both of its buttons were simply cut off, with no scrollbar and
+          // nothing to suggest anything was missing. Measured: 343px of
+          // content in a 269px box.
+          <div key={f.id} className="rounded-lg overflow-hidden shrink-0" style={{ border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
             <div className="flex items-start gap-3 px-3 py-2">
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-2">
@@ -97,7 +159,14 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
             )}
             {open === f.id && f.command && (
               <div className="px-3 pb-3">
-                <ShellConsole command={f.command} cwd={root} onClose={() => setOpen(null)} />
+                {/* Read before run. The button used to go straight to a shell
+                    with a branch-deleting command already typed, which asked
+                    somebody to consent to something the row had not explained:
+                    not what the command does, and not what put the row there
+                    in the first place. */}
+                {armed === f.id
+                  ? <ShellConsole command={f.command} cwd={root} onClose={() => { setArmed(null); setOpen(null); }} />
+                  : <TidyExplain f={f} onArm={() => setArmed(f.id)} onCancel={() => setOpen(null)} />}
               </div>
             )}
           </div>

@@ -1819,6 +1819,23 @@ export interface TidyFinding {
   /** Null where there is no command safe enough to offer — see `note`. */
   command: string | null;
   note?: string;
+  /**
+   * The three questions somebody should be able to answer before pressing
+   * Enter on a command that changes their repository, and could not answer
+   * from the list alone.
+   *
+   * `why` is the evidence — the actual thing git said that put this row here,
+   * so the finding is checkable rather than trusted. `effect` is what the
+   * command does, in plain words. `risk` is the worst case, including the
+   * common one where git simply refuses.
+   */
+  why: string;
+  effect: string;
+  risk: string;
+  /** A few lines of monospace drawing. The situations here are all shapes —
+   *  something pointing at something that is gone — and a shape is faster to
+   *  see than to read. */
+  diagram: string[];
 }
 
 export interface TidyReport {

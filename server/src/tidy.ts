@@ -103,6 +103,7 @@ export function tidyReport(root: string): TidyReport {
     const vet = vetCommand(f.command);
     findings.push({
       id: f.id, title: f.title, what: f.what, command: vet.command,
+      why: f.why, effect: f.effect, risk: f.risk, diagram: f.diagram,
       // A refusal replaces the note rather than joining it: if the module will
       // not offer the line, why it will not is the only thing worth reading.
       note: vet.refused ? `No command offered: ${vet.refused}.` : f.note,
@@ -123,6 +124,15 @@ export function tidyReport(root: string): TidyReport {
     what: "Each of these tracked a branch on the remote that no longer exists — usually because its pull request merged and the host deleted it.",
     command: gone.length ? `git branch -d ${gone.join(" ")}` : null,
     note: "`-d`, never `-D`: it refuses any branch whose work is not merged, and names it. A refusal here is the command working.",
+    why: "`git branch -vv` prints `: gone]` beside a branch whose upstream no longer exists. Git learned that at the last fetch with pruning; it is a fact from the remote, not a guess about age or naming.",
+    effect: "Deletes the local branch NAME. The commits stay reachable from wherever they were merged, and from the reflog for at least two weeks.",
+    risk: "If one of these is not actually merged anywhere, git refuses that branch, names it, and deletes the rest. Nothing is forced.",
+    diagram: [
+      "  origin/orbit-1042   ✗  deleted on the remote (its PR merged)",
+      "        ▲",
+      "        │ tracked",
+      "  orbit-1042          ●  still here, pointing at nothing",
+    ],
   });
 
   // ---- branches already merged into the base ------------------------------
@@ -136,6 +146,14 @@ export function tidyReport(root: string): TidyReport {
     what: `Every commit on these is already on ${base}, so deleting the branch deletes nothing but the name.`,
     command: mergedNames.length ? `git branch -d ${mergedNames.join(" ")}` : null,
     note: "Branches checked out in a worktree are refused until that worktree is removed — that is git protecting the checkout, not an error.",
+    why: `\`git branch --merged ${base}\` lists branches whose every commit is already an ancestor of ${base}. Git computed that from the graph — it is not "looks old" or "name looks done".`,
+    effect: "Deletes the branch name only. Every commit on it is already reachable from " + base + ", so nothing becomes unreachable.",
+    risk: "A branch that is checked out in a worktree is refused until that worktree is removed. That is git protecting a live checkout.",
+    diagram: [
+      `  ${base}   ●──●──●──●   every commit below is already here`,
+      "                   ╲",
+      "  orbit-980         ●   the name is the only thing left",
+    ],
   });
 
   // ---- worktrees whose directory is gone ----------------------------------
@@ -154,6 +172,15 @@ export function tidyReport(root: string): TidyReport {
     what: "Registrations pointing at directories that no longer exist. Git keeps the bookkeeping until asked, so they go on appearing in every list.",
     command: stale.length ? "git worktree prune -v" : null,
     note: "Only the registration goes; the directory is already gone. Nothing on disk can be lost here.",
+    why: "`git worktree list --porcelain` marks these `prunable`: git looked for the directory each one registers and did not find it.",
+    effect: "Removes the bookkeeping under .git/worktrees for directories that are already gone. `-v` makes it name each one as it goes.",
+    risk: "None that can cost anything: there is no directory left to delete. A worktree still on disk is never touched.",
+    diagram: [
+      "  .git/worktrees/spike  ●  registration git still keeps",
+      "         │",
+      "         ▼",
+      "  /tmp/…/spike          ✗  directory already deleted",
+    ],
   });
 
   // ---- stashes -------------------------------------------------------------
@@ -167,6 +194,15 @@ export function tidyReport(root: string): TidyReport {
     what: "Uncommitted work, set aside. The oldest ones are usually the ones nobody will come back to — but that is a judgement only their author can make.",
     command: null,
     note: "No command offered on purpose. A stash is the one thing in this list that exists nowhere else, and `git stash drop` cannot be undone once the reflog expires. Read one with `git stash show -p stash@{0}` and decide it yourself.",
+    why: "`git stash list` — every entry, oldest last. Listed for the same reason as the rest: it is taking up room in your head.",
+    effect: "Nothing. This finding has no button.",
+    risk: "The reason there is no button: a stash is not on any branch and not on any remote. Dropping one is the only action in this tab with no way back.",
+    diagram: [
+      "  stash@{0}  ●  the only copy",
+      "               ✗ no branch",
+      "               ✗ no remote",
+      "               ✗ nothing else points at it",
+    ],
   });
 
   // ---- housekeeping --------------------------------------------------------
@@ -179,6 +215,15 @@ export function tidyReport(root: string): TidyReport {
     what: "Objects written but not yet packed. They cost disk and slow every command that has to walk them.",
     command: "git gc",
     note: "The same maintenance git already runs on its own; this only makes it happen now. Nothing reachable is removed.",
+    why: "`git count-objects -v` reports the loose count. Above a few hundred it is worth packing; git would get to it on its own eventually.",
+    effect: "Packs loose objects together and drops ones nothing can reach. Reachable history is untouched, and the repository gets smaller and faster to walk.",
+    risk: "Plain `git gc` keeps unreachable objects for two weeks, which is the window that makes a mistaken deletion recoverable. No `--prune=now` is offered, and the module refuses one.",
+    diagram: [
+      "  2665 loose objects  ──gc──▶  packed",
+      "",
+      "  reachable history            unchanged",
+      "  deleted-by-mistake           still recoverable for 2 weeks",
+    ],
   });
 
   // ---- remote-tracking refs -------------------------------------------------
@@ -190,6 +235,15 @@ export function tidyReport(root: string): TidyReport {
     what: "Copies of branches as they were on the remote. Ones deleted upstream stay here until a prune, and they are what makes the branch pickers long.",
     command: "git fetch --prune",
     note: "Touches nothing local: it only forgets remote branches the remote itself no longer has.",
+    why: "`git for-each-ref refs/remotes` counted them. Every branch anyone has ever pushed leaves one here, and nothing removes it without a prune.",
+    effect: "Fetches, then deletes the local copies of remote branches the remote no longer has. This is what shortens every branch picker.",
+    risk: "None to your work: these are copies of somebody else's branches. Your own branches and commits are not remote-tracking refs.",
+    diagram: [
+      "  refs/remotes/origin/*   869 copies here",
+      "                            │",
+      "  the remote actually has   ▼  far fewer",
+      "  the difference is what --prune forgets",
+    ],
   });
 
   return { root, base, findings };
