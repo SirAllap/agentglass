@@ -269,3 +269,59 @@ export function typingInto(el: { tagName?: string; isContentEditable?: boolean }
   const tag = (el.tagName ?? "").toUpperCase();
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
+
+/*
+ * When a task is due, as the four answers anybody actually sorts by.
+ *
+ * Not a date comparison at the call site, because "this week" has an edge that
+ * is easy to get subtly wrong and then wrong in two places. Dates are the
+ * store's own local `YYYY-MM-DD` strings, compared as strings — they sort
+ * correctly that way and it avoids constructing a Date per row per render, and
+ * with it a timezone question nobody asked.
+ */
+export type Bucket = "late" | "today" | "week" | "later" | "none";
+
+/** `days` on from a `YYYY-MM-DD`, as the same kind of string. */
+export function addDays(day: string, n: number): string {
+  const [y, m, d] = day.split("-").map(Number) as [number, number, number];
+  const at = new Date(Date.UTC(y, m - 1, d + n));
+  const p = (x: number) => String(x).padStart(2, "0");
+  return `${at.getUTCFullYear()}-${p(at.getUTCMonth() + 1)}-${p(at.getUTCDate())}`;
+}
+
+export function dueBucket(due: string | null, today: string): Bucket {
+  if (!due) return "none";
+  if (due < today) return "late";
+  if (due === today) return "today";
+  // Seven days INCLUDING today, which is what "this week" means to someone
+  // looking at a list on a Wednesday — not "until Sunday", which empties the
+  // pill as the week goes on and makes it useless exactly when it is busiest.
+  return due <= addDays(today, 6) ? "week" : "later";
+}
+
+/** What each pill counts. `all` is the open list, so the numbers add up to it. */
+export function bucketCounts(tasks: { due: string | null }[], today: string): Record<Bucket | "all", number> {
+  const out = { late: 0, today: 0, week: 0, later: 0, none: 0, all: tasks.length };
+  for (const t of tasks) out[dueBucket(t.due, today)]++;
+  return out;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A due date as a person would say it.
+ *
+ * "today" and "tomorrow" by name because that is how they are thought about;
+ * everything else as `4 Aug`, with the year only when it is not this one. The
+ * bare ISO string is precise and unreadable at a glance, which is the only way
+ * this column is ever read.
+ */
+export function dueLabel(due: string | null, today: string): string {
+  if (!due) return "";
+  if (due === today) return "today";
+  if (due === addDays(today, 1)) return "tomorrow";
+  if (due === addDays(today, -1)) return "yesterday";
+  const [y, m, d] = due.split("-").map(Number) as [number, number, number];
+  const label = `${d} ${MONTHS[m - 1] ?? "?"}`;
+  return String(y) === today.slice(0, 4) ? label : `${label} ${y}`;
+}

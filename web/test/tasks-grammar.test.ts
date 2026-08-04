@@ -251,3 +251,50 @@ describe("keys meant for a text field", () => {
     expect(typingInto(undefined)).toBe(false);
   });
 });
+
+describe("when a task is due", () => {
+  const { dueBucket, bucketCounts, dueLabel, addDays } = mod.__test;
+  const today = "2026-08-04";
+
+  it("puts a date in the bucket somebody would sort it into", () => {
+    expect(dueBucket("2026-08-03", today)).toBe("late");
+    expect(dueBucket("2026-08-04", today)).toBe("today");
+    expect(dueBucket("2026-08-05", today)).toBe("week");
+    expect(dueBucket("2026-08-10", today)).toBe("week");
+    expect(dueBucket("2026-08-11", today)).toBe("later");
+    expect(dueBucket(null, today)).toBe("none");
+  });
+
+  it("counts seven days including today, not until Sunday", () => {
+    // "Until Sunday" empties the pill as the week goes on, which is exactly
+    // when somebody is looking at it.
+    expect(dueBucket(addDays(today, 6), today)).toBe("week");
+    expect(dueBucket(addDays(today, 7), today)).toBe("later");
+  });
+
+  it("crosses a month and a year without arithmetic of its own", () => {
+    expect(addDays("2026-08-31", 1)).toBe("2026-09-01");
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
+    expect(addDays("2026-03-01", -1)).toBe("2026-02-28");
+  });
+
+  it("counts every task exactly once, so the pills add up to the list", () => {
+    const c = bucketCounts([
+      { due: "2026-08-01" }, { due: "2026-08-04" }, { due: "2026-08-04" },
+      { due: "2026-08-07" }, { due: "2026-12-01" }, { due: null },
+    ], today);
+    expect(c).toEqual({ late: 1, today: 2, week: 1, later: 1, none: 1, all: 6 });
+    expect(c.late + c.today + c.week + c.later + c.none).toBe(c.all);
+  });
+
+  it("says the date the way a person would", () => {
+    expect(dueLabel(today, today)).toBe("today");
+    expect(dueLabel("2026-08-05", today)).toBe("tomorrow");
+    expect(dueLabel("2026-08-03", today)).toBe("yesterday");
+    expect(dueLabel("2026-08-21", today)).toBe("21 Aug");
+    // The year only when it is not this one — otherwise it is noise on a column
+    // that is read at a glance.
+    expect(dueLabel("2027-01-09", today)).toBe("9 Jan 2027");
+    expect(dueLabel(null, today)).toBe("");
+  });
+});

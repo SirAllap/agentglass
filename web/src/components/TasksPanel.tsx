@@ -19,7 +19,7 @@ import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
-import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, TASK_KEYS, SORTS, type SortMode } from "../lib/taskGrammar.ts";
+import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -607,6 +607,9 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
   const [filter, setFilter] = useState<{ kind: "tag" | "project"; value: string } | null>(null);
   const [marked, setMarked] = useState<Set<string>>(() => new Set());
   const [adding, setAdding] = useState(false);
+  const [bucket, setBucket] = useState<Bucket | "all" | null>(null);
+  const [prio, setPrio] = useState<"H" | "M" | "L" | null>(null);
+  const [keysOpen, setKeysOpen] = useState(false);
   const [tagFor, setTagFor] = useState<string>("");
   const [tagging, setTagging] = useState(false);
   const barRef = useRef<HTMLInputElement>(null);
@@ -666,17 +669,30 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
   // shown, or filtering to one of them hides all the others.
   const picker = useMemo(() => inUse(data?.tasks ?? []), [data]);
 
-  const { open, done } = useMemo(() => {
+  /*
+   * Two lists, and the counts the pills show.
+   *
+   * The counts are taken AFTER the tag/project/search filters and BEFORE the
+   * date pill, which is the only combination that reads correctly: picking
+   * "Today" must not change the number on "Today", and filtering to a project
+   * must change every one of them.
+   */
+  const { open, done, counts } = useMemo(() => {
     const all = data?.tasks ?? [];
-    const keep = (t: LocalTask) => !filter
-      || (filter.kind === "tag" ? t.tags.includes(filter.value) : t.project === filter.value);
+    const keep = (t: LocalTask) => (!filter
+      || (filter.kind === "tag" ? t.tags.includes(filter.value) : t.project === filter.value))
+      && (!prio || t.priority === prio);
     const q = input.trim().toLowerCase();
     const matches = (t: LocalTask) => !q || t.description.toLowerCase().includes(q);
+    const pending = all.filter((t) => t.status === "pending" && keep(t) && matches(t));
+    const inBucket = (t: LocalTask) =>
+      !bucket || bucket === "all" || dueBucket(t.due, today) === bucket;
     return {
-      open: sortTasks(all.filter((t) => t.status === "pending" && keep(t) && matches(t)), sort),
+      counts: bucketCounts(pending, today),
+      open: sortTasks(pending.filter(inBucket), sort),
       done: all.filter((t) => t.status === "completed" && keep(t) && matches(t)),
     };
-  }, [data, filter, sort, input]);
+  }, [data, filter, prio, sort, input, bucket, today]);
 
   /**
    * One handler on the panel, in the capture phase.
@@ -850,50 +866,86 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
       )}
       {/* One field: filter and compose are the same box, because the thing you
           typed and could not find is usually the thing you meant to add. */}
-      <div className="flex items-center gap-2 px-5 shrink-0" style={{ height: 36, borderBottom: edge(12) }}>
-        <span className="text-[12px]" style={{ color: "var(--text3)" }}>⌕</span>
-        <input ref={barRef} value={input} onChange={(e) => setInput(e.target.value)}
-          onKeyDown={async (e) => {
-            if (e.key === "Escape") { setEditing(null); setInput(""); barRef.current?.blur(); return; }
-            if (e.key !== "Enter" || !input.trim()) return;
-            e.preventDefault();
-            const target = editing ? [...open, ...done].find((t) => t.uuid === editing) : null;
-            const ok = target
-              ? await write(() => api.taskEdit(target.uuid, input, target.tags, fp))
-              : await write(() => api.taskAdd(input, fp));
-            if (ok) { setInput(""); setEditing(null); }
-          }}
-          spellCheck={false}
-          placeholder={editing
-            ? "Re-state the task and press Enter — what you leave out is cleared"
-            : cap.configured
-            ? "Filter, or type a task and press Enter — !h  #3  +tag  @project"
-            : "Filter"}
-          className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
-          style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
-        <ParseStrip input={input} />
-        {/* What the list is currently doing, printed rather than remembered. */}
-        <button onClick={() => setSort((m) => SORTS[(SORTS.indexOf(m) + 1) % SORTS.length]!)}
-          className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ border: edge(16), color: "var(--text3)" }}
-          title="Cycle the order — s">sort: {sort}</button>
-        {filter && (
-          <button onClick={() => setFilter(null)}
-            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-            style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text2)" }}
-            title="Clear the filter — f">
-            {filter.kind === "tag" ? "+" : "@"}{filter.value} ×
+      {/* Pills, a filter, then the drop-downs — the shape Pull Requests uses,
+          because it is the same job: narrow a list without typing a query
+          language. Everything a key does, a pointer can now do too. */}
+      <div className="flex items-center gap-1.5 px-5 pt-2.5 pb-1.5 flex-wrap shrink-0">
+        {BUCKETS.map((b) => (
+          <button key={b.id} onClick={() => setBucket((cur) => (cur === b.id ? null : b.id))}
+            aria-pressed={bucket === b.id}
+            className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
+            style={bucket === b.id
+              ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)", color: "var(--text)" }
+              : { border: edge(14), color: "var(--text2)" }}>
+            {b.tone && <span aria-hidden style={{ width: 6, height: 6, borderRadius: 999, background: b.tone }} />}
+            {b.label}
+            <span style={{ color: "var(--text3)" }}>{counts[b.id]}</span>
           </button>
-        )}
-        {/* The button the grammar never was. The bar can still do it faster;
-            this is the half that does not require having been told. */}
+        ))}
+        <span className="flex-1" />
+        <div className="flex rounded-lg overflow-hidden" style={{ border: edge(14) }}>
+          {([false, true] as const).map((d) => (
+            <button key={String(d)} onClick={() => setShowDone(d)} aria-pressed={showDone === d}
+              className="text-[10.5px] px-2.5 py-0.5"
+              style={showDone === d
+                ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", color: "var(--text)" }
+                : { color: "var(--text3)" }}>
+              {d ? `Done ${done.length}` : "Open"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 px-5 pb-1.5 shrink-0">
+        <div className="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-2.5 py-1"
+          style={{ background: "var(--bg2)", border: edge(14) }}>
+          <span className="text-[11px] shrink-0" style={{ color: "var(--text3)" }}>⌕</span>
+          <input ref={barRef} value={input} onChange={(e) => setInput(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === "Escape") { setEditing(null); setInput(""); barRef.current?.blur(); return; }
+              if (e.key !== "Enter" || !input.trim()) return;
+              e.preventDefault();
+              const target = editing ? [...open, ...done].find((t) => t.uuid === editing) : null;
+              const ok = target
+                ? await write(() => api.taskEdit(target.uuid, input, target.tags, fp))
+                : await write(() => api.taskAdd(input, fp));
+              if (ok) { setInput(""); setEditing(null); }
+            }}
+            spellCheck={false}
+            placeholder={editing
+              ? "Re-state the task and press Enter — what you leave out is cleared"
+              : "Search your tasks"}
+            className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
+            style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
+          <ParseStrip input={input} />
+        </div>
         {cap.configured && (
           <button onClick={() => setAdding((o) => !o)} aria-expanded={adding}
-            className="shrink-0 text-[10.5px] px-2 py-0.5 rounded-lg"
-            style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)", color: "var(--text)" }}>
+            className="shrink-0 text-[11.5px] px-3 py-1 rounded-lg font-medium"
+            style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--primary) 48%, transparent)", color: "var(--text)" }}>
             + New task
           </button>
         )}
+      </div>
+
+      <div className="flex items-center gap-1.5 px-5 pb-2 flex-wrap shrink-0">
+        <Drop label="Priority" value={prio ? PRIO_NAME[prio] : null} onClear={() => setPrio(null)}
+          options={(["H", "M", "L"] as const).map((p) => ({ id: p, label: PRIO_NAME[p] }))}
+          onPick={(id) => setPrio(id as "H" | "M" | "L")} />
+        <Drop label="Project" value={filter?.kind === "project" ? filter.value : null}
+          onClear={() => setFilter(null)}
+          options={picker.projects.map((x) => ({ id: x, label: x }))}
+          onPick={(id) => setFilter({ kind: "project", value: id })} />
+        <Drop label="Tag" value={filter?.kind === "tag" ? filter.value : null}
+          onClear={() => setFilter(null)}
+          options={picker.tags.map((x) => ({ id: x, label: x }))}
+          onPick={(id) => setFilter({ kind: "tag", value: id })} />
+        <span className="flex-1" />
+        <Drop label="Sort" value={sort} onClear={null}
+          options={SORTS.map((x) => ({ id: x, label: x }))}
+          onPick={(id) => setSort(id as SortMode)} />
       </div>
       {adding && (
         <NewTask projects={picker.projects} tags={picker.tags}
@@ -907,21 +959,31 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
         }}>{note.text}</div>
       )}
       <div className="flex flex-1 min-h-0">
-      <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
-        {!open.length && <LocalEmpty cap={cap} done={done.length} />}
-        {!!od.length && <Section label="Overdue" tone="var(--error)" />}
-        {od.map((t) => <TaskRow key={t.uuid} {...rowProps(t)} />)}
-        {rest.map((t) => <TaskRow key={t.uuid} {...rowProps(t)} />)}
-        {!!done.length && (
-          <button onClick={() => setShowDone((v) => !v)}
-            className="w-full text-left text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1"
-            style={{ color: "var(--text3)" }}>
-            {showDone ? "▾" : "▸"} {done.length} done
-          </button>
-        )}
-        {showDone && done.slice(0, 200).map((t) => (
-          <TaskRow key={t.uuid} {...rowProps(t)} />
-        ))}
+      <div className="flex flex-col flex-1 min-w-0">
+        {/* Named columns, so what is in each one stops being a guess. The same
+            grid drives every row — see GRID. */}
+        <div className="px-5 py-1 text-[8.5px] uppercase tracking-[0.16em] shrink-0"
+          style={{ display: "grid", gridTemplateColumns: GRID, gap: 10, color: "var(--text4)",
+            borderTop: edge(10), borderBottom: edge(10) }}>
+          <span /><span>Task</span><span>Project</span><span>Due</span><span>Reminder</span><span />
+        </div>
+        <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+          {!open.length && !showDone && <LocalEmpty cap={cap} done={done.length} />}
+          {showDone
+            ? done.slice(0, 200).map((t) => <TaskRow key={t.uuid} {...rowProps(t)} />)
+            : GROUPS.map(({ id, label, tone }) => {
+              const rows = open.filter((t) => dueBucket(t.due, today) === id);
+              if (!rows.length) return null;
+              return (
+                <div key={id}>
+                  {/* Only when the list is actually mixed: a heading over the
+                      only group there is says nothing. */}
+                  {!bucket && <Section label={label} tone={tone} />}
+                  {rows.map((t) => <TaskRow key={t.uuid} {...rowProps(t)} />)}
+                </div>
+              );
+            })}
+        </div>
       </div>
       <aside className="agx-scroll overflow-y-auto p-5 text-[11.5px] shrink-0"
         style={{ width: 380, borderLeft: edge(12) }}>
@@ -937,15 +999,28 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
         )}
       </aside>
       </div>
-      <div className="agx-scroll px-4 py-1.5 flex items-center gap-3 overflow-x-auto text-[9.5px]"
-        style={{ borderTop: edge(10), color: "var(--text3)" }}>
-        {TASK_KEYS.map((k) => (
-          <span key={k.keys.join()} className="whitespace-nowrap">
-            <kbd style={{ color: "var(--text2)" }}>
-              {k.keys.map((x) => (x === "Escape" ? "Esc" : x)).join(" / ")}
-            </kbd> {k.what}
-          </span>
-        ))}
+      {/* The status bar is gone. The shortcuts still exist and still matter —
+          they are just no longer the widest thing on screen, which is what made
+          the panel read as a terminal. */}
+      <div className="flex items-center gap-3 px-5 py-1.5 shrink-0 text-[10.5px]"
+        style={{ borderTop: edge(10), color: "var(--text4)" }}>
+        <span>{open.length} {open.length === 1 ? "task" : "tasks"}{counts.today ? ` · ${counts.today} today` : ""}</span>
+        <span className="flex-1" />
+        {keysOpen && (
+          <div className="agx-scroll flex items-center gap-3 overflow-x-auto">
+            {TASK_KEYS.map((k) => (
+              <span key={k.keys.join()} className="whitespace-nowrap">
+                <kbd style={{ color: "var(--text2)" }}>
+                  {k.keys.map((x) => (x === "Escape" ? "Esc" : x)).join(" / ")}
+                </kbd> {k.what}
+              </span>
+            ))}
+          </div>
+        )}
+        <button onClick={() => setKeysOpen((o) => !o)} aria-expanded={keysOpen}
+          className="shrink-0 px-2 py-0.5 rounded-lg" style={{ border: edge(14), color: "var(--text3)" }}>
+          ⌨ {keysOpen ? "Hide" : "Shortcuts"}
+        </button>
       </div>
     </div>
   );
@@ -966,6 +1041,7 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
   const isDone = t.status === "completed";
   const late = overdue(t, today);
   const dueToday = t.due === today;
+  const progress = checkProgress(t.notes);
   // Two different states, announced as the two different things they are:
   // `aria-current` is where the cursor sits, `aria-selected` is what a bulk
   // action would act on. Saying either with a stripe alone leaves a screen
@@ -973,79 +1049,122 @@ function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, o
   //
   // Modifier-click marks, which is what every list does, and it means the row
   // needs no permanent checkbox competing with the one that completes it.
+  const glyph = isDone ? "\u2713" : t.priority ? "\u25cf" : "\u25cb";
+  const glyphTone = isDone ? "var(--text3)"
+    : t.priority === "H" ? "var(--error)"
+    : t.priority === "M" ? "var(--warning)" : t.priority ? "var(--text3)" : "var(--text4)";
+
   return (
     <div role="row" tabIndex={0}
       aria-current={on ? "true" : undefined} aria-selected={!!marked}
       onClick={(e) => { if (e.metaKey || e.ctrlKey) onMark?.(); else onPick(); }}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
-      className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-[11.5px] hover:bg-white/5 cursor-pointer"
+      className="agx-row w-full text-left px-5 py-1.5 hover:bg-white/5 cursor-pointer items-center"
       style={{
-        borderBottom: edge(7),
+        display: "grid", gridTemplateColumns: GRID, gap: 10,
+        borderBottom: edge(6),
         background: marked
-          ? "color-mix(in srgb, var(--primary) 22%, transparent)"
-          : on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : undefined,
+          ? "color-mix(in srgb, var(--primary) 20%, transparent)"
+          : on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
-      {marked && (
-        <span aria-hidden className="shrink-0 -ml-1 text-[10px]" style={{ color: "var(--primary)" }}>\u2713</span>
-      )}
       {/* The glyph is the switch. Completing is the thing done most and it
           should not need a menu; reopening is the same press, because undoing a
-          misclick must be as cheap as the misclick. */}
-      {onToggle && writable ? (
+          misclick must be as cheap as the misclick. Marked rows put their tick
+          here rather than stealing a column nobody would recognise. */}
+      {marked ? (
+        <button onClick={(e) => { e.stopPropagation(); onMark?.(); }} aria-label="Unmark"
+          className="text-center text-[11px]" style={{ color: "var(--primary)" }}>\u2713</button>
+      ) : onToggle && writable ? (
         <button onClick={(e) => { e.stopPropagation(); onToggle(); }}
           title={isDone ? "Reopen" : "Mark done"}
           aria-label={isDone ? `Reopen ${t.description}` : `Mark ${t.description} done`}
-          className="w-3.5 text-center shrink-0 rounded"
-          style={{ color: isDone ? "var(--text3)" : t.priority === "H" ? "var(--warning)" : t.priority ? "var(--text3)" : "var(--text4)" }}>
-          {isDone ? "✓" : t.priority ? "●" : "○"}
+          className="text-center text-[11px] rounded" style={{ color: glyphTone }}>
+          {glyph}
         </button>
       ) : (
-        <span className="w-3.5 text-center shrink-0"
-          style={{ color: isDone ? "var(--text3)" : t.priority === "H" ? "var(--warning)" : t.priority ? "var(--text3)" : "var(--text4)" }}>
-          {isDone ? "✓" : t.priority ? "●" : "○"}
-        </span>
+        <span className="text-center text-[11px]" style={{ color: glyphTone }}>{glyph}</span>
       )}
-      <span className="flex-1 min-w-0 truncate" title={t.description}
-        style={isDone ? { textDecoration: "line-through", color: "var(--text3)" } : { color: "var(--text)" }}>
-        {t.description}
+
+      {/* The task, and under it only what qualifies it. One size larger than
+          everything around it, because it is the thing being read. */}
+      <div className="min-w-0">
+        <div className="truncate text-[12.5px] leading-snug" title={t.description}
+          style={isDone ? { textDecoration: "line-through", color: "var(--text3)" } : { color: "var(--text)" }}>
+          {t.description}
+        </div>
+        {(t.priority || t.tags.length || progress.total > 0) && (
+          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+            {t.priority && (
+              <span className="text-[8.5px] tracking-[0.08em] px-1.5 rounded"
+                style={t.priority === "H"
+                  ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                  : t.priority === "M"
+                  ? { color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 13%, transparent)" }
+                  : { color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>
+                {t.priority === "H" ? "HIGH" : t.priority === "M" ? "MED" : "LOW"}
+              </span>
+            )}
+            {t.tags.slice(0, 3).map((tag) => (
+              <button key={tag} onClick={(e) => { e.stopPropagation(); onFilter?.("tag", tag); }}
+                className="text-[9.5px] px-1.5 rounded-full"
+                style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 7%, transparent)" }}
+                title={`Only +${tag}`}>{tag}</button>
+            ))}
+            {progress.total > 0 && (
+              <span className="text-[9.5px] px-1.5 rounded-full tabular-nums"
+                style={progress.done === progress.total
+                  ? { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }
+                  : { color: "var(--text3)", background: "color-mix(in srgb, var(--text) 7%, transparent)" }}>
+                {progress.done}/{progress.total}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      <span className="truncate text-[11px]">
+        {t.project && (
+          <button onClick={(e) => { e.stopPropagation(); onFilter?.("project", t.project!); }}
+            className="truncate max-w-full" style={{ color: "var(--info)" }}
+            title={`Only @${t.project}`}>{t.project}</button>
+        )}
       </span>
-      {t.project && (
-        <button onClick={(e) => { e.stopPropagation(); onFilter?.("project", t.project!); }}
-          className="shrink-0 text-[10px]" style={{ color: "var(--info)" }} title={`Only @${t.project}`}>@{t.project}</button>
-      )}
-      {t.tags.slice(0, 2).map((tag) => (
-        <button key={tag} onClick={(e) => { e.stopPropagation(); onFilter?.("tag", tag); }}
-          className="shrink-0 text-[9px] px-1.5 rounded" style={{ color: "var(--text3)", border: edge(14) }}
-          title={`Only +${tag}`}>{tag}</button>
-      ))}
-      <span className="shrink-0 tabular-nums text-right" style={{
-        width: 72,
+
+      <span className="text-[11px] tabular-nums" style={{
         color: late ? "var(--error)" : dueToday ? "var(--warning)" : "var(--text3)",
-        fontWeight: late || dueToday ? 600 : undefined,
       }}>
-        {t.due ? (dueToday ? "today" : t.due.slice(5)) : "—"}
+        {dueLabel(t.due, today)}
       </span>
-      {/* The reminder column, and the offer where there is none. A due date
-          says when something is wanted; only a reminder will actually tell
-          you — so a task with a due date and no reminder says so rather than
-          leaving a blank that reads as "handled". */}
-      <span className="shrink-0 relative tabular-nums text-right group" style={{ width: 116 }}>
+
+      {/* A due date says when something is wanted; only a reminder will
+          actually tell you. So the offer sits here rather than a blank that
+          reads as "handled" — and it is an offer, not the announcement that
+          nothing is going to happen. */}
+      <span className="relative text-[11px] tabular-nums">
         {reminder ? (
-          <span style={{ color: reminder.firedAt ? "var(--error)" : reminder.due - Date.now() < 3_600_000 ? "var(--warning)" : "var(--text3)" }}>
+          <span style={{ color: reminder.firedAt ? "var(--error)" : reminder.due - Date.now() < 3_600_000 ? "var(--warning)" : "var(--primary)" }}>
             ⏰ {remindLabel(reminder.due)}
           </span>
         ) : isDone ? null : (
           <button onClick={(e) => { e.stopPropagation(); onRemind?.(); }}
-            className="text-[10px] px-1 rounded hover:bg-white/5"
+            className="agx-onrow px-1 rounded hover:bg-white/5"
             style={{ color: t.due ? "var(--warning)" : "var(--text4)" }}
             title="Set a reminder for this task">
-            {t.due ? "⌁ nothing will tell you" : "⌁ remind me…"}
+            ＋ remind
           </button>
         )}
         {remindOpen && onSetRemind && onCloseRemind && (
           <RemindPopover task={t} onClose={onCloseRemind} onSet={onSetRemind} />
         )}
+      </span>
+
+      {/* One action per row, revealed on approach — the gesture the
+          pull-request list already teaches with its "Review →". */}
+      <span className="text-right">
+        <button onClick={(e) => { e.stopPropagation(); onPick(); }}
+          className="agx-onrow text-[10.5px] px-2 py-0.5 rounded-lg"
+          style={{ border: edge(16), color: "var(--text2)" }}>Open →</button>
       </span>
     </div>
   );
@@ -1101,6 +1220,89 @@ function Note({ text, writable, onToggle }: {
   flush("pEnd");
   return <div className="mb-3">{out}</div>;
 }
+
+/**
+ * A filter you pick rather than type.
+ *
+ * The panel had one filter mechanism and it was a grammar in a text box, which
+ * works beautifully once somebody has told you it exists. This is the same
+ * filter with its options on screen — the pattern the pull-request view already
+ * uses for Author, Label and Checks, so it is not a new idea to learn either.
+ *
+ * Shows the CHOSEN value in the button rather than only highlighting it: a
+ * filter you cannot see is how a list ends up looking empty for no reason.
+ */
+function Drop({ label, value, options, onPick, onClear }: {
+  label: string;
+  value: string | null;
+  options: { id: string; label: string }[];
+  onPick: (id: string) => void;
+  /** Null when the filter cannot be cleared — Sort always has a value. */
+  onClear: (() => void) | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useDismiss(open, box, () => setOpen(false));
+  const on = value !== null;
+  return (
+    <div className="relative" ref={box}>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} disabled={!options.length}
+        className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-lg whitespace-nowrap disabled:opacity-40"
+        style={on
+          ? { background: "color-mix(in srgb, var(--primary) 14%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+          : { border: edge(14), color: "var(--text2)" }}>
+        {label}{on && <span style={{ color: "var(--primary)" }}>{value}</span>}
+        <span style={{ color: "var(--text4)" }}>▾</span>
+      </button>
+      {open && (
+        <div className="absolute left-0 mt-1 rounded-lg text-[11.5px] shadow-2xl flex flex-col overflow-auto"
+          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 160, maxHeight: 300 }}>
+          {onClear && (
+            <button onClick={() => { onClear(); setOpen(false); }}
+              className="text-left px-2.5 py-1.5 hover:bg-white/5" style={{ color: "var(--text3)" }}>
+              Any {label.toLowerCase()}
+            </button>
+          )}
+          {options.map((o) => (
+            <button key={o.id} onClick={() => { onPick(o.id); setOpen(false); }}
+              className="text-left px-2.5 py-1.5 hover:bg-white/5 whitespace-nowrap"
+              style={{ color: o.label === value ? "var(--text)" : "var(--text2)",
+                background: o.label === value ? "color-mix(in srgb, var(--primary) 14%, transparent)" : undefined }}>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The four answers to "when", plus everything. Ordered by how soon it matters,
+ *  which is also the order somebody scans them in. */
+const BUCKETS: { id: Bucket | "all"; label: string; tone?: string }[] = [
+  { id: "late", label: "Overdue", tone: "var(--error)" },
+  { id: "today", label: "Today", tone: "var(--warning)" },
+  { id: "week", label: "This week" },
+  { id: "none", label: "No date" },
+  { id: "all", label: "All" },
+];
+
+const PRIO_NAME: Record<"H" | "M" | "L", string> = { H: "High", M: "Medium", L: "Low" };
+
+/** One column definition for the header and every row, so they cannot drift
+ *  apart — which is the failure that makes a table look broken rather than
+ *  merely misaligned. */
+const GRID = "22px 1fr 120px 86px 104px 74px";
+
+/** The order the list is read in: what is late, what is now, then the rest. */
+const GROUPS: { id: Bucket; label: string; tone: string }[] = [
+  { id: "late", label: "Overdue", tone: "var(--error)" },
+  { id: "today", label: "Today", tone: "var(--warning)" },
+  { id: "week", label: "This week", tone: "var(--text3)" },
+  { id: "later", label: "Later", tone: "var(--text3)" },
+  { id: "none", label: "No date", tone: "var(--text3)" },
+];
 
 /*
  * Making a task without knowing the grammar.
@@ -1293,15 +1495,19 @@ function TaskFields({ t, today, projects, tags, onEdit }: {
   const [tagText, setTagText] = useState("");
   const [editingProject, setEditingProject] = useState(false);
   const [projectText, setProjectText] = useState(t.project ?? "");
+  const [editingDue, setEditingDue] = useState(false);
 
-  const label = "text-[8.5px] uppercase tracking-[0.18em] block mb-1";
-  const chip = "text-[10px] px-1.5 py-0.5 rounded";
+  const lab = { color: "var(--text4)", width: 62 };
   const field = { background: "var(--bg2)", border: edge(18), color: "var(--text)" };
+  /* A value you can change looks like one: quiet until the pointer is on it,
+     then it shows its edge. A row of boxed inputs reads as a settings screen,
+     which is what this pane looked like. */
+  const val = "text-left rounded px-1.5 py-0.5 -mx-1.5 hover:bg-white/5 truncate max-w-full";
 
   return (
-    <div className="flex flex-col gap-2.5 mb-3">
-      <div>
-        <span className={label} style={{ color: "var(--text3)" }}>Priority</span>
+    <div className="flex flex-col gap-1 mb-3.5 text-[11.5px]">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] shrink-0" style={lab}>Priority</span>
         <div className="flex items-center gap-1">
           {([null, "L", "M", "H"] as const).map((p) => (
             <button key={p ?? "none"} onClick={() => onEdit({ priority: p })} aria-pressed={t.priority === p}
@@ -1309,54 +1515,61 @@ function TaskFields({ t, today, projects, tags, onEdit }: {
               style={t.priority === p
                 ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)",
                     border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
-                : { border: edge(16), color: "var(--text3)" }}>
-              {p === null ? "None" : p === "L" ? "Low" : p === "M" ? "Medium" : "High"}
+                : { border: edge(14), color: "var(--text3)" }}>
+              {p === null ? "None" : PRIO_NAME[p]}
             </button>
           ))}
         </div>
       </div>
 
-      <div className="flex items-end gap-3 flex-wrap">
-        <div>
-          <label className={label} style={{ color: "var(--text3)" }} htmlFor="td-due">Due</label>
-          <div className="flex items-center gap-1">
-            <input id="td-due" type="date" value={t.due ?? ""}
-              onChange={(e) => onEdit({ due: e.target.value || null })}
-              className="text-[10.5px] px-1.5 py-0.5 rounded-lg outline-none"
-              style={{ ...field, color: overdue(t, today) ? "var(--error)" : "var(--text)" }} />
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] shrink-0" style={lab}>Due</span>
+        {editingDue ? (
+          <input autoFocus type="date" value={t.due ?? ""}
+            onChange={(e) => { onEdit({ due: e.target.value || null }); setEditingDue(false); }}
+            onBlur={() => setEditingDue(false)}
+            className="text-[11px] px-1.5 py-0.5 rounded-lg outline-none" style={field} />
+        ) : (
+          <div className="flex items-center gap-1 min-w-0">
+            <button className={val} onClick={() => setEditingDue(true)}
+              style={{ color: t.due ? (overdue(t, today) ? "var(--error)" : t.due === today ? "var(--warning)" : "var(--text2)") : "var(--text4)" }}>
+              {t.due ? `${dueLabel(t.due, today)}${overdue(t, today) ? " · overdue" : ""}` : "no date"}
+            </button>
             {t.due && (
               <button onClick={() => onEdit({ due: null })} title="Clear the due date"
-                className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)" }}>×</button>
+                className="agx-onrow text-[11px] px-1" style={{ color: "var(--text4)" }}>×</button>
             )}
           </div>
-        </div>
-        <div>
-          <span className={label} style={{ color: "var(--text3)" }}>Project</span>
-          {editingProject ? (
-            <form onSubmit={(e) => { e.preventDefault(); onEdit({ project: projectText.trim() || null }); setEditingProject(false); }}>
-              <input autoFocus list="agx-projects" value={projectText} spellCheck={false} autoComplete="off"
-                onChange={(e) => setProjectText(e.target.value)}
-                onBlur={() => { onEdit({ project: projectText.trim() || null }); setEditingProject(false); }}
-                onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setEditingProject(false); setProjectText(t.project ?? ""); } }}
-                className="text-[10.5px] px-1.5 py-0.5 rounded-lg outline-none" style={{ ...field, width: 140 }} />
-            </form>
-          ) : (
-            <button onClick={() => { setProjectText(t.project ?? ""); setEditingProject(true); }}
-              className={chip} style={{ color: t.project ? "var(--info)" : "var(--text3)", border: edge(16) }}>
-              {t.project ? `@${t.project}` : "none"}
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
-      <div>
-        <span className={label} style={{ color: "var(--text3)" }}>Tags</span>
-        <div className="flex items-center gap-1 flex-wrap">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] shrink-0" style={lab}>Project</span>
+        {editingProject ? (
+          <form onSubmit={(e) => { e.preventDefault(); onEdit({ project: projectText.trim() || null }); setEditingProject(false); }}>
+            <input autoFocus list="agx-projects" value={projectText} spellCheck={false} autoComplete="off"
+              onChange={(e) => setProjectText(e.target.value)}
+              onBlur={() => { onEdit({ project: projectText.trim() || null }); setEditingProject(false); }}
+              onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setEditingProject(false); setProjectText(t.project ?? ""); } }}
+              className="text-[11px] px-1.5 py-0.5 rounded-lg outline-none" style={{ ...field, width: 150 }} />
+          </form>
+        ) : (
+          <button className={val} onClick={() => { setProjectText(t.project ?? ""); setEditingProject(true); }}
+            style={{ color: t.project ? "var(--info)" : "var(--text4)" }}>
+            {t.project || "none"}
+          </button>
+        )}
+      </div>
+
+      <div className="flex items-start gap-2">
+        <span className="text-[10px] shrink-0 mt-1" style={lab}>Tags</span>
+        <div className="flex items-center gap-1 flex-wrap min-w-0">
           {t.tags.map((tag) => (
-            <span key={tag} className={`${chip} flex items-center gap-1`} style={{ color: "var(--text2)", border: edge(16) }}>
+            <span key={tag} className="text-[10px] pl-2 pr-1 py-0.5 rounded-full flex items-center gap-1"
+              style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>
               {tag}
               <button onClick={() => onEdit({ tags: t.tags.filter((x) => x !== tag) })}
-                title={`Remove ${tag}`} style={{ color: "var(--text3)" }}>×</button>
+                title={`Remove ${tag}`} style={{ color: "var(--text4)" }}>×</button>
             </span>
           ))}
           {addingTag ? (
@@ -1369,12 +1582,12 @@ function TaskFields({ t, today, projects, tags, onEdit }: {
               <input autoFocus list="agx-tags" value={tagText} spellCheck={false} autoComplete="off"
                 onChange={(e) => setTagText(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setAddingTag(false); setTagText(""); } }}
-                placeholder="tag" className="text-[10.5px] px-1.5 py-0.5 rounded-lg outline-none"
+                placeholder="tag" className="text-[11px] px-1.5 py-0.5 rounded-lg outline-none"
                 style={{ ...field, width: 110 }} />
             </form>
           ) : (
-            <button onClick={() => setAddingTag(true)} className={chip}
-              style={{ color: "var(--text3)", border: edge(16) }}>+ tag</button>
+            <button onClick={() => setAddingTag(true)} className="text-[10px] px-1.5 py-0.5 rounded-full"
+              style={{ color: "var(--text4)" }}>＋ tag</button>
           )}
         </div>
         <datalist id="agx-projects">{projects.map((p) => <option key={p} value={p} />)}</datalist>
@@ -1418,10 +1631,12 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
             ))}
           </div>
         )}
-      <div className="text-[10px] mb-4" style={{ color: overdue(t, today) ? "var(--error)" : "var(--text3)" }}>
+      {/* Grey, always. This line used to inherit the overdue colour, so a task
+          that was late reported the day it was CREATED in error red. */}
+      <div className="text-[10px] mb-4" style={{ color: "var(--text4)" }}>
         {[
-          t.completed && `done ${t.completed}`,
-          t.created && `created ${t.created}`,
+          t.completed && `completed ${dueLabel(t.completed, today)}`,
+          t.created && `created ${dueLabel(t.created, today)}`,
         ].filter(Boolean).join(" · ")}
       </div>
       {reminder && (

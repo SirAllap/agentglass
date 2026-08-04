@@ -755,3 +755,21 @@ textarea.bg-transparent {
   animation: agx-pair-spin 0.9s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) { .pair-spin { animation: none; } }
+
+/*
+ * Row affordances that step forward on approach.
+ *
+ * Dimmed rather than hidden. Hiding them is calmer and it is the wrong trade
+ * here: a control you cannot see is a control nobody knows exists, which is the
+ * exact complaint this panel earned. At 40% they read as available without
+ * competing with the task, and they come to full strength under the pointer.
+ *
+ * `:focus-within` too, because "hover" is not a thing a keyboard can do, and a
+ * headless browser reports `hover: none` — which is why the media query below
+ * must not be the only thing keeping them visible.
+ */
+.agx-onrow { opacity: 0.4; transition: opacity 90ms ease; }
+.agx-row:hover .agx-onrow,
+.agx-row:focus-within .agx-onrow,
+.agx-row[aria-current="true"] .agx-onrow { opacity: 1; }
+@media (hover: none) { .agx-onrow { opacity: 1; } }
