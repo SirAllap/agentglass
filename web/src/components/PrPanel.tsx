@@ -2273,7 +2273,17 @@ function Overview({ d, busy, openThreads, conversationCount, onLocalReview, onMe
           {d.autoMerge
             ? <Btn onClick={onCancelAutoMerge} disabled={busy} warn title={`Armed by ${d.autoMerge.enabledBy}`}>Cancel auto-merge</Btn>
             : <Btn onClick={onAutoMerge} disabled={busy} title="Merge automatically once everything passes">Merge when green</Btn>}
-          <Btn onClick={onUpdateBranch} disabled={busy} warn title="Merge the base branch into this one — this updates the branch on GitHub">↻ Update branch</Btn>
+          {/* Only when the branch is genuinely BEHIND its base. Rendered
+              unconditionally, this amber button read as "you must sync" even
+              right after a sync — GitHub recomputes through UNKNOWN and lands on
+              BLOCKED (a locked branch, pending checks), never back to BEHIND, so
+              the state it was reacting to was gone. GitHub itself offers it only
+              when behind. Gated on viewerCanUpdate too (undefined = allow): a
+              branch you cannot write to should not offer an action that only
+              comes back "cannot change this locked branch". */}
+          {d.mergeState === "BEHIND" && d.viewerCanUpdate !== false && (
+            <Btn onClick={onUpdateBranch} disabled={busy} warn title="Merge the base branch into this one — this updates the branch on GitHub">↻ Update branch</Btn>
+          )}
           {c.failure > 0 && <Btn onClick={onRerun} disabled={busy}>Re-run failed</Btn>}
           <span className="ml-auto flex gap-1.5">
             <Btn onClick={onDraft} disabled={busy} small>{d.isDraft ? "Mark ready" : "To draft"}</Btn>

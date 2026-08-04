@@ -2188,6 +2188,15 @@ export async function updateBranch(rootIn: unknown, number: unknown): Promise<Pr
   if (!r.ok && /conflict|mergeable/i.test(r.error || "")) {
     return { ok: false, error: "can't update automatically — this branch conflicts with its base. pull the base branch and resolve the merge locally, then push." };
   }
+  // A locked or protected branch, or no write access: gh returns "not
+  // authorized"/"locked"/403, and the raw text is another dead end. The button
+  // is gated on BEHIND + viewerCanUpdate so this should rarely surface, but the
+  // two can race — the branch locks between the read and the click — and a bare
+  // "failed to update branch" is exactly the confusing error we are trying to
+  // avoid here.
+  if (!r.ok && /lock|protect|not authoriz|forbidden|permission|\b403\b/i.test(r.error || "")) {
+    return { ok: false, error: "can't update this branch — it is locked or protected, or you do not have write access. update it on GitHub, or ask someone who can." };
+  }
   return r;
 }
 
