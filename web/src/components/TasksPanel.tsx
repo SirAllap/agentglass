@@ -18,6 +18,8 @@ import { useDismiss } from "../lib/useDismiss.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
+import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
+import { useSyncExternalStore } from "react";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
 
@@ -115,6 +117,7 @@ export function TasksView({ active }: { active: boolean }) {
       </ViewHeader>
       {source === "local" ? <LocalBody active={active} /> : (
         <div className="flex flex-col flex-1 min-h-0">
+          {source === "all" && <NowBand onChanged={() => {}} />}
           {source === "all" && <LocalStrip active={active} onOpen={() => setSource("local")} />}
           {root ? <IssuesBody key={root} root={root} active={active} /> : (
             <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>No repository to read issues from.</div>
@@ -399,6 +402,121 @@ const Field = ({ k, children }: { k: string; children: React.ReactNode }) => (
 );
 
 // ---------------------------------------------------------------------------
+// reminders
+// ---------------------------------------------------------------------------
+
+const hhmm = (ms: number) => {
+  const d = new Date(ms); const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+/** How a reminder reads in a column 100px wide: the time if it is today, the
+ *  day and the time if it is not, and a date once it is far enough away that
+ *  the weekday stops helping. */
+function remindLabel(ms: number): string {
+  const d = new Date(ms), now = new Date();
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const days = Math.floor((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - midnight) / 86_400_000);
+  if (days === 0) return hhmm(ms);
+  if (days === 1) return `tomorrow ${hhmm(ms)}`;
+  if (days > 1 && days < 7) return `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]} ${hhmm(ms)}`;
+  return `${d.getDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()]}`;
+}
+const civilOf = (at: Date) => {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())}T${p(at.getHours())}:${p(at.getMinutes())}`;
+};
+
+/** The presets, and what each resolves to now. Relative ones ("in an hour") are
+ *  the common case; the two clock times are the ones people actually say. */
+function presetTimes(): { label: string; at: Date }[] {
+  const now = new Date();
+  const at = (h: number, m: number, addDays = 0) => {
+    const d = new Date(now); d.setDate(d.getDate() + addDays); d.setHours(h, m, 0, 0); return d;
+  };
+  const evening = at(18, 0, now.getHours() >= 18 ? 1 : 0);
+  const nextMon = (() => { const d = at(9, 0); const add = ((1 - d.getDay() + 7) % 7) || 7; d.setDate(d.getDate() + add); return d; })();
+  return [
+    { label: "in 15 minutes", at: new Date(now.getTime() + 15 * 60_000) },
+    { label: "in an hour", at: new Date(now.getTime() + 60 * 60_000) },
+    { label: `this evening (${hhmm(evening.getTime())})`, at: evening },
+    { label: "tomorrow 9:00", at: at(9, 0, 1) },
+    { label: "next Monday 9:00", at: nextMon },
+  ];
+}
+
+/**
+ * Everything that has fired and not been answered, at the top of the list.
+ *
+ * It reads the stored rows rather than anything that arrived over the wire, so
+ * a reminder whose every transport failed is still here, in red, with the time
+ * it fired. That is the answer to "what if the notification never lands".
+ */
+function NowBand({ onChanged }: { onChanged: () => void }) {
+  const live = useSyncExternalStore(subscribeReminders, liveReminders, liveReminders);
+  if (!live.length) return null;
+  const act = async (fn: Promise<unknown>) => { await fn; await nudgeReminders(); onChanged(); };
+  return (
+    <div className="shrink-0" style={{ borderBottom: edge(12), background: "color-mix(in srgb, var(--error) 8%, transparent)" }}>
+      <div className="text-[8.5px] uppercase tracking-[0.2em] px-5 pt-2.5 pb-1" style={{ color: "var(--error)" }}>Now</div>
+      {live.map((r) => (
+        <div key={r.id} className="flex items-center gap-2.5 px-5 py-2">
+          <span className="tabular-nums shrink-0 text-[12px] font-semibold" style={{ color: "var(--error)" }}>
+            {hhmm(r.firedAt ?? r.due)}
+          </span>
+          <span className="flex-1 min-w-0 truncate text-[11.5px]" style={{ color: "var(--text)" }} title={r.title}>{r.title}</span>
+          <button onClick={() => void act(api.reminderAck(r.id))}
+            className="shrink-0 text-[10px] px-2 py-0.5 rounded"
+            style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}>
+            Done
+          </button>
+          <button onClick={() => void act(api.reminderSnooze(r.id, 15))}
+            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>15m</button>
+          <button onClick={() => void act(api.reminderSnooze(r.id, 60))}
+            className="shrink-0 text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>1h</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Pick a time, or type one. Anchored to the row it was opened from. */
+function RemindPopover({ task, onClose, onSet }: {
+  task: LocalTask; onClose: () => void; onSet: (civil: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [free, setFree] = useState("");
+  useDismiss(true, ref, onClose);
+  const parsed = useMemo(() => {
+    const m = free.trim().match(/^(?:(\d{1,2})[:h](\d{2}))$/);
+    if (!m) return null;
+    const d = new Date(); d.setHours(+m[1]!, +m[2]!, 0, 0);
+    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+    return d;
+  }, [free]);
+  return (
+    <div ref={ref} className="absolute right-0 top-full mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
+      style={{ zIndex: 40, background: "var(--bg2)", border: edge(28), minWidth: 240, padding: 4 }}>
+      {presetTimes().map((p) => (
+        <button key={p.label} onClick={() => onSet(civilOf(p.at))}
+          className="text-left px-2.5 py-1.5 rounded hover:bg-white/5" style={{ color: "var(--text2)" }}>
+          {p.label}
+        </button>
+      ))}
+      <div style={{ borderTop: edge(14), margin: "4px 0" }} />
+      <input value={free} autoFocus onChange={(e) => setFree(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && parsed) { e.preventDefault(); onSet(civilOf(parsed)); } }}
+        placeholder="8:30" spellCheck={false}
+        className="mx-1 mb-1 px-2 py-1 rounded text-[11px] outline-none"
+        style={{ background: "color-mix(in srgb, var(--bg3) 55%, transparent)", border: edge(14), color: "var(--text)" }} />
+      <div className="px-2 pb-1 text-[9.5px]" style={{ color: "var(--text4)", minHeight: 13 }}>
+        {parsed ? `→ ${remindLabel(parsed.getTime())}` : free.trim() ? "a time like 8:30" : ""}
+      </div>
+      <span className="sr-only">{task.description}</span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // the local list
 // ---------------------------------------------------------------------------
 
@@ -415,6 +533,8 @@ function useLocalTasks(active: boolean) {
   const load = useCallback(() => {
     api.tasksList().then(setData).catch(() => {});
   }, []);
+  // Re-read when a reminder is set or answered, so the row agrees with the
+  // click that just happened rather than waiting out the poll.
   useEffect(() => {
     if (!active) return;
     load();
@@ -458,10 +578,18 @@ function LocalEmpty({ cap, done }: { cap: TaskCapability; done: number }) {
 }
 
 function LocalBody({ active }: { active: boolean }) {
-  const { data } = useLocalTasks(active);
+  const { data, reload } = useLocalTasks(active);
   const [sel, setSel] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
+  const [remindFor, setRemindFor] = useState<string | null>(null);
   const today = todayStr();
+  const byTask = data?.byTask ?? {};
+  const setRemind = useCallback(async (t: LocalTask, civil: string) => {
+    setRemindFor(null);
+    await api.remind({ taskUuid: t.uuid, title: t.description, civil });
+    await nudgeReminders();
+    reload();
+  }, [reload]);
 
   const { open, done } = useMemo(() => {
     const all = data?.tasks ?? [];
@@ -480,13 +608,24 @@ function LocalBody({ active }: { active: boolean }) {
   const od = open.filter((t) => overdue(t, today));
   const rest = open.filter((t) => !overdue(t, today));
 
+  const rowProps = (t: LocalTask) => ({
+    t, today, on: t.uuid === sel, onPick: () => setSel(t.uuid),
+    reminder: byTask[t.uuid] ?? null,
+    remindOpen: remindFor === t.uuid,
+    onRemind: () => setRemindFor((cur) => (cur === t.uuid ? null : t.uuid)),
+    onCloseRemind: () => setRemindFor(null),
+    onSetRemind: (civil: string) => void setRemind(t, civil),
+  });
+
   return (
-    <div className="flex flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0">
+      <NowBand onChanged={reload} />
+      <div className="flex flex-1 min-h-0">
       <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
         {!open.length && <LocalEmpty cap={cap} done={done.length} />}
         {!!od.length && <Section label="Overdue" tone="var(--error)" />}
-        {od.map((t) => <TaskRow key={t.uuid} t={t} today={today} on={t.uuid === sel} onPick={() => setSel(t.uuid)} />)}
-        {rest.map((t) => <TaskRow key={t.uuid} t={t} today={today} on={t.uuid === sel} onPick={() => setSel(t.uuid)} />)}
+        {od.map((t) => <TaskRow key={t.uuid} {...rowProps(t)} />)}
+        {rest.map((t) => <TaskRow key={t.uuid} {...rowProps(t)} />)}
         {!!done.length && (
           <button onClick={() => setShowDone((v) => !v)}
             className="w-full text-left text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1"
@@ -495,15 +634,17 @@ function LocalBody({ active }: { active: boolean }) {
           </button>
         )}
         {showDone && done.slice(0, 200).map((t) => (
-          <TaskRow key={t.uuid} t={t} today={today} on={t.uuid === sel} onPick={() => setSel(t.uuid)} />
+          <TaskRow key={t.uuid} {...rowProps(t)} />
         ))}
       </div>
       <aside className="agx-scroll overflow-y-auto p-5 text-[11.5px] shrink-0"
         style={{ width: 380, borderLeft: edge(12) }}>
-        {picked ? <TaskDetail t={picked} today={today} /> : (
+        {picked ? <TaskDetail t={picked} today={today} reminder={byTask[picked.uuid] ?? null}
+          onCancel={async () => { const r = byTask[picked.uuid]; if (r) { await api.reminderCancel(r.id); await nudgeReminders(); reload(); } }} /> : (
           <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a task.</div>
         )}
       </aside>
+      </div>
     </div>
   );
 }
@@ -512,7 +653,11 @@ const Section = ({ label, tone }: { label: string; tone: string }) => (
   <div className="text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1" style={{ color: tone }}>{label}</div>
 );
 
-function TaskRow({ t, today, on, onPick }: { t: LocalTask; today: string; on: boolean; onPick: () => void }) {
+function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onCloseRemind, onSetRemind }: {
+  t: LocalTask; today: string; on: boolean; onPick: () => void;
+  reminder?: import("../../../shared/types.ts").Reminder | null;
+  remindOpen?: boolean; onRemind?: () => void; onCloseRemind?: () => void; onSetRemind?: (civil: string) => void;
+}) {
   const isDone = t.status === "completed";
   const late = overdue(t, today);
   const dueToday = t.due === today;
@@ -543,11 +688,36 @@ function TaskRow({ t, today, on, onPick }: { t: LocalTask; today: string; on: bo
       }}>
         {t.due ? (dueToday ? "today" : t.due.slice(5)) : "—"}
       </span>
+      {/* The reminder column, and the offer where there is none. A due date
+          says when something is wanted; only a reminder will actually tell
+          you — so a task with a due date and no reminder says so rather than
+          leaving a blank that reads as "handled". */}
+      <span className="shrink-0 relative tabular-nums text-right group" style={{ width: 116 }}>
+        {reminder ? (
+          <span style={{ color: reminder.firedAt ? "var(--error)" : reminder.due - Date.now() < 3_600_000 ? "var(--warning)" : "var(--text3)" }}>
+            ⏰ {remindLabel(reminder.due)}
+          </span>
+        ) : isDone ? null : (
+          <button onClick={(e) => { e.stopPropagation(); onRemind?.(); }}
+            className="text-[10px] px-1 rounded hover:bg-white/5"
+            style={{ color: t.due ? "var(--warning)" : "var(--text4)" }}
+            title="Set a reminder for this task">
+            {t.due ? "⌁ nothing will tell you" : "⌁ remind me…"}
+          </button>
+        )}
+        {remindOpen && onSetRemind && onCloseRemind && (
+          <RemindPopover task={t} onClose={onCloseRemind} onSet={onSetRemind} />
+        )}
+      </span>
     </button>
   );
 }
 
-function TaskDetail({ t, today }: { t: LocalTask; today: string }) {
+function TaskDetail({ t, today, reminder, onCancel }: {
+  t: LocalTask; today: string;
+  reminder?: import("../../../shared/types.ts").Reminder | null;
+  onCancel?: () => void;
+}) {
   return (
     <div>
       <h2 className="text-[16px] font-semibold leading-snug mb-2.5" style={{ color: "var(--text)", textWrap: "balance" }}>
@@ -571,6 +741,15 @@ function TaskDetail({ t, today }: { t: LocalTask; today: string }) {
           t.created && `created ${t.created}`,
         ].filter(Boolean).join(" · ")}
       </div>
+      {reminder && (
+        <div className="flex items-center gap-2 mb-4 text-[11px]">
+          <span style={{ color: reminder.firedAt ? "var(--error)" : "var(--primary)" }}>⏰ {remindLabel(reminder.due)}</span>
+          <span className="flex-1" />
+          <button onClick={onCancel} className="text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>
+            remove
+          </button>
+        </div>
+      )}
       {!!t.notes.length && (
         <>
           <div className="text-[8.5px] uppercase tracking-[0.2em] mb-1.5" style={{ color: "var(--text3)" }}>Notes</div>
@@ -601,6 +780,7 @@ function TaskDetail({ t, today }: { t: LocalTask; today: string }) {
 function LocalStrip({ active, onOpen }: { active: boolean; onOpen: () => void }) {
   const { data } = useLocalTasks(active);
   const today = todayStr();
+  const byTask = data?.byTask ?? {};
   const open = (data?.tasks ?? []).filter((t) => t.status === "pending");
   if (!open.length) return null;
   const sorted = [...open].sort((a, b) =>
@@ -613,7 +793,7 @@ function LocalStrip({ active, onOpen }: { active: boolean; onOpen: () => void })
         style={{ color: "var(--text3)" }}>
         Yours · {open.length}
       </button>
-      {shown.map((t) => <TaskRow key={t.uuid} t={t} today={today} on={false} onPick={onOpen} />)}
+      {shown.map((t) => <TaskRow key={t.uuid} t={t} today={today} on={false} onPick={onOpen} reminder={byTask[t.uuid] ?? null} />)}
       {open.length > shown.length && (
         <button onClick={onOpen} className="w-full text-left text-[10px] px-5 py-1.5 hover:bg-white/5"
           style={{ color: "var(--text4)" }}>

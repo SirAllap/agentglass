@@ -61,6 +61,10 @@ import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep } from "./tasks.ts";
+import {
+  addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
+  remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
+} from "./reminders.ts";
 import { fileTree, findFiles, grepFiles } from "./files.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -385,6 +389,10 @@ setAlertSink({ broadcast: (a) => broadcast({ type: "alert", data: a }), hasClien
 // The task store has a second writer — the user's editor — so a change there
 // reaches the panel through a sweep rather than through anything we did.
 setTaskChangeHook(() => broadcast({ type: "tasks" }));
+// A reminder that fired changes what the panel and the rail should show, and
+// the panel is not necessarily open — so it is pushed, like everything else
+// that happens without the user asking.
+setReminderHook(() => broadcast({ type: "tasks" }));
 // Let the git layer ask what a branch's pull request says its base is. Wired
 // here rather than imported there, because gitwork must not depend on the
 // pull-request layer — same reason as the two hooks above. Reads the PR list
@@ -1607,7 +1615,17 @@ const server = Bun.serve<WsData>({
     if (pathname === "/tasks/list") {
       const snap = await listTasks(url.searchParams.get("force") === "1");
       const capability = await taskCapability();
-      return json({ ok: !snap.error, tasks: snap.tasks, capability, error: snap.error });
+      // The reminders ride along: a row that has one must be able to say so
+      // without a request per row, and they are ours to read cheaply.
+      return json({
+        ok: !snap.error, tasks: snap.tasks, capability, error: snap.error,
+        byTask: remindersFor(snap.tasks.map((t) => t.uuid)),
+      });
+    }
+    if (pathname === "/tasks/reminders") {
+      const w = url.searchParams.get("window");
+      const window = w === "upcoming" || w === "history" ? w : "live";
+      return json({ ok: true, reminders: listReminders(window), zone: localZone() });
     }
 
     if (pathname === "/machine/ports") return json(listPorts());
@@ -1686,6 +1704,26 @@ const server = Bun.serve<WsData>({
      * the server decides what runs, which is the same rule the review prompt
      * follows.
      */
+    if (pathname.startsWith("/tasks/remind") && req.method === "POST") {
+      // None of these touch Taskwarrior or its lock. That is what keeps the
+      // engine working when the task list cannot be read at all.
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (pathname === "/tasks/remind") {
+        return json(addReminder({
+          taskUuid: typeof b.taskUuid === "string" ? b.taskUuid : null,
+          title: String(b.title ?? ""),
+          civil: String(b.civil ?? ""),
+          zone: typeof b.zone === "string" ? b.zone : undefined,
+          root: typeof b.root === "string" ? b.root : null,
+        }));
+      }
+      const id = String(b.id ?? "");
+      if (!id) return json({ ok: false, error: "which reminder?" }, 400);
+      if (pathname === "/tasks/reminder/ack") return json(ackReminder(id));
+      if (pathname === "/tasks/reminder/cancel") return json(cancelReminder(id));
+      if (pathname === "/tasks/reminder/snooze") return json(snoozeReminder(id, Number(b.minutes ?? 60)));
+      return json({ ok: false, error: "not found" }, 404);
+    }
     if (pathname.startsWith("/issues/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
@@ -2352,6 +2390,7 @@ setInterval(prune, 3_600_000);
 // A no-op when the engine is off, tmux is absent, or eviction is disabled.
 startPaneSweeper();
 startTaskSweep();
+startReminderTick();
 
 // Read every Claude Code session on this machine from ~/.claude/projects, then
 // keep watching. This is what makes the dashboard cover all projects at once

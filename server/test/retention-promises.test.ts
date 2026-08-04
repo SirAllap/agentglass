@@ -31,12 +31,13 @@ describe("the promises SECURITY.md makes about retention", () => {
       "db.ts:events",
       "db.ts:events_fts",
       "db.ts:gates",
+      "db.ts:reminders",
       "db.ts:sessions",
     ]);
-    // …and all four are inside pruneOldRows, bounded by the cutoff.
+    // …and all five are inside pruneOldRows, bounded by the cutoff.
     const prune = src.slice(src.indexOf("export function pruneOldRows"));
     const body = prune.slice(0, prune.indexOf("\n}\n"));
-    for (const t of ["events_fts", "events", "sessions", "gates"]) {
+    for (const t of ["events_fts", "events", "sessions", "gates", "reminders"]) {
       expect(body, `DELETE FROM ${t} escaped pruneOldRows`).toContain(`DELETE FROM ${t}`);
     }
   });

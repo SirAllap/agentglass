@@ -172,13 +172,22 @@ async function deliver(
     pushEveryone(title, body, reach, action).catch((e) => console.warn("[alerts] push failed:", e));
   }
 
+  // An attached client is not an operating-system side effect.
+  //
+  // `AGENTGLASS_NOTIFY` exists to gate `notify-send` — spawning a binary that
+  // paints on somebody's desktop, which is a thing to opt into. Handing the
+  // frame to a client that is already connected and already looking is not the
+  // same act, and gating it behind the same flag meant a running app stayed
+  // silent about the very things it was open to show. The user chose to have
+  // this window; the browser then asks its own permission before anything
+  // native happens (`sysNotify.ts:178`), which is the consent that matters.
+  //
+  // `notify-send` below stays exactly where it was.
+  if (sink?.hasClients()) {
+    sink.broadcast({ title, body, urgency });
+    return;
+  }
   if (DESKTOP) {
-    // A connected client shows a native OS notification (cross-platform).
-    // notify-send is the fallback only when nothing is attached to show it.
-    if (sink?.hasClients()) {
-      sink.broadcast({ title, body, urgency });
-      return;
-    }
     if (notifier) { notifier({ title, body, urgency }); return; }
     // No seam installed and this is a test run: say nothing. A suite must never
     // put an approval prompt on somebody's desktop for a hold that never
@@ -218,6 +227,23 @@ export function pushGate(agent: string, tool: string, summary: string, id?: stri
       2, "wake",
       id ? { gate: id } : undefined,
     );
+}
+
+/**
+ * A reminder came due — say so, once.
+ *
+ * One call rather than a delivery path of its own, and that is deliberate: this
+ * buys the webhook, the phone fan-out, the native OS notification when a client
+ * is attached and `notify-send` when none is, all through the code that already
+ * gets each of those right. A parallel path is the bug this file fixed once
+ * already.
+ *
+ * Urgency 1 and `reach: "tell"`, never `"wake"`. Waking a phone's radio is
+ * reserved for an agent that is stopped until a person answers. A reminder is
+ * news: it should arrive, and it should not vibrate somebody awake.
+ */
+export function pushReminder(id: string, title: string, when: string) {
+  if (shouldSend(`remind:${id}`)) deliver(`⏰ ${title}`, when, 1, "tell");
 }
 
 /** Inspect an event and fire an alert if it warrants one. */

@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -449,6 +449,13 @@ const realApi = {
 
   // --- local tasks ---
   tasksList: (force = false) => get<TasksListResponse>(`/tasks/list${force ? "?force=1" : ""}`),
+  reminders: (window: "live" | "upcoming" | "history" = "live") =>
+    get<RemindersResponse>(`/tasks/reminders?window=${window}`),
+  remind: (body: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) =>
+    post<{ ok: boolean; reminder?: Reminder; error?: string }>("/tasks/remind", body),
+  reminderAck: (id: string) => post<{ ok: boolean }>("/tasks/reminder/ack", { id }),
+  reminderCancel: (id: string) => post<{ ok: boolean }>("/tasks/reminder/cancel", { id }),
+  reminderSnooze: (id: string, minutes: number) => post<{ ok: boolean }>("/tasks/reminder/snooze", { id, minutes }),
 
   // --- github issues ---
   issuesList: (root: string, state = "open", q = "", assignee = "") =>
@@ -930,6 +937,11 @@ const demoApi: typeof realApi = {
   // fabricated dataset in a browser tab. Empty and honest beats invented — a
   // fake port list would be the one screen in the tour that lies.
   tasksList: (_f?: boolean) => D({ ok: true, tasks: [], capability: { available: false, configured: false, reason: "not available in the demo" } }),
+  reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
+  remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),
+  reminderAck: (_i: string) => D({ ok: false }),
+  reminderCancel: (_i: string) => D({ ok: false }),
+  reminderSnooze: (_i: string, _m: number) => D({ ok: false }),
   issuesList: (_r: string, _s?: string, _q?: string, _a?: string) => D({ ok: false, issues: [], error: "not available in the demo" }),
   issueDetail: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   issuesWork: (_repo?: string) => D({ work: [] }),

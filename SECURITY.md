@@ -183,6 +183,10 @@ Two things about retention are easy to get wrong:
 - **The rollup has no expiry at all.** Nothing prunes it, and there is no path
   in the product that removes a row from it. It is designed to be kept for
   years.
+- **A reminder you have answered ages out; one you have not never does.** The
+  reminders table is pruned on the same cutoff as the events, but only for rows
+  that have been acknowledged or cancelled. A reminder still waiting for you is
+  a live request, however old its row looks — the same ruling held tools get.
 - **Neither does the activity log.** Settings › Activity is an audit trail, so
   it is append-only by design: every git write, container action, pull-request
   action and gate decision, with what it touched and the address it came from

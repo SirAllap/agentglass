@@ -1968,4 +1968,44 @@ export interface TasksListResponse {
   tasks: LocalTask[];
   capability: TaskCapability;
   error?: string;
+  /** The soonest live reminder per task uuid, so a list of rows can show its
+   *  own without a request per row. */
+  byTask?: Record<string, Reminder>;
+}
+
+/**
+ * When to tell somebody about something.
+ *
+ * agentglass's own, not Taskwarrior's — which is what lets a reminder fire on a
+ * machine where the task list cannot be read at all. `taskUuid` is nullable and
+ * first-class: a reminder with nothing behind it is a legitimate thing to want.
+ *
+ * `civil` + `zone` are what the human asked for; `due` is those two resolved.
+ * Keeping the pair rather than only the instant is what makes "Monday 9:00"
+ * still mean nine o'clock after the clocks change.
+ */
+export interface Reminder {
+  id: string;
+  taskUuid: string | null;
+  title: string;
+  root: string | null;
+  /** "2026-08-05T09:00" — local wall clock, as typed. */
+  civil: string;
+  /** IANA zone the civil time was written in. */
+  zone: string;
+  due: number;
+  created: number;
+  /** The ledger. Written inside the claim, before any delivery is attempted. */
+  firedAt: number | null;
+  ackedAt: number | null;
+  cancelledAt: number | null;
+  snoozeOf: string | null;
+}
+
+export interface RemindersResponse {
+  ok: boolean;
+  reminders: Reminder[];
+  /** Keyed by task uuid — the soonest live reminder for each, so a list of rows
+   *  can show its own without a query per row. */
+  byTask?: Record<string, Reminder>;
 }

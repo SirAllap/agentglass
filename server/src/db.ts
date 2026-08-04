@@ -491,6 +491,45 @@ CREATE TABLE IF NOT EXISTS gates (
 );
 CREATE INDEX IF NOT EXISTS idx_gates_pending ON gates(decision, expires);
 CREATE INDEX IF NOT EXISTS idx_gates_created ON gates(created);
+
+/*
+ * When to tell somebody about something.
+ *
+ * The one part of the task feature that is ours. Taskwarrior owns what a task
+ * IS and has nowhere to put a reminder; we own when to speak, which is also the
+ * part that must keep working when Taskwarrior is absent, unconfigured, or
+ * being written to by an editor at the same moment. task_uuid is nullable and
+ * first-class: a reminder with no task behind it is a legitimate thing to want.
+ *
+ * title is a snapshot, not a join. It must be possible to fire a reminder on
+ * a machine where the task list cannot be read at all — and a notification that
+ * says "reminder about (unavailable)" is worse than none.
+ *
+ * civil + zone rather than an instant alone, because "Monday 9:00" is a
+ * civil time. Fixing it to an epoch at creation fires it an hour wrong on the
+ * far side of a daylight-saving change — twice a year, for anyone in Europe.
+ * due is the resolved cache, recomputed when the two disagree.
+ *
+ * fired_at is the ledger. It is written inside the claim, before any delivery
+ * is attempted: a crash between claim and send costs one missed ping, and the
+ * other order costs a duplicate. A missed ping sits red on screen until
+ * acknowledged; a duplicate at three in the morning is an uninstall.
+ */
+CREATE TABLE IF NOT EXISTS reminders (
+  id TEXT PRIMARY KEY,
+  task_uuid TEXT,
+  title TEXT NOT NULL,
+  root TEXT,
+  civil TEXT NOT NULL,
+  zone TEXT NOT NULL,
+  due INTEGER NOT NULL,
+  created INTEGER NOT NULL,
+  fired_at INTEGER,
+  acked_at INTEGER,
+  cancelled_at INTEGER,
+  snooze_of TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_live ON reminders(fired_at, due);
 `);
 /**
  * *Which* human, not just that one of them answered.
@@ -945,6 +984,9 @@ export function pruneOldRows(): { events: number; sessions: number; rolled: numb
     // Resolved gates only — a pending one is a live request, never retention's
     // business no matter how old its row looks.
     db.run(`DELETE FROM gates WHERE decision IS NOT NULL AND created < ?`, [cutoff]);
+    // Acknowledged reminders age out; a live one is never retention's business
+    // however old its row looks — the same ruling the gates line above makes.
+    db.run(`DELETE FROM reminders WHERE (acked_at IS NOT NULL OR cancelled_at IS NOT NULL) AND due < ?`, [cutoff]);
     return { events: ev.changes, sessions: se.changes, rolled };
   })();
 }
