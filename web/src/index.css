@@ -307,7 +307,23 @@
  * — is unaffected. */
 :focus-visible:not([tabindex="-1"]) {
   outline: 2px solid var(--primary) !important;
-  outline-offset: 2px;
+  /* Inside the box, not around it.
+   *
+   * A positive offset paints the ring outside the border box, so it needs
+   * slack around the control to be seen — and plenty of controls have none.
+   * The view tabs and the pinned command chips sit flush inside tight
+   * horizontal strips that are `overflow-hidden` for their own reasons, and
+   * the strip crops whatever the ring puts outside it. What is left is the two
+   * side arcs, which reads as a pair of brackets rather than as focus.
+   *
+   * Measured on one view, 47 controls: at +2px, eight had a clipped ring and
+   * every one of them was cut on the top AND the bottom. At 0 the same eight
+   * were still clipped — they sit exactly flush, so there is no positive
+   * offset small enough to fit. At -2px, none. A ring 2px inside a control
+   * reads as well as one 2px outside it, and an ancestor cannot crop what
+   * never leaves the control. The fields below already worked this way, and
+   * for the same reason. */
+  outline-offset: -2px;
   border-radius: 6px;
 }
 
