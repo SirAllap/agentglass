@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { subscribeSystemNotes, openNote, type SystemNote } from "../lib/sysNotify.ts";
+import { Chevron, useClipped } from "./TopBarNotes.tsx";
 import { Portal } from "./Portal.tsx";
 import { TOP_BAR_H } from "./TopBar.tsx";
 
@@ -82,16 +83,27 @@ function Card({ n, onGone, onGoto }: {
   onGoto: (g: NonNullable<SystemNote["goto"]>) => void;
 }) {
   const [held, setHeld] = useState(false);
+  const [open, setOpen] = useState(false);
+  const bodyEl = useRef<HTMLSpanElement>(null);
+  // Whether three lines is showing everything. Measured rather than guessed
+  // from the length, and measured once the card is actually in the document —
+  // see useClipped, which exists because a Portal's children have no layout at
+  // the moment their own effects run.
+  const cut = useClipped([bodyEl], !open, [n.body]);
 
   // Urgent stays until it is dismissed. A sender marking a notification
   // critical is rare enough to be meant, and a five-second window is not how
   // you treat the one message that said it could not wait.
+  //
+  // So does one you have opened: expanding it is you saying you are reading it,
+  // and a card that vanishes mid-sentence because its timer ran out is the
+  // whole complaint about truncation with extra steps.
   useEffect(() => {
-    if (held || n.urgency === 2) return;
+    if (held || open || n.urgency === 2) return;
     const id = setTimeout(onGone, HOLD_MS);
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [held, n.id]);
+  }, [held, open, n.id]);
 
   const go = n.goto ? () => { onGone(); onGoto(n.goto!); } : null;
 
@@ -127,10 +139,20 @@ function Card({ n, onGone, onGoto }: {
         {n.urgency === 2 && (
           <span className="text-[9px] uppercase tracking-wider shrink-0" style={{ color: "var(--error)" }}>urgent</span>
         )}
+        {/* The rest of the message, on the card, without going to the bell for
+            it. Same control the bell's rows carry, so opening a notification is
+            one gesture wherever you meet it. */}
+        {(cut || open) && (
+          <button className="agx-note-btn agx-note-icon ml-auto shrink-0" aria-expanded={open}
+            onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+            title={open ? "Show less" : "Show the whole message"}>
+            <Chevron up={open} />
+          </button>
+        )}
         {/* Dismisses the card, not the record: it is still in the bell
             afterwards, because closing a banner is "I have seen it", never
             "delete what happened". */}
-        <button className="agx-note-btn ml-auto shrink-0"
+        <button className={`agx-note-btn agx-note-icon shrink-0${cut || open ? "" : " ml-auto"}`}
           onClick={(e) => { e.stopPropagation(); onGone(); }}
           aria-label="Dismiss" title="Dismiss — it stays in the bell">✕</button>
       </div>
@@ -138,10 +160,13 @@ function Card({ n, onGone, onGoto }: {
       <span className="text-[12px] font-semibold leading-snug" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>
         {n.summary || n.app}
       </span>
-      {/* Three lines, then it stops. The full text is one click away in the
-          bell, and a card that grows with the message is a card that can cover
-          the thing you were reading. */}
-      {n.body && <span className="agx-note-body agx-note-toast-body">{n.body}</span>}
+      {/* Three lines closed, so a chatty afternoon cannot paper over the thing
+          you were reading — and all of it when you ask, scrolling inside the
+          card rather than growing past the bottom of the screen. */}
+      {n.body && (
+        <span ref={bodyEl}
+          className={open ? "agx-note-body agx-note-toast-open" : "agx-note-body agx-note-toast-body"}>{n.body}</span>
+      )}
 
       {n.url && (
         <button className="agx-note-link self-start" title={n.url}
