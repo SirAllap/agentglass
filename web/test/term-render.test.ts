@@ -132,3 +132,33 @@ describe("line height", () => {
     expect(prefs.currentTermLineHeight()).toBe(prefs.DEFAULT_LINE_HEIGHT);
   });
 });
+
+describe("which renderer draws the rules", () => {
+  // The DOM renderer is the only one that asks the *font* for `│ ─ ┌ └`. That
+  // is why a pane border came out as dashes on some faces and a line on
+  // others: measured on a border with text beside it, 75 seams and a 2.5px
+  // wobble on the default font and 60 on two of the five offered, against none
+  // on canvas for any of them. So "not WebGL" has to mean canvas, not DOM —
+  // canvas draws those glyphs itself and has no GL context to lose.
+  let r: typeof import("../src/lib/termRenderer.ts");
+  beforeAll(async () => { r = await import("../src/lib/termRenderer.ts"); });
+  beforeEach(() => { mem.clear(); });
+
+  it("draws on canvas wherever the GPU renderer is not used", () => {
+    Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }, configurable: true });
+    expect(r.wantsWebgl()).toBe(false); // the white-out this file exists to avoid
+    expect(r.wantsCanvas()).toBe(true); // …but not at the cost of the rules
+  });
+
+  it("leaves the GPU renderer alone where it is used", () => {
+    Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X)" }, configurable: true });
+    expect(r.wantsWebgl()).toBe(true);
+    expect(r.wantsCanvas()).toBe(false); // WebGL already draws them itself
+  });
+
+  it("still honours someone who asked for the DOM renderer", () => {
+    Object.defineProperty(globalThis, "navigator", { value: { userAgent: "Mozilla/5.0 (X11; Linux x86_64)" }, configurable: true });
+    mem.set("agentglass.term.webgl", "dom");
+    expect(r.wantsCanvas()).toBe(false);
+  });
+});
