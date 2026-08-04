@@ -1216,6 +1216,28 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // Keyed by tmux's window id, not the index: a rename in flight must follow the
   // window even if killing another one renumbers the strip underneath it.
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** The same box, for `move-window`: a number rather than a name, so it is a
+   *  separate mode rather than a flag on the one above. */
+  const [moving, setMoving] = useState<string | null>(null);
+
+  /**
+   * `prefix ,` and `prefix .`, arriving from tmux.
+   *
+   * While this strip owns the bar there is no row for tmux to prompt in, so the
+   * keys leave a note on the window instead and the server forwards it once.
+   * Opening our own input here is what makes the takeover honest: the keys
+   * people already have in their fingers keep working, and they land in a box
+   * that looks like the rest of the app rather than in a tmux prompt drawn over
+   * the first line of the shell.
+   *
+   * The server clears the note as it forwards it, so this fires once per press.
+   */
+  useEffect(() => {
+    const asked = tmuxWindows.find((w) => w.ask);
+    if (!asked) return;
+    if (asked.ask === "rename") { setMoving(null); setRenaming(asked.id); }
+    else { setRenaming(null); setMoving(asked.id); }
+  }, [tmuxWindows]);
 
   /*
    * Whether tmux keeps drawing its own status line underneath our tabs.
@@ -1477,6 +1499,17 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ Split</button>}
                     <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="Kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ Restart</button>
                     <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>Clear</button>
+                    {/* The way back, and it lives here because the way out
+                        lives in the strip — which is the thing being hidden.
+                        A toggle whose "off" state removes the button that
+                        turns it on is a one-way door. Exactly one of the two
+                        is on screen at any time. */}
+                    {tmuxActive && tmuxWindows.length > 0 && tmuxBar && (
+                      <button onClick={() => setTmuxBar(false)} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+                        title="Draw the window list here instead, and take tmux's row back for the shell">
+                        Use agentglass bar
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1510,7 +1543,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     Same shape as the shell tabs above on purpose: from the
                     user's side this is the same control, and which program is
                     behind it should not change how the workspace looks. */}
-                {tmuxActive && tmuxWindows.length > 0 && (
+                {/* One window list or the other, never both. `tmuxBar` is the
+                    user's answer to "whose bar is this", so it gates the strip
+                    as well as tmux's row — a blanked row under our tabs was two
+                    bars pretending to be one, and a row we keep for a prompt
+                    that no longer arrives there is just a gap. */}
+                {tmuxActive && tmuxWindows.length > 0 && !tmuxBar && (
                   // keepTermFocus so switching tmux windows by click (and the +,
                   // kill, hide-bar buttons) never blurs the pane — tmux keeps
                   // owning the keyboard the instant the tab changes. The rename
@@ -1559,7 +1597,31 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           style={w.id === activeWindow
                             ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
                             : { background: "color-mix(in srgb, var(--bg3) 55%, transparent)", color: "var(--text2)" }}>
-                          <span className="tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>
+                          {/* The index doubles as the move box: `prefix .`
+                              asks which number, and the number it is asking
+                              about is right here. Typing over it is a more
+                              direct answer than a prompt somewhere else. */}
+                          {moving === w.id ? (
+                            <input
+                              autoFocus
+                              defaultValue={String(w.index)}
+                              inputMode="numeric"
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={() => setMoving(null)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") { setMoving(null); focusTerm(); return; }
+                                if (e.key !== "Enter") return;
+                                const to = (e.target as HTMLInputElement).value.trim();
+                                if (/^\d{1,3}$/.test(to) && Number(to) !== w.index) tmuxCmd("move", { window: w.id, name: to });
+                                setMoving(null);
+                                focusTerm();
+                              }}
+                              className="bg-transparent outline-none w-7 text-[10.5px] tabular-nums text-center"
+                              style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" }}
+                            />
+                          ) : (
+                            <span className="tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>
+                          )}
                           {renaming === w.id ? (
                             <input
                               autoFocus
@@ -1593,11 +1655,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       );
                     })}
                     <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
-                    <button onClick={() => setTmuxBar((v) => !v)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
-                      title={tmuxBar
-                        ? "Blank tmux's own status line for this session — it keeps the row, so its prompts and messages still have somewhere to draw"
-                        : "Give tmux's own status line back"}>
-                      {tmuxBar ? "Hide tmux bar" : "Show tmux bar"}
+                    <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
+                      title="Give tmux its own status line back — this strip steps aside, so you are never looking at two window lists">
+                      Use tmux's bar
                     </button>
                   </div>
                 )}
