@@ -641,9 +641,13 @@ const BULK_MAX = 200;
 export async function bulkApply(
   uuids: string[], action: BulkAction, value: string | null = null, expect?: string,
 ): Promise<BulkResult> {
+  // Selection shape is validated before the tool is even considered: an empty
+  // selection is nothing to do regardless of whether Taskwarrior is installed,
+  // and checking the tool first reported "not installed" for a request that was
+  // malformed anyway (and broke this exact assertion in a taskless CI).
+  if (!uuids.length) return { ok: false, error: "nothing is selected" };
   const bad = await writeGuard();
   if (bad) return { ok: false, error: bad };
-  if (!uuids.length) return { ok: false, error: "nothing is selected" };
   if (uuids.length > BULK_MAX) return { ok: false, error: `that is more than ${BULK_MAX} tasks at once` };
   if (!uuids.every(isUuid)) return { ok: false, error: "that is not a task id" };
   // Duplicates would apply the same change twice — harmless for `done`, not for
