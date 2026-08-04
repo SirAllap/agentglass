@@ -28,6 +28,7 @@ import { typingWouldLandInApp } from "../lib/termForeground.ts";
 import { THEMES } from "../lib/themes.ts";
 import { deriveAnsi } from "../lib/termPalette.ts";
 import { termOptions } from "../lib/termPrefs.ts";
+import { useModernWidths } from "../lib/termUnicode.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -287,9 +288,13 @@ function applyThemeLive(s: Sess): () => void {
         // var when font/size/cursor change). Font and size change the cell box,
         // so refit when either moves.
         const o = termOptions();
-        const needFit = s.term.options.fontFamily !== o.fontFamily || s.term.options.fontSize !== o.fontSize;
+        // Line height changes the cell, so it refits for the same reason the
+        // font does: the grid is laid out on a cell measured once.
+        const needFit = s.term.options.fontFamily !== o.fontFamily || s.term.options.fontSize !== o.fontSize
+          || s.term.options.lineHeight !== o.lineHeight;
         if (s.term.options.fontFamily !== o.fontFamily) s.term.options.fontFamily = o.fontFamily;
         if (s.term.options.fontSize !== o.fontSize) s.term.options.fontSize = o.fontSize;
+        if (s.term.options.lineHeight !== o.lineHeight) s.term.options.lineHeight = o.lineHeight;
         if (s.term.options.cursorStyle !== o.cursorStyle) s.term.options.cursorStyle = o.cursorStyle;
         if (needFit) fitTerm(s);
         // The WebGL renderer caches cells in a texture atlas and won't always
@@ -429,8 +434,11 @@ function createSession(root: string): Sess {
   const term = new Terminal({
     fontFamily: tp.fontFamily,
     fontSize: tp.fontSize,
-    lineHeight: 1.2,
+    lineHeight: tp.lineHeight,
     cursorBlink: true,
+    // Required before a custom width table can be registered, and harmless
+    // otherwise — see termUnicode.
+    allowProposedApi: true,
     cursorStyle: tp.cursorStyle,
     /*
      * Scrollback, and why it is not ten thousand any more.
@@ -449,6 +457,10 @@ function createSession(root: string): Sess {
     theme: themeFromCss(),
     macOptionIsMeta: true,
   });
+  // Before anything is written: the width table decides how many columns each
+  // character claims, and a line already parsed under the old one keeps the
+  // widths it was parsed with.
+  useModernWidths(term);
   const fit = new FitAddon();
   term.loadAddon(fit);
   const search = new SearchAddon();
