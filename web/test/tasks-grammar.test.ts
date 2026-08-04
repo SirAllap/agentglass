@@ -128,3 +128,62 @@ describe("checklists in a note", () => {
     expect(checkProgress(["nothing here"])).toEqual({ done: 0, total: 0 });
   });
 });
+
+describe("which checkout a task is about", () => {
+  const { rootForTask, taskPrompt } = mod.__test;
+  const repos = [{ root: "/home/u/code/orbit", name: "orbit" }, { root: "/home/u/code/atlas", name: "atlas" }];
+
+  it("takes the repo the project names", () => {
+    expect(rootForTask("atlas", repos, "/fallback")).toBe("/home/u/code/atlas");
+    expect(rootForTask("Atlas", repos, "/fallback")).toBe("/home/u/code/atlas");
+  });
+
+  it("reads the last segment of a dotted project, which is how a hierarchy is spelled", () => {
+    expect(rootForTask("work.atlas", repos, "/fallback")).toBe("/home/u/code/atlas");
+  });
+
+  it("falls back to where the panel already is", () => {
+    expect(rootForTask("nothing-like-it", repos, "/fallback")).toBe("/fallback");
+    expect(rootForTask(null, repos, "/fallback")).toBe("/fallback");
+  });
+
+  it("says nowhere rather than picking a directory to be going on with", () => {
+    expect(rootForTask(null, [], null)).toBe(null);
+    expect(rootForTask("atlas", [], "")).toBe(null);
+  });
+
+  it("seeds a prompt from the task as written, and asks for nothing", () => {
+    const p = taskPrompt({
+      description: "the login redirect loops", project: "atlas", tags: ["auth", "web"],
+      notes: ["happens only with SSO", "  "],
+    });
+    expect(p).toContain("the login redirect loops");
+    expect(p).toContain("project: atlas");
+    expect(p).toContain("tags: auth, web");
+    expect(p).toContain("happens only with SSO");
+    // No instruction: this lands in a composer that has not been sent.
+    expect(p.toLowerCase()).not.toContain("please");
+    expect(p.toLowerCase()).not.toContain("fix this");
+  });
+
+  it("is just the description when there is nothing else", () => {
+    expect(taskPrompt({ description: "buy milk", project: null, tags: [], notes: [] })).toBe("buy milk");
+  });
+});
+
+describe("two identical checklist lines", () => {
+  const { toggleCheckbox, checkProgress } = mod.__test;
+
+  it("toggle independently, because the line is addressed by index", () => {
+    // The hazard the plan called out: `task denotate` matches by SUBSTRING, so
+    // anything that identified a line by its text would flip whichever copy it
+    // found first — and a list with "() review" twice is an ordinary list.
+    const note = "() review\n() review";
+    expect(toggleCheckbox(note, 0)).toBe("(x) review\n() review");
+    expect(toggleCheckbox(note, 1)).toBe("() review\n(x) review");
+  });
+
+  it("counts both", () => {
+    expect(checkProgress(["(x) review\n() review"])).toEqual({ done: 1, total: 2 });
+  });
+});

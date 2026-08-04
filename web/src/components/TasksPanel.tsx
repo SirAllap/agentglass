@@ -19,7 +19,7 @@ import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
-import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, SORTS, type SortMode } from "../lib/taskGrammar.ts";
+import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, TASK_KEYS, SORTS, type SortMode } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -65,7 +65,11 @@ const LABEL: Record<string, string> = {
   done: "Completed", priority: "Priority set", tag: "Tagged", delete: "Deleted",
 };
 
-export function TasksView({ active }: { active: boolean }) {
+
+export function TasksView({ active, onOpenChatWith }: {
+  active: boolean;
+  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+}) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
   const [repoOpen, setRepoOpen] = useState(false);
@@ -122,7 +126,7 @@ export function TasksView({ active }: { active: boolean }) {
           )}
         </div>
       </ViewHeader>
-      {source === "local" ? <LocalBody active={active} /> : (
+      {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} /> : (
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}
           {source === "all" && <LocalStrip active={active} onOpen={() => setSource("local")} />}
@@ -584,7 +588,13 @@ function LocalEmpty({ cap, done }: { cap: TaskCapability; done: number }) {
     : <>Nothing here yet.</>);
 }
 
-function LocalBody({ active }: { active: boolean }) {
+function LocalBody({ active, repos, here, onOpenChatWith }: {
+  active: boolean;
+  repos: GitRepoRef[];
+  /** The checkout the header is pointed at — what "here" means everywhere else. */
+  here: string;
+  onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
+}) {
   const { data, reload } = useLocalTasks(active);
   const [sel, setSel] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
@@ -706,6 +716,27 @@ function LocalBody({ active }: { active: boolean }) {
     reload();
   }, [marked, fp, reload]);
 
+  /**
+   * Somewhere to actually do the task, in the checkout it is about.
+   *
+   * `w` opens a plain shell there; `c` opens a chat with the task already in
+   * the composer and NOT sent — a Claude run costs real tokens and should not
+   * begin because a key was pressed next to the one that sorts a list. Both go
+   * through machinery that already exists: the terminal is asked for a
+   * directory, never for a command.
+   */
+  const openFor = useCallback((t: LocalTask, how: "shell" | "chat") => {
+    const cwd = rootForTask(t.project, repos, here);
+    if (!cwd) {
+      setNote({ ok: false, text: "No checkout to open this in — give the task a project that names one" });
+      return;
+    }
+    const name = `t${t.uuid.slice(0, 6)}`;
+    if (how === "shell") { requestTermIssue(cwd, name, "", false); return; }
+    if (!onOpenChatWith) { setNote({ ok: false, text: "Chat is not available here" }); return; }
+    onOpenChatWith(cwd, taskPrompt(t), t.description.slice(0, 60));
+  }, [repos, here, onOpenChatWith]);
+
   const onKey = useCallback((e: React.KeyboardEvent) => {
     const inBar = document.activeElement === barRef.current;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -761,8 +792,10 @@ function LocalBody({ active }: { active: boolean }) {
       stop();
       void write(() => api.taskTags(cur.uuid, copiedTags, fp));
     }
+    else if (k === "w") { if (!cur) return; stop(); openFor(cur, "shell"); }
+    else if (k === "c") { if (!cur) return; stop(); openFor(cur, "chat"); }
     else if (k === "d") { if (!cur) return; stop(); void write(() => api.taskDelete(cur.uuid, fp)); }
-  }, [open, done, showDone, sel, fp, write, copiedTags, toggleMark]);
+  }, [open, done, showDone, sel, fp, write, copiedTags, toggleMark, openFor]);
 
   if (!data) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading your task list…</div>;
   const cap = data.capability;
@@ -866,11 +899,23 @@ function LocalBody({ active }: { active: boolean }) {
         style={{ width: 380, borderLeft: edge(12) }}>
         {picked ? <TaskDetail t={picked} today={today} reminder={byTask[picked.uuid] ?? null}
           writable={cap.configured}
+          onShell={() => openFor(picked, "shell")}
+          onChat={onOpenChatWith ? () => openFor(picked, "chat") : undefined}
           onToggleNote={(oldText, newText) => { void write(() => api.taskNote(picked.uuid, oldText, newText, fp)); }}
           onCancel={async () => { const r = byTask[picked.uuid]; if (r) { await api.reminderCancel(r.id); await nudgeReminders(); reload(); } }} /> : (
           <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a task.</div>
         )}
       </aside>
+      </div>
+      <div className="agx-scroll px-4 py-1.5 flex items-center gap-3 overflow-x-auto text-[9.5px]"
+        style={{ borderTop: edge(10), color: "var(--text3)" }}>
+        {TASK_KEYS.map((k) => (
+          <span key={k.keys.join()} className="whitespace-nowrap">
+            <kbd style={{ color: "var(--text2)" }}>
+              {k.keys.map((x) => (x === "Escape" ? "Esc" : x)).join(" / ")}
+            </kbd> {k.what}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -1085,12 +1130,14 @@ function BulkBar({ n, tagging, tag, onTag, onTagging, onRun, onClear }: {
   );
 }
 
-function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote }: {
+function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onShell, onChat }: {
   t: LocalTask; today: string;
   reminder?: import("../../../shared/types.ts").Reminder | null;
   onCancel?: () => void;
   writable?: boolean;
   onToggleNote?: (oldText: string, newText: string) => void;
+  onShell?: () => void;
+  onChat?: () => void;
 }) {
   const progress = checkProgress(t.notes);
   return (
@@ -1123,6 +1170,22 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote }: {
           <button onClick={onCancel} className="text-[10px] px-2 py-0.5 rounded" style={{ border: edge(20), color: "var(--text2)" }}>
             remove
           </button>
+        </div>
+      )}
+      {(onShell || onChat) && (
+        <div className="flex items-center gap-1.5 mb-4">
+          {onShell && (
+            <button onClick={onShell} className="text-[10.5px] px-2 py-1 rounded-lg"
+              style={{ border: edge(18), color: "var(--text2)" }} title="w">
+              Shell here
+            </button>
+          )}
+          {onChat && (
+            <button onClick={onChat} className="text-[10.5px] px-2 py-1 rounded-lg"
+              style={{ border: edge(18), color: "var(--text2)" }} title="c — the prompt waits in the composer, unsent">
+              Ask Claude
+            </button>
+          )}
         </div>
       )}
       {!!t.notes.length && (

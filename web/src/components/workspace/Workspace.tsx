@@ -185,7 +185,7 @@ function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusI
 }) {
   switch (id) {
     case "files": return <FilesView active={active} />;
-    case "tasks": return <TasksView active={active} />;
+    case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
     case "diff": return <DiffView active={active} />;
     case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} />;

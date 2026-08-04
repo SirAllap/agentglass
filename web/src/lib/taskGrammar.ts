@@ -148,3 +148,78 @@ export function checkProgress(notes: string[]): { done: number; total: number } 
   }
   return { done, total };
 }
+
+/**
+ * Which checkout a local task is about.
+ *
+ * Taskwarrior has nowhere to put this — there is no field for "the repository"
+ * and adding a UDA would mean writing to the user's `~/.taskrc`, which this app
+ * does not do. So it is inferred, and only from something the user actually
+ * typed: `project:agentglass` names a repo called agentglass. Matching is
+ * case-insensitive and also accepts the LAST segment of a dotted project,
+ * because `@work.agentglass` is how a hierarchy is spelled here.
+ *
+ * The fallback is the checkout the panel is already pointed at — the same
+ * "here" the rest of the app means by it. When there is nothing at all, null:
+ * opening a shell in an arbitrary directory because we had to pick one is worse
+ * than saying there is nowhere to open it.
+ */
+export function rootForTask(
+  project: string | null, repos: { root: string; name: string }[], fallback: string | null,
+): string | null {
+  const want = (project ?? "").trim().toLowerCase();
+  if (want) {
+    const tail = want.split(".").pop()!;
+    const hit = repos.find((r) => r.name.toLowerCase() === want)
+      ?? repos.find((r) => r.name.toLowerCase() === tail);
+    if (hit) return hit.root;
+  }
+  return fallback || null;
+}
+
+/**
+ * What to hand an agent that is being asked about a task.
+ *
+ * The task as the user wrote it, not a paraphrase — description, then whatever
+ * they put in the notes, which is where the actual detail lives. No instruction
+ * to do anything: this lands in a composer that has not been sent, and deciding
+ * what to ask for is the user's half of that.
+ */
+export function taskPrompt(t: { description: string; project: string | null; tags: string[]; notes: string[] }): string {
+  const head = [t.description];
+  const meta = [t.project ? `project: ${t.project}` : "", t.tags.length ? `tags: ${t.tags.join(", ")}` : ""]
+    .filter(Boolean).join(" · ");
+  if (meta) head.push(meta);
+  const body = t.notes.filter((n) => n.trim()).join("\n\n");
+  return body ? `${head.join("\n")}\n\n${body}` : head.join("\n");
+}
+
+/**
+ * Every key the local list answers to, in one place.
+ *
+ * This array IS the legend on screen, and a test reads it against the branches
+ * of the handler: a key advertised here with nothing behind it, or a key in the
+ * handler nobody is told about, fails the build. A keyboard model nobody can
+ * discover is the same as not having one — which is what this panel was until
+ * the shortcuts had somewhere to be printed.
+ *
+ * `keys` is a list rather than a string with slashes in it, because one of the
+ * keys IS a slash and splitting on it produced two keys named "".
+ */
+export const TASK_KEYS: { keys: string[]; what: string }[] = [
+  { keys: ["j", "k"], what: "move" },
+  { keys: ["g", "G"], what: "first / last" },
+  { keys: ["Tab"], what: "mark and move on" },
+  { keys: ["Enter"], what: "complete or reopen" },
+  { keys: ["e"], what: "edit in the bar" },
+  { keys: ["p"], what: "priority" },
+  { keys: ["r"], what: "remind me" },
+  { keys: ["t", "v"], what: "copy tags / paste them" },
+  { keys: ["s"], what: "sort" },
+  { keys: ["f"], what: "clear the filter" },
+  { keys: ["w"], what: "shell here" },
+  { keys: ["c"], what: "ask Claude" },
+  { keys: ["d"], what: "delete" },
+  { keys: ["/"], what: "the bar" },
+  { keys: ["Escape"], what: "back to the bar, drop the marks" },
+];
