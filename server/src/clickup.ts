@@ -174,7 +174,7 @@ interface RawTask {
   priority?: { priority?: string } | null;
   tags?: { name?: string }[];
   list?: { id?: string; name?: string } | null;
-  assignees?: { id?: string | number; username?: string; initials?: string }[];
+  assignees?: { id?: string | number; username?: string; initials?: string; color?: string; profilePicture?: string }[];
   locations?: { id?: string; name?: string }[];
   points?: number | null;
   custom_fields?: RawField[];
@@ -254,7 +254,13 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     list: raw.list?.name ?? null,
     listId: raw.list?.id ? String(raw.list.id) : undefined,
     assignees: assignees.map((a) => a.username ?? "").filter(Boolean),
-    assigneeInitials: assignees.map((a) => a.initials || initialsOf(a.username ?? "")).filter(Boolean),
+    people: assignees.map((a) => ({
+      name: a.username ?? "",
+      initials: a.initials || initialsOf(a.username ?? ""),
+      color: a.color || undefined,
+      avatar: a.profilePicture || undefined,
+      me: myId ? String(a.id ?? "") === myId : undefined,
+    })).filter((x) => x.name || x.initials),
     // A sprint is another LIST the card also lives in. `locations` holds those,
     // minus the one it belongs to primarily.
     sprint: shortSprint((raw.locations ?? []).map((l) => l.name ?? "").find((n) => n && n !== raw.list?.name)),

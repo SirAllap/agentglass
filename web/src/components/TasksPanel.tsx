@@ -832,7 +832,6 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
               borderTop: edge(10), borderBottom: edge(10) }}>
             <span>Task</span>
             {anyWho && <span>Who</span>}
-            <span>Status</span>
             {anySprint && <span>Sprint</span>}
             <span>Due</span><span>Pts</span><span />
           </div>
@@ -853,9 +852,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
               </button>
             )}
             {found && (
-              <div>
-                <div className="px-5 pt-3 pb-1.5 text-[8.5px] uppercase tracking-[0.16em]" style={{ color: "var(--text4)" }}>
-                  Fetched by id · {found.list ?? "elsewhere"}
+              <div style={{ marginTop: 18 }}>
+                {/* This one is not in a group, so it carries its own status —
+                    which the grouped rows get from their heading. */}
+                <div className="px-5 py-2 flex items-center gap-2.5" style={{ borderTop: edge(9) }}>
+                  <span className="text-[8.5px] uppercase tracking-[0.16em]" style={{ color: "var(--text4)" }}>
+                    Fetched by id
+                  </span>
+                  <StatusPill status={found.status} color={found.statusColor} dim={found.statusKind === "done"} />
+                  <span className="text-[10.5px] truncate" style={{ color: "var(--text4)" }}>{found.list ?? ""}</span>
                 </div>
                 <ClickUpRow t={found} today={today} on={found.id === sel} onPick={() => setSel(found.id)}
                   grid={grid} showWho={anyWho} showSprint={anySprint} />
@@ -871,15 +876,25 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
             {/* Grouped by status, in the board's own workflow order, each group
                 foldable with its count — the shape ClickUp itself uses, and the
                 one that answers "what is in review" without a filter. */}
-            {groups.map((g) => (
-              <div key={g.status}>
+            {groups.map((g, gi) => (
+              <div key={g.status} style={{ marginTop: gi ? 18 : 4 }}>
+                {/* The whole heading is the control, not a glyph beside it. A
+                    nine-pixel triangle is a target you aim at; a row you can hit
+                    anywhere is one you use. */}
                 <button onClick={() => setFolded((f) => ({ ...f, [g.status]: !f[g.status] }))}
-                  className="w-full flex items-center gap-2 px-5 pt-3 pb-1.5 text-left hover:bg-white/5">
-                  <span style={{ color: "var(--text4)", fontSize: 9 }}>{folded[g.status] ? "▸" : "▾"}</span>
+                  aria-expanded={!folded[g.status]}
+                  className="w-full flex items-center gap-2.5 px-5 py-2 text-left hover:bg-white/5"
+                  style={{ borderTop: gi ? edge(9) : undefined }}>
+                  <span aria-hidden className="inline-block text-center"
+                    style={{ color: "var(--text3)", fontSize: 11, width: 12,
+                      transform: folded[g.status] ? "none" : "rotate(90deg)", transition: "transform 110ms ease" }}>▸</span>
                   <StatusPill status={g.status} color={g.color} dim={g.done} />
-                  <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>{g.rows.length}</span>
+                  <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>{g.rows.length}</span>
                   {g.points > 0 && (
-                    <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>· {g.points} pts</span>
+                    <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text4)" }}>· {g.points} pts</span>
+                  )}
+                  {folded[g.status] && (
+                    <span className="text-[10px]" style={{ color: "var(--text4)" }}>· hidden</span>
                   )}
                 </button>
                 {!folded[g.status] && g.rows.map((t) => (
@@ -1013,8 +1028,18 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note }: {
  */
 const YOLO_KEY = "agentglass.clickup.skipPermissions";
 
+/*
+ * The columns, and the ones that come and go.
+ *
+ * No status column: the rows are grouped BY status, so every row in a group
+ * would carry the same pill its own heading already shows. That is 170px of
+ * repetition, taken from the one column whose content varies — the title.
+ *
+ * `Who` and `Sprint` appear only once some card actually has one. A column of
+ * blanks costs the title its width and tells you nothing.
+ */
 const cuGrid = (who: boolean, sprint: boolean) =>
-  ["1fr", who ? "54px" : "", "170px", sprint ? "96px" : "", "78px", "32px", "48px"].filter(Boolean).join(" ");
+  ["1fr", who ? "54px" : "", sprint ? "96px" : "", "78px", "32px", "48px"].filter(Boolean).join(" ");
 
 /**
  * A status, spelled and coloured the way the board spells and colours it.
@@ -1040,6 +1065,40 @@ function StatusPill({ status, color, dim }: { status: string; color?: string; di
         border: `1px solid color-mix(in srgb, ${c} ${dim ? 18 : 34}%, transparent)`,
       }}>
       {status.toUpperCase()}
+    </span>
+  );
+}
+
+/*
+ * One person, as a face.
+ *
+ * Initials are not enough on a real board: two people here share `AG`, and a
+ * column of identical grey squares is a column that tells you nothing. So the
+ * picture when there is one, the person's OWN colour behind their initials when
+ * there is not, and the full name on hover either way.
+ *
+ * Overlapped slightly, the way every tool draws a row of assignees, so three of
+ * them still fit in the width of one.
+ */
+function Face({ p, n }: { p: NonNullable<ProviderTask["people"]>[number]; n: number }) {
+  const ring = p.me ? "var(--success)" : "transparent";
+  const base = {
+    width: 18, height: 18, borderRadius: 999, marginLeft: n ? -5 : 0,
+    boxShadow: `0 0 0 1.5px ${ring}, 0 0 0 3px var(--bg)`,
+    zIndex: 10 - n,
+  } as const;
+  if (p.avatar) {
+    return (
+      <img src={p.avatar} alt="" title={p.me ? `${p.name} — you` : p.name}
+        loading="lazy" referrerPolicy="no-referrer"
+        style={{ ...base, objectFit: "cover", position: "relative" }} />
+    );
+  }
+  return (
+    <span title={p.me ? `${p.name} — you` : p.name}
+      className="inline-flex items-center justify-center text-[8px] font-medium"
+      style={{ ...base, position: "relative", background: p.color || "var(--bg4)", color: "#fff" }}>
+      {p.initials}
     </span>
   );
 }
@@ -1087,17 +1146,13 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint }: {
         </div>
       </div>
       {showWho && (
-        <span className="flex items-center gap-1">
-          {t.mine
-            ? <span className="text-[8.5px] px-1 rounded" title={t.assignees.join(", ")}
-                style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 16%, transparent)" }}>YOU</span>
-            : t.assigneeInitials?.slice(0, 2).map((i, n) => (
-                <span key={n} className="text-[8.5px] px-1 rounded" title={t.assignees.join(", ")}
-                  style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>{i}</span>
-              ))}
+        <span className="flex items-center" style={{ paddingLeft: 3 }}>
+          {(t.people ?? []).slice(0, 3).map((p, n) => <Face key={n} p={p} n={n} />)}
+          {(t.people?.length ?? 0) > 3 && (
+            <span className="text-[8.5px] ml-1" style={{ color: "var(--text4)" }}>+{(t.people!.length) - 3}</span>
+          )}
         </span>
       )}
-      <span className="min-w-0"><StatusPill status={t.status} color={t.statusColor} dim={done} /></span>
       {showSprint && (
         <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
           title={t.sprint ?? ""}>{t.sprint ?? "—"}</span>
@@ -1330,7 +1385,14 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
               done: t.mine ? "Taken off" : "Assigned to you",
               go: () => api.clickupAssign(t.id, !t.mine, t.updated),
             })}>
-            {t.mine ? "you" : (t.assignees.join(", ") || "nobody")}{writable ? " ▾" : ""}
+            <span className="inline-flex items-center gap-1.5">
+              {!!t.people?.length && (
+                <span className="inline-flex items-center" style={{ paddingLeft: 3 }}>
+                  {t.people.slice(0, 4).map((p, n) => <Face key={n} p={p} n={n} />)}
+                </span>
+              )}
+              <span>{t.mine ? "you" : (t.assignees.join(", ") || "nobody")}{writable ? " ▾" : ""}</span>
+            </span>
           </button>
         </CardField>
 

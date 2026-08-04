@@ -161,9 +161,23 @@ export interface ProviderTask {
   list: string | null;
   listId?: string;
   assignees: string[];
-  /** Initials for the row, where the provider gives them — a column of names
-   *  wide enough to read is a column that costs the title its space. */
-  assigneeInitials?: string[];
+  /**
+   * Who is on it, with what a row needs to draw them.
+   *
+   * Initials alone are not enough, and that is not hypothetical: on a real
+   * board two people share `AG`. The avatar tells them apart, and the colour —
+   * the workspace's own, one per person — does it when there is no photo.
+   */
+  people?: {
+    name: string;
+    initials: string;
+    /** The colour ClickUp assigned this person. */
+    color?: string;
+    /** Their picture, when they have uploaded one. */
+    avatar?: string;
+    /** True for the connected account. */
+    me?: boolean;
+  }[];
   /**
    * The sprint this card is in, when it is in one.
    *
