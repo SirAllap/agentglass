@@ -1039,6 +1039,47 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   );
 }
 
+/**
+ * The worktree the focused pane's agent is working in, read from what it prints.
+ *
+ * The process cwd is no help — every agent's shell, its `claude`, and their
+ * children sit in the PARENT repo; the agent reaches into a worktree with
+ * `git -C` and `cd` in subcommands without moving its own directory. But the
+ * tool calls it prints DO name the checkout it edits (`Update(~/code/orbit-
+ * WEB-1042/…)`), and that is on screen. So scan the scrollback bottom-up for the
+ * most recently named worktree folder — matched as a whole path segment, so
+ * `code/orbit` is not caught inside `code/orbit-WEB-1042`. Only linked worktrees
+ * are candidates; the parent repo is the shell's own cwd (the noise) and never
+ * what we mean. Null when nothing recognisable is there (a fresh agent, one in
+ * the repo root), where the caller falls back to the picker.
+ *
+ * Best-effort by nature: it reads output, not a fact the app was handed. Bounded
+ * to the last screens so a stale line from a tmux window switched away from does
+ * not win over the window on screen now.
+ */
+function detectPaneWorktree(term: Terminal | undefined, worktrees: GitRepoRef[]): GitRepoRef | null {
+  if (!term || !worktrees.length) return null;
+  const cands = worktrees.map((r) => ({ r, leaf: dirName(r.root) }));
+  const AFTER = "/ ):'\",";
+  try {
+    const buf = term.buffer.active;
+    const top = buf.baseY + buf.cursorY;
+    for (let y = top; y >= Math.max(0, top - 250); y--) {
+      const line = buf.getLine(y)?.translateToString(true);
+      if (!line) continue;
+      for (const c of cands) {
+        let i = line.indexOf(c.leaf);
+        while (i >= 1) {
+          const after = line[i + c.leaf.length];
+          if (line[i - 1] === "/" && (after === undefined || AFTER.includes(after))) return c.r;
+          i = line.indexOf(c.leaf, i + 1);
+        }
+      }
+    }
+  } catch { /* buffer not ready — fall back to the picker */ }
+  return null;
+}
+
 export function TermView({ active, onClose = () => {} }: { active: boolean; onClose?: () => void }) {
   const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
@@ -1581,8 +1622,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         // Empty box shows only what is live — a dozen idle checkouts is the
                         // noise the picker was drowning in. A search, or "Show all", looks
                         // through every one.
+                        // What THIS pane's agent is working in, read from its terminal output.
+                        const detected = detectPaneWorktree(sess?.term, all.filter((r) => r.worktreeOf));
                         const base = (q || wtShowAll || active.length === 0) ? all : active;
-                        const list = base.filter((r) => !q || (r.branch + " " + dirName(r.root)).toLowerCase().includes(q));
+                        const list = base.filter((r) => !q || (r.branch + " " + dirName(r.root)).toLowerCase().includes(q)).filter((r) => r.root !== detected?.root);
                         const hiddenCount = all.length - active.length;
                         return (
                           <div className="absolute right-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 400, maxWidth: "min(90vw, 640px)", maxHeight: 440, overflow: "hidden" }}>
@@ -1593,6 +1636,20 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               )}
                             </div>
                             <input autoFocus value={wtQuery} onChange={(e) => setWtQuery(e.target.value)} placeholder="Filter by ticket or name…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                            {detected && !wtQuery && (
+                              /* Auto-detected from the focused pane's agent output — the one you
+                                 almost certainly want, pinned above the list and out of the filter. */
+                              <div className="w-full px-2.5 py-1.5 flex items-center gap-2 shrink-0" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                                <span className="shrink-0 text-[8px] uppercase tracking-wider px-1 py-[2px] rounded self-start mt-0.5" title="Read from this pane's agent output" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
+                                <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${detected.branch}\n${detected.root}`}>
+                                  <span className="truncate font-medium" style={{ color: "var(--text)" }}>{detected.branch}</span>
+                                  <span className="truncate text-[9px]" style={{ color: "var(--text3)" }}>{dirName(detected.root)}</span>
+                                </span>
+                                {detected.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${detected.dirty} changed file${detected.dirty === 1 ? "" : "s"}`}>●{detected.dirty}</span>}
+                                <button onClick={() => { requestWorktreeJump({ view: "git", root: detected.root }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open in Source control">Git</button>
+                                <button onClick={() => { requestWorktreeJump({ view: "diff", filter: dirName(detected.root) }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                              </div>
+                            )}
                             <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
                               {list.map((r) => {
                                 const wt = !!r.worktreeOf;
