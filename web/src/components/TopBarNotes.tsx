@@ -26,7 +26,7 @@
 // came out of was being pulled away from the terminal to find out what wanted
 // you; a surface welded to the top of the window is one you can read without
 // going anywhere.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { api } from "../lib/api.ts";
 import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
@@ -286,18 +286,76 @@ function Cap({ children, dim }: { children: React.ReactNode; dim?: boolean }) {
   );
 }
 
+/** The disclosure arrow, turning rather than swapping glyph: one control that
+ *  moves reads as the same thing in two states, which "▾ / ▴" did not. */
+export function Chevron({ up, size = 12 }: { up: boolean; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden
+      style={{ transform: up ? "rotate(180deg)" : undefined, transition: "transform .16s ease" }}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+/** Is this element showing less than it holds? Measured, because the guess it
+ *  replaces ("longer than 90 characters, or has a newline") was wrong in both
+ *  directions: a 120-character message can fit two lines, and a short one with
+ *  a long URL in it cannot. */
+const isCut = (el: HTMLElement | null): boolean =>
+  !!el && (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
+
+/**
+ * Watch some elements and say whether any of them is clipped.
+ *
+ * Not a plain layout effect, which is what this was and why the control never
+ * appeared: every surface here lives inside a `Portal`, and a Portal appends its
+ * container in an effect of its own. A child's effects run before its parent's,
+ * so measuring at that point measures an element that is not in the document —
+ * height zero, width zero, "nothing is hidden" over a message that was entirely
+ * hidden. Found by probe: the panel reported 168px of clipped text and the
+ * expand button was not rendered.
+ *
+ * A ResizeObserver answers both halves: it fires once when observation starts —
+ * by which time the node is attached — and again whenever the panel is resized
+ * or the app's UI scale changes.
+ */
+export function useClipped(els: React.RefObject<HTMLElement | null>[], enabled: boolean, deps: unknown[]): boolean {
+  const [cut, setCut] = useState(false);
+  useLayoutEffect(() => {
+    if (!enabled) return;
+    const measure = () => setCut(els.some((r) => isCut(r.current)));
+    measure();
+    const raf = requestAnimationFrame(measure);
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    for (const r of els) if (r.current && ro) ro.observe(r.current);
+    return () => { cancelAnimationFrame(raf); ro?.disconnect(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, ...deps]);
+  return cut;
+}
+
 function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; onGoto: (g: NonNullable<SystemNote["goto"]>) => void }) {
   const [open, setOpen] = useState(false);
-  const long = n.body.length > 90 || n.body.includes("\n");
+  const bodyEl = useRef<HTMLSpanElement>(null);
+  const sumEl = useRef<HTMLSpanElement>(null);
+  // Measured while closed only — open, nothing is clipped by definition, so
+  // asking then would answer "no" and take the control away mid-read.
+  const cut = useClipped([bodyEl, sumEl], !open, [n.body, n.summary]);
+
   // Clickable only when there is somewhere to go. A row that highlights under
   // the pointer and then does nothing is the thing being fixed here, so the
   // affordance appears exactly where it is honest.
   const go = n.goto ? () => onGoto(n.goto!) : null;
+  const expandable = cut || open;
+  // With nowhere to go, the row itself opens the message — which is what the
+  // desktop's own list does, and what anyone tries first.
+  const act = go ?? (expandable ? () => setOpen((v) => !v) : null);
   return (
-    <div className={go ? "agx-note-row agx-note-row-go" : "agx-note-row"}
-      onClick={go ?? undefined}
-      role={go ? "button" : undefined}
-      title={go ? `Open ${n.goto!.repo}#${n.goto!.number}` : undefined}>
+    <div className={`agx-note-row${go ? " agx-note-row-go" : act ? " agx-note-row-open" : ""}`}
+      onClick={act ?? undefined}
+      role={act ? "button" : undefined}
+      title={go ? `Open ${n.goto!.repo}#${n.goto!.number}` : expandable ? (open ? "Show less" : "Show the whole message") : undefined}>
       <div className="flex items-start gap-2">
         <span className="flex flex-col min-w-0 flex-1 gap-[3px]">
           <span className="flex items-center gap-2">
@@ -305,13 +363,18 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
             <Cap dim>{ago(n.at)}</Cap>
             {n.urgency === 2 && <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--error)" }}>urgent</span>}
           </span>
-          <span className="text-[11.5px] font-semibold truncate" style={{ color: "var(--text)" }}>{n.summary}</span>
+          {/* The title unwraps too. Expanding has to mean "show me all of it",
+              and a summary cut at one line with an ellipsis is part of "all of
+              it" — a Slack notification puts the channel and the sender there. */}
+          <span ref={sumEl}
+            className={open ? "text-[11.5px] font-semibold" : "text-[11.5px] font-semibold truncate"}
+            style={{ color: "var(--text)", ...(open ? { overflowWrap: "anywhere" as const } : null) }}>{n.summary}</span>
           {/* Wraps, never widens. A nowrap line contributes its whole length to
               the container's max-content width, which is what let one long Slack
               message stretch the panel across the screen. Clamped to two lines
               closed, unclamped open — so expanding grows downward. */}
           {n.body && (
-            <span className={open ? "agx-note-body" : "agx-note-body agx-note-body-clamp"}>{n.body}</span>
+            <span ref={bodyEl} className={open ? "agx-note-body" : "agx-note-body agx-note-body-clamp"}>{n.body}</span>
           )}
           {/* Named, not a bare arrow. An unlabelled ↗ next to a Slack
               notification reads as "go to Slack", which is the one thing it
@@ -324,11 +387,19 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
           )}
         </span>
         <span className="flex items-center gap-1 shrink-0">
-          {long && (
-            <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-              title={open ? "Collapse" : "Show the whole message"}>{open ? "▴" : "▾"}</button>
+          {/* A control, not a character. This was a 10px "▾" wedged against the
+              ✕, which is an affordance nobody finds — the message looked simply
+              truncated, with the rest of it unreachable. Same size and shape as
+              the dismiss button beside it, so the pair reads as "open it" and
+              "get rid of it". */}
+          {expandable && (
+            <button className="agx-note-btn agx-note-icon" aria-expanded={open}
+              onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+              title={open ? "Show less" : "Show the whole message"}>
+              <Chevron up={open} />
+            </button>
           )}
-          <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); onGone(); }} title="Dismiss">✕</button>
+          <button className="agx-note-btn agx-note-icon" onClick={(e) => { e.stopPropagation(); onGone(); }} title="Dismiss">✕</button>
         </span>
       </div>
     </div>

@@ -552,6 +552,14 @@ textarea.bg-transparent {
   overflow: hidden;
   color: var(--text2);
 }
+/* Opened on the card. Bounded and scrollable rather than unbounded: a card is
+   an overlay, and a five-hundred-word message that grows one would run off the
+   bottom of the screen with its own dismiss button below the fold. */
+.agx-note-toast-open {
+  max-height: 40vh;
+  overflow-y: auto;
+  color: var(--text2);
+}
 .agx-note-row + .agx-note-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
@@ -566,6 +574,12 @@ textarea.bg-transparent {
 .agx-note-row-go:hover {
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
+/* Rows that open rather than travel. The pointer is honest — something happens
+   — but not the primary tint, which in this panel means "this leads somewhere
+   else in the app". */
+.agx-note-row-open {
+  cursor: pointer;
+}
 /* Really a control, so here a pointer and a hover fill are honest rather than
    misleading. */
 .agx-note-btn {
@@ -576,6 +590,21 @@ textarea.bg-transparent {
   cursor: pointer;
   color: var(--text3);
   transition: background 0.12s ease, color 0.12s ease;
+}
+/* The two square controls in a row's corner — disclose and dismiss. Given a
+   real target size rather than a glyph's worth of padding: the arrow used to be
+   a 10px character you had to aim at, which is why the message read as simply
+   cut off with no way to see the rest. */
+.agx-note-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+}
+.agx-note-icon:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
 }
 .agx-note-btn:hover {
   background: color-mix(in srgb, var(--primary) 22%, transparent);
