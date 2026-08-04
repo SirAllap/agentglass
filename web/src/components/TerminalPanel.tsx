@@ -13,6 +13,7 @@ import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/Vi
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
@@ -22,7 +23,7 @@ import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow } from "../../
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
-import { wantsWebgl, fallBackToDom } from "../lib/termRenderer.ts";
+import { wantsWebgl, wantsCanvas, fallBackToDom } from "../lib/termRenderer.ts";
 import { isFindChord } from "../lib/termKeys.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
 import { THEMES } from "../lib/themes.ts";
@@ -505,7 +506,15 @@ function createSession(root: string): Sess {
       // to the DOM renderer app-wide and remember it, so no new shell hits it.
       gl.onContextLoss(() => { fallBackToDom(); try { gl.dispose(); } catch { /* already gone */ } });
       term.loadAddon(gl);
-    } catch { /* no WebGL2 here — the DOM renderer stays */ }
+    } catch { /* no WebGL2 here — canvas below, or the DOM renderer */ }
+  } else if (wantsCanvas()) {
+    // Not a consolation prize for missing a GPU: this is the renderer that
+    // draws box-drawing characters itself, so `│` between two tmux panes is a
+    // line rather than whatever the machine's fallback font happens to have.
+    // The DOM renderer cannot do that, and which font you had chosen decided
+    // whether your rules were solid. Failure here is not worth a word to the
+    // user — the DOM renderer takes over and the shell never noticed.
+    try { term.loadAddon(new CanvasAddon()); } catch { /* the DOM renderer stays */ }
   }
   // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
   term.attachCustomKeyEventHandler((e) => {
