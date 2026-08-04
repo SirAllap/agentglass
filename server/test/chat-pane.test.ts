@@ -10,7 +10,11 @@ import { test, expect, beforeAll } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.AGENTGLASS_TMUX_SOCKET = "agentglass-test-never-started";
+// Unique per run, like the state dirs below. A fixed socket name is not a
+// private server — it is a path, and anything already listening there is what
+// the suite ends up talking to.
+const SOCKET = `agx-pane-test-${process.pid}`;
+process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
 process.env.AGENTGLASS_STATE_DIR = join(tmpdir(), `agx-pane-test-${process.pid}`);
 process.env.AGENTGLASS_CLAUDE_HOME = join(tmpdir(), `agx-claude-home-${process.pid}`);
 
@@ -52,7 +56,7 @@ test("the attach command names our socket, not the user's default server", () =>
   const cmd = pane.attachCommand("6f1c9b52-0000-4000-8000-0123456789ab");
   // The `-L` is the whole reason the user's own tmux (and their resurrect saves)
   // are untouched. A command without it would attach to their server.
-  expect(cmd).toContain("-L agentglass-test-never-started");
+  expect(cmd).toContain(`-L ${SOCKET}`);
   expect(cmd).toContain("attach -t 6f1c9b52-0000-4000-8000-0123456789ab");
 });
 
