@@ -22,7 +22,7 @@ import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { cardSkills, skillCommand, windowName, skillModes, namedForIt } from "../lib/cardSkills.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
-import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
+import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, stamp, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -609,6 +609,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   const [showDone, setShowDone] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Pending | null>(null);
+  const [statusPick, setStatusPick] = useState<string[]>([]);
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const today = todayStr();
 
@@ -665,11 +667,13 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
     const all = data?.tasks ?? [];
     const needle = q.trim().toLowerCase();
     return all.filter((t) =>
-      (showDone || t.statusKind !== "done")
+      // An explicit pick overrides the done/not-done default: asking to see
+      // "in production" and getting nothing would be absurd.
+      (statusPick.length ? statusPick.includes(t.status) : (showDone || t.statusKind !== "done"))
       && (!mineOnly || t.mine)
       && (!tag || t.tags.includes(tag))
       && (!needle || t.title.toLowerCase().includes(needle)));
-  }, [data, q, tag, mineOnly, showDone]);
+  }, [data, q, tag, mineOnly, showDone, statusPick]);
 
   const tags = useMemo(() => {
     const seen = new Set<string>();
@@ -687,6 +691,31 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   }, [data]);
 
   const picked = rows.find((t) => t.id === sel) ?? null;
+  const anyWho = (data?.tasks ?? []).some((t) => t.assignees.length);
+  const anySprint = (data?.tasks ?? []).some((t) => t.sprint);
+  const grid = cuGrid(anyWho, anySprint);
+
+  /* One group per status that HAS something, ordered by the board's own
+     workflow rather than alphabetically or by count — a board is read in the
+     order work moves through it. */
+  const groups = useMemo(() => {
+    const order = new Map((data?.statuses ?? []).map((s, i) => [s.status, { i, color: s.color, type: s.type }]));
+    const by = new Map<string, ProviderTask[]>();
+    for (const t of rows) {
+      const k = t.status || "—";
+      (by.get(k) ?? by.set(k, []).get(k)!).push(t);
+    }
+    return [...by.entries()]
+      .map(([status, list]) => ({
+        status,
+        rows: list,
+        color: order.get(status)?.color ?? list[0]?.statusColor,
+        done: (order.get(status)?.type ?? "") === "done" || (order.get(status)?.type ?? "") === "closed",
+        points: list.reduce((n, t) => n + (t.points ?? 0), 0),
+        i: order.get(status)?.i ?? 999,
+      }))
+      .sort((a, b) => a.i - b.i);
+  }, [rows, data?.statuses]);
 
   if (!boards) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading your boards…</div>;
 
@@ -748,6 +777,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
               ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
               : { border: edge(14), color: "var(--text3)" }}>{t}</button>
         ))}
+        <StatusFilter statuses={data?.statuses ?? []} tasks={data?.tasks ?? []}
+          picked={statusPick} onPick={setStatusPick} />
         <span className="flex-1" />
         {/* Hidden by default and counted, so nobody has to wonder where the
             finished work went. `done` here is ClickUp's own status TYPE — see
@@ -776,26 +807,49 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
       <div className="flex flex-1 min-h-0">
         <div className="flex flex-col flex-1 min-w-0">
           <div className="px-5 py-1 text-[8.5px] uppercase tracking-[0.16em] shrink-0"
-            style={{ display: "grid", gridTemplateColumns: CU_GRID, gap: 10, color: "var(--text4)",
+            style={{ display: "grid", gridTemplateColumns: grid, gap: 10, color: "var(--text4)",
               borderTop: edge(10), borderBottom: edge(10) }}>
-            <span>Task</span><span>Status</span><span>Due</span><span>Pts</span><span />
+            <span>Task</span>
+            {anyWho && <span>Who</span>}
+            <span>Status</span>
+            {anySprint && <span>Sprint</span>}
+            <span>Due</span><span>Pts</span><span />
           </div>
           <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
             {!rows.length && (
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
                 {data?.error ? "Nothing to show — the last read did not get through."
-                  : q || tag || mineOnly ? "Nothing matches that."
+                  : q || tag || mineOnly || statusPick.length ? "Nothing matches that."
                   : "This board has nothing open."}
               </div>
             )}
-            {rows.map((t) => (
-              <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)} />
+            {/* Grouped by status, in the board's own workflow order, each group
+                foldable with its count — the shape ClickUp itself uses, and the
+                one that answers "what is in review" without a filter. */}
+            {groups.map((g) => (
+              <div key={g.status}>
+                <button onClick={() => setFolded((f) => ({ ...f, [g.status]: !f[g.status] }))}
+                  className="w-full flex items-center gap-2 px-5 pt-3 pb-1.5 text-left hover:bg-white/5">
+                  <span style={{ color: "var(--text4)", fontSize: 9 }}>{folded[g.status] ? "▸" : "▾"}</span>
+                  <StatusPill status={g.status} color={g.color} dim={g.done} />
+                  <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>{g.rows.length}</span>
+                  {g.points > 0 && (
+                    <span className="text-[10px] tabular-nums" style={{ color: "var(--text4)" }}>· {g.points} pts</span>
+                  )}
+                </button>
+                {!folded[g.status] && g.rows.map((t) => (
+                  <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
+                    grid={grid} showWho={anyWho} showSprint={anySprint} />
+                ))}
+              </div>
             ))}
           </div>
           <div className="flex items-center gap-3 px-5 py-1.5 shrink-0 text-[10.5px]"
             style={{ borderTop: edge(10), color: "var(--text4)" }}>
             <span>{rows.length} of {data?.tasks.length ?? 0}</span>
-            {data?.at ? <span>· read {fmtAgo(data.at)}</span> : null}
+            {/* When, not only how long ago: a board opened from a cache written
+                this morning has to say so in a way you can check against a clock. */}
+            {data?.at ? <span title={new Date(data.at).toLocaleString()}>· read {stamp(data.at)}</span> : null}
             <span className="flex-1" />
             {data?.view?.name && <span className="truncate max-w-[280px]">{data.view.name}</span>}
           </div>
@@ -904,43 +958,105 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note }: {
   );
 }
 
-const CU_GRID = "1fr 150px 80px 40px 66px";
+/*
+ * The columns, and the two that come and go.
+ *
+ * A sprint column on a board where nothing has been sprinted is a column of
+ * blanks, and a "who" column on one nobody has been assigned on is the same.
+ * Both appear only once some card actually has one, so the title keeps the
+ * width until there is something to spend it on.
+ */
 const YOLO_KEY = "agentglass.clickup.skipPermissions";
 
-function ClickUpRow({ t, today, on, onPick }: { t: ProviderTask; today: string; on: boolean; onPick: () => void }) {
+const cuGrid = (who: boolean, sprint: boolean) =>
+  ["1fr", who ? "54px" : "", "170px", sprint ? "96px" : "", "78px", "32px", "48px"].filter(Boolean).join(" ");
+
+/**
+ * A status, spelled and coloured the way the board spells and colours it.
+ *
+ * Upper case and a pill because that is what ClickUp shows, and the colour is
+ * the workspace's own — it arrives on every task. Mapping it to a palette of
+ * ours would make this panel disagree with the tool it is displaying, which is
+ * the one thing a second window onto somebody's board must not do.
+ *
+ * The colour is used at low alpha for the fill and full strength for the text,
+ * so a pale yellow status is legible on a dark ground and a red one does not
+ * shout louder than the task's own title.
+ */
+function StatusPill({ status, color, dim }: { status: string; color?: string; dim?: boolean }) {
+  if (!status) return null;
+  const c = color || "var(--text3)";
+  return (
+    <span className="text-[9.5px] tracking-[0.06em] px-1.5 py-0.5 rounded whitespace-nowrap"
+      title={status}
+      style={{
+        color: dim ? "var(--text4)" : c,
+        background: `color-mix(in srgb, ${c} ${dim ? 8 : 15}%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${c} ${dim ? 18 : 34}%, transparent)`,
+      }}>
+      {status.toUpperCase()}
+    </span>
+  );
+}
+
+/** Priority in the four colours it has. Shown at every level, not only the loud
+ *  ones: "normal" is a decision somebody made, and hiding it read as nobody
+ *  having made one. */
+function PriorityChip({ p }: { p: NonNullable<ProviderTask["priority"]> }) {
+  const look = p === "urgent" ? { c: "var(--error)", t: "URGENT" }
+    : p === "high" ? { c: "var(--error)", t: "HIGH" }
+    : p === "normal" ? { c: "var(--info)", t: "NORMAL" }
+    : { c: "var(--text4)", t: "LOW" };
+  return (
+    <span className="text-[8.5px] tracking-[0.08em] px-1.5 rounded"
+      style={{ color: look.c, background: `color-mix(in srgb, ${look.c} 13%, transparent)` }}>{look.t}</span>
+  );
+}
+
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint }: {
+  t: ProviderTask; today: string; on: boolean; onPick: () => void;
+  grid: string; showWho: boolean; showSprint: boolean;
+}) {
   const late = !!t.due && t.due < today;
   const now = t.due === today;
+  const done = t.statusKind === "done";
   return (
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
-      className="agx-row w-full text-left px-5 py-1.5 hover:bg-white/5 cursor-pointer items-center"
+      className="agx-row w-full text-left px-5 py-2 hover:bg-white/5 cursor-pointer items-center"
       style={{
-        display: "grid", gridTemplateColumns: CU_GRID, gap: 10, borderBottom: edge(6),
+        display: "grid", gridTemplateColumns: grid, gap: 10, borderBottom: edge(6),
         background: on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
       <div className="min-w-0">
-        <div className="truncate text-[12.5px] leading-snug" style={{ color: "var(--text)" }} title={t.title}>{t.title}</div>
-        {(t.mine || t.priority || t.tags.length) && (
-          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-            {t.mine && (
-              <span className="text-[8.5px] tracking-[0.08em] px-1.5 rounded"
-                style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 14%, transparent)" }}>YOU</span>
-            )}
-            {t.priority && (t.priority === "urgent" || t.priority === "high") && (
-              <span className="text-[8.5px] tracking-[0.08em] px-1.5 rounded"
-                style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }}>
-                {t.priority.toUpperCase()}
-              </span>
-            )}
-            {t.tags.slice(0, 3).map((tag) => (
-              <span key={tag} className="text-[9.5px] px-1.5 rounded-full"
-                style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 7%, transparent)" }}>{tag}</span>
-            ))}
-          </div>
-        )}
+        <div className="truncate text-[12.5px] leading-snug" style={{ color: done ? "var(--text3)" : "var(--text)" }}
+          title={t.title}>{t.title}</div>
+        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+          {t.customId && <span className="text-[9px] tabular-nums" style={{ color: "var(--text4)" }}>{t.customId}</span>}
+          {t.priority && <PriorityChip p={t.priority} />}
+          {t.tags.map((tag) => (
+            <span key={tag} className="text-[9.5px] px-1.5 rounded-full"
+              style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>{tag}</span>
+          ))}
+        </div>
       </div>
-      <span className="truncate text-[11px]" style={{ color: t.statusKind === "done" ? "var(--text4)" : "var(--text3)" }} title={t.status}>{t.status}</span>
+      {showWho && (
+        <span className="flex items-center gap-1">
+          {t.mine
+            ? <span className="text-[8.5px] px-1 rounded" title={t.assignees.join(", ")}
+                style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 16%, transparent)" }}>YOU</span>
+            : t.assigneeInitials?.slice(0, 2).map((i, n) => (
+                <span key={n} className="text-[8.5px] px-1 rounded" title={t.assignees.join(", ")}
+                  style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>{i}</span>
+              ))}
+        </span>
+      )}
+      <span className="min-w-0"><StatusPill status={t.status} color={t.statusColor} dim={done} /></span>
+      {showSprint && (
+        <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
+          title={t.sprint ?? ""}>{t.sprint ?? "—"}</span>
+      )}
       <span className="text-[11px] tabular-nums" style={{ color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
         {dueLabel(t.due, today)}
       </span>
@@ -952,6 +1068,95 @@ function ClickUpRow({ t, today, on, onPick }: { t: ProviderTask; today: string; 
             style={{ border: edge(16), color: "var(--text2)" }}>↗</a>
         )}
       </span>
+    </div>
+  );
+}
+
+/*
+ * Filter by the board's own statuses.
+ *
+ * Multi-select, because the question people have is "what is in review OR
+ * blocked" and a single-select turns that into two passes. Each carries how
+ * many cards are in it, so an empty status is visibly empty rather than a click
+ * that produces nothing. Ordered by the board's `orderindex` — its workflow
+ * order — and split at the finished ones, so five kinds of done are not
+ * interleaved with the work.
+ */
+function StatusFilter({ statuses, tasks, picked, onPick }: {
+  statuses: ListStatus[]; tasks: ProviderTask[];
+  picked: string[]; onPick: (v: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useDismiss(open, box, () => setOpen(false));
+  if (!statuses.length) return null;
+
+  const count = (name: string) => tasks.filter((t) => t.status === name).length;
+  const working = statuses.filter((s) => s.type !== "done" && s.type !== "closed");
+  const finished = statuses.filter((s) => s.type === "done" || s.type === "closed");
+  const toggle = (name: string) =>
+    onPick(picked.includes(name) ? picked.filter((x) => x !== name) : [...picked, name]);
+
+  const Row = ({ s }: { s: ListStatus }) => {
+    const n = count(s.status);
+    const on = picked.includes(s.status);
+    return (
+      <button onClick={() => toggle(s.status)}
+        className="flex items-center gap-2 text-left px-2.5 py-1 hover:bg-white/5 whitespace-nowrap">
+        <span aria-hidden style={{
+          width: 9, height: 9, borderRadius: 999, flexShrink: 0,
+          background: on ? (s.color || "var(--primary)") : "transparent",
+          border: `1.5px solid ${s.color || "var(--text4)"}`,
+        }} />
+        <span className="flex-1 text-[10.5px] tracking-[0.04em]"
+          style={{ color: on ? "var(--text)" : "var(--text2)" }}>{s.status.toUpperCase()}</span>
+        <span className="tabular-nums text-[10px]" style={{ color: n ? "var(--text3)" : "var(--text4)" }}>{n}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className="relative" ref={box}>
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open}
+        className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
+        style={picked.length
+          ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+          : { border: edge(14), color: "var(--text2)" }}>
+        {picked.length ? `${picked.length} selected` : "Status"}
+        <span style={{ color: "var(--text4)" }}>▾</span>
+      </button>
+      {open && (
+        <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"
+          style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 236, maxHeight: 380 }}>
+          {!!picked.length && (
+            <button onClick={() => { onPick([]); setOpen(false); }}
+              className="text-left px-2.5 py-1.5 text-[10.5px] hover:bg-white/5" style={{ color: "var(--text3)" }}>
+              Clear
+            </button>
+          )}
+          {working.map((s) => <Row key={s.status} s={s} />)}
+          {!!finished.length && (
+            <div className="px-2.5 pt-2 pb-1 text-[8.5px] uppercase tracking-[0.16em]"
+              style={{ color: "var(--text4)", borderTop: edge(10) }}>Done</div>
+          )}
+          {finished.map((s) => <Row key={s.status} s={s} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One metadatum: a quiet label with its value beneath. Named apart from the
+ *  issues panel's own `Field`, which takes a different prop — two components
+ *  with one name is how a rename breaks a panel three hundred lines away. */
+function CardField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[8.5px] uppercase tracking-[0.16em] mb-1 truncate" style={{ color: "var(--text4)" }} title={label}>
+        {label}
+      </div>
+      <div className="text-[11.5px] leading-tight break-words">{children}</div>
     </div>
   );
 }
@@ -1020,103 +1225,108 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
 
   return (
     <div>
-      <h2 className="text-[14px] font-semibold leading-snug mb-1" style={{ color: "var(--text)", textWrap: "balance" }}>
+      {/* The id somebody recognises, first and copyable: it is what goes in a
+          branch name, a commit and a message to a colleague. The internal one is
+          a fallback, not the headline. */}
+      <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+        <button onClick={() => void copyId()} className="text-[10.5px] tabular-nums rounded px-1.5 py-0.5"
+          style={{ color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 12%, transparent)" }}
+          title="Copy this id">
+          {copied ? "copied ✓" : (t.customId || t.id)}
+        </button>
+        {t.priority && <PriorityChip p={t.priority} />}
+        {t.mine && (
+          <span className="text-[8.5px] tracking-[0.08em] px-1.5 py-0.5 rounded"
+            style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 15%, transparent)" }}>YOURS</span>
+        )}
+      </div>
+      <h2 className="text-[14px] font-semibold leading-snug mb-3" style={{ color: "var(--text)", textWrap: "balance" }}>
         {t.title}
       </h2>
-      <button onClick={() => void copyId()} className="text-[10px] mb-3 rounded px-1 -mx-1 hover:bg-white/5"
-        style={{ color: "var(--text4)" }} title="Copy the card id">
-        {copied ? "copied" : t.id}
-      </button>
 
-      <div className="flex flex-col gap-1 mb-3 text-[11.5px]">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] shrink-0" style={lab}>Status</span>
+      {/* Two columns of label-above-value rather than one of label|value. In a
+          380px pane the second shape leaves the value about ninety pixels, which
+          is where "ready for engineering" became "to…". */}
+      <div className="mb-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "11px 12px" }}>
+        <CardField label="Status">
           <div className="relative">
             <button onClick={() => writable && setStatusOpen((o) => !o)} disabled={!writable || !options.length}
-              className={val} style={{ color: "var(--text2)", border: writable && options.length ? line : "1px solid transparent" }}>
-              {t.status || "—"}{writable && options.length ? " ▾" : ""}
+              className="text-left rounded -mx-0.5 px-0.5 hover:bg-white/5">
+              <StatusPill status={t.status} color={t.statusColor} />
+              {writable && options.length ? <span style={{ color: "var(--text4)" }}> ▾</span> : null}
             </button>
             {statusOpen && (
-              <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col overflow-auto"
-                style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 190, maxHeight: 280 }}>
-                {options.map((s) => (
-                  <button key={s.status} className="text-left px-2.5 py-1.5 hover:bg-white/5 whitespace-nowrap"
-                    style={{ color: s.type === "done" || s.type === "closed" ? "var(--text3)" : "var(--text2)" }}
+              <div className="agx-scroll absolute left-0 mt-1 rounded-lg shadow-2xl flex flex-col overflow-y-auto"
+                style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 210, maxHeight: 300 }}>
+                {options.map((o) => (
+                  <button key={o.status} className="text-left px-2 py-1.5 hover:bg-white/5"
                     onClick={() => {
                       setStatusOpen(false);
                       onAsk({
-                        what: "Move this card", from: t.status, to: s.status,
-                        done: `Moved to ${s.status}`,
-                        go: () => api.clickupStatus(t.id, s.status, t.updated),
+                        what: "Move this card", from: t.status, to: o.status,
+                        done: `Moved to ${o.status}`,
+                        go: () => api.clickupStatus(t.id, o.status, t.updated),
                       });
-                    }}>{s.status}</button>
+                    }}>
+                    <StatusPill status={o.status} color={o.color} dim={o.type === "done" || o.type === "closed"} />
+                  </button>
                 ))}
               </div>
             )}
           </div>
-        </div>
+        </CardField>
 
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] shrink-0" style={lab}>Assigned</span>
-          <button disabled={!writable} className={val}
-            style={{ color: t.mine ? "var(--success)" : "var(--text3)", border: writable ? line : "1px solid transparent" }}
+        <CardField label="Assigned">
+          <button disabled={!writable}
+            className="text-left rounded px-1 -mx-1 hover:bg-white/5 w-full text-[11.5px] leading-tight"
+            style={{ color: t.mine ? "var(--success)" : "var(--text2)" }}
             onClick={() => onAsk({
               what: t.mine ? "Take yourself off this card" : "Put yourself on this card",
               done: t.mine ? "Taken off" : "Assigned to you",
               go: () => api.clickupAssign(t.id, !t.mine, t.updated),
             })}>
-            {t.mine ? "you ✓" : (t.assignees.join(", ") || "nobody")}
+            {t.mine ? "you" : (t.assignees.join(", ") || "nobody")}{writable ? " ▾" : ""}
           </button>
-        </div>
+        </CardField>
 
+        {t.sprint && <CardField label="Sprint"><span style={{ color: "var(--info)" }}>{t.sprint}</span></CardField>}
+        {t.points != null && <CardField label="Points"><span className="tabular-nums" style={{ color: "var(--text2)" }}>{t.points}</span></CardField>}
         {t.due && (
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] shrink-0" style={lab}>Due</span>
-            <span className="text-[11px]" style={{ color: t.due < today ? "var(--error)" : "var(--text2)" }}>
+          <CardField label="Due">
+            <span style={{ color: t.due < today ? "var(--error)" : t.due === today ? "var(--warning)" : "var(--text2)" }}>
               {dueLabel(t.due, today)}
             </span>
-          </div>
+          </CardField>
         )}
-        {t.points != null && (
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] shrink-0" style={lab}>Points</span>
-            <span className="text-[11px]" style={{ color: "var(--text2)" }}>{t.points}</span>
-          </div>
-        )}
-        {!!t.tags.length && (
-          <div className="flex items-start gap-2">
-            <span className="text-[10px] shrink-0 mt-0.5" style={lab}>Tags</span>
-            <div className="flex gap-1 flex-wrap">
-              {t.tags.map((x) => (
-                <span key={x} className="text-[10px] px-1.5 py-0.5 rounded-full"
-                  style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>{x}</span>
-              ))}
-            </div>
-          </div>
-        )}
-        {/* Custom fields, values already resolved from ids to the words on the
-            board. A field whose own NAME says not to edit it is shown and never
-            offered — that warning is somebody telling every reader something the
-            API has nowhere to say. */}
+        {t.list && <CardField label="List"><span style={{ color: "var(--text2)" }}>{t.list}</span></CardField>}
         {t.custom?.map((c) => {
           const spec = fields.find((f) => f.id === c.id);
           return (
-            <div key={c.id} className="flex items-center gap-2">
-              <span className="text-[10px] shrink-0 truncate" style={lab} title={c.name}>{c.name}</span>
-              <span className="text-[11px] truncate" style={{ color: "var(--text2)" }}>
-                {c.value}{spec?.readOnly ? " 🔒" : ""}
-              </span>
-            </div>
+            <CardField key={c.id} label={c.name.replace(/\s*\(.*\)\s*$/, "")}>
+              <span style={{ color: "var(--text2)" }}>{c.value}{spec?.readOnly ? " 🔒" : ""}</span>
+            </CardField>
           );
         })}
       </div>
 
+      {/* Tags on their own full-width line. They were competing with a value
+          column and losing, and they are how this board gets navigated. */}
+      {!!t.tags.length && (
+        <div className="flex items-center gap-1.5 flex-wrap mb-3">
+          {t.tags.map((x) => (
+            <span key={x} className="text-[10px] px-2 py-0.5 rounded-full"
+              style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>{x}</span>
+          ))}
+        </div>
+      )}
+
+      {/* No heading of ours: these cards open with their own "Description"
+          heading, and stacking a label above it read as a stutter. */}
       {full?.description ? (
-        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
-          <div className="text-[8.5px] uppercase tracking-[0.18em] mb-1.5" style={{ color: "var(--text4)" }}>Description</div>
+        <div className="mb-3 pt-2.5 agx-cu-body" style={{ borderTop: edge(10) }}>
           <Markdown text={full.description} />
         </div>
-      ) : full && !full.error ? null : null}
+      ) : null}
 
       {!!full?.subtasks?.length && (
         <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>

@@ -147,6 +147,11 @@ export interface ProviderTask {
    * decides whether a row is work you still owe.
    */
   statusKind: "open" | "done" | "other";
+  /** The colour the workspace gave this status. Used as-is rather than mapped
+   *  to a palette of ours: a board's colours are how its people read it at a
+   *  glance, and inventing our own would make agentglass disagree with the tool
+   *  it is showing. */
+  statusColor?: string;
   priority: "urgent" | "high" | "normal" | "low" | null;
   /** Local calendar date, `YYYY-MM-DD`, converted from the provider's epoch. */
   due: string | null;
@@ -156,6 +161,19 @@ export interface ProviderTask {
   list: string | null;
   listId?: string;
   assignees: string[];
+  /** Initials for the row, where the provider gives them — a column of names
+   *  wide enough to read is a column that costs the title its space. */
+  assigneeInitials?: string[];
+  /**
+   * The sprint this card is in, when it is in one.
+   *
+   * ClickUp has no sprint FIELD: a sprint is a list, and a card in one is a
+   * card living in two lists at once — which arrives as `locations`. Checked
+   * against a real board where nothing had been sprinted yet: every card came
+   * back with an empty one, which is why the column only appears once some card
+   * actually has a sprint.
+   */
+  sprint?: string | null;
   /** Whether YOU are on it — resolved server-side against the connected
    *  account, because the client has no business knowing your user id. */
   mine?: boolean;
