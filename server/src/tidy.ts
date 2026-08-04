@@ -284,17 +284,29 @@ export function tidyReport(root: string): TidyReport {
   add({
     id: "remotes", all: refCount > 200 ? [`${refCount} remote-tracking refs`] : [],
     title: "Remote-tracking branches",
-    what: "Copies of branches as they were on the remote. Ones deleted upstream stay here until a prune, and they are what makes the branch pickers long.",
+    what: "Copies of branches as they were on the remote — one per branch anyone has ever pushed. A prune drops the ones the remote has deleted since your last fetch, which may be none.",
     command: "git fetch --prune",
     note: "Touches nothing local: it only forgets remote branches the remote itself no longer has.",
-    why: "`git for-each-ref refs/remotes` counted them. Every branch anyone has ever pushed leaves one here, and nothing removes it without a prune.",
-    effect: "Fetches, then deletes the local copies of remote branches the remote no longer has. This is what shortens every branch picker.",
-    risk: "None to your work: these are copies of somebody else's branches. Your own branches and commits are not remote-tracking refs.",
+    /**
+     * The one finding that cannot know its own answer without doing the work,
+     * and it used to pretend otherwise.
+     *
+     * The count is of refs you HAVE, not of refs that are stale — the only
+     * thing that knows which are stale is the remote. Presented as something
+     * to clean up, it read as a promise: run this and the number drops. On a
+     * repository where nothing was stale it ran, changed nothing, and looked
+     * broken. So the card says what the number is and what the command can and
+     * cannot know.
+     */
+    why: "`git for-each-ref refs/remotes` counted them. That is how many copies you have — NOT how many are stale. Only the remote knows which of its branches are gone, which is why finding out means fetching.",
+    effect: "Fetches, then drops the copies of remote branches the remote no longer has. If the remote has deleted nothing since your last fetch, it correctly removes nothing and the count stays where it is.",
+    risk: "None to your work: these are copies of other people's branches, not your branches or your commits. The realistic outcome is that it removes nothing, which is the command agreeing with you rather than failing.",
     diagram: [
-      "  refs/remotes/origin/*   869 copies here",
-      "                            │",
-      "  the remote actually has   ▼  far fewer",
-      "  the difference is what --prune forgets",
+      "  refs/remotes/origin/*   what you have  ─┐",
+      "                                          ├─ the difference is",
+      "  branches origin has now  ───────────────┘   what --prune drops",
+      "",
+      "  the difference is often zero, and that is a clean result",
     ],
   });
 

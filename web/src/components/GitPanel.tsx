@@ -171,7 +171,11 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
                     style={held
                       ? { color: "var(--text4)", background: "transparent", border: "1px dashed color-mix(in srgb, var(--text3) 35%, transparent)" }
                       : { color: "var(--text2)", background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>
-                    {held ? `${i} · held` : i}
+                    {/* The marker leads, because the name is what gets
+                        truncated: these run to ninety characters and a
+                        trailing "· held" is the first thing to disappear —
+                        which made six held branches look like one. */}
+                    {held ? `⊘ ${i}` : i}
                   </span>
                 );
               })}
