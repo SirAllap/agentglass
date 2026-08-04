@@ -361,7 +361,13 @@ export function NotifyBell({ noDrag, onGoto }: {
   // what is on screen: an unsupported host must never be offered a switch that
   // cannot do anything.
   const [cap, setCap] = useState<NotifyCapability | null>(null);
-  useEffect(() => { if (open && !cap) void notifyCapability().then(setCap); }, [open, cap]);
+  // Re-asked whenever we do not have a positive answer, not just once: a probe
+  // that landed while the server was still starting is not a verdict, and the
+  // panel is where the offer to switch this on lives.
+  useEffect(() => {
+    if (!open || cap?.supported) return;
+    void notifyCapability().then(setCap);
+  }, [open, cap]);
 
   // Looking at them is what marks them read. `hist` is in the deps so a note
   // arriving while the panel is open does not silently re-arm the badge.
