@@ -714,6 +714,10 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const [q, setQ] = useState("");
   /** Ignored files start folded away — see `visible` below. */
   const [showIgnored, setShowIgnored] = useState(false);
+  const [showOutside, setShowOutside] = useState(false);
+  /** What the server filtered against, so the chip names the same project the
+   *  flag was computed from. Null on an unscoped instance. */
+  const [project, setProject] = useState<string | null>(null);
   /** Split whichever grouping is chosen by day as well. */
   const [byDate, setByDate] = useState(false);
   const [selId, setSelId] = useState<number | null>(null);
@@ -746,6 +750,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     } else {
       api.changes(200).then((r) => {
         setChanges(r.changes);
+        setProject(r.project ?? null);
         setSelId(r.changes[0]?.id ?? null);
       }).catch(() => setChanges([]));
     }
@@ -767,6 +772,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   // in already resolved, and re-fetching would replace them with the fleet's.
   usePoll(open && !presetChanges, () => {
     api.changes(200).then((r) => {
+      setProject(r.project ?? null);
       setChanges((prev) => {
         // Same ids in the same order → keep the old array so nothing downstream
         // re-renders or re-highlights on an unchanged poll.
@@ -800,8 +806,32 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
    * silently: the count is shown and one click brings them back, because a list
    * that quietly drops entries is worse than a long one.
    */
-  const ignoredCount = useMemo(() => all.reduce((n, c) => n + (c.ignored ? 1 : 0), 0), [all]);
-  const visible = useMemo(() => (showIgnored ? all : all.filter((c) => !c.ignored)), [all, showIgnored]);
+  /**
+   * And the same for files that are not this project's.
+   *
+   * A session is in scope because its cwd is; where it writes is another
+   * question. A cockpit scoped to one repo still fills with a note
+   * under ~/Documents and a scratch script in /tmp — real edits by a real
+   * session of this project, and not one of them the project. Same treatment as
+   * the ignored ones for the same reason: folded away, counted, one click back.
+   *
+   * Each chip counts the rows IT is hiding — a file that is both ignored and
+   * outside is not claimed by both, or you click "+1 outside", nothing appears,
+   * and the count looks like a lie when it was the other filter still holding
+   * the row down.
+   */
+  const outsideCount = useMemo(
+    () => all.reduce((n, c) => n + (c.outside && (showIgnored || !c.ignored) ? 1 : 0), 0),
+    [all, showIgnored],
+  );
+  const ignoredCount = useMemo(
+    () => all.reduce((n, c) => n + (c.ignored && (showOutside || !c.outside) ? 1 : 0), 0),
+    [all, showOutside],
+  );
+  const visible = useMemo(
+    () => all.filter((c) => (showIgnored || !c.ignored) && (showOutside || !c.outside)),
+    [all, showIgnored, showOutside],
+  );
   const filtered = useMemo(() => (q ? visible.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : visible), [visible, q]);
   const groups = useMemo(() => groupChanges(filtered, groupBy, titles, byDate), [filtered, groupBy, titles, byDate]);
   const shown = useMemo(() => groups.flatMap((g) => g.items), [groups]);
@@ -989,6 +1019,24 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                               border: `1px solid color-mix(in srgb, var(--border) ${showIgnored ? 45 : 18}%, transparent)`,
                             }}
                           >{showIgnored ? `✕ ${ignoredCount} ignored` : `+ ${ignoredCount} ignored`}</button>
+                        )}
+                        {/* Only when there is a project to be outside of, and
+                            only when something actually is. Named, because
+                            "outside" alone raises the question this answers:
+                            outside WHAT. */}
+                        {outsideCount > 0 && (
+                          <button
+                            onClick={() => setShowOutside((v) => !v)}
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
+                            title={showOutside
+                              ? `Hide edits outside ${project ?? "this project"}`
+                              : `${outsideCount} file${outsideCount === 1 ? "" : "s"} outside ${project ?? "this project"} ${outsideCount === 1 ? "is" : "are"} hidden — notes, scratch files, anything this project's sessions touched elsewhere`}
+                            style={{
+                              background: showOutside ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                              color: showOutside ? "var(--text)" : "var(--text3)",
+                              border: `1px solid color-mix(in srgb, var(--border) ${showOutside ? 45 : 18}%, transparent)`,
+                            }}
+                          >{showOutside ? `✕ ${outsideCount} outside` : `+ ${outsideCount} outside`}</button>
                         )}
                         {changes && all.length > 0 && (
                           <span className="ml-auto text-[9.5px] t-dim2 tabular-nums" title="Files reviewed">{revCount}/{visible.length}</span>

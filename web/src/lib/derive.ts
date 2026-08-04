@@ -60,6 +60,22 @@ export interface AgentCard {
   subagents: number;
   /** Subagent type → count, most common first (e.g. Explore, workflow-subagent). */
   subagentTypes: [string, number][];
+  /**
+   * Why it stopped for you, in its own words — "wants to run Bash", or whatever
+   * the agent's own notification said. Empty unless the latest event was one of
+   * the two that stop a session, which is the same test `status === "waiting"`
+   * is made of, so the two can never disagree.
+   */
+  needBecause: string;
+  /**
+   * The directory this session is actually running in, and the project it folds
+   * onto. `worktree` already derived a LABEL from these two and threw the paths
+   * away, which is enough to print and not enough to go anywhere: answering "is
+   * this the project I am looking at" and "which terminal pane is it in" both
+   * need the path itself.
+   */
+  cwd: string | null;
+  project: string | null;
   /** A tool call that started (PreToolUse) and hasn't reported back yet. */
   runningTool: string | null;
   runningSince: number;
@@ -104,6 +120,30 @@ const TOOL_RUN_WARN_MS = 5 * 60_000;
 // normally trails a failure by a few seconds.
 const ERROR_TAIL_MS = 60_000;
 
+/**
+ * Why an agent stopped, in its own words.
+ *
+ * The reason has always been on the event — a PermissionRequest names the tool
+ * it is asking for, a Notification carries the message the agent raised — and
+ * the server already reads both to write the desktop notification (alerts.ts).
+ * This side threw them away and wrote "waiting for approval / input" for every
+ * case, so the one thing the alert existed to tell you was the one thing it
+ * never said, on the chip, in the dashboard's panel, everywhere.
+ *
+ * Empty for every other event on purpose: it is read only while the session is
+ * `waiting`, and a stale reason left over from the last block would be worse
+ * than none.
+ */
+function becauseOf(e: WatchEvent): string {
+  if (e.hook_event_type === "PermissionRequest")
+    return e.tool_name ? `wants to run ${e.tool_name}` : "wants your approval";
+  if (e.hook_event_type === "Notification") {
+    const m = String((e.payload as { message?: unknown } | null)?.message ?? "").trim();
+    return m || "raised a notification";
+  }
+  return "";
+}
+
 function blankCard(key: string, source_app: string, session_id: string, model_name: string | null): AgentCard {
   return {
     key,
@@ -125,6 +165,9 @@ function blankCard(key: string, source_app: string, session_id: string, model_na
     spark: new Array(20).fill(0),
     subagents: 0,
     subagentTypes: [],
+    needBecause: "",
+    cwd: null,
+    project: null,
     runningTool: null,
     runningSince: 0,
     evidenceAt: null,
@@ -261,6 +304,10 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
     if (e.timestamp >= a.lastSeen) {
       a.lastSeen = e.timestamp;
       a.lastType = e.hook_event_type;
+      // Set from the same event that sets lastType, which is what decides
+      // `waiting` below — so the reason is always the reason for the block that
+      // is actually current.
+      a.needBecause = becauseOf(e);
       // Both ride on the payload: `project_path` is the repo every checkout
       // folds onto, `cwd` is only written when the turn ran somewhere else.
       //
@@ -273,6 +320,10 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
       const p = e.payload as any;
       const wt = sessionWorktree({ project_path: p?.project_path, cwd_path: p?.cwd });
       if (wt) a.worktree = wt;
+      // Same rule, same reason: keep the last known answer rather than letting
+      // an event that does not carry the field blank one that did.
+      if (p?.cwd) a.cwd = String(p.cwd);
+      if (p?.project_path) a.project = String(p.project_path);
       if (e.model_name) a.model_name = e.model_name; // latest, not last-in-array
       a.lastAction = e.tool_name
         ? `${e.hook_event_type} · ${e.tool_name}`
@@ -445,7 +496,10 @@ export function deriveAlerts(agents: AgentCard[]): Alert[] {
   const out: Alert[] = [];
   for (const a of agents) {
     if (a.status === "waiting")
-      out.push({ id: "wait:" + a.key, level: "warn", agent: a.key, text: "waiting for approval / input", ts: a.lastSeen });
+      // What it wants, not merely that it wants something. The fallback is for
+      // a card seeded without the blocking event in the buffer, which is the
+      // only case left where we honestly do not know.
+      out.push({ id: "wait:" + a.key, level: "warn", agent: a.key, text: a.needBecause || "waiting for approval / input", ts: a.lastSeen });
     if (a.status === "errored")
       out.push({ id: "err:" + a.key, level: "error", agent: a.key, text: `${a.errors} error(s) — last action ${a.lastAction}`, ts: a.lastSeen });
     // A long tool call used to raise the same warning whatever it was doing,

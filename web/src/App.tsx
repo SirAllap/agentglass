@@ -36,6 +36,11 @@ import { ZoomToast } from "./components/ZoomToast.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
+import { NeedsPopover, type NeedsItem } from "./components/NeedsPopover.tsx";
+import { subscribeGates, listGates } from "./lib/gateStore.ts";
+
+/** The last segment of a path — a project's name as anyone says it out loud. */
+const leafOf = (p: string): string => p.split("/").filter(Boolean).pop() ?? p;
 
 /**
  * Wrap a setState so a poll that answers the same thing twice doesn't commit.
@@ -334,6 +339,10 @@ export default function App() {
     [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider, titles]
   );
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
+  /** Held tool calls. Read here as well as on the dashboard so the bar can tell
+   *  "an agent asked a question" from "an agent is stopped at a gate you can
+   *  let through" — only the second has a button anywhere in this app. */
+  const gates = useSyncExternalStore(subscribeGates, listGates, listGates);
   /**
    * The one thing the top bar interrupts for.
    *
@@ -351,31 +360,70 @@ export default function App() {
     const label = who?.title || who?.source_app || first.agent;
     return {
       count: alerts.length,
-      label: alerts.length > 1 ? `${label} +${alerts.length - 1} need you` : `${label} needs you`,
-      // WHERE it is, not just that it exists. Without this the bar was an alarm
-      // with nowhere to go — see goToNeeds.
-      sessionId: who?.session_id ?? "",
-      app: who?.source_app ?? "",
+      // The name alone. It used to carry "needs you" as well, which spends the
+      // width the reason needs to say something you can already see from the
+      // amber strip it is sitting in.
+      label,
+      // WHAT it wants. The alert has always known — a permission request names
+      // its tool, a notification carries its message — and deriveAlerts used to
+      // replace all of it with one constant string. See becauseOf().
+      because: first.text,
+      // Where it is, and what can be done about it, live on `needsList` — the
+      // chip is only the headline now, and the panel it opens is the thing that
+      // has to know how to act.
     };
   }, [alerts, agents]);
 
   /**
-   * Take me to the agent that is waiting.
+   * Everything that is waiting on you, with what can honestly be done about it.
    *
-   * It used to go to the dashboard, which is not a destination — the dashboard
-   * shows the same alert in a panel, so the button spent a click to repeat
-   * itself. An alarm whose action is "look at the alarm again" is furniture.
+   * The chip used to be a button that went somewhere: first the dashboard, then
+   * the session — a chat when one existed, and SessionModal otherwise. That last
+   * fallback is the one that had to go. SessionModal is a post-mortem headed
+   * WHAT IT DID; it cannot answer "waiting for your input", so clicking an alarm
+   * covered the terminal you were working in with a read-only summary and left
+   * you no better off.
    *
-   * So it goes to the session: its chat if one is open in this app, and its
-   * transcript otherwise, which is the surface that can read what it said and
-   * offers to resume it. Both are places you can actually answer from.
+   * So the chip opens a panel instead, and this is what it reads. An action is
+   * listed only when it exists: a chat that can carry the reply, a gate the
+   * dashboard can approve, a project this alert belongs to that is not the one
+   * you have open. When none of them do, the panel says so and names the
+   * directory, which is the useful half of what a destination would have done.
    */
-  const goToNeeds = useCallback(() => {
-    if (!needs?.sessionId) return;
-    const chat = chatResuming(needs.sessionId);
-    if (chat) { setChatFocus(chat.id); goView("chat"); return; }
-    setSessionView({ id: needs.sessionId, app: needs.app });
-  }, [needs]);
+  const needsList = useMemo((): NeedsItem[] => {
+    const homeless = alerts.slice(0, 8);
+    return homeless.map((al) => {
+      const who = agents.find((a) => a.key === al.agent);
+      const sessionId = who?.session_id ?? "";
+      const project = who?.project ?? null;
+      // A cockpit watches every project at once, so an alert from another one is
+      // legitimate — but it must say which, or you go looking in the wrong tree.
+      const other = project && workspace && project !== workspace ? leafOf(project) : null;
+      return {
+        key: al.id,
+        sessionId,
+        label: who?.title || who?.source_app || al.agent,
+        because: al.text,
+        level: al.level === "error" ? "error" : "warn",
+        cwd: who?.cwd ?? project,
+        project,
+        otherProject: other,
+        chatId: sessionId ? (chatResuming(sessionId)?.id ?? null) : null,
+        gated: !!sessionId && gates.some((g) => g.session_id === sessionId),
+      };
+    });
+  }, [alerts, agents, workspace, gates]);
+
+  const openChatFor = useCallback((chatId: string) => {
+    setChatFocus(chatId);
+    goView("chat");
+  }, [goView]);
+  /** The Approve buttons live on the dashboard's "What needs you" — the one
+   *  place in the app that can actually let a held tool call through. */
+  const approveOnDash = useCallback(() => { goView("dash"); }, [goView]);
+  const switchProject = useCallback((root: string) => {
+    void api.setWorkspace(root).then((r) => { if (r.ok) setWorkspace(r.workspace); }).catch(() => {});
+  }, []);
   useAlertSound(alerts.length, sound);
 
   // Demo builds only: hand the fleet to whoever is showing this build inside a
@@ -645,7 +693,10 @@ export default function App() {
         // feel like decoration.
         quiet={dashActive}
         needs={needs}
-        onGoNeeds={goToNeeds}
+        needsList={needsList}
+        onNeedChat={openChatFor}
+        onNeedApprove={approveOnDash}
+        onNeedProject={switchProject}
       />
 
       <Workspace

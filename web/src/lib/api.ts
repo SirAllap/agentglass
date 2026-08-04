@@ -300,7 +300,7 @@ const realApi = {
   // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
   // and is not. 0 means pruning is off and it really is all time.
   skills: () => get<{ skills: SkillInfo[]; usage_since?: number; generated_at: number }>(`/skills`),
-  changes: (limit = 200) => get<{ changes: FileChange[] }>(`/changes?limit=${limit}`),
+  changes: (limit = 200) => get<{ changes: FileChange[]; project?: string | null }>(`/changes?limit=${limit}`),
   session: (id: string) => get<SessionDetail>(`/session?id=${encodeURIComponent(id)}`),
   /** Sessions with a turn running right now. The only honest answer to "can I
    *  send to this without interrupting it" — see server/src/chat.ts. */

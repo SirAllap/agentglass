@@ -1333,8 +1333,8 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-                {/* The plan meters moved to the workspace's DynamicIsland, which
-                    covers every view now rather than only the terminal. */}
+                {/* The plan meters live in the top bar, which is over every view
+                    rather than only over the terminal. */}
                 <style>{SCROLLBAR_CSS}</style>
                 {/* Pin xterm's own boxes flush. The stylesheet ships no padding
                     today, but it has before and it is one release away from

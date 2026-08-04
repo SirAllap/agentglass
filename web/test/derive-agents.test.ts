@@ -239,3 +239,62 @@ test("the roll-up does not leak into the failure-rate inputs", () => {
   expect(card.tools).toBe(900);
   expect(deriveAlerts([card]).filter((a) => a.id.startsWith("rate:"))).toEqual([]);
 });
+
+// ---------------------------------------------------------------------------
+// Why an agent stopped.
+//
+// The reason has always been on the event — a PermissionRequest names the tool
+// it is asking for, a Notification carries the message the agent raised — and
+// the server reads both to write the desktop notification. This side used to
+// throw them away and write one constant string, so the alert's only job was
+// the one thing it could not do.
+// ---------------------------------------------------------------------------
+
+const waitText = (card: any): string | undefined =>
+  deriveAlerts([card]).find((a) => a.id.startsWith("wait:"))?.text;
+
+test("a notification's own message becomes the alert", () => {
+  const card = only([ev({
+    hook_event_type: "Notification",
+    tool_name: null,
+    timestamp: now - 1000,
+    payload: { message: "Claude is waiting for your input" },
+  })]);
+  expect(card.status).toBe("waiting");
+  expect(card.needBecause).toBe("Claude is waiting for your input");
+  expect(waitText(card)).toBe("Claude is waiting for your input");
+});
+
+test("a permission request names the tool it wants", () => {
+  const card = only([ev({ hook_event_type: "PermissionRequest", tool_name: "Bash", timestamp: now - 1000 })]);
+  expect(waitText(card)).toBe("wants to run Bash");
+});
+
+test("a notification with no message still says something true", () => {
+  const card = only([ev({ hook_event_type: "Notification", tool_name: null, timestamp: now - 1000, payload: {} })]);
+  expect(waitText(card)).toBe("raised a notification");
+});
+
+// The reason is read only while the card is `waiting`, and `waiting` is decided
+// by the latest event. If the two could disagree, a card would carry the reason
+// for a block it is no longer in.
+test("a reason does not outlive the block it belongs to", () => {
+  const card = only([
+    ev({ hook_event_type: "Notification", tool_name: null, timestamp: now - 3000, payload: { message: "answer me" } }),
+    ev({ hook_event_type: "PostToolUse", timestamp: now - 1000 }),
+  ]);
+  expect(card.status).toBe("working");
+  expect(card.needBecause).toBe("");
+});
+
+// Where it is running: needed to say which project an alert belongs to, and to
+// have any hope of pointing at the terminal it is waiting in.
+test("the card keeps the directory and project it last reported", () => {
+  const card = only([
+    ev({ timestamp: now - 3000, payload: { cwd: "/home/x/code/app-wt", project_path: "/home/x/code/app" } }),
+    // A later event that carries neither must not blank what the first knew.
+    ev({ timestamp: now - 1000, payload: {} }),
+  ]);
+  expect(card.cwd).toBe("/home/x/code/app-wt");
+  expect(card.project).toBe("/home/x/code/app");
+});

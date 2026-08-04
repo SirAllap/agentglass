@@ -129,3 +129,47 @@ describe("scoped reads", () => {
     expect(rows.some((r) => r.source_app === "mono")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The live seam.
+//
+// Everything above proves the *reads* are filtered. The WebSocket push was not,
+// which made the same window disagree with itself: a reload showed the open
+// project and the next event from anywhere on the machine put a stranger back on
+// the fleet. It showed up on the top bar, which interrupts for exactly this.
+// ---------------------------------------------------------------------------
+describe("what is pushed live is what a reload would show", () => {
+  let cfg: typeof import("../src/config.ts");
+  beforeAll(async () => { cfg = await import("../src/config.ts"); });
+
+  test("a session in the open project is pushed", () => {
+    expect(cfg.sessionInScope({ project_path: SCOPED, cwd_path: SCOPED })).toBe(true);
+  });
+
+  test("a session in another project is not", () => {
+    expect(cfg.sessionInScope({ project_path: OTHER, cwd_path: OTHER })).toBe(false);
+  });
+
+  test("a sibling whose path merely starts the same is not", () => {
+    expect(cfg.sessionInScope({ project_path: SIBLING, cwd_path: SIBLING })).toBe(false);
+  });
+
+  // The monorepo / linked-worktree case: the repo root is elsewhere but the turn
+  // ran inside the project. The SQL accepts either column and so must this, or
+  // a scoped cockpit would go blind to the work actually happening in it.
+  test("either column is enough, exactly as the SQL has it", () => {
+    expect(cfg.sessionInScope({ project_path: MONO, cwd_path: SCOPED })).toBe(true);
+    expect(cfg.sessionInScope({ project_path: SCOPED, cwd_path: MONO })).toBe(true);
+  });
+
+  test("a session that says nothing about where it is, is not in the project", () => {
+    expect(cfg.sessionInScope({ project_path: null, cwd_path: null })).toBe(false);
+  });
+
+  // Unscoped is the machine-wide default and must stay unfiltered — this is the
+  // guard against "fixing" the leak by scoping a cockpit nobody scoped.
+  test("with no project open, everything is pushed", () => {
+    expect(cfg.sessionInScope({ project_path: OTHER, cwd_path: OTHER }, null)).toBe(true);
+    expect(cfg.sessionInScope({ project_path: null, cwd_path: null }, null)).toBe(true);
+  });
+});

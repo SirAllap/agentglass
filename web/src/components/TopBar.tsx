@@ -17,12 +17,15 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api, type UsagePayload } from "../lib/api.ts";
 import { subscribeUsage, usageError } from "./UsageWidget.tsx";
+import { stalenessLabel } from "../lib/usageAge.ts";
 import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
 import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
 import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
 import { Logo } from "./Logo.tsx";
+import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
+import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
 
 export const TOP_BAR_H = 30;
 
@@ -170,6 +173,19 @@ function Item({ cap, children, title, dim, hideUnder }: {
   );
 }
 
+/** Commits moving one way or the other. Direction by shape, so the two readings
+ *  are told apart without reading their captions. */
+function Arrow({ up }: { up?: boolean }) {
+  return (
+    <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6}
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden
+      style={{ color: up ? "var(--success)" : "var(--info)" }}>
+      {up ? <><path d="M12 20V9M6 13l6-6 6 6" /><path d="M4.5 4h15" /></>
+        : <><path d="M12 4v11M6 11l6 6 6-6" /><path d="M4.5 20h15" /></>}
+    </svg>
+  );
+}
+
 function Meter({ pct, tint }: { pct: number; tint: string }) {
   return (
     <span className="block rounded-full shrink-0" style={{ width: 26, height: 3, background: "color-mix(in srgb, var(--text) 18%, transparent)" }}>
@@ -178,8 +194,34 @@ function Meter({ pct, tint }: { pct: number; tint: string }) {
   );
 }
 
+/**
+ * One plan window: how much of it is gone.
+ *
+ * `age` is set only once the reading has stopped refreshing. It takes over the
+ * caption and dims the number, so a stuck meter is legible as stuck at a glance
+ * without ever ceasing to answer the question it is there to answer. The
+ * alternative — replacing the number with the word "stale" — throws away a true
+ * reading half an hour old, which is still the best answer anyone has.
+ */
+function PlanMeter({ tag, pct, age, dim, hideUnder }: {
+  tag: string; pct: number; age: string | null; dim?: boolean; hideUnder?: "sm" | "md";
+}) {
+  return (
+    <Item
+      cap={age ? `${tag} · ${age} old` : tag}
+      dim={dim}
+      hideUnder={hideUnder}
+      title={`${pct}% of the ${tag} window${age ? ` — could not refresh, last read ${age} ago` : ""}`}
+    >
+      <Meter pct={pct} tint={pct >= 80 ? "var(--error)" : "var(--warning)"} />
+      <b className="text-[9.5px] tabular-nums" style={{ color: "var(--text2)", opacity: age ? 0.55 : 1 }}>{pct}%</b>
+    </Item>
+  );
+}
+
 export function TopBar({
-  workspace, onOpenProject, onOpenPalette, quiet, needs, onGoNeeds,
+  workspace, onOpenProject, onOpenPalette, quiet, needs,
+  needsList, onNeedChat, onNeedApprove, onNeedProject,
 }: {
   workspace: string | null;
   onOpenProject: () => void;
@@ -193,21 +235,33 @@ export function TopBar({
    * exactly what made the old notch feel decorative.
    */
   quiet?: boolean;
-  /** Something wants you: how many, which one, and where it lives. */
-  needs: { count: number; label: string; sessionId: string; app: string } | null;
-  onGoNeeds: () => void;
+  /** Something wants you: how many, which one, WHAT FOR, and where it lives. */
+  needs: { count: number; label: string; because: string } | null;
+  /** All of them, with what can honestly be done about each — see NeedsPopover. */
+  needsList: NeedsItem[];
+  onNeedChat: (chatId: string) => void;
+  onNeedApprove: () => void;
+  onNeedProject: (root: string) => void;
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
   const waiting = useSyncExternalStore(subscribeChats, () => listChats().reduce((n, c) => n + (c.attention !== "none" ? 1 : 0), 0), () => 0);
   const upd = useSyncExternalStore(subscribeUpdate, updateState, updateState);
+  const { note, behind, ahead } = useAmbientNotes();
+  const chip = useRef<HTMLButtonElement>(null);
+  const [needsOpen, setNeedsOpen] = useState(false);
 
   const [u, setU] = useState<UsagePayload | null>(null);
   useEffect(() => subscribeUsage(setU), []);
   const rateLimited = !u?.available && usageError()?.includes("429");
   const five = u?.five_hour;
   const week = u?.seven_day;
+  // How old the numbers are, and only once that is worth saying. The meters keep
+  // their last good reading through a burst of 429s rather than vanishing, which
+  // is only honest if they also say when it was taken. The clock beside them
+  // re-renders this strip every minute, so this stays current without a timer.
+  const age = u?.available ? stalenessLabel(u.fetched_at) : null;
 
   const alarm = !!needs?.count;
 
@@ -257,6 +311,24 @@ export function TopBar({
           <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success)" }}>{waiting}</b>
         </Item>
       )}
+      {/* Work that exists only here, and work that exists only there. The first
+          had no indicator anywhere: a branch you have committed to and not
+          pushed looked exactly like one with nothing outstanding, and that is
+          the state where losing a laptop costs you the work. Both leave entirely
+          at zero — an idle strip should not spend width saying nothing is
+          happening. */}
+      {ahead > 0 && (
+        <Item cap="to push" dim={quiet} hideUnder="md" title={`${ahead} commit${ahead === 1 ? "" : "s"} committed here and pushed nowhere`}>
+          <Arrow up />
+          <b className="text-[10.5px] tabular-nums" style={{ color: "var(--success)" }}>{ahead}</b>
+        </Item>
+      )}
+      {behind > 0 && (
+        <Item cap="to pull" dim={quiet} hideUnder="md" title={`${behind} commit${behind === 1 ? "" : "s"} on the upstream you have not pulled`}>
+          <Arrow />
+          <b className="text-[10.5px] tabular-nums" style={{ color: "var(--info)" }}>{behind}</b>
+        </Item>
+      )}
 
       {/* ── the middle: nothing, until something wants you ─────────── */}
       {/* Absolutely centred rather than a flex remainder between two groups of
@@ -265,25 +337,60 @@ export function TopBar({
           whose middle always has something in it has nowhere left to put the
           one thing that matters. */}
       <div className="flex-1 min-w-0" />
-      {alarm && (
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ top: 0, bottom: 0 }}>
-          <button onClick={onGoNeeds} className="flex items-center gap-2 px-2.5 py-[1px] rounded-full shrink-0"
+      {/* One slot, and the blocked thing always wins it. A toast is something
+          that happened and is already in the bell's list; the chip is something
+          that has not happened yet and will not until you act. Showing the
+          passing message over the standing block would be the wrong way round,
+          and showing both would put two things in the one place the bar keeps
+          empty so that it has somewhere to put the one thing that matters. */}
+      <div className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ top: 0, bottom: 0 }}>
+        {alarm ? (
+          <button ref={chip} onClick={() => setNeedsOpen((v) => !v)}
+            aria-label="What needs you" aria-expanded={needsOpen}
+            className="flex items-center gap-2 px-2.5 py-[1px] rounded-full min-w-0"
             style={{
               color: "var(--warning)",
               border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)",
               background: "color-mix(in srgb, var(--warning) 14%, transparent)",
+              maxWidth: "min(52vw, 520px)",
               ...NO_DRAG,
-            }}>
-            <span className="rounded-full" style={{ width: 6, height: 6, background: "var(--warning)" }} />
-            <span className="text-[10px] font-semibold truncate" style={{ maxWidth: 260 }}>{needs!.label}</span>
+            }}
+            title={`${needs!.label} — ${needs!.because}`}>
+            <span className="rounded-full shrink-0" style={{ width: 6, height: 6, background: "var(--warning)" }} />
+            <span className="text-[10px] font-semibold truncate shrink-0" style={{ maxWidth: 200 }}>{needs!.label}</span>
+            {/* WHAT it wants, in its own words. The chip used to say only that
+                something wanted you, which leaves you to open the thing to find
+                out whether it was worth opening — and the reason was on the
+                event all along: a permission request names its tool, a
+                notification carries its message. */}
+            <span className="text-[10px] truncate opacity-90 min-w-0">{needs!.because}</span>
+            {needs!.count > 1 && (
+              <span className="text-[9px] tabular-nums shrink-0 opacity-75" title={`${needs!.count} agents want you`}>+{needs!.count - 1}</span>
+            )}
             {/* No key advertised. Enter belongs to whatever has focus — a
                 shell, a composer — and binding it globally would take it from
                 them; promising it and not binding it is worse. The chip is the
-                gesture. */}
-            <span className="text-[9px] opacity-75">go →</span>
+                gesture.
+
+                And no arrow either. It said "go →" while what it did was open a
+                screen you could not answer from; the chip opens a panel over
+                itself now and moves nothing, so a glyph promising travel would
+                be the same lie in a smaller font. */}
+            <span className="text-[9px] opacity-75 shrink-0">{needsOpen ? "▴" : "▾"}</span>
           </button>
-        </div>
-      )}
+        ) : (
+          <NoteToast note={note} />
+        )}
+      </div>
+      <NeedsPopover
+        anchorRef={chip}
+        open={needsOpen && alarm}
+        items={needsList}
+        onClose={() => setNeedsOpen(false)}
+        onChat={(id) => { setNeedsOpen(false); onNeedChat(id); }}
+        onApprove={() => { setNeedsOpen(false); onNeedApprove(); }}
+        onProject={(root) => { setNeedsOpen(false); onNeedProject(root); }}
+      />
 
       {/* ── the plan, the clock, the way in ───────────────────────── */}
       <div className="flex items-center gap-2.5 shrink-0">
@@ -295,18 +402,16 @@ export function TopBar({
           </Item>
         ) : (
           <>
-            {five && (
-              <Item cap="5h" dim={quiet} hideUnder="md" title={`${five.utilization}% of the 5-hour window`}>
-                <Meter pct={five.utilization} tint={five.utilization >= 80 ? "var(--error)" : "var(--warning)"} />
-                <b className="text-[9.5px] tabular-nums" style={{ color: "var(--text2)" }}>{five.utilization}%</b>
-              </Item>
-            )}
-            {week && (
-              <Item cap="week" dim={quiet} hideUnder="sm" title={`${week.utilization}% of the weekly window`}>
-                <Meter pct={week.utilization} tint={week.utilization >= 80 ? "var(--error)" : "var(--warning)"} />
-                <b className="text-[9.5px] tabular-nums" style={{ color: "var(--text2)" }}>{week.utilization}%</b>
-              </Item>
-            )}
+            {five && <PlanMeter tag="5h" pct={five.utilization} age={age} dim={quiet} hideUnder="md" />}
+            {week && <PlanMeter tag="week" pct={week.utilization} age={age} dim={quiet} hideUnder="sm" />}
+            {/* Per-model weekly windows, labelled with whatever the API called
+                them. Not hardcoded to any model name: the plan that has one
+                bucket this week can have another next week, and a bar that only
+                knows last quarter's models quietly stops mentioning your
+                limits. */}
+            {u?.scoped?.map((s) => (
+              <PlanMeter key={s.name} tag={s.name} pct={s.utilization} age={age} dim={quiet} hideUnder="md" />
+            ))}
           </>
         )}
         <span className="shrink-0" style={{ width: 1, height: 12, background: "color-mix(in srgb, var(--text) 14%, transparent)" }} />
@@ -321,6 +426,9 @@ export function TopBar({
         {(!WINDOW_CONTROLS || win.full) && (
           <b className="text-[11px] tabular-nums tracking-[0.03em] shrink-0" style={{ color: "var(--text)" }}>{time}</b>
         )}
+        {/* What you missed. The bar interrupts for one thing at a time in its
+            middle; everything else it ever said is still in here. */}
+        <NotifyBell noDrag={NO_DRAG} />
         {/* An update is worth noticing on the way past, never worth pulling the
             eye off a running fleet. */}
         {updateAvailable() && (

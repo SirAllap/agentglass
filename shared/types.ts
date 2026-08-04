@@ -503,6 +503,14 @@ export interface FileChange {
    *  buries the edits worth reviewing. Absent means "not asked" / "unknown",
    *  which is never hidden. */
   ignored?: boolean;
+  /** This path is not in the open project — not the scoped repo, and not any of
+   *  its linked worktrees. A session of this project still writes notes and
+   *  scratch files elsewhere, and those are recorded like any other edit; they
+   *  are just not what you opened a project-scoped diff to read. Hidden by
+   *  default, on the same terms as `ignored`. Absent (and always so on an
+   *  unscoped instance, where there is no project to be outside of) means never
+   *  hidden. */
+  outside?: boolean;
 }
 
 /** A tool call the server sees as still running: a PreToolUse with no matching

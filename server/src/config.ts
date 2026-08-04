@@ -275,6 +275,30 @@ export function inScope(path: string | null | undefined, scope = workspaceRoot()
   return worktreeFamily(scope).some((r) => isWithin(p, r));
 }
 
+/**
+ * Is this session's work part of the open project?
+ *
+ * `inScope` asks it of a path; a session carries two, and either one answers
+ * yes. That is the same rule `scopeClause()` puts in SQL — `project_path IN
+ * (...) OR cwd_path IN (...)` — kept here so the live seam and the stored reads
+ * cannot drift apart.
+ *
+ * They had drifted. Every read was scoped and the WebSocket push was not, so a
+ * cockpit opened for one project showed that project's history and then filled
+ * up with whatever else on the machine happened to emit while you watched.
+ * Reloading swept those away and the next event brought them back — one window
+ * disagreeing with itself about which fleet it was showing. It surfaced where it
+ * was least deniable: an alert from another project taking the top bar of a
+ * cockpit scoped somewhere else.
+ */
+export function sessionInScope(
+  s: { project_path?: string | null; cwd_path?: string | null },
+  scope = workspaceRoot(),
+): boolean {
+  if (!scope) return true; // whole-machine: nothing to filter
+  return inScope(s.project_path, scope) || inScope(s.cwd_path, scope);
+}
+
 /** The directories a scoped instance is about: the project plus its linked
  *  worktrees. Unscoped returns empty — "no scope" is not "a list of roots", and
  *  callers branch on that rather than being handed the whole machine. */
