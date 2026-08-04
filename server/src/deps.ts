@@ -10,7 +10,7 @@
 // not render; a missing setsid leaves stray processes behind a closed shell.
 //
 // Read-only throughout: this route probes and reports, it never installs.
-import { DEPS, usedOn, type DepReport, type DepSpec, type DepStatus, type DepsResponse } from "../../shared/deps.ts";
+import { DEPS, usedOn, PKG_INSTALL, type DepReport, type DepSpec, type DepStatus, type DepsResponse, type PkgManager } from "../../shared/deps.ts";
 import { gitCapability } from "./git.ts";
 import { dockerCapability } from "./docker.ts";
 import { ghCapability } from "./prs.ts";
@@ -116,6 +116,52 @@ async function probe(spec: DepSpec): Promise<{ status: DepStatus; detail?: strin
 // mid-session. Long enough to make reopening free, short enough that "install
 // it, then press Recheck" tells the truth.
 const TTL_MS = 10_000;
+/**
+ * Which package manager this machine actually uses.
+ *
+ * Order is "how much is this the machine's own". A Linux box with both apt and
+ * brew is an apt box that also has brew: its docs, its forums and every other
+ * package on it assume `sudo apt-get`, so that is the line to offer even though
+ * brew is there. On macOS the native manager is the one Apple does not ship, so
+ * brew is the answer by elimination rather than by preference.
+ *
+ * Resolved once. A package manager does not appear mid-session, and probing six
+ * binaries on every poll of a settings page is six spawns for an answer that
+ * cannot have changed.
+ */
+let managerCache: PkgManager | null | undefined;
+export function packageManager(): PkgManager | null {
+  if (managerCache !== undefined) return managerCache;
+  const order: PkgManager[] = process.platform === "darwin"
+    ? ["brew"]
+    : ["apt", "dnf", "pacman", "zypper", "apk", "brew"];
+  // `apt-get` rather than `apt`: apt is the interactive front end and prints a
+  // warning about not having a stable interface when scripted. apt-get is the
+  // one meant to be typed into something that is not a human conversation.
+  const bin: Record<PkgManager, string> = {
+    apt: "apt-get", dnf: "dnf", pacman: "pacman", zypper: "zypper", apk: "apk", brew: "brew",
+  };
+  managerCache = order.find((m) => !!Bun.which(bin[m])) ?? null;
+  return managerCache;
+}
+/** Test seam — a manager does not appear mid-session, but a test's PATH does. */
+export function __resetPackageManager(): void { managerCache = undefined; }
+
+/**
+ * The line to type for one tool, or nothing.
+ *
+ * Nothing is a real answer here and happens three ways: the tool has no
+ * one-line install (Docker, the Claude CLI), no manager was recognised, or
+ * this manager's name for the package was one nobody was sure of. All three
+ * leave the panel showing the project's page, which is what it showed before
+ * any of this existed.
+ */
+function installLine(spec: DepSpec): string | undefined {
+  const m = packageManager();
+  const pkg = m ? spec.pkg?.[m] : undefined;
+  return m && pkg ? PKG_INSTALL[m](pkg) : undefined;
+}
+
 let cache: { at: number; res: DepsResponse } | null = null;
 
 export async function dependencyReport(force = false): Promise<DepsResponse> {
@@ -127,10 +173,10 @@ export async function dependencyReport(force = false): Promise<DepsResponse> {
         return { ...spec, status: "unsupported", detail: `not used on ${platform}` };
       }
       const r = await probe(spec);
-      return { ...spec, ...r };
+      return { ...spec, ...r, install: installLine(spec) };
     }),
   );
-  const res: DepsResponse = { platform, deps };
+  const res: DepsResponse = { platform, manager: packageManager() ?? undefined, deps };
   cache = { at: Date.now(), res };
   return res;
 }

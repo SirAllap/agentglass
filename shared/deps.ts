@@ -6,11 +6,27 @@
 // a list, and a list needs a single source, or the wording drifts between the
 // six places that already tell part of the story.
 //
-// GENERIC ON PURPOSE. There is one macOS, one Windows and an unbounded number
-// of Linux distributions, so a package-manager line is wrong for most readers
-// and stale for the rest. Each entry names the tool, says what stops working
-// without it, and links the project's own page. How the reader installs
-// software on their machine is theirs to know, not ours to guess.
+// It USED to say: generic on purpose, no package-manager lines, "how the reader
+// installs software is theirs to know, not ours to guess". That reasoning was
+// sound and the conclusion was wrong, so it is worth saying why it changed
+// rather than quietly deleting it.
+//
+// The objection was that a guess is wrong for most readers and stale for the
+// rest. True — and it only matters if the guess RUNS. What the panel does now
+// is type the command into a real terminal and stop: the prompt is yours, the
+// Enter is yours, and a wrong guess costs one keystroke to correct instead of
+// installing the wrong thing. At that point a command that is right most of the
+// time beats a link that is right always and helps nobody who is missing a
+// package at 1am. It also means `sudo` is typed by the person who owns the
+// machine, into their own shell, rather than asked for by an app.
+//
+// Two rules keep the guess honest:
+//   * `pkg` is per manager and OPTIONAL. Where there is no one-line answer —
+//     Docker, the Claude CLI — there is no entry, and the reader gets the
+//     project's page exactly as before. A fabricated apt line for Docker would
+//     install the wrong daemon from the wrong repository.
+//   * Names nobody is sure of are left out rather than approximated. A missing
+//     row costs a search; a wrong one costs a package.
 
 /** Platforms a tool is used on at all. Anywhere else the row reads "not used
  *  here" rather than "missing", because a mac with no `pkexec` is not broken. */
@@ -39,7 +55,35 @@ export interface DepSpec {
   platforms?: DepPlatform[];
   /** One extra thing a reader cannot infer from the name, when there is one. */
   note?: string;
+  /**
+   * What this tool is called to each package manager, where a plain install is
+   * an honest answer.
+   *
+   * Absent on purpose for anything whose install is a repository, a script or a
+   * runtime of its own — see the note at the top of this file. Partial on
+   * purpose too: a manager missing from the record is one whose package name
+   * nobody here was sure of, and the reader gets the project's page for it.
+   */
+  pkg?: Partial<Record<PkgManager, string>>;
 }
+
+/** The package managers worth detecting. Ordered by how much they are the
+ *  machine's own: a Linux box with both apt and brew is an apt box that also
+ *  has brew, and `sudo apt-get` is what its docs, its forums and its other
+ *  packages assume. */
+export type PkgManager = "apt" | "dnf" | "pacman" | "zypper" | "apk" | "brew";
+
+/** How each one is asked to install something. `sudo` is part of the string
+ *  rather than something the app arranges: it is typed into the user's own
+ *  shell, where their password belongs. brew refuses to run under sudo. */
+export const PKG_INSTALL: Record<PkgManager, (pkg: string) => string> = {
+  apt: (p) => `sudo apt-get install -y ${p}`,
+  dnf: (p) => `sudo dnf install -y ${p}`,
+  pacman: (p) => `sudo pacman -S --needed ${p}`,
+  zypper: (p) => `sudo zypper install -y ${p}`,
+  apk: (p) => `sudo apk add ${p}`,
+  brew: (p) => `brew install ${p}`,
+};
 
 /** The catalog. Order is the reading order: the things that break the app
  *  first, then what each feature wants, then the small POSIX pieces. */
@@ -48,6 +92,7 @@ export const DEPS: DepSpec[] = [
     id: "git", bin: "git", title: "Git", required: true,
     what: "Source control, file changes, pull requests and worktrees all shell out to it, and the terminal uses it to decide where to open.",
     url: "https://git-scm.com/downloads",
+    pkg: { apt: "git", dnf: "git", pacman: "git", zypper: "git", apk: "git", brew: "git" },
   },
   {
     id: "claude", bin: "claude", title: "Claude Code CLI", required: true,
@@ -60,6 +105,7 @@ export const DEPS: DepSpec[] = [
     what: "Two separate jobs: it runs the hook forwarder that streams sessions here live, and it backs the terminal's pseudo-terminal.",
     url: "https://www.python.org/downloads/",
     note: "Without it the hooks stay written but fail on every event, so nothing arrives live and nothing says why. The terminal keeps opening, in a degraded mode where full-screen programs do not render. On Windows the hooks use `py` or `python`.",
+    pkg: { apt: "python3", dnf: "python3", pacman: "python", zypper: "python3", apk: "python3", brew: "python" },
   },
   {
     id: "tmux", bin: "tmux", title: "tmux", required: false,
@@ -67,12 +113,14 @@ export const DEPS: DepSpec[] = [
     url: "https://github.com/tmux/tmux/wiki/Installing",
     platforms: ["linux", "darwin"],
     note: "Without it chats still run, one process per turn, which is slower to start but costs nothing while idle.",
+    pkg: { apt: "tmux", dnf: "tmux", pacman: "tmux", zypper: "tmux", apk: "tmux", brew: "tmux" },
   },
   {
     id: "gh", bin: "gh", title: "GitHub CLI", required: false,
     what: "Everything in the pull requests panel: the list, the diff, reviews, checks and merges.",
     url: "https://cli.github.com",
     note: "Installing it is half the job. It also has to be logged in before the panel can read anything.",
+    pkg: { apt: "gh", dnf: "gh", pacman: "github-cli", zypper: "gh", apk: "github-cli", brew: "gh" },
   },
   {
     id: "docker", bin: "docker", title: "Docker", required: false,
@@ -85,12 +133,14 @@ export const DEPS: DepSpec[] = [
     what: "The half of the Tasks view that is yours: the local list you add to, edit and tick off. GitHub issues are read over the network and arrive either way.",
     url: "https://taskwarrior.org/download/",
     note: "Its absence is the quiet kind — the view opens, the issues load, and the list you were expecting is simply not there. Which is why it is on this page.",
+    pkg: { apt: "taskwarrior", dnf: "task", pacman: "task", apk: "taskwarrior", brew: "task" },
   },
   {
     id: "nvim", bin: "nvim", title: "Neovim", required: false,
     what: "Sends a file straight to a running editor from the diff and file panels, and keeps it on the app's theme.",
     url: "https://neovim.io",
     note: "With any other $EDITOR the app hands you the command to paste instead.",
+    pkg: { apt: "neovim", dnf: "neovim", pacman: "neovim", zypper: "neovim", apk: "neovim", brew: "neovim" },
   },
   {
     id: "setsid", bin: "setsid", title: "setsid (util-linux)", required: false,
@@ -101,12 +151,14 @@ export const DEPS: DepSpec[] = [
     // is why a Mac shows this row as absent rather than as not applicable.
     platforms: ["linux", "darwin"],
     note: "Without it a closed terminal or chat can leave background processes behind. macOS does not ship it.",
+    pkg: { apt: "util-linux", dnf: "util-linux", pacman: "util-linux", zypper: "util-linux", apk: "util-linux" },
   },
   {
     id: "script", bin: "script", title: "script (util-linux)", required: false,
     what: "The terminal's fallback pseudo-terminal, used when Python 3 is absent.",
     url: "https://github.com/util-linux/util-linux",
     platforms: ["linux"],
+    pkg: { apt: "bsdutils", dnf: "util-linux", pacman: "util-linux", zypper: "util-linux", apk: "util-linux" },
   },
   {
     id: "ss", bin: "ss", title: "ss (iproute2)", required: false,
@@ -114,6 +166,7 @@ export const DEPS: DepSpec[] = [
     url: "https://github.com/iproute2/iproute2",
     platforms: ["linux"],
     note: "Ships with iproute2 and is present on almost every Linux, which is why its absence is confusing rather than obvious: the panel simply lists nothing.",
+    pkg: { apt: "iproute2", dnf: "iproute", pacman: "iproute2", zypper: "iproute2", apk: "iproute2" },
   },
   {
     id: "dbus-monitor", bin: "dbus-monitor", title: "D-Bus tools", required: false,
@@ -121,12 +174,14 @@ export const DEPS: DepSpec[] = [
     url: "https://www.freedesktop.org/wiki/Software/dbus/",
     platforms: ["linux"],
     note: "It also needs a session bus, which a headless box or an SSH session does not have.",
+    pkg: { apt: "dbus", pacman: "dbus", zypper: "dbus-1" },
   },
   {
     id: "notify-send", bin: "notify-send", title: "notify-send (libnotify)", required: false,
     what: "Raises a desktop alert when an agent needs you and no agentglass window is open to show it.",
     url: "https://gitlab.gnome.org/GNOME/libnotify",
     platforms: ["linux"],
+    pkg: { apt: "libnotify-bin", dnf: "libnotify", pacman: "libnotify", zypper: "libnotify-tools", apk: "libnotify" },
   },
   {
     id: "opener", bin: "xdg-open", title: "Desktop opener", required: false,
@@ -134,18 +189,21 @@ export const DEPS: DepSpec[] = [
     url: "https://www.freedesktop.org/wiki/Software/xdg-utils/",
     platforms: ["linux"],
     note: "macOS and Windows use their built-in openers, so there is nothing to install there.",
+    pkg: { apt: "xdg-utils", dnf: "xdg-utils", pacman: "xdg-utils", zypper: "xdg-utils", apk: "xdg-utils" },
   },
   {
     id: "pkexec", bin: "pkexec", title: "polkit", required: false,
     what: "Hands a worktree back to you when its files ended up owned by another user, for example after a container wrote into it.",
     url: "https://gitlab.freedesktop.org/polkit/polkit",
     platforms: ["linux"],
+    pkg: { apt: "policykit-1", dnf: "polkit", pacman: "polkit", zypper: "polkit" },
   },
   {
     id: "bash", bin: "bash", title: "Bash", required: false,
     what: "The shell the terminal falls back to when $SHELL is not set, and what the self-update script runs under.",
     url: "https://www.gnu.org/software/bash/",
     platforms: ["linux", "darwin"],
+    pkg: { apt: "bash", dnf: "bash", pacman: "bash", zypper: "bash", apk: "bash", brew: "bash" },
   },
 ];
 
@@ -171,12 +229,25 @@ export interface DepReport extends DepSpec {
   /** A version when we have one cheaply, otherwise why it is not usable.
    *  Written for a reader, and it is the server's words, not a code. */
   detail?: string;
+  /**
+   * The line to type, already resolved for THIS machine's package manager.
+   *
+   * Resolved on the server because only the server knows what is installed
+   * where it runs — the browser may not even be on that machine. Absent when
+   * the tool has no one-line install, or when no manager was recognised, and
+   * the panel falls back to the project's page.
+   */
+  install?: string;
 }
 
 export interface DepsResponse {
   /** `process.platform`, so the UI can say "on Linux" without guessing from
    *  the browser, which may not be the machine the server runs on. */
   platform: string;
+  /** Which package manager the install lines were written for, so the panel can
+   *  name it. A reader who sees `apt-get` on a machine where they use brew
+   *  needs to know we chose, not that we were confused. */
+  manager?: PkgManager;
   deps: DepReport[];
 }
 
