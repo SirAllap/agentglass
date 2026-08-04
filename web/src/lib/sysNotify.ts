@@ -36,6 +36,10 @@ export type SystemNote = {
 export type NotifyCapability = { supported: boolean; reason?: string };
 
 const KEY = "agentglass.sysNotify";
+/** The detail level to come back to when the switch is turned on again, so
+ *  "off for an hour" does not quietly cost you the choice between "who wrote"
+ *  and "what they said". */
+const DETAIL_KEY = "agentglass.sysNotify.detail";
 
 /** Off unless asked for. Reading every notification you receive is not a
  *  default anyone should be opted into. */
@@ -46,8 +50,26 @@ export function sysNotifyMode(): SysNotifyMode {
 
 export function setSysNotifyMode(m: SysNotifyMode) {
   localStorage.setItem(KEY, m);
+  if (m !== "off") localStorage.setItem(DETAIL_KEY, m);
   for (const fn of modeListeners) fn(m);
   retune();
+}
+
+/**
+ * The plain on/off half of the same preference.
+ *
+ * Three states is the right answer to "how much of the message do I want on my
+ * screen" and the wrong answer to "do I get my machine's notifications in here
+ * at all" — which is the question anyone actually arrives with, and the one the
+ * tri-state made you answer by picking a word. So the switch is a switch, and
+ * the detail is a second, smaller decision underneath it.
+ */
+export const sysNotifyOn = (): boolean => sysNotifyMode() !== "off";
+
+export function setSysNotifyOn(on: boolean) {
+  if (!on) return setSysNotifyMode("off");
+  const back = localStorage.getItem(DETAIL_KEY);
+  setSysNotifyMode(back === "titles" ? "titles" : "full");
 }
 
 const modeListeners = new Set<(m: SysNotifyMode) => void>();
@@ -55,6 +77,59 @@ export function subscribeSysNotifyMode(fn: (m: SysNotifyMode) => void): () => vo
   modeListeners.add(fn);
   return () => modeListeners.delete(fn);
 }
+
+// ---------------------------------------------------------------------------
+// agentglass's own notifications.
+//
+// The other half of the same switchboard. Everything above is about other
+// people's apps; this is about ours — a chat that finished, a branch that fell
+// behind, a build that went red. They share one surface on purpose, so they
+// need to be silenceable separately or "stop interrupting me" means giving up
+// the thing you installed this for.
+//
+// Two deliberate limits, both of which the hint in Settings says out loud:
+//
+//   - Off stops them INTERRUPTING, not being collected. The bell keeps the full
+//     list either way, exactly as `quiet` does for the mirrored ones.
+//   - A held tool call is not covered. It cannot be caught up on later — the
+//     hold expires on its own while an agent sits there waiting — so it is the
+//     one thing that still speaks with this off. Anything else can wait for you
+//     to look.
+// ---------------------------------------------------------------------------
+
+const APP_KEY = "agentglass.appNotify";
+
+/** On unless turned off: these are the app's own events, and someone running a
+ *  fleet cockpit installed it to be told about them. */
+export function appNotify(): boolean {
+  return localStorage.getItem(APP_KEY) !== "0";
+}
+
+export function setAppNotify(on: boolean) {
+  localStorage.setItem(APP_KEY, on ? "1" : "0");
+  for (const fn of appListeners) fn(on);
+}
+
+const appListeners = new Set<(on: boolean) => void>();
+export function subscribeAppNotify(fn: (on: boolean) => void): () => void {
+  appListeners.add(fn);
+  return () => appListeners.delete(fn);
+}
+
+/**
+ * May one of agentglass's own events interrupt right now?
+ *
+ * The rule lives here, in one line, rather than inside the component that draws
+ * the toast — because it is a rule about the product and not about a strip of
+ * bar, and because the exception is the kind that gets quietly refactored away
+ * by someone tidying a condition they do not have the context for.
+ *
+ * `urgent` means something is STOPPED until you act: a tool call held at the
+ * gate, a chat that cannot continue. Those speak with the switch off. Everything
+ * else — a turn that finished, commits to pull, checks that went green — waits
+ * for you in the bell.
+ */
+export const shouldInterrupt = (urgent: boolean): boolean => urgent || appNotify();
 
 // ---------------------------------------------------------------------------
 // Quiet.
@@ -255,11 +330,35 @@ function retune() {
   else close();
 }
 
-async function open() {
-  if (ws || retryTimer) return;
-  const cap = await notifyCapability();
-  if (!cap.supported || !wanted()) return;
+/**
+ * Claimed before the capability probe is awaited, not after.
+ *
+ * `ws` alone could not guard this: opening is asynchronous, so two callers
+ * arriving while the probe was in flight both saw `ws === null`, both passed,
+ * and both opened a socket. The server then delivered every notification twice
+ * — two toasts for one Slack message, and two rows in the bell — which read as
+ * the desktop sending duplicates rather than as this racing itself. It happens
+ * on every cold start: the module retunes on load and the first subscriber
+ * retunes on mount, and those two are milliseconds apart.
+ */
+let opening = false;
 
+async function open() {
+  if (ws || retryTimer || opening) return;
+  opening = true;
+  try {
+    const cap = await notifyCapability();
+    // Re-read everything the await could have changed: the feature may have been
+    // switched off while the probe was in flight, and a socket may have been
+    // opened by the caller that lost this race.
+    if (!cap.supported || !wanted() || ws) return;
+    attach();
+  } finally {
+    opening = false;
+  }
+}
+
+function attach() {
   const sock = new WebSocket(withToken(SERVER.replace(/^http/, "ws") + "/notifications"));
   ws = sock;
   sock.onmessage = (ev) => {

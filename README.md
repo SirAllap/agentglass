@@ -20,7 +20,7 @@
 
 Point any AI coding agent at agentglass — via Claude Code hooks or any OpenTelemetry GenAI exporter (OpenAI Codex, Gemini CLI, Bedrock, LangChain, LiteLLM…) — and watch every agent, tool call, token, and dollar move in real time. Cost tracking, tool-latency percentiles, error timelines, session lifecycles, one switch that filters the whole cockpit by provider, and 22 themes. It persists across reloads (unlike a pure in-browser stream).
 
-And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — all behind one keystroke, under a notch that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
+And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code sessions — all behind one keystroke, under a bar that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
 
 ### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/demo/)
 
@@ -97,13 +97,15 @@ They live in one **workspace**: `Ctrl+\` (`⌘\`) opens it over the dashboard, a
 
 **Drag the rail to reorder it.** Put the terminal at the bottom if that is where your thumb goes; `Ctrl+1`–`6` follow your arrangement, so the tooltips never start lying. Drag the seam beside any list to resize it — every view shares that width, and it is remembered.
 
-### 🔔 The notch — what is happening, above everything
+### 🔔 The bar — what is happening, above everything
 
-A strip across the top of the workspace, always visible, never themed: true black so it disappears into the bezel of an OLED display.
+A strip across the top of the window, always visible, whatever view you are in.
 
-It carries what you would otherwise go looking for — commits **to push** and **to pull**, live **shells**, chats **waiting** on you, unread notifications, your Anthropic **5-hour and weekly plan meters**, a seven-segment clock — and it mirrors **desktop notifications**, so the Slack message that arrives while you are fullscreen is not lost. Click it and it opens downward into an inbox with the full text; click again and it closes. Capability-probed on the server, so a platform without a notification bus gets a notch with no inbox rather than a broken one.
+It carries what you would otherwise go looking for — commits **to push** and **to pull**, live **shells**, chats **waiting** on you, your Anthropic **5-hour and weekly plan meters**, a clock — plus a **bell** with everything that has happened while you were elsewhere, and one lane in the middle for the thing that just did.
 
-Notifications are off by default and opt-in per level in **Settings ▸ Preferences** — titles only, or the full body.
+And it mirrors **your machine's own notifications**: agentglass runs fullscreen, so the Slack banner your desktop draws is behind the app that is covering it. Those arrive as **cards** over the top-right corner — sender, message, and the link if the message carried one — and then wait in the bell. A copy, never an interception: your desktop still shows its own, and agentglass never becomes the notification daemon. Capability-probed on the server, so a platform without a notification bus says so instead of offering a switch that does nothing.
+
+Two switches in **Settings ▸ Notifications**, because there are two sources. **From your desktop** is off by default (it reads every notification you receive) with a second choice of how much to show — who it was from, or the whole message — and a *quiet* mode that keeps collecting without interrupting. **From agentglass** is on, and turning it off silences chats finishing and branches falling behind while still letting anything *held waiting on you* speak. Neither switch stops the bell collecting: silence is about interruption, never about the record.
 
 ### 🔬 File changes — a syntax-highlighted diff & review workspace &nbsp;`d`
 
@@ -601,7 +603,7 @@ Linux distributions, so how you install software is yours to know.
 | [Docker](https://docs.docker.com/get-started/get-docker/) | Containers, images, volumes, logs | No docker panel. The daemon has to be running, not just the CLI installed |
 | [Neovim](https://neovim.io) | Sending a file to a live editor, theme sync | The app hands you a command to paste instead |
 | setsid, script ([util-linux](https://github.com/util-linux/util-linux)) | Process groups per shell, and the fallback pseudo-terminal | A closed terminal can leave background processes behind |
-| [D-Bus tools](https://www.freedesktop.org/wiki/Software/dbus/), [libnotify](https://gitlab.gnome.org/GNOME/libnotify), [xdg-utils](https://www.freedesktop.org/wiki/Software/xdg-utils/) | Mirroring desktop notifications onto the notch, alerts when no window is open, opening their links (Linux) | Those notifications simply do not appear |
+| [D-Bus tools](https://www.freedesktop.org/wiki/Software/dbus/), [libnotify](https://gitlab.gnome.org/GNOME/libnotify), [xdg-utils](https://www.freedesktop.org/wiki/Software/xdg-utils/) | Mirroring desktop notifications into the app, alerts when no window is open, opening their links (Linux) | Those notifications simply do not appear |
 | [polkit](https://gitlab.freedesktop.org/polkit/polkit) | Handing a worktree back to you when a container left root-owned files in it | That one repair button fails |
 
 **Two more that are not binaries**

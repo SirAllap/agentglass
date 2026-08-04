@@ -32,7 +32,12 @@ import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { externalUrl } from "../lib/externalUrl.ts";
 import type { UpdateStatus, ReleaseNotes, HookSetupStatus } from "../../../shared/types.ts";
-import { sysNotifyMode, setSysNotifyMode, notifyCapability, notifyQuiet, setNotifyQuiet, type SysNotifyMode, type NotifyCapability } from "../lib/sysNotify.ts";
+import {
+  sysNotifyMode, setSysNotifyMode, setSysNotifyOn, subscribeSysNotifyMode,
+  notifyCapability, notifyQuiet, setNotifyQuiet, subscribeNotifyQuiet,
+  appNotify, setAppNotify, subscribeAppNotify,
+  type SysNotifyMode, type NotifyCapability,
+} from "../lib/sysNotify.ts";
 import { chatEnginePref, setChatEnginePref, type ChatEnginePref } from "../lib/chatEnginePref.ts";
 import type { TmuxEngineInfo } from "../../../shared/types.ts";
 import type { DepReport, DepStatus } from "../../../shared/deps.ts";
@@ -45,10 +50,28 @@ import {
 } from "./workspace/views.ts";
 import { AppearancePane } from "./ThemePicker.tsx";
 
-function Toggle({ on, onClick, label, hint }: { on: boolean; onClick: () => void; label: string; hint: string }) {
+/** A heading inside a Section, for a pane that answers the same question about
+ *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
+ *  list and you have to read every hint to work out which switch is about your
+ *  machine and which is about this app. */
+function Group({ children }: { children: React.ReactNode }) {
   return (
-    <button onClick={onClick} role="switch" aria-checked={on}
-      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-white/5">
+    <div className="px-3 pt-2.5 pb-0.5">
+      <span className="text-[10px] t-dim2 uppercase tracking-wider">{children}</span>
+    </div>
+  );
+}
+
+function Toggle({ on, onClick, label, hint, disabled }: {
+  on: boolean; onClick: () => void; label: string; hint: string;
+  /** A host that cannot do this at all — the row stays, greyed, saying why in
+   *  its hint, because a switch that vanishes reads as a feature you imagined. */
+  disabled?: boolean;
+}) {
+  return (
+    <button onClick={onClick} role="switch" aria-checked={on} disabled={disabled}
+      style={disabled ? { opacity: 0.55 } : undefined}
+      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-white/5 disabled:cursor-not-allowed">
       <span className="min-w-0 flex-1">
         <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>{label}</span>
         <span className="block text-[10.5px] t-dim2 mt-0.5">{hint}</span>
@@ -1123,8 +1146,15 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   // actually comes off.
   useEffect(() => { if (!open) { setCapturing(null); setCapturingChord(null); setKeyError(null); } }, [open]);
 
-  const [sysNotify, setSysNotifyState] = useState<SysNotifyMode>(() => sysNotifyMode());
-  const [quiet, setQuietState] = useState(() => notifyQuiet());
+  // Read from the stores, not copied into local state. This modal is mounted for
+  // the life of the app, so a `useState` seeded at startup is seeded once and
+  // never again — and these three switches have another surface now: the bell's
+  // empty state can turn mirroring on, and Settings then sat there showing it
+  // off, with a toggle whose first click did nothing visible. Measured, not
+  // reasoned: the probe clicked the bell's button and this row still read false.
+  const sysNotify = useSyncExternalStore(subscribeSysNotifyMode, sysNotifyMode, () => "off" as SysNotifyMode);
+  const quiet = useSyncExternalStore(subscribeNotifyQuiet, notifyQuiet, () => false);
+  const own = useSyncExternalStore(subscribeAppNotify, appNotify, () => true);
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
   useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
   const [enginePref, setEnginePref] = useState<ChatEnginePref>(() => chatEnginePref());
@@ -1391,32 +1421,53 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
 
                   {pane === "notifications" && (
                   <Section title="Notifications">
+                    {/* Two sources, two switches. They share one surface — the
+                        bell lists both — so "stop interrupting me" has to be
+                        answerable about each separately, or turning off the
+                        chatter means turning off the fleet you are watching. */}
+                    <Group>From your desktop</Group>
+                    <Toggle
+                      on={sysNotify !== "off"}
+                      disabled={notifyCap ? !notifyCap.supported : true}
+                      onClick={() => setSysNotifyOn(sysNotify === "off")}
+                      label="Mirror this machine's notifications"
+                      hint={notifyCap && !notifyCap.supported
+                        ? `Unavailable — ${notifyCap.reason}`
+                        : "Slack, mail, calendar — whatever pops up behind agentglass while it is covering your screen. A copy, never an interception: your desktop still shows its own."} />
+                    {sysNotify !== "off" && (
+                      <>
+                        {/* Not the same question as the switch above. "Tell me
+                            someone wrote" and "show me what they said" differ on
+                            a shared screen, which is the one place this feature
+                            is most useful and least private. */}
+                        <Choice<SysNotifyMode>
+                          label="How much of the message"
+                          hint="Full shows the text on the card; Who shows only who it was from"
+                          value={sysNotify}
+                          onPick={setSysNotifyMode}
+                          options={[
+                            { v: "titles", label: "Who" },
+                            { v: "full", label: "Full" },
+                          ]} />
+                        {/* agentglass reads the bus rather than being the daemon,
+                            so the desktop's own Do Not Disturb cannot reach what
+                            lands here. This is the switch that can. It silences
+                            other people's messages only: a gate hold never travels
+                            this path, so quiet can't mean an agent blocked and
+                            nobody said. */}
+                        <Toggle on={quiet} onClick={() => setNotifyQuiet(!quiet)}
+                          label="Quiet — collect them without interrupting"
+                          hint="No cards; they still land in the bell, so nothing is lost" />
+                      </>
+                    )}
+
+                    <Group>From agentglass</Group>
+                    <Toggle on={own} onClick={() => setAppNotify(!own)}
+                      label="agentglass's own notifications"
+                      hint="Chats finishing, branches falling behind, checks going red. Anything held waiting on you still speaks — that one cannot be caught up on later — and everything keeps landing in the bell either way." />
                     <Toggle on={sound} onClick={onSound}
                       label="Alert sounds"
                       hint="A chime when a session errors or needs you" />
-                    <Choice<SysNotifyMode>
-                      label="Desktop notifications on the notch"
-                      hint="Slack and the rest, mirrored onto the strip you can still see in fullscreen"
-                      disabled={notifyCap ? !notifyCap.supported : true}
-                      disabledHint={notifyCap ? `Unavailable — ${notifyCap.reason}` : "Checking…"}
-                      value={sysNotify}
-                      onPick={(m) => { setSysNotifyMode(m); setSysNotifyState(m); }}
-                      options={[
-                        { v: "off", label: "Off" },
-                        { v: "titles", label: "Who" },
-                        { v: "full", label: "Full" },
-                      ]} />
-                    {/* agentglass reads the bus rather than being the daemon,
-                        so the desktop's own Do Not Disturb cannot reach what
-                        lands here. This is the switch that can. It silences
-                        other people's messages only: a gate hold never travels
-                        this path, so quiet can't mean an agent blocked and
-                        nobody said. */}
-                    {sysNotify !== "off" && (
-                      <Toggle on={quiet} onClick={() => { setNotifyQuiet(!quiet); setQuietState(!quiet); }}
-                        label="Quiet mirrored notifications"
-                        hint="Keep collecting them, stop letting them interrupt — agentglass's own alerts still come through" />
-                    )}
                   </Section>
                   )}
 
