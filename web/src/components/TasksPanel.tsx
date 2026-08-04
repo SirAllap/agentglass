@@ -620,7 +620,11 @@ function ClickUpBody({ active }: { active: boolean }) {
   }, [data, q]);
 
   if (!data) {
-    return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading ClickUp…</div>;
+    return (
+      <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
+        Reading ClickUp… <span style={{ color: "var(--text4)" }}>the first read of a large workspace takes a few seconds</span>
+      </div>
+    );
   }
 
   if (data.unauthorised || (!data.tasks.length && data.error?.includes("not connected"))) {
@@ -678,9 +682,15 @@ function ClickUpBody({ active }: { active: boolean }) {
       </div>
 
       <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+        {/* "Nothing assigned to you" is a CLAIM, and it must not be made on the
+            strength of a request that failed. A timeout with an empty list said
+            exactly that — under a banner admitting ClickUp had not answered. */}
         {!rows.length && (
           <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
-            {q ? "Nothing matches that." : "Nothing assigned to you is open right now."}
+            {data.error
+              ? "Nothing to show — the last read did not get through."
+              : q ? "Nothing matches that."
+              : "Nothing assigned to you is open right now."}
           </div>
         )}
         {rows.map((t) => <ClickUpRow key={t.id} t={t} today={today} />)}

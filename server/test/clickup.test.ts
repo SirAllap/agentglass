@@ -130,6 +130,15 @@ describe("reading tasks", () => {
     expect(q).toContain("include_closed=false");
   });
 
+  it("does not ask for subtasks, which doubled the time and returned nothing", async () => {
+    // Measured on a real workspace: 25.0s with `subtasks=true` against 12.5s
+    // without, for the same thirteen rows. Asserted so that a future tidy-up
+    // cannot put it back on the grounds that it looks more complete.
+    reply = () => json({ tasks: [TASK] });
+    await CU.fetchTasks("pk_1_X", "9001", "7");
+    expect(seen[0]!.path).not.toContain("subtasks");
+  });
+
   it("maps a task into the shape the panel reads", async () => {
     reply = () => json({ tasks: [TASK] });
     const r = await CU.fetchTasks("pk_1_X", "9001", "7");

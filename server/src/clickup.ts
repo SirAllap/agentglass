@@ -38,7 +38,21 @@ export function __setClickUpBase(url: string | null): void {
   reset();
 }
 
+/*
+ * Two limits, because the two calls are not the same shape.
+ *
+ * `/user` and `/team` are small and answer immediately; if one of those takes
+ * eight seconds something is genuinely wrong and saying so quickly is right.
+ *
+ * The task query is not that. It filters the whole workspace by assignee, and
+ * on a real one — measured, not guessed — eight seconds was not enough: the
+ * first connection to an actual workspace came back "ClickUp did not answer in
+ * time" at exactly 8.00s, which is the shape of our own abort rather than a
+ * slow service. A read that is allowed to take twenty seconds and succeeds is
+ * better than a fast failure that tells you nothing.
+ */
 const TIMEOUT_MS = 8_000;
+const LIST_TIMEOUT_MS = 25_000;
 
 /**
  * What the last call learned about our budget.
@@ -77,12 +91,12 @@ export interface CallResult<T> {
  * neither is allowed to look like "you have no tasks", which is the wrong
  * answer people act on.
  */
-async function call<T>(pathname: string, token: string): Promise<CallResult<T>> {
+async function call<T>(pathname: string, token: string, timeoutMs = TIMEOUT_MS): Promise<CallResult<T>> {
   if (budget && budget.remaining <= RESERVE && Date.now() < budget.resetAt) {
     return { ok: false, throttled: true, error: "Holding off — ClickUp's rate limit is nearly used up" };
   }
   const ctl = new AbortController();
-  const kill = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  const kill = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const r = await fetch(`${base}${pathname}`, {
       // Bare, not `Bearer`. See the note at the top of this file.
@@ -213,14 +227,29 @@ export interface TaskPage {
 export async function fetchTasks(
   token: string, workspaceId: string, userId: string, page = 0,
 ): Promise<CallResult<TaskPage>> {
+  /*
+   * Measured against a real workspace, not chosen from the documentation.
+   *
+   *   subtasks + order_by   25.0s   13 tasks
+   *   without subtasks      12.5s   13 tasks
+   *   without order_by      13.4s   13 tasks
+   *   neither               14.6s   13 tasks
+   *
+   * `subtasks=true` DOUBLED the time and returned not one extra row, so it is
+   * gone. `order_by` is kept: it costs nothing measurable and means the first
+   * page is the soonest work rather than an arbitrary thirteen — which starts
+   * to matter the moment somebody has more than a page of them.
+   *
+   * Twelve seconds is still slow, and it is ClickUp's floor for this query, not
+   * ours: the minimal version is no faster. That is what the cache is for.
+   */
   const q = new URLSearchParams({
     page: String(page),
     order_by: "due_date",
-    subtasks: "true",
     include_closed: "false",
   });
   q.append("assignees[]", userId);
-  const r = await call<{ tasks: RawTask[] }>(`/team/${encodeURIComponent(workspaceId)}/task?${q}`, token);
+  const r = await call<{ tasks: RawTask[] }>(`/team/${encodeURIComponent(workspaceId)}/task?${q}`, token, LIST_TIMEOUT_MS);
   if (!r.ok) return { ...r, data: undefined };
   const raw = r.data?.tasks ?? [];
   return { ok: true, data: { tasks: raw.map(toTask), more: raw.length >= 100 } };
