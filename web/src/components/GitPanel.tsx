@@ -1004,6 +1004,39 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     else if (view === "tags") track(api.gitTags(root), (r) => setTags(r.tags));
     else if (view === "reflog") track(api.gitReflog(root), (r) => setReflog(r.entries));
   }, [open, root, view, logScope, remoteSel]);
+
+  /**
+   * The header refresh: this view, and the working tree, with something to see.
+   *
+   * Declared after loadView, and that is not tidiness: the dependency array
+   * reads it at once, so putting this above was a temporal dead zone — the
+   * same shape that blanked the whole window this morning. tsc caught this
+   * one, because a deps array is evaluated where it is written rather than
+   * inside a callback nobody calls yet.
+   *
+   * The tick is held for a moment on purpose. A repository that answers in
+   * 80ms would otherwise flash a spinner nobody's eye catches, and "it did
+   * nothing" and "it did it faster than you can see" look identical — which
+   * was the actual complaint. The floor is on the FEEDBACK, never on the work:
+   * the reload starts immediately and is not delayed by a millisecond.
+   */
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshed, setRefreshed] = useState(false);
+  const refreshAll = useCallback(() => {
+    if (!root) return;
+    setRefreshed(false);
+    setRefreshing(true);
+    const started = Date.now();
+    void Promise.allSettled([loadTree(root), Promise.resolve(loadView())]).then(() => {
+      const seen = Date.now() - started;
+      setTimeout(() => {
+        setRefreshing(false);
+        setRefreshed(true);
+        setTimeout(() => setRefreshed(false), 1400);
+      }, Math.max(0, 320 - seen));
+    });
+  }, [root, loadTree, loadView]);
+
   useEffect(() => { loadView(); }, [loadView]);
 
   // Any repository mutation, from anywhere — this panel, another window, or a
@@ -2108,7 +2141,26 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     <RemoteButton label={`↑ push${branch && branch.ahead > 0 ? ` (${branch.ahead})` : ""}`} runningLabel="pushing…"
                       running={pending === "push"} disabled={!writeEnabled || busy} primary
                       onClick={() => act(() => api.gitPush(root), "pushed", "push")} />
-                    <button onClick={() => loadTree(root)} title="Refresh" className="text-[13px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>⟳</button>
+                    {/*
+                      Two defects, and the first is why it looked broken: it
+                      only reloaded the working TREE. On the Branches tab — or
+                      Tidy, or Worktrees — pressing it did nothing at all,
+                      because none of those come from the tree. It refreshes
+                      what you are actually looking at now, and the tree too.
+
+                      The second is the one its neighbours already solved and
+                      it never got: it said nothing while it worked and nothing
+                      when it finished. The comment three buttons up says it —
+                      several seconds of nothing reads as "the button is
+                      broken" — and on a fast repo the honest problem is the
+                      opposite, that a refresh which changes nothing visible is
+                      indistinguishable from one that never ran. So it spins
+                      while it goes, and says so briefly when it lands.
+                    */}
+                    <button onClick={refreshAll} disabled={refreshing} title="Refresh this view and the working tree"
+                      className="text-[13px] px-2 py-1 rounded-lg disabled:opacity-60" style={{ color: refreshed ? "var(--success)" : "var(--text2)" }}>
+                      <span className={refreshing ? "inline-block animate-spin" : "inline-block"}>{refreshed && !refreshing ? "✓" : "⟳"}</span>
+                    </button>
                   </div>
                 </div>
 
