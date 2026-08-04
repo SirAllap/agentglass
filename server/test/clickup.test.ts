@@ -457,3 +457,35 @@ describe("writing to somebody's company board", () => {
     expect(seen.length).toBe(0);
   });
 });
+
+describe("finding a card by the number you remember", () => {
+  const { normaliseCardQuery } = CU;
+
+  it("completes a bare number from the shape this workspace uses", () => {
+    // The prefix is derived from cards already read, so typing the number is
+    // enough and nobody has to be asked what their ids look like.
+    expect(normaliseCardQuery("20542", "ABC-")).toBe("ABC-20542");
+    expect(normaliseCardQuery("  20542 ", "ABC-")).toBe("ABC-20542");
+  });
+
+  it("takes a whole id as typed, in any case", () => {
+    expect(normaliseCardQuery("ABC-20542", "ABC-")).toBe("ABC-20542");
+    expect(normaliseCardQuery("abc-20542", "")).toBe("ABC-20542");
+  });
+
+  it("takes an internal id too", () => {
+    expect(normaliseCardQuery("86e2gw40g", "ABC-")).toBe("86e2gw40g");
+  });
+
+  it("refuses a bare number when it has never seen this workspace's ids", () => {
+    // Guessing a prefix would produce a 404 reading as "no such card", when the
+    // truth is "I do not know your naming yet".
+    expect(normaliseCardQuery("20542", "")).toBe(null);
+  });
+
+  it("refuses what is plainly not an id", () => {
+    for (const bad of ["", "   ", "the login bug", "12", "https://example.invalid/x"]) {
+      expect(normaliseCardQuery(bad, "ABC-"), JSON.stringify(bad)).toBe(null);
+    }
+  });
+});
