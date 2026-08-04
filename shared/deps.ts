@@ -33,7 +33,7 @@
 export type DepPlatform = "linux" | "darwin" | "win32";
 
 export type DepId =
-  | "git" | "claude" | "python" | "tmux" | "gh" | "docker" | "nvim" | "task"
+  | "git" | "claude" | "python" | "tmux" | "gh" | "glab" | "docker" | "nvim" | "task"
   | "setsid" | "script" | "ss" | "dbus-monitor" | "notify-send" | "opener" | "pkexec" | "bash";
 
 export interface DepSpec {
@@ -152,6 +152,13 @@ export const DEPS: DepSpec[] = [
     url: "https://cli.github.com",
     note: "Installing it is half the job. It also has to be logged in before the panel can read anything.",
     pkg: { apt: "gh", dnf: "gh", pacman: "github-cli", zypper: "gh", apk: "github-cli", brew: "gh" },
+  },
+  {
+    id: "glab", bin: "glab", title: "GitLab CLI", required: false,
+    what: "Reads merge requests and pipelines from GitLab, the way `gh` does for GitHub.",
+    url: "https://gitlab.com/gitlab-org/cli",
+    note: "Only worth installing if you have a GitLab remote. Like `gh`, it has to be logged in — `glab auth login` — before anything can be read.",
+    pkg: { apt: "glab", dnf: "glab", pacman: "glab", zypper: "glab", apk: "glab", brew: "glab" },
   },
   {
     id: "docker", bin: "docker", title: "Docker", required: false,

@@ -60,6 +60,9 @@ import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
 import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
+import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace } from "./providers.ts";
+import { clickupTasks } from "./clickup.ts";
+import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
 import {
   addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
@@ -1612,6 +1615,42 @@ const server = Bun.serve<WsData>({
     if (pathname === "/issues/work") return json({ work: currentWork(url.searchParams.get("repo") || undefined) });
 
     // --- tasks (taskwarrior-backed, read-only) ---
+    /*
+     * The integrations pane, and the one route that receives a secret.
+     *
+     * `/providers/connect` is the only place in this server where a token
+     * arrives from the browser, and it never goes back the other way: the
+     * response carries a status — who you are, what workspace, how many tasks —
+     * and no credential. See credentials.ts for why that is two functions
+     * rather than a flag.
+     */
+    if (pathname === "/providers") {
+      return json({ providers: await providerStatuses() });
+    }
+    if (pathname === "/providers/workspaces") {
+      return json(await providerWorkspaces((url.searchParams.get("id") ?? "") as ProviderId));
+    }
+    if (pathname.startsWith("/providers/") && req.method === "POST") {
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const id = String(b.id ?? "") as ProviderId;
+      const r = pathname === "/providers/connect"
+          ? await connectProvider(id, String(b.token ?? ""))
+        : pathname === "/providers/disconnect" ? await disconnectProvider(id)
+        : pathname === "/providers/workspace"
+          ? await chooseWorkspace(id, String(b.workspaceId ?? ""), String(b.name ?? ""))
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      return json(r, r.ok ? 200 : 400);
+    }
+    if (pathname === "/tasks/provider") {
+      // One provider's list. `force` is what the Refresh button sends; the poll
+      // never sets it, so a page left open cannot burn the rate budget.
+      const snap = await clickupTasks(url.searchParams.get("force") === "1");
+      return json({
+        tasks: snap.tasks, more: snap.more, error: snap.error,
+        unauthorised: snap.unauthorised, at: snap.at,
+      });
+    }
     if (pathname === "/tasks/list") {
       const snap = await listTasks(url.searchParams.get("force") === "1");
       const capability = await taskCapability();

@@ -8,10 +8,11 @@
 //
 // Here each kind gets its own section, toggles look like toggles and say what
 // they control, and downloads say what you actually get.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
+import { PROVIDERS, type ProviderSpec, type ProviderStatus, type ProviderState } from "../../../shared/providers.ts";
 import { fmtAgo } from "../lib/format.ts";
 import type { ActionRecord, GateRecord } from "../../../shared/types.ts";
 import { mergeActivity, gateLine, actorLabel, type ActivityRow } from "../lib/activity.ts";
@@ -163,7 +164,7 @@ function Row({ label, hint, kbd, href, download, onClick }: { label: string; hin
     : <button onClick={onClick} className={cls}>{body}</button>;
 }
 
-type Pane = "appearance" | "prefs" | "terminal" | "chat" | "notifications" | "browser" | "rail" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "reqs" | "remote" | "about";
+type Pane = "appearance" | "prefs" | "terminal" | "chat" | "notifications" | "browser" | "rail" | "keys" | "open" | "export" | "log" | "budgets" | "hooks" | "reqs" | "integrations" | "remote" | "about";
 type TabGroup = "Interface" | "Data" | "Setup" | "About";
 // Rendered in this order; a group with no matching tab is dropped, so search
 // collapses to just the sections that still have something in them.
@@ -192,6 +193,7 @@ const TABS: { id: Pane; label: string; group: TabGroup; kw: string }[] = [
   { id: "export", label: "Export", group: "Data", kw: "export download data json csv" },
   { id: "hooks", label: "Agents", group: "Setup", kw: "agents hooks claude code install setup" },
   { id: "reqs", label: "Requirements", group: "Setup", kw: "requirements dependencies deps tmux git docker install" },
+  { id: "integrations", label: "Integrations", group: "Setup", kw: "integrations providers connect github gitlab clickup taskwarrior token api credentials account" },
   { id: "remote", label: "Remote", group: "Setup", kw: "remote access pair phone tailscale token device" },
   { id: "about", label: "About", group: "About", kw: "about version update release notes changelog" },
 ];
@@ -1007,6 +1009,198 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
   );
 }
 
+
+/*
+ * Integrations: the services agentglass can be connected to.
+ *
+ * The Requirements pane next door answers "is this tool installed"; this one
+ * answers "is this service connected". Same shape, different question, and
+ * deliberately not the same component — a dependency has an install command and
+ * a provider has a credential, and the two cards diverge the moment either
+ * grows anything.
+ *
+ * One rule here, and it is the reason this pane can exist at all: a token is
+ * typed in and never read back. There is no field showing what is stored,
+ * because there is nothing to show — the server holds it and answers with who
+ * you are.
+ */
+function IntegrationsPane({ open }: { open: boolean }) {
+  const [status, setStatus] = useState<ProviderStatus[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    try {
+      const r = await api.providers();
+      setStatus(r.providers); setErr(null);
+    } catch { setErr("Could not read the integrations"); }
+    finally { setBusy(false); }
+  }, []);
+
+  useEffect(() => { if (open) void load(); }, [open, load]);
+
+  const statusOf = (id: string) => status?.find((x) => x.id === id) ?? null;
+
+  return (
+    <Section title="Integrations">
+      <div className="px-3 pb-3 flex flex-col gap-4">
+        <div className="flex items-center gap-2">
+          <div className="text-[11.5px] flex-1" style={{ color: "var(--text2)" }}>
+            Where agentglass gets your reviews and your work from. Anything connected here shows up
+            in the panel that uses it — a task provider becomes a tab in Tasks.
+          </div>
+          <button onClick={() => void load()} disabled={busy}
+            className="shrink-0 text-[10.5px] px-2.5 py-1 rounded-lg"
+            style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+            {busy ? "Checking…" : "Recheck"}
+          </button>
+        </div>
+        {err && <div className="text-[11px]" style={{ color: "var(--error)" }}>{err}</div>}
+        {!status && !err && <div className="text-[11px] t-dim2">Checking what is connected…</div>}
+
+        {status && (["review", "task"] as const).map((kind) => (
+          <section key={kind} className="flex flex-col gap-2">
+            <div>
+              <div className="text-[11.5px] font-semibold" style={{ color: "var(--text)" }}>
+                {kind === "review" ? "Review providers" : "Task providers"}
+              </div>
+              <div className="text-[11px]" style={{ color: "var(--text3)" }}>
+                {kind === "review"
+                  ? "Pull requests, checks and review state."
+                  : "Where the things you owe come from."}
+              </div>
+            </div>
+            {PROVIDERS.filter((p) => p.kind === kind).map((p) => (
+              <ProviderCard key={p.id} spec={p} status={statusOf(p.id)} onChanged={load} />
+            ))}
+          </section>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+/** Four states, four sentences. A boolean here would flatten "installed but
+ *  logged out" into "broken", and those need different buttons. */
+const STATE_LOOK: Record<ProviderState, { label: string; fg: string }> = {
+  connected: { label: "Connected", fg: "var(--success)" },
+  "needs-auth": { label: "Not connected", fg: "var(--warning)" },
+  "missing-tool": { label: "Not installed", fg: "var(--text3)" },
+  error: { label: "Needs attention", fg: "var(--error)" },
+};
+
+function ProviderCard({ spec, status, onChanged }: {
+  spec: ProviderSpec; status: ProviderStatus | null; onChanged: () => Promise<void> | void;
+}) {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [spaces, setSpaces] = useState<{ id: string; name: string }[] | null>(null);
+
+  const look = STATE_LOOK[status?.state ?? "needs-auth"];
+  const connected = status?.state === "connected";
+  const wantsToken = spec.auth === "token";
+  const line = "1px solid color-mix(in srgb, var(--border) 40%, transparent)";
+
+  const connect = async () => {
+    if (!token.trim()) return;
+    setBusy(true);
+    const r = await api.providerConnect(spec.id, token.trim());
+    setBusy(false);
+    if (!r.ok) { setNote(r.error ?? "That did not work"); return; }
+    // Cleared on success and only on success: a refused token is usually one
+    // that was pasted short, and retyping it is a chore nobody needs.
+    setToken(""); setNote(null);
+    await onChanged();
+  };
+
+  return (
+    <div className="rounded-xl p-3" style={{ background: "color-mix(in srgb, var(--bg2) 60%, transparent)", border: line }}>
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>{spec.title}</div>
+          <div className="text-[11px] mt-0.5" style={{ color: "var(--text3)" }}>{spec.what}</div>
+        </div>
+        <span className="text-[10px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
+          style={{ color: look.fg, background: `color-mix(in srgb, ${look.fg} 12%, transparent)`, border: `1px solid color-mix(in srgb, ${look.fg} 35%, transparent)` }}>
+          {look.label}
+        </span>
+      </div>
+
+      {status?.detail && (
+        <div className="text-[11px] mt-2.5 px-2.5 py-1.5 rounded-lg"
+          style={{ background: "color-mix(in srgb, var(--text) 5%, transparent)", color: "var(--text2)" }}>
+          {status.detail}
+        </div>
+      )}
+
+      {spec.note && !connected && (
+        <div className="text-[10.5px] mt-2" style={{ color: "var(--text3)" }}>{spec.note}</div>
+      )}
+
+      {wantsToken && !connected && (
+        <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+          {/* `type=password`, and there is nothing to reveal: the value here is
+              what you are typing, never what is stored. */}
+          <input type="password" value={token} onChange={(e) => setToken(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void connect(); }}
+            placeholder="Paste your personal API token" spellCheck={false} autoComplete="off"
+            className="flex-1 min-w-[200px] text-[11.5px] px-2.5 py-1.5 rounded-lg outline-none"
+            style={{ background: "var(--bg3)", border: line, color: "var(--text)" }} />
+          <button onClick={() => void connect()} disabled={busy || !token.trim()}
+            className="text-[11.5px] px-3 py-1.5 rounded-lg"
+            style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--primary) 48%, transparent)",
+              color: "var(--text)", opacity: busy || !token.trim() ? 0.4 : 1 }}>
+            {busy ? "Checking…" : "Connect"}
+          </button>
+        </div>
+      )}
+
+      {note && <div className="text-[11px] mt-2" style={{ color: "var(--error)" }}>{note}</div>}
+
+      <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+        {spec.help && !connected && (
+          <a href={spec.help} target="_blank" rel="noreferrer"
+            className="text-[10.5px] px-2 py-1 rounded-lg" style={{ border: line, color: "var(--text2)" }}>
+            How to get one ↗
+          </a>
+        )}
+        {connected && wantsToken && (
+          <>
+            <button onClick={async () => {
+              const r = await api.providerWorkspaces(spec.id);
+              if (!r.ok) { setNote(r.error ?? "Could not read the workspaces"); return; }
+              setSpaces(r.workspaces ?? []);
+            }} className="text-[10.5px] px-2 py-1 rounded-lg" style={{ border: line, color: "var(--text2)" }}>
+              Change workspace
+            </button>
+            <button onClick={async () => { setBusy(true); await api.providerDisconnect(spec.id); setBusy(false); setSpaces(null); await onChanged(); }}
+              className="text-[10.5px] px-2 py-1 rounded-lg"
+              style={{ border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)", color: "var(--error)" }}>
+              Disconnect
+            </button>
+          </>
+        )}
+      </div>
+
+      {spaces && (
+        <div className="flex flex-col gap-0.5 mt-2.5 rounded-lg p-1" style={{ background: "var(--bg3)", border: line }}>
+          {!spaces.length && <div className="text-[11px] px-2 py-1 t-dim2">This token can see no workspaces.</div>}
+          {spaces.map((w) => (
+            <button key={w.id}
+              onClick={async () => { await api.providerWorkspace(spec.id, w.id, w.name); setSpaces(null); await onChanged(); }}
+              className="text-left text-[11.5px] px-2 py-1 rounded hover:bg-white/5" style={{ color: "var(--text2)" }}>
+              {w.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RequirementsPane({ open }: { open: boolean }) {
   /**
    * Where the install shell opens.
@@ -1091,8 +1285,10 @@ function RequirementsPane({ open }: { open: boolean }) {
   );
 }
 
-export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp, theme, onTheme }: {
+export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, onOpenStats, onOpenHelp, theme, onTheme, jumpTo }: {
   open: boolean; onClose: () => void; sound: boolean; onSound: () => void;
+  /** A pane to land on, when Settings was opened by something asking for one. */
+  jumpTo?: string | null;
   scale: number; onZoom: (dir: 1 | -1 | 0) => void;
   onOpenStats: () => void; onOpenHelp: () => void;
   theme: string; onTheme: (id: string) => void;
@@ -1133,6 +1329,11 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
     return TABS[0]!.id;
   });
   useEffect(() => { try { localStorage.setItem(LAST_PANE_KEY, pane); } catch { /* ignore */ } }, [pane]);
+  // Somebody asked for a specific pane. Overrides the remembered one for this
+  // opening only — the next plain open still lands where you left it.
+  useEffect(() => {
+    if (open && jumpTo && TABS.some((t) => t.id === jumpTo)) setPane(jumpTo as Pane);
+  }, [open, jumpTo]);
   const [q, setQ] = useState(""); // settings search — filters the nav below
   const [termFont, setTermFontState] = useState(() => currentTermFont());
   const [termSize, setTermSizeState] = useState(() => currentTermSize());
@@ -1609,6 +1810,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   {pane === "hooks" && <><HooksPane open={open} /><AgentsSection open={open} /></>}
 
                   {pane === "reqs" && <RequirementsPane open={open} />}
+                  {pane === "integrations" && <IntegrationsPane open={open} />}
 
                   {pane === "remote" && <RemoteAccessPane open={open} />}
 

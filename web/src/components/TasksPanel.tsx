@@ -13,11 +13,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
 import type { GitRepoRef, IssueDetail, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse } from "../../../shared/types.ts";
+import type { ProviderTask, ProviderTasksResponse } from "../../../shared/providers.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
+import { openSettings } from "../lib/openSettings.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
 import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
@@ -52,11 +54,15 @@ const MODES: { id: StartMode; label: string; hint: string }[] = [
  * `all` is first because it is the only one no provider can offer: none of them
  * knows about the others.
  */
-type SourceId = "all" | "github" | "local";
+type SourceId = "all" | "github" | "local" | "clickup";
 const SOURCES: { id: SourceId; label: string }[] = [
   { id: "all", label: "All" },
   { id: "github", label: "GitHub" },
   { id: "local", label: "Local" },
+  // Shown whether or not it is connected, and that is deliberate: a tab that
+  // only appears once you have found Settings is a feature nobody discovers.
+  // Unconnected, it says what to do and links to the pane that does it.
+  { id: "clickup", label: "ClickUp" },
 ];
 
 /** What a finished bulk run says it did. Past tense, and the same words as the
@@ -102,9 +108,11 @@ export function TasksView({ active, onOpenChatWith }: {
             </button>
           ))}
         </nav>
-        {/* Only the GitHub half is scoped to a repository. The local list is the
-            machine's, and showing a repo picker over it would imply otherwise. */}
-        <div className="relative" ref={pickerRef} style={{ display: source === "local" ? "none" : undefined }}>
+        {/* Only the GitHub half is scoped to a repository. The local list is
+            this machine's and ClickUp is a workspace's, so a repo picker over
+            either would imply a scoping that does not exist. */}
+        <div className="relative" ref={pickerRef}
+          style={{ display: source === "local" || source === "clickup" ? "none" : undefined }}>
           <button onClick={() => setRepoOpen((o) => !o)}
             className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[280px] whitespace-nowrap"
             style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }}
@@ -126,7 +134,9 @@ export function TasksView({ active, onOpenChatWith }: {
           )}
         </div>
       </ViewHeader>
-      {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} /> : (
+      {source === "local" ? <LocalBody active={active} repos={repos} here={root} onOpenChatWith={onOpenChatWith} />
+      : source === "clickup" ? <ClickUpBody active={active} />
+      : (
         <div className="flex flex-col flex-1 min-h-0">
           {source === "all" && <NowBand onChanged={() => {}} />}
           {source === "all" && <LocalStrip active={active} onOpen={() => setSource("local")} />}
@@ -565,6 +575,177 @@ const todayStr = () => {
  *  is the first thing anybody sees. Each cause gets its own sentence because
  *  each has a different next step — "install it" and "answer its question" are
  *  not the same instruction. */
+/*
+ * ClickUp, read-only for now.
+ *
+ * Read-only is a decision rather than a stage left unfinished: ClickUp's
+ * statuses are defined per list, so "complete" is not a verb that exists until
+ * you have read the statuses of the list a given task lives in. Offering a
+ * button that works on some of your tasks and silently fails on the rest is
+ * worse than not offering it, so what is here is the half that is honest —
+ * seeing the work, and starting on it.
+ *
+ * The columns are the local list's, on purpose. Two task tabs that laid out
+ * their rows differently would make the eye do work the app should be doing.
+ */
+function ClickUpBody({ active }: { active: boolean }) {
+  const [data, setData] = useState<ProviderTasksResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState("");
+  const today = todayStr();
+
+  const load = useCallback(async (force = false) => {
+    setBusy(true);
+    try { setData(await api.providerTasks(force)); }
+    catch { setData({ tasks: [], more: false, at: Date.now(), error: "Could not reach the server" }); }
+    finally { setBusy(false); }
+  }, []);
+
+  useEffect(() => { if (active) void load(); }, [active, load]);
+  // A minute, matching the server's own cache: polling faster cannot produce a
+  // fresher answer, it can only spend the rate budget finding that out.
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => { if (!document.hidden) void load(); }, 60_000);
+    return () => clearInterval(t);
+  }, [active, load]);
+
+  const rows = useMemo(() => {
+    const all = data?.tasks ?? [];
+    const needle = q.trim().toLowerCase();
+    const kept = needle ? all.filter((t) => t.title.toLowerCase().includes(needle)) : all;
+    // Undated last rather than first: a list sorted by a field most rows do not
+    // have puts the least urgent work at the top.
+    return [...kept].sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"));
+  }, [data, q]);
+
+  if (!data) {
+    return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading ClickUp…</div>;
+  }
+
+  if (data.unauthorised || (!data.tasks.length && data.error?.includes("not connected"))) {
+    return (
+      <div className="flex flex-col items-center justify-center flex-1 gap-2 p-8 text-center">
+        <div className="text-[13px]" style={{ color: "var(--text)" }}>
+          {data.unauthorised ? "ClickUp refused the saved token" : "ClickUp is not connected yet"}
+        </div>
+        <div className="text-[11.5px] max-w-[46ch]" style={{ color: "var(--text3)" }}>
+          {data.unauthorised
+            ? "Tokens can be revoked from ClickUp. Connect again with a fresh one."
+            : "Paste a personal API token in Settings → Integrations and your assigned tasks appear here."}
+        </div>
+        <button onClick={() => openSettings("integrations")}
+          className="mt-1 text-[11.5px] px-3 py-1.5 rounded-lg"
+          style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}>
+          Open Integrations
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      <div className="flex items-center gap-2 px-5 py-2 shrink-0">
+        <div className="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-2.5 py-1"
+          style={{ background: "var(--bg2)", border: edge(14) }}>
+          <span className="text-[11px] shrink-0" style={{ color: "var(--text3)" }}>⌕</span>
+          <input value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false}
+            placeholder="Search your ClickUp tasks"
+            className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
+            style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
+        </div>
+        <button onClick={() => void load(true)} disabled={busy}
+          className="shrink-0 text-[10.5px] px-2.5 py-1 rounded-lg"
+          style={{ border: edge(16), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
+          {busy ? "Reading…" : "Refresh"}
+        </button>
+      </div>
+
+      {/* An error with rows behind it is a stale list, not an empty one. Said
+          plainly, above the rows it applies to. */}
+      {data.error && !data.unauthorised && (
+        <div className="px-5 py-1 text-[10.5px] shrink-0"
+          style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 10%, transparent)" }}>
+          {data.error}{data.tasks.length ? " — showing what was last read" : ""}
+        </div>
+      )}
+
+      <div className="px-5 py-1 text-[8.5px] uppercase tracking-[0.16em] shrink-0"
+        style={{ display: "grid", gridTemplateColumns: CU_GRID, gap: 10, color: "var(--text4)",
+          borderTop: edge(10), borderBottom: edge(10) }}>
+        <span>Task</span><span>List</span><span>Status</span><span>Due</span><span />
+      </div>
+
+      <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+        {!rows.length && (
+          <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
+            {q ? "Nothing matches that." : "Nothing assigned to you is open right now."}
+          </div>
+        )}
+        {rows.map((t) => <ClickUpRow key={t.id} t={t} today={today} />)}
+      </div>
+
+      <div className="flex items-center gap-3 px-5 py-1.5 shrink-0 text-[10.5px]"
+        style={{ borderTop: edge(10), color: "var(--text4)" }}>
+        <span>{rows.length} {rows.length === 1 ? "task" : "tasks"}</span>
+        {/* Said out loud rather than truncating quietly: a list that stops at a
+            hundred with no note reads as "that is all of them". */}
+        {data.more && <span style={{ color: "var(--warning)" }}>· more than one page — showing the first 100</span>}
+        <span className="flex-1" />
+        <span>read-only</span>
+      </div>
+    </div>
+  );
+}
+
+const CU_GRID = "1fr 150px 120px 86px 74px";
+
+function ClickUpRow({ t, today }: { t: ProviderTask; today: string }) {
+  const late = !!t.due && t.due < today;
+  const now = t.due === today;
+  return (
+    <div role="row" className="agx-row w-full text-left px-5 py-1.5 hover:bg-white/5 items-center"
+      style={{ display: "grid", gridTemplateColumns: CU_GRID, gap: 10, borderBottom: edge(6) }}>
+      <div className="min-w-0">
+        <div className="truncate text-[12.5px] leading-snug" style={{ color: "var(--text)" }} title={t.title}>
+          {t.title}
+        </div>
+        {(t.priority || t.tags.length) && (
+          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+            {t.priority && (
+              <span className="text-[8.5px] tracking-[0.08em] px-1.5 rounded"
+                style={t.priority === "urgent" || t.priority === "high"
+                  ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                  : { color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>
+                {t.priority.toUpperCase()}
+              </span>
+            )}
+            {t.tags.slice(0, 3).map((tag) => (
+              <span key={tag} className="text-[9.5px] px-1.5 rounded-full"
+                style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 7%, transparent)" }}>{tag}</span>
+            ))}
+          </div>
+        )}
+      </div>
+      <span className="truncate text-[11px]" style={{ color: "var(--info)" }} title={t.list ?? ""}>{t.list ?? ""}</span>
+      {/* Verbatim. Renaming somebody's workflow is not ours to do. */}
+      <span className="truncate text-[11px]" style={{ color: "var(--text3)" }} title={t.status}>{t.status}</span>
+      <span className="text-[11px] tabular-nums"
+        style={{ color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
+        {dueLabel(t.due, today)}
+      </span>
+      <span className="text-right">
+        {t.url && (
+          <a href={t.url} target="_blank" rel="noreferrer"
+            className="agx-onrow text-[10.5px] px-2 py-0.5 rounded-lg inline-block"
+            style={{ border: edge(16), color: "var(--text2)" }}>Open ↗</a>
+        )}
+      </span>
+    </div>
+  );
+}
+
 function LocalEmpty({ cap, done }: { cap: TaskCapability; done: number }) {
   const box = (title: string, body: React.ReactNode) => (
     <div className="p-5 text-[11.5px] leading-relaxed" style={{ color: "var(--text3)", maxWidth: "56ch" }}>

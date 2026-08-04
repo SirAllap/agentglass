@@ -1,4 +1,5 @@
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse } from "../../../shared/types.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse } from "../../../shared/providers.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -465,6 +466,20 @@ const realApi = {
    *  stop part-way, and the message on screen has to say how far it got. */
   taskBulk: (uuids: string[], action: "done" | "priority" | "tag" | "delete", value: string | null, fingerprint?: string) =>
     post<TaskWriteResponse & { applied?: number }>("/tasks/write/bulk", { uuids, action, value, fingerprint }),
+
+  /* Integrations. `connect` is the only call in this file that sends a secret,
+     and nothing here ever receives one back — the responses carry a status. */
+  providers: () => get<ProvidersResponse>("/providers"),
+  providerConnect: (id: string, token: string) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/connect", { id, token }),
+  providerDisconnect: (id: string) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/disconnect", { id }),
+  providerWorkspaces: (id: string) =>
+    get<{ ok: boolean; workspaces?: { id: string; name: string }[]; error?: string }>(`/providers/workspaces?id=${encodeURIComponent(id)}`),
+  providerWorkspace: (id: string, workspaceId: string, name: string) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/workspace", { id, workspaceId, name }),
+  providerTasks: (force = false) =>
+    get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
   reminders: (window: "live" | "upcoming" | "history" = "live") =>
     get<RemindersResponse>(`/tasks/reminders?window=${window}`),
   remind: (body: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) =>
@@ -962,6 +977,12 @@ const demoApi: typeof realApi = {
   taskTags: (_u: string, _t: string[], _f?: string) => D({ ok: false, error: "not available in the demo" }),
   taskNote: (_u: string, _o: string, _n: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   taskBulk: (_u: string[], _a: string, _v: string | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  providers: () => D({ providers: [] }),
+  providerConnect: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  providerDisconnect: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
+  providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
   remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),
   reminderAck: (_i: string) => D({ ok: false }),
