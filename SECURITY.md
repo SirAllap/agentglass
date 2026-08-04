@@ -182,6 +182,19 @@ answers with a status — who you are, which workspace, how many tasks — and n
 with the credential. It is not written to logs either: where one has to be
 named, only a prefix and a length are printed.
 
+### One more outbound request: assignee pictures
+
+The ClickUp panel draws the people on a card as their avatars, and those images
+come from ClickUp's own attachment host — so opening a board makes a request per
+distinct person, carrying no credential and no referrer. It is the same kind of
+request the pull-request list already makes for GitHub avatars.
+
+Nothing is uploaded and nothing about you is in the URL: it is a picture your
+workspace already publishes to anyone who can see the card. If that request is
+unwelcome, the panel is still correct without it — a person with no photo is
+drawn as their initials on their own colour, which is what happens today for
+anyone who never uploaded one.
+
 **One feature does send data off this machine, and it is the only one.** The AI
 **Explain** walkthrough hands your changed lines to a model — the local `claude`
 CLI, or the Anthropic API if you have set a key — so it can describe them. That
