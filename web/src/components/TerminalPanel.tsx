@@ -1041,10 +1041,16 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const { ask, dialog } = useDialogs();
-  /** The row for the directory we are standing in — what "here" means, by name,
-   *  what it currently holds, and whether it has uncommitted work in it. */
-  const here = repos.find((r) => r.root === root) ?? null;
   const [root, setRoot] = useState<string>(() => { try { return localStorage.getItem(ROOT_KEY) || ""; } catch { return ""; } });
+  /** The row for the directory we are standing in — what "here" means, by name,
+   *  what it currently holds, and whether it has uncommitted work in it.
+   *
+   *  Below the `root` it reads, and that is not a style point: it sat above,
+   *  and `root` is a `const` from useState, so the lookup ran in its temporal
+   *  dead zone and threw on the first render of this panel — a white window for
+   *  anyone whose last view was the terminal. tsc cannot see it because the
+   *  read is inside the `find` callback, where it looks deferred. */
+  const here = repos.find((r) => r.root === root) ?? null;
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   /** Only whether the server allows commands at all — the list, its dropdown
