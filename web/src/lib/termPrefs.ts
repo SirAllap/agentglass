@@ -36,9 +36,38 @@ export const SIZE_MAX = 22;
  *  settings page calls default. */
 export const DEFAULT_SIZE = 13;
 
+/**
+ * Line height, and why the default is exactly 1.
+ *
+ * This used to be a hardcoded 1.2, which reads as a harmless bit of air between
+ * rows and is not. A terminal's box-drawing characters — `│` between tmux
+ * panes, the rules around Claude Code's boxes — are meant to touch the row
+ * above and below so they read as one continuous line. xterm only guarantees
+ * that on the WebGL/canvas renderers, which draw those glyphs themselves and
+ * fill the whole cell. On the **DOM renderer** the glyph comes from the font at
+ * its natural height, so every extra percent of line height is a gap punched
+ * through the middle of every rule: the divider came out dashed, and the Claude
+ * Code logo — built from block characters — came out striped.
+ *
+ * That is not a rare configuration here. `wantsWebgl()` deliberately turns the
+ * GPU renderer OFF on Linux to dodge a compositor white-out, so the DOM
+ * renderer is the *default* on the platform this was reported from. Measured at
+ * that machine's device pixel ratio: 1.2 on the DOM renderer draws a dashed
+ * rule, 1.0 draws a solid one, and both WebGL variants are solid either way.
+ *
+ * So: 1 by default, matching every native terminal and Orca. It stays
+ * adjustable, because some people do want the air and will accept the trade —
+ * hence MIN of exactly 1 (xterm throws below it) and the warning the settings
+ * page shows above it.
+ */
+export const LINE_HEIGHT_MIN = 1;
+export const LINE_HEIGHT_MAX = 2;
+export const DEFAULT_LINE_HEIGHT = 1;
+
 const FONT_KEY = "agentglass-term-font";
 const SIZE_KEY = "agentglass-term-size";
 const CURSOR_KEY = "agentglass-term-cursor";
+const LINE_HEIGHT_KEY = "agentglass-term-line-height";
 const read = (k: string) => { try { return localStorage.getItem(k) ?? ""; } catch { return ""; } };
 const write = (k: string, v: string) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch { /* private mode */ } };
 
@@ -50,6 +79,14 @@ export const currentTermSize = (): number => {
 export const currentTermCursor = (): CursorStyle => {
   const c = read(CURSOR_KEY);
   return c === "bar" || c === "underline" ? c : "block";
+};
+/** Clamped on read, not just on write: a value edited by hand or left by an
+ *  older build must not reach xterm, which throws during construction for
+ *  anything below 1 and would take the whole terminal down with it. */
+export const currentTermLineHeight = (): number => {
+  const n = parseFloat(read(LINE_HEIGHT_KEY));
+  if (!Number.isFinite(n)) return DEFAULT_LINE_HEIGHT;
+  return Math.min(LINE_HEIGHT_MAX, Math.max(LINE_HEIGHT_MIN, n));
 };
 
 /**
@@ -72,12 +109,13 @@ export function fontAvailable(family: string): boolean {
 }
 
 /** The xterm options the current prefs resolve to. */
-export function termOptions(): { fontFamily: string; fontSize: number; cursorStyle: CursorStyle } {
+export function termOptions(): { fontFamily: string; fontSize: number; cursorStyle: CursorStyle; lineHeight: number } {
   const f = TERM_FONTS.find((x) => x.id === currentTermFont());
   return {
     fontFamily: f && f.stack ? f.stack : TERM_FALLBACK,
     fontSize: currentTermSize(),
     cursorStyle: currentTermCursor(),
+    lineHeight: currentTermLineHeight(),
   };
 }
 
@@ -90,7 +128,7 @@ function ping(): void {
   try {
     document.documentElement.style.setProperty(
       "--agx-term-prefs",
-      `${currentTermFont()}|${currentTermSize()}|${currentTermCursor()}`,
+      `${currentTermFont()}|${currentTermSize()}|${currentTermCursor()}|${currentTermLineHeight()}`,
     );
   } catch { /* no DOM */ }
 }
@@ -99,3 +137,10 @@ export const applyTermPrefs = (): void => ping();
 export function setTermFont(id: string): void { write(FONT_KEY, id); ping(); }
 export function setTermSize(n: number): void { write(SIZE_KEY, String(Math.max(SIZE_MIN, Math.min(SIZE_MAX, n)))); ping(); }
 export function setTermCursor(c: CursorStyle): void { write(CURSOR_KEY, c); ping(); }
+export function setTermLineHeight(n: number): void {
+  const v = Math.min(LINE_HEIGHT_MAX, Math.max(LINE_HEIGHT_MIN, n));
+  // The default is written as an absent key, so a machine that never touched
+  // this follows the default if it ever moves again.
+  write(LINE_HEIGHT_KEY, v === DEFAULT_LINE_HEIGHT ? "" : String(v));
+  ping();
+}

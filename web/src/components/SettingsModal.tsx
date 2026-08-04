@@ -27,7 +27,7 @@ import { RunningPanes } from "./RunningPanes.tsx";
 import { BudgetsPane } from "./BudgetsPane.tsx";
 import { AgentsPane } from "./AgentsPane.tsx";
 import { rendererPref, setRendererPref, type RendererPref } from "../lib/termRenderer.ts";
-import { TERM_FONTS, CURSORS, fontAvailable, currentTermFont, currentTermSize, currentTermCursor, setTermFont, setTermSize, setTermCursor, SIZE_MIN, SIZE_MAX, type CursorStyle } from "../lib/termPrefs.ts";
+import { TERM_FONTS, CURSORS, fontAvailable, currentTermFont, currentTermSize, currentTermCursor, currentTermLineHeight, setTermFont, setTermSize, setTermCursor, setTermLineHeight, SIZE_MIN, SIZE_MAX, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX, type CursorStyle } from "../lib/termPrefs.ts";
 import { canZoomIn, canZoomOut, fmtScale } from "../lib/uiScale.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { externalUrl } from "../lib/externalUrl.ts";
@@ -1068,6 +1068,7 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const [q, setQ] = useState(""); // settings search — filters the nav below
   const [termFont, setTermFontState] = useState(() => currentTermFont());
   const [termSize, setTermSizeState] = useState(() => currentTermSize());
+  const [termLine, setTermLineState] = useState(() => currentTermLineHeight());
   const [termCursor, setTermCursorState] = useState<CursorStyle>(() => currentTermCursor());
   const [keyError, setKeyError] = useState<{ id: ActionId; msg: string } | null>(null);
   useEffect(() => subscribeBindings(() => setKeys({ ...bindings() })), []);
@@ -1267,6 +1268,20 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                       onDec={() => { const n = Math.max(SIZE_MIN, termSize - 1); setTermSize(n); setTermSizeState(n); }}
                       onInc={() => { const n = Math.min(SIZE_MAX, termSize + 1); setTermSize(n); setTermSizeState(n); }}
                       canDec={termSize > SIZE_MIN} canInc={termSize < SIZE_MAX} />
+                    {/* The warning is the point of exposing this at all. Air
+                        between rows is a real preference, and above 1 it is
+                        paid for in broken box rules on the DOM renderer —
+                        which is the default on Linux. Better said here than
+                        discovered as "the terminal looks wrong". */}
+                    <Stepper
+                      label="Line height"
+                      hint={termLine > LINE_HEIGHT_MIN
+                        ? "Above 1, box-drawing rules — the divider between tmux panes, the frames around an agent's output — are drawn with a gap on every row wherever the GPU renderer is off (the default on Linux). 1 keeps them solid."
+                        : "Space between rows. 1 keeps box-drawing rules solid, which is what a terminal is normally set to."}
+                      value={termLine.toFixed(2).replace(/0$/, "")}
+                      onDec={() => { const n = Math.max(LINE_HEIGHT_MIN, Math.round((termLine - 0.05) * 100) / 100); setTermLineHeight(n); setTermLineState(n); }}
+                      onInc={() => { const n = Math.min(LINE_HEIGHT_MAX, Math.round((termLine + 0.05) * 100) / 100); setTermLineHeight(n); setTermLineState(n); }}
+                      canDec={termLine > LINE_HEIGHT_MIN} canInc={termLine < LINE_HEIGHT_MAX} />
                     <Choice<CursorStyle>
                       label="Cursor"
                       hint="The shape that marks where you're typing."
