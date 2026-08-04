@@ -16,7 +16,7 @@
 // Deliberately read-only except for one thing, and that one thing (`kill`) will
 // only ever touch a process this user owns.
 
-import { readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
 
 /** One listening TCP socket. */
 export interface PortEntry {
@@ -34,6 +34,14 @@ export interface PortEntry {
    * exactly when killing it is our business.
    */
   mine: boolean;
+  /** Seconds since it started, or null when /proc would not say. */
+  ageSec: number | null;
+  /** Its ancestry runs through an agent's tool-call shell — a fact about who
+   *  started it, not a verdict about whether it should still be running. */
+  fromAgent: boolean;
+  /** Its working directory is gone: the checkout it was serving was deleted
+   *  underneath it. */
+  cwdGone: boolean;
 }
 
 export interface PortsReport {
@@ -171,7 +179,17 @@ export function parsePorts(out: string): PortsReport {
     const key = `${addr}:${port}:${pid ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    ports.push({ port, addr, proc, pid, cwd: mine && pid != null ? cwdOf(pid) : null, mine });
+    // Only for processes we own: /proc says nothing useful about anybody
+    // else's, and asking is how a ports panel turns into a machine audit.
+    const cwd = mine && pid != null ? cwdOf(pid) : null;
+    ports.push({
+      port, addr, proc, pid, cwd, mine,
+      ageSec: mine && pid != null ? ageSecOf(pid) : null,
+      fromAgent: mine && pid != null ? startedByAgent(pid) : false,
+      // A null cwd is unknown, not gone — an unreadable link and a deleted
+      // directory are different facts and only one of them is a verdict.
+      cwdGone: cwd != null && !existsSync(cwd),
+    });
   }
 
   // Ours first and by port, then everything else by port: the list is read
@@ -405,6 +423,95 @@ function ownedByMe(pid: number): boolean {
  *  which is the only reason any of this is more useful than `top`. */
 function cwdOf(pid: number): string | null {
   try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return null; }
+}
+
+/**
+ * How long a process has been up, in seconds.
+ *
+ * Field 22 of /proc/<pid>/stat is its start time in clock ticks since boot, so
+ * the age is uptime minus that. Read rather than shelled out to `ps` because
+ * this runs per listening socket on a poll, and a spawn per row for a number
+ * already sitting in a file is a spawn for nothing.
+ *
+ * The command name in field 2 is parenthesised and may itself contain spaces
+ * or brackets, so the fields are counted from the LAST `)` — splitting the
+ * whole line on whitespace is the classic way to read this file wrong.
+ */
+export function ageSecOf(pid: number): number | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    // stat[22] is the 22nd field overall; fields 1 and 2 are before the split.
+    const ticks = Number(rest[19]);
+    if (!Number.isFinite(ticks)) return null;
+    const uptime = Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]);
+    if (!Number.isFinite(uptime)) return null;
+    // 100 Hz is the value Linux has shipped for every architecture this runs
+    // on; there is no syscall to read it from a process that is not us.
+    const age = Math.round(uptime - ticks / 100);
+    return age >= 0 ? age : null;
+  } catch { return null; }
+}
+
+/** The mark a coding agent's tool call leaves on the shell it runs commands in.
+ *  Matched on the path rather than the word "claude", which appears in half the
+ *  command lines on a machine like this one. */
+const AGENT_SHELL = /\.claude\/shell-snapshots\//;
+
+/**
+ * Did an agent's tool call start this?
+ *
+ * Walks up the parents rather than looking only at the immediate one: a server
+ * launched as `setsid env … bun run …` sits at least one wrapper below the
+ * shell, and the wrapper is what carries the mark.
+ *
+ * Bounded, and it has to be. The walk stops at init, at a repeat (a wrong ppid
+ * is a cycle waiting to happen), and at a fixed depth — this runs on a poll,
+ * and an unbounded loop over /proc on a poll is a hang nobody would attribute
+ * to a ports panel.
+ *
+ * Measured before it was written: agentglass's own installed server comes back
+ * false, because relaunching detaches it to systemd — the ancestry is
+ * agentglass-server, the Electron shell, systemd. A dev server left behind by
+ * a session comes back true. Had that not held, the signal would have been
+ * worthless and this function would not exist.
+ *
+ * WHAT IT CANNOT DO, and this is not a defect to be fixed later: the evidence
+ * lives in the ancestry, so it dies with it. A server started through `setsid`
+ * whose launching shell has since exited is reparented to init, and the chain
+ * that led back to the agent is simply gone — measured on exactly such a
+ * process, which came back false while a sibling that kept its shell came back
+ * true. So a false here means "nothing says an agent started this", never
+ * "a person did". The age beside it is what covers that gap: whatever started
+ * it, a listener that has been up for four hours is the one worth looking at.
+ */
+/** One step up the tree. The seam exists so the walk can be tested against a
+ *  process tree that is written down rather than one that has to be running. */
+export type ProcStep = (pid: number) => { cmdline: string; ppid: number } | null;
+
+const procFromSlashProc: ProcStep = (pid) => {
+  try {
+    const m = readFileSync(`/proc/${pid}/status`, "utf8").match(/^PPid:\s+(\d+)/m);
+    if (!m) return null;
+    return { cmdline: cmdlineOf(pid), ppid: Number(m[1]) };
+  } catch { return null; }
+};
+
+export function startedByAgent(pid: number, step: ProcStep = procFromSlashProc): boolean {
+  const seen = new Set<number>();
+  let cur = pid;
+  for (let depth = 0; depth < 8 && cur > 1; depth++) {
+    if (seen.has(cur)) return false;
+    seen.add(cur);
+    const info = step(cur);
+    if (!info) return false;
+    // Skips depth 0 on purpose: the process itself is the server, and matching
+    // its own command line would only ever be a false positive.
+    if (depth > 0 && AGENT_SHELL.test(info.cmdline)) return true;
+    if (!Number.isInteger(info.ppid) || info.ppid <= 1) return false;
+    cur = info.ppid;
+  }
+  return false;
 }
 
 /** Enough of the command line to tell two `node`s apart, and no more: a webpack

@@ -1819,6 +1819,22 @@ export interface PortEntry {
   /** Owned by the user running the server: the only ones we can name, and the
    *  only ones we would ever signal. */
   mine: boolean;
+  /** Seconds since it started, or null when /proc would not say. Age is the
+   *  difference between "the dev server I just started" and "something that
+   *  has been holding a port since this morning". */
+  ageSec: number | null;
+  /**
+   * Its ancestry runs through an agent's tool-call shell.
+   *
+   * A fact, not a verdict: an agent starts a server on purpose all the time.
+   * What it buys is the answer to "who started this, then" for a process
+   * nobody in front of the screen remembers launching — which is the whole
+   * question you ask when a port is taken and you do not know by what.
+   */
+  fromAgent: boolean;
+  /** Its working directory is gone. Whatever checkout it was serving has been
+   *  deleted underneath it, so nothing it is doing can still matter. */
+  cwdGone: boolean;
 }
 export interface PortsReport { ports: PortEntry[]; mine: number; external: number; error?: string }
 

@@ -146,6 +146,16 @@ function Ports({ onOpenBrowser }: { onOpenBrowser?: () => void }) {
   );
 }
 
+/** "4h41m" — coarse on purpose. The question this answers is "did this start
+ *  just now or has it been sitting here", and to the second is noise. */
+function forAge(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  return m ? `${h}h${m}m` : `${h}h`;
+}
+
 function Row({ p, actions, dim }: { p: PortEntry; actions?: React.ReactNode; dim?: boolean }) {
   return (
     <div className="group flex items-center gap-3 px-3.5 py-1.5 hover:bg-white/5" style={{ borderBottom: edge(7) }}>
@@ -164,10 +174,37 @@ function Row({ p, actions, dim }: { p: PortEntry; actions?: React.ReactNode; dim
         <span className="block truncate text-[10px]" style={{ color: "var(--text4)" }}>
           {p.addr}:{p.port}
           {p.pid != null && ` · pid ${p.pid}`}
+          {p.ageSec != null && ` · up ${forAge(p.ageSec)}`}
         </span>
       </span>
       {/* The cwd is the whole reason this beats `ss`: it names the checkout the
           process was started in, which is the fact you actually wanted. */}
+      {/* Who started this, for a port nobody remembers taking.
+          Deliberately a statement of fact and not a warning: an agent starts a
+          server on purpose constantly, and a panel that called every one of
+          them a leak would be wrong most of the time and ignored the rest. The
+          age beside it is what makes it decidable — a minute old is a session
+          working, four hours old is a session that ended without tidying up. */}
+      {p.fromAgent && (
+        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title="Started by a coding agent's tool call, not launched by hand. Check the age before assuming it is still wanted."
+          // Grey, and chosen rather than inherited: amber would fire on the dev
+          // server a session started a minute ago and is still using, and a
+          // badge that cries wolf on the common case stops being read by the
+          // time it matters. The age next to it does the arguing.
+          style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text3) 30%, transparent)" }}>
+          agent-started
+        </span>
+      )}
+      {/* This one IS a verdict, and it is safe to make: whatever it was serving
+          has been deleted underneath it. */}
+      {p.cwdGone && (
+        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap"
+          title="Its working directory no longer exists — the checkout it was serving has been removed."
+          style={{ color: "var(--error)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
+          checkout gone
+        </span>
+      )}
       {p.cwd && (
         <span className="shrink-0 truncate text-[10px] px-1.5 py-0.5 rounded-full max-w-[190px]"
           title={p.cwd}
