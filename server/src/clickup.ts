@@ -165,6 +165,7 @@ export async function workspaces(token: string): Promise<CallResult<ClickUpWorks
  *  is left alone rather than modelled — the same rule tasks.ts follows. */
 interface RawTask {
   id: string;
+  custom_id?: string | null;
   name: string;
   url?: string;
   status?: { status?: string; type?: string };
@@ -205,6 +206,7 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
   const assignees = raw.assignees ?? [];
   return {
     id: String(raw.id),
+    customId: raw.custom_id ? String(raw.custom_id) : undefined,
     title: raw.name ?? "(untitled)",
     url: raw.url ?? "",
     status: raw.status?.status ?? "",

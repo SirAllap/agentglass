@@ -610,7 +610,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   // `number`/`root` ride along only for {cmd:"review"} — see below, where the
   // server builds what runs rather than taking a command string off the wire.
   let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean;
-    number?: number; root?: string; cwd?: string; prompt?: string; agent?: boolean };
+    number?: number; root?: string; cwd?: string; prompt?: string; agent?: boolean; yolo?: boolean };
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
     // A keystroke is the least ambiguous "a human is waiting on this process"
@@ -706,9 +706,25 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       const prompt = typeof msg.prompt === "string" ? msg.prompt : "";
       if (msg.agent === true && prompt) {
         const bin = claudeCode.bin();
+        /*
+         * The permission prompts, off when asked for — and only ever as this
+         * one fixed argument.
+         *
+         * The client sends a boolean and the server owns the string. That is
+         * the same rule this handler already follows for the command itself:
+         * what runs is decided here, so a socket reachable from the UI cannot
+         * become a way to pass arbitrary arguments to a binary. `yolo === true`
+         * buys exactly one flag and nothing else.
+         *
+         * It is worth offering because the failure it prevents is silent: an
+         * agent handed a card, left in another tmux window, stopping on its
+         * first tool call and waiting for an answer nobody is there to give.
+         * And it is worth being a CHOICE for the mirror-image reason.
+         */
+        const args = msg.yolo === true ? ["--dangerously-skip-permissions", prompt] : [prompt];
         // No agent available is not a reason to open nothing: a shell in the
         // right worktree is still most of what was asked for.
-        if (bin) newWindowRunning(target, cwd, name, [bin, prompt]);
+        if (bin) newWindowRunning(target, cwd, name, [bin, ...args]);
         else newWindowRunning(target, cwd, name, []);
       } else {
         newWindowRunning(target, cwd, name, []);
