@@ -72,6 +72,29 @@ describe("character widths", () => {
   });
 });
 
+describe("the fallback stack", () => {
+  // The browser resolves a monospace stack per character, so the face that
+  // draws `│` need not be the one the cell was measured from. Measured at 13px
+  // on a real screen: DejaVu's rule is 17px of ink, Liberation's is 15, and the
+  // cell is about 17 — so landing on Liberation puts a seam in every row of
+  // every divider. Ordering is the whole fix, which makes it worth pinning.
+  const boxDrawer = /"DejaVu Sans Mono"/;
+  const shortRule = /"Liberation Mono"/;
+
+  it("prefers a face whose box drawing fills the line box", () => {
+    for (const f of prefs.TERM_FONTS) {
+      const stack = f.stack || prefs.termOptions().fontFamily;
+      expect(stack).toMatch(boxDrawer);
+      // Ahead of the short one, or the short one wins and the rules dash again.
+      expect(stack.search(boxDrawer)).toBeLessThan(stack.search(shortRule));
+    }
+  });
+
+  it("covers the default, which every other choice falls through to", () => {
+    expect(prefs.termOptions().fontFamily).toMatch(boxDrawer);
+  });
+});
+
 describe("line height", () => {
   beforeEach(() => { mem.clear(); });
 
