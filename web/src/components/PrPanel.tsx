@@ -2440,7 +2440,27 @@ function PrSidebar({ d, onLabels, onReviewers, onAssignees, onMilestone }: {
   onLabels: () => void; onReviewers: () => void; onAssignees: () => void; onMilestone: () => void;
 }) {
   return (
-    <aside className="shrink-0 w-[248px] pl-4 hidden lg:block" style={{ borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+    /**
+     * Pinned, because it is reference rather than reading.
+     *
+     * Who is reviewing this, what it is labelled, which milestone it is in —
+     * these are the things you look up *while* reading the description, and
+     * they were scrolling away with it. On a PR whose body runs to several
+     * screens (this app's own do) they were gone by the second one, and the way
+     * back was to scroll to the top and lose your place in the prose.
+     *
+     * `items-start` on the row is what makes this work: a stretched flex child
+     * is already as tall as the column beside it, and an element that fills its
+     * container has nothing to stick within. The tab strip is a sibling ABOVE
+     * the scroll container rather than inside it, so `top-0` is the top of the
+     * scrollport and nothing overlaps.
+     *
+     * The height cap and its scrollbar are a safety valve, not the usual case:
+     * five short sections fit anywhere, but a PR with thirty reviewers must not
+     * pin a list whose bottom cannot then be reached.
+     */
+    <aside className="sticky top-0 shrink-0 w-[248px] pl-4 hidden lg:block overflow-y-auto agx-scroll overscroll-contain"
+      style={{ borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", maxHeight: "calc(100vh - 6rem)" }}>
       <SidebarSection title="Reviewers" onEdit={onReviewers}>
         <SidebarPeople people={d.reviewers} empty="No reviewers" />
       </SidebarSection>
