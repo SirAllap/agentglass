@@ -79,3 +79,52 @@ describe("moving the selection", () => {
     expect(step(-1, -1, 0)).toBe(-1);
   });
 });
+
+describe("checklists in a note", () => {
+  const { checkbox, toggleCheckbox, checkProgress } = mod.__test;
+
+  it("reads the spelling the editor writes, not markdown's", () => {
+    // These notes already exist in the store. A reader that only knew `- [ ]`
+    // would render every one of them as prose.
+    expect(checkbox("() call the bank")).toEqual({ checked: false, label: "call the bank" });
+    expect(checkbox("(x) call the bank")).toEqual({ checked: true, label: "call the bank" });
+    expect(checkbox("( ) with a space")).toEqual({ checked: false, label: "with a space" });
+    expect(checkbox("- () with a bullet")).toEqual({ checked: false, label: "with a bullet" });
+    expect(checkbox("  (X) indented and shouting")).toEqual({ checked: true, label: "indented and shouting" });
+  });
+
+  it("leaves prose alone", () => {
+    for (const line of ["just a sentence", "(not a box) really", "()", "- a plain bullet", ""]) {
+      expect(checkbox(line), line).toBe(null);
+    }
+  });
+
+  it("flips one line and hands back the whole note", () => {
+    // The caller replaces the note wholesale, so returning the line alone would
+    // push the reassembly — and the chance of losing the rest — to the caller.
+    const note = "shopping\n() bread\n(x) milk\nnot a box";
+    expect(toggleCheckbox(note, 1)).toBe("shopping\n(x) bread\n(x) milk\nnot a box");
+    expect(toggleCheckbox(note, 2)).toBe("shopping\n() bread\n() milk\nnot a box");
+  });
+
+  it("writes unchecked back as the editor spells it", () => {
+    // `()`, not `( )`: a toggle must not restyle a note that a synced store
+    // would then show as changed.
+    expect(toggleCheckbox("( ) spaced", 0)).toBe("(x) spaced");
+    expect(toggleCheckbox("(x) spaced", 0)).toBe("() spaced");
+  });
+
+  it("keeps the bullet and the indent it found", () => {
+    expect(toggleCheckbox("  - () nested", 0)).toBe("  - (x) nested");
+  });
+
+  it("refuses a line that is not a checkbox, so a stray click writes nothing", () => {
+    expect(toggleCheckbox("shopping\n() bread", 0)).toBe(null);
+    expect(toggleCheckbox("() bread", 9)).toBe(null);
+  });
+
+  it("counts across every note on the task", () => {
+    expect(checkProgress(["() a\n(x) b", "prose", "(x) c"])).toEqual({ done: 2, total: 3 });
+    expect(checkProgress(["nothing here"])).toEqual({ done: 0, total: 0 });
+  });
+});

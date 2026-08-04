@@ -238,10 +238,26 @@ export type TaskSnapshot = { at: number; tasks: LocalTask[]; fingerprint: string
 let snap: TaskSnapshot | null = null;
 const SNAP_TTL_MS = 3_000;
 
-/** A cheap stand-in for "did anything change" — length plus the uuids and their
- *  modification-sensitive fields, hashed by the runtime. Compared by the sweep
- *  so a poll that found nothing new costs one broadcast fewer. */
-const fingerprintOf = (raw: string) => String(Bun.hash(raw));
+/**
+ * Everything the store says, minus the one field it makes up on the spot.
+ *
+ * `urgency` is not stored. Taskwarrior computes it per export from the task's
+ * age and how near its due date is, so it changes CONTINUOUSLY — measured on
+ * this fixture, `9.10475` became `9.10478` six seconds later with nobody
+ * writing anything. Hashing the raw export therefore produced a precondition
+ * that moved on its own, and every write more than a few seconds after the list
+ * loaded was refused with "somebody changed this task while you were pressing
+ * the key". That was not true, and a false report of a concurrent edit is the
+ * worst thing this particular message can say: it teaches the user that the
+ * safety check is noise.
+ *
+ * Stripped rather than replaced by a hash of our own struct. The point of
+ * hashing the WHOLE export is to notice a change to a field we do not model —
+ * a recurrence, a dependency, somebody's UDA — and hashing only what we parse
+ * would give exactly that up.
+ */
+const CLOCK_DERIVED = /,?"urgency":-?\d+(?:\.\d+)?/g;
+export const fingerprintOf = (raw: string) => String(Bun.hash(raw.replace(CLOCK_DERIVED, "")));
 
 export async function listTasks(force = false): Promise<TaskSnapshot> {
   if (!force && snap && Date.now() - snap.at < SNAP_TTL_MS * backoff()) return snap;

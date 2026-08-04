@@ -19,7 +19,7 @@ import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
-import { parseLocal, toLine, sortTasks, step, SORTS, type SortMode } from "../lib/taskGrammar.ts";
+import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, SORTS, type SortMode } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -794,6 +794,8 @@ function LocalBody({ active }: { active: boolean }) {
       <aside className="agx-scroll overflow-y-auto p-5 text-[11.5px] shrink-0"
         style={{ width: 380, borderLeft: edge(12) }}>
         {picked ? <TaskDetail t={picked} today={today} reminder={byTask[picked.uuid] ?? null}
+          writable={cap.configured}
+          onToggleNote={(oldText, newText) => { void write(() => api.taskNote(picked.uuid, oldText, newText, fp)); }}
           onCancel={async () => { const r = byTask[picked.uuid]; if (r) { await api.reminderCancel(r.id); await nudgeReminders(); reload(); } }} /> : (
           <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a task.</div>
         )}
@@ -891,11 +893,65 @@ function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onClose
   );
 }
 
-function TaskDetail({ t, today, reminder, onCancel }: {
+/*
+ * One note, with its checklist live.
+ *
+ * A note is one string in the store and it is replaced wholesale, so a click on
+ * a box sends the WHOLE note back with one line flipped. That is why the lines
+ * are rendered here rather than handed to the markdown renderer with a
+ * checkbox plugin: what has to survive the round trip is the note's exact text,
+ * including the lines nobody clicked, and the only way to be sure of that is to
+ * never take it apart in the first place.
+ *
+ * Runs of prose between checklist items are kept together and given to
+ * `Markdown` as one block, so a paragraph that happens to sit between two boxes
+ * is still a paragraph.
+ */
+function Note({ text, writable, onToggle }: {
+  text: string; writable?: boolean; onToggle?: (next: string) => void;
+}) {
+  const lines = text.split("\n");
+  const boxes = lines.map((l) => checkbox(l));
+  if (!boxes.some(Boolean)) return <div className="mb-3"><Markdown text={text} /></div>;
+
+  const out: React.ReactNode[] = [];
+  let prose: string[] = [];
+  const flush = (key: string) => {
+    if (!prose.length) return;
+    const block = prose.join("\n");
+    if (block.trim()) out.push(<Markdown key={key} text={block} />);
+    prose = [];
+  };
+  lines.forEach((line, i) => {
+    const box = boxes[i];
+    if (!box) { prose.push(line); return; }
+    flush(`p${i}`);
+    const flip = () => { const next = toggleCheckbox(text, i); if (next !== null) onToggle?.(next); };
+    out.push(
+      <button key={`b${i}`} onClick={flip} disabled={!writable || !onToggle}
+        className="w-full text-left flex items-start gap-2 py-0.5 rounded hover:bg-white/5 disabled:hover:bg-transparent"
+        style={{ cursor: writable && onToggle ? "pointer" : "default" }}>
+        <span aria-hidden className="shrink-0 leading-[1.45]"
+          style={{ color: box.checked ? "var(--ok)" : "var(--text3)" }}>{box.checked ? "\u2611" : "\u2610"}</span>
+        <span className="leading-[1.45]" style={{
+          color: box.checked ? "var(--text3)" : "var(--text)",
+          textDecoration: box.checked ? "line-through" : undefined,
+        }}>{box.label}</span>
+      </button>,
+    );
+  });
+  flush("pEnd");
+  return <div className="mb-3">{out}</div>;
+}
+
+function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote }: {
   t: LocalTask; today: string;
   reminder?: import("../../../shared/types.ts").Reminder | null;
   onCancel?: () => void;
+  writable?: boolean;
+  onToggleNote?: (oldText: string, newText: string) => void;
 }) {
+  const progress = checkProgress(t.notes);
   return (
     <div>
       <h2 className="text-[16px] font-semibold leading-snug mb-2.5" style={{ color: "var(--text)", textWrap: "balance" }}>
@@ -930,8 +986,18 @@ function TaskDetail({ t, today, reminder, onCancel }: {
       )}
       {!!t.notes.length && (
         <>
-          <div className="text-[8.5px] uppercase tracking-[0.2em] mb-1.5" style={{ color: "var(--text3)" }}>Notes</div>
-          {t.notes.map((n, i) => <div key={i} className="mb-3"><Markdown text={n} /></div>)}
+          <div className="text-[8.5px] uppercase tracking-[0.2em] mb-1.5 flex items-center gap-2" style={{ color: "var(--text3)" }}>
+            Notes
+            {progress.total > 0 && (
+              <span style={{ color: progress.done === progress.total ? "var(--ok)" : "var(--text3)" }}>
+                {progress.done}/{progress.total}
+              </span>
+            )}
+          </div>
+          {t.notes.map((n, i) => (
+            <Note key={i} text={n} writable={writable}
+              onToggle={onToggleNote ? (next) => onToggleNote(n, next) : undefined} />
+          ))}
         </>
       )}
       {!!t.urls.length && (

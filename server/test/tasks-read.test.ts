@@ -161,3 +161,36 @@ describe("capability", () => {
     rmSync(probe, { recursive: true, force: true });
   });
 });
+
+describe("the precondition has to hold still", () => {
+  it("ignores the field Taskwarrior recomputes on every export", () => {
+    // `urgency` is derived from the clock, not stored. Hashing it made the
+    // fingerprint drift on its own — 9.10475 became 9.10478 six seconds later
+    // with nobody writing — so every write after the list had been open for a
+    // moment was refused as a concurrent edit that never happened.
+    const at = (u: string) => `[{"uuid":"a","description":"x","status":"pending","urgency":${u}}]`;
+    expect(mod.fingerprintOf(at("9.10475"))).toBe(mod.fingerprintOf(at("9.10478")));
+    expect(mod.fingerprintOf(at("0"))).toBe(mod.fingerprintOf(at("-3.5")));
+  });
+
+  it("still moves for anything that is actually stored", () => {
+    // Including a field nothing here models — which is the reason the whole
+    // export is hashed rather than the struct we parse out of it.
+    const base = `[{"uuid":"a","description":"x","status":"pending","urgency":1}]`;
+    for (const other of [
+      `[{"uuid":"a","description":"y","status":"pending","urgency":1}]`,
+      `[{"uuid":"a","description":"x","status":"completed","urgency":1}]`,
+      `[{"uuid":"a","description":"x","status":"pending","recur":"weekly","urgency":1}]`,
+      `[{"uuid":"a","description":"x","status":"pending","urgency":1},{"uuid":"b","description":"z","status":"pending","urgency":1}]`,
+    ]) expect(mod.fingerprintOf(base), other).not.toBe(mod.fingerprintOf(other));
+  });
+
+  it.skipIf(!has)("reads the same store twice across a second and does not call it a change", () => {
+    // The end-to-end version of the same claim, against a real `task export`.
+    const env = { TASKDATA: process.env.TASKDATA!, TASKRC: process.env.TASKRC! };
+    const one = () => mod.fingerprintOf(run(["rc.gc=0", "rc.verbose=nothing", "export"], env).stdout.toString());
+    const a = one();
+    Bun.sleepSync(2_200);
+    expect(one(), "the fingerprint drifted with nobody writing").toBe(a);
+  });
+});

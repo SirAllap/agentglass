@@ -95,3 +95,56 @@ export function step(at: number, n: number, len: number): number {
   const from = at < 0 ? (n > 0 ? -1 : len) : at;
   return Math.max(0, Math.min(len - 1, from + n));
 }
+
+/*
+ * Checklists inside a note.
+ *
+ * `() thing` and `(x) thing`, with an optional bullet — the shape the editor's
+ * own note buffer writes, and the reason it is this and not `- [ ]`: these
+ * notes already exist in the store, written by hand over months, and a list
+ * that only understood markdown's spelling would render every one of them as
+ * text. The format is the user's; this reads it.
+ *
+ * Unchecked is written back as `()` rather than `( )` for the same reason —
+ * that is what the editor emits, and a toggle here must not quietly restyle a
+ * note the next `git diff` of a synced store would show as changed.
+ */
+const BOX = /^(\s*(?:[-*]\s+)?)\(\s*([xX]?)\s*\)\s(.*)$/;
+
+export interface CheckLine { checked: boolean; label: string }
+
+/** The checkbox on this line, or null if the line is ordinary prose. */
+export function checkbox(line: string): CheckLine | null {
+  const m = BOX.exec(line);
+  if (!m) return null;
+  return { checked: m[2]!.toLowerCase() === "x", label: m[3]! };
+}
+
+/**
+ * The whole note back, with one line flipped.
+ *
+ * A note is replaced wholesale (denotate then annotate), so the caller needs
+ * the new text of the ENTIRE note, not of the line — returning the line would
+ * push the reassembly, and the chance to lose the rest of it, to the call site.
+ * Null when that line is not a checkbox, so nothing is written on a stray
+ * click.
+ */
+export function toggleCheckbox(note: string, index: number): string | null {
+  const lines = note.split("\n");
+  const line = lines[index];
+  if (line === undefined) return null;
+  const m = BOX.exec(line);
+  if (!m) return null;
+  lines[index] = `${m[1]}(${m[2]!.toLowerCase() === "x" ? "" : "x"}) ${m[3]}`;
+  return lines.join("\n");
+}
+
+/** How many of a note's checkboxes are done, for a count on the row. */
+export function checkProgress(notes: string[]): { done: number; total: number } {
+  let done = 0, total = 0;
+  for (const n of notes) for (const line of n.split("\n")) {
+    const c = checkbox(line);
+    if (c) { total++; if (c.checked) done++; }
+  }
+  return { done, total };
+}
