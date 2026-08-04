@@ -489,7 +489,8 @@ const realApi = {
      anything in somebody's company workspace; each one carries the
      `date_updated` the client was looking at, so a card that moved underneath
      is refused rather than overwritten. */
-  clickupViews: () => get<{ views: SavedView[]; current?: string; writeEnabled: boolean }>("/clickup/views"),
+  clickupViews: () => get<{ views: SavedView[]; current?: string; writeEnabled: boolean; writeForced?: boolean }>("/clickup/views"),
+  clickupSetWrites: (on: boolean) => post<{ ok: boolean }>("/clickup/writes", { on }),
   clickupView: (id?: string, force = false) =>
     get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
   clickupAddView: (url: string) =>
@@ -1013,6 +1014,7 @@ const demoApi: typeof realApi = {
   providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
   clickupViews: () => D({ views: [], writeEnabled: false }),
+  clickupSetWrites: (_o: boolean) => D({ ok: false }),
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),

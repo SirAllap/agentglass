@@ -47,6 +47,9 @@ export interface CachedView {
 
 interface Store {
   views: SavedView[];
+  /** Whether changes may be sent to ClickUp. Off until somebody says so — see
+   *  clickup.ts for why this default is the opposite of the local list's. */
+  writes?: boolean;
   /** Keyed by view id. Trimmed with the view it belongs to. */
   cache: Record<string, CachedView>;
   /** The one on screen when you last looked. */
@@ -82,6 +85,10 @@ function save(s: Store): void {
 }
 
 export const savedViews = (): SavedView[] => load().views;
+
+/** The stored answer to "may this app change my company's board". */
+export const writesAllowed = (): boolean => load().writes === true;
+export function setWritesAllowed(on: boolean): void { save({ ...load(), writes: on }); }
 export const currentView = (): string | undefined => load().current;
 
 export function setCurrent(id: string): void {

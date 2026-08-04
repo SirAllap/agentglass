@@ -61,8 +61,8 @@ import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, readView } from "./providers.ts";
-import { savedViews, currentView, setCurrent, removeView, cachedFor } from "./clickupviews.ts";
-import { assignSelf, setStatus, setField, taskDetail, findCard, cardPullRequests, CLICKUP_WRITE_ENABLED } from "./clickup.ts";
+import { savedViews, currentView, setCurrent, removeView, cachedFor, setWritesAllowed } from "./clickupviews.ts";
+import { assignSelf, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -1654,7 +1654,7 @@ const server = Bun.serve<WsData>({
        clickup.ts for why this one defaults to off while the local list
        defaults to on. */
     if (pathname === "/clickup/views") {
-      return json({ views: savedViews(), current: currentView(), writeEnabled: CLICKUP_WRITE_ENABLED });
+      return json({ views: savedViews(), current: currentView(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
     }
     if (pathname === "/clickup/view") {
       const id = url.searchParams.get("id") ?? currentView() ?? "";
@@ -1695,6 +1695,7 @@ const server = Bun.serve<WsData>({
         : pathname === "/clickup/assign" ? await assignSelf(id, b.on !== false, seen)
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
         : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
+        : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
       return json(r, r.ok ? 200 : ("conflict" in r && r.conflict) ? 409 : 400);
