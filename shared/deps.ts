@@ -65,6 +65,17 @@ export interface DepSpec {
    * nobody here was sure of, and the reader gets the project's page for it.
    */
   pkg?: Partial<Record<PkgManager, string>>;
+  /**
+   * The project's own one-line install, for tools no package manager owns.
+   *
+   * `pkg` covers everything a distribution packages. This covers the rest —
+   * and "the rest" includes a REQUIRED tool, which is the whole reason it
+   * exists: the Claude CLI is not in anybody's repositories, so the page could
+   * name the one dependency most likely to be missing and then offer nothing
+   * but a link. Taken verbatim from the project's own documentation, never
+   * invented, and used only when `pkg` has no answer for this machine.
+   */
+  installer?: string;
 }
 
 /** The package managers worth detecting. Ordered by how much they are the
@@ -85,6 +96,17 @@ export const PKG_INSTALL: Record<PkgManager, (pkg: string) => string> = {
   brew: (p) => `brew install ${p}`,
 };
 
+/**
+ * Does this line fetch something off the internet and run it?
+ *
+ * Derived rather than declared, so a future entry cannot forget to say so. The
+ * console shows every command before running it, but "read this first" carries
+ * more weight for a script nobody can read until it has already been fetched
+ * than it does for `apt-get install`, and the two deserve different words.
+ */
+export const isRemoteScript = (cmd: string): boolean =>
+  /\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba)?sh\b/.test(cmd);
+
 /** The catalog. Order is the reading order: the things that break the app
  *  first, then what each feature wants, then the small POSIX pieces. */
 export const DEPS: DepSpec[] = [
@@ -97,8 +119,17 @@ export const DEPS: DepSpec[] = [
   {
     id: "claude", bin: "claude", title: "Claude Code CLI", required: true,
     what: "The chat panel runs it: every turn, the tmux pane engine, Review with Claude, and the walkthrough.",
-    url: "https://docs.claude.com/en/docs/claude-code/setup",
+    // Moved host: the old docs.claude.com path 301s here. A link that redirects
+    // still works and still rots — this one was found pointing at the old host
+    // while reading the page for the install line below.
+    url: "https://code.claude.com/docs/en/setup",
     note: "agentglass reads Claude Code's own transcripts either way, so sessions still show up without it. Only chatting from the app needs the CLI.",
+    // The native installer, which is what the setup page presents as the
+    // recommended method on macOS, Linux and WSL. Not a package: there are
+    // signed apt/dnf/apk repositories, but each is a key plus a repository plus
+    // an install — three commands and a fingerprint to check, which is a
+    // documentation link's job, not a button's.
+    installer: "curl -fsSL https://claude.ai/install.sh | bash",
   },
   {
     id: "python", bin: "python3", title: "Python 3", required: true,

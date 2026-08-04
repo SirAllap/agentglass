@@ -24,6 +24,7 @@ import { termOptions } from "../lib/termPrefs.ts";
 // that drew itself in slightly different colours would look like a screenshot
 // pasted into the settings page.
 import { themeFromCss } from "./TerminalPanel.tsx";
+import { isRemoteScript } from "../../../shared/deps.ts";
 
 export function InstallConsole({ command, cwd, onClose }: {
   /** Typed into the shell verbatim, and never followed by a newline. */
@@ -37,6 +38,7 @@ export function InstallConsole({ command, cwd, onClose }: {
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"opening" | "ready" | "failed">("opening");
   const [copied, setCopied] = useState(false);
+  const remote = isRemoteScript(command);
 
   useEffect(() => {
     const el = host.current;
@@ -161,7 +163,13 @@ export function InstallConsole({ command, cwd, onClose }: {
           ? "The shell could not be opened — copy the command and run it yourself."
           : state === "opening"
             ? "Opening a shell…"
-            : "It is typed, not run. Press Enter when you have read it."}
+            : remote
+              // A different sentence for a different decision. `apt-get install`
+              // asks you to trust a distribution you already trust; this asks
+              // you to run a script you cannot read until it has been fetched.
+              // Both are typed and not run, but only one of them is a choice.
+              ? "It is typed, not run. This downloads a script and runs it — the project's own recommended install. Press Enter to accept that."
+              : "It is typed, not run. Press Enter when you have read it."}
       </div>
       <div ref={host} style={{ height: 190, background: "var(--bg)" }} />
     </div>
