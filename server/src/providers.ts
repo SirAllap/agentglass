@@ -15,7 +15,7 @@ import { PROVIDERS, type ProviderId, type ProviderStatus, type ProviderState } f
 import { ghCapability } from "./prs.ts";
 import { taskCapability } from "./tasks.ts";
 import { hasCredential, redacted, setCredential, clearCredential } from "./credentials.ts";
-import { whoAmI, workspaces, clickupTasks } from "./clickup.ts";
+import { whoAmI, workspaces, clickupTasks, __reset } from "./clickup.ts";
 
 const found = (bin: string): boolean => !!Bun.which(bin);
 
@@ -120,12 +120,25 @@ export async function connectProvider(id: ProviderId, token: string): Promise<Co
     workspaceId: first?.id,
     verifiedAt: Date.now(),
   });
+  /*
+   * Drop the cached list before reporting the new status.
+   *
+   * The tab has almost certainly been looked at already — that is where the
+   * button to get here lives — so a snapshot saying "ClickUp is not connected"
+   * is sitting in a sixty-second cache. Without this, connecting succeeds and
+   * the card immediately reports the cached failure back: "not connected · last
+   * known as David", which is both wrong and baffling, since the name could
+   * only have come from the credential that was just written.
+   *
+   * Disconnect already did this for the mirror-image reason. Connect needs it
+   * more: the failure is silent and looks like a broken token.
+   */
+  __reset();
   return { ok: true, status: await statusOf(id) };
 }
 
 export async function disconnectProvider(id: ProviderId): Promise<ConnectResult> {
   clearCredential(id);
-  const { __reset } = await import("./clickup.ts");
   // The cached list goes too. Leaving it would show somebody else's tasks after
   // a disconnect, which is the one thing a disconnect must not do.
   if (id === "clickup") __reset();
@@ -147,7 +160,6 @@ export async function providerWorkspaces(id: ProviderId): Promise<{ ok: boolean;
 export async function chooseWorkspace(id: ProviderId, workspaceId: string, name: string): Promise<ConnectResult> {
   if (id !== "clickup") return { ok: false, error: "That provider has no workspaces" };
   const { annotate } = await import("./credentials.ts");
-  const { __reset } = await import("./clickup.ts");
   annotate("clickup", { workspaceId, workspace: name });
   __reset();
   return { ok: true, status: await statusOf(id) };

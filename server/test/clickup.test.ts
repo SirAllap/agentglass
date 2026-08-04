@@ -286,3 +286,37 @@ describe("what may be printed", () => {
     expect(CU.tokenLabel()).not.toContain("SECRETVALUE");
   });
 });
+
+describe("connecting, when the tab has already been looked at", () => {
+  it("does not report the cached failure back at you", async () => {
+    /*
+     * The bug this exists for, and it looked like a broken token.
+     *
+     * The button that opens Integrations lives on the ClickUp tab, so by the
+     * time anybody pastes a token the tab has already polled and cached a
+     * snapshot saying "ClickUp is not connected". Connecting then succeeded and
+     * the card immediately reported that cached failure — "not connected · last
+     * known as David" — where the name could only have come from the credential
+     * that had just been written a moment earlier.
+     */
+    const P = await import("../src/providers.ts");
+
+    // 1. The tab polls while nothing is connected. This caches the failure.
+    const before = await CU.clickupTasks(true);
+    expect(before.error).toContain("not connected");
+
+    // 2. A good token goes in.
+    reply = (req) => {
+      const path = new URL(req.url).pathname;
+      if (path.endsWith("/user")) return json({ user: { id: 7, username: "David", email: "e" } });
+      if (path.endsWith("/team")) return json({ teams: [{ id: "9001", name: "Producto" }] });
+      return json({ tasks: [TASK] });
+    };
+    const r = await P.connectProvider("clickup", "pk_1_GOOD");
+
+    expect(r.ok, r.error).toBe(true);
+    expect(r.status!.state, "connect reported the cached failure").toBe("connected");
+    expect(r.status!.detail).toContain("David");
+    expect(r.status!.detail).not.toContain("not connected");
+  });
+});
