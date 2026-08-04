@@ -639,7 +639,7 @@ export interface BulkResult extends WriteResult {
 const BULK_MAX = 200;
 
 export async function bulkApply(
-  uuids: string[], action: BulkAction, value: string | null, expect?: string,
+  uuids: string[], action: BulkAction, value: string | null = null, expect?: string,
 ): Promise<BulkResult> {
   const bad = await writeGuard();
   if (bad) return { ok: false, error: bad };
