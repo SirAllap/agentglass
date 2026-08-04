@@ -221,7 +221,7 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 
 export function TopBar({
   workspace, onOpenProject, onOpenPalette, quiet, needs,
-  needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal,
+  needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
 }: {
   workspace: string | null;
   onOpenProject: () => void;
@@ -243,6 +243,8 @@ export function TopBar({
   onNeedApprove: () => void;
   onNeedProject: (root: string) => void;
   onNeedTerminal: () => void;
+  /** A notification that knows where it belongs. */
+  onNoteGoto: (g: { kind: "pr"; repo: string; number: number }) => void;
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
@@ -430,7 +432,7 @@ export function TopBar({
         )}
         {/* What you missed. The bar interrupts for one thing at a time in its
             middle; everything else it ever said is still in here. */}
-        <NotifyBell noDrag={NO_DRAG} />
+        <NotifyBell noDrag={NO_DRAG} onGoto={onNoteGoto} />
         {/* An update is worth noticing on the way past, never worth pulling the
             eye off a running fleet. */}
         {updateAvailable() && (

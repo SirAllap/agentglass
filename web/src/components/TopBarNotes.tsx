@@ -282,11 +282,18 @@ function Cap({ children, dim }: { children: React.ReactNode; dim?: boolean }) {
   );
 }
 
-function HistoryRow({ n, onGone }: { n: SystemNote; onGone: () => void }) {
+function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; onGoto: (g: NonNullable<SystemNote["goto"]>) => void }) {
   const [open, setOpen] = useState(false);
   const long = n.body.length > 90 || n.body.includes("\n");
+  // Clickable only when there is somewhere to go. A row that highlights under
+  // the pointer and then does nothing is the thing being fixed here, so the
+  // affordance appears exactly where it is honest.
+  const go = n.goto ? () => onGoto(n.goto!) : null;
   return (
-    <div className="agx-note-row">
+    <div className={go ? "agx-note-row agx-note-row-go" : "agx-note-row"}
+      onClick={go ?? undefined}
+      role={go ? "button" : undefined}
+      title={go ? `Open ${n.goto!.repo}#${n.goto!.number}` : undefined}>
       <div className="flex items-start gap-2">
         <span className="flex flex-col min-w-0 flex-1 gap-[3px]">
           <span className="flex items-center gap-2">
@@ -307,17 +314,17 @@ function HistoryRow({ n, onGone }: { n: SystemNote; onGone: () => void }) {
               cannot do — what it actually opens is the link inside the message.
               Saying the host out loud makes the button honest. */}
           {n.url && (
-            <button className="agx-note-link self-start" onClick={() => void openNote(n.id)} title={n.url}>
+            <button className="agx-note-link self-start" onClick={(e) => { e.stopPropagation(); void openNote(n.id); }} title={n.url}>
               ↗ Open {hostOf(n.url)}
             </button>
           )}
         </span>
         <span className="flex items-center gap-1 shrink-0">
           {long && (
-            <button className="agx-note-btn" onClick={() => setOpen((v) => !v)}
+            <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
               title={open ? "Collapse" : "Show the whole message"}>{open ? "▴" : "▾"}</button>
           )}
-          <button className="agx-note-btn" onClick={onGone} title="Dismiss">✕</button>
+          <button className="agx-note-btn" onClick={(e) => { e.stopPropagation(); onGone(); }} title="Dismiss">✕</button>
         </span>
       </div>
     </div>
@@ -332,7 +339,12 @@ function HistoryRow({ n, onGone }: { n: SystemNote; onGone: () => void }) {
  * bar clips its own overflow — it has to, or a long project name would push the
  * clock off the end — and a dropdown drawn inside it would be sliced off at 30px.
  */
-export function NotifyBell({ noDrag }: { noDrag?: React.CSSProperties }) {
+export function NotifyBell({ noDrag, onGoto }: {
+  noDrag?: React.CSSProperties;
+  /** Take me to what this note is about. The bar does not know how; the shell
+   *  does, so the destination travels up rather than the router coming down. */
+  onGoto: (g: NonNullable<SystemNote["goto"]>) => void;
+}) {
   const btn = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState<{ top: number; right: number } | null>(null);
@@ -435,7 +447,10 @@ export function NotifyBell({ noDrag }: { noDrag?: React.CSSProperties }) {
             </div>
             {hist.length ? (
               <div className="agx-inbox-list">
-                {hist.map((n) => <HistoryRow key={n.id} n={n} onGone={() => dismissNote(n.id)} />)}
+                {hist.map((n) => (
+                  <HistoryRow key={n.id} n={n} onGone={() => dismissNote(n.id)}
+                    onGoto={(g) => { setOpen(false); onGoto(g); }} />
+                ))}
               </div>
             ) : (
               // Says which of the two reasons it is empty for. "Nothing here"

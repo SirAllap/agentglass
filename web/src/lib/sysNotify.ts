@@ -23,6 +23,15 @@ export type SystemNote = {
   at: number;
   /** Present when the notification's own text carried a link. */
   url?: string;
+  /**
+   * Somewhere in THIS app the note is about.
+   *
+   * A mirrored desktop notification can only offer the link it came with, which
+   * leaves the app. Our own notes usually know an in-app destination and had no
+   * way to say so, so seventeen rows about pull requests were seventeen rows
+   * you could not click. Only kinds this app can actually reach belong here.
+   */
+  goto?: { kind: "pr"; repo: string; number: number };
 };
 export type NotifyCapability = { supported: boolean; reason?: string };
 
@@ -172,7 +181,7 @@ export function fireDesktopAlert(a: { title: string; body: string }) {
   }
 }
 
-export function recordNote(n: { app: string; summary: string; body: string; urgency?: 0 | 1 | 2 }) {
+export function recordNote(n: { app: string; summary: string; body: string; urgency?: 0 | 1 | 2; goto?: SystemNote["goto"] }) {
   const note: SystemNote = {
     id: `app-${++localSeq}`,
     app: n.app,
@@ -180,6 +189,7 @@ export function recordNote(n: { app: string; summary: string; body: string; urge
     body: n.body,
     urgency: n.urgency ?? 1,
     at: Date.now(),
+    ...(n.goto ? { goto: n.goto } : {}),
   };
   history = [note, ...history].slice(0, HISTORY_MAX);
   unread++;

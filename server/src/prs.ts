@@ -267,6 +267,23 @@ export function rollupChecks(raw: RawCheck[] | null | undefined): { rollup: PrCh
 
 /** What we last told the user about each PR, so we tell them once. */
 const latch = new Map<string, "green" | "red">();
+/**
+ * PRs whose suite we have actually watched running.
+ *
+ * The latch alone made every first observation an announcement, so starting the
+ * app told you the standing state of everything you have a stake in — seventeen
+ * "checks green" in one burst, about runs that finished days ago. That is not a
+ * notification, it is an inventory, and it is what makes people stop reading
+ * the ones that matter.
+ *
+ * A notification is for something that happened while you were watching. So a
+ * verdict counts as news only for a PR we saw with checks still running: that
+ * is the difference between "this just went green" and "this was already
+ * green when I arrived". Everything else is recorded silently and reported the
+ * moment it CHANGES, which covers the re-run, the flip from green to red, and
+ * every case anyone actually wants to be interrupted for.
+ */
+const watched = new Set<string>();
 const ciListeners = new Set<(v: CiVerdict) => void>();
 
 export function subscribeCi(fn: (v: CiVerdict) => void): () => void {
@@ -289,11 +306,17 @@ export function subscribeCi(fn: (v: CiVerdict) => void): () => void {
  */
 export function noteCi(repo: PrRepoId, pr: PrSummary): void {
   const key = `${repo.key}#${pr.number}`;
-  if (!pr.checks.allDone) { latch.delete(key); return; }
+  // Seeing it run is what earns the announcement when it lands.
+  if (!pr.checks.allDone) { latch.delete(key); watched.add(key); return; }
   const verdict = pr.checks.verdict;
   if (!verdict) return;
-  if (latch.get(key) === verdict) return;
+  const prev = latch.get(key);
   latch.set(key, verdict);
+  if (prev === verdict) return;
+  // First sight of a suite we never saw running: this is the state of the world
+  // as we found it, not something that happened. Remembered, not announced —
+  // any later change from here is news and does get through.
+  if (prev === undefined && !watched.has(key)) return;
   const v: CiVerdict = {
     repo: repo.nameWithOwner, number: pr.number, title: pr.title, verdict,
     failing: pr.checks.failing.map((c) => c.name), url: pr.url,

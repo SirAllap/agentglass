@@ -19,8 +19,9 @@
 //
 // 4. Nothing waits on the network. `gh` costs a second or more per call and the
 //    server has one thread; every read is a cached answer with its age shown.
-import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Portal } from "./Portal.tsx";
+import { subscribePrJump, prJump, clearPrJump } from "../lib/prJump.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type {
   PrSummary, PrDetail, PrRepoId, PrThread, PrComment, PrReview, PrReviewer, PrCheck, GitRepoRef, FileChange,
@@ -950,6 +951,29 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
   /** Open a pull request as a page. Back returns to the list, cursor intact. */
   const openPr = useCallback((n: number) => { setRowCursor(n); setSelected(n); setTab("overview"); setCondensed(false); }, []);
   const backToList = useCallback(() => { setSelected(null); setDetailErr(""); }, []);
+
+  /**
+   * "Open this pull request", asked from somewhere that cannot reach this panel.
+   *
+   * The notification list in the top bar can be open over any view, and this
+   * panel may not be mounted when a row is clicked — so the request is left in a
+   * slot and picked up here, the same shape the issues panel uses to start a
+   * terminal it cannot reach. Cleared on service, not on arrival, so one made
+   * while this was still mounting is not dropped on the way in.
+   *
+   * The repo is checked rather than assumed. A number alone is not an identity:
+   * `#16175` names a different pull request in every repository, and opening the
+   * one with that number in whichever repo happens to be selected would be a
+   * confident wrong answer. Mismatched, the request waits for the repo it named
+   * — switching to it serves the request rather than losing it.
+   */
+  const jump = useSyncExternalStore(subscribePrJump, prJump, () => null);
+  useEffect(() => {
+    if (!jump || !repo) return;
+    if (jump.repo !== repo.nameWithOwner) return;
+    clearPrJump();
+    openPr(jump.number);
+  }, [jump, repo, openPr]);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
   // Automation comments render in full by default now that they render as

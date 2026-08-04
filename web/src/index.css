@@ -508,6 +508,14 @@ textarea.bg-transparent {
 .agx-note-row:hover {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
+/* Only the rows that lead somewhere. A row that lights up under the pointer and
+   then does nothing is exactly the dead end this class exists to stop being. */
+.agx-note-row-go {
+  cursor: pointer;
+}
+.agx-note-row-go:hover {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
 /* Really a control, so here a pointer and a hover fill are honest rather than
    misleading. */
 .agx-note-btn {

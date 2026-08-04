@@ -393,11 +393,36 @@ describe("CI notification latch", () => {
   test("sixty-one checks produce one notification, not sixty-one", () => {
     const seen: string[] = [];
     const off = prs.subscribeCi((v) => seen.push(`${v.number}:${v.verdict}`));
+    prs.noteCi(repo, pr(101, rollup({ pending: 61, allDone: false, verdict: null }))); // watched running
     prs.noteCi(repo, pr(101));
     prs.noteCi(repo, pr(101)); // the next poll, same answer
     prs.noteCi(repo, pr(101));
     off();
     expect(seen).toEqual(["101:green"]);
+  });
+
+  // The burst that started this: opening the app announced the standing state
+  // of every PR you have a stake in — seventeen "checks green" at once, about
+  // runs that had finished days earlier. An inventory is not news, and it is
+  // what teaches people to stop reading the notifications that are.
+  test("the state of the world when we arrive is not news", () => {
+    const seen: string[] = [];
+    const off = prs.subscribeCi((v) => seen.push(`${v.number}:${v.verdict}`));
+    prs.noteCi(repo, pr(111));                      // already green before we looked
+    prs.noteCi(repo, pr(112, rollup({ failure: 1, verdict: "red", failing: [{ name: "pytest" }] })));
+    off();
+    expect(seen).toEqual([]);
+  });
+
+  // ...but it is remembered, so a change from it still gets through. This is
+  // what stops the fix from turning into "never mention this PR again".
+  test("a change from the state we found IS news, without ever seeing it run", () => {
+    const seen: string[] = [];
+    const off = prs.subscribeCi((v) => seen.push(`${v.number}:${v.verdict}`));
+    prs.noteCi(repo, pr(113));                      // found green, silent
+    prs.noteCi(repo, pr(113, rollup({ failure: 1, verdict: "red", failing: [{ name: "pytest" }] })));
+    off();
+    expect(seen).toEqual(["113:red"]);
   });
 
   test("a suite still running says nothing at all", () => {
@@ -412,6 +437,7 @@ describe("CI notification latch", () => {
   test("a re-run clears the latch, so the next verdict is delivered", () => {
     const seen: string[] = [];
     const off = prs.subscribeCi((v) => seen.push(`${v.number}:${v.verdict}`));
+    prs.noteCi(repo, pr(103, rollup({ pending: 9, allDone: false, verdict: null }))); // watched running
     prs.noteCi(repo, pr(103, rollup({ failure: 1, success: 42, verdict: "red", failing: [{ name: "pytest" }] })));
     prs.noteCi(repo, pr(103, rollup({ pending: 5, allDone: false, verdict: null }))); // re-running
     prs.noteCi(repo, pr(103));                                                        // green this time
@@ -422,6 +448,7 @@ describe("CI notification latch", () => {
   test("the failing check names ride along, so the message can name them", () => {
     let got: string[] = [];
     const off = prs.subscribeCi((v) => { got = v.failing; });
+    prs.noteCi(repo, pr(104, rollup({ pending: 2, allDone: false, verdict: null })));
     prs.noteCi(repo, pr(104, rollup({ failure: 1, verdict: "red", failing: [{ name: "pytest \u00b7 vr/health" }] })));
     off();
     expect(got).toEqual(["pytest \u00b7 vr/health"]);
