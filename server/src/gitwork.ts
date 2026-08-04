@@ -795,6 +795,19 @@ export function pull(rootIn: string): GitActionResult {
  * remote refs, so a single fetch updates the counts for all of them.
  */
 const AUTO_FETCH_MS = Number(process.env.AGENTGLASS_AUTOFETCH_SECONDS ?? 60) * 1000;
+/** How long a background fetch may run before we take it to be hung. Generous
+ *  on purpose — see the note where it is used. */
+const AUTO_FETCH_CEILING_MS = 10 * 60_000;
+/**
+ * Every fetch this app runs, and the flags it may never lose.
+ *
+ * Exported so a test can hold `--atomic` in place. It is one word standing
+ * between an interrupted fetch and a repository that has to be repaired by
+ * hand — the kind of thing that gets dropped in a refactor by someone tidying
+ * "redundant" flags, on the reasonable-sounding grounds that fetches normally
+ * finish.
+ */
+export const FETCH_ARGV = ["fetch", "--all", "--prune", "--atomic"] as const;
 let fetching = false;
 
 async function autoFetchOnce(): Promise<void> {
@@ -815,12 +828,38 @@ async function autoFetchOnce(): Promise<void> {
     // squash-merged branch was ever recognised. Most fetches change nothing.
     const refsOf = () => git(root, ["for-each-ref", "--format=%(objectname) %(refname)", "refs/remotes"]).stdout;
     const before = refsOf();
-    const proc = Bun.spawn(["git", "-C", root, "fetch", "--all", "--prune", "--quiet"], {
+    // --atomic, and this is the important word in the line.
+    //
+    // Without it, `git fetch` updates remote-tracking refs one at a time, and a
+    // fetch killed part-way leaves the ones it was mid-write on as ZERO-BYTE
+    // files. Git then cannot even resolve them to delete them ("reference
+    // broken"), and — worse — the repository starts claiming to have objects it
+    // does not, so the next fetch negotiates from a lie and the server answers
+    // "did not send all necessary objects". Every fetch, pull and sync fails
+    // until someone finds and removes the empty files by hand.
+    //
+    // That is not hypothetical. On a repo with 852 remote branches this timer
+    // killed the fetch EVERY time — it cannot finish in twenty seconds — and it
+    // left seven broken refs written inside the same millisecond, on a
+    // repository shared with a team. With --atomic the refs move in one
+    // transaction: all of them or none, whatever happens to the process.
+    const proc = Bun.spawn(["git", "-C", root, ...FETCH_ARGV, "--quiet"], {
       stdout: "ignore",
       stderr: "ignore",
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS_REQUIRE: "never" },
     });
-    const timer = setTimeout(() => proc.kill(), 20_000);
+    // A backstop for a wedged process, not a routine deadline.
+    //
+    // Twenty seconds was chosen as "a fetch should be quick", which is true of
+    // small repos and false of the ones this feature matters most on. Nothing
+    // needed that deadline: `fetching` above already stops fetches piling up, so
+    // a slow one costs a skipped tick and nothing else. The ceiling now only
+    // exists to release a process that has genuinely hung, and it is far beyond
+    // any honest fetch.
+    //
+    // SIGTERM rather than a kill: it gives git the chance to unwind its ref
+    // transaction rather than being shot between two writes.
+    const timer = setTimeout(() => { try { proc.kill("SIGTERM"); } catch { /* already gone */ } }, AUTO_FETCH_CEILING_MS);
     await proc.exited;
     clearTimeout(timer);
     // A fetch that MOVED origin/* changes what "merged into the trunk" means.
@@ -843,7 +882,7 @@ export function startAutoFetch(): void {
 export function fetch(rootIn: string): GitActionResult {
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
-  return run(root, ["fetch", "--all", "--prune"]);
+  return run(root, [...FETCH_ARGV]);
 }
 
 // --- branches / log / stash --------------------------------------------------
