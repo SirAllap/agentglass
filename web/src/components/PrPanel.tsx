@@ -888,8 +888,10 @@ function PrRow({ p, active, onSelect, onReview }: {
 // panel
 // ---------------------------------------------------------------------------
 
-export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
+export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   active: boolean;
+  /** A search another panel asked us to land on — see lib/openPrs.ts. */
+  jumpTo?: string | null;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   /** Hand the review to the user's own tmux instead of to the chat. */
   onReviewInTerminal?: (root: string, number: number) => void;
@@ -917,6 +919,10 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
   // Cleared when the scope changes so each tab (mine / review / all) starts
   // fresh; "all" can be hundreds of rows and a facet beats scrolling.
   const [query, setQuery] = useState("");
+  // Somebody sent us here looking for a particular pull request. Applied on
+  // each new request rather than once, so asking twice for two different cards
+  // works the second time too.
+  useEffect(() => { if (active && jumpTo) setQuery(jumpTo); }, [active, jumpTo]);
   // The query filters the rows already loaded LIVE and client-side (visiblePrs),
   // so typing is instant. The SERVER copy — which re-runs `gh` to search across
   // the pages the client does not hold — is debounced off it. Before this, every

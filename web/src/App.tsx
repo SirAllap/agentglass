@@ -29,6 +29,7 @@ import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import { chordFromEvent, viewForChord } from "./lib/keybindings.ts";
 import { onOpenSettings } from "./lib/openSettings.ts";
+import { onOpenPrs } from "./lib/openPrs.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
@@ -135,7 +136,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // A pane a panel elsewhere asked us to land on — see lib/openSettings.ts.
   const [settingsPane, setSettingsPane] = useState<string | null>(null);
+  const [prQuery, setPrQuery] = useState<string | null>(null);
   useEffect(() => onOpenSettings((pane) => { setSettingsPane(pane ?? null); setSettingsOpen(true); }), []);
+  useEffect(() => onOpenPrs((q) => { setPrQuery(q); goView("pr"); }), [goView]);
   /** Which machine tab is open, or none. One piece of state for both surfaces:
    *  the dashboard header and the workspace rail open the same panel, and a
    *  second copy would be a second poll of /proc. */
@@ -723,6 +726,7 @@ export default function App() {
       />
 
       <Workspace
+        prQuery={prQuery}
         view={wsView} onView={setWsView}
         onSkills={() => setSkillsOpen(true)}
         onSettings={() => setSettingsOpen(true)}
