@@ -1832,6 +1832,16 @@ export interface TidyFinding {
   why: string;
   effect: string;
   risk: string;
+  /**
+   * Items that are in the list but deliberately NOT in the command.
+   *
+   * Watching it run is what put this here: seven branches deleted cleanly and
+   * two refused, in red, because they were checked out in a worktree. Both
+   * refusals were predictable — `git worktree list` names every branch that is
+   * checked out — so the panel knew and said nothing, and let the user find
+   * out from stderr.
+   */
+  blocked: { name: string; why: string }[];
   /** A few lines of monospace drawing. The situations here are all shapes —
    *  something pointing at something that is gone — and a shape is faster to
    *  see than to read. */

@@ -94,16 +94,62 @@ export function tidyReport(root: string): TidyReport {
   if (inside.code !== 0) return { root, base: "main", findings: [], error: "not a git checkout" };
 
   const base = baseBranch(root);
+
+  /**
+   * Branches a worktree has checked out.
+   *
+   * `git branch -d` refuses these, and rightly — deleting the branch a live
+   * checkout is sitting on would strand it. Found by watching the command run
+   * for real: seven deletions succeeded and two failed in red, and both
+   * failures were knowable in advance from this list. Offering a command that
+   * is guaranteed to half-fail is a worse answer than offering one that works
+   * and naming what it left behind.
+   */
+  const checkedOut = new Set<string>();
+  {
+    const wl = git(root, ["worktree", "list", "--porcelain"]);
+    if (wl.code === 0) {
+      for (const line of wl.stdout.split("\n")) {
+        if (line.startsWith("branch ")) checkedOut.add(line.slice(7).trim().replace(/^refs\/heads\//, ""));
+      }
+    }
+  }
+  const HELD_WORKTREE = "a worktree has it checked out — remove that worktree first";
+  const HELD_UNMERGED = "it has commits that are on no other branch — read them before deciding";
+
+  /**
+   * Everything merged into the base, as a set.
+   *
+   * Needed by the gone-upstream finding as well as its own, and this is the
+   * correction that matters most in this file. A deleted upstream was being
+   * treated as proof the work landed — "usually because its PR merged" — and
+   * on a real checkout three of six such branches had commits that were on no
+   * other branch. `git branch -d` refused all three, correctly, and the user
+   * read six red errors for a command the panel had promised would work.
+   *
+   * A remote branch disappears for more than one reason: the pull request
+   * merged, or it was closed unmerged, or somebody tidied the remote, or work
+   * was committed locally after the merge. Only the graph knows which.
+   */
+  const mergedSet = new Set<string>();
+  {
+    const m = git(root, ["branch", "--merged", base, "--format=%(refname:short)"]);
+    if (m.code === 0) for (const b of m.stdout.split("\n").map((x) => x.trim()).filter(Boolean)) mergedSet.add(b);
+  }
+  const holdReason = (b: string): string | null =>
+    checkedOut.has(b) ? HELD_WORKTREE : !mergedSet.has(b) ? HELD_UNMERGED : null;
+
   const findings: TidyFinding[] = [];
   /** `all` is the full list; `items` and `extra` are how much of it is shown.
    *  A finding with nothing in it is not added at all — an empty section is a
    *  row of furniture that teaches people to skim past the ones that matter. */
-  const add = (f: Omit<TidyFinding, "extra" | "items"> & { all: string[] }) => {
+  const add = (f: Omit<TidyFinding, "extra" | "items" | "blocked"> & { all: string[]; blocked?: { name: string; why: string }[] }) => {
     if (!f.all.length) return;
     const vet = vetCommand(f.command);
     findings.push({
       id: f.id, title: f.title, what: f.what, command: vet.command,
       why: f.why, effect: f.effect, risk: f.risk, diagram: f.diagram,
+      blocked: f.blocked ?? [],
       // A refusal replaces the note rather than joining it: if the module will
       // not offer the line, why it will not is the only thing worth reading.
       note: vet.refused ? `No command offered: ${vet.refused}.` : f.note,
@@ -118,15 +164,17 @@ export function tidyReport(root: string): TidyReport {
   const gone = vv.code === 0
     ? vv.stdout.split("\n").filter((l) => l.includes(": gone]")).map(branchName).filter(Boolean)
     : [];
+  const goneHeld = gone.map((b) => ({ name: b, why: holdReason(b) })).filter((x): x is { name: string; why: string } => x.why !== null);
+  const goneFree = gone.filter((b) => holdReason(b) === null);
   add({
-    id: "gone", all: gone,
+    id: "gone", all: gone, blocked: goneHeld,
     title: "Branches whose remote is gone",
     what: "Each of these tracked a branch on the remote that no longer exists — usually because its pull request merged and the host deleted it.",
-    command: gone.length ? `git branch -d ${gone.join(" ")}` : null,
+    command: goneFree.length ? `git branch -d ${goneFree.join(" ")}` : null,
     note: "`-d`, never `-D`: it refuses any branch whose work is not merged, and names it. A refusal here is the command working.",
-    why: "`git branch -vv` prints `: gone]` beside a branch whose upstream no longer exists. Git learned that at the last fetch with pruning; it is a fact from the remote, not a guess about age or naming.",
+    why: "`git branch -vv` prints `: gone]` beside a branch whose upstream no longer exists — a fact from the last pruning fetch, not a guess about age or naming. It does NOT prove the work landed: a remote branch also disappears when its pull request is closed unmerged, so each one is checked against the graph as well, and any branch with commits of its own is held back below.",
     effect: "Deletes the local branch NAME. The commits stay reachable from wherever they were merged, and from the reflog for at least two weeks.",
-    risk: "If one of these is not actually merged anywhere, git refuses that branch, names it, and deletes the rest. Nothing is forced.",
+    risk: "Anything not merged, or checked out in a worktree, is already left out of the command and listed as held. If git still refuses one, it names it and deletes the rest — nothing is ever forced.",
     diagram: [
       "  origin/orbit-1042   ✗  deleted on the remote (its PR merged)",
       "        ▲",
@@ -140,11 +188,15 @@ export function tidyReport(root: string): TidyReport {
   const mergedNames = merged.code === 0
     ? merged.stdout.split("\n").map((s) => s.trim()).filter((s) => s && s !== base && !gone.includes(s))
     : [];
+  // These are merged by definition, so a worktree is the only thing that can
+  // hold one back here.
+  const mergedHeld = mergedNames.filter((b) => checkedOut.has(b)).map((b) => ({ name: b, why: HELD_WORKTREE }));
+  const mergedFree = mergedNames.filter((b) => !checkedOut.has(b));
   add({
-    id: "merged", all: mergedNames,
+    id: "merged", all: mergedNames, blocked: mergedHeld,
     title: `Branches already merged into ${base}`,
     what: `Every commit on these is already on ${base}, so deleting the branch deletes nothing but the name.`,
-    command: mergedNames.length ? `git branch -d ${mergedNames.join(" ")}` : null,
+    command: mergedFree.length ? `git branch -d ${mergedFree.join(" ")}` : null,
     note: "Branches checked out in a worktree are refused until that worktree is removed — that is git protecting the checkout, not an error.",
     why: `\`git branch --merged ${base}\` lists branches whose every commit is already an ancestor of ${base}. Git computed that from the graph — it is not "looks old" or "name looks done".`,
     effect: "Deletes the branch name only. Every commit on it is already reachable from " + base + ", so nothing becomes unreachable.",

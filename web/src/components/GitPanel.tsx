@@ -77,6 +77,17 @@ function TidyExplain({ f, onArm, onCancel }: { f: TidyFinding; onArm: () => void
             skip — and on most of these rows the worst case is a refusal, which
             is worth knowing before it happens and reads as a failure. */}
         <Says label="What can go wrong" tint="var(--warning)">{f.risk}</Says>
+        {/* Named before it runs, not after. These are in the list and out of
+            the command, and the difference is worth a sentence. */}
+        {f.blocked.length > 0 && (
+          <Says label={`Left out of the command (${f.blocked.length})`}>
+            {/* One line each, with its own reason: a worktree owning a branch
+                and a branch having unmerged commits need different answers. */}
+            {f.blocked.map((b) => (
+              <span key={b.name} className="block truncate" title={`${b.name} — ${b.why}`}>{b.name} — {b.why}</span>
+            ))}
+          </Says>
+        )}
       </div>
       <div className="px-3 pb-3 flex items-center gap-2 flex-wrap">
         <code className="flex-1 min-w-0 truncate text-[11px] px-2 py-1 rounded" title={f.command ?? ""}
@@ -148,10 +159,22 @@ function TidyView({ report, root, busy }: { report: TidyReport | null; root: str
             {/* The names, because a count is not something anybody can agree to.
                 Deleting nine branches is a decision about nine branches. */}
             <div className="px-3 pb-2 flex flex-wrap gap-1">
-              {f.items.map((i) => (
-                <span key={i} className="text-[10px] px-1.5 py-0.5 rounded truncate max-w-[280px]" title={i}
-                  style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>{i}</span>
-              ))}
+              {f.items.map((i) => {
+                // Held back rather than hidden: it is in the list because it
+                // IS one of these, and it is dimmed because the command will
+                // not touch it. Learning that from stderr, in red, after
+                // pressing Enter, is how this was found.
+                const held = f.blocked.find((b) => b.name === i);
+                return (
+                  <span key={i} className="text-[10px] px-1.5 py-0.5 rounded truncate max-w-[280px]"
+                    title={held ? `${i} — ${held.why}` : i}
+                    style={held
+                      ? { color: "var(--text4)", background: "transparent", border: "1px dashed color-mix(in srgb, var(--text3) 35%, transparent)" }
+                      : { color: "var(--text2)", background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>
+                    {held ? `${i} · held` : i}
+                  </span>
+                );
+              })}
               {f.extra > 0 && <span className="text-[10px] px-1.5 py-0.5" style={{ color: "var(--text3)" }}>+{f.extra} more</span>}
             </div>
             {f.note && (

@@ -18,6 +18,7 @@ import { git } from "../src/git.ts";
 
 let repo: string;
 let remoteDir: string;
+let liveWt: string;
 
 beforeAll(() => {
   repo = mkdtempSync(join(tmpdir(), "agx-tidy-"));
@@ -62,6 +63,17 @@ beforeAll(() => {
   git(repo, ["worktree", "add", "-q", "-b", "in-a-worktree", wt]);
   rmSync(wt, { recursive: true, force: true });
 
+  /**
+   * A merged branch that a LIVE worktree has checked out.
+   *
+   * Found by watching the real command run: seven branches deleted and two
+   * refused in red, both because a worktree owned them — which the panel could
+   * have known from `git worktree list` and did not say.
+   */
+  git(repo, ["branch", "held-by-worktree"]);
+  liveWt = join(repo, "..", `agx-tidy-live-${process.pid}`);
+  git(repo, ["worktree", "add", "-q", liveWt, "held-by-worktree"]);
+
   // Something set aside, so the stash finding has a subject.
   writeFileSync(join(repo, "a.txt"), "changed\n");
   git(repo, ["stash", "push", "-q", "-m", "wip"]);
@@ -70,6 +82,7 @@ beforeAll(() => {
 afterAll(() => {
   rmSync(repo, { recursive: true, force: true });
   if (remoteDir) rmSync(remoteDir, { recursive: true, force: true });
+  if (liveWt) rmSync(liveWt, { recursive: true, force: true });
 });
 
 const find = (r: ReturnType<typeof tidyReport>, id: string) => r.findings.find((f) => f.id === id);
@@ -103,6 +116,55 @@ describe("what it reports", () => {
     // if somebody swaps the command for something destructive, which is the
     // failure two earlier versions of this file could not see.
     expect(w?.command).toBe("git worktree prune -v");
+  });
+
+  test("a branch a live worktree owns is listed, held back, and kept out of the command", () => {
+    const merged = find(tidyReport(repo), "merged");
+    // In the list, because it IS merged — hiding it would be a different lie.
+    expect(merged?.items).toContain("held-by-worktree");
+    const held = merged?.blocked.find((b) => b.name === "held-by-worktree");
+    expect(held).toBeTruthy();
+    // Each held branch carries its OWN reason: a worktree owning it and a
+    // branch having unmerged commits are different problems with different
+    // answers, and one sentence for both would be true of neither.
+    expect(held?.why).toContain("worktree");
+    // And out of the command, because git would refuse it and the user would
+    // read that as a failure of the panel rather than as git working.
+    expect(merged?.command ?? "").not.toContain("held-by-worktree");
+  });
+
+  test("a branch nothing has checked out is still in the command", () => {
+    // The other half: holding back must be the exception, not a habit.
+    const merged = find(tidyReport(repo), "merged");
+    expect(merged?.blocked.some((b) => b.name === "already-merged")).toBe(false);
+    expect(merged?.command).toContain("already-merged");
+  });
+
+  test("a gone upstream is not taken as proof the work landed", () => {
+    /**
+     * The correction this whole mechanism exists for. A deleted remote branch
+     * was being treated as "its PR merged", and on a real checkout three of
+     * six such branches had commits on no other branch. `git branch -d`
+     * refused all three — correctly — and the user read six red errors for a
+     * command the panel had said would work.
+     */
+    git(repo, ["checkout", "-q", "-b", "gone-but-unmerged"]);
+    writeFileSync(join(repo, "c.txt"), "own work\n");
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-q", "-m", "work nobody else has"]);
+    git(repo, ["push", "-q", "-u", "origin", "gone-but-unmerged"]);
+    git(repo, ["checkout", "-q", "main"]);
+    git(remoteDir, ["update-ref", "-d", "refs/heads/gone-but-unmerged"]);
+    git(repo, ["fetch", "-q", "--prune"]);
+
+    const gone = find(tidyReport(repo), "gone");
+    // Listed — its upstream really is gone, which is worth knowing.
+    expect(gone?.items).toContain("gone-but-unmerged");
+    // Held, with the reason that actually applies.
+    const held = gone?.blocked.find((b) => b.name === "gone-but-unmerged");
+    expect(held?.why).toContain("no other branch");
+    // And absent from the command, so pressing Enter does not produce an error.
+    expect(gone?.command ?? "").not.toContain("gone-but-unmerged");
   });
 
   test("stashes are found and shown", () => {
