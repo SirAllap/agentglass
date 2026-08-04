@@ -281,8 +281,31 @@
  * only signal a keyboard user has for where they are — nothing in the UI showed
  * focus at all. :focus-visible restores it without putting a ring on every
  * mouse click, and the `!important` is needed to beat the utility classes that
- * cleared it. */
-:focus-visible {
+ * cleared it.
+ *
+ * Except on `tabindex="-1"`, and that exception is the whole point of the
+ * selector below. Eleven panels here carry it — the Git panel, the pull request
+ * list, Files — not to be tabbed to, but so they can be handed focus by script
+ * and then receive j/k. Nobody ever arrives at one by pressing Tab, so a ring
+ * around one tells a keyboard user nothing they did not already know.
+ *
+ * What it does instead is draw a 2px accent rectangle around an entire view.
+ * Those panels already say `outline-none`; the `!important` was overriding
+ * them. And because the ring is an outline at +2px offset on an element flush
+ * inside `overflow-hidden` parents, the right and bottom edges get clipped —
+ * so it reads as a broken border rather than as focus, which is exactly how it
+ * was reported.
+ *
+ * It also only appeared on the first visit to a view after a cold start, which
+ * is the tell. `:focus-visible` on a scripted `.focus()` is a browser
+ * heuristic: with no pointer interaction yet recorded, Chromium treats it as
+ * keyboard focus and paints. One click anywhere and the same call stops
+ * matching. Excluding the element is therefore the fix rather than fighting the
+ * heuristic — this holds whether or not the browser decides to match.
+ *
+ * Anything a user can actually tab to — buttons, links, fields, `tabindex="0"`
+ * — is unaffected. */
+:focus-visible:not([tabindex="-1"]) {
   outline: 2px solid var(--primary) !important;
   outline-offset: 2px;
   border-radius: 6px;
