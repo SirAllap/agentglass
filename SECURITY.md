@@ -160,6 +160,7 @@ and no menu item that removes recorded data. The `Clear ✕` in the header clear
 | `~/.config/agentglass/token` | The shared secret, `0600`, when one has been minted. |
 | `~/.config/agentglass/devices.json` | One row per paired device, `0600`: its name, its level, when it was added and last used, and a **SHA-256 of its credential** — never the credential. Revoked rows are kept rather than deleted, so "did I definitely cut that phone off" stays answerable. |
 | `~/.config/agentglass/config.json` | The active project scope and the UI switches. |
+| `~/.config/agentglass/clickup-views.json` | The ClickUp boards you saved, and a copy of the last thing each one returned — task titles, statuses and tags. Not a secret and not `0600`: it is a cache of things you can already see, kept on disk so the panel opens instantly instead of waiting a second and a half after every restart. Delete it and it rebuilds. |
 | `~/.config/agentglass/credentials.json` | **API tokens for services you connected in Settings → Integrations**, `0600`, alongside what the service said about each one — the account name and workspace, so a card can say who you are without a round trip. Only providers with no CLI of their own land here: `gh` keeps GitHub's token in your system keyring and agentglass never reads it. |
 
 ### About that credentials file
@@ -269,6 +270,25 @@ Please include:
 You can expect an acknowledgement within a few days. Once a fix ships, the
 report can be published as an advisory with credit to you (unless you prefer to
 stay anonymous).
+
+## Writing to somebody else's board
+
+Reading ClickUp needs only the token. **Changing** anything there — moving a card
+to another status, putting yourself on it — is off unless you set
+`AGENTGLASS_CLICKUP_WRITE=1`, and that default is the opposite of the one the
+local task list uses. The reason is the blast radius rather than the risk of a
+bug: your Taskwarrior store is yours, while a status change on a company board
+fires automations, notifies a team, and cannot be undone from here.
+
+With it on, each change still asks first — naming the card and what will change
+from and to — and re-reads the card immediately beforehand, refusing if somebody
+moved it while you had it open. That check is `date_updated`, which is the
+closest thing ClickUp offers to a precondition; it is weaker than the fingerprint
+the local list uses, and it catches the case that actually happens.
+
+Values are offered, never typed: a status can only be one the list itself
+accepts, so an invalid one cannot be sent. And there are no bulk actions here on
+purpose — one wrong batch is thirty notifications to other people.
 
 ## Hardening knobs
 

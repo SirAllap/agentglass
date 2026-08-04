@@ -17,8 +17,8 @@
  * and adding `Bearer` produces a 401 that looks exactly like a wrong token.
  */
 import { singleFlight } from "./singleflight.ts";
-import { secretFor, annotate, fingerprint } from "./credentials.ts";
-import type { ProviderTask, ClickUpUser, ClickUpWorkspace } from "../../shared/providers.ts";
+import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
+import type { ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, TaskDetail } from "../../shared/providers.ts";
 
 const CLICKUP_API = "https://api.clickup.com/api/v2";
 
@@ -172,8 +172,18 @@ interface RawTask {
   date_updated?: string | number | null;
   priority?: { priority?: string } | null;
   tags?: { name?: string }[];
-  list?: { name?: string } | null;
-  assignees?: { username?: string }[];
+  list?: { id?: string; name?: string } | null;
+  assignees?: { id?: string | number; username?: string }[];
+  points?: number | null;
+  custom_fields?: RawField[];
+}
+
+interface RawField {
+  id: string;
+  name: string;
+  type: string;
+  value?: unknown;
+  type_config?: { options?: { id: string; name?: string; label?: string; orderindex?: number }[] };
 }
 
 /** ClickUp's epoch-milliseconds-as-a-string, as the local calendar date the
@@ -190,23 +200,64 @@ function localDay(v: string | number | null | undefined): string | null {
 
 const PRIORITY = new Set(["urgent", "high", "normal", "low"]);
 
-export function toTask(raw: RawTask): ProviderTask {
+export function toTask(raw: RawTask, myId?: string): ProviderTask {
   const kind = raw.status?.type;
+  const assignees = raw.assignees ?? [];
   return {
     id: String(raw.id),
     title: raw.name ?? "(untitled)",
     url: raw.url ?? "",
     status: raw.status?.status ?? "",
-    // ClickUp's status TYPE is the only portable thing about a status: the
-    // names are per-list and a workspace may well have four words for "doing".
+    /*
+     * ClickUp's status TYPE is the only portable thing about a status.
+     *
+     * Measured on a real board with seventeen of them: the working states are
+     * all `custom` — shaping, in development, code review, blocked — while
+     * "ready for deployment", "in staging", "in production", "released" and
+     * "won't fix / obsolete" are `done`, and only "completed" is `closed`.
+     *
+     * That is why `include_closed=false` was not enough on its own and half the
+     * list read as finished work: those rows are done to a person and open to
+     * the API. Folding `done` in with `closed` here is what lets the panel hide
+     * them by default without anybody having to configure a thing.
+     */
     statusKind: kind === "done" || kind === "closed" ? "done" : kind === "open" ? "open" : "other",
     priority: PRIORITY.has(raw.priority?.priority ?? "") ? (raw.priority!.priority as ProviderTask["priority"]) : null,
     due: localDay(raw.due_date),
     updated: Number(raw.date_updated) || 0,
     tags: (raw.tags ?? []).map((t) => t.name ?? "").filter(Boolean),
     list: raw.list?.name ?? null,
-    assignees: (raw.assignees ?? []).map((a) => a.username ?? "").filter(Boolean),
+    listId: raw.list?.id ? String(raw.list.id) : undefined,
+    assignees: assignees.map((a) => a.username ?? "").filter(Boolean),
+    // Resolved here, against the connected account. The browser has no business
+    // knowing your ClickUp user id, and a client-side comparison would need it.
+    mine: myId ? assignees.some((a) => String(a.id ?? "") === myId) : undefined,
+    points: typeof raw.points === "number" ? raw.points : null,
+    custom: (raw.custom_fields ?? [])
+      .map((f) => ({ id: f.id, name: f.name, value: fieldText(f) }))
+      .filter((f) => f.value),
   };
+}
+
+/**
+ * A custom field's value as something readable.
+ *
+ * ClickUp answers with the raw storage: a drop-down is the INDEX of the chosen
+ * option, not its name, so printing `value` gives you "3" where the board says
+ * "Purple". Resolved against `type_config.options` here so nothing downstream
+ * has to know that.
+ */
+function fieldText(f: RawField): string {
+  const v = f.value;
+  if (v === undefined || v === null || v === "") return "";
+  if (f.type === "drop_down") {
+    const opts = f.type_config?.options ?? [];
+    const hit = opts.find((o) => o.orderindex === Number(v) || o.id === String(v));
+    return hit?.name ?? hit?.label ?? "";
+  }
+  if (Array.isArray(v)) return v.map((x) => (typeof x === "object" && x ? String((x as { name?: string }).name ?? "") : String(x))).filter(Boolean).join(", ");
+  if (typeof v === "object") return String((v as { username?: string }).username ?? "");
+  return String(v);
 }
 
 export interface TaskPage {
@@ -252,7 +303,7 @@ export async function fetchTasks(
   const r = await call<{ tasks: RawTask[] }>(`/team/${encodeURIComponent(workspaceId)}/task?${q}`, token, LIST_TIMEOUT_MS);
   if (!r.ok) return { ...r, data: undefined };
   const raw = r.data?.tasks ?? [];
-  return { ok: true, data: { tasks: raw.map(toTask), more: raw.length >= 100 } };
+  return { ok: true, data: { tasks: raw.map((t) => toTask(t, userId)), more: raw.length >= 100 } };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,3 +391,311 @@ async function identity(token: string): Promise<{ workspaceId?: string; userId?:
 
 /** For a log line that needs to name a token without printing one. */
 export const tokenLabel = (): string => fingerprint(secretFor("clickup") ?? "");
+
+// ---------------------------------------------------------------------------
+// views, pasted rather than navigated
+// ---------------------------------------------------------------------------
+
+/**
+ * The identifiers inside a ClickUp address.
+ *
+ * Deliberately matched on the PATH and not the host. Two reasons, and only one
+ * of them is about this repository: the shape `/{workspace}/v/{kind}/{id}` is
+ * the stable part — ClickUp serves the same app from more than one hostname and
+ * has changed which one it prefers — and a matcher anchored to a hostname would
+ * quietly stop working the day that changes. The host is checked separately,
+ * loosely, for the domain rather than the subdomain.
+ *
+ * The `kind` segment says what you pasted: `l` is a view, `li` a bare list, and
+ * `b`, `gantt`, `cal` and friends are views too. A view id carries hyphens
+ * (`6-901715483311-1`); the number in the middle of one is the LIST behind it,
+ * which is worth having because a list knows its own statuses and a view does
+ * not. Verified against a real board: the full hyphenated string resolves,
+ * the middle number alone 404s as a view and 200s as a list.
+ */
+export interface ParsedViewUrl {
+  workspaceId?: string;
+  kind: "view" | "list";
+  viewId?: string;
+  listId?: string;
+}
+
+const VIEW_PATH = /\/(\d+)\/v\/([a-z]+)\/([\w-]+)/i;
+
+export function parseViewUrl(raw: string): ParsedViewUrl | null {
+  const text = (raw || "").trim();
+  if (!text) return null;
+
+  // A bare id, pasted on its own. Checked BEFORE the URL parse, because
+  // `new URL("https://6-901715483311-1")` is a perfectly valid URL whose host
+  // is that string — so an id would be judged as coming from the wrong domain
+  // and thrown away.
+  if (!text.includes("/") && /^\d+-\d{6,}-\d+$/.test(text)) {
+    return { kind: "view", viewId: text, listId: text.split("-")[1] };
+  }
+
+  let host = "", path = text;
+  try {
+    const u = new URL(text.startsWith("http") ? text : `https://${text}`);
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    // Not a URL — maybe somebody pasted just the path, or just an id.
+  }
+  // The domain, not the subdomain. Anything else is not ours to interpret.
+  if (host && !host.endsWith("clickup.com")) return null;
+
+  const m = VIEW_PATH.exec(path);
+  if (m) {
+    const [, workspaceId, kind, id] = m as unknown as [string, string, string, string];
+    if (kind.toLowerCase() === "li") return { workspaceId, kind: "list", listId: id };
+    // A view id looks like `6-901715483311-1`; the middle segment is the list.
+    const parts = id.split("-");
+    const listId = parts.length >= 2 && /^\d{6,}$/.test(parts[1]!) ? parts[1] : undefined;
+    return { workspaceId, kind: "view", viewId: id, listId };
+  }
+  return null;
+}
+
+/** What ClickUp calls this view, so a saved entry is named by the service
+ *  rather than by whoever pasted the link. */
+export async function viewMeta(token: string, viewId: string): Promise<CallResult<{ name: string; type: string }>> {
+  const r = await call<{ view?: { name?: string; type?: string } }>(`/view/${encodeURIComponent(viewId)}`, token);
+  if (!r.ok) return { ...r, data: undefined };
+  const v = r.data?.view;
+  if (!v) return { ok: false, error: "ClickUp did not recognise that view" };
+  return { ok: true, data: { name: v.name || "Untitled view", type: v.type || "list" } };
+}
+
+/** A list's own statuses and custom fields — the two things a view cannot tell
+ *  us, and the two a picker needs in order not to guess. */
+export async function listMeta(
+  token: string, listId: string,
+): Promise<CallResult<{ name: string; statuses: ListStatus[]; fields: ListField[] }>> {
+  const l = await call<{ name?: string; statuses?: { status: string; type: string; orderindex: number; color?: string }[] }>(
+    `/list/${encodeURIComponent(listId)}`, token,
+  );
+  if (!l.ok) return { ...l, data: undefined };
+  const f = await call<{ fields?: { id: string; name: string; type: string; type_config?: { options?: { id: string; name?: string; label?: string }[] } }[] }>(
+    `/list/${encodeURIComponent(listId)}/field`, token,
+  );
+  return {
+    ok: true,
+    data: {
+      name: l.data?.name ?? "",
+      statuses: (l.data?.statuses ?? []).map((s) => ({
+        status: s.status, type: s.type, orderindex: s.orderindex, color: s.color,
+      })).sort((a, b) => a.orderindex - b.orderindex),
+      fields: (f.data?.fields ?? []).map((x) => ({
+        id: x.id, name: x.name, type: x.type,
+        options: (x.type_config?.options ?? []).map((o) => ({ id: o.id, name: o.name ?? o.label ?? "" })).filter((o) => o.name),
+        // Somebody wrote the warning into the field's own name because the API
+        // has nowhere else to put it. Reading it is the least we can do.
+        readOnly: /do not edit/i.test(x.name),
+      })),
+    },
+  };
+}
+
+/**
+ * Every task in a view, following its pages.
+ *
+ * Measured: page 0 returns 30 and `last_page:false`, page 1 returns the
+ * remaining 6 and `last_page:true` — about a second each. Followed to the end
+ * rather than stopping at the first page, because a list that silently shows
+ * the first thirty of thirty-six is the kind of wrong that is never noticed.
+ * Capped anyway: a view with fifty pages is a view nobody works from, and
+ * spending the whole rate budget discovering that helps no one.
+ */
+const MAX_PAGES = 10;
+
+export async function viewTasks(
+  token: string, viewId: string, myId?: string,
+): Promise<CallResult<{ tasks: ProviderTask[]; truncated: boolean }>> {
+  const out: ProviderTask[] = [];
+  let page = 0;
+  for (; page < MAX_PAGES; page++) {
+    const r = await call<{ tasks?: RawTask[]; last_page?: boolean }>(
+      `/view/${encodeURIComponent(viewId)}/task?page=${page}`, token, LIST_TIMEOUT_MS,
+    );
+    if (!r.ok) return out.length ? { ok: true, data: { tasks: out, truncated: true } } : { ...r, data: undefined };
+    for (const raw of r.data?.tasks ?? []) out.push(toTask(raw, myId));
+    if (r.data?.last_page !== false) return { ok: true, data: { tasks: out, truncated: false } };
+  }
+  return { ok: true, data: { tasks: out, truncated: true } };
+}
+
+// ---------------------------------------------------------------------------
+// writing — the half that other people can see
+// ---------------------------------------------------------------------------
+
+/**
+ * Writes are off unless switched on, and they are off by default.
+ *
+ * The local task list ships with writes ENABLED and a switch to turn them off,
+ * which is the right default for a store that belongs to you. This is the
+ * opposite case: it is somebody's company workspace, a status change fires
+ * automations and notifies a team, and there is no undo. So the default is
+ * read-only and turning it on is a deliberate act — the same reasoning
+ * `TASK_WRITE_ENABLED` uses, pointed the other way.
+ */
+export const CLICKUP_WRITE_ENABLED = process.env.AGENTGLASS_CLICKUP_WRITE === "1";
+
+export interface WriteOutcome {
+  ok: boolean;
+  error?: string;
+  /** The task as it stands after the write, re-read rather than assumed. */
+  task?: ProviderTask;
+  /** Somebody else changed it between the read and the write. */
+  conflict?: boolean;
+}
+
+/**
+ * The precondition, as close as this API gets to one.
+ *
+ * Taskwarrior gave us a fingerprint of the whole store; ClickUp gives nothing
+ * of the kind. What it does give is `date_updated`, so the shape is: the client
+ * sends the value it was looking at, and the write is refused if the task has
+ * moved since. It is weaker than a fingerprint — two edits inside the same
+ * millisecond would slip through — and it catches the case that actually
+ * happens, which is somebody moving the card while you had it open.
+ */
+async function guardUnchanged(token: string, taskId: string, expectUpdated?: number): Promise<string | null> {
+  if (!expectUpdated) return null;
+  const r = await call<RawTask>(`/task/${encodeURIComponent(taskId)}`, token);
+  if (!r.ok) return r.error ?? "could not check the task first";
+  const now = Number(r.data?.date_updated) || 0;
+  if (now && now !== expectUpdated) return "Somebody changed this card while you had it open — reloaded";
+  return null;
+}
+
+async function put(pathname: string, token: string, body: unknown): Promise<CallResult<RawTask>> {
+  const ctl = new AbortController();
+  const kill = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${base}${pathname}`, {
+      method: "PUT",
+      headers: { Authorization: token, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctl.signal,
+    });
+    if (r.status === 401 || r.status === 403) return { ok: false, unauthorised: true, error: "ClickUp refused this token" };
+    if (!r.ok) {
+      // ClickUp's own message is worth surfacing here, unlike on a read: it is
+      // usually "Status not found" and that is precisely what you need to know.
+      const said = await r.text().catch(() => "");
+      const m = /"err"\s*:\s*"([^"]+)"/.exec(said);
+      return { ok: false, error: m?.[1] ? `ClickUp: ${m[1]}` : `ClickUp answered ${r.status}` };
+    }
+    return { ok: true, data: (await r.json()) as RawTask };
+  } catch (e) {
+    const aborted = (e as { name?: string })?.name === "AbortError";
+    return { ok: false, error: aborted ? "ClickUp did not answer in time" : "Could not reach ClickUp" };
+  } finally { clearTimeout(kill); }
+}
+
+/** Put yourself on a card, or take yourself off it. */
+export async function assignSelf(taskId: string, on: boolean, expectUpdated?: number): Promise<WriteOutcome> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!CLICKUP_WRITE_ENABLED) return { ok: false, error: "Writing to ClickUp is switched off" };
+  const me = redacted("clickup")?.accountId;
+  if (!me) return { ok: false, error: "Do not know which ClickUp account this is" };
+  const stale = await guardUnchanged(token, taskId, expectUpdated);
+  if (stale) return { ok: false, conflict: true, error: stale };
+  const n = Number(me);
+  const r = await put(`/task/${encodeURIComponent(taskId)}`, token, {
+    assignees: on ? { add: [n] } : { rem: [n] },
+  });
+  __reset();
+  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error };
+}
+
+/** Move a card to another status. The value must be one the LIST accepts —
+ *  the caller offers those and never a free-text box, so this cannot be asked
+ *  to invent one. */
+export async function setStatus(taskId: string, status: string, expectUpdated?: number): Promise<WriteOutcome> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!CLICKUP_WRITE_ENABLED) return { ok: false, error: "Writing to ClickUp is switched off" };
+  if (!status.trim()) return { ok: false, error: "no status given" };
+  const stale = await guardUnchanged(token, taskId, expectUpdated);
+  if (stale) return { ok: false, conflict: true, error: stale };
+  const r = await put(`/task/${encodeURIComponent(taskId)}`, token, { status });
+  __reset();
+  const me = redacted("clickup")?.accountId;
+  return r.ok ? { ok: true, task: toTask(r.data!, me) } : { ok: false, error: r.error };
+}
+
+/** A drop-down custom field, by id, to one of its own options. */
+export async function setField(taskId: string, fieldId: string, optionId: string): Promise<WriteOutcome> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  if (!CLICKUP_WRITE_ENABLED) return { ok: false, error: "Writing to ClickUp is switched off" };
+  const ctl = new AbortController();
+  const kill = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(`${base}/task/${encodeURIComponent(taskId)}/field/${encodeURIComponent(fieldId)}`, {
+      method: "POST",
+      headers: { Authorization: token, "content-type": "application/json" },
+      body: JSON.stringify({ value: optionId }),
+      signal: ctl.signal,
+    });
+    __reset();
+    if (r.status === 401 || r.status === 403) return { ok: false, error: "ClickUp refused this token" };
+    if (!r.ok) return { ok: false, error: `ClickUp answered ${r.status}` };
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Could not reach ClickUp" };
+  } finally { clearTimeout(kill); }
+}
+
+/** The full card: description, subtasks, checklists — everything the list row
+ *  cannot hold. Read on demand, never for every row. */
+export async function taskDetail(taskId: string): Promise<CallResult<TaskDetail>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const r = await call<RawTask & {
+    description?: string; markdown_description?: string;
+    subtasks?: RawTask[];
+    checklists?: { name?: string; items?: { name?: string; resolved?: boolean }[] }[];
+  }>(`/task/${encodeURIComponent(taskId)}?include_subtasks=true&include_markdown_description=true`, token);
+  if (!r.ok) return { ...r, data: undefined };
+  const d = r.data!;
+  const me = redacted("clickup")?.accountId;
+  const c = await call<{ comments?: { id: string; comment_text?: string; user?: { username?: string }; date?: string }[] }>(
+    `/task/${encodeURIComponent(taskId)}/comment`, token,
+  );
+  return {
+    ok: true,
+    data: {
+      task: toTask(d, me),
+      description: d.markdown_description || d.description || "",
+      subtasks: (d.subtasks ?? []).map((t) => toTask(t, me)),
+      checklists: (d.checklists ?? []).map((cl) => ({
+        name: cl.name ?? "",
+        items: (cl.items ?? []).map((i) => ({ name: i.name ?? "", done: !!i.resolved })),
+      })),
+      comments: (c.data?.comments ?? []).map((x) => ({
+        id: x.id, who: x.user?.username ?? "", text: x.comment_text ?? "", at: Number(x.date) || 0,
+      })),
+    },
+  };
+}
+
+/** A list's own tasks, for an address that pointed at a list rather than a
+ *  view. Same pagination rule as a view: follow to the end, then stop. */
+export async function rawListTasks(
+  token: string, listId: string, myId?: string,
+): Promise<CallResult<{ tasks: ProviderTask[]; truncated: boolean }>> {
+  const out: ProviderTask[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const r = await call<{ tasks?: RawTask[]; last_page?: boolean }>(
+      `/list/${encodeURIComponent(listId)}/task?page=${page}&include_closed=false`, token, LIST_TIMEOUT_MS,
+    );
+    if (!r.ok) return out.length ? { ok: true, data: { tasks: out, truncated: true } } : { ...r, data: undefined };
+    for (const raw of r.data?.tasks ?? []) out.push(toTask(raw, myId));
+    if (r.data?.last_page !== false) return { ok: true, data: { tasks: out, truncated: false } };
+  }
+  return { ok: true, data: { tasks: out, truncated: true } };
+}
