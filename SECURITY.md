@@ -160,6 +160,26 @@ and no menu item that removes recorded data. The `Clear ✕` in the header clear
 | `~/.config/agentglass/token` | The shared secret, `0600`, when one has been minted. |
 | `~/.config/agentglass/devices.json` | One row per paired device, `0600`: its name, its level, when it was added and last used, and a **SHA-256 of its credential** — never the credential. Revoked rows are kept rather than deleted, so "did I definitely cut that phone off" stays answerable. |
 | `~/.config/agentglass/config.json` | The active project scope and the UI switches. |
+| `~/.config/agentglass/credentials.json` | **API tokens for services you connected in Settings → Integrations**, `0600`, alongside what the service said about each one — the account name and workspace, so a card can say who you are without a round trip. Only providers with no CLI of their own land here: `gh` keeps GitHub's token in your system keyring and agentglass never reads it. |
+
+### About that credentials file
+
+It is `0600`, and `0600` is a real boundary: another user on this machine cannot
+read it. It is **not encrypted**, and that is a limit worth stating rather than
+papering over — any key this process could read unattended would have to sit
+next to the thing it protects, which buys a feeling rather than a defence.
+
+So the honest scope is: `0600` stops another account on this computer. It does
+not stop a backup of your home directory, a synced dotfiles repository, or
+anyone who can already read your files as you. If that matters for a given
+token, prefer a provider with a CLI that uses the system keyring, and scope the
+token narrowly wherever the service lets you.
+
+The token is never sent to the browser. It goes in through one route, is
+verified against the service before anything is written, and after that the app
+answers with a status — who you are, which workspace, how many tasks — and never
+with the credential. It is not written to logs either: where one has to be
+named, only a prefix and a length are printed.
 
 **One feature does send data off this machine, and it is the only one.** The AI
 **Explain** walkthrough hands your changed lines to a model — the local `claude`
