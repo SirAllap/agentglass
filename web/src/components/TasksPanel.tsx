@@ -19,7 +19,7 @@ import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
-import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, TASK_KEYS, SORTS, type SortMode } from "../lib/taskGrammar.ts";
+import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, TASK_KEYS, SORTS, type SortMode } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -606,6 +606,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
   const [sort, setSort] = useState<SortMode>("reminder");
   const [filter, setFilter] = useState<{ kind: "tag" | "project"; value: string } | null>(null);
   const [marked, setMarked] = useState<Set<string>>(() => new Set());
+  const [adding, setAdding] = useState(false);
   const [tagFor, setTagFor] = useState<string>("");
   const [tagging, setTagging] = useState(false);
   const barRef = useRef<HTMLInputElement>(null);
@@ -658,6 +659,12 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
     await nudgeReminders();
     reload();
   }, [reload]);
+
+  // Offered in the pickers, so a project is chosen rather than retyped — which
+  // is how `@web` and `@Web` become two projects. Off the WHOLE list, not the
+  // filtered one: the projects you can pick must not depend on what is being
+  // shown, or filtering to one of them hides all the others.
+  const picker = useMemo(() => inUse(data?.tasks ?? []), [data]);
 
   const { open, done } = useMemo(() => {
     const all = data?.tasks ?? [];
@@ -738,14 +745,19 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
   }, [repos, here, onOpenChatWith]);
 
   const onKey = useCallback((e: React.KeyboardEvent) => {
-    const inBar = document.activeElement === barRef.current;
+    // Asked of the element the key went to, not of one input we happen to know
+    // about. The shortcuts are bare letters bound on the frame that CONTAINS
+    // every field in this panel, so typing "comprar café" into the new-task
+    // form used to run `c`, `p`, `a`, `e` — and `d`, which deletes the selected
+    // task. A field added later is covered by this without anyone remembering.
+    const typing = typingInto(e.target as HTMLElement | null);
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "Escape") {
       barRef.current?.blur(); setEditing(null); setRemindFor(null);
       setTagging(false); setMarked(new Set());
       return;
     }
-    if (inBar) return;
+    if (typing) return;
     const list = open.concat(showDone ? done : []);
     const at = list.findIndex((t) => t.uuid === sel);
     const cur = at >= 0 ? list[at] : undefined;
@@ -800,6 +812,7 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
   if (!data) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading your task list…</div>;
   const cap = data.capability;
   const picked = [...open, ...done].find((t) => t.uuid === sel) ?? null;
+
 
   // Every hook this component has is ABOVE this line, and must stay there. An
   // early return with a `useCallback` after it renders a different number of
@@ -871,7 +884,22 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
             {filter.kind === "tag" ? "+" : "@"}{filter.value} ×
           </button>
         )}
+        {/* The button the grammar never was. The bar can still do it faster;
+            this is the half that does not require having been told. */}
+        {cap.configured && (
+          <button onClick={() => setAdding((o) => !o)} aria-expanded={adding}
+            className="shrink-0 text-[10.5px] px-2 py-0.5 rounded-lg"
+            style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)", color: "var(--text)" }}>
+            + New task
+          </button>
+        )}
       </div>
+      {adding && (
+        <NewTask projects={picker.projects} tags={picker.tags}
+          onAdd={(line) => write(() => api.taskAdd(line, fp))}
+          onClose={() => setAdding(false)} />
+      )}
       {note && (
         <div className="px-5 py-1 text-[10.5px] shrink-0" style={{
           color: note.ok ? "var(--success)" : "var(--warning)",
@@ -899,6 +927,8 @@ function LocalBody({ active, repos, here, onOpenChatWith }: {
         style={{ width: 380, borderLeft: edge(12) }}>
         {picked ? <TaskDetail t={picked} today={today} reminder={byTask[picked.uuid] ?? null}
           writable={cap.configured}
+          projects={picker.projects} tags={picker.tags}
+          onEdit={(patch) => { void write(() => api.taskEdit(picked.uuid, lineWith(picked, patch), picked.tags, fp)); }}
           onShell={() => openFor(picked, "shell")}
           onChat={onOpenChatWith ? () => openFor(picked, "chat") : undefined}
           onToggleNote={(oldText, newText) => { void write(() => api.taskNote(picked.uuid, oldText, newText, fp)); }}
@@ -1073,6 +1103,118 @@ function Note({ text, writable, onToggle }: {
 }
 
 /*
+ * Making a task without knowing the grammar.
+ *
+ * The bar can already do this — `!h #3 +tag @project` and Enter — and that is
+ * the fast way once you know it. It is also invisible: the bar wears a
+ * magnifying glass and its placeholder starts with the word "Filter", so
+ * somebody who has not read it has no reason to believe a task can be made
+ * there at all. This is the same act with the fields named.
+ *
+ * It builds the very line the bar would have been given and hands it to the
+ * same verb, so there is one write path rather than two that drift.
+ *
+ * Inline rather than a modal: the list stays on screen, which is what tells you
+ * whether the thing you are adding is already there three rows down.
+ */
+function NewTask({ projects, tags, onAdd, onClose }: {
+  projects: string[]; tags: string[];
+  onAdd: (line: string) => Promise<boolean>;
+  onClose: () => void;
+}) {
+  const [description, setDescription] = useState("");
+  const [priority, setPriority] = useState<"H" | "M" | "L" | null>(null);
+  const [project, setProject] = useState("");
+  const [tagText, setTagText] = useState("");
+  const [due, setDue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const first = useRef<HTMLInputElement>(null);
+  useEffect(() => { first.current?.focus(); }, []);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!description.trim() || busy) return;
+    setBusy(true);
+    const line = lineWith(
+      { description: "", priority: null, project: null, due: null, tags: [] } as unknown as LocalTask,
+      {
+        description: description.trim(),
+        priority,
+        project: project.trim() || null,
+        due: due || null,
+        // Split on spaces and commas both, because both are what people type.
+        tags: tagText.split(/[,\s]+/).map((x) => x.replace(/^\+/, "").trim()).filter(Boolean),
+      },
+    );
+    const ok = await onAdd(line);
+    setBusy(false);
+    if (ok) onClose();
+  };
+
+  const field = { background: "var(--bg2)", border: edge(18), color: "var(--text)" };
+  const label = "text-[8.5px] uppercase tracking-[0.18em] mb-1 block";
+  return (
+    <form id="agx-new" onSubmit={submit} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}
+      className="px-5 py-3 flex flex-col gap-2.5"
+      style={{ borderBottom: edge(12), background: "color-mix(in srgb, var(--primary) 6%, transparent)" }}>
+      <div>
+        <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-desc">What needs doing</label>
+        <input id="nt-desc" ref={first} value={description} onChange={(e) => setDescription(e.target.value)}
+          placeholder="Describe the task" spellCheck={false} autoComplete="off"
+          className="w-full text-[12px] px-2 py-1.5 rounded-lg outline-none" style={field} />
+      </div>
+      <div className="flex items-end gap-2 flex-wrap">
+        <div>
+          <span className={label} style={{ color: "var(--text3)" }}>Priority</span>
+          <div className="flex items-center gap-1">
+            {([null, "L", "M", "H"] as const).map((p) => (
+              <button key={p ?? "none"} type="button" onClick={() => setPriority(p)}
+                aria-pressed={priority === p}
+                className="text-[10.5px] px-2 py-1 rounded-lg"
+                style={priority === p
+                  ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)",
+                      border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+                  : { border: edge(18), color: "var(--text3)" }}>
+                {p === null ? "None" : p === "L" ? "Low" : p === "M" ? "Medium" : "High"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-proj">Project</label>
+          <input id="nt-proj" list="agx-projects" value={project} onChange={(e) => setProject(e.target.value)}
+            placeholder="none" spellCheck={false} autoComplete="off"
+            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={{ ...field, width: 150 }} />
+        </div>
+        <div>
+          <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-tags">Tags</label>
+          <input id="nt-tags" list="agx-tags" value={tagText} onChange={(e) => setTagText(e.target.value)}
+            placeholder="space separated" spellCheck={false} autoComplete="off"
+            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={{ ...field, width: 170 }} />
+        </div>
+        <div>
+          <label className={label} style={{ color: "var(--text3)" }} htmlFor="nt-due">Due</label>
+          <input id="nt-due" type="date" value={due} onChange={(e) => setDue(e.target.value)}
+            className="text-[11px] px-2 py-1 rounded-lg outline-none" style={field} />
+        </div>
+        <datalist id="agx-projects">{projects.map((p) => <option key={p} value={p} />)}</datalist>
+        <datalist id="agx-tags">{tags.map((t) => <option key={t} value={t} />)}</datalist>
+        <div className="flex items-center gap-1.5 ml-auto">
+          <button type="button" onClick={onClose} className="text-[10.5px] px-2.5 py-1 rounded-lg"
+            style={{ color: "var(--text3)" }}>Cancel</button>
+          <button type="submit" disabled={!description.trim() || busy}
+            className="text-[10.5px] px-3 py-1 rounded-lg disabled:opacity-40"
+            style={{ background: "color-mix(in srgb, var(--primary) 20%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }}>
+            {busy ? "Adding…" : "Add task"}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+/*
  * What to do with the rows you marked.
  *
  * Only on screen when something is marked: a permanently visible strip of
@@ -1130,7 +1272,119 @@ function BulkBar({ n, tagging, tag, onTag, onTagging, onRun, onClear }: {
   );
 }
 
-function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onShell, onChat }: {
+/*
+ * The task's fields, as controls rather than as a caption.
+ *
+ * These were chips that only reported. Everything they report was settable —
+ * by `p`, by `e`, by retyping the line — and only by somebody who had been told
+ * which keys those were. Each control here rebuilds the whole line through
+ * `lineWith` and sends it to the same `edit` verb the bar uses, so the pointer
+ * and the keyboard cannot drift apart.
+ *
+ * Nothing is staged and there is no Save: a click IS the edit. Staging would
+ * mean holding a copy of a task that another writer is free to change
+ * underneath, which is the state this whole panel is built to avoid.
+ */
+function TaskFields({ t, today, projects, tags, onEdit }: {
+  t: LocalTask; today: string; projects: string[]; tags: string[];
+  onEdit: (patch: Partial<Pick<LocalTask, "priority" | "project" | "due" | "tags">>) => void;
+}) {
+  const [addingTag, setAddingTag] = useState(false);
+  const [tagText, setTagText] = useState("");
+  const [editingProject, setEditingProject] = useState(false);
+  const [projectText, setProjectText] = useState(t.project ?? "");
+
+  const label = "text-[8.5px] uppercase tracking-[0.18em] block mb-1";
+  const chip = "text-[10px] px-1.5 py-0.5 rounded";
+  const field = { background: "var(--bg2)", border: edge(18), color: "var(--text)" };
+
+  return (
+    <div className="flex flex-col gap-2.5 mb-3">
+      <div>
+        <span className={label} style={{ color: "var(--text3)" }}>Priority</span>
+        <div className="flex items-center gap-1">
+          {([null, "L", "M", "H"] as const).map((p) => (
+            <button key={p ?? "none"} onClick={() => onEdit({ priority: p })} aria-pressed={t.priority === p}
+              className="text-[10px] px-2 py-0.5 rounded-lg"
+              style={t.priority === p
+                ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)",
+                    border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+                : { border: edge(16), color: "var(--text3)" }}>
+              {p === null ? "None" : p === "L" ? "Low" : p === "M" ? "Medium" : "High"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-end gap-3 flex-wrap">
+        <div>
+          <label className={label} style={{ color: "var(--text3)" }} htmlFor="td-due">Due</label>
+          <div className="flex items-center gap-1">
+            <input id="td-due" type="date" value={t.due ?? ""}
+              onChange={(e) => onEdit({ due: e.target.value || null })}
+              className="text-[10.5px] px-1.5 py-0.5 rounded-lg outline-none"
+              style={{ ...field, color: overdue(t, today) ? "var(--error)" : "var(--text)" }} />
+            {t.due && (
+              <button onClick={() => onEdit({ due: null })} title="Clear the due date"
+                className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)" }}>×</button>
+            )}
+          </div>
+        </div>
+        <div>
+          <span className={label} style={{ color: "var(--text3)" }}>Project</span>
+          {editingProject ? (
+            <form onSubmit={(e) => { e.preventDefault(); onEdit({ project: projectText.trim() || null }); setEditingProject(false); }}>
+              <input autoFocus list="agx-projects" value={projectText} spellCheck={false} autoComplete="off"
+                onChange={(e) => setProjectText(e.target.value)}
+                onBlur={() => { onEdit({ project: projectText.trim() || null }); setEditingProject(false); }}
+                onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setEditingProject(false); setProjectText(t.project ?? ""); } }}
+                className="text-[10.5px] px-1.5 py-0.5 rounded-lg outline-none" style={{ ...field, width: 140 }} />
+            </form>
+          ) : (
+            <button onClick={() => { setProjectText(t.project ?? ""); setEditingProject(true); }}
+              className={chip} style={{ color: t.project ? "var(--info)" : "var(--text3)", border: edge(16) }}>
+              {t.project ? `@${t.project}` : "none"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <span className={label} style={{ color: "var(--text3)" }}>Tags</span>
+        <div className="flex items-center gap-1 flex-wrap">
+          {t.tags.map((tag) => (
+            <span key={tag} className={`${chip} flex items-center gap-1`} style={{ color: "var(--text2)", border: edge(16) }}>
+              {tag}
+              <button onClick={() => onEdit({ tags: t.tags.filter((x) => x !== tag) })}
+                title={`Remove ${tag}`} style={{ color: "var(--text3)" }}>×</button>
+            </span>
+          ))}
+          {addingTag ? (
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const fresh = tagText.split(/[,\s]+/).map((x) => x.replace(/^\+/, "").trim()).filter(Boolean);
+              if (fresh.length) onEdit({ tags: [...new Set([...t.tags, ...fresh])] });
+              setTagText(""); setAddingTag(false);
+            }}>
+              <input autoFocus list="agx-tags" value={tagText} spellCheck={false} autoComplete="off"
+                onChange={(e) => setTagText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setAddingTag(false); setTagText(""); } }}
+                placeholder="tag" className="text-[10.5px] px-1.5 py-0.5 rounded-lg outline-none"
+                style={{ ...field, width: 110 }} />
+            </form>
+          ) : (
+            <button onClick={() => setAddingTag(true)} className={chip}
+              style={{ color: "var(--text3)", border: edge(16) }}>+ tag</button>
+          )}
+        </div>
+        <datalist id="agx-projects">{projects.map((p) => <option key={p} value={p} />)}</datalist>
+        <datalist id="agx-tags">{tags.map((x) => <option key={x} value={x} />)}</datalist>
+      </div>
+    </div>
+  );
+}
+
+function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onShell, onChat, onEdit, projects, tags }: {
   t: LocalTask; today: string;
   reminder?: import("../../../shared/types.ts").Reminder | null;
   onCancel?: () => void;
@@ -1138,6 +1392,10 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
   onToggleNote?: (oldText: string, newText: string) => void;
   onShell?: () => void;
   onChat?: () => void;
+  /** One field changed. The line is rebuilt from the whole task, so nothing
+   *  that was not touched is lost — see `lineWith`. */
+  onEdit?: (patch: Partial<Pick<LocalTask, "priority" | "project" | "due" | "tags">>) => void;
+  projects?: string[]; tags?: string[];
 }) {
   const progress = checkProgress(t.notes);
   return (
@@ -1145,20 +1403,23 @@ function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote, onSh
       <h2 className="text-[16px] font-semibold leading-snug mb-2.5" style={{ color: "var(--text)", textWrap: "balance" }}>
         {t.description}
       </h2>
-      <div className="flex flex-wrap items-center gap-1.5 mb-2">
-        {t.priority && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: edge(16) }}>
-            {t.priority === "H" ? "High" : t.priority === "M" ? "Medium" : "Low"}
-          </span>
+      {onEdit && writable
+        ? <TaskFields t={t} today={today} projects={projects ?? []} tags={tags ?? []} onEdit={onEdit} />
+        : (
+          <div className="flex flex-wrap items-center gap-1.5 mb-2">
+            {t.priority && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: edge(16) }}>
+                {t.priority === "H" ? "High" : t.priority === "M" ? "Medium" : "Low"}
+              </span>
+            )}
+            {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info)", border: edge(16) }}>@{t.project}</span>}
+            {t.tags.map((tag) => (
+              <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(16) }}>{tag}</span>
+            ))}
+          </div>
         )}
-        {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info)", border: edge(16) }}>@{t.project}</span>}
-        {t.tags.map((tag) => (
-          <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(16) }}>{tag}</span>
-        ))}
-      </div>
       <div className="text-[10px] mb-4" style={{ color: overdue(t, today) ? "var(--error)" : "var(--text3)" }}>
         {[
-          t.due && `due ${t.due}${overdue(t, today) ? " · overdue" : ""}`,
           t.completed && `done ${t.completed}`,
           t.created && `created ${t.created}`,
         ].filter(Boolean).join(" · ")}

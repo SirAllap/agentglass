@@ -187,3 +187,67 @@ describe("two identical checklist lines", () => {
     expect(checkProgress(["(x) review\n() review"])).toEqual({ done: 1, total: 2 });
   });
 });
+
+describe("the line a mouse click writes", () => {
+  const { lineWith, inUse } = mod.__test;
+  const t = {
+    uuid: "u", description: "fix the redirect", status: "pending" as const,
+    project: "web", priority: "M" as const, tags: ["auth", "urgent"],
+    due: "2026-08-09", created: null, completed: null, urgency: 1, notes: [], urls: [],
+  };
+
+  it("changes one field and keeps every other", () => {
+    // The whole point: `edit` clears what the line leaves out, so a patch that
+    // rebuilt only part of the line would silently drop the rest.
+    const line = lineWith(t, { priority: "H" });
+    expect(line).toContain("fix the redirect");
+    expect(line).toContain("!h");
+    expect(line).toContain("@web");
+    expect(line).toContain("+auth");
+    expect(line).toContain("+urgent");
+    expect(line).toContain("due:2026-08-09");
+  });
+
+  it("clears a field by leaving it out, which is what the verb means", () => {
+    expect(lineWith(t, { priority: null })).not.toContain("!");
+    expect(lineWith(t, { due: null })).not.toContain("due:");
+    expect(lineWith(t, { project: null })).not.toContain("@");
+    expect(lineWith(t, { tags: [] })).not.toContain("+");
+  });
+
+  it("round-trips through the parser it will be handed to", () => {
+    const back = mod.__test.parseLocal(lineWith(t, { priority: "L" }));
+    expect(back.description).toBe("fix the redirect");
+    expect(back.priority).toBe("L");
+    expect(back.project).toBe("web");
+    expect(back.tags.sort()).toEqual(["auth", "urgent"]);
+    expect(back.due).toBe("2026-08-09");
+  });
+
+  it("collects the projects and tags already in use, once each and sorted", () => {
+    // Offered rather than typed again, because retyping is how `@web` and
+    // `@Web` become two projects.
+    const got = inUse([t, { ...t, project: "api", tags: ["auth"] }, { ...t, project: null, tags: [] }]);
+    expect(got.projects).toEqual(["api", "web"]);
+    expect(got.tags).toEqual(["auth", "urgent"]);
+  });
+});
+
+describe("keys meant for a text field", () => {
+  const { typingInto } = mod.__test;
+
+  it("recognises everything a person types into", () => {
+    for (const tagName of ["INPUT", "TEXTAREA", "SELECT", "input", "textarea"]) {
+      expect(typingInto({ tagName }), tagName).toBe(true);
+    }
+    expect(typingInto({ tagName: "DIV", isContentEditable: true })).toBe(true);
+  });
+
+  it("leaves the list itself alone, which is where the shortcuts belong", () => {
+    for (const tagName of ["DIV", "BUTTON", "SPAN", "KBD"]) {
+      expect(typingInto({ tagName }), tagName).toBe(false);
+    }
+    expect(typingInto(null)).toBe(false);
+    expect(typingInto(undefined)).toBe(false);
+  });
+});

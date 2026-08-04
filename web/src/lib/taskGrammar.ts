@@ -48,7 +48,33 @@ export function toLine(t: LocalTask): string {
   return bits.join(" ");
 }
 
+/**
+ * The task's own line, with one field changed.
+ *
+ * Every mouse control in the panel goes through this: a click on "High" builds
+ * the line the user would have typed and sends it to the same `edit` verb the
+ * bar uses. One write path, not two — a second one would be the place where the
+ * pointer and the keyboard quietly start meaning different things.
+ *
+ * It matters that this rebuilds from the WHOLE task. `edit` clears what the
+ * line leaves out, on purpose, so patching a field by hand-editing a string
+ * would silently drop whatever was not in it.
+ */
+export function lineWith(
+  t: LocalTask,
+  patch: Partial<Pick<LocalTask, "description" | "priority" | "project" | "due" | "tags">>,
+): string {
+  return toLine({ ...t, ...patch });
+}
 
+/** Every project and tag already in use, for the pickers — you almost always
+ *  want one you have used before, and typing it again is how `@web` and
+ *  `@Web` end up as two projects. */
+export function inUse(tasks: LocalTask[]): { projects: string[]; tags: string[] } {
+  const p = new Set<string>(), g = new Set<string>();
+  for (const t of tasks) { if (t.project) p.add(t.project); for (const x of t.tags) g.add(x); }
+  return { projects: [...p].sort(), tags: [...g].sort() };
+}
 
 /**
  * The same grammar the server parses, for the strip above.
@@ -223,3 +249,23 @@ export const TASK_KEYS: { keys: string[]; what: string }[] = [
   { keys: ["/"], what: "the bar" },
   { keys: ["Escape"], what: "back to the bar, drop the marks" },
 ];
+
+/**
+ * Is the user typing into something?
+ *
+ * The panel's shortcuts are bare letters, and they are bound on the frame that
+ * CONTAINS every field in it — so a keystroke meant for a text box arrives at
+ * the handler too. The first version only excused the one input it knew about
+ * by identity. The moment the panel grew a form, typing "comprar café" into it
+ * ran `c`, `p`, `a`, `e` … and `d`, which deletes the selected task. Measured:
+ * the form vanished mid-word because `c` had switched to the chat view.
+ *
+ * Asked of the ELEMENT rather than kept as a list of known inputs, so a field
+ * added later is covered by construction rather than by remembering.
+ */
+export function typingInto(el: { tagName?: string; isContentEditable?: boolean } | null | undefined): boolean {
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  const tag = (el.tagName ?? "").toUpperCase();
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
