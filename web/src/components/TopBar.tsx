@@ -221,7 +221,7 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 
 export function TopBar({
   workspace, onOpenProject, onOpenPalette, quiet, needs,
-  needsList, onNeedChat, onNeedApprove, onNeedProject,
+  needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
 }: {
   workspace: string | null;
   onOpenProject: () => void;
@@ -242,6 +242,9 @@ export function TopBar({
   onNeedChat: (chatId: string) => void;
   onNeedApprove: () => void;
   onNeedProject: (root: string) => void;
+  onNeedTerminal: () => void;
+  /** A notification that knows where it belongs. */
+  onNoteGoto: (g: { kind: "pr"; repo: string; number: number }) => void;
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
@@ -390,6 +393,7 @@ export function TopBar({
         onChat={(id) => { setNeedsOpen(false); onNeedChat(id); }}
         onApprove={() => { setNeedsOpen(false); onNeedApprove(); }}
         onProject={(root) => { setNeedsOpen(false); onNeedProject(root); }}
+        onTerminal={() => { setNeedsOpen(false); onNeedTerminal(); }}
       />
 
       {/* ── the plan, the clock, the way in ───────────────────────── */}
@@ -428,7 +432,7 @@ export function TopBar({
         )}
         {/* What you missed. The bar interrupts for one thing at a time in its
             middle; everything else it ever said is still in here. */}
-        <NotifyBell noDrag={NO_DRAG} />
+        <NotifyBell noDrag={NO_DRAG} onGoto={onNoteGoto} />
         {/* An update is worth noticing on the way past, never worth pulling the
             eye off a running fleet. */}
         {updateAvailable() && (

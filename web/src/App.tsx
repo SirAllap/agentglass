@@ -37,6 +37,7 @@ import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
 import { NeedsPopover, type NeedsItem } from "./components/NeedsPopover.tsx";
+import { requestPrJump } from "./lib/prJump.ts";
 import { subscribeGates, listGates } from "./lib/gateStore.ts";
 
 /** The last segment of a path — a project's name as anyone says it out loud. */
@@ -697,6 +698,12 @@ export default function App() {
         onNeedChat={openChatFor}
         onNeedApprove={approveOnDash}
         onNeedProject={switchProject}
+        onNeedTerminal={() => goView("term")}
+        // A notification that knows what it is about. The panel may be open
+        // over any view and the PR panel may not be mounted at all, so the
+        // request is left in a slot and the view switched — the same shape the
+        // issues panel uses to start a terminal it cannot reach.
+        onNoteGoto={(g) => { requestPrJump(g.repo, g.number); goView("pr"); }}
       />
 
       <Workspace

@@ -155,6 +155,23 @@ type Session = {
 };
 const sessions = new Map<PtyWs, Session>();
 
+/**
+ * The last tmux client any terminal here was attached to.
+ *
+ * Kept because the question "which pane is that agent in" outlives the panel
+ * that can answer it: the tmux server goes on running with every pane in it
+ * whether or not this app has a shell open, and the top bar can be asked from
+ * any view. A target from a shell that has since closed still names a reachable
+ * server — the socket is the durable half — and if it does not, the tmux call
+ * simply fails and the caller reports no panes.
+ *
+ * Null until a terminal has been opened once this run, which is the honest
+ * answer: we learn the socket by finding a client on it, and until then we do
+ * not know which of the machine's tmux servers is the user's.
+ */
+let lastTarget: TmuxTarget | null = null;
+export const lastTmuxTarget = (): TmuxTarget | null => lastTarget;
+
 const clampCols = (v: unknown) => Math.min(500, Math.max(20, Math.floor(Number(v)) || 0));
 const clampRows = (v: unknown) => Math.min(300, Math.max(5, Math.floor(Number(v)) || 0));
 
@@ -438,6 +455,7 @@ export function ptyOpen(ws: PtyWs) {
     if (!session.tmuxClient) session.tmuxClient = resolveClient(proc.pid);
     const frame = session.tmuxClient ? readFrame(session.tmuxClient) : null;
     if (frame) {
+      lastTarget = frame.target;
       if (frame.target.id !== session.tmux?.id) followSession(frame.target);
       else session.tmux = frame.target; // a rename keeps the id and changes the name
     } else {

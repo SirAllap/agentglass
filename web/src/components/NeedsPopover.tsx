@@ -20,6 +20,8 @@
 // twice to understand is worse than a list you read once.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Portal } from "./Portal.tsx";
+import { api } from "../lib/api.ts";
+import type { AgentPane } from "../../../shared/types.ts";
 
 export type NeedsItem = {
   /** The agent card key this was raised from. Stable enough for a list key. */
@@ -64,14 +66,31 @@ function Action({ children, onClick, primary }: { children: React.ReactNode; onC
   );
 }
 
-function Row({ it, onChat, onApprove, onProject }: {
+/**
+ * The panes running an agent in this directory.
+ *
+ * Measured, not assumed: on the machine this was built against there are five
+ * agents in one project directory and three in another, so "which pane" often
+ * has no single answer. The button appears on exactly one hit; more than that
+ * and the panel says how many rather than dropping you into the wrong
+ * conversation with nothing to tell you it was the wrong one.
+ */
+const panesFor = (panes: AgentPane[], cwd: string | null): AgentPane[] =>
+  cwd ? panes.filter((p) => p.agentCwds.includes(cwd)) : [];
+
+function Row({ it, hits, onChat, onApprove, onProject, onPane }: {
   it: NeedsItem;
+  /** Panes running an agent in this session's directory. One is a button; more
+   *  than one is a fact worth stating and not a choice worth guessing. */
+  hits: AgentPane[];
   onChat: (chatId: string) => void;
   onApprove: () => void;
   onProject: (root: string) => void;
+  onPane: (p: AgentPane) => void;
 }) {
   const tint = it.level === "error" ? "var(--error)" : "var(--warning)";
-  const actionable = !!it.chatId || it.gated || !!it.otherProject;
+  const pane = hits.length === 1 ? hits[0]! : null;
+  const actionable = !!it.chatId || it.gated || !!it.otherProject || hits.length > 0;
   return (
     <div className="agx-note-row">
       <div className="flex items-center gap-2 mb-1">
@@ -98,6 +117,24 @@ function Row({ it, onChat, onApprove, onProject }: {
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         {it.chatId && <Action primary onClick={() => onChat(it.chatId!)}>Open its chat</Action>}
         {it.gated && <Action primary={!it.chatId} onClick={onApprove}>Approve it</Action>}
+        {/* The one that answers the original complaint: the agent is in a tmux
+            pane, and now the app knows which. It moves tmux to it and shows the
+            terminal, so you land on the prompt that is waiting rather than on a
+            summary of what it did. */}
+        {pane && (
+          <Action primary={!it.chatId && !it.gated} onClick={() => onPane(pane)}>
+            Go to its pane · {pane.windowName || pane.windowIndex}
+          </Action>
+        )}
+        {/* Several agents in one directory is the normal case, not the odd one
+            — five in a project is a working day. The app cannot tell them
+            apart, and it does not have to: it knows the windows, and you named
+            them. Offering the candidates is not guessing, and it beats a
+            sentence that leaves you to find them yourself. */}
+        {hits.length > 1 && <span className="text-[10px]" style={{ color: "var(--text4)" }}>in one of</span>}
+        {hits.length > 1 && hits.slice(0, 4).map((p) => (
+          <Action key={p.paneId} onClick={() => onPane(p)}>{p.windowName || `${p.session}:${p.windowIndex}`}</Action>
+        ))}
         {it.otherProject && it.project && <Action onClick={() => onProject(it.project!)}>Switch to {it.otherProject}</Action>}
         {/* Honest about the gap rather than offering a button that lands
             somewhere useless. Naming the directory is the useful half of what a
@@ -119,7 +156,7 @@ function Row({ it, onChat, onApprove, onProject }: {
  * clips its own overflow — it has to, or a long project name pushes the clock
  * off the end — and a panel drawn inside it would be sliced off at 30px.
  */
-export function NeedsPopover({ anchorRef, open, items, onClose, onChat, onApprove, onProject }: {
+export function NeedsPopover({ anchorRef, open, items, onClose, onChat, onApprove, onProject, onTerminal }: {
   anchorRef: React.RefObject<HTMLElement | null>;
   open: boolean;
   items: NeedsItem[];
@@ -127,9 +164,33 @@ export function NeedsPopover({ anchorRef, open, items, onClose, onChat, onApprov
   onChat: (chatId: string) => void;
   onApprove: () => void;
   onProject: (root: string) => void;
+  /** Show the terminal, once tmux has been moved to the pane. */
+  onTerminal: () => void;
 }) {
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const [panes, setPanes] = useState<AgentPane[]>([]);
+
+  // Asked when the panel opens, and only then. It is a `list-panes` plus a walk
+  // of /proc per pane on the far side — cheap once and wasted on a timer, since
+  // the answer is only read in the second between opening this and clicking
+  // through it. Failure is silent on purpose: no pane found and no pane
+  // offered are the same outcome here.
+  useEffect(() => {
+    if (!open) return;
+    let dead = false;
+    api.agentPanes().then((r) => { if (!dead) setPanes(r.panes ?? []); }).catch(() => {});
+    return () => { dead = true; };
+  }, [open]);
+
+  const goPane = useCallback((p: AgentPane) => {
+    void api.focusPane({ sessionId: p.sessionId, windowId: p.windowId, paneId: p.paneId })
+      // The view switches either way. If tmux refused — the pane died between
+      // the list and the click — the terminal is still where you were going,
+      // and it will be showing whatever tmux is actually on.
+      .catch(() => {})
+      .finally(onTerminal);
+  }, [onTerminal]);
 
   const place = useCallback(() => {
     const r = anchorRef.current?.getBoundingClientRect();
@@ -184,7 +245,8 @@ export function NeedsPopover({ anchorRef, open, items, onClose, onChat, onApprov
         </div>
         <div className="agx-inbox-list">
           {items.map((it) => (
-            <Row key={it.key} it={it} onChat={onChat} onApprove={onApprove} onProject={onProject} />
+            <Row key={it.key} it={it} hits={panesFor(panes, it.cwd)}
+              onChat={onChat} onApprove={onApprove} onProject={onProject} onPane={goPane} />
           ))}
         </div>
       </div>

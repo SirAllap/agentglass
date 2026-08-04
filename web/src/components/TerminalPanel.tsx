@@ -8,6 +8,8 @@ import { Fragment, useCallback, useEffect, useReducer, useRef, useState, useSync
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { useDialogs } from "./ConfirmDialog.tsx";
+import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
@@ -806,6 +808,10 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   const [picked, setPicked] = useState<string>(() => { try { return localStorage.getItem(CONSOLE_ROOT_KEY) || ""; } catch { return ""; } });
   const root = picked || fallbackRoot;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  const { ask, dialog } = useDialogs();
+  /** The row for the directory we are standing in — what "here" means, by name,
+   *  what it currently holds, and whether it has uncommitted work in it. */
+  const here = repos.find((r) => r.root === root) ?? null;
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -837,7 +843,10 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   };
   // A local branch with no worktree of its own: switch by checking it out in the
   // console's current directory, then refresh so the list reflects the move.
-  const checkoutHere = (name: string) => {
+  const checkoutHere = async (name: string) => {
+    // Never silently. See lib/checkoutWarning.ts for why each sentence is there.
+    const t = { branch: name, dir: here?.name ?? root.split("/").pop() ?? root, displacing: here?.branch ?? null, dirty: here?.dirty ?? 0 };
+    if (needsCheckoutConfirm(t) && !(await ask(checkoutConfirm(t)))) return;
     api.gitCheckout(root, name).then((r) => {
       if (!r.ok) return;
       setRepoOpen(false); setRepoQuery("");
@@ -927,6 +936,8 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   if (!open) return null;
   return (
     <div className="shrink-0 flex flex-col" style={{ height: `${Math.round(height * 100)}%`, borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+      {/* Rendered, or the question it asks is a promise nobody ever answers. */}
+      {dialog}
       {/* The strip's own toolbar. Everything in it stops the drag from
           starting — the whole bar is the resize handle, so a click that also
           began a drag would move the console every time you opened a menu. */}
@@ -960,12 +971,21 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
                   <button key={r.root} onClick={() => chooseRepo(r.root)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
                     style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                     {/* Same badge and same name rule as every other picker: a
-                        worktree IS its branch, a project is its folder. */}
+                        worktree IS its branch, a project is its folder — but the
+                        folder is now always said out loud beside it. Naming a
+                        worktree only by its branch means a checkout RENAMES the
+                        row, and that is what made "master turned into a worktree
+                        and the worktree into a branch" the honest description of
+                        what someone saw. The identity of a directory must not
+                        change under a click. */}
                     <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
                       style={r.worktreeOf
                         ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
                         : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{r.worktreeOf ? "WT" : "REPO"}</span>
-                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.root}>{r.worktreeOf ? r.branch : r.name}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={`${r.branch}\n${r.root}`}>{r.worktreeOf ? r.branch : r.name}</span>
+                    {r.worktreeOf && r.name !== r.branch && (
+                      <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>
+                    )}
                     {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
                   </button>
                 ))}
@@ -978,7 +998,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
                   if (!branches.length) return null;
                   return (
                     <>
-                      <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                      <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
                       {branches.slice(0, 80).map((b) => (
                         <button key={b.name} onClick={() => checkoutHere(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
                           <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
@@ -1020,6 +1040,10 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
 export function TermView({ active, onClose = () => {} }: { active: boolean; onClose?: () => void }) {
   const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  const { ask, dialog } = useDialogs();
+  /** The row for the directory we are standing in — what "here" means, by name,
+   *  what it currently holds, and whether it has uncommitted work in it. */
+  const here = repos.find((r) => r.root === root) ?? null;
   const [root, setRoot] = useState<string>(() => { try { return localStorage.getItem(ROOT_KEY) || ""; } catch { return ""; } });
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
@@ -1055,7 +1079,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     api.gitRepos().then(({ repos }) => setRepos(repos)).catch(() => {});
     api.gitBranches(root).then(setBranchData).catch(() => {});
   }, [repoOpen, root]);
-  const checkoutBranch = (name: string) => {
+  const checkoutBranch = async (name: string) => {
+    const t = { branch: name, dir: here?.name ?? root.split("/").pop() ?? root, displacing: here?.branch ?? null, dirty: here?.dirty ?? 0 };
+    if (needsCheckoutConfirm(t) && !(await ask(checkoutConfirm(t)))) return;
     api.gitCheckout(root, name).then((r) => {
       if (!r.ok) return;
       setRepoOpen(false); setRepoQuery("");
@@ -1376,6 +1402,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
+      {dialog}
                 {/* The plan meters live in the top bar, which is over every view
                     rather than only over the terminal. */}
                 <style>{SCROLLBAR_CSS}</style>
@@ -1473,7 +1500,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             if (!branches.length) return null;
                             return (
                               <>
-                                <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                                <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
                                 {branches.slice(0, 80).map((b) => (
                                   <button key={b.name} onClick={() => checkoutBranch(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
                                     <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>

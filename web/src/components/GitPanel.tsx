@@ -17,6 +17,7 @@ import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { worktreeTag } from "../lib/worktree.ts";
+import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts";
 import { buildFileTree, visibleRows, allDirPaths } from "../lib/fileTree.ts";
 import { useIncremental } from "../lib/useIncremental.ts";
 import { CommandLog } from "./CommandLog.tsx";
@@ -814,7 +815,16 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   };
   // branches
   const reloadBranches = () => api.gitBranches(root).then(setBranchData).catch(() => {});
-  const checkout = async (name: string) => { if (await act(() => api.gitCheckout(root, name), `On ${name}`)) { reloadBranches(); setView("changes"); } };
+  /** The row for the directory we are standing in: what "here" is called, what
+   *  it holds, and what is uncommitted in it. */
+  const here = repos.find((r) => r.root === root) ?? null;
+  const checkout = async (name: string) => {
+    // A checkout moves a branch INTO a folder and evicts what was there. Said
+    // out loud first — see lib/checkoutWarning.ts.
+    const t = { branch: name, dir: here?.name ?? wtName(root), displacing: here?.branch ?? null, dirty: here?.dirty ?? 0 };
+    if (needsCheckoutConfirm(t) && !(await ask(checkoutConfirm(t)))) return;
+    if (await act(() => api.gitCheckout(root, name), `On ${name}`)) { reloadBranches(); setView("changes"); }
+  };
   const createBranch = async () => { const n = newBranch.trim(); if (!n) return; if (await act(() => api.gitBranchCreate(root, n), `Created ${n}`)) { setNewBranch(""); reloadBranches(); setView("changes"); } };
   /**
    * Delete a branch, and offer the repair when git refuses.
@@ -1623,11 +1633,23 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                   truncated the one you were reading. Projects
                                   keep their name, since there the folder is the
                                   identity and the branch is just what's checked
-                                  out right now. */}
+                                  out right now.
+
+                                  But the folder is now always shown beside it.
+                                  That rule holds only while a worktree keeps the
+                                  branch it was made for, and this app hands you a
+                                  one-click way to change it — so a checkout
+                                  RENAMED a row, and "master turned into a
+                                  worktree and the worktree into a branch" was an
+                                  accurate description of what someone saw. A
+                                  directory's identity must not move under a
+                                  click. */}
                               <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.worktreeOf ? `${r.branch}\n${r.root}` : r.root}>
                                 {r.worktreeOf ? r.branch : r.name}
                               </span>
-                              {!r.worktreeOf && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>}
+                              {!r.worktreeOf
+                                ? <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>
+                                : r.name !== r.branch && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>}
                               {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
                               {/* Same reading as the header chip. This used to be
                                   hardcoded to zero, so the one place you pick a
