@@ -165,6 +165,72 @@ const VIEW_KEYS: Record<View, [string, string][]> = {
  * like an empty one. Nothing here is new information; it is the difference
  * between not knowing yet and knowing the answer is none.
  */
+export type SortKey = "recent" | "name" | "track";
+
+/**
+ * The row's shape, in one place, because five tabs drawing "roughly the same
+ * row" by hand is why they did not line up.
+ *
+ * A grid, not a flex row. The old row was flex with the subject as the only
+ * flexible child and the action buttons appearing on hover — so hovering
+ * *changed the width available to the text*, the subject reflowed under the
+ * cursor, and on the selected row the buttons landed on top of the sentence
+ * they had just squeezed. Nothing was overlapping in the CSS sense; the layout
+ * was simply being recomputed by the pointer.
+ *
+ * Fixed tracks fix that: the action column is always allocated, whether or not
+ * anything is drawn in it, so a row looks the same hovered and not. The cost is
+ * a strip of empty space on the right of every row, and it is worth it — that
+ * strip is what stops the list moving while you read it.
+ */
+const ROW_GRID = {
+  display: "grid",
+  gridTemplateColumns: "14px minmax(0, 22rem) minmax(0, 1fr) auto var(--gitrow-actions, 0px)",
+  alignItems: "center",
+  columnGap: "0.5rem",
+} as const;
+
+/** Search, sort, and whatever chips the tab wants — one strip, one place.
+ *
+ *  The search is `autoFocus`-free on purpose: these tabs are reached by number
+ *  keys and j/k, and stealing focus on every tab change would break that. */
+function ListToolbar({ q, onQ, placeholder, sort, onSort, sorts, count, total, children }: {
+  q: string; onQ: (v: string) => void; placeholder: string;
+  sort?: SortKey; onSort?: (s: SortKey) => void; sorts?: { key: SortKey; label: string; title: string }[];
+  count: number; total: number; children?: ReactNode;
+}) {
+  return (
+    <div className="flex items-center gap-2 mb-2 flex-wrap">
+      <input
+        value={q}
+        onChange={(e) => onQ(e.target.value)}
+        placeholder={placeholder}
+        className="px-2.5 py-1.5 rounded-lg text-[11.5px] outline-none min-w-0 flex-1 max-w-md"
+        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+      />
+      {sorts && sort && onSort && (
+        <div className="flex items-center gap-1 shrink-0">
+          {sorts.map((s) => (
+            <button key={s.key} onClick={() => onSort(s.key)} title={s.title}
+              className="text-[10px] px-2 py-1 rounded-lg transition-colors whitespace-nowrap"
+              style={sort === s.key
+                ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)" }
+                : { background: "transparent", border: "1px solid color-mix(in srgb, var(--border) 22%, transparent)", color: "var(--text3)" }}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {children}
+      {/* Says what the filter did. A list that silently shrinks reads as data
+          that went missing. */}
+      {q.trim() !== "" && (
+        <span className="text-[9.5px] t-dim2 shrink-0 tabular-nums">{count} of {total}</span>
+      )}
+    </div>
+  );
+}
+
 function PaneEmpty({ busy, what }: { busy: boolean; what: string }) {
   return (
     <div className="grid place-items-center py-10 t-dim2 text-[12px]">
@@ -470,6 +536,18 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const { ask, askText, dialog } = useDialogs();
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
+  /**
+   * One search box and one sort, shared by every list tab.
+   *
+   * Shared rather than per-tab state because the question is the same on all of
+   * them — "where is the row about ORBIT-1042" — and a repo with 54 branches,
+   * 23 worktrees, 127 tags and 22 stashes is a repo where scrolling to find one
+   * is the whole cost of the panel. Cleared on a tab or repo change: a filter
+   * still applied to a list you are no longer looking at is an empty pane with
+   * no visible reason.
+   */
+  const [q, setQ] = useState("");
+  const [sort, setSort] = useState<SortKey>("recent");
   // branches / log / stashes / worktrees
   const [branchData, setBranchData] = useState<{ current: string; branches: GitBranch[]; trunk?: string | null; checking?: boolean }>({ current: "", branches: [] });
   const [newBranch, setNewBranch] = useState("");
@@ -915,7 +993,48 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // delete a checked-out branch anyway, and offering it is just a failed call.
   const goneBranches = branchData.branches.filter((b) => !b.current && trackChip(b.track).gone);
   const goneCount = goneBranches.length;
-  const shownBranches = onlyGone ? goneBranches : branchData.branches;
+  /**
+   * The branch list as it is actually drawn: the gone filter, then the search,
+   * then the sort.
+   *
+   * Searched over name AND subject, because half of what you remember about a
+   * branch is what its last commit said, not what somebody named the ref. Sort
+   * defaults to `recent`, which is git's own order here and the one that makes
+   * a 54-branch list usable at all — `name` is for when you know the ticket
+   * number, and `track` puts what you are behind on at the top.
+   */
+  const shownBranches = useMemo(() => {
+    const base = onlyGone ? goneBranches : branchData.branches;
+    const needle = q.trim().toLowerCase();
+    const hits = needle
+      ? base.filter((b) => `${b.name} ${b.subject ?? ""} ${b.upstream ?? ""}`.toLowerCase().includes(needle))
+      : base;
+    if (sort === "recent") return hits;
+    const out = [...hits];
+    if (sort === "name") out.sort((a, b) => a.name.localeCompare(b.name));
+    // Most out-of-sync first, ahead counting for as much as behind: both mean
+    // "this one still has something to settle".
+    else out.sort((a, b) => {
+      const w = (x: GitBranch) => { const t = trackChip(x.track); return t.behind + t.ahead; };
+      return w(b) - w(a);
+    });
+    return out;
+  }, [onlyGone, goneBranches, branchData.branches, q, sort]);
+  const branchTotal = onlyGone ? goneBranches.length : branchData.branches.length;
+
+  /** The same search, over the lists that are not branches. Each one over the
+   *  fields you would actually remember: a stash by what it says, a tag by its
+   *  name or its commit, a worktree by its branch or its directory. */
+  const hit = useCallback((...fields: (string | undefined | null)[]) => {
+    const needle = q.trim().toLowerCase();
+    return !needle || fields.filter(Boolean).join(" ").toLowerCase().includes(needle);
+  }, [q]);
+  const shownStashes = useMemo(() => stashes.filter((x) => hit(x.ref, x.message)), [stashes, hit]);
+  const shownTags = useMemo(() => {
+    const out = tags.filter((x) => hit(x.name, x.subject, x.hash));
+    return sort === "name" ? [...out].sort((a, b) => a.name.localeCompare(b.name)) : out;
+  }, [tags, hit, sort]);
+  const shownWorktrees = useMemo(() => worktrees.filter((x) => hit(x.branch, x.path)), [worktrees, hit]);
   // The branch you are ACTUALLY on, read off the fresh working-tree poll (2.5s)
   // rather than the branch list (10s) so the ⎇ and the disabled state track a
   // switch — from here, the terminal, or another window — without a lag where
@@ -1410,7 +1529,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // Long lists are rendered a screenful at a time — see useIncremental. These
   // are the four that actually get long on a real repo (787 remote branches,
   // 500 commits, 200 reflog entries, 125 tags).
-  const incBranches = useIncremental(shownBranches, `${root}:${onlyGone}`);
+  // The search and the sort are part of the identity: without them the
+  // incremental window keeps the first N rows of the PREVIOUS list, so
+  // typing filters a page you are no longer looking at.
+  const incBranches = useIncremental(shownBranches, `${root}:${onlyGone}:${q}:${sort}`);
   const incGraph = useIncremental(graph, root);
   const incReflog = useIncremental(reflog, root);
   const incTags = useIncremental(tags, root);
@@ -1437,16 +1559,16 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const rowCount =
     view === "branches" ? shownBranches.length :
     view === "reflog" ? reflog.length :
-    view === "tags" ? tags.length :
+    view === "tags" ? shownTags.length :
     view === "remotes" ? shownRemoteBranches.length :
-    view === "stashes" ? stashes.length :
-    view === "worktrees" ? worktrees.length :
+    view === "stashes" ? shownStashes.length :
+    view === "worktrees" ? shownWorktrees.length :
     view === "log" ? graph.length : 0;
 
   // A list that shrinks under the cursor (deleting branches, applying stashes)
   // would otherwise leave it pointing past the end.
   useEffect(() => { setRowIdx((i) => (rowCount ? Math.min(i, rowCount - 1) : 0)); }, [rowCount]);
-  useEffect(() => { setRowIdx(0); }, [view, root]);
+  useEffect(() => { setRowIdx(0); setQ(""); setSort("recent"); }, [view, root]);
   // The current branch moved (our checkout, the terminal, another window). The
   // working-tree poll notices before the 10s branch-list poll, so pull the list
   // forward the moment it changes — otherwise it sits crowning the branch you
@@ -1459,7 +1581,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // opened from any view, so make sure the branch list is loaded when it is —
   // otherwise the branches section is empty everywhere but the Branches tab.
   useEffect(() => {
-    if (repoOpen && root) reloadBranches();
+    if (!repoOpen || !root) return;
+    reloadBranches();
+    /**
+     * And the repo list itself, which is where each row's branch comes from.
+     *
+     * `reloadBranches()` refreshes the BRANCHES of the current checkout; the
+     * "which branch is this repo on" beside each row is `GitRepoRef.branch`,
+     * loaded with the repo list on mount and never again. So the picker showed
+     * whatever was checked out when the view first opened — a checkout made
+     * since, from this very panel, left it naming a branch you had already
+     * left. It is the one line in the picker that claims to be live.
+     */
+    api.gitRepos().then(({ repos }) => setRepos(repos)).catch(() => { /* keep the stale list rather than an empty one */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repoOpen]);
   // A different repo has different remotes: carrying the selection over asks for
@@ -1481,11 +1615,11 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
       if (!b || b.name === currentBranchName) return;
       kind === "primary" ? switchTo(b) : deleteBranch(b);
     } else if (view === "stashes") {
-      const s = stashes[rowIdx];
+      const s = shownStashes[rowIdx];
       if (!s) return;
       stashOp(kind === "primary" ? "apply" : "drop", s.index);
     } else if (view === "worktrees") {
-      const w = worktrees[rowIdx];
+      const w = shownWorktrees[rowIdx];
       if (!w || (kind === "delete" && w.current)) return;
       kind === "primary" ? openWorktree(w) : removeWorktree(w);
     } else if (view === "remotes") {
@@ -1600,7 +1734,18 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         tall and shoved the tab strip down with it. */}
                     <button onClick={() => setRepoOpen((o) => !o)} className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[240px] shrink-0 whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }}
                       title={repoRef ? `${repoRef.name}\n${repoRef.root}` : undefined}>
-                      <span className="font-medium truncate min-w-0">{repoRef?.name ?? "Repo"}</span><span className="t-dim2 shrink-0">▼</span>
+                      {/* Repo AND branch. The button named only the checkout,
+                          which is the half that does not change — you switch
+                          branch from this very panel and the control at the top
+                          of it went on saying exactly what it said before. The
+                          branch comes from the working-tree poll rather than
+                          from the repo list, so it moves the instant you switch
+                          rather than at the next repo scan. */}
+                      <span className="font-medium truncate min-w-0">{repoRef?.name ?? "Repo"}</span>
+                      {currentBranchName && (
+                        <span className="t-dim2 shrink-0 truncate max-w-[9rem]" style={{ maxWidth: "9rem" }} title={`on ${currentBranchName}`}>· {currentBranchName}</span>
+                      )}
+                      <span className="t-dim2 shrink-0">▼</span>
                     </button>
                     {repoOpen && (
                       <div className="absolute left-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 320, maxHeight: 420, overflow: "hidden" }}>
@@ -1995,12 +2140,23 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         <button onClick={createBranch} disabled={busy || !newBranch.trim()} className="text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: newBranch.trim() ? 1 : 0.5 }}>+ create & switch</button>
                       </div>
                     )}
+                    <ListToolbar
+                      q={q} onQ={(v) => { setQ(v); setRowIdx(0); }}
+                      placeholder="Search branches by name or last commit…"
+                      sort={sort} onSort={(s) => { setSort(s); setRowIdx(0); }}
+                      sorts={[
+                        { key: "recent", label: "recent", title: "Most recently committed first — git's own order" },
+                        { key: "name", label: "name", title: "Alphabetical, for when you know the ticket number" },
+                        { key: "track", label: "unsynced", title: "Furthest from its upstream first — what still has something to settle" },
+                      ]}
+                      count={shownBranches.length} total={branchTotal}
+                    />
                     {/* Merged-and-tidied branches pile up invisibly — a repo worked
                         one-ticket-per-branch ends up mostly dead entries. lazygit
                         marks them but never lets you see just those, which is the
                         view you want when the actual job is deleting them. */}
                     {goneCount > 0 && (
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
                         <button onClick={() => setOnlyGone((v) => !v)} className="text-[10.5px] px-2.5 py-1 rounded-lg transition-colors"
                           style={{ background: onlyGone ? "color-mix(in srgb, var(--error) 16%, transparent)" : "transparent", border: `1px solid color-mix(in srgb, var(--error) ${onlyGone ? 45 : 22}%, transparent)`, color: onlyGone ? "var(--text)" : "var(--text2)" }}
                           title="Branches whose remote branch no longer exists — usually a merged PR that was tidied up">
@@ -2054,42 +2210,50 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         // to see where the keyboard is, and "this is HEAD" is
                         // already said by the ⎇ glyph.
                         <div key={b.name} onClick={() => setRowIdx(i)} {...rowProps(sel)}
-                          className="group flex items-center gap-2 px-2.5 py-1.5 rounded-md"
-                          style={sel ? rowProps(true).style : { background: isCurrent ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-                          <span className="w-3 text-center text-[11px] shrink-0" style={{ color: "var(--primary-hover)" }}>{isCurrent ? "⎇" : ""}</span>
-                          <button disabled={isCurrent || !writeEnabled || busy} onClick={(e) => { e.stopPropagation(); switchTo(b); }} className="text-[12px] font-medium text-left shrink-0 truncate" style={{ maxWidth: 320, color: isCurrent ? "var(--text)" : "var(--text2)", cursor: isCurrent ? "default" : "pointer" }} title={isCurrent ? `${b.name} — you are here` : wtElsewhere ? `${b.name} — open its worktree` : `Switch to ${b.name}`}>{b.name}</button>
-                          {/* Checked out in a worktree — switching opens it. */}
-                          {wt && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${wt.path}`}>▸ {wtName(wt.path)}</span>}
-                          {/* Behind before ahead — "pull this many, push that many". */}
-                          {(t.ahead > 0 || t.behind > 0) && (
-                            <span className="shrink-0 text-[9.5px] tabular-nums">
-                              {t.behind > 0 && <span style={{ color: "var(--warning)" }}>↓{t.behind}</span>}
-                              {t.ahead > 0 && <span className="ml-1" style={{ color: "var(--success)" }}>↑{t.ahead}</span>}
-                            </span>
-                          )}
-                          {/* Its remote branch is gone — a merged, tidied-up PR.
-                              Safe to delete locally, and the usual reason a branch
-                              list grows to 57 entries. */}
-                          {t.gone && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }} title={`${b.upstream} no longer exists on the remote — this branch was probably merged`}>gone</span>}
-                          {/* In sync, and freshly enough fetched to mean it. */}
-                          {b.upstream && !t.gone && !t.ahead && !t.behind && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--success)" }} title={`in sync with ${b.upstream}`}>✓</span>}
-                          <span className="min-w-0 flex-1 truncate text-[10px] t-dim2">{b.subject}</span>
-                          <span className="shrink-0 text-[9.5px] t-dim2">{b.date}</span>
-                          {writeEnabled && !isCurrent && (
-                            <div className={`shrink-0 flex items-center gap-1.5 transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
+                          className="group px-2.5 py-1.5 rounded-md"
+                          // The action column is reserved whether or not the
+                          // buttons are drawn, so hovering cannot resize the
+                          // subject beside it. See ROW_GRID.
+                          style={{ ...ROW_GRID, ...(sel ? rowProps(true).style : { background: isCurrent ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }), ["--gitrow-actions" as string]: writeEnabled ? "23rem" : "0px" }}>
+                          <span className="text-center text-[11px]" style={{ color: "var(--primary-hover)" }}>{isCurrent ? "⎇" : ""}</span>
+                          {/* Name and its badges share one track and truncate
+                              together — the badges say what the branch IS, so
+                              they must not be pushed out by a long name. */}
+                          <span className="flex items-center gap-1.5 min-w-0">
+                            <button disabled={isCurrent || !writeEnabled || busy} onClick={(e) => { e.stopPropagation(); switchTo(b); }} className="text-[12px] font-medium text-left truncate min-w-0" style={{ color: isCurrent ? "var(--text)" : "var(--text2)", cursor: isCurrent ? "default" : "pointer" }} title={isCurrent ? `${b.name} — you are here` : wtElsewhere ? `${b.name} — open its worktree` : `Switch to ${b.name}`}>{b.name}</button>
+                            {/* Checked out in a worktree — switching opens it. */}
+                            {wt && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${wt.path}`}>▸ {wtName(wt.path)}</span>}
+                            {/* Behind before ahead — "pull this many, push that many". */}
+                            {(t.ahead > 0 || t.behind > 0) && (
+                              <span className="shrink-0 text-[9.5px] tabular-nums">
+                                {t.behind > 0 && <span style={{ color: "var(--warning)" }}>↓{t.behind}</span>}
+                                {t.ahead > 0 && <span className="ml-1" style={{ color: "var(--success)" }}>↑{t.ahead}</span>}
+                              </span>
+                            )}
+                            {/* Its remote branch is gone — a merged, tidied-up PR.
+                                Safe to delete locally, and the usual reason a branch
+                                list grows to 57 entries. */}
+                            {t.gone && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }} title={`${b.upstream} no longer exists on the remote — this branch was probably merged`}>gone</span>}
+                            {/* In sync, and freshly enough fetched to mean it. */}
+                            {b.upstream && !t.gone && !t.ahead && !t.behind && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--success)" }} title={`in sync with ${b.upstream}`}>✓</span>}
+                          </span>
+                          <span className="min-w-0 truncate text-[10px] t-dim2" title={b.subject}>{b.subject}</span>
+                          <span className="text-[9.5px] t-dim2 whitespace-nowrap text-right">{b.date}</span>
+                          {writeEnabled && !isCurrent ? (
+                            <div className={`flex items-center justify-end gap-1.5 transition-opacity ${sel ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
                               {/* The switch, first and filled — the action you came
                                   for. "Open worktree" when it lives in one, else a
                                   plain checkout. */}
                               {wtElsewhere
                                 ? <button onClick={(e) => { e.stopPropagation(); openWorktree(wt!); }} disabled={busy} className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium" style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }} title={`Open ${b.name}'s worktree — ${wt!.path}`}>▸ Open worktree</button>
                                 : <button onClick={(e) => { e.stopPropagation(); checkout(b.name); }} disabled={busy} className="agx-btn text-[10px] px-2 py-0.5 rounded whitespace-nowrap font-medium" style={{ color: "var(--bg)", background: "var(--primary)", border: "1px solid var(--primary)" }} title={`Switch this checkout to ${b.name}`}>⎇ Checkout</button>}
-                              <button onClick={(e) => { e.stopPropagation(); openBranchOnWeb(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={trackChip(b.track).gone ? "its remote branch is gone — find the pull request it came from" : "open this branch on GitHub"}>open ↗</button>
+                              <button onClick={(e) => { e.stopPropagation(); openBranchOnWeb(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded whitespace-nowrap" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={trackChip(b.track).gone ? "its remote branch is gone — find the pull request it came from" : "open this branch on GitHub"}>open ↗</button>
                               <button onClick={(e) => { e.stopPropagation(); mergeBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Merge ${b.name} into current`}>merge</button>
                               <button onClick={(e) => { e.stopPropagation(); rebaseBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} title={`Rebase current onto ${b.name}`}>rebase</button>
                               <button onClick={(e) => { e.stopPropagation(); renameBranch(b.name); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)" }}>rename</button>
                               <button onClick={(e) => { e.stopPropagation(); deleteBranch(b); }} className="agx-btn text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Delete branch">delete</button>
                             </div>
-                          )}
+                          ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}
                         </div>
                       );
                     })}
@@ -2098,17 +2262,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                 ) : view === "stashes" ? (
                   <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
                     {writeEnabled && <button onClick={stashPush} disabled={busy || tree?.clean} className="mb-3 text-[11px] px-3 py-1.5 rounded-lg font-medium" style={{ background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)", color: "var(--text)", opacity: tree?.clean ? 0.5 : 1 }}>⇩ stash all changes</button>}
-                    {stashes.map((s, i) => (
-                      <div key={s.ref} {...rowProps(i === rowIdx)} className="group flex items-center gap-3 px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}>
-                        <span className="shrink-0 text-[10px] tabular-nums t-dim2">{s.ref}</span>
-                        <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--text)" }}>{s.message}</span>
-                        {writeEnabled && (
-                          <div className="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                    <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search stashes…" count={shownStashes.length} total={stashes.length} />
+                    {shownStashes.map((s, i) => (
+                      <div key={s.ref} {...rowProps(i === rowIdx)} className="group px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
+                        style={{ ...ROW_GRID, gridTemplateColumns: "5rem minmax(0, 1fr) var(--gitrow-actions, 0px)", ...rowProps(i === rowIdx).style, ["--gitrow-actions" as string]: writeEnabled ? "10rem" : "0px" }}>
+                        <span className="text-[10px] tabular-nums t-dim2">{s.ref}</span>
+                        <span className="min-w-0 truncate text-[11.5px]" style={{ color: "var(--text)" }} title={s.message}>{s.message}</span>
+                        {writeEnabled ? (
+                          <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
                             <button onClick={() => stashOp("apply", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>apply</button>
                             <button onClick={() => stashOp("pop", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 30%, transparent)" }}>pop</button>
                             <button onClick={() => stashOp("drop", s.index)} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }}>drop</button>
                           </div>
-                        )}
+                        ) : <span className="text-[10px] px-1.5 py-0.5 rounded inline-block" style={{ border: "1px solid transparent" }} aria-hidden>&nbsp;</span>}
                       </div>
                     ))}
                     {!stashes.length && <PaneEmpty busy={busyView === "stashes"} what="stashes" />}
@@ -2233,16 +2399,21 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 ) : view === "tags" ? (
                   <div onScroll={incTags.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
+                    <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search tags by name, commit or subject…"
+                      sort={sort} onSort={(x) => { setSort(x); setRowIdx(0); }}
+                      sorts={[{ key: "recent", label: "recent", title: "Newest tag first" }, { key: "name", label: "name", title: "Alphabetical" }]}
+                      count={shownTags.length} total={tags.length} />
                     {incTags.rows.map((t, i) => (
-                      <div key={t.name} {...rowProps(i === rowIdx)} className="flex items-center gap-3 px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}>
-                        <span className="shrink-0 text-[11.5px] font-medium truncate" style={{ maxWidth: 260, color: "var(--text)" }} title={t.name}>{t.annotated ? "🏷" : "⚑"} {t.name}</span>
-                        <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{t.hash}</span>
-                        <span className="min-w-0 flex-1 truncate text-[10px] t-dim2">{t.subject}</span>
-                        <span className="shrink-0 text-[9.5px] t-dim2">{t.date}</span>
+                      <div key={t.name} {...rowProps(i === rowIdx)} className="px-2.5 py-1.5 rounded-md" onClick={() => setRowIdx(i)}
+                        style={{ ...ROW_GRID, gridTemplateColumns: "minmax(0, 18rem) 5rem minmax(0, 1fr) auto", ...rowProps(i === rowIdx).style }}>
+                        <span className="text-[11.5px] font-medium truncate min-w-0" style={{ color: "var(--text)" }} title={t.name}>{t.annotated ? "🏷" : "⚑"} {t.name}</span>
+                        <span className="text-[9.5px] tabular-nums t-dim2">{t.hash}</span>
+                        <span className="min-w-0 truncate text-[10px] t-dim2" title={t.subject}>{t.subject}</span>
+                        <span className="text-[9.5px] t-dim2 whitespace-nowrap text-right">{t.date}</span>
                       </div>
                     ))}
-                    {!tags.length && <PaneEmpty busy={busyView === "tags"} what="tags" />}
-                    <MoreRows shown={incTags.rows.length} total={tags.length} onAll={incTags.showAll} />
+                    {!shownTags.length && <PaneEmpty busy={busyView === "tags"} what="tags" />}
+                    <MoreRows shown={incTags.rows.length} total={shownTags.length} onAll={incTags.showAll} />
                   </div>
                 ) : view === "reflog" ? (
                   <div onScroll={incReflog.onScroll} className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
@@ -2269,20 +2440,30 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         <button onClick={addWorktree} disabled={busy || !newWtBranch.trim()} className="text-[11px] px-3 py-1.5 rounded-lg font-medium whitespace-nowrap" style={{ background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", color: "var(--text)", opacity: newWtBranch.trim() ? 1 : 0.5 }}>+ add worktree</button>
                       </div>
                     )}
-                    {worktrees.map((w, i) => (
+                    <ListToolbar q={q} onQ={(v) => { setQ(v); setRowIdx(0); }} placeholder="Search worktrees by branch or directory…" count={shownWorktrees.length} total={worktrees.length} />
+                    {shownWorktrees.map((w, i) => (
+                      // Fixed tracks for the directory and the branch so they
+                      // line up down the list. With seventeen ticket worktrees
+                      // whose names differ in length by thirty characters, a
+                      // flex row put every branch chip at a different x and the
+                      // eye had nothing to run down.
                       <div key={w.path} onClick={() => setRowIdx(i)} {...rowProps(i === rowIdx)}
-                        className="group flex items-center gap-2 px-2.5 py-1.5 rounded-md"
-                        style={i === rowIdx ? rowProps(true).style : { background: w.current ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
-                        <span className="w-3 text-center text-[11px] shrink-0" style={{ color: "var(--primary-hover)" }}>{w.current ? "▸" : ""}</span>
-                        <button onClick={() => openWorktree(w)} className="text-[12px] font-medium text-left shrink-0" style={{ color: "var(--text)" }} title={`Open ${w.path}`}>{wtName(w.path)}</button>
-                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }}>⎇ {w.branch}</span>
-                        <span className="shrink-0 text-[9.5px] tabular-nums t-dim2">{w.head}</span>
-                        {w.locked && <span className="shrink-0 text-[9px]" style={{ color: "var(--warning)" }}>locked</span>}
+                        className="group px-2.5 py-1.5 rounded-md"
+                        style={{ ...ROW_GRID, gridTemplateColumns: "14px minmax(0, 14rem) minmax(0, 20rem) 5rem minmax(0, 1fr) auto", ...(i === rowIdx ? rowProps(true).style : { background: w.current ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }) }}>
+                        <span className="text-center text-[11px]" style={{ color: "var(--primary-hover)" }}>{w.current ? "▸" : ""}</span>
+                        <button onClick={() => openWorktree(w)} className="text-[12px] font-medium text-left truncate min-w-0" style={{ color: "var(--text)" }} title={`Open ${w.path}`}>{wtName(w.path)}</button>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded truncate min-w-0" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }} title={w.branch}>⎇ {w.branch}</span>
+                        <span className="text-[9.5px] tabular-nums t-dim2 flex items-center gap-1">
+                          {w.head}
+                          {w.locked && <span className="text-[9px]" style={{ color: "var(--warning)" }}>locked</span>}</span>
                         {/* Same reading as the repo picker's. It is also the
                             reason the sync button below may be disabled, so it
                             has to be visible on the row that carries it. */}
-                        {!!w.dirty && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${w.dirty} uncommitted change${w.dirty === 1 ? "" : "s"} in this checkout`}>●{w.dirty}</span>}
-                        <span className="min-w-0 flex-1 truncate text-[9.5px] t-dim2">{w.path}</span>
+                        <span className="min-w-0 truncate text-[9.5px] t-dim2 flex items-center gap-1.5" title={w.path}>
+                          {!!w.dirty && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${w.dirty} uncommitted change${w.dirty === 1 ? "" : "s"} in this checkout`}>●{w.dirty}</span>}
+                          <span className="truncate min-w-0">{w.path}</span>
+                        </span>
+                        <span className="flex items-center justify-end gap-2 whitespace-nowrap">
                         {/* How far this checkout has drifted from what it was
                             branched off, and the one-click way to close the
                             gap. Shown only when there is a gap: a checkout
@@ -2339,9 +2520,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} />
                         )}
                         {writeEnabled && !w.current && <button onClick={() => removeWorktree(w)} className="shrink-0 text-[10px] opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded" style={{ color: "var(--error)" }} title="Remove worktree">remove</button>}
+                        </span>
                       </div>
                     ))}
-                    {!worktrees.length && <PaneEmpty busy={busyView === "worktrees"} what="worktrees" />}
+                    {!shownWorktrees.length && <PaneEmpty busy={busyView === "worktrees"} what="worktrees" />}
                   </div>
                 )}
 
