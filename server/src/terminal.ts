@@ -180,7 +180,7 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveClient, readFrame, runAction, setStatusLine, prefixKeys, newWindowRunning, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, clearAsk, prefixKeys, newWindowRunning, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { applyThemeTo } from "./themesync.ts";
@@ -447,6 +447,23 @@ export function ptyOpen(ws: PtyWs) {
       session.tmux = null;
     }
     const windows = frame?.windows ?? [];
+    /**
+     * A prompt tmux would have drawn, taken off the window and forwarded once.
+     *
+     * Cleared here rather than by the panel: the note is on the tmux side and
+     * the sweep is the only thing holding a target for it, and leaving it set
+     * would have the panel reopening its rename box twice a second for as long
+     * as the option lived. Forwarded first, cleared second — the frame below
+     * still carries `ask`, and the next sweep will not.
+     */
+    if (frame && windows.some((w) => w.ask)) {
+      for (const w of windows) if (w.ask) clearAsk(frame.target, w.id);
+      // Deliberately outside the change check below: two renames in a row on
+      // the same window are the same shape, and the second must still open the
+      // box. `sent` is reset so the following sweep — which no longer carries
+      // the note — is seen as a change and clears it from the client's copy.
+      sent = "";
+    }
     // Only speak when something changed. A tab strip that re-renders on every
     // tick is a tab strip that drops the click you were halfway through. The
     // session is part of "changed": switching between two sessions with the
@@ -678,7 +695,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     }
 
     const action = msg.cmd as TmuxAction;
-    if (!["select", "new", "kill", "rename"].includes(action)) return;
+    if (!["select", "new", "kill", "rename", "move"].includes(action)) return;
     if (!runAction(s.tmux, action, msg.window, msg.name)) return;
     // Answer now rather than at the next tick. The command has already been
     // applied by the time it returns, so the strip can be correct within a

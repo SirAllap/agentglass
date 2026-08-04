@@ -316,6 +316,16 @@ export interface TmuxWindow {
   name: string;
   active: boolean;
   flags: string;
+  /**
+   * A prompt tmux would have drawn, handed to the panel instead.
+   *
+   * While the panel owns the status line there is no row for tmux to draw a
+   * command prompt into, so `prefix ,` and `prefix .` set a window option here
+   * rather than prompting. The server reads it on its next sweep, clears it,
+   * and the panel opens its own input on that window. Absent almost always —
+   * it exists for the one sweep between the keystroke and the panel reacting.
+   */
+  ask?: "rename" | "move";
 }
 
 /** A tool call held at the gate, awaiting a remote approve/deny. */
