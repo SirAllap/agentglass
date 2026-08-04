@@ -13,14 +13,28 @@
  * when the PR is in another repository or has been deleted. Pushing a selection
  * instead would need the view to hold a card's idea of what exists.
  */
-let listener: ((query: string) => void) | null = null;
+/**
+ * How wide the receiving view has to look.
+ *
+ * `open` is the ordinary case and the cheap one. `all` includes every pull
+ * request the repository has ever had — 16,199 of them on a real one against
+ * 389 open — so it is asked for only when the thing being looked for is not
+ * open, which the sender already knows from the card.
+ */
+export type PrScope = "open" | "all";
 
-export function onOpenPrs(fn: ((query: string) => void) | null): () => void {
+export interface PrJump { query: string; scope: PrScope; n: number }
+
+let listener: ((j: PrJump) => void) | null = null;
+let seq = 0;
+
+export function onOpenPrs(fn: ((j: PrJump) => void) | null): () => void {
   listener = fn;
   return () => { if (listener === fn) listener = null; };
 }
 
-/** Open the pull-request view with this text in its search box. */
-export function openPrs(query: string): void {
-  listener?.(query);
+/** Open the pull-request view looking for this. `n` rises each time so asking
+ *  for the same number twice is two arrivals, not one ignored. */
+export function openPrs(query: string, scope: PrScope = "open"): void {
+  listener?.({ query, scope, n: ++seq });
 }

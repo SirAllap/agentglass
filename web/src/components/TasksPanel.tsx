@@ -21,7 +21,7 @@ import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
 import { openPrs } from "../lib/openPrs.ts";
-import { cardSkills, skillCommand, windowName, skillModes, namedForIt } from "../lib/cardSkills.ts";
+import { cardSkills, skillCommand, windowName, skillModes, namedForIt, shortName } from "../lib/cardSkills.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
 import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, stamp, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
@@ -612,6 +612,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   const [confirm, setConfirm] = useState<Pending | null>(null);
   const [statusPick, setStatusPick] = useState<string[]>([]);
   const [confirmWrite, setConfirmWrite] = useState(false);
+  const [readyOnly, setReadyOnly] = useState(false);
   const [folded, setFolded] = useState<Record<string, boolean>>({});
   /* A card fetched by id rather than found on this board. Kept beside the
      board's own rows instead of mixed into them: it belongs to some other list
@@ -647,9 +648,16 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   }, []);
 
   useEffect(() => { if (active) { void loadBoards(); void load(); } }, [active, loadBoards, load]);
+  /*
+   * One minute, matching the server's own cache.
+   *
+   * Polling faster cannot produce a fresher answer — the server would serve the
+   * same snapshot — it can only spend the rate budget finding that out. Paused
+   * while the tab is hidden, like everything else here.
+   */
   useEffect(() => {
     if (!active) return;
-    const t = setInterval(() => { if (!document.hidden) void load(data?.view?.id); }, 60_000);
+    const t = setInterval(() => { if (!document.hidden) void load(data?.view?.id); }, CU_POLL_MS);
     return () => clearInterval(t);
   }, [active, load, data?.view?.id]);
 
@@ -676,6 +684,21 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
     await load(data?.view?.id, true);
   };
 
+  /*
+   * What is standing in a card's way, resolved against the board itself.
+   *
+   * Dependencies arrive as ids. Almost all of them are cards on the same board,
+   * so they are looked up here rather than fetched — a list of 36 would
+   * otherwise mean 36 extra calls against a 100-a-minute budget. Only the ones
+   * that are NOT finished count: a card waiting on something already in
+   * production is not blocked, it is ready, and saying otherwise is the kind of
+   * warning people learn to ignore.
+   */
+  const byId = useMemo(() => new Map((data?.tasks ?? []).map((t) => [t.id, t])), [data]);
+  const blockedBy = useCallback((t: ProviderTask) =>
+    (t.waitsOn ?? []).map((id) => byId.get(id)).filter((x): x is ProviderTask => !!x && x.statusKind !== "done"),
+  [byId]);
+
   const rows = useMemo(() => {
     const all = data?.tasks ?? [];
     const needle = q.trim().toLowerCase();
@@ -685,8 +708,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
       (statusPick.length ? statusPick.includes(t.status) : (showDone || t.statusKind !== "done"))
       && (!mineOnly || t.mine)
       && (!tag || t.tags.includes(tag))
+      && (!readyOnly || !blockedBy(t).length)
       && (!needle || t.title.toLowerCase().includes(needle)));
-  }, [data, q, tag, mineOnly, showDone, statusPick]);
+  }, [data, q, tag, mineOnly, showDone, statusPick, readyOnly, blockedBy]);
 
   const tags = useMemo(() => {
     const seen = new Set<string>();
@@ -700,8 +724,9 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
       mine: all.filter((t) => t.mine && t.statusKind !== "done").length,
       open: all.filter((t) => t.statusKind !== "done").length,
       done: all.filter((t) => t.statusKind === "done").length,
+      ready: all.filter((t) => t.statusKind !== "done" && !blockedBy(t).length).length,
     };
-  }, [data]);
+  }, [data, blockedBy]);
 
   // A bare number, or a prefixed id. Loose on purpose — the server decides
   // what is really a card, and being asked is cheaper than not being offered.
@@ -720,7 +745,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   const picked = [...rows, ...(found ? [found] : [])].find((t) => t.id === sel) ?? null;
   const anyWho = (data?.tasks ?? []).some((t) => t.assignees.length);
   const anySprint = (data?.tasks ?? []).some((t) => t.sprint);
-  const grid = cuGrid(anyWho, anySprint);
+  const anyEst = (data?.tasks ?? []).some((t) => t.estimateHours);
+  const grid = cuGrid(anyWho, anySprint, anyEst);
 
   /* One group per status that HAS something, ordered by the board's own
      workflow rather than alphabetically or by count — a board is read in the
@@ -750,11 +776,15 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      <div className="flex items-center gap-1.5 px-5 pt-2.5 pb-1.5 flex-wrap shrink-0">
+      {/* One bar, not three. The old layout spent 216 pixels before the first
+          task — boards, then search, then filters, then column headings — on a
+          list of 36 rows of which 13 fitted. Boards and controls now share a
+          line, and the search shares the next with the filters. */}
+      <div className="flex items-center gap-1.5 px-4 pt-2 pb-1.5 flex-wrap shrink-0">
         {boards.views.map((v) => (
           <button key={v.id} onClick={() => { setSel(null); void load(v.id); }}
             aria-pressed={data?.view?.id === v.id}
-            className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap max-w-[280px]"
+            className="flex items-center gap-1.5 text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap max-w-[240px]"
             style={data?.view?.id === v.id
               ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)",
                   border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)", color: "var(--text)" }
@@ -764,11 +794,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
           </button>
         ))}
         <button onClick={() => setAdding((o) => !o)} className="text-[11px] px-2 py-0.5 rounded-full"
-          style={{ border: edge(14), color: "var(--text3)" }}>＋ board</button>
+          style={{ border: edge(14), color: "var(--text3)" }} title="Add a board by pasting its address">＋</button>
         <span className="flex-1" />
-        {/* The switch, where the consequence is. It was an environment variable
-            only, which meant the one person who could see what it does was the
-            one person who could not turn it on. */}
         <button onClick={async () => {
             const on = !boards.writeEnabled;
             if (on && !confirmWrite) { setConfirmWrite(true); return; }
@@ -784,10 +811,22 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
             : { color: "var(--text4)", border: edge(12) }}>
           {boards.writeEnabled ? "can edit" : "read-only"}
         </button>
+        {/* When it was read AND how long that answer stands for. A timestamp on
+            its own answers half the question: the other half is whether the
+            thing is about to correct itself or has been sitting there since
+            this morning. Both are stated, and the exact instant is on hover. */}
+        {data?.at ? (
+          <span className="text-[10px] flex items-center gap-1"
+            title={`Read at ${new Date(data.at).toLocaleString()}. Refreshes on its own every ${Math.round(CU_POLL_MS / 1000)}s while this tab is open — Refresh forces it now.`}
+            style={{ color: "var(--text4)" }}>
+            <span>{stamp(data.at)}</span>
+            <span style={{ opacity: 0.65 }}>· auto {Math.round(CU_POLL_MS / 1000)}s</span>
+          </span>
+        ) : null}
         <button onClick={() => void load(data?.view?.id, true)} disabled={busy}
-          className="text-[10.5px] px-2.5 py-0.5 rounded-lg"
+          className="text-[10.5px] px-2 py-0.5 rounded-lg"
           style={{ border: edge(16), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
-          {busy ? "Reading…" : "Refresh"}
+          {busy ? "…" : "Refresh"}
         </button>
       </div>
 
@@ -816,7 +855,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
         <AddBoardBar value={urlText} onValue={setUrlText} onAdd={addBoard} onClose={() => setAdding(false)} busy={busy} />
       )}
 
-      <div className="flex items-center gap-1.5 px-5 pb-2 flex-wrap shrink-0">
+      <div className="flex items-center gap-1.5 px-4 pb-1.5 flex-wrap shrink-0">
         <div className="flex items-center gap-2 flex-1 min-w-[220px] rounded-lg px-2.5 py-1"
           style={{ background: "var(--bg2)", border: edge(14) }}>
           <span className="text-[11px] shrink-0" style={{ color: "var(--text3)" }}>⌕</span>
@@ -827,6 +866,17 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
             className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
             style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
         </div>
+        {/* The six of thirty-six that nothing is in the way of. On a board this
+            dependent, that is the only question worth asking first: what can I
+            actually start? */}
+        <button onClick={() => setReadyOnly((v) => !v)} aria-pressed={readyOnly}
+          title="Cards nothing unfinished is blocking"
+          className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
+          style={readyOnly
+            ? { background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text)" }
+            : { border: edge(14), color: "var(--text2)" }}>
+          ready <span style={{ color: "var(--text3)" }}>{counts.ready}</span>
+        </button>
         <button onClick={() => setMineOnly((v) => !v)} aria-pressed={mineOnly}
           className="text-[11px] px-2.5 py-0.5 rounded-full whitespace-nowrap"
           style={mineOnly
@@ -876,7 +926,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
             <span>Task</span>
             {anyWho && <span>Who</span>}
             {anySprint && <span>Sprint</span>}
-            <span>Due</span><span>Pts</span><span />
+            <span>Due</span>{anyEst && <span>Est</span>}<span>Pts</span><span />
           </div>
           <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
             {/* Looks like a card number and is not on this board — so offer to
@@ -906,7 +956,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
                   <span className="text-[10.5px] truncate" style={{ color: "var(--text4)" }}>{found.list ?? ""}</span>
                 </div>
                 <ClickUpRow t={found} today={today} on={found.id === sel} onPick={() => setSel(found.id)}
-                  grid={grid} showWho={anyWho} showSprint={anySprint} />
+                  grid={grid} showWho={anyWho} showSprint={anySprint} showEst={anyEst} blocked={[]} />
               </div>
             )}
             {!rows.length && !found && !looksLikeId && (
@@ -953,7 +1003,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
                 </button>
                 {!folded[g.status] && g.rows.map((t) => (
                   <ClickUpRow key={t.id} t={t} today={today} on={t.id === sel} onPick={() => setSel(t.id)}
-                    grid={grid} showWho={anyWho} showSprint={anySprint} />
+                    grid={grid} showWho={anyWho} showSprint={anySprint} showEst={anyEst} blocked={blockedBy(t)} />
                 ))}
               </div>
             ))}
@@ -981,6 +1031,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
                 writable={boards.writeEnabled} repos={repos} here={here}
                 onOpenChatWith={onOpenChatWith}
                 wide={wide} onWide={() => setWide((w) => !w)}
+                byId={byId} onGo={(id) => setSel(id)}
                 skills={skills}
                 onNote={(text) => setNote({ ok: true, text })}
                 onAsk={(p) => setConfirm(p)} />
@@ -1088,6 +1139,9 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note }: {
  */
 const YOLO_KEY = "agentglass.clickup.skipPermissions";
 const WIDE_KEY = "agentglass.clickup.wideCard";
+/** How often the board re-reads itself. Named because it is now printed on
+ *  screen, and a number in two places drifts. */
+const CU_POLL_MS = 60_000;
 
 /*
  * The columns, and the ones that come and go.
@@ -1099,8 +1153,8 @@ const WIDE_KEY = "agentglass.clickup.wideCard";
  * `Who` and `Sprint` appear only once some card actually has one. A column of
  * blanks costs the title its width and tells you nothing.
  */
-const cuGrid = (who: boolean, sprint: boolean) =>
-  ["1fr", who ? "54px" : "", sprint ? "96px" : "", "78px", "32px", "48px"].filter(Boolean).join(" ");
+const cuGrid = (who: boolean, sprint: boolean, est: boolean) =>
+  ["1fr", who ? "50px" : "", sprint ? "88px" : "", "72px", est ? "38px" : "", "30px", "40px"].filter(Boolean).join(" ");
 
 /**
  * A status, spelled and coloured the way the board spells and colours it.
@@ -1178,9 +1232,11 @@ function PriorityChip({ p }: { p: NonNullable<ProviderTask["priority"]> }) {
   );
 }
 
-function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint }: {
+function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint, showEst, blocked }: {
   t: ProviderTask; today: string; on: boolean; onPick: () => void;
-  grid: string; showWho: boolean; showSprint: boolean;
+  grid: string; showWho: boolean; showSprint: boolean; showEst: boolean;
+  /** Unfinished cards this one is waiting on. Empty means it can be started. */
+  blocked: ProviderTask[];
 }) {
   const late = !!t.due && t.due < today;
   const now = t.due === today;
@@ -1188,18 +1244,40 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint }: {
   return (
     <div role="row" tabIndex={0} aria-current={on ? "true" : undefined} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
-      className="agx-row w-full text-left px-5 py-2 hover:bg-white/5 cursor-pointer items-center"
+      className="agx-row w-full text-left px-4 py-1.5 hover:bg-white/5 cursor-pointer items-center"
       style={{
-        display: "grid", gridTemplateColumns: grid, gap: 10, borderBottom: edge(6),
+        display: "grid", gridTemplateColumns: grid, gap: 8, borderBottom: edge(6),
         background: on ? "color-mix(in srgb, var(--primary) 13%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
       <div className="min-w-0">
-        <div className="truncate text-[12.5px] leading-snug" style={{ color: done ? "var(--text3)" : "var(--text)" }}
-          title={t.title}>{t.title}</div>
-        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+        <div className="flex items-baseline gap-1.5 min-w-0">
+          {/* Blocked first, because it changes whether the rest is worth
+              reading. 28 of 30 cards on a real board have dependencies and none
+              of them were shown; the ones that matter are the unfinished ones. */}
+          {/* WHAT it waits on, not that it waits. On a real board 30 of 36
+              cards are blocked, so the word alone is a label every row wears —
+              which is a label nobody reads. The name of the thing in the way is
+              different on every row and is the part you can act on. */}
+          {!!blocked.length && (
+            <span className="text-[8.5px] tracking-[0.06em] px-1.5 rounded shrink-0 tabular-nums"
+              title={`Waiting on ${blocked.map((b) => `${shortName(b.title, b.customId ?? b.id)} — ${b.title}`).join("\n")}`}
+              style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 14%, transparent)" }}>
+              ⛔ {shortName(blocked[0]!.title, blocked[0]!.customId ?? blocked[0]!.id)}
+              {blocked.length > 1 ? ` +${blocked.length - 1}` : ""}
+            </span>
+          )}
+          <span className="truncate text-[12.5px] leading-snug" style={{ color: done ? "var(--text3)" : "var(--text)" }}
+            title={t.title}>{t.title}</span>
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
           {t.customId && <span className="text-[9px] tabular-nums" style={{ color: "var(--text4)" }}>{t.customId}</span>}
-          {t.priority && <PriorityChip p={t.priority} />}
+          {/* Only a priority worth acting on. "Normal" was on nine rows in ten,
+              which is a column of noise pretending to be information. */}
+          {t.priority && t.priority !== "normal" && <PriorityChip p={t.priority} />}
+          {!!t.subtasks && (
+            <span className="text-[9px]" style={{ color: "var(--text4)" }} title={`${t.subtasks} subtasks`}>⌥{t.subtasks}</span>
+          )}
           {t.tags.map((tag) => (
             <span key={tag} className="text-[9.5px] px-1.5 rounded-full"
               style={{ color: "var(--text3)", background: "color-mix(in srgb, var(--text) 8%, transparent)" }}>{tag}</span>
@@ -1216,16 +1294,22 @@ function ClickUpRow({ t, today, on, onPick, grid, showWho, showSprint }: {
       )}
       {showSprint && (
         <span className="truncate text-[10.5px]" style={{ color: t.sprint ? "var(--info)" : "var(--text4)" }}
-          title={t.sprint ?? ""}>{t.sprint ?? "—"}</span>
+          title={t.sprint ?? ""}>{t.sprint ?? ""}</span>
       )}
       <span className="text-[11px] tabular-nums" style={{ color: late ? "var(--error)" : now ? "var(--warning)" : "var(--text3)" }}>
         {dueLabel(t.due, today)}
       </span>
+      {showEst && (
+        <span className="text-[10.5px] tabular-nums text-right" style={{ color: "var(--text4)" }}
+          title={t.estimateHours ? `${t.estimateHours}h estimated${t.spentHours ? `, ${t.spentHours}h logged` : ""}` : ""}>
+          {t.estimateHours ? `${t.estimateHours}h` : ""}
+        </span>
+      )}
       <span className="text-[11px] tabular-nums text-right" style={{ color: "var(--text4)" }}>{t.points ?? ""}</span>
       <span className="text-right">
         {t.url && (
           <a href={t.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
-            className="agx-onrow text-[10.5px] px-2 py-0.5 rounded-lg inline-block"
+            className="agx-onrow text-[10.5px] px-1.5 py-0.5 rounded-lg inline-block"
             style={{ border: edge(16), color: "var(--text2)" }}>↗</a>
         )}
       </span>
@@ -1308,6 +1392,21 @@ function StatusFilter({ statuses, tasks, picked, onPick }: {
   );
 }
 
+/** A dependency, as a row you can jump to. Its status decides whether it is an
+ *  obstacle or a note: a card waiting on something already in production is
+ *  ready, and colouring it red is how a warning gets ignored. */
+function DepRow({ d, onGo }: { d: ProviderTask; onGo: (id: string) => void }) {
+  const done = d.statusKind === "done";
+  return (
+    <button onClick={() => onGo(d.id)}
+      className="w-full text-left flex items-center gap-2 py-1 px-1 -mx-1 rounded hover:bg-white/5">
+      <StatusPill status={d.status} color={d.statusColor} dim={done} />
+      <span className="truncate text-[11px]" style={{ color: done ? "var(--text4)" : "var(--text2)" }}
+        title={d.title}>{d.title}</span>
+    </button>
+  );
+}
+
 /** One metadatum: a quiet label with its value beneath. Named apart from the
  *  issues panel's own `Field`, which takes a different prop — two components
  *  with one name is how a rename breaks a panel three hundred lines away. */
@@ -1334,7 +1433,7 @@ function CardField({ label, children }: { label: string; children: React.ReactNo
  * then does anything leave this machine. That is not ceremony. A status change
  * here fires automations and notifies people, and there is no undo.
  */
-function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenChatWith, onAsk, skills, onNote, wide, onWide }: {
+function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenChatWith, onAsk, skills, onNote, wide, onWide, byId, onGo }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
   writable: boolean;
@@ -1346,6 +1445,9 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
   onNote: (text: string) => void;
   wide: boolean;
   onWide: () => void;
+  /** The board's own cards, for resolving dependencies without a call each. */
+  byId: Map<string, ProviderTask>;
+  onGo: (id: string) => void;
 }) {
   const [full, setFull] = useState<(Partial<TaskDetail> & { ok?: boolean; error?: string }) | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
@@ -1389,6 +1491,9 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
      already in. Never a text box — an invalid status is a 400, and a status
      from another list means something else entirely. */
   const options = statuses.filter((s) => s.status !== t.status);
+  const waits = (t.waitsOn ?? []).map((id) => byId.get(id)).filter((x): x is ProviderTask => !!x);
+  const waitsOpen = waits.filter((x) => x.statusKind !== "done");
+  const blocksThese = (t.blocks ?? []).map((id) => byId.get(id)).filter((x): x is ProviderTask => !!x);
 
   const shown = useMemo(() => {
     const needle = skillQ.trim().toLowerCase();
@@ -1487,7 +1592,20 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
             </span>
           </CardField>
         )}
+        {t.estimateHours != null && (
+          <CardField label="Estimate">
+            <span className="tabular-nums" style={{ color: "var(--text2)" }}>
+              {t.estimateHours}h{t.spentHours ? ` · ${t.spentHours}h logged` : ""}
+            </span>
+          </CardField>
+        )}
+        {t.start && <CardField label="Starts"><span style={{ color: "var(--text2)" }}>{dueLabel(t.start, today)}</span></CardField>}
         {t.list && <CardField label="List"><span style={{ color: "var(--text2)" }}>{t.list}</span></CardField>}
+        {t.updated ? (
+          <CardField label="Last moved">
+            <span style={{ color: "var(--text3)" }} title={new Date(t.updated).toLocaleString()}>{fmtAgo(t.updated)}</span>
+          </CardField>
+        ) : null}
         {t.custom?.map((c) => {
           const spec = fields.find((f) => f.id === c.id);
           return (
@@ -1509,6 +1627,33 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
         </div>
       )}
 
+      {/* What is in the way, and what this is in the way of.
+          The most actionable thing on an engineering board — 28 of 30 cards on
+          a real one have these — and it was the one thing not being shown.
+          Resolved against the board's own rows, so naming them costs nothing.
+          A dependency already finished is listed quietly rather than as a
+          block: it is history, not an obstacle. */}
+      {(!!waits.length || !!blocksThese.length) && (
+        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+          {!!waits.length && (
+            <>
+              <div className="text-[8.5px] uppercase tracking-[0.18em] mb-1.5" style={{ color: waitsOpen.length ? "var(--error)" : "var(--text4)" }}>
+                {waitsOpen.length ? `Blocked by ${waitsOpen.length}` : "Was waiting on"}
+              </div>
+              {waits.map((d) => <DepRow key={d.id} d={d} onGo={onGo} />)}
+            </>
+          )}
+          {!!blocksThese.length && (
+            <>
+              <div className="text-[8.5px] uppercase tracking-[0.18em] mt-2 mb-1.5" style={{ color: "var(--text4)" }}>
+                Blocking {blocksThese.length}
+              </div>
+              {blocksThese.map((d) => <DepRow key={d.id} d={d} onGo={onGo} />)}
+            </>
+          )}
+        </div>
+      )}
+
       {/* The pull requests this card produced.
           ClickUp's own GitHub panel knows them and its API does not expose
           them, so they are found the way the team already names things: the
@@ -1523,7 +1668,7 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">
-              <button onClick={() => openPrs(String(p.number))}
+              <button onClick={() => openPrs(String(p.number), p.state === "OPEN" || !p.state ? "open" : "all")}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
                 title="Open this in Pull Requests">
                 <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>

@@ -179,6 +179,12 @@ interface RawTask {
   locations?: { id?: string; name?: string }[];
   points?: number | null;
   custom_fields?: RawField[];
+  time_estimate?: number | null;
+  time_spent?: number | null;
+  date_created?: string | number | null;
+  start_date?: string | number | null;
+  subtasks_count?: number;
+  dependencies?: { task_id?: string; depends_on?: string; type?: number }[];
 }
 
 interface RawField {
@@ -269,6 +275,20 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     // knowing your ClickUp user id, and a client-side comparison would need it.
     mine: myId ? assignees.some((a) => String(a.id ?? "") === myId) : undefined,
     points: typeof raw.points === "number" ? raw.points : null,
+    // Hours, not milliseconds. The API speaks one and people plan in the other.
+    estimateHours: raw.time_estimate ? Math.round((Number(raw.time_estimate) / 3_600_000) * 10) / 10 : null,
+    spentHours: raw.time_spent ? Math.round((Number(raw.time_spent) / 3_600_000) * 10) / 10 : null,
+    created: Number(raw.date_created) || undefined,
+    start: localDay(raw.start_date),
+    subtasks: typeof raw.subtasks_count === "number" ? raw.subtasks_count : undefined,
+    /*
+     * ClickUp's dependency rows are directional and both directions arrive on
+     * both cards. `type: 1` is "waiting on"; anything else is the other side.
+     * Split here rather than at the call site because the field is one array
+     * where a reader needs two lists with opposite meanings.
+     */
+    waitsOn: (raw.dependencies ?? []).filter((d) => d.type === 1 && d.task_id === String(raw.id)).map((d) => d.depends_on).filter(Boolean) as string[],
+    blocks: (raw.dependencies ?? []).filter((d) => d.type === 1 && d.depends_on === String(raw.id)).map((d) => d.task_id).filter(Boolean) as string[],
     custom: (raw.custom_fields ?? [])
       .map((f) => ({ id: f.id, name: f.name, value: fieldText(f) }))
       .filter((f) => f.value),
