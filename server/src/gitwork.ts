@@ -1226,7 +1226,7 @@ export function invalidateMerged(root?: string): void {
   // path both of those reach.
   if (!root) {
     mergedCache.clear(); probedAt.clear(); probeMemo.clear();
-    defaultBranchCache.clear(); baseCache.clear();
+    defaultBranchCache.clear(); baseCache.clear(); publishedCache.clear();
     return;
   }
   const mine = `${root}\u0000`;
@@ -1235,6 +1235,7 @@ export function invalidateMerged(root?: string): void {
   }
   // `mine` (root + separator) is the prefix of the per-branch base keys too.
   defaultBranchCache.delete(root);
+  publishedCache.delete(root);
   for (const k of baseCache.keys()) if (k.startsWith(mine)) baseCache.delete(k);
 }
 
@@ -1366,6 +1367,78 @@ export async function logGraph(rootIn: unknown, limit = 400, scope: "head" | "al
  *  write (including setBase, the only thing that changes an override) passes
  *  through. Same TTL as the trunk it mostly returns. */
 const baseCache = new Map<string, { at: number; base: string | null }>();
+
+/**
+ * Every branch name `origin` publishes, as short names.
+ *
+ * Cached and single-flighted for the same reason `defaultBranch` is: `baseOf`
+ * asks for it once per checkout and `worktrees()` launches all of those in one
+ * `Promise.all`, so a plain TTL cache would be missed by all twenty-two of them
+ * before any had filled it. One `for-each-ref` per minute per repo, shared.
+ *
+ * Cleared by `invalidateMerged`, which every write passes through, and by a
+ * fetch that actually moved refs — so a branch pushed for the first time is a
+ * candidate base within the same poll that notices it.
+ */
+const PUBLISHED_TTL_MS = 60_000;
+const publishedCache = new Map<string, { at: number; refs: Set<string> }>();
+const publishedInflight = new Map<string, Promise<Set<string>>>();
+
+async function publishedRefs(root: string): Promise<Set<string>> {
+  const hit = publishedCache.get(root);
+  if (hit && Date.now() - hit.at < PUBLISHED_TTL_MS) return hit.refs;
+  const flying = publishedInflight.get(root);
+  if (flying) return flying;
+  const p = (async () => {
+    try {
+      const out = await gitAsync(root, ["for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/"]);
+      const refs = new Set(
+        out.stdout.split("\n").map((s) => s.trim().replace(/^origin\//, "")).filter((s) => s && s !== "HEAD"),
+      );
+      if (publishedCache.size > 200) publishedCache.clear();
+      publishedCache.set(root, { at: Date.now(), refs });
+      return refs;
+    } finally {
+      publishedInflight.delete(root);
+    }
+  })();
+  publishedInflight.set(root, p);
+  return p;
+}
+
+/**
+ * The published copy of a base, when that is the one worth comparing against.
+ *
+ * A base branch is usually checked out *somewhere* — the trunk of a stack often
+ * sits in the family's main checkout — and a checkout nobody has pulled goes
+ * stale while the branch it names keeps moving on the server. Comparing against
+ * the stale local copy is how "126 commits behind" renders as nothing at all:
+ * the local `orbit-WEB-1042` was itself 126 behind `origin/orbit-WEB-1042`, so
+ * `branch..base` came out zero and the panel had nothing to show.
+ *
+ * So once a base has a *name*, the ref we actually measure and merge is the
+ * freshest copy of that name: `origin/<short>` when it exists and carries
+ * commits the local copy does not. Not "whenever the remote exists" — a base
+ * whose local copy is ahead is one somebody is actively building, and pointing
+ * at the remote would under-report it.
+ *
+ * `syncFromBase` merges whatever this returns, which is the intended behaviour:
+ * "Update branch" on a pull request page brings in the *remote* base, not
+ * whatever happens to be on this disk.
+ */
+async function freshest(root: string, ref: string): Promise<string> {
+  const short = ref.replace(/^origin\//, "");
+  if (ref.startsWith("origin/") || !validRef(short)) return ref;
+  if (!(await publishedRefs(root)).has(short)) return ref; // no remote copy to prefer
+  // One spawn covers both questions. A range whose left side does not exist
+  // fails rather than counting, and that failure is itself the answer: there is
+  // no local copy, so the remote is the only copy there is.
+  const r = await gitAsync(root, ["rev-list", "--count", `refs/heads/${short}..refs/remotes/origin/${short}`]);
+  if (r.code !== 0) return `origin/${short}`;
+  const n = Number(r.stdout.trim());
+  return Number.isFinite(n) && n > 0 ? `origin/${short}` : ref;
+}
+
 /**
  * The branch this one was cut from, when nobody recorded it — read off the shape
  * of history rather than guessed.
@@ -1375,9 +1448,22 @@ const baseCache = new Map<string, { at: number; base: string | null }>();
  * is stacked on. `git` does that filter in a single pass (`--merged <branch>
  * --no-merged <trunk>`), so a repo with hundreds of refs still returns only the
  * handful in the stacking chain. The closest of them — fewest commits between
- * its tip and the branch — is the direct base; taking the smallest count also
- * prefers the up-to-date remote copy over a stale local one (`origin/X` at 13
- * beats a local `X` sitting 637 behind).
+ * its tip and the branch — is the direct base.
+ *
+ * **Only published branches are candidates**, when the repo has an `origin` at
+ * all. `--merged <branch>` matches *any* ref that happens to be an ancestor,
+ * and a working repository is full of refs that are ancestors by accident: the
+ * `pr1042-review`, `pr1039`, `pr998-review` someone left behind after
+ * reading a diff. Those sit a commit or two back, so they win the
+ * fewest-commits test outright and become the "base" — a scratch ref this
+ * branch was never cut from. Having a counterpart on the remote is what tells a
+ * branch somebody is stacked on from a bookmark somebody made. Repos with no
+ * remote keep the unfiltered set, because there the distinction does not exist.
+ *
+ * What comes back is a *name*, not the ref to measure. `--merged` can only ever
+ * match a copy of the base this branch is already level with, so measuring the
+ * ref it returns is guaranteed to report zero — see `freshest`, which `baseOf`
+ * applies to the answer.
  *
  * Relative to `branch`, never to `HEAD`: `worktrees()` resolves every sibling's
  * base from the family's MAIN checkout, so `HEAD` there is the main branch, not
@@ -1401,15 +1487,55 @@ async function inferBase(root: string, branch: string, trunk: string | null): Pr
     const short = r.replace(/^origin\//, "");
     return short !== branch && short !== trunkShort; // never self (local or its remote), never the trunk
   });
+  // Checked against the shared published set in memory rather than a `rev-parse`
+  // per candidate. A repo with no origin refs at all has no way to tell a
+  // stacked branch from a bookmark, so it keeps every candidate rather than none.
+  const published = await publishedRefs(root);
+  const eligible = published.size ? cands.filter((r) => published.has(r.replace(/^origin\//, ""))) : cands;
   let best: string | null = null;
   let bestN = Infinity;
-  for (const r of cands) {
+  for (const r of eligible) {
     const n = Number((await gitAsync(root, ["rev-list", "--count", `${r}..${branch}`])).stdout.trim());
     if (Number.isFinite(n) && n > 0 && n < bestN) { bestN = n; best = r; }
   }
   return best;
 }
 
+/**
+ * The base branch a pull request declares for this head — the authoritative
+ * answer, from whoever is already holding it.
+ *
+ * Git does not record what a branch was cut from, so everything else here is
+ * inference off the shape of history, and inference is ambiguous exactly when
+ * branches are stacked: on a real repo four sibling card branches and a
+ * leftover review ref all scored within two commits of each other, and the
+ * wrong one won. The pull request is not ambiguous. It names its base, and that
+ * name is what GitHub's own "N commits behind" is measured against — so taking
+ * it is what makes this panel agree with the check on the pull request page.
+ *
+ * The pull-request list is already fetched and cached with `baseRefName` in it,
+ * so this costs a map lookup: no `gh`, no network, nothing on the poll path.
+ *
+ * A hook for the same reason `setGitChangeHook` is one: this module must not
+ * import the pull-request layer, which spawns `gh` and knows about auth. It
+ * answers null whenever it cannot answer — cache still cold, no `gh`, no PR for
+ * this branch — and the ladder falls through to inference, so a repo that has
+ * never seen a pull request behaves exactly as it did before.
+ */
+type PrBaseLookup = (root: string, branch: string) => Promise<string | null>;
+let prBaseFor: PrBaseLookup | null = null;
+export function setPrBaseHook(fn: PrBaseLookup | null): void { prBaseFor = fn; }
+
+/**
+ * What this branch is measured against, in order of how much the answer is
+ * actually *known*: an override somebody wrote down, then the base its pull
+ * request declares, then the shape of history, then the trunk.
+ *
+ * Whatever wins, what comes back is the freshest copy of that branch (see
+ * `freshest`). That is not a detail — it is the difference between a number and
+ * nothing at all. A base is worth showing precisely when it has moved on, and
+ * the copy sitting on this disk is the one that has not.
+ */
 export async function baseOf(root: string, branch: string): Promise<string | null> {
   if (!branch || branch === "(detached)") return null;
   const key = `${root}\u0000${branch}`;
@@ -1421,16 +1547,28 @@ export async function baseOf(root: string, branch: string): Promise<string | nul
   const cfg = (await gitAsync(root, ["config", "--get", `branch.${branch}.agentglassbase`])).stdout.trim();
   let base: string | null;
   if (cfg && validRef(cfg) && (await gitAsync(root, ["rev-parse", "--verify", "--quiet", cfg])).code === 0) {
-    base = cfg;
+    base = cfg; // an answer somebody wrote down beats every guess below it
   } else {
-    const trunk = await defaultBranch(root);
-    // No base recorded: infer the branch this one was stacked on (its base is
-    // THAT, not the trunk). Falls back to the trunk when there is nothing between
-    // HEAD and it. A branch is not its own base; the trunk checkout simply has
-    // none.
-    const inferred = await inferBase(root, branch, trunk);
-    base = inferred ?? (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch ? null : trunk);
+    // Only asked once the override has lost, so a branch with an explicit base
+    // costs nothing here.
+    const declared = (await prBaseFor?.(root, branch))?.trim() || "";
+    if (declared && declared !== branch && validRef(declared) && (await publishedRefs(root)).has(declared)) {
+      // Named against the remote, because that is where a pull request's base
+      // lives: the name GitHub reports may have no local copy here at all, and
+      // when it does have one, that copy is routinely the stale half of the
+      // very problem this is measuring.
+      base = `origin/${declared}`;
+    } else {
+      const trunk = await defaultBranch(root);
+      // No base recorded anywhere: infer the branch this one was stacked on (its
+      // base is THAT, not the trunk). Falls back to the trunk when there is
+      // nothing between HEAD and it. A branch is not its own base; the trunk
+      // checkout simply has none.
+      const inferred = await inferBase(root, branch, trunk);
+      base = inferred ?? (!trunk || trunk === branch || trunk.replace(/^origin\//, "") === branch ? null : trunk);
+    }
   }
+  if (base) base = await freshest(root, base);
   if (baseCache.size > 400) baseCache.clear();
   baseCache.set(key, { at: Date.now(), base });
   return base;

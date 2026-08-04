@@ -178,6 +178,15 @@ const ID_TTL_MS = 5 * 60_000;
  * upstream and a panel pointed at the fork shows an empty list forever. That is
  * three lines here and confusing to retrofit later.
  */
+/**
+ * Single-flighted as well as cached, because `gitwork`'s base ladder asks this
+ * once per checkout and launches all of them in one `Promise.all` — twenty-two
+ * on a worktree-heavy repo, every one of them missing an empty cache before any
+ * has filled it. Two `git remote get-url` each is nothing on its own and forty
+ * of them at once, five minutes apart, is not nothing.
+ */
+const idInflight = new Map<string, Promise<PrRepoId | null>>();
+
 export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
   const abs = safeAbs(rootIn);
   if (!abs) return null;
@@ -185,15 +194,25 @@ export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
   if (!root) return null;
   const hit = idCache.get(root);
   if (hit && Date.now() - hit.at < ID_TTL_MS) return hit.id;
-  let id: PrRepoId | null = null;
-  for (const remote of ["upstream", "origin"]) {
-    const r = await gitAsync(root, ["remote", "get-url", remote]);
-    if (r.code !== 0) continue;
-    id = parseRemote(r.stdout.trim());
-    if (id) break;
-  }
-  idCache.set(root, { at: Date.now(), id });
-  return id;
+  const flying = idInflight.get(root);
+  if (flying) return flying;
+  const p = (async () => {
+    try {
+      let id: PrRepoId | null = null;
+      for (const remote of ["upstream", "origin"]) {
+        const r = await gitAsync(root, ["remote", "get-url", remote]);
+        if (r.code !== 0) continue;
+        id = parseRemote(r.stdout.trim());
+        if (id) break;
+      }
+      idCache.set(root, { at: Date.now(), id });
+      return id;
+    } finally {
+      idInflight.delete(root);
+    }
+  })();
+  idInflight.set(root, p);
+  return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +381,42 @@ const inflight = new Set<string>();
  * already read), but it is scoped to the user's own cache directory all the
  * same, and a corrupt or unreadable file is simply ignored.
  */
+/**
+ * The base branch an open pull request declares for this head.
+ *
+ * Read straight off the list cache — the rows are already fetched with
+ * `baseRefName` in them (`LIST_FIELDS_FAST`), and that cache survives restarts
+ * on disk, so the answer is usually there before anything has refreshed. No
+ * `gh`, no network: the only subprocess this can reach is `repoIdFor`'s
+ * `git remote get-url`, itself cached for five minutes.
+ *
+ * This exists for `gitwork`'s base ladder, which otherwise has to guess what a
+ * branch was cut from by the shape of history — ambiguous exactly when branches
+ * are stacked, which is exactly when it matters. Null whenever there is nothing
+ * to say (no repo id, cold cache, no pull request for this branch); the caller
+ * falls back to inference.
+ *
+ * An open pull request wins over a closed or merged one: the same branch can
+ * have been proposed twice, and the live proposal is the one whose base is
+ * still being merged into.
+ */
+export async function prBaseOf(rootIn: string, branch: string): Promise<string | null> {
+  if (!branch) return null;
+  const id = await repoIdFor(rootIn);
+  if (!id) return null;
+  const mine = `${id.key}\u0000`;
+  let fallback: string | null = null;
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(mine)) continue;
+    for (const p of e.prs) {
+      if (p.headRefName !== branch || !p.baseRefName) continue;
+      if (p.state === "OPEN") return p.baseRefName;
+      fallback ??= p.baseRefName;
+    }
+  }
+  return fallback;
+}
+
 const CACHE_FILE = join(homedir(), ".cache", "agentglass", "pr-list.json");
 const CACHE_MAX_ENTRIES = 24;
 let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
