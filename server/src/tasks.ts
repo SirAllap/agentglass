@@ -510,3 +510,73 @@ export async function addTask(input: string, expect?: string): Promise<WriteResu
   const r = await runVerb(args, expect);
   return { ...r, parsed };
 }
+
+const PRIO_CYCLE: Record<string, string> = { "": "L", L: "M", M: "H", H: "" };
+
+/** Round the priority: none → low → medium → high → none. One key, because it
+ *  is the field most often adjusted and least often typed. */
+export async function cyclePriority(uuid: string, current: "H" | "M" | "L" | null, expect?: string): Promise<WriteResult> {
+  if (!isUuid(uuid)) return { ok: false, error: "that is not a task id" };
+  const next = PRIO_CYCLE[current ?? ""] ?? "L";
+  return runVerb([uuid, "modify", `priority:${next}`], expect);
+}
+
+/**
+ * Re-state a whole task from one line of the grammar.
+ *
+ * The subtlety is what happens to what you left out. Typing the task again
+ * without `!h` means you no longer want a priority — so the fields the grammar
+ * can express are all set, and the ones that are absent are explicitly cleared.
+ * Anything the grammar cannot express (a recurrence, a UDA) is never mentioned
+ * and therefore never touched, which is the same merge property `import` throws
+ * away.
+ */
+export async function editTask(uuid: string, input: string, previousTags: string[], expect?: string): Promise<WriteResult & { parsed?: ParsedTask }> {
+  if (!isUuid(uuid)) return { ok: false, error: "that is not a task id" };
+  const parsed = parseInput(input);
+  if (!parsed.description) return { ok: false, error: "that is all labels and no task", parsed };
+  const args = [uuid, "modify", parsed.description];
+  args.push(`priority:${parsed.priority ?? ""}`);
+  args.push(`project:${parsed.project ?? ""}`);
+  args.push(`due:${parsed.due ?? ""}`);
+  for (const t of parsed.tags) args.push(`+${t}`);
+  // A tag that was there and is not in the new line was removed on purpose.
+  for (const old of previousTags) if (!parsed.tags.includes(old) && TAG_RE.test(old)) args.push(`-${old}`);
+  const r = await runVerb(args, expect);
+  return { ...r, parsed };
+}
+
+/** Add tags without disturbing the ones already there — the merge is the point,
+ *  since this exists to copy a set from one task onto several others. */
+export async function addTags(uuid: string, tags: string[], expect?: string): Promise<WriteResult> {
+  if (!isUuid(uuid)) return { ok: false, error: "that is not a task id" };
+  const clean = tags.filter((t) => TAG_RE.test(t));
+  if (!clean.length) return { ok: false, error: "no tags to apply" };
+  return runVerb([uuid, "modify", ...clean.map((t) => `+${t}`)], expect);
+}
+
+/**
+ * Replace one annotation with another.
+ *
+ * `denotate` matches by SUBSTRING, so handing it a line that also appears
+ * inside a longer annotation removes the wrong one. The old text is therefore
+ * passed whole and compared here first: if the store does not contain exactly
+ * that annotation, nothing is written and the caller re-reads.
+ */
+export async function replaceNote(uuid: string, oldText: string, newText: string, expect?: string): Promise<WriteResult> {
+  if (!isUuid(uuid)) return { ok: false, error: "that is not a task id" };
+  if (!oldText.trim()) return { ok: false, error: "nothing to replace" };
+  const snapshot = await listTasks(true);
+  const t = snapshot.tasks.find((x) => x.uuid === uuid);
+  if (!t) return { ok: false, error: "that task is not in the list any more" };
+  const exact = t.notes.filter((n) => n === oldText).length;
+  if (exact !== 1) {
+    return { ok: false, conflict: exact === 0, error: exact === 0
+      ? "that note is not there any more — reloaded"
+      : "two notes on this task are identical; edit it in your editor" };
+  }
+  const away = await runVerb([uuid, "denotate", oldText], expect ?? snapshot.fingerprint);
+  if (!away.ok) return away;
+  if (!newText.trim()) return away;
+  return runVerb([uuid, "annotate", newText], away.fingerprint);
+}

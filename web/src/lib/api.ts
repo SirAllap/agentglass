@@ -453,6 +453,14 @@ const realApi = {
   taskDone: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/done", { uuid, fingerprint }),
   taskReopen: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/reopen", { uuid, fingerprint }),
   taskDelete: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/delete", { uuid, fingerprint }),
+  taskPriority: (uuid: string, current: "H" | "M" | "L" | null, fingerprint?: string) =>
+    post<TaskWriteResponse>("/tasks/write/priority", { uuid, current, fingerprint }),
+  taskEdit: (uuid: string, input: string, previousTags: string[], fingerprint?: string) =>
+    post<TaskWriteResponse>("/tasks/write/edit", { uuid, input, previousTags, fingerprint }),
+  taskTags: (uuid: string, tags: string[], fingerprint?: string) =>
+    post<TaskWriteResponse>("/tasks/write/tags", { uuid, tags, fingerprint }),
+  taskNote: (uuid: string, oldText: string, newText: string, fingerprint?: string) =>
+    post<TaskWriteResponse>("/tasks/write/note", { uuid, oldText, newText, fingerprint }),
   reminders: (window: "live" | "upcoming" | "history" = "live") =>
     get<RemindersResponse>(`/tasks/reminders?window=${window}`),
   remind: (body: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) =>
@@ -945,6 +953,10 @@ const demoApi: typeof realApi = {
   taskDone: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   taskReopen: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   taskDelete: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskPriority: (_u: string, _c: "H" | "M" | "L" | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskEdit: (_u: string, _i: string, _p: string[], _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskTags: (_u: string, _t: string[], _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskNote: (_u: string, _o: string, _n: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
   remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),
   reminderAck: (_i: string) => D({ ok: false }),

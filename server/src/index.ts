@@ -60,7 +60,7 @@ import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
 import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
-import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, TASK_WRITE_ENABLED } from "./tasks.ts";
+import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, TASK_WRITE_ENABLED } from "./tasks.ts";
 import {
   addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
@@ -1714,10 +1714,15 @@ const server = Bun.serve<WsData>({
       const b = await req.json().catch(() => ({})) as Record<string, unknown>;
       const expect = typeof b.fingerprint === "string" ? b.fingerprint : undefined;
       const uuid = String(b.uuid ?? "");
+      const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") as string[] : []);
       const r = pathname === "/tasks/write/add" ? await addTask(String(b.input ?? ""), expect)
         : pathname === "/tasks/write/done" ? await completeTask(uuid, expect)
         : pathname === "/tasks/write/reopen" ? await reopenTask(uuid, expect)
         : pathname === "/tasks/write/delete" ? await deleteTask(uuid, expect)
+        : pathname === "/tasks/write/priority" ? await cyclePriority(uuid, (b.current as "H" | "M" | "L" | null) ?? null, expect)
+        : pathname === "/tasks/write/edit" ? await editTask(uuid, String(b.input ?? ""), strs(b.previousTags), expect)
+        : pathname === "/tasks/write/tags" ? await addTags(uuid, strs(b.tags), expect)
+        : pathname === "/tasks/write/note" ? await replaceNote(uuid, String(b.oldText ?? ""), String(b.newText ?? ""), expect)
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
       if (r.ok) broadcast({ type: "tasks" });

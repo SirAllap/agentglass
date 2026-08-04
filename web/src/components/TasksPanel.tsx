@@ -19,6 +19,7 @@ import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
+import { parseLocal, toLine, sortTasks, step, SORTS, type SortMode } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
@@ -584,6 +585,14 @@ function LocalBody({ active }: { active: boolean }) {
   const [remindFor, setRemindFor] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [copiedTags, setCopiedTags] = useState<string[]>([]);
+  const [sort, setSort] = useState<SortMode>("reminder");
+  const [filter, setFilter] = useState<{ kind: "tag" | "project"; value: string } | null>(null);
+  const barRef = useRef<HTMLInputElement>(null);
+  // Written by `takeFrame` below, so it is the nullable form rather than the
+  // read-only one React hands a plain `ref={}`.
+  const frameRef = useRef<HTMLDivElement | null>(null);
   const today = todayStr();
   const byTask = data?.byTask ?? {};
   const fp = data?.fingerprint;
@@ -602,6 +611,28 @@ function LocalBody({ active }: { active: boolean }) {
     reload();
     return r.ok;
   }, [reload]);
+  /*
+   * Focused the moment the list enters the DOM, so the keys work without having
+   * to click something first — the gesture the editor's own picker has.
+   *
+   * A callback ref rather than an effect, and the difference is not style: the
+   * first render is a placeholder while the store is read, so an effect keyed
+   * on `active` looks for the frame before it exists, finds nothing, and never
+   * runs again once the tasks arrive. Measured — the frame was still null in
+   * the one pass that effect ever got. A callback ref fires exactly when the
+   * node is attached, so there is no instant left to guess at.
+   *
+   * Not while the caret is in the bar: stealing focus mid-word is worse than
+   * needing one click. `preventScroll` because focusing a list must not also
+   * move it.
+   */
+  const takeFrame = useCallback((n: HTMLDivElement | null) => {
+    frameRef.current = n;
+    if (!n || !active) return;
+    if (document.activeElement === barRef.current) return;
+    n.focus({ preventScroll: true });
+  }, [active]);
+
   const setRemind = useCallback(async (t: LocalTask, civil: string) => {
     setRemindFor(null);
     await api.remind({ taskUuid: t.uuid, title: t.description, civil });
@@ -611,11 +642,69 @@ function LocalBody({ active }: { active: boolean }) {
 
   const { open, done } = useMemo(() => {
     const all = data?.tasks ?? [];
+    const keep = (t: LocalTask) => !filter
+      || (filter.kind === "tag" ? t.tags.includes(filter.value) : t.project === filter.value);
+    const q = input.trim().toLowerCase();
+    const matches = (t: LocalTask) => !q || t.description.toLowerCase().includes(q);
     return {
-      open: all.filter((t) => t.status === "pending"),
-      done: all.filter((t) => t.status === "completed"),
+      open: sortTasks(all.filter((t) => t.status === "pending" && keep(t) && matches(t)), sort),
+      done: all.filter((t) => t.status === "completed" && keep(t) && matches(t)),
     };
-  }, [data]);
+  }, [data, filter, sort, input]);
+
+  /**
+   * One handler on the panel, in the capture phase.
+   *
+   * The bare letters are the ones his editor has; they fire only when the caret
+   * is not in the bar, because a task called "done" has to be typeable. `/` and
+   * `i` reach for the bar and `Escape` leaves it, which is the vocabulary the
+   * rest of this app already uses.
+   */
+  const onKey = useCallback((e: React.KeyboardEvent) => {
+    const inBar = document.activeElement === barRef.current;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "Escape") { barRef.current?.blur(); setEditing(null); setRemindFor(null); return; }
+    if (inBar) return;
+    const list = open.concat(showDone ? done : []);
+    const at = list.findIndex((t) => t.uuid === sel);
+    const cur = at >= 0 ? list[at] : undefined;
+    const go = (n: number) => {
+      const next = list[step(at, n, list.length)];
+      if (next) setSel(next.uuid);
+    };
+    const k = e.key;
+    const stop = () => { e.preventDefault(); e.stopPropagation(); };
+    if (k === "j" || k === "ArrowDown") { stop(); go(1); }
+    else if (k === "k" || k === "ArrowUp") { stop(); go(-1); }
+    else if (k === "g") { stop(); if (list[0]) setSel(list[0].uuid); }
+    else if (k === "G") { stop(); if (list.length) setSel(list[list.length - 1]!.uuid); }
+    else if (k === "/" || k === "i") { stop(); barRef.current?.focus(); }
+    else if (k === "Enter" || k === " ") {
+      if (!cur) return; stop();
+      void write(() => (cur.status === "completed" ? api.taskReopen(cur.uuid, fp) : api.taskDone(cur.uuid, fp)));
+    }
+    else if (k === "s") { stop(); setSort((m) => SORTS[(SORTS.indexOf(m) + 1) % SORTS.length]!); }
+    else if (k === "f") { stop(); setFilter(null); }
+    else if (k === "p") { if (!cur) return; stop(); void write(() => api.taskPriority(cur.uuid, cur.priority, fp)); }
+    else if (k === "r") { if (!cur || cur.status === "completed") return; stop(); setRemindFor(cur.uuid); }
+    else if (k === "e") {
+      if (!cur) return; stop();
+      setEditing(cur.uuid);
+      setInput(toLine(cur));
+      requestAnimationFrame(() => barRef.current?.focus());
+    }
+    else if (k === "t") {
+      if (!cur) return; stop();
+      setCopiedTags(cur.tags);
+      setNote({ ok: true, text: cur.tags.length ? `Copied ${cur.tags.map((x) => "+" + x).join(" ")}` : "That task has no tags" });
+    }
+    else if (k === "v") {
+      if (!cur || !copiedTags.length) { if (!copiedTags.length) setNote({ ok: false, text: "No tags copied yet — press t on a task that has some" }); return; }
+      stop();
+      void write(() => api.taskTags(cur.uuid, copiedTags, fp));
+    }
+    else if (k === "d") { if (!cur) return; stop(); void write(() => api.taskDelete(cur.uuid, fp)); }
+  }, [open, done, showDone, sel, fp, write, copiedTags]);
 
   if (!data) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading your task list…</div>;
   const cap = data.capability;
@@ -635,28 +724,49 @@ function LocalBody({ active }: { active: boolean }) {
     onSetRemind: (civil: string) => void setRemind(t, civil),
     onToggle: () => void write(() => (t.status === "completed" ? api.taskReopen(t.uuid, fp) : api.taskDone(t.uuid, fp))),
     writable: cap.configured,
+    onFilter: (kind: "tag" | "project", value: string) => setFilter({ kind, value }),
   });
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div ref={takeFrame} tabIndex={-1} onKeyDown={onKey}
+      className="flex flex-col flex-1 min-h-0 outline-none">
       <NowBand onChanged={reload} />
       {/* One field: filter and compose are the same box, because the thing you
           typed and could not find is usually the thing you meant to add. */}
       <div className="flex items-center gap-2 px-5 shrink-0" style={{ height: 36, borderBottom: edge(12) }}>
         <span className="text-[12px]" style={{ color: "var(--text3)" }}>⌕</span>
-        <input value={input} onChange={(e) => setInput(e.target.value)}
+        <input ref={barRef} value={input} onChange={(e) => setInput(e.target.value)}
           onKeyDown={async (e) => {
+            if (e.key === "Escape") { setEditing(null); setInput(""); barRef.current?.blur(); return; }
             if (e.key !== "Enter" || !input.trim()) return;
             e.preventDefault();
-            if (await write(() => api.taskAdd(input, fp))) setInput("");
+            const target = editing ? [...open, ...done].find((t) => t.uuid === editing) : null;
+            const ok = target
+              ? await write(() => api.taskEdit(target.uuid, input, target.tags, fp))
+              : await write(() => api.taskAdd(input, fp));
+            if (ok) { setInput(""); setEditing(null); }
           }}
           spellCheck={false}
-          placeholder={cap.configured
+          placeholder={editing
+            ? "Re-state the task and press Enter — what you leave out is cleared"
+            : cap.configured
             ? "Filter, or type a task and press Enter — !h  #3  +tag  @project"
             : "Filter"}
           className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
           style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
         <ParseStrip input={input} />
+        {/* What the list is currently doing, printed rather than remembered. */}
+        <button onClick={() => setSort((m) => SORTS[(SORTS.indexOf(m) + 1) % SORTS.length]!)}
+          className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ border: edge(16), color: "var(--text3)" }}
+          title="Cycle the order — s">sort: {sort}</button>
+        {filter && (
+          <button onClick={() => setFilter(null)}
+            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded"
+            style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)", color: "var(--text2)" }}
+            title="Clear the filter — f">
+            {filter.kind === "tag" ? "+" : "@"}{filter.value} ×
+          </button>
+        )}
       </div>
       {note && (
         <div className="px-5 py-1 text-[10.5px] shrink-0" style={{
@@ -697,17 +807,21 @@ const Section = ({ label, tone }: { label: string; tone: string }) => (
   <div className="text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1" style={{ color: tone }}>{label}</div>
 );
 
-function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onCloseRemind, onSetRemind, onToggle, writable }: {
+function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onCloseRemind, onSetRemind, onToggle, writable, onFilter }: {
   t: LocalTask; today: string; on: boolean; onPick: () => void;
   reminder?: import("../../../shared/types.ts").Reminder | null;
   remindOpen?: boolean; onRemind?: () => void; onCloseRemind?: () => void; onSetRemind?: (civil: string) => void;
   onToggle?: () => void; writable?: boolean;
+  onFilter?: (kind: "tag" | "project", value: string) => void;
 }) {
   const isDone = t.status === "completed";
   const late = overdue(t, today);
   const dueToday = t.due === today;
+  // `aria-selected` and not only the stripe: the row the keys act on has to be
+  // announced, or a screen reader follows `j` down a list where nothing ever
+  // appears to change.
   return (
-    <div onClick={onPick} role="row" tabIndex={0}
+    <div onClick={onPick} role="row" tabIndex={0} aria-selected={!!on}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
       className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-[11.5px] hover:bg-white/5 cursor-pointer"
       style={{
@@ -736,9 +850,14 @@ function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onClose
         style={isDone ? { textDecoration: "line-through", color: "var(--text3)" } : { color: "var(--text)" }}>
         {t.description}
       </span>
-      {t.project && <span className="shrink-0 text-[10px]" style={{ color: "var(--info)" }}>@{t.project}</span>}
+      {t.project && (
+        <button onClick={(e) => { e.stopPropagation(); onFilter?.("project", t.project!); }}
+          className="shrink-0 text-[10px]" style={{ color: "var(--info)" }} title={`Only @${t.project}`}>@{t.project}</button>
+      )}
       {t.tags.slice(0, 2).map((tag) => (
-        <span key={tag} className="shrink-0 text-[9px] px-1.5 rounded" style={{ color: "var(--text3)", border: edge(14) }}>{tag}</span>
+        <button key={tag} onClick={(e) => { e.stopPropagation(); onFilter?.("tag", tag); }}
+          className="shrink-0 text-[9px] px-1.5 rounded" style={{ color: "var(--text3)", border: edge(14) }}
+          title={`Only +${tag}`}>{tag}</button>
       ))}
       <span className="shrink-0 tabular-nums text-right" style={{
         width: 72,
@@ -894,28 +1013,3 @@ function ParseStrip({ input }: { input: string }) {
   );
 }
 
-/**
- * The same grammar the server parses, for the strip above.
- *
- * Duplicated deliberately and kept small: the server is the one that decides
- * what a write means, and this only has to be honest about what it is going to
- * say. A shared module would drag the server's Bun imports into the bundle.
- */
-function parseLocal(input: string): { description: string; priority: string | null; tags: string[]; project: string | null; due: string | null } {
-  const out = { description: "", priority: null as string | null, tags: [] as string[], project: null as string | null, due: null as string | null };
-  let s = input.replace(/\*([^*]+)$/u, " ");
-  s = s.replace(/(?:^|\s)!([hmlHML])(?=\s|$)/gu, (_, p: string) => { out.priority = p.toUpperCase(); return " "; });
-  s = s.replace(/(?:^|\s)#(\d{1,4})(?=\s|$)/gu, (_, n: string) => {
-    const d = new Date(); d.setDate(d.getDate() + Number(n));
-    const q = (x: number) => String(x).padStart(2, "0");
-    out.due = `${d.getFullYear()}-${q(d.getMonth() + 1)}-${q(d.getDate())}`;
-    return " ";
-  });
-  s = s.replace(/(?:^|\s)due:(\d{4}-\d{2}-\d{2})(?=\s|$)/gu, (_, d: string) => { out.due = d; return " "; });
-  s = s.replace(/(?:^|\s)\+([^\s]+)/gu, (m: string, t: string) =>
-    /^[\p{L}\p{N}_-]{1,40}$/u.test(t) ? (out.tags.push(t), " ") : m);
-  s = s.replace(/(?:^|\s)@([^\s]+)/gu, (m: string, p: string) =>
-    /^[\p{L}\p{N}._-]{1,60}$/u.test(p) ? ((out.project = p), " ") : m);
-  out.description = s.replace(/\s+/gu, " ").trim();
-  return out;
-}
