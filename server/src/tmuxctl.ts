@@ -518,6 +518,44 @@ export function clearAsk(t: TmuxTarget, window: string): void {
   tmux(t.socket, ["set-option", "-w", "-t", window, "-u", "@agx-ask"]);
 }
 
+/** Sockets this process has already swept. See releaseStale. */
+const swept = new Set<string>();
+
+/**
+ * Give back every status line a previous run of this app took and never
+ * returned.
+ *
+ * The release path is keyed off in-memory state (`tmuxStatusHiddenOn`), so it
+ * runs when the panel closes and when the shell exits — and not at all when the
+ * process is killed, OOMed, or goes down with the laptop lid. What is left
+ * behind is a tmux session with `status off` and `@agx-owned` still set: no
+ * status line, `prefix ,` leaving notes nobody reads, and no way for the user
+ * to know why. It heals only if they happen to open the panel on that same
+ * session again and then close it properly.
+ *
+ * So it is swept instead, once per tmux server, the first time this process
+ * touches one. At that moment the claim is stale BY DEFINITION: no shell in
+ * this process has taken anything yet, so any `@agx-owned` it finds belongs to
+ * a run that is gone.
+ *
+ * The restore is exact rather than a guess, because the way back was written
+ * onto the session itself — `@agx-had-rename` and `@agx-had-move` outlive the
+ * process that set them, which is the whole reason they live there instead of
+ * in a variable.
+ */
+export function releaseStale(c: TmuxClient): void {
+  const key = c.socket.join(" ");
+  if (swept.has(key)) return;
+  swept.add(key);
+  const out = tmux(c.socket, ["list-sessions", "-F", "#{session_id}\t#{@agx-owned}"]);
+  if (!out) return;
+  for (const line of out.split("\n")) {
+    const [id, owned] = line.split("\t");
+    if (!id || owned?.trim() !== "1") continue;
+    setStatusLine({ pid: c.pid, socket: c.socket, session: "", id }, true);
+  }
+}
+
 export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
   if (visible) {
     releasePrompts(t);

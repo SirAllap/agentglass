@@ -197,7 +197,7 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveClient, readFrame, runAction, setStatusLine, clearAsk, prefixKeys, newWindowRunning, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode } from "./agents/claudecode.ts";
 import { applyThemeTo } from "./themesync.ts";
@@ -452,7 +452,12 @@ export function ptyOpen(ws: PtyWs) {
     // restore, which switches the client to the restored session and kills the
     // one it attached to. A target cached at attach time points at that dead
     // session for the rest of the shell's life.
-    if (!session.tmuxClient) session.tmuxClient = resolveClient(proc.pid);
+    if (!session.tmuxClient) {
+      session.tmuxClient = resolveClient(proc.pid);
+      // First contact with this tmux server: hand back anything a previous run
+      // took and was killed before returning. See releaseStale.
+      if (session.tmuxClient) releaseStale(session.tmuxClient);
+    }
     const frame = session.tmuxClient ? readFrame(session.tmuxClient) : null;
     if (frame) {
       lastTarget = frame.target;

@@ -29,6 +29,7 @@ Notes:
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -39,7 +40,24 @@ SEND_EVENT = os.path.join(HOOKS_DIR, "send_event.py")
 MARKER = "send_event.py"  # substring that identifies a hook command as ours
 
 STATUSLINE = os.path.join(HOOKS_DIR, "statusline.sh")
-SL_MARKER = "statusline.sh"  # same idea, for the status line slot
+# Our status line, recognised by SHAPE rather than by a filename substring.
+#
+# This was `"statusline.sh" in cmd`, and the collision it caused is the kind
+# that eats somebody's config in silence: a status line of their own called
+# `mi-statusline.sh`, `custom-statusline.sh` or the widely used
+# `ccstatusline.sh` all CONTAIN "statusline.sh". The installer read them as
+# ours, tried to unwrap a command that was never wrapped, found no third
+# argument, and dropped it. Nothing failed and nothing was said; their status
+# line was simply gone after installing.
+#
+# The path is not usable as the marker either — the repo moves, and an install
+# from an older checkout has to stay recognisable. So: our command always
+# begins `sh "…/hooks/statusline.sh"`, and that shape is what is matched.
+SL_RE = re.compile(r'^sh\s+"(?:.*/)?hooks/statusline\.sh"')
+
+
+def _is_ours_statusline(cmd):
+    return bool(cmd) and SL_RE.match(cmd.strip()) is not None
 
 # event -> (matcher or None, attach transcript for token/cost)
 EVENTS = {
@@ -102,7 +120,7 @@ def _statusline_command(chained):
 def _chained_from(cmd):
     """What our wrapper was told to call, so re-installing re-points the script
     path without forgetting the status line it wraps."""
-    if not cmd or SL_MARKER not in cmd:
+    if not _is_ours_statusline(cmd):
         return None
     try:
         parts = shlex.split(cmd)
@@ -130,7 +148,7 @@ def install_statusline(cfg):
     current = cfg.get("statusLine")
     cur_cmd = current.get("command") if isinstance(current, dict) else None
     # Already ours: re-point the script path, keep what it wraps.
-    chained = _chained_from(cur_cmd) if cur_cmd and SL_MARKER in cur_cmd else cur_cmd
+    chained = _chained_from(cur_cmd) if _is_ours_statusline(cur_cmd) else cur_cmd
     cfg["statusLine"] = {"type": "command", "command": _statusline_command(chained)}
 
 
@@ -139,7 +157,7 @@ def uninstall_statusline(cfg):
     slot that was empty before us is left empty."""
     current = cfg.get("statusLine")
     cur_cmd = current.get("command") if isinstance(current, dict) else None
-    if not cur_cmd or SL_MARKER not in cur_cmd:
+    if not _is_ours_statusline(cur_cmd):
         return
     chained = _chained_from(cur_cmd)
     if chained:
