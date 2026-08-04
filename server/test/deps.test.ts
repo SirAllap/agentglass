@@ -49,20 +49,41 @@ describe("dependency catalog", () => {
     for (const d of DEPS.filter((x) => x.required)) expect(d.platforms).toBeUndefined();
   });
 
-  it("names no package manager anywhere, in the catalog or the panels quoting it", () => {
-    const surfaces = [
-      "shared/deps.ts",
+  it("names no package manager in prose, only in the one table built for it", () => {
+    /**
+     * This used to forbid package managers outright, everywhere. That rule was
+     * right for what it was protecting and is now too wide by exactly one
+     * table: `PKG_INSTALL` exists precisely to name them, because the panel
+     * types the line into a shell and waits rather than running it — see the
+     * note at the top of shared/deps.ts.
+     *
+     * What it was protecting is still protected, and that is the narrower rule
+     * kept here: an install line hard-coded into PROSE — a `what`, a `note`, a
+     * banner, a panel's copy — is stale the day a distribution renames a
+     * package, and nothing tells you. The generated one is resolved per machine
+     * from a structured record, so it is either right or absent.
+     */
+    const prose = [
       "web/src/components/GitMissingBanner.tsx",
       "web/src/components/DockerPanel.tsx",
       "web/src/components/PrPanel.tsx",
       "web/src/components/SettingsModal.tsx",
     ];
-    for (const rel of surfaces) {
+    for (const rel of prose) {
       const hit = PKG_MANAGER_CMD.exec(read(rel));
       // The message names the file and the offending line, because the fix is
       // to replace it with the project's own page, not to loosen the rule.
       expect(hit ? `${rel}: ${hit[0]}` : null).toBeNull();
     }
+    // And in the catalogue, the managers may appear only inside PKG_INSTALL.
+    // Anywhere else — a `what`, a `note`, a `url` — is prose that will rot.
+    const cat = read("shared/deps.ts");
+    const table = cat.slice(cat.indexOf("export const PKG_INSTALL"), cat.indexOf("/** The catalog."));
+    const outside = cat.replace(table, "");
+    const stray = PKG_MANAGER_CMD.exec(outside);
+    expect(stray ? `shared/deps.ts (outside PKG_INSTALL): ${stray[0]}` : null).toBeNull();
+    // A url that is a package-manager page is the same mistake wearing a link.
+    for (const d of DEPS) expect(d.url).not.toMatch(/\b(apt|dnf|pacman|brew|apk|yum|zypper)\b/);
   });
 
   it("knows which platforms a tool is used on", () => {

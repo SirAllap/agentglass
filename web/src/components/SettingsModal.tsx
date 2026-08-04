@@ -49,6 +49,7 @@ import {
   type RailPlace, type ViewId,
 } from "./workspace/views.ts";
 import { AppearancePane } from "./ThemePicker.tsx";
+import { InstallConsole } from "./InstallConsole.tsx";
 
 /** A heading inside a Section, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
@@ -939,11 +940,23 @@ const RANK: Record<DepStatus, number> = { missing: 0, attention: 1, ok: 2, unsup
 const byUrgency = (a: DepReport, b: DepReport) =>
   (RANK[a.status] - RANK[b.status]) || (Number(b.required) - Number(a.required));
 
-function DepRow({ d }: { d: DepReport }) {
+function DepRow({ d, home }: { d: DepReport; home: string }) {
   const color = statusColor(d);
   const href = externalUrl(d.url);
+  const [console, setConsole] = useState(false);
+  // Offered only where there is something to do AND a line worth typing. A tool
+  // that is already there needs no console, and one whose install is a
+  // repository rather than a package has no honest one-liner — those keep the
+  // guide link they always had. See shared/deps.ts.
+  // Not conditioned on having a root. An empty one is a perfectly good answer —
+  // the server refuses a path it does not like and opens the shell somewhere of
+  // its own choosing — and requiring one hid the button entirely from anyone who
+  // had never opened the terminal panel, which is most people the first time
+  // they read this page.
+  const canType = !!d.install && d.status !== "ok" && d.status !== "unsupported";
   return (
-    <div className="px-3 py-2 rounded-lg flex items-start gap-2.5 hover:bg-white/5">
+    <div className="px-3 py-2 rounded-lg hover:bg-white/5">
+    <div className="flex items-start gap-2.5">
       <span className="mt-[5px] shrink-0 w-[7px] h-[7px] rounded-full" style={{ background: color }} aria-hidden />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2 flex-wrap">
@@ -965,18 +978,50 @@ function DepRow({ d }: { d: DepReport }) {
       {/* Only where there is something to do about it. A row that is already
           ready does not need a link, and a tool this platform never uses has
           nothing to install. */}
+      {/* The console comes first, because it is the one that finishes the job.
+          `>_` rather than "Install": it says a terminal is about to open, which
+          is the thing worth knowing before clicking. */}
+      {canType && (
+        <button onClick={() => setConsole((v) => !v)}
+          className="shrink-0 text-[10.5px] px-2 py-1 rounded-lg whitespace-nowrap"
+          style={console
+            ? { color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
+            : { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)" }}
+          title="Open a shell here with the command typed in — you press Enter">
+          {">_ Install"}
+        </button>
+      )}
       {href && d.status !== "unsupported" && d.status !== "ok" && (
         <a href={href} target="_blank" rel="noreferrer noopener"
           className="shrink-0 text-[10.5px] px-2 py-1 rounded-lg"
-          style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)" }}>
+          style={{ color: canType ? "var(--text3)" : "var(--primary-hover)", border: `1px solid color-mix(in srgb, var(--${canType ? "border" : "primary"}) 34%, transparent)` }}>
           Install guide
         </a>
       )}
+    </div>
+    {/* Expanded in place rather than in a modal: the row you clicked stays on
+        screen above it, so what is being installed and why is still readable
+        while you decide. */}
+    {console && canType && <InstallConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} />}
     </div>
   );
 }
 
 function RequirementsPane({ open }: { open: boolean }) {
+  /**
+   * Where the install shell opens.
+   *
+   * The terminal panel's own remembered checkout, and it does not really
+   * matter: a system package install behaves the same from anywhere — the
+   * literal command is deliberately not written here, since a package-manager
+   * line living in a component is exactly what deps.test.ts forbids, and being
+   * a comment does not make it age any better. What matters
+   * is that the server VETS it — a root that is not a repository in scope is
+   * refused and replaced with its own fallback — so this passes the path the
+   * user already has a shell in rather than inventing one and pushing on the
+   * boundary that exists to stop exactly that.
+   */
+  const shellRoot = (() => { try { return localStorage.getItem("agentglass.terminalRoot") || ""; } catch { return ""; } })();
   const [deps, setDeps] = useState<DepReport[] | null>(null);
   const [platform, setPlatform] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
@@ -1029,10 +1074,10 @@ function RequirementsPane({ open }: { open: boolean }) {
       </div>
 
       <div className="panel-eyebrow px-3 pt-1 pb-1">Needed</div>
-      {needed.map((d) => <DepRow key={d.id} d={d} />)}
+      {needed.map((d) => <DepRow key={d.id} d={d} home={shellRoot} />)}
 
       <div className="panel-eyebrow px-3 pt-2 pb-1">Per feature</div>
-      {optional.map((d) => <DepRow key={d.id} d={d} />)}
+      {optional.map((d) => <DepRow key={d.id} d={d} home={shellRoot} />)}
 
       {idle.length > 0 && (
         <>
