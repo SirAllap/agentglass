@@ -66,6 +66,15 @@ describe("base branch", () => {
     expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
   });
 
+  it("treats clearing an override that was never set as done, not as an error", async () => {
+    // `git config --unset` exits 5 on a missing key. Taken literally, the
+    // picker's "work it out for me" would fail on every branch that never had
+    // an override — which is most of them — and report it as a broken action.
+    expect(gw.setBase(repo, "CARD-1", null).ok).toBe(true);
+    expect(gw.setBase(repo, "CARD-1", "").ok).toBe(true);
+    expect((await gw.baseOf(repo, "CARD-1"))).toBe("main");
+  });
+
   it("counts what the base has and the branch does not", async () => {
     expect(await gw.behindBase(repo, "CARD-1", "main")).toBe(2);
     expect(await gw.behindBase(repo, "main", "main")).toBe(0);

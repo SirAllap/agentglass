@@ -1604,7 +1604,16 @@ export function setBase(rootIn: unknown, branch: unknown, base: unknown): GitAct
   const root = repoRoot(rootIn); if (!root) return { ok: false, error: "not a git repository root" };
   const g = guard(root); if (g) return g;
   if (typeof branch !== "string" || !validRef(branch)) return { ok: false, error: "invalid branch" };
-  if (base === null || base === "") return run(root, ["config", "--unset", `branch.${branch}.agentglassbase`]);
+  if (base === null || base === "") {
+    const key = `branch.${branch}.agentglassbase`;
+    // Clearing an override that was never set changes nothing, so say so rather
+    // than handing it to git: `--unset` exits 5 on a missing key, which would
+    // turn "work it out for me" into an error toast on every branch that never
+    // had an override — which is most of them. Nothing goes stale by skipping
+    // the write either: with no override, the base already was the inferred one.
+    if (!git(root, ["config", "--get", key]).stdout.trim()) return { ok: true };
+    return run(root, ["config", "--unset", key]);
+  }
   if (typeof base !== "string" || !validRef(base)) return { ok: false, error: "invalid base" };
   return run(root, ["config", `branch.${branch}.agentglassbase`, base]);
 }
