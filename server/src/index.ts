@@ -77,7 +77,7 @@ import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_D
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
-import { workspaceRoot, setWorkspaceRoot, inScope, readBudgets, writeBudgets } from "./config.ts";
+import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, readBudgets, writeBudgets } from "./config.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
@@ -464,8 +464,13 @@ function ingestBody(body: IngestBody) {
   // session refreshes on the next open, while static sessions keep serving from
   // cache. Cheap: one Map delete on a path already doing a DB write.
   sessionCache.delete(event.session_id);
-  broadcast({ type: "event", data: event });
-  broadcast({ type: "session", data: session });
+  // Stored either way — a cockpit scoped today may be unscoped tomorrow, and the
+  // history has to be there when it is. Only the live push is filtered, so that
+  // what arrives while you watch agrees with what a reload would show.
+  if (sessionInScope(session)) {
+    broadcast({ type: "event", data: event });
+    broadcast({ type: "session", data: session });
+  }
   // A Pre opens a call and a Post closes one, so the list the fleet is drawing
   // from just changed. Pushed now rather than up to a tick later, because the
   // moment a tool starts is exactly when the card should say so.
@@ -2278,8 +2283,13 @@ startScanner(({ event, session }) => {
   // — drop its cached detail here too, or a session being watched live would
   // read stale until the TTL backstop.
   sessionCache.delete(event.session_id);
-  broadcast({ type: "event", data: event });
-  broadcast({ type: "session", data: session });
+  // Stored either way — a cockpit scoped today may be unscoped tomorrow, and the
+  // history has to be there when it is. Only the live push is filtered, so that
+  // what arrives while you watch agrees with what a reload would show.
+  if (sessionInScope(session)) {
+    broadcast({ type: "event", data: event });
+    broadcast({ type: "session", data: session });
+  }
   // A Pre opens a call and a Post closes one, so the list the fleet is drawing
   // from just changed. Pushed now rather than up to a tick later, because the
   // moment a tool starts is exactly when the card should say so.

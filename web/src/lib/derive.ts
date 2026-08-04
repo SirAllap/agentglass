@@ -67,6 +67,15 @@ export interface AgentCard {
    * is made of, so the two can never disagree.
    */
   needBecause: string;
+  /**
+   * The directory this session is actually running in, and the project it folds
+   * onto. `worktree` already derived a LABEL from these two and threw the paths
+   * away, which is enough to print and not enough to go anywhere: answering "is
+   * this the project I am looking at" and "which terminal pane is it in" both
+   * need the path itself.
+   */
+  cwd: string | null;
+  project: string | null;
   /** A tool call that started (PreToolUse) and hasn't reported back yet. */
   runningTool: string | null;
   runningSince: number;
@@ -157,6 +166,8 @@ function blankCard(key: string, source_app: string, session_id: string, model_na
     subagents: 0,
     subagentTypes: [],
     needBecause: "",
+    cwd: null,
+    project: null,
     runningTool: null,
     runningSince: 0,
     evidenceAt: null,
@@ -309,6 +320,10 @@ export function deriveAgents(events: WatchEvent[], openTools: OpenToolCall[] = [
       const p = e.payload as any;
       const wt = sessionWorktree({ project_path: p?.project_path, cwd_path: p?.cwd });
       if (wt) a.worktree = wt;
+      // Same rule, same reason: keep the last known answer rather than letting
+      // an event that does not carry the field blank one that did.
+      if (p?.cwd) a.cwd = String(p.cwd);
+      if (p?.project_path) a.project = String(p.project_path);
       if (e.model_name) a.model_name = e.model_name; // latest, not last-in-array
       a.lastAction = e.tool_name
         ? `${e.hook_event_type} · ${e.tool_name}`

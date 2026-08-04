@@ -25,6 +25,7 @@ import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStor
 import { IS_MAC_DESKTOP, WINDOW_CONTROLS } from "../lib/desktop.ts";
 import { Logo } from "./Logo.tsx";
 import { useAmbientNotes, NoteToast, NotifyBell } from "./TopBarNotes.tsx";
+import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
 
 export const TOP_BAR_H = 30;
 
@@ -219,7 +220,8 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 }
 
 export function TopBar({
-  workspace, onOpenProject, onOpenPalette, quiet, needs, onGoNeeds,
+  workspace, onOpenProject, onOpenPalette, quiet, needs,
+  needsList, onNeedChat, onNeedApprove, onNeedProject,
 }: {
   workspace: string | null;
   onOpenProject: () => void;
@@ -234,8 +236,12 @@ export function TopBar({
    */
   quiet?: boolean;
   /** Something wants you: how many, which one, WHAT FOR, and where it lives. */
-  needs: { count: number; label: string; because: string; sessionId: string; app: string } | null;
-  onGoNeeds: () => void;
+  needs: { count: number; label: string; because: string } | null;
+  /** All of them, with what can honestly be done about each — see NeedsPopover. */
+  needsList: NeedsItem[];
+  onNeedChat: (chatId: string) => void;
+  onNeedApprove: () => void;
+  onNeedProject: (root: string) => void;
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
@@ -243,6 +249,8 @@ export function TopBar({
   const waiting = useSyncExternalStore(subscribeChats, () => listChats().reduce((n, c) => n + (c.attention !== "none" ? 1 : 0), 0), () => 0);
   const upd = useSyncExternalStore(subscribeUpdate, updateState, updateState);
   const { note, behind, ahead } = useAmbientNotes();
+  const chip = useRef<HTMLButtonElement>(null);
+  const [needsOpen, setNeedsOpen] = useState(false);
 
   const [u, setU] = useState<UsagePayload | null>(null);
   useEffect(() => subscribeUsage(setU), []);
@@ -337,7 +345,9 @@ export function TopBar({
           empty so that it has somewhere to put the one thing that matters. */}
       <div className="absolute left-1/2 -translate-x-1/2 flex items-center" style={{ top: 0, bottom: 0 }}>
         {alarm ? (
-          <button onClick={onGoNeeds} className="flex items-center gap-2 px-2.5 py-[1px] rounded-full min-w-0"
+          <button ref={chip} onClick={() => setNeedsOpen((v) => !v)}
+            aria-label="What needs you" aria-expanded={needsOpen}
+            className="flex items-center gap-2 px-2.5 py-[1px] rounded-full min-w-0"
             style={{
               color: "var(--warning)",
               border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)",
@@ -360,13 +370,27 @@ export function TopBar({
             {/* No key advertised. Enter belongs to whatever has focus — a
                 shell, a composer — and binding it globally would take it from
                 them; promising it and not binding it is worse. The chip is the
-                gesture. */}
-            <span className="text-[9px] opacity-75 shrink-0">go →</span>
+                gesture.
+
+                And no arrow either. It said "go →" while what it did was open a
+                screen you could not answer from; the chip opens a panel over
+                itself now and moves nothing, so a glyph promising travel would
+                be the same lie in a smaller font. */}
+            <span className="text-[9px] opacity-75 shrink-0">{needsOpen ? "▴" : "▾"}</span>
           </button>
         ) : (
           <NoteToast note={note} />
         )}
       </div>
+      <NeedsPopover
+        anchorRef={chip}
+        open={needsOpen && alarm}
+        items={needsList}
+        onClose={() => setNeedsOpen(false)}
+        onChat={(id) => { setNeedsOpen(false); onNeedChat(id); }}
+        onApprove={() => { setNeedsOpen(false); onNeedApprove(); }}
+        onProject={(root) => { setNeedsOpen(false); onNeedProject(root); }}
+      />
 
       {/* ── the plan, the clock, the way in ───────────────────────── */}
       <div className="flex items-center gap-2.5 shrink-0">
