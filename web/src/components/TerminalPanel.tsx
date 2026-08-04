@@ -1351,7 +1351,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const issue = useSyncExternalStore(subscribeTermIssue, termIssue, termIssue);
   useEffect(() => {
     if (!issue || !tmuxActive) return;
-    tmuxCmd("issue", { cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent });
+    tmuxCmd("issue", { cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo });
     clearTermIssue();
   }, [issue, tmuxActive, tmuxCmd]);
 

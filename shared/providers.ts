@@ -123,6 +123,16 @@ export interface ProvidersResponse {
 export interface ProviderTask {
   /** The provider's own id, as a string. Never parsed. */
   id: string;
+  /**
+   * The id a HUMAN uses for this card, when the workspace has them switched on.
+   *
+   * ClickUp keeps two: an internal one nobody recognises, and a custom one that
+   * appears in the address bar, in commit messages and in the prompts people
+   * have already written. Skills written against this workspace ask for the
+   * second. Passing the first to one of them fails in the least helpful way
+   * available — the card exists, the tool cannot find it.
+   */
+  customId?: string;
   title: string;
   /** Where to open it in the service's own UI. Empty when it has none. */
   url: string;

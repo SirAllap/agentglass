@@ -20,6 +20,21 @@ export type TermIssue = {
   prompt: string;
   /** Start an agent at all. False opens the shell and nothing else. */
   agent: boolean;
+  /**
+   * Start the agent with its permission prompts turned off.
+   *
+   * A BOOLEAN, and that is the whole design. The socket carries a flag the
+   * server knows how to interpret, never the switch itself — the rule this file
+   * already states is that a socket reachable from the UI must not be a way to
+   * execute an arbitrary string, and "let the client name a command-line
+   * argument" is that rule with extra steps.
+   *
+   * Worth having because the alternative is worse in practice: a card handed to
+   * an agent that then stops on its first tool call is an agent nobody notices
+   * has stopped. Worth being a choice because the same setting on the wrong
+   * card is an agent editing files nobody asked it to.
+   */
+  yolo?: boolean;
   n: number;
 };
 
@@ -36,8 +51,8 @@ export function termIssue(): TermIssue | null { return pending; }
 /** `n` increments so starting the same issue twice is two requests — otherwise
  *  closing the window and pressing Start again would look like the request that
  *  has already been served. */
-export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean): void {
-  pending = { cwd, name, prompt, agent, n: (pending?.n ?? 0) + 1 };
+export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false): void {
+  pending = { cwd, name, prompt, agent, yolo, n: (pending?.n ?? 0) + 1 };
   subs.forEach((f) => f());
 }
 

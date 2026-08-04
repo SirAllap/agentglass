@@ -12,7 +12,7 @@
 // with fourteen checkouts nobody can name.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
-import type { GitRepoRef, IssueDetail, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse } from "../../../shared/types.ts";
+import type { GitRepoRef, IssueDetail, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse, SkillInfo } from "../../../shared/types.ts";
 import type { ProviderTask, ProviderTasksResponse, SavedView, ViewTasksResponse, ListStatus, ListField, TaskDetail } from "../../../shared/providers.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
@@ -20,6 +20,7 @@ import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
+import { cardSkills, skillCommand, windowName, skillModes, namedForIt } from "../lib/cardSkills.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
 import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
 import { useSyncExternalStore } from "react";
@@ -608,7 +609,16 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   const [showDone, setShowDone] = useState(false);
   const [sel, setSel] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Pending | null>(null);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
   const today = todayStr();
+
+  // Read once when the tab opens. The set of skills on a machine does not
+  // change while somebody is looking at a board, and this is a hundred-odd
+  // rows filtered down to a handful.
+  useEffect(() => {
+    if (!active) return;
+    void api.skills().then((r) => setSkills(cardSkills(r.skills ?? []))).catch(() => setSkills([]));
+  }, [active]);
 
   const loadBoards = useCallback(async () => {
     try { setBoards(await api.clickupViews()); } catch { /* the panel still renders */ }
@@ -797,6 +807,8 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
             ? <CardDetail t={picked} today={today} statuses={data?.statuses ?? []} fields={data?.fields ?? []}
                 writable={boards.writeEnabled} repos={repos} here={here}
                 onOpenChatWith={onOpenChatWith}
+                skills={skills}
+                onNote={(text) => setNote({ ok: true, text })}
                 onAsk={(p) => setConfirm(p)} />
             : <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a card.</div>}
         </aside>
@@ -893,6 +905,7 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note }: {
 }
 
 const CU_GRID = "1fr 150px 80px 40px 66px";
+const YOLO_KEY = "agentglass.clickup.skipPermissions";
 
 function ClickUpRow({ t, today, on, onPick }: { t: ProviderTask; today: string; on: boolean; onPick: () => void }) {
   const late = !!t.due && t.due < today;
@@ -955,18 +968,29 @@ function ClickUpRow({ t, today, on, onPick }: { t: ProviderTask; today: string; 
  * then does anything leave this machine. That is not ceremony. A status change
  * here fires automations and notifies people, and there is no undo.
  */
-function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenChatWith, onAsk }: {
+function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenChatWith, onAsk, skills, onNote }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
   writable: boolean;
   repos: GitRepoRef[]; here: string;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   onAsk: (p: Pending) => void;
+  /** Only the skills that take a card — see lib/cardSkills.ts. */
+  skills: SkillInfo[];
+  onNote: (text: string) => void;
 }) {
   const [full, setFull] = useState<(Partial<TaskDetail> & { ok?: boolean; error?: string }) | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [skillQ, setSkillQ] = useState("");
+  // Remembered across cards and restarts: whoever wants this once usually wants
+  // it for the rest of the afternoon, and re-ticking it every time is how it
+  // ends up left on by habit instead of by choice.
+  const [yolo, setYolo] = useState(() => {
+    try { return localStorage.getItem(YOLO_KEY) === "1"; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem(YOLO_KEY, yolo ? "1" : "0"); } catch { /* private mode */ } }, [yolo]);
 
   useEffect(() => {
     let live = true;
@@ -983,6 +1007,12 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
      already in. Never a text box — an invalid status is a 400, and a status
      from another list means something else entirely. */
   const options = statuses.filter((s) => s.status !== t.status);
+
+  const shown = useMemo(() => {
+    const needle = skillQ.trim().toLowerCase();
+    if (!needle) return skills;
+    return skills.filter((s) => s.name.toLowerCase().includes(needle) || (s.description ?? "").toLowerCase().includes(needle));
+  }, [skills, skillQ]);
 
   const copyId = async () => {
     try { await navigator.clipboard.writeText(t.id); setCopied(true); setTimeout(() => setCopied(false), 1200); } catch { /* no clipboard */ }
@@ -1139,21 +1169,110 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
             Hand to Claude ▾
           </button>
           {askOpen && (
-            <div className="absolute left-0 bottom-full mb-1 rounded-lg text-[11px] shadow-2xl flex flex-col"
-              style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 210 }}>
+            <div className="agx-scroll absolute left-0 bottom-full mb-1 rounded-lg text-[11px] shadow-2xl flex flex-col overflow-y-auto"
+              style={{ zIndex: 30, background: "var(--bg2)", border: edge(28), minWidth: 260, maxHeight: 340 }}>
+              {/* Your own skills first, because running one is the thing being
+                  reached for — the plain hand-offs below are the fallback for a
+                  card no skill covers. */}
+              {!!skills.length && (
+                <>
+                  <div className="px-2.5 pt-2 pb-1 flex items-center gap-2">
+                    <span className="text-[8.5px] uppercase tracking-[0.16em]" style={{ color: "var(--text4)" }}>
+                      Run a skill on this card
+                    </span>
+                    <span className="flex-1" />
+                    <input value={skillQ} onChange={(e) => setSkillQ(e.target.value)} placeholder="filter"
+                      spellCheck={false} autoComplete="off"
+                      className="text-[10px] px-1.5 py-0.5 rounded outline-none"
+                      style={{ background: "var(--bg3)", border: edge(16), color: "var(--text)", width: 92 }} />
+                  </div>
+                  {shown.map((sk, i) => {
+                    // One heading between the ones named for it and the rest,
+                    // rather than a filter that would have to be right about
+                    // which of the others take a card. See namedForIt.
+                    const firstOther = !namedForIt(sk) && (i === 0 || namedForIt(shown[i - 1]!));
+                    const modes = skillModes(sk.argument_hint);
+                    const run = (mode?: string) => {
+                      setAskOpen(false);
+                      const cwd = rootForTask(t.list, repos, here);
+                      if (!cwd) { onNote("No checkout to run it in — give the board's list a project name that matches a repo"); return; }
+                      const cmd = skillCommand(sk.name, t) + (mode ? ` ${mode}` : "");
+                      // A tmux window with the agent already running it, which
+                      // is the gesture the issues panel uses.
+                      requestTermIssue(cwd, windowName(t), cmd, true, yolo);
+                      onNote(`${cmd}${yolo ? " · permissions off" : ""} — opening a window`);
+                    };
+                    return (
+                      <div key={sk.name}>
+                      {firstOther && (
+                        <div className="px-2.5 pt-2 pb-1 text-[8.5px] uppercase tracking-[0.16em]"
+                          style={{ color: "var(--text4)", borderTop: edge(10) }}>Also mention ClickUp</div>
+                      )}
+                      <div className="px-2.5 py-1.5 hover:bg-white/5">
+                        <button className="text-left w-full" title={sk.description} onClick={() => run()}>
+                          <div style={{ color: "var(--warning)" }}>
+                            /{sk.name.replace(/^\//, "")} <span style={{ color: "var(--text3)" }}>{t.customId || t.id}</span>
+                          </div>
+                          {sk.description && (
+                            <div className="text-[9.5px] line-clamp-2" style={{ color: "var(--text4)" }}>{sk.description}</div>
+                          )}
+                        </button>
+                        {/* The gears the skill itself advertises. Parsed from
+                            its own invocation line, so a skill that grows a
+                            third mode grows a third button here for free. */}
+                        {!!modes.length && (
+                          <div className="flex items-center gap-1 mt-1">
+                            {modes.map((m) => (
+                              <button key={m} onClick={() => run(m)}
+                                className="text-[9.5px] px-1.5 py-0.5 rounded-full"
+                                style={{ color: "var(--text3)", border: edge(16) }}>{m}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      </div>
+                    );
+                  })}
+                  {!shown.length && (
+                    <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text4)" }}>No skill matches that.</div>
+                  )}
+                  <div style={{ borderTop: edge(12) }} />
+                </>
+              )}
+              <div className="px-2.5 pt-2 pb-1 text-[8.5px] uppercase tracking-[0.16em]" style={{ color: "var(--text4)" }}>
+                Or hand it over to write your own
+              </div>
               {HANDOFFS.map((h) => (
                 <button key={h.id} className="text-left px-2.5 py-1.5 hover:bg-white/5"
                   style={{ color: "var(--text2)" }}
                   onClick={() => {
                     setAskOpen(false);
                     const cwd = rootForTask(t.list, repos, here);
-                    if (!cwd) return;
+                    if (!cwd) { onNote("No checkout to open a chat in"); return; }
                     onOpenChatWith?.(cwd, h.build(t, full?.description ?? ""), t.title.slice(0, 60));
                   }}>
                   <div>{h.label}</div>
                   <div className="text-[9.5px]" style={{ color: "var(--text4)" }}>{h.hint}</div>
                 </button>
               ))}
+              {/* Applies to a skill run, which spawns an agent — not to the
+                  hand-offs above, which only put text in a composer. Sticky,
+                  because whoever wants it once usually wants it all afternoon,
+                  and loud, because it is the setting that lets an agent edit
+                  files without asking. */}
+              {!!skills.length && (
+                <label className="flex items-start gap-2 px-2.5 py-2 cursor-pointer"
+                  style={{ borderTop: edge(12) }}>
+                  <input type="checkbox" checked={yolo} onChange={(e) => setYolo(e.target.checked)}
+                    style={{ accentColor: "var(--error)", marginTop: 2 }} />
+                  <span>
+                    <span style={{ color: yolo ? "var(--error)" : "var(--text2)" }}>Skip permission prompts</span>
+                    <span className="block text-[9.5px]" style={{ color: "var(--text4)" }}>
+                      The agent edits and runs without asking. Only for a card you already trust.
+                    </span>
+                  </span>
+                </label>
+              )}
             </div>
           )}
         </div>
