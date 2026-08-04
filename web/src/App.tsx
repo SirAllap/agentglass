@@ -33,6 +33,7 @@ import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
 import { ZoomToast } from "./components/ZoomToast.tsx";
+import { NoteToasts } from "./components/NoteToasts.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
@@ -742,6 +743,12 @@ export default function App() {
           the update button restarts into a new build and otherwise says nothing
           about what changed. */}
       <WhatsNew />
+      {/* This machine's own notifications, over whatever is on screen — the
+          point of mirroring them at all is that agentglass is what is covering
+          the banner your desktop just drew. App-level and not inside a view, for
+          the same reason MachinePanel is: a Slack ping is not about the panel
+          you happen to be looking at. */}
+      <NoteToasts onGoto={(g) => { requestPrJump(g.repo, g.number); goView("pr"); }} />
       <ZoomToast zoom={zoomed} />
       <SettingsModal
         open={settingsOpen}

@@ -17,6 +17,11 @@
 //   whenever you choose to ask. Everything the lane shows is in the list too, so
 //   a toast you never saw costs you nothing.
 //
+// A third half, since: your machine's own notifications no longer pass through
+// the lane at all. They are cards now (NoteToasts.tsx), because a Slack message
+// is prose and this lane is a caption. They still land in the bell, which is why
+// the empty state below is the place that offers to switch them on.
+//
 // Both live in the strip rather than in a view, deliberately. The complaint this
 // came out of was being pulled away from the terminal to find out what wanted
 // you; a surface welded to the top of the window is one you can read without
@@ -29,15 +34,18 @@ import { subscribeGitChanged } from "../lib/gitBus.ts";
 import { subscribeNewGates } from "../lib/gateStore.ts";
 import { enqueue, dequeue } from "../lib/toastQueue.ts";
 import {
-  subscribeSystemNotes, subscribeNotifyHistory, notifyHistory, notifyUnread,
+  subscribeNotifyHistory, notifyHistory, notifyUnread,
   markNotifyRead, dismissNote, clearNotes, openNote, recordNote,
-  notifyQuiet, setNotifyQuiet, subscribeNotifyQuiet, type SystemNote,
+  notifyQuiet, setNotifyQuiet, subscribeNotifyQuiet,
+  appNotify, subscribeAppNotify, shouldInterrupt,
+  sysNotifyOn, setSysNotifyOn, subscribeSysNotifyMode, notifyCapability,
+  type SystemNote, type NotifyCapability,
 } from "../lib/sysNotify.ts";
 import { Portal } from "./Portal.tsx";
 
-export type NoteKind = "done" | "blocked" | "pull" | "system";
+export type NoteKind = "done" | "blocked" | "pull";
 export type Note = {
-  id: string; kind: NoteKind; title: string; sub: string; color: string; app?: string;
+  id: string; kind: NoteKind; title: string; sub: string; color: string;
   /** When it was queued. The lane drops what went stale waiting; see toastQueue.ts. */
   at: number;
   /** Something is blocked until you answer. Jumps the queue, never dropped. */
@@ -59,7 +67,6 @@ function NoteIcon({ kind }: { kind: NoteKind }) {
   };
   if (kind === "done") return <svg {...p}><path d="M4 12.5l5 5L20 6" /></svg>;
   if (kind === "blocked") return <svg {...p}><path d="M12 8v5M12 16.5v.01" /><circle cx="12" cy="12" r="9" /></svg>;
-  if (kind === "system") return <BellGlyph {...p} />;
   return <svg {...p}><path d="M12 4v11M6 11l6 6 6-6" /><path d="M4.5 20h15" /></svg>; // pull: a download arrow
 }
 
@@ -96,8 +103,21 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
   const queue = useRef<Note[]>([]);
   const showing = useRef(false);
 
-  /** Callers describe the note; the lane stamps when it arrived. */
+  /**
+   * Callers describe the note; the lane stamps when it arrived.
+   *
+   * Switched off (Settings → Notifications → "agentglass's own notifications"),
+   * nothing passing gets the lane — with one structural exception: a note marked
+   * `urgent` is something that is STOPPED until you act, and those still speak.
+   * "Do not interrupt me" is a reasonable thing to ask for; "let an agent sit
+   * held until it times out and say nothing" is not, and it is the one state
+   * that cannot be caught up on later.
+   *
+   * Off never touches the record either. Everything here also lands in the
+   * bell's list through `recordNote`, which is deliberately outside this gate.
+   */
   const push = (n: Omit<Note, "at">) => {
+    if (!shouldInterrupt(!!n.urgent)) return;
     enqueue(queue.current, { ...n, at: Date.now() });
     if (!showing.current) advance();
   };
@@ -153,28 +173,18 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
     });
   }), []);
 
-  // Desktop notifications, read off the D-Bus session bus by the server and
-  // mirrored here. They share the lane with agentglass's own events on purpose:
-  // from where you are sitting, "a teammate replied" and "the chat finished" are
-  // the same kind of interruption, and giving each its own surface would mean
-  // watching two places instead of one.
+  // Desktop notifications used to be pushed into this lane too. They are not any
+  // more: they go to NoteToasts, which gives them a card. Two reasons, both of
+  // them things this lane could not fix by being adjusted.
   //
-  // Only while the setting is on -- with it off the socket is never opened, so
-  // the server never even starts watching. An unsupported platform simply never
-  // delivers anything and nothing here needs to know.
-  useEffect(() => subscribeSystemNotes((n) => {
-    push({
-      id: n.id,
-      kind: "system",
-      color: n.urgency === 2 ? "var(--error)" : "var(--primary)",
-      title: n.summary || n.app,
-      sub: n.body || n.app,
-      app: n.app,
-      // A sender marked it critical. Rare from third-party apps, and the one
-      // signal we have that it is not chatter.
-      urgent: n.urgency === 2,
-    });
-  }), []);
+  // The lane is one slot in the middle of the bar, and the "needs you" chip owns
+  // that slot whenever anything is held — so the mirrored ping arrived exactly
+  // when it was least likely to be shown. And a caption cannot carry someone
+  // else's message: "New message from Alejandro García / Avisa cuando lo tengas"
+  // is prose, and truncating prose to 10px of bar is how you end up opening
+  // Slack to find out what Slack already told you.
+  //
+  // Our own events keep the lane, because they genuinely are captions.
 
   // Branches falling behind their upstream -- "main has changes to pull". Its
   // own poll, deliberately slow: this moves on the scale of someone pushing to a
@@ -247,12 +257,6 @@ export function NoteToast({ note }: { note: Note | null }) {
           </span>
           <span className="text-[10.5px] font-semibold truncate shrink-0" style={{ color: "var(--text)", maxWidth: 200 }}>{note.title}</span>
           <span className="text-[10px] truncate" style={{ color: note.color }}>{note.sub}</span>
-          {/* Which app it came from. Only for the mirrored ones: on our own
-              events it would say "agentglass" to someone already looking at
-              agentglass. */}
-          {note.kind === "system" && note.app && (
-            <span className="text-[9px] uppercase tracking-wider shrink-0" style={{ color: "var(--text4)" }}>{note.app}</span>
-          )}
         </motion.div>
       )}
     </AnimatePresence>
@@ -351,6 +355,13 @@ export function NotifyBell({ noDrag, onGoto }: {
   const hist = useSyncExternalStore(subscribeNotifyHistory, notifyHistory, notifyHistory);
   const unread = useSyncExternalStore(subscribeNotifyHistory, notifyUnread, () => 0);
   const quiet = useSyncExternalStore(subscribeNotifyQuiet, notifyQuiet, () => false);
+  const mirroring = useSyncExternalStore(subscribeSysNotifyMode, sysNotifyOn, () => false);
+  const own = useSyncExternalStore(subscribeAppNotify, appNotify, () => true);
+  // Asked only when the panel is opened, and only while the answer could change
+  // what is on screen: an unsupported host must never be offered a switch that
+  // cannot do anything.
+  const [cap, setCap] = useState<NotifyCapability | null>(null);
+  useEffect(() => { if (open && !cap) void notifyCapability().then(setCap); }, [open, cap]);
 
   // Looking at them is what marks them read. `hist` is in the deps so a note
   // arriving while the panel is open does not silently re-arm the badge.
@@ -456,10 +467,47 @@ export function NotifyBell({ noDrag, onGoto }: {
               // Says which of the two reasons it is empty for. "Nothing here"
               // over a feature that is switched off is the same screen as
               // "nothing has happened", and they call for opposite actions.
-              <div className="px-3 py-4 text-[11px]" style={{ color: "var(--text3)" }}>
-                Nothing yet. Chats that finish, agents that block and branches that fall
-                behind land here — and your desktop's own notifications too, once
-                Settings → Notifications is switched on.
+              <div className="px-3 py-4 text-[11px] flex flex-col gap-2.5" style={{ color: "var(--text3)" }}>
+                <span>
+                  Nothing yet. Chats that finish, agents that block and branches that fall
+                  behind land here{mirroring ? " — your desktop's own notifications too." : "."}
+                </span>
+                {/* The switch, where you notice it is off.
+                    Telling someone their notifications are off and then sending
+                    them to a modal three panes deep is how this feature spent
+                    months looking broken to someone who had simply never turned
+                    it on. Supported hosts get the button; the rest get the
+                    reason, which is not their fault and not fixable here. */}
+                {!mirroring && (cap?.supported
+                  ? (
+                    <button className="agx-note-link self-start"
+                      onClick={() => setSysNotifyOn(true)}
+                      title="Mirror this machine's notifications into agentglass — Slack, mail, whatever else pops up while the app is covering your screen">
+                      Turn on desktop notifications
+                    </button>
+                  )
+                  : cap && (
+                    <span style={{ color: "var(--text4)" }}>
+                      Desktop notifications unavailable — {cap.reason}
+                    </span>
+                  ))}
+              </div>
+            )}
+            {/* Standing state, said out loud wherever the list is read. Two
+                switches can silence this panel's sources and both of them are
+                elsewhere; a list that is empty because you muted it should never
+                look like a list that is empty because nothing happened. */}
+            {hist.length > 0 && (!own || !mirroring) && (
+              <div className="px-2.5 py-1.5 text-[9.5px] flex items-center gap-2"
+                style={{ borderTop: "1px solid var(--border)", color: "var(--text4)" }}>
+                <span>
+                  {!own && !mirroring ? "Both lanes are quiet — nothing interrupts, everything still collects here."
+                    : !own ? "agentglass's own alerts are not interrupting — they still collect here."
+                    : "Your desktop's notifications are not being mirrored."}
+                </span>
+                {!mirroring && cap?.supported && (
+                  <button className="agx-note-btn ml-auto shrink-0" onClick={() => setSysNotifyOn(true)}>Turn on</button>
+                )}
               </div>
             )}
           </div>

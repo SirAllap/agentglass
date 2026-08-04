@@ -541,6 +541,17 @@ textarea.bg-transparent {
   line-clamp: 2;
   overflow: hidden;
 }
+/* The same body text on a banner rather than in the list. Three lines instead
+   of two: a card that arrives unbidden over your work has one chance to say
+   what it is, and the list behind the bell is where the rest is waiting. */
+.agx-note-toast-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  color: var(--text2);
+}
 .agx-note-row + .agx-note-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
