@@ -1047,7 +1047,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    *
    *  Below the `root` it reads, and that is not a style point: it sat above,
    *  and `root` is a `const` from useState, so the lookup ran in its temporal
-   *  dead zone and threw on the first render of this panel — a white window for
+   *  dead zone and threw on the panel's first render — a white window for
    *  anyone whose last view was the terminal. tsc cannot see it because the
    *  read is inside the `find` callback, where it looks deferred. */
   const here = repos.find((r) => r.root === root) ?? null;
