@@ -773,3 +773,35 @@ textarea.bg-transparent {
 .agx-row:focus-within .agx-onrow,
 .agx-row[aria-current="true"] .agx-onrow { opacity: 1; }
 @media (hover: none) { .agx-onrow { opacity: 1; } }
+
+/*
+ * A ClickUp card's own markdown, in a 380-pixel column.
+ *
+ * These descriptions are written for a full-width browser: h2 headings, tables,
+ * long inline code. Left alone they set the pane's scroll width and everything
+ * else goes with it. Scaled down and given somewhere to scroll rather than
+ * rewritten — the text belongs to whoever wrote the card.
+ */
+.agx-cu-body :is(h1, h2, h3) { font-size: 12px; margin: 10px 0 4px; }
+.agx-cu-body :is(h1, h2, h3):first-child { margin-top: 0; }
+.agx-cu-body p, .agx-cu-body li { font-size: 11.5px; line-height: 1.5; }
+.agx-cu-body code { font-size: 10.5px; overflow-wrap: anywhere; }
+.agx-cu-body pre { overflow-x: auto; font-size: 10.5px; }
+.agx-cu-body table { display: block; overflow-x: auto; font-size: 10.5px; }
+.agx-cu-body ul, .agx-cu-body ol { padding-left: 16px; margin: 4px 0; }
+
+/*
+ * A ClickUp card's own markdown, in a 380-pixel column.
+ *
+ * These descriptions are written for a full-width browser: h2 headings, tables,
+ * long inline code. Left alone they set the pane's scroll width and drag
+ * everything else sideways with them. Scaled down and given somewhere to scroll
+ * rather than rewritten — the text belongs to whoever wrote the card.
+ */
+.agx-cu-body :is(h1, h2, h3) { font-size: 12px; margin: 10px 0 4px; }
+.agx-cu-body :is(h1, h2, h3):first-child { margin-top: 0; }
+.agx-cu-body p, .agx-cu-body li { font-size: 11.5px; line-height: 1.5; }
+.agx-cu-body code { font-size: 10.5px; overflow-wrap: anywhere; }
+.agx-cu-body pre { overflow-x: auto; font-size: 10.5px; }
+.agx-cu-body table { display: block; overflow-x: auto; font-size: 10.5px; }
+.agx-cu-body ul, .agx-cu-body ol { padding-left: 16px; margin: 4px 0; }

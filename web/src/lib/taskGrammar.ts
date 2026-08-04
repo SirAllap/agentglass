@@ -325,3 +325,30 @@ export function dueLabel(due: string | null, today: string): string {
   const label = `${d} ${MONTHS[m - 1] ?? "?"}`;
   return String(y) === today.slice(0, 4) ? label : `${label} ${y}`;
 }
+
+/**
+ * When something was read, as a person would check it against a clock.
+ *
+ * "7s ago" is right while you are watching it happen and useless the next
+ * morning, when the question is whether this is today's board or Friday's.
+ * Today gets a time, yesterday gets said by name, and anything older gets a
+ * date — the point being that you can tell at a glance whether to trust it.
+ */
+export function stamp(at: number, now = Date.now()): string {
+  if (!at) return "never";
+  const d = new Date(at), n = new Date(now);
+  const p = (x: number) => String(x).padStart(2, "0");
+  const clock = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+  if (sameDay) {
+    const mins = Math.floor((now - at) / 60_000);
+    // Under a minute it is still happening in front of you, and a clock time
+    // there reads as staler than it is.
+    return mins < 1 ? "just now" : `today ${clock}`;
+  }
+  const y = new Date(now - 86_400_000);
+  if (d.getFullYear() === y.getFullYear() && d.getMonth() === y.getMonth() && d.getDate() === y.getDate()) {
+    return `yesterday ${clock}`;
+  }
+  return `${d.getDate()} ${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]} ${clock}`;
+}

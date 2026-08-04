@@ -168,13 +168,14 @@ interface RawTask {
   custom_id?: string | null;
   name: string;
   url?: string;
-  status?: { status?: string; type?: string };
+  status?: { status?: string; type?: string; color?: string };
   due_date?: string | number | null;
   date_updated?: string | number | null;
   priority?: { priority?: string } | null;
   tags?: { name?: string }[];
   list?: { id?: string; name?: string } | null;
-  assignees?: { id?: string | number; username?: string }[];
+  assignees?: { id?: string | number; username?: string; initials?: string }[];
+  locations?: { id?: string; name?: string }[];
   points?: number | null;
   custom_fields?: RawField[];
 }
@@ -201,6 +202,27 @@ function localDay(v: string | number | null | undefined): string | null {
 
 const PRIORITY = new Set(["urgent", "high", "normal", "low"]);
 
+/**
+ * A sprint's name, minus the dates nobody reads in a column.
+ *
+ * They arrive as `Sprint 137 (26/7/29 - 26/8/4)`. The number is the part that
+ * identifies it in conversation; the range is thirty characters that push the
+ * task title off the row. Kept whole when it does not match that shape, because
+ * a workspace that names its sprints differently should still see its own name.
+ */
+function shortSprint(name: string | undefined): string | null {
+  if (!name) return null;
+  const m = /^([^(]+?)\s*\(/.exec(name);
+  return (m?.[1] ?? name).trim() || null;
+}
+
+/** Two letters from a name, for a column that has room for two letters. */
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "";
+  return ((parts[0]![0] ?? "") + (parts.length > 1 ? parts[parts.length - 1]![0] ?? "" : "")).toUpperCase();
+}
+
 export function toTask(raw: RawTask, myId?: string): ProviderTask {
   const kind = raw.status?.type;
   const assignees = raw.assignees ?? [];
@@ -210,6 +232,7 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     title: raw.name ?? "(untitled)",
     url: raw.url ?? "",
     status: raw.status?.status ?? "",
+    statusColor: raw.status?.color || undefined,
     /*
      * ClickUp's status TYPE is the only portable thing about a status.
      *
@@ -231,6 +254,10 @@ export function toTask(raw: RawTask, myId?: string): ProviderTask {
     list: raw.list?.name ?? null,
     listId: raw.list?.id ? String(raw.list.id) : undefined,
     assignees: assignees.map((a) => a.username ?? "").filter(Boolean),
+    assigneeInitials: assignees.map((a) => a.initials || initialsOf(a.username ?? "")).filter(Boolean),
+    // A sprint is another LIST the card also lives in. `locations` holds those,
+    // minus the one it belongs to primarily.
+    sprint: shortSprint((raw.locations ?? []).map((l) => l.name ?? "").find((n) => n && n !== raw.list?.name)),
     // Resolved here, against the connected account. The browser has no business
     // knowing your ClickUp user id, and a client-side comparison would need it.
     mine: myId ? assignees.some((a) => String(a.id ?? "") === myId) : undefined,
