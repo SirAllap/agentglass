@@ -798,3 +798,89 @@ export async function findCard(text: string, knownPrefix: string): Promise<CallR
   if (!r.data?.id) return { ok: false, error: `No card called ${asked}` };
   return { ok: true, data: { task: toTask(r.data, me?.accountId), asked } };
 }
+
+// ---------------------------------------------------------------------------
+// the pull requests a card produced
+// ---------------------------------------------------------------------------
+
+/**
+ * Which pull requests belong to a card.
+ *
+ * ClickUp's own GitHub panel knows this and does not tell anyone: the v2 API
+ * exposes no endpoint for those links — checked against a card whose sidebar
+ * showed two, and neither the task, its `linked_tasks`, its attachments nor any
+ * `/task/{id}/…` route mentioned them.
+ *
+ * What DOES work is the convention the team already follows. The card id goes
+ * in the branch name and the commit, so GitHub's own search finds every pull
+ * request for a card — measured on that same card: `gh pr list --search
+ * <card-id>` returned both, one open and one merged, exactly the two ClickUp
+ * was showing.
+ *
+ * The `Github Url` custom field is used as well, because somebody typing a link
+ * by hand is a statement of intent that outranks a search, and because a pull
+ * request in another repository will never be found by searching this one.
+ * Union of the two, the field first.
+ */
+export interface CardPr {
+  number: number;
+  title: string;
+  /** OPEN | MERGED | CLOSED, as GitHub spells it. */
+  state: string;
+  draft?: boolean;
+  url: string;
+  /** True when it came from the card's own field rather than from a search. */
+  stated?: boolean;
+}
+
+/** A pull-request number out of a GitHub URL, and nothing else out of anything
+ *  else. A bare number in that field would be ambiguous — issue or PR — so it
+ *  has to be a link that says `/pull/`. */
+export function prNumberFromUrl(url: string): number | null {
+  const m = /github\.com\/[^/]+\/[^/]+\/pull\/(\d+)/i.exec(url || "");
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export async function cardPullRequests(
+  cardId: string, fieldUrl: string | undefined, root: string,
+): Promise<{ ok: boolean; prs: CardPr[]; error?: string }> {
+  const { gh } = await import("./prs.ts");
+  const out = new Map<number, CardPr>();
+
+  const stated = prNumberFromUrl(fieldUrl ?? "");
+  if (stated) {
+    out.set(stated, { number: stated, title: "", state: "", url: fieldUrl!, stated: true });
+  }
+
+  if (!cardId) return { ok: true, prs: [...out.values()] };
+  // `--search` rather than a filter: the id appears in a branch, a title or a
+  // commit, and which of those is not ours to assume.
+  const r = await gh(
+    ["pr", "list", "--search", cardId, "--state", "all", "--limit", "20",
+      "--json", "number,title,state,isDraft,url"],
+    root,
+  );
+  if (r.code !== 0) {
+    // A search that failed is not a card with no pull requests. Whatever the
+    // field said still stands, and the caller is told the rest is unknown.
+    return { ok: false, prs: [...out.values()], error: r.stderr.trim().slice(0, 160) || "could not search GitHub" };
+  }
+  try {
+    const rows = JSON.parse(r.stdout) as { number: number; title: string; state: string; isDraft?: boolean; url: string }[];
+    for (const p of rows) {
+      const had = out.get(p.number);
+      out.set(p.number, {
+        number: p.number, title: p.title, state: p.state, draft: p.isDraft, url: p.url,
+        stated: had?.stated,
+      });
+    }
+  } catch { /* a search that answered nothing usable is a search with no rows */ }
+
+  return {
+    ok: true,
+    // Stated first, then by number descending — newest work at the top, which
+    // is the one somebody is looking for.
+    prs: [...out.values()].sort((a, b) => Number(!!b.stated) - Number(!!a.stated) || b.number - a.number),
+  };
+}

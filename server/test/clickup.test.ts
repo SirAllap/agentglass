@@ -489,3 +489,21 @@ describe("finding a card by the number you remember", () => {
     }
   });
 });
+
+describe("the pull requests a card produced", () => {
+  const { prNumberFromUrl } = CU;
+
+  it("reads a number out of a pull-request link", () => {
+    expect(prNumberFromUrl("https://github.com/acme/widgets/pull/17304")).toBe(17304);
+    expect(prNumberFromUrl("https://github.com/acme/widgets/pull/17304/files")).toBe(17304);
+  });
+
+  it("refuses anything that is not one", () => {
+    // A bare number in that field would be ambiguous — issue or pull request —
+    // so the link has to say `/pull/`.
+    for (const bad of ["", "17304", "https://github.com/acme/widgets/issues/17304",
+      "https://github.com/acme/widgets", "https://example.invalid/x/y/pull/1"]) {
+      expect(prNumberFromUrl(bad), JSON.stringify(bad)).toBe(null);
+    }
+  });
+});

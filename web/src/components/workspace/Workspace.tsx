@@ -58,7 +58,7 @@ const KEEP_RUNNING = new Set<ViewId>(["term", "chat"]);
  */
 
 export function Workspace({
-  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard,
+  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard, prQuery,
 }: {
   view: ViewId;
   onView: (v: ViewId) => void;
@@ -70,6 +70,8 @@ export function Workspace({
    *  (the live socket feeds the chat store too), so it arrives already built
    *  and is handed its own `active` here like everything else. */
   dashboard: (active: boolean) => React.ReactNode;
+  /** A pull-request search another panel asked for — see lib/openPrs.ts. */
+  prQuery?: string | null;
 }) {
   const openChat = useCallback(() => onView("chat"), [onView]);
 
@@ -164,7 +166,7 @@ export function Workspace({
             >
               {v.id === "dash"
                 ? dashboard(active)
-                : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith}
+                : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith} prQuery={prQuery}
                     reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
             </div>
           );
@@ -176,19 +178,20 @@ export function Workspace({
 
 /** The non-dashboard views, and the props each one wants. Split out so the map
  *  above stays about mounting rather than about plumbing. */
-function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusId }: {
+function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusId, prQuery }: {
   id: ViewId; active: boolean;
   openChat: () => void;
   openChatWith: (cwd: string, prompt: string, title: string) => void;
   reviewInTerminal: (root: string, number: number) => void;
   chatFocusId?: string | null;
+  prQuery?: string | null;
 }) {
   switch (id) {
     case "files": return <FilesView active={active} />;
     case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
     case "diff": return <DiffView active={active} />;
-    case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} />;
+    case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prQuery} />;
     case "docker": return <DockerView active={active} />;
     case "term": return <TermView active={active} />;
     case "chat": return <ChatView active={active} focusId={chatFocusId} />;

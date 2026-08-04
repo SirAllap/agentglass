@@ -20,6 +20,7 @@ import { Markdown } from "../lib/markdown.tsx";
 import { fmtAgo } from "../lib/format.ts";
 import { requestTermIssue } from "../lib/termIssue.ts";
 import { openSettings } from "../lib/openSettings.ts";
+import { openPrs } from "../lib/openPrs.ts";
 import { cardSkills, skillCommand, windowName, skillModes, namedForIt } from "../lib/cardSkills.ts";
 import { subscribeReminders, liveReminders, nudgeReminders } from "../lib/reminderStore.ts";
 import { parseLocal, toLine, sortTasks, step, checkbox, toggleCheckbox, checkProgress, rootForTask, taskPrompt, lineWith, inUse, typingInto, dueBucket, bucketCounts, dueLabel, stamp, TASK_KEYS, SORTS, type SortMode, type Bucket } from "../lib/taskGrammar.ts";
@@ -615,6 +616,12 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
      board's own rows instead of mixed into them: it belongs to some other list
      and pretending otherwise would make the counts lie. */
   const [found, setFound] = useState<ProviderTask | null>(null);
+  /* Some cards are a page of prose with tables in them. Remembered, because
+     whoever needs the room needs it for the whole board, not for one card. */
+  const [wide, setWide] = useState(() => {
+    try { return localStorage.getItem(WIDE_KEY) === "1"; } catch { return false; }
+  });
+  useEffect(() => { try { localStorage.setItem(WIDE_KEY, wide ? "1" : "0"); } catch { /* private mode */ } }, [wide]);
   const [finding, setFinding] = useState(false);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const today = todayStr();
@@ -915,12 +922,18 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
           </div>
         </div>
 
-        <aside className="agx-scroll overflow-y-auto p-4 text-[11.5px] shrink-0"
-          style={{ width: 380, borderLeft: edge(12) }}>
+        {/* `overflow-x: hidden` and `minWidth: 0`, together. Without the second
+            a grid child takes its content's width as its minimum, so one long
+            unbroken URL in a card pushed the whole pane sideways and dragged the
+            list with it — which is the horizontal scrollbar that appeared under
+            everything. */}
+        <aside className="agx-scroll overflow-y-auto overflow-x-hidden p-4 text-[11.5px] shrink-0"
+          style={{ width: wide ? 720 : 380, minWidth: 0, borderLeft: edge(12), transition: "width 120ms ease" }}>
           {picked
             ? <CardDetail t={picked} today={today} statuses={data?.statuses ?? []} fields={data?.fields ?? []}
                 writable={boards.writeEnabled} repos={repos} here={here}
                 onOpenChatWith={onOpenChatWith}
+                wide={wide} onWide={() => setWide((w) => !w)}
                 skills={skills}
                 onNote={(text) => setNote({ ok: true, text })}
                 onAsk={(p) => setConfirm(p)} />
@@ -1027,6 +1040,7 @@ function AddFirstBoard({ value, onValue, onAdd, busy, note }: {
  * width until there is something to spend it on.
  */
 const YOLO_KEY = "agentglass.clickup.skipPermissions";
+const WIDE_KEY = "agentglass.clickup.wideCard";
 
 /*
  * The columns, and the ones that come and go.
@@ -1273,7 +1287,7 @@ function CardField({ label, children }: { label: string; children: React.ReactNo
  * then does anything leave this machine. That is not ceremony. A status change
  * here fires automations and notifies people, and there is no undo.
  */
-function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenChatWith, onAsk, skills, onNote }: {
+function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenChatWith, onAsk, skills, onNote, wide, onWide }: {
   t: ProviderTask; today: string;
   statuses: ListStatus[]; fields: ListField[];
   writable: boolean;
@@ -1283,6 +1297,8 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
   /** Only the skills that take a card — see lib/cardSkills.ts. */
   skills: SkillInfo[];
   onNote: (text: string) => void;
+  wide: boolean;
+  onWide: () => void;
 }) {
   const [full, setFull] = useState<(Partial<TaskDetail> & { ok?: boolean; error?: string }) | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
@@ -1296,6 +1312,20 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
     try { return localStorage.getItem(YOLO_KEY) === "1"; } catch { return false; }
   });
   useEffect(() => { try { localStorage.setItem(YOLO_KEY, yolo ? "1" : "0"); } catch { /* private mode */ } }, [yolo]);
+
+  const [prs, setPrs] = useState<{ number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]>([]);
+  const [prsErr, setPrsErr] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setPrs([]); setPrsErr(false);
+    const field = t.custom?.find((c) => /github/i.test(c.name))?.value ?? "";
+    const cwd = rootForTask(t.list, repos, here) ?? here;
+    void api.clickupPrs(t.customId || "", field, cwd)
+      .then((r) => { if (live) { setPrs(r.prs ?? []); setPrsErr(!r.ok); } })
+      .catch(() => { if (live) setPrsErr(true); });
+    return () => { live = false; };
+  }, [t.id, t.customId, t.custom, t.list, repos, here]);
 
   useEffect(() => {
     let live = true;
@@ -1339,6 +1369,11 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
           <span className="text-[8.5px] tracking-[0.08em] px-1.5 py-0.5 rounded"
             style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 15%, transparent)" }}>YOURS</span>
         )}
+        <span className="flex-1" />
+        <button onClick={onWide} title={wide ? "Narrow this pane" : "Some cards are a page of prose — give it room"}
+          className="text-[10px] px-1.5 py-0.5 rounded" style={{ border: edge(16), color: "var(--text3)" }}>
+          {wide ? "⇥ narrow" : "⇤ wider"}
+        </button>
       </div>
       <h2 className="text-[14px] font-semibold leading-snug mb-3" style={{ color: "var(--text)", textWrap: "balance" }}>
         {t.title}
@@ -1347,7 +1382,7 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
       {/* Two columns of label-above-value rather than one of label|value. In a
           380px pane the second shape leaves the value about ninety pixels, which
           is where "ready for engineering" became "to…". */}
-      <div className="mb-3" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "11px 12px" }}>
+      <div className="mb-3" style={{ display: "grid", gridTemplateColumns: wide ? "repeat(3, minmax(0,1fr))" : "1fr 1fr", gap: "11px 12px" }}>
         <CardField label="Status">
           <div className="relative">
             <button onClick={() => writable && setStatusOpen((o) => !o)} disabled={!writable || !options.length}
@@ -1423,6 +1458,46 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
           {t.tags.map((x) => (
             <span key={x} className="text-[10px] px-2 py-0.5 rounded-full"
               style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 10%, transparent)" }}>{x}</span>
+          ))}
+        </div>
+      )}
+
+      {/* The pull requests this card produced.
+          ClickUp's own GitHub panel knows them and its API does not expose
+          them, so they are found the way the team already names things: the
+          card id is in the branch, so GitHub's search finds them. Whatever the
+          card's own field says is kept too — a link typed by hand outranks a
+          search, and a PR in another repository would never be found by one. */}
+      {!!prs.length && (
+        <div className="mb-3 pt-2.5" style={{ borderTop: edge(10) }}>
+          <div className="text-[8.5px] uppercase tracking-[0.18em] mb-1.5 flex items-center gap-2" style={{ color: "var(--text4)" }}>
+            Pull requests <span>{prs.length}</span>
+            {prsErr && <span style={{ color: "var(--warning)" }}>· search failed, showing what the card states</span>}
+          </div>
+          {prs.map((p) => (
+            <div key={p.number} className="flex items-center gap-2 py-1">
+              <button onClick={() => openPrs(String(p.number))}
+                className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
+                title="Open this in Pull Requests">
+                <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>
+                {p.state && (
+                  <span className="ml-1.5 text-[9px] tracking-[0.06em] px-1.5 rounded"
+                    style={p.state === "MERGED"
+                      ? { color: "#a371f7", background: "#a371f721" }
+                      : p.state === "CLOSED"
+                      ? { color: "var(--error)", background: "color-mix(in srgb, var(--error) 13%, transparent)" }
+                      : { color: "var(--success)", background: "color-mix(in srgb, var(--success) 13%, transparent)" }}>
+                    {p.draft ? "DRAFT" : p.state}
+                  </span>
+                )}
+                {p.stated && (
+                  <span className="ml-1.5 text-[9px]" style={{ color: "var(--text4)" }} title="named on the card itself">on the card</span>
+                )}
+                <div className="truncate text-[10.5px]" style={{ color: "var(--text3)" }}>{p.title || p.url}</div>
+              </button>
+              <a href={p.url} target="_blank" rel="noreferrer" className="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                style={{ border: edge(16), color: "var(--text3)" }}>↗</a>
+            </div>
           ))}
         </div>
       )}

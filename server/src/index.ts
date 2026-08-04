@@ -62,7 +62,7 @@ import {
 } from "./issues.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, readView } from "./providers.ts";
 import { savedViews, currentView, setCurrent, removeView, cachedFor } from "./clickupviews.ts";
-import { assignSelf, setStatus, setField, taskDetail, findCard, CLICKUP_WRITE_ENABLED } from "./clickup.ts";
+import { assignSelf, setStatus, setField, taskDetail, findCard, cardPullRequests, CLICKUP_WRITE_ENABLED } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -1661,6 +1661,19 @@ const server = Bun.serve<WsData>({
       if (!id) return json({ tasks: [], statuses: [], fields: [], at: 0 });
       setCurrent(id);
       return json(await readView(id, url.searchParams.get("force") === "1"));
+    }
+    if (pathname === "/clickup/prs") {
+      // The checkout the search runs in, vetted the same way every other route
+      // vets one: a path outside the configured scope is refused rather than
+      // corrected, and `gh` then runs where the app already lives.
+      const asked = url.searchParams.get("root") ?? "";
+      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const r = await cardPullRequests(
+        url.searchParams.get("card") ?? "",
+        url.searchParams.get("field") ?? undefined,
+        root,
+      );
+      return json(r);
     }
     if (pathname === "/clickup/find") {
       // The prefix comes from what we have already read, so a bare number is
