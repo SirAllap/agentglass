@@ -60,6 +60,7 @@ import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
 import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
+import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep } from "./tasks.ts";
 import { fileTree, findFiles, grepFiles } from "./files.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -381,6 +382,9 @@ setMergedVerdictHook(() => {
 // Let the alert path reach a connected client, which raises a native OS
 // notification (cross-platform) instead of the Linux-only notify-send.
 setAlertSink({ broadcast: (a) => broadcast({ type: "alert", data: a }), hasClients: () => clients.size > 0 });
+// The task store has a second writer — the user's editor — so a change there
+// reaches the panel through a sweep rather than through anything we did.
+setTaskChangeHook(() => broadcast({ type: "tasks" }));
 // Let the git layer ask what a branch's pull request says its base is. Wired
 // here rather than imported there, because gitwork must not depend on the
 // pull-request layer — same reason as the two hooks above. Reads the PR list
@@ -1599,6 +1603,13 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/issues/work") return json({ work: currentWork(url.searchParams.get("repo") || undefined) });
 
+    // --- tasks (taskwarrior-backed, read-only) ---
+    if (pathname === "/tasks/list") {
+      const snap = await listTasks(url.searchParams.get("force") === "1");
+      const capability = await taskCapability();
+      return json({ ok: !snap.error, tasks: snap.tasks, capability, error: snap.error });
+    }
+
     if (pathname === "/machine/ports") return json(listPorts());
     if (pathname === "/machine/resources") return json(listResources(Number(url.searchParams.get("limit") || 40)));
     // On demand only, and never on a poll: `du` over a checkout walks every
@@ -2340,6 +2351,7 @@ setInterval(prune, 3_600_000);
 // abandoned chat gives its memory back and resumes transparently next time.
 // A no-op when the engine is off, tmux is absent, or eviction is disabled.
 startPaneSweeper();
+startTaskSweep();
 
 // Read every Claude Code session on this machine from ~/.claude/projects, then
 // keep watching. This is what makes the dashboard cover all projects at once

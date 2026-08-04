@@ -12,7 +12,7 @@
 // with fourteen checkouts nobody can name.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.ts";
-import type { GitRepoRef, IssueDetail, IssueRow, IssueWork, StartMode } from "../../../shared/types.ts";
+import type { GitRepoRef, IssueDetail, IssueRow, IssueWork, StartMode, LocalTask, TaskCapability, TasksListResponse } from "../../../shared/types.ts";
 import { ViewHeader } from "./workspace/ViewHeader.tsx";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { Markdown } from "../lib/markdown.tsx";
@@ -37,10 +37,30 @@ const MODES: { id: StartMode; label: string; hint: string }[] = [
   { id: "branch", label: "Branch here", hint: "No worktree — switches this checkout to a new branch. Refused if it is dirty" },
 ];
 
-export function IssuesView({ active }: { active: boolean }) {
+/**
+ * Where the work comes from.
+ *
+ * The view is called Tasks rather than Issues because "issues" names a
+ * *provider* and what is being grouped here is a *category*: things you owe.
+ * Once the container is named that way GitHub stops being the owner and becomes
+ * one source among several — adding another later is an entry in this array
+ * rather than a rename of the view.
+ *
+ * `all` is first because it is the only one no provider can offer: none of them
+ * knows about the others.
+ */
+type SourceId = "all" | "github" | "local";
+const SOURCES: { id: SourceId; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "github", label: "GitHub" },
+  { id: "local", label: "Local" },
+];
+
+export function TasksView({ active }: { active: boolean }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
   const [repoOpen, setRepoOpen] = useState(false);
+  const [source, setSource] = useState<SourceId>("all");
   const pickerRef = useRef<HTMLDivElement>(null);
   useDismiss(repoOpen, pickerRef, () => setRepoOpen(false));
   const repo = repos.find((r) => r.root === root) ?? null;
@@ -55,8 +75,23 @@ export function IssuesView({ active }: { active: boolean }) {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <ViewHeader title="Issues">
-        <div className="relative" ref={pickerRef}>
+      <ViewHeader title="Tasks">
+        <nav className="flex items-center gap-0.5" aria-label="Sources">
+          {SOURCES.map((s) => (
+            <button key={s.id} onClick={() => setSource(s.id)}
+              aria-current={s.id === source ? "true" : undefined}
+              className="text-[11px] px-2.5 py-1 rounded-lg whitespace-nowrap"
+              style={s.id === source
+                ? { background: "color-mix(in srgb, var(--primary) 16%, transparent)", color: "var(--text)",
+                    boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--primary) 40%, transparent)" }
+                : { color: "var(--text3)" }}>
+              {s.label}
+            </button>
+          ))}
+        </nav>
+        {/* Only the GitHub half is scoped to a repository. The local list is the
+            machine's, and showing a repo picker over it would imply otherwise. */}
+        <div className="relative" ref={pickerRef} style={{ display: source === "local" ? "none" : undefined }}>
           <button onClick={() => setRepoOpen((o) => !o)}
             className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg max-w-[280px] whitespace-nowrap"
             style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: edge(20), color: "var(--text)" }}
@@ -78,8 +113,13 @@ export function IssuesView({ active }: { active: boolean }) {
           )}
         </div>
       </ViewHeader>
-      {root ? <IssuesBody key={root} root={root} active={active} /> : (
-        <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>No repository to read issues from.</div>
+      {source === "local" ? <LocalBody active={active} /> : (
+        <div className="flex flex-col flex-1 min-h-0">
+          {source === "all" && <LocalStrip active={active} onOpen={() => setSource("local")} />}
+          {root ? <IssuesBody key={root} root={root} active={active} /> : (
+            <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>No repository to read issues from.</div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -357,3 +397,229 @@ const Field = ({ k, children }: { k: string; children: React.ReactNode }) => (
     <div className="text-[10.5px]" style={{ color: "var(--text2)" }}>{children}</div>
   </div>
 );
+
+// ---------------------------------------------------------------------------
+// the local list
+// ---------------------------------------------------------------------------
+
+/**
+ * Read out of Taskwarrior, which the user already writes to from their editor.
+ *
+ * Nothing here is ours: the list is re-read rather than mirrored, so a task
+ * added in Neovim shows up without anything having to be reconciled. Read-only
+ * for now — the write path needs a lock and a compare-and-swap against a store
+ * with a second writer, and none of that is needed to put the list on screen.
+ */
+function useLocalTasks(active: boolean) {
+  const [data, setData] = useState<TasksListResponse | null>(null);
+  const load = useCallback(() => {
+    api.tasksList().then(setData).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!active) return;
+    load();
+    const t = setInterval(load, 15_000);
+    return () => clearInterval(t);
+  }, [active, load]);
+  return { data, reload: load };
+}
+
+const overdue = (t: LocalTask, today: string) => !!t.due && t.due < today;
+const todayStr = () => {
+  const d = new Date(); const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
+
+/** What the panel says when there is no list to show, which on a fresh machine
+ *  is the first thing anybody sees. Each cause gets its own sentence because
+ *  each has a different next step — "install it" and "answer its question" are
+ *  not the same instruction. */
+function LocalEmpty({ cap, done }: { cap: TaskCapability; done: number }) {
+  const box = (title: string, body: React.ReactNode) => (
+    <div className="p-5 text-[11.5px] leading-relaxed" style={{ color: "var(--text3)", maxWidth: "56ch" }}>
+      <b className="block mb-1.5 text-[12.5px]" style={{ color: "var(--text)" }}>{title}</b>
+      {body}
+    </div>
+  );
+  if (!cap.available) {
+    return box("Taskwarrior isn't installed.", <>
+      agentglass reads this list with the <code>task</code> command. Install it, then refresh.
+    </>);
+  }
+  if (!cap.configured) {
+    return box("Taskwarrior is installed but not set up.", <>
+      Run <code>task</code> once in a terminal and answer its question. agentglass will not
+      write your <code>~/.taskrc</code> for you.
+    </>);
+  }
+  return box("Nothing open.", done > 0
+    ? <>{done} finished. Add one from your editor and it shows up here.</>
+    : <>Nothing here yet.</>);
+}
+
+function LocalBody({ active }: { active: boolean }) {
+  const { data } = useLocalTasks(active);
+  const [sel, setSel] = useState<string | null>(null);
+  const [showDone, setShowDone] = useState(false);
+  const today = todayStr();
+
+  const { open, done } = useMemo(() => {
+    const all = data?.tasks ?? [];
+    return {
+      open: all.filter((t) => t.status === "pending"),
+      done: all.filter((t) => t.status === "completed"),
+    };
+  }, [data]);
+
+  if (!data) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading your task list…</div>;
+  const cap = data.capability;
+  const picked = [...open, ...done].find((t) => t.uuid === sel) ?? null;
+
+  if (!open.length && !done.length) return <LocalEmpty cap={cap} done={0} />;
+
+  const od = open.filter((t) => overdue(t, today));
+  const rest = open.filter((t) => !overdue(t, today));
+
+  return (
+    <div className="flex flex-1 min-h-0">
+      <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
+        {!open.length && <LocalEmpty cap={cap} done={done.length} />}
+        {!!od.length && <Section label="Overdue" tone="var(--error)" />}
+        {od.map((t) => <TaskRow key={t.uuid} t={t} today={today} on={t.uuid === sel} onPick={() => setSel(t.uuid)} />)}
+        {rest.map((t) => <TaskRow key={t.uuid} t={t} today={today} on={t.uuid === sel} onPick={() => setSel(t.uuid)} />)}
+        {!!done.length && (
+          <button onClick={() => setShowDone((v) => !v)}
+            className="w-full text-left text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1"
+            style={{ color: "var(--text3)" }}>
+            {showDone ? "▾" : "▸"} {done.length} done
+          </button>
+        )}
+        {showDone && done.slice(0, 200).map((t) => (
+          <TaskRow key={t.uuid} t={t} today={today} on={t.uuid === sel} onPick={() => setSel(t.uuid)} />
+        ))}
+      </div>
+      <aside className="agx-scroll overflow-y-auto p-5 text-[11.5px] shrink-0"
+        style={{ width: 380, borderLeft: edge(12) }}>
+        {picked ? <TaskDetail t={picked} today={today} /> : (
+          <div className="text-center p-5" style={{ color: "var(--text3)" }}>Pick a task.</div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+const Section = ({ label, tone }: { label: string; tone: string }) => (
+  <div className="text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1" style={{ color: tone }}>{label}</div>
+);
+
+function TaskRow({ t, today, on, onPick }: { t: LocalTask; today: string; on: boolean; onPick: () => void }) {
+  const isDone = t.status === "completed";
+  const late = overdue(t, today);
+  const dueToday = t.due === today;
+  return (
+    <button onClick={onPick}
+      className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-[11.5px] hover:bg-white/5"
+      style={{
+        borderBottom: edge(7),
+        background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : undefined,
+        boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
+      }}>
+      <span className="w-3.5 text-center shrink-0"
+        style={{ color: isDone ? "var(--text3)" : t.priority === "H" ? "var(--warning)" : t.priority ? "var(--text3)" : "var(--text4)" }}>
+        {isDone ? "✓" : t.priority ? "●" : "○"}
+      </span>
+      <span className="flex-1 min-w-0 truncate" title={t.description}
+        style={isDone ? { textDecoration: "line-through", color: "var(--text3)" } : { color: "var(--text)" }}>
+        {t.description}
+      </span>
+      {t.project && <span className="shrink-0 text-[10px]" style={{ color: "var(--info)" }}>@{t.project}</span>}
+      {t.tags.slice(0, 2).map((tag) => (
+        <span key={tag} className="shrink-0 text-[9px] px-1.5 rounded" style={{ color: "var(--text3)", border: edge(14) }}>{tag}</span>
+      ))}
+      <span className="shrink-0 tabular-nums text-right" style={{
+        width: 72,
+        color: late ? "var(--error)" : dueToday ? "var(--warning)" : "var(--text3)",
+        fontWeight: late || dueToday ? 600 : undefined,
+      }}>
+        {t.due ? (dueToday ? "today" : t.due.slice(5)) : "—"}
+      </span>
+    </button>
+  );
+}
+
+function TaskDetail({ t, today }: { t: LocalTask; today: string }) {
+  return (
+    <div>
+      <h2 className="text-[16px] font-semibold leading-snug mb-2.5" style={{ color: "var(--text)", textWrap: "balance" }}>
+        {t.description}
+      </h2>
+      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+        {t.priority && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--warning)", border: edge(16) }}>
+            {t.priority === "H" ? "High" : t.priority === "M" ? "Medium" : "Low"}
+          </span>
+        )}
+        {t.project && <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--info)", border: edge(16) }}>@{t.project}</span>}
+        {t.tags.map((tag) => (
+          <span key={tag} className="text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: edge(16) }}>{tag}</span>
+        ))}
+      </div>
+      <div className="text-[10px] mb-4" style={{ color: overdue(t, today) ? "var(--error)" : "var(--text3)" }}>
+        {[
+          t.due && `due ${t.due}${overdue(t, today) ? " · overdue" : ""}`,
+          t.completed && `done ${t.completed}`,
+          t.created && `created ${t.created}`,
+        ].filter(Boolean).join(" · ")}
+      </div>
+      {!!t.notes.length && (
+        <>
+          <div className="text-[8.5px] uppercase tracking-[0.2em] mb-1.5" style={{ color: "var(--text3)" }}>Notes</div>
+          {t.notes.map((n, i) => <div key={i} className="mb-3"><Markdown text={n} /></div>)}
+        </>
+      )}
+      {!!t.urls.length && (
+        <>
+          <div className="text-[8.5px] uppercase tracking-[0.2em] mt-4 mb-1.5" style={{ color: "var(--text3)" }}>Links</div>
+          {t.urls.map((u) => (
+            <a key={u} href={u} target="_blank" rel="noreferrer"
+              className="block text-[10px] break-all mb-1" style={{ color: "var(--info)" }}>{u}</a>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The local list, on the All tab, above the issues.
+ *
+ * Capped and collapsed rather than shown whole: this tab's job is to answer
+ * "what do I owe" at a glance, and a hundred-row local list under a
+ * hundred-row issue list answers it worse than either alone. Overdue first,
+ * because that is the part that cannot wait for the user to switch tabs.
+ */
+function LocalStrip({ active, onOpen }: { active: boolean; onOpen: () => void }) {
+  const { data } = useLocalTasks(active);
+  const today = todayStr();
+  const open = (data?.tasks ?? []).filter((t) => t.status === "pending");
+  if (!open.length) return null;
+  const sorted = [...open].sort((a, b) =>
+    Number(overdue(b, today)) - Number(overdue(a, today)) || (a.due ?? "9").localeCompare(b.due ?? "9"));
+  const shown = sorted.slice(0, 5);
+  return (
+    <div className="shrink-0" style={{ borderBottom: edge(12) }}>
+      <button onClick={onOpen}
+        className="w-full text-left text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1 hover:bg-white/5"
+        style={{ color: "var(--text3)" }}>
+        Yours · {open.length}
+      </button>
+      {shown.map((t) => <TaskRow key={t.uuid} t={t} today={today} on={false} onPick={onOpen} />)}
+      {open.length > shown.length && (
+        <button onClick={onOpen} className="w-full text-left text-[10px] px-5 py-1.5 hover:bg-white/5"
+          style={{ color: "var(--text4)" }}>
+          and {open.length - shown.length} more — open the Local tab
+        </button>
+      )}
+    </div>
+  );
+}

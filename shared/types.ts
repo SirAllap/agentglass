@@ -569,7 +569,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "issues";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "tasks";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -602,6 +602,7 @@ export type WsFrame =
    *  each need a different slice of git state, so they re-read what they show
    *  rather than the server guessing which of them cares about what. */
   | { type: "git" }
+  | { type: "tasks" }
   /** A pull request's checks all finished. One frame per PR per verdict — the
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
@@ -1919,4 +1920,52 @@ export interface AgentPane {
   paneId: string;
   path: string;
   agentCwds: string[];
+}
+
+// ---------------------------------------------------------------------------
+// local tasks (Taskwarrior-backed)
+// ---------------------------------------------------------------------------
+
+/** Whether this machine can read a local task list, and if not, why not. The
+ *  two failures are different and the panel says different things about them:
+ *  a missing binary is a thing to install, an unconfigured one is a question
+ *  only the user can answer. */
+export interface TaskCapability {
+  available: boolean;
+  configured: boolean;
+  version?: string;
+  reason?: string;
+}
+
+/**
+ * One task as this app models it.
+ *
+ * Taskwarrior's `id` is deliberately absent: it is a display number, reassigned
+ * whenever the store is garbage-collected, so anything holding one across a
+ * refresh acts on whatever task inherited it. `uuid` is the only reference.
+ *
+ * Notes and URLs are one field in Taskwarrior (annotations) and two here,
+ * because one is prose to read and the other is a link to follow.
+ */
+export interface LocalTask {
+  uuid: string;
+  description: string;
+  status: "pending" | "completed" | "deleted";
+  project: string | null;
+  priority: "H" | "M" | "L" | null;
+  tags: string[];
+  /** Local calendar dates, "YYYY-MM-DD" — converted from Taskwarrior's UTC. */
+  due: string | null;
+  created: string | null;
+  completed: string | null;
+  urgency: number;
+  notes: string[];
+  urls: string[];
+}
+
+export interface TasksListResponse {
+  ok: boolean;
+  tasks: LocalTask[];
+  capability: TaskCapability;
+  error?: string;
 }
