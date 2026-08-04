@@ -1852,8 +1852,25 @@ export interface ProcEntry {
   /** Descended from this server (or from a tmux it started). */
   ours: boolean;
 }
+export interface MachineTotals {
+  /** Busy percent across all cores, 0..100; null on the first sample. */
+  cpu: number | null;
+  cores: number;
+  memUsed: number;
+  memTotal: number;
+  swapUsed: number;
+  swapTotal: number;
+  /** Hottest thermal zone in °C, or null where the kernel exposes none. */
+  tempC: number | null;
+  load1: number;
+  diskFree: number;
+  diskTotal: number;
+}
+
 export interface ResourceReport {
   procs: ProcEntry[];
+  /** The whole machine, so the panel can say what share of it is ours. */
+  machine: MachineTotals;
   totalCpu: number | null;
   totalRss: number;
   oursCpu: number | null;

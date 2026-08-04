@@ -16,7 +16,7 @@
 // Deliberately read-only except for one thing, and that one thing (`kill`) will
 // only ever touch a process this user owns.
 
-import { existsSync, readdirSync, readFileSync, readlinkSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, readlinkSync, statSync, statfsSync } from "node:fs";
 
 /** One listening TCP socket. */
 export interface PortEntry {
@@ -79,6 +79,8 @@ export interface ResourceReport {
   procs: ProcEntry[];
   totalCpu: number | null;
   totalRss: number;
+  /** The machine as a whole, so "ours" has something to be a share OF. */
+  machine: MachineTotals;
   /** The same two numbers for our own subtree. The difference between these and
    *  the totals is "everything else on this machine", which the panel shows as
    *  one collapsed line rather than four hundred rows of browser tab. */
@@ -233,6 +235,119 @@ export function killPort(pidIn: unknown): { ok: boolean; error?: string; detail?
  * a pid that got recycled between samples cannot inherit a stranger's ticks.
  */
 const lastTicks = new Map<number, { ticks: number; at: number; start: number }>();
+/**
+ * What the whole machine is doing, not just our share of it.
+ *
+ * The panel could say "our 67 processes are using 4.26 GB" and leave you with
+ * no idea whether that was most of the machine or a rounding error. These are
+ * the numbers a system monitor opens with, so the app does not have to be the
+ * reason you go and open one.
+ *
+ * Every field is a file read. Nothing here shells out, because this rides the
+ * same poll as the process list and a spawn per refresh for numbers sitting in
+ * /proc would be a spawn for nothing.
+ */
+export interface MachineTotals {
+  /** Busy percent across all cores, 0..100. Null on the first sample — a rate
+   *  needs two readings, the same reason a process's CPU starts null. */
+  cpu: number | null;
+  cores: number;
+  memUsed: number;
+  memTotal: number;
+  swapUsed: number;
+  swapTotal: number;
+  /** The hottest zone the kernel exposes, in °C, or null where it exposes
+   *  none — a VM and a laptop are different machines about this. */
+  tempC: number | null;
+  /** One-minute load. Reported beside CPU rather than instead of it: they
+   *  disagree usefully, since load counts waiting for disk and CPU does not. */
+  load1: number;
+  diskFree: number;
+  diskTotal: number;
+}
+
+/** The previous /proc/stat reading. Busy percent is a difference between two
+ *  samples; a single one only says what the machine has done since boot. */
+let cpuPrev: { total: number; idle: number; at: number } | null = null;
+
+function cpuTotals(): { cpu: number | null; cores: number } {
+  let cores = 1;
+  try {
+    const stat = readFileSync("/proc/stat", "utf8");
+    // Field order is fixed: user nice system idle iowait irq softirq steal…
+    // idle + iowait is the not-working half; everything else is work.
+    const first = stat.split("\n", 1)[0]!.trim().split(/\s+/).slice(1).map(Number);
+    cores = stat.split("\n").filter((l) => /^cpu\d/.test(l)).length || 1;
+    const total = first.reduce((n, v) => n + (Number.isFinite(v) ? v : 0), 0);
+    const idle = (first[3] ?? 0) + (first[4] ?? 0);
+    const now = Date.now();
+    const prev = cpuPrev;
+    cpuPrev = { total, idle, at: now };
+    if (!prev || now - prev.at > SAMPLE_STALE_MS) return { cpu: null, cores };
+    const dt = total - prev.total;
+    const di = idle - prev.idle;
+    // A counter that went backwards means the machine suspended or the file
+    // was read mid-update; a negative percentage is worse than no number.
+    if (dt <= 0 || di < 0) return { cpu: null, cores };
+    return { cpu: Math.min(100, Math.max(0, ((dt - di) / dt) * 100)), cores };
+  } catch { return { cpu: null, cores }; }
+}
+
+/** °C from the hottest thermal zone. Kernels report millidegrees, and some
+ *  expose zones that read zero or nonsense — those are dropped rather than
+ *  averaged in, because one bogus zone would drag a real reading down. */
+function hottestC(): number | null {
+  try {
+    let best: number | null = null;
+    for (const zone of readdirSync("/sys/class/thermal")) {
+      if (!zone.startsWith("thermal_zone")) continue;
+      const raw = Number(readFileSync(`/sys/class/thermal/${zone}/temp`, "utf8").trim());
+      if (!Number.isFinite(raw) || raw <= 0) continue;
+      const c = raw > 1000 ? raw / 1000 : raw;
+      if (c > 0 && c < 150 && (best === null || c > best)) best = c;
+    }
+    return best;
+  } catch { return null; }
+}
+
+export function machineTotals(): MachineTotals {
+  const { cpu, cores } = cpuTotals();
+  let memTotal = 0, memAvail = 0, swapTotal = 0, swapFree = 0;
+  try {
+    for (const line of readFileSync("/proc/meminfo", "utf8").split("\n")) {
+      const m = line.match(/^(\w+):\s+(\d+) kB/);
+      if (!m) continue;
+      const v = Number(m[2]) * 1024;
+      if (m[1] === "MemTotal") memTotal = v;
+      // MemAvailable, not MemFree: the kernel's own estimate of what a new
+      // process could actually get. MemFree counts cache as used and reads
+      // alarmingly low on a machine that is behaving perfectly.
+      else if (m[1] === "MemAvailable") memAvail = v;
+      else if (m[1] === "SwapTotal") swapTotal = v;
+      else if (m[1] === "SwapFree") swapFree = v;
+    }
+  } catch { /* not Linux, or /proc is not mounted */ }
+
+  let load1 = 0;
+  try { load1 = Number(readFileSync("/proc/loadavg", "utf8").split(" ")[0]) || 0; } catch { /* absent */ }
+
+  let diskFree = 0, diskTotal = 0;
+  try {
+    const fs = statfsSync("/");
+    diskTotal = Number(fs.blocks) * Number(fs.bsize);
+    // bavail, not bfree: bfree includes the blocks reserved for root, which a
+    // user cannot have and should not be shown as free.
+    diskFree = Number(fs.bavail) * Number(fs.bsize);
+  } catch { /* older runtimes have no statfs */ }
+
+  return {
+    cpu, cores,
+    memUsed: Math.max(0, memTotal - memAvail), memTotal,
+    swapUsed: Math.max(0, swapTotal - swapFree), swapTotal,
+    tempC: hottestC(), load1, diskFree, diskTotal,
+  };
+}
+
 /** Older than this and the previous sample is not a comparison, it is history. */
 const SAMPLE_STALE_MS = 30_000;
 
@@ -247,7 +362,7 @@ export function listResources(limit = 40): ResourceReport {
   const now = Date.now();
   const rows: ProcEntry[] = [];
   let pids: string[];
-  try { pids = readdirSync("/proc"); } catch { return { procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false }; }
+  try { pids = readdirSync("/proc"); } catch { return { procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false, machine: machineTotals() }; }
 
   let rated = false;
   for (const name of pids) {
@@ -317,7 +432,7 @@ export function listResources(limit = 40): ResourceReport {
     r.cmd = cmdlineOf(r.pid);
   }
   kept.sort((a, b) => Number(b.ours) - Number(a.ours) || b.rss - a.rss);
-  return { procs: kept, totalCpu, totalRss, oursCpu, oursRss, seen, rated };
+  return { procs: kept, totalCpu, totalRss, oursCpu, oursRss, seen, rated, machine: machineTotals() };
 }
 
 /**
