@@ -159,8 +159,14 @@ export function __resetPackageManager(): void { managerCache = undefined; }
 function installLine(spec: DepSpec): string | undefined {
   const m = packageManager();
   const pkg = m ? spec.pkg?.[m] : undefined;
-  return m && pkg ? PKG_INSTALL[m](pkg) : undefined;
+  // The distribution's package first: it is the machine's own idea of how
+  // software arrives, it updates with everything else, and it needs no trust
+  // decision. The project's installer only where no package manager has an
+  // answer — which is where the required Claude CLI lives.
+  if (m && pkg) return PKG_INSTALL[m](pkg);
+  return spec.installer;
 }
+
 
 let cache: { at: number; res: DepsResponse } | null = null;
 

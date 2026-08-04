@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { DEPS } from "../../shared/deps.ts";
+import { DEPS, isRemoteScript } from "../../shared/deps.ts";
 
 const SRC = join(import.meta.dir, "..", "src");
 
@@ -74,6 +74,54 @@ describe("the requirements catalogue matches what the app actually runs", () => 
     expect(ALL).toContain('Bun.which("rg")');
     expect(ALL).toContain('Bun.which("fd")');
     expect(DEPS.some((d) => d.bin === "rg" || d.bin === "fd")).toBe(false);
+  });
+
+  test("every required tool can be offered, not just linked", () => {
+    /**
+     * The gap this closes. `git` and `python3` are in every distribution, so
+     * the per-manager table covered them and it looked finished — but the
+     * required tool most likely to be missing on a fresh machine is the Claude
+     * CLI, which no distribution packages, and the page offered it a link and
+     * nothing else. "Install the things this app cannot run without" has to
+     * work for all three or it does not work.
+     *
+     * Asserted on the catalogue rather than on a resolved line, because the
+     * resolved line depends on which package manager the test machine happens
+     * to have, and that is not what is being claimed here.
+     */
+    for (const d of DEPS.filter((x) => x.required)) {
+      const offerable = !!d.installer || Object.keys(d.pkg ?? {}).length > 0;
+      expect(offerable ? null : `${d.id} is required and has no way to install it`).toBeNull();
+    }
+  });
+
+  test("Docker keeps its link on purpose, and says why in the catalogue", () => {
+    // The honest limit of the feature: Docker's install is a repository and a
+    // key, and a fabricated one-liner would fetch the wrong daemon. If someone
+    // later gives it an apt line, this fails and they have to mean it.
+    const docker = DEPS.find((d) => d.id === "docker");
+    expect(docker?.pkg).toBeUndefined();
+    expect(docker?.installer).toBeUndefined();
+  });
+
+  test("a script fetched off the internet is told apart from a package install", () => {
+    // Drives the extra sentence the console shows. Both are typed rather than
+    // run, but only one of them asks you to trust something you cannot read yet.
+    expect(isRemoteScript("curl -fsSL https://claude.ai/install.sh | bash")).toBe(true);
+    expect(isRemoteScript("wget -qO- https://example.com/i.sh | sudo sh")).toBe(true);
+    expect(isRemoteScript("sudo apt-get install -y git")).toBe(false);
+    expect(isRemoteScript("brew install tmux")).toBe(false);
+    // A download that does NOT pipe into a shell is not this: it leaves a file
+    // on disk that a person can read before running it.
+    expect(isRemoteScript("curl -fsSL https://example.com/x.sh -o x.sh")).toBe(false);
+  });
+
+  test("the Claude CLI carries the command its own docs recommend", () => {
+    const claude = DEPS.find((d) => d.id === "claude");
+    expect(claude?.installer).toBe("curl -fsSL https://claude.ai/install.sh | bash");
+    // Taken from the setup page, which also moved host — the old docs.claude.com
+    // path only reaches it through a redirect.
+    expect(claude?.url).toBe("https://code.claude.com/docs/en/setup");
   });
 
   test("no id is listed twice and every id has a binary", () => {
