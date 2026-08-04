@@ -50,9 +50,8 @@ export function DashIcon({ size = 15 }: P) {
 export function FilesIcon({ size = 15 }: P) {
   return (
     <svg {...svg} width={size} height={size}>
-      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
-      <path d="M14 3v5h5" />
-      <path d="M9 13h6M9 17h4" />
+      <path d="M3 6.6a2 2 0 0 1 2-2h3.5l2 2.6H19a2 2 0 0 1 2 2v9.2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M3 9.7h18" />
     </svg>
   );
 }
@@ -70,11 +69,15 @@ export function FilesIcon({ size = 15 }: P) {
  */
 export function GitIcon({ size = 15 }: P) {
   return (
-    <svg {...svg} width={size} height={size}>
-      <path d="M6 3v12" />
-      <circle cx="6" cy="18" r="3" />
-      <circle cx="18" cy="6" r="3" />
-      <path d="M18 9a9 9 0 0 1-9 9" />
+    // 1.7 rather than 2: the diamond carries a branch inside it, and at 17px a
+    // 2px stroke closes the gaps between the two.
+    <svg {...svg} width={size} height={size} strokeWidth={1.7}>
+      <path d="M12 2.4 21.6 12 12 21.6 2.4 12Z" />
+      <path d="M8.7 15.3 15.3 8.7" />
+      <circle cx="8.7" cy="15.3" r="1.5" />
+      <circle cx="15.3" cy="8.7" r="1.5" />
+      <path d="M11.6 12.4 14.1 14.9" />
+      <circle cx="15.4" cy="16.2" r="1.5" />
     </svg>
   );
 }
@@ -96,10 +99,10 @@ export function GitIcon({ size = 15 }: P) {
 export function DiffIcon({ size = 15 }: P) {
   return (
     <svg {...svg} width={size} height={size}>
-      <circle cx="6" cy="6" r="3" />
-      <circle cx="18" cy="18" r="3" />
-      <path d="M11 6h5a2 2 0 0 1 2 2v7" />
-      <path d="M13 18H8a2 2 0 0 1-2-2V9" />
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+      <path d="M12 11.5v5M9.5 14h5" />
+      <path d="M9.5 18.4h5" />
     </svg>
   );
 }
@@ -147,10 +150,12 @@ export function PrIcon({ size = 15 }: P) {
 export function DockerIcon({ size = 15 }: P) {
   return (
     <svg {...svg} width={size} height={size} strokeWidth={1.7}>
-      <rect x="3.5" y="10" width="4.6" height="4.6" rx="0.7" />
-      <rect x="9.4" y="10" width="4.6" height="4.6" rx="0.7" />
-      <rect x="9.4" y="4.8" width="4.6" height="4.6" rx="0.7" />
-      <path d="M2 16.8h17.5a4.6 4.6 0 0 1-4.6 4.2H7.4A5.4 5.4 0 0 1 2 16.8Z" />
+      <rect x="4.2" y="10.3" width="3.4" height="3.2" rx="0.5" />
+      <rect x="8.4" y="10.3" width="3.4" height="3.2" rx="0.5" />
+      <rect x="12.6" y="10.3" width="3.4" height="3.2" rx="0.5" />
+      <rect x="8.4" y="6.5" width="3.4" height="3.2" rx="0.5" />
+      <path d="M2.6 14.2h14.9c0 2.8-2 4.8-5.1 4.8H7.5c-2.8 0-4.9-1.9-4.9-4.8Z" />
+      <path d="M18 12.6c1.1-.8 2.4-.9 3.4-.3-.6 1.4-1.9 2-3.2 1.8" />
     </svg>
   );
 }
