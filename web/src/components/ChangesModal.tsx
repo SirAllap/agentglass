@@ -1,4 +1,5 @@
-import { memo, Fragment, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { memo, Fragment, createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { subscribeWorktreeJump, worktreeJump } from "../lib/worktreeJump.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
 import type { FileChange, DiffHunk, WalkthroughResult } from "../../../shared/types.ts";
@@ -734,6 +735,8 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const [reviewed, setReviewed] = useState<Set<number>>(() => new Set());
   const paneRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  const wtJump = useSyncExternalStore(subscribeWorktreeJump, worktreeJump);
+  const wtJumpServed = useRef(0);
 
   useEffect(() => {
     if (!open) return;
@@ -762,6 +765,19 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     // focus the frame so j/k nav works immediately (filter is opt-in via click)
     requestAnimationFrame(() => frameRef.current?.focus());
   }, [open]);
+
+  // A worktree jump from the Terminal chrome seeds the file-path filter with the
+  // worktree's folder name. Declared after the open-reset above (which clears
+  // the filter every time this view is shown) and depending on `open` so it
+  // re-applies in the same pass the view becomes active — and served once per
+  // request `n`, so re-opening File changes later never replays a stale filter.
+  useEffect(() => {
+    if (!open) return;
+    if (wtJump && wtJump.view === "diff" && wtJump.filter != null && wtJump.n !== wtJumpServed.current) {
+      wtJumpServed.current = wtJump.n;
+      setQ(wtJump.filter);
+    }
+  }, [open, wtJump]);
 
   // The fleet keeps editing while this is open, so a list loaded once goes
   // stale within a turn. Refreshed in place rather than through the effect

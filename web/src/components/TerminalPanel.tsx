@@ -8,6 +8,8 @@ import { Fragment, useCallback, useEffect, useReducer, useRef, useState, useSync
 import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
 import { subscribeTermIssue, termIssue, clearTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { dirName } from "../lib/worktree.ts";
+import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
@@ -1059,6 +1061,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   /** Both dropdowns live in here, so one listener can tell "clicked outside"
    *  from "clicked a row". */
   const pickersRef = useRef<HTMLDivElement>(null);
+  // The "jump to a worktree's git / changes" dropdown. Separate from the repo
+  // picker above (which switches the terminal itself): this one leaves the
+  // terminal where it is and takes you to Source control / File changes for the
+  // chosen worktree. The worktree is picked, never read from the focused pane —
+  // measured against a live fleet, the pane's cwd is always the parent repo.
+  const [wtOpen, setWtOpen] = useState(false);
+  const [wtQuery, setWtQuery] = useState("");
+  const wtRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
 
@@ -1121,6 +1131,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // dismissing it (Escape, an outside click) has to give the shell its cursor
   // back — see focusTerm.
   useDismiss(repoOpen, pickersRef, () => { setRepoOpen(false); focusTerm(); });
+  useDismiss(wtOpen, wtRef, () => { setWtOpen(false); setWtQuery(""); focusTerm(); });
 
   const tabs = !IS_DEMO && root ? termSessionsFor(root) : [];
 
@@ -1550,6 +1561,42 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       title={status === "unauthorized" ? "This server needs an access token — click to enter it" : "Shell status"}>
                       <span style={{ color: statusDot[status].color }}>●</span>{statusDot[status].label}
                     </span>
+                    {/* Jump straight to a worktree's changes. The worktree is
+                        chosen here rather than inferred from the focused pane:
+                        every agent's pane and process sits in the parent repo,
+                        so there is nothing in the pane to read (see
+                        worktreeJump.ts). Dirty checkouts sort to the top, which
+                        is the one being worked in. */}
+                    <div className="relative" ref={wtRef}>
+                      <button onClick={() => { if (wtOpen) { setWtOpen(false); focusTerm(); } else setWtOpen(true); }} disabled={!root || IS_DEMO || disabled} title="Open a worktree's Source control or File changes" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↗ Worktree ▾</button>
+                      {wtOpen && (() => {
+                        const project = here?.worktreeOf || here?.root || root;
+                        const list = repos
+                          .filter((r) => (r.worktreeOf || r.root) === project)
+                          .filter((r) => { const q = wtQuery.trim().toLowerCase(); return !q || (dirName(r.root) + " " + r.branch).toLowerCase().includes(q); })
+                          .sort((a, b) => (b.dirty - a.dirty) || (b.touchedAt - a.touchedAt) || dirName(a.root).localeCompare(dirName(b.root)));
+                        return (
+                          <div className="absolute right-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 360, maxWidth: "min(86vw, 560px)", maxHeight: 420, overflow: "hidden" }}>
+                            <div className="px-2.5 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                              <div className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>Open a worktree's changes</div>
+                            </div>
+                            <input autoFocus value={wtQuery} onChange={(e) => setWtQuery(e.target.value)} placeholder="Filter worktrees…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                            <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
+                              {list.map((r) => (
+                                <div key={r.root} className="w-full px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+                                  <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title={r.worktreeOf ? `Worktree of ${r.worktreeOf}` : "Main checkout"} style={r.worktreeOf ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" } : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{r.worktreeOf ? "WT" : "REPO"}</span>
+                                  <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={`${r.branch}\n${r.root}`}>{dirName(r.root)}</span>
+                                  {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
+                                  <button onClick={() => { requestWorktreeJump({ view: "git", root: r.root }); setWtOpen(false); setWtQuery(""); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} title="Open in Source control">Git</button>
+                                  <button onClick={() => { requestWorktreeJump({ view: "diff", filter: dirName(r.root) }); setWtOpen(false); setWtQuery(""); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                                </div>
+                              ))}
+                              {list.length === 0 && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>{wtQuery ? "No match." : "No worktrees for this repo."}</div>}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
                     {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ Split</button>}
                     <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="Kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ Restart</button>
                     <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>Clear</button>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
+import { subscribeWorktreeJump, worktreeJump } from "./lib/worktreeJump.ts";
 import { useStats } from "./lib/useStats.ts";
 import { deriveAgents, deriveAlerts, buildTitles, buildRollups } from "./lib/derive.ts";
 import { publishFleet } from "./lib/demoBridge.ts";
@@ -112,6 +113,16 @@ export default function App() {
     if (!isVisibleView(v)) moveView(v, "work");
     setWsView(v);
   }, []);
+
+  // A worktree jump from the Terminal chrome switches to the view it targets;
+  // the git / file-changes panel reads the scope or filter from the same store.
+  // goView, not a bare setWsView, so a view hidden from the rail comes back
+  // rather than switching to a tab that is not there.
+  const wtJump = useSyncExternalStore(subscribeWorktreeJump, worktreeJump);
+  const wtJumpServed = useRef(0);
+  useEffect(() => {
+    if (wtJump && wtJump.n !== wtJumpServed.current) { wtJumpServed.current = wtJump.n; goView(wtJump.view); }
+  }, [wtJump, goView]);
   useEffect(() => {
     const visible = visibleIds();
     // ⌘\'s way back, checked whether or not it is where you are: hiding the

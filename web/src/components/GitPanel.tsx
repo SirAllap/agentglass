@@ -2,7 +2,7 @@
 // (stage/unstage/discard/commit), branches (checkout/create/delete), log
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
@@ -18,6 +18,7 @@ import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { worktreeTag } from "../lib/worktree.ts";
+import { subscribeWorktreeJump, worktreeJump } from "../lib/worktreeJump.ts";
 import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts";
 import { buildFileTree, visibleRows, allDirPaths } from "../lib/fileTree.ts";
 import { useIncremental } from "../lib/useIncremental.ts";
@@ -596,6 +597,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const sidebarW = useSidebarWidth();
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState<string>("");
+  // A worktree jump from the Terminal chrome scopes this panel to the chosen
+  // checkout. Every view stays mounted, so this subscription is always live —
+  // the jump lands whether or not Source control was the view on screen. Served
+  // once per request `n`; the root init below is `cur || first`, so this never
+  // fights it.
+  const wtJump = useSyncExternalStore(subscribeWorktreeJump, worktreeJump);
+  const wtJumpServed = useRef(0);
+  useEffect(() => {
+    if (wtJump && wtJump.view === "git" && wtJump.root && wtJump.n !== wtJumpServed.current) {
+      wtJumpServed.current = wtJump.n;
+      setRoot(wtJump.root);
+    }
+  }, [wtJump]);
   const [tree, setTree] = useState<WorkingTree | null>(null);
   // Which root the tree on screen belongs to. When it isn't the current root,
   // the header (branch, sync-behind count, push/pull state) is still showing the
