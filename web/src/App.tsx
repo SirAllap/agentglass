@@ -607,6 +607,12 @@ export default function App() {
       // opens rather than toggles: there is no open workspace to close from
       // here, and ⌘\ is the key that puts it away from inside.
       if (action?.startsWith("view.")) {
+        // Only from the dashboard — the note above says so, but nothing was
+        // enforcing it: off the dashboard, focus falls back to <body> constantly
+        // (a shell losing it, a click on padding), so a bare `g` in the terminal
+        // jumped to git. A workspace view keeps its bare letters as letters; the
+        // modifier chords (⌘1..N) are how you switch once you are in one.
+        if (wsViewRef.current !== "dash") return;
         const view = action.slice(5) as ViewId;
         e.preventDefault();
         goView(view);
