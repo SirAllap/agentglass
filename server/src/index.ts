@@ -60,7 +60,9 @@ import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
 import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
-import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace } from "./providers.ts";
+import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, readView } from "./providers.ts";
+import { savedViews, currentView, setCurrent, removeView } from "./clickupviews.ts";
+import { assignSelf, setStatus, setField, taskDetail, CLICKUP_WRITE_ENABLED } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -1646,6 +1648,36 @@ const server = Bun.serve<WsData>({
         : null;
       if (!r) return json({ ok: false, error: "not found" }, 404);
       return json(r, r.ok ? 200 : 400);
+    }
+    /* Boards, saved by pasting their address. Reads and one write path, and
+       the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
+       clickup.ts for why this one defaults to off while the local list
+       defaults to on. */
+    if (pathname === "/clickup/views") {
+      return json({ views: savedViews(), current: currentView(), writeEnabled: CLICKUP_WRITE_ENABLED });
+    }
+    if (pathname === "/clickup/view") {
+      const id = url.searchParams.get("id") ?? currentView() ?? "";
+      if (!id) return json({ tasks: [], statuses: [], fields: [], at: 0 });
+      setCurrent(id);
+      return json(await readView(id, url.searchParams.get("force") === "1"));
+    }
+    if (pathname === "/clickup/task") {
+      const r = await taskDetail(url.searchParams.get("id") ?? "");
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
+    }
+    if (pathname.startsWith("/clickup/") && req.method === "POST") {
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const id = String(b.id ?? "");
+      const seen = typeof b.updated === "number" ? b.updated : undefined;
+      const r = pathname === "/clickup/views/add" ? await addViewByUrl(String(b.url ?? ""))
+        : pathname === "/clickup/views/remove" ? (removeView(id), { ok: true })
+        : pathname === "/clickup/assign" ? await assignSelf(id, b.on !== false, seen)
+        : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
+        : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      return json(r, r.ok ? 200 : ("conflict" in r && r.conflict) ? 409 : 400);
     }
     if (pathname === "/tasks/provider") {
       // One provider's list. `force` is what the Refresh button sends; the poll

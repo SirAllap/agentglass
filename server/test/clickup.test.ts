@@ -329,3 +329,131 @@ describe("connecting, when the tab has already been looked at", () => {
     expect(r.status!.detail).not.toContain("not connected");
   });
 });
+
+describe("the address you paste", () => {
+  const { parseViewUrl } = CU;
+
+  it("reads a view address, and the list hiding inside its id", () => {
+    // The middle segment of a view id is the LIST id — verified against a real
+    // board: the whole hyphenated string resolves as a view, the number alone
+    // 404s as a view and 200s as a list. That list is what knows the statuses,
+    // so pulling it out of the address saves a call and makes the status picker
+    // possible at all.
+    const p = parseViewUrl("https://example.clickup.com/9000001/v/l/6-901715483311-1")!;
+    expect(p.kind).toBe("view");
+    expect(p.viewId).toBe("6-901715483311-1");
+    expect(p.listId).toBe("901715483311");
+    expect(p.workspaceId).toBe("9000001");
+  });
+
+  it("reads a bare list address", () => {
+    const p = parseViewUrl("https://example.clickup.com/9000001/v/li/901715483311")!;
+    expect(p.kind).toBe("list");
+    expect(p.listId).toBe("901715483311");
+  });
+
+  it("takes the other view kinds, which are views too", () => {
+    for (const kind of ["b", "gantt", "cal", "tb", "em"]) {
+      const p = parseViewUrl(`https://example.clickup.com/9000001/v/${kind}/7-123456789012-2`);
+      expect(p?.kind, kind).toBe("view");
+      expect(p?.viewId, kind).toBe("7-123456789012-2");
+    }
+  });
+
+  it("accepts a pasted id on its own", () => {
+    expect(parseViewUrl("6-901715483311-1")?.viewId).toBe("6-901715483311-1");
+  });
+
+  it("refuses an address from somewhere else entirely", () => {
+    // Somebody pasting a Jira link should be told, not silently handed a
+    // request built from whatever numbers were in it.
+    expect(parseViewUrl("https://example.invalid/9000001/v/l/6-1-1")).toBe(null);
+    expect(parseViewUrl("https://notclickup.example/1/v/l/6-1-1")).toBe(null);
+  });
+
+  it("refuses nothing, and rubbish", () => {
+    for (const bad of ["", "   ", "hello", "https://example.clickup.com/", "https://example.clickup.com/9000001"]) {
+      expect(parseViewUrl(bad), JSON.stringify(bad)).toBe(null);
+    }
+  });
+
+  it("does not mistake a short middle segment for a list id", () => {
+    // `6-42-1` has a middle segment, but no list id is two digits. Guessing one
+    // would produce a status picker offering another board's statuses.
+    expect(parseViewUrl("https://example.clickup.com/9000001/v/l/6-42-1")?.listId).toBeUndefined();
+  });
+});
+
+describe("what the status TYPE decides", () => {
+  it("counts a board's done-but-open statuses as done", () => {
+    /*
+     * Measured on a real board with seventeen statuses: the working ones are
+     * all `custom`, while "ready for deployment", "in staging", "in
+     * production", "released" and "won't fix / obsolete" are `done` — and only
+     * "completed" is `closed`. That is why `include_closed=false` left half the
+     * list looking finished, and why the panel hides by TYPE rather than by
+     * name.
+     */
+    const mk = (status: string, type: string) => CU.toTask({ id: "x", name: "n", status: { status, type } });
+    expect(mk("in development", "custom").statusKind).toBe("other");
+    expect(mk("blocked", "custom").statusKind).toBe("other");
+    expect(mk("in production", "done").statusKind).toBe("done");
+    expect(mk("won't fix / obsolete", "done").statusKind).toBe("done");
+    expect(mk("completed", "closed").statusKind).toBe("done");
+    expect(mk("to do", "open").statusKind).toBe("open");
+  });
+
+  it("knows which cards are yours without the browser knowing your id", () => {
+    const raw = { id: "x", name: "n", assignees: [{ id: 95, username: "you" }, { id: 12, username: "someone" }] };
+    expect(CU.toTask(raw, "95").mine).toBe(true);
+    expect(CU.toTask(raw, "12").mine).toBe(true);
+    expect(CU.toTask(raw, "99").mine).toBe(false);
+    expect(CU.toTask(raw).mine).toBeUndefined();
+  });
+
+  it("resolves a drop-down to the word on the board, not its index", () => {
+    // ClickUp answers with the option's orderindex. Printing `value` gives "3"
+    // where the board says the name.
+    const t = CU.toTask({
+      id: "x", name: "n",
+      custom_fields: [{
+        id: "f1", name: "Squad", type: "drop_down", value: 2,
+        type_config: { options: [
+          { id: "a", name: "Orange", orderindex: 0 },
+          { id: "b", name: "Purple", orderindex: 1 },
+          { id: "c", name: "Blue", orderindex: 2 },
+        ] },
+      }],
+    });
+    expect(t.custom).toEqual([{ id: "f1", name: "Squad", value: "Blue" }]);
+  });
+
+  it("leaves an unset custom field out entirely", () => {
+    const t = CU.toTask({ id: "x", name: "n", custom_fields: [{ id: "f", name: "Squad", type: "drop_down" }] });
+    expect(t.custom).toEqual([]);
+  });
+});
+
+describe("writing to somebody's company board", () => {
+  it("is off unless it has been switched on", () => {
+    // The local list ships with writes ON and a switch to disable them, which
+    // is right for a store that is yours. This is the opposite case, so the
+    // default is the opposite too.
+    expect(CU.CLICKUP_WRITE_ENABLED).toBe(process.env.AGENTGLASS_CLICKUP_WRITE === "1");
+  });
+
+  it.skipIf(process.env.AGENTGLASS_CLICKUP_WRITE === "1")("refuses every write while it is off", async () => {
+    C.setCredential("clickup", { token: "pk_1_X", accountId: "7" });
+    for (const [what, go] of [
+      ["assign", () => CU.assignSelf("abc", true)],
+      ["status", () => CU.setStatus("abc", "in development")],
+      ["field", () => CU.setField("abc", "f1", "opt")],
+    ] as const) {
+      const r = await go();
+      expect(r.ok, what).toBe(false);
+      expect(r.error, what).toContain("switched off");
+    }
+    // And nothing was sent.
+    expect(seen.length).toBe(0);
+  });
+});

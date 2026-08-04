@@ -144,7 +144,15 @@ export interface ProviderTask {
   tags: string[];
   /** The list, board or project it sits in. */
   list: string | null;
+  listId?: string;
   assignees: string[];
+  /** Whether YOU are on it — resolved server-side against the connected
+   *  account, because the client has no business knowing your user id. */
+  mine?: boolean;
+  /** Sprint points, ClickUp's own numeric field. Null when unset. */
+  points?: number | null;
+  /** Custom field values worth showing, already resolved from ids to names. */
+  custom?: { id: string; name: string; value: string }[];
 }
 
 export interface ClickUpUser { id: string; name: string; email: string }
@@ -160,4 +168,89 @@ export interface ProviderTasksResponse {
   /** The one error that means "reconnect" rather than "try later". */
   unauthorised?: boolean;
   at: number;
+}
+
+// ---------------------------------------------------------------------------
+// saved views
+// ---------------------------------------------------------------------------
+
+/**
+ * A ClickUp view, saved by pasting its address.
+ *
+ * The alternative was walking the hierarchy — spaces, then folders, then lists
+ * — which is several calls deep, needs a picker of its own, and lands you in a
+ * *list* rather than the *view* you actually work in. Pasting the address you
+ * are already looking at skips all of it, and it turns out to be better on
+ * every axis that matters:
+ *
+ *   asking the workspace for "assigned to me"   12.5s
+ *   asking a view for its tasks                  1.4s
+ *
+ * …because a view is already scoped, and because it applies its OWN filters
+ * server-side. Measured on a real board: the list holds 36 tasks and the view
+ * returns 30, which is the same 30 the browser shows. So what arrives is what
+ * you would have seen, and it arrives nine times faster.
+ */
+export interface SavedView {
+  /** ClickUp's own view id, taken from the address. */
+  id: string;
+  /** What the view is called, read from ClickUp rather than typed. */
+  name: string;
+  /**
+   * The list behind it, when the address had one.
+   *
+   * Worth keeping because a LIST knows things a view does not: its valid
+   * statuses and its custom fields. Without it, a status picker would be
+   * guessing at what this board accepts.
+   */
+  listId?: string;
+  listName?: string;
+  /** Where it came from, so a stale entry can be re-resolved. */
+  url: string;
+  addedAt: number;
+}
+
+/** The statuses a list accepts, in the workspace's own order and words. */
+export interface ListStatus {
+  status: string;
+  /** `open` | `custom` | `done` | `closed` — the only portable part. */
+  type: string;
+  orderindex: number;
+  color?: string;
+}
+
+/** A custom field on a list, and its options when it has them. */
+export interface ListField {
+  id: string;
+  name: string;
+  type: string;
+  options?: { id: string; name: string }[];
+  /**
+   * Some fields are marked off-limits by their own name — "(DO NOT EDIT!!!)"
+   * is a real one on a real board. It is somebody telling every reader
+   * something the API cannot express, and a tool that ignores it is a tool that
+   * breaks a convention its user relies on.
+   */
+  readOnly: boolean;
+}
+
+export interface ViewTasksResponse {
+  tasks: ProviderTask[];
+  /** Every status the list behind this view accepts. Empty when the address
+   *  gave no list — the picker then has nothing to offer, and says so. */
+  statuses: ListStatus[];
+  fields: ListField[];
+  view?: SavedView;
+  error?: string;
+  unauthorised?: boolean;
+  at: number;
+}
+
+export interface TaskDetail {
+  task: ProviderTask;
+  /** Markdown, as the workspace wrote it. */
+  description: string;
+  subtasks: ProviderTask[];
+  checklists: { name: string; items: { name: string; done: boolean }[] }[];
+  comments: { id: string; who: string; text: string; at: number }[];
 }

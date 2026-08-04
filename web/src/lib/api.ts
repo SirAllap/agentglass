@@ -1,5 +1,8 @@
 import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport } from "../../../shared/types.ts";
-import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse } from "../../../shared/providers.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ViewTasksResponse, TaskDetail, ProviderTask } from "../../../shared/providers.ts";
+
+/** What every ClickUp write answers with: the card as it now stands, or why not. */
+type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask };
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -481,6 +484,25 @@ const realApi = {
     post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/workspace", { id, workspaceId, name }),
   providerTasks: (force = false) =>
     get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
+
+  /* ClickUp boards. `clickupWrite*` are the only calls in this file that change
+     anything in somebody's company workspace; each one carries the
+     `date_updated` the client was looking at, so a card that moved underneath
+     is refused rather than overwritten. */
+  clickupViews: () => get<{ views: SavedView[]; current?: string; writeEnabled: boolean }>("/clickup/views"),
+  clickupView: (id?: string, force = false) =>
+    get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
+  clickupAddView: (url: string) =>
+    post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/add", { url }),
+  clickupRemoveView: (id: string) => post<{ ok: boolean }>("/clickup/views/remove", { id }),
+  clickupTask: (id: string) =>
+    get<{ ok: boolean; error?: string } & Partial<TaskDetail>>(`/clickup/task?id=${encodeURIComponent(id)}`),
+  clickupAssign: (id: string, on: boolean, updated?: number) =>
+    post<ClickUpWrite>("/clickup/assign", { id, on, updated }),
+  clickupStatus: (id: string, status: string, updated?: number) =>
+    post<ClickUpWrite>("/clickup/status", { id, status, updated }),
+  clickupField: (id: string, field: string, value: string) =>
+    post<ClickUpWrite>("/clickup/field", { id, field, value }),
   reminders: (window: "live" | "upcoming" | "history" = "live") =>
     get<RemindersResponse>(`/tasks/reminders?window=${window}`),
   remind: (body: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) =>
@@ -985,6 +1007,14 @@ const demoApi: typeof realApi = {
   providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
   providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
+  clickupViews: () => D({ views: [], writeEnabled: false }),
+  clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
+  clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupRemoveView: (_i: string) => D({ ok: true }),
+  clickupTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupAssign: (_i: string, _o: boolean, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupStatus: (_i: string, _s: string, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupField: (_i: string, _f: string, _v: string) => D({ ok: false, error: "not available in the demo" }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
   remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),
   reminderAck: (_i: string) => D({ ok: false }),

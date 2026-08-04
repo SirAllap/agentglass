@@ -11,7 +11,8 @@
  * The one genuinely new probe is the credential one, because until now no
  * provider had a secret we hold.
  */
-import { PROVIDERS, type ProviderId, type ProviderStatus, type ProviderState } from "../../shared/providers.ts";
+import { PROVIDERS, type ProviderId, type ProviderStatus, type ProviderState, type SavedView, type ViewTasksResponse } from "../../shared/providers.ts";
+import { savedViews, addView, cachedFor, putCache } from "./clickupviews.ts";
 import { ghCapability } from "./prs.ts";
 import { taskCapability } from "./tasks.ts";
 import { hasCredential, redacted, setCredential, clearCredential } from "./credentials.ts";
@@ -163,4 +164,107 @@ export async function chooseWorkspace(id: ProviderId, workspaceId: string, name:
   annotate("clickup", { workspaceId, workspace: name });
   __reset();
   return { ok: true, status: await statusOf(id) };
+}
+
+// ---------------------------------------------------------------------------
+// views
+// ---------------------------------------------------------------------------
+
+/**
+ * Save a board by pasting its address.
+ *
+ * Resolved against ClickUp before it is stored, for the same reason a token is:
+ * a saved view that turns out not to exist is a row that fails every time it is
+ * opened, and the moment to find that out is while the person is still looking
+ * at the address they pasted.
+ */
+export async function addViewByUrl(url: string): Promise<{ ok: boolean; error?: string; view?: SavedView }> {
+  const { parseViewUrl, viewMeta, listMeta } = await import("./clickup.ts");
+  const { secretFor } = await import("./credentials.ts");
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "Connect ClickUp first" };
+
+  const parsed = parseViewUrl(url);
+  if (!parsed?.viewId && !parsed?.listId) {
+    return { ok: false, error: "That does not look like a ClickUp board address" };
+  }
+  // A pasted LIST address has no view behind it; the list is the thing.
+  if (!parsed.viewId && parsed.listId) {
+    const l = await listMeta(token, parsed.listId);
+    if (!l.ok || !l.data) return { ok: false, error: l.error ?? "ClickUp did not recognise that list" };
+    const view: SavedView = {
+      id: `list:${parsed.listId}`, name: l.data.name || "List",
+      listId: parsed.listId, listName: l.data.name, url, addedAt: Date.now(),
+    };
+    addView(view);
+    return { ok: true, view };
+  }
+
+  const meta = await viewMeta(token, parsed.viewId!);
+  if (!meta.ok || !meta.data) return { ok: false, error: meta.error ?? "ClickUp did not recognise that view" };
+  let listName: string | undefined;
+  if (parsed.listId) {
+    const l = await listMeta(token, parsed.listId);
+    listName = l.data?.name;
+  }
+  const view: SavedView = {
+    id: parsed.viewId!, name: meta.data.name,
+    listId: parsed.listId, listName, url, addedAt: Date.now(),
+  };
+  addView(view);
+  return { ok: true, view };
+}
+
+/**
+ * One board's tasks, from cache first and the network second.
+ *
+ * `force` is what the Refresh button sends. Everything else is served from the
+ * last read if it is under a minute old, and from the network otherwise — but
+ * a network failure NEVER empties the board: what was last seen stays on
+ * screen with the failure named above it.
+ */
+export async function readView(viewId: string, force = false): Promise<ViewTasksResponse> {
+  const { viewTasks, listMeta } = await import("./clickup.ts");
+  const { secretFor, redacted } = await import("./credentials.ts");
+  const view = savedViews().find((v) => v.id === viewId);
+  if (!view) return { tasks: [], statuses: [], fields: [], at: 0, error: "That board is not saved any more" };
+
+  const held = cachedFor(viewId);
+  if (!force && held && Date.now() - held.at < 60_000) {
+    return { tasks: held.tasks, statuses: held.statuses, fields: held.fields, view, at: held.at };
+  }
+  const token = secretFor("clickup");
+  if (!token) {
+    return { tasks: held?.tasks ?? [], statuses: held?.statuses ?? [], fields: held?.fields ?? [], view, at: held?.at ?? 0, error: "ClickUp is not connected" };
+  }
+  const me = redacted("clickup")?.accountId;
+
+  // The statuses and fields come from the LIST and change about never, so they
+  // are only re-read when we have none.
+  let statuses = held?.statuses ?? [];
+  let fields = held?.fields ?? [];
+  if (view.listId && (!statuses.length || force)) {
+    const l = await listMeta(token, view.listId);
+    if (l.ok && l.data) { statuses = l.data.statuses; fields = l.data.fields; }
+  }
+
+  const r = view.id.startsWith("list:")
+    ? await listTasksOf(token, view.listId!, me)
+    : await viewTasks(token, view.id, me);
+
+  if (!r.ok || !r.data) {
+    return {
+      tasks: held?.tasks ?? [], statuses, fields, view, at: held?.at ?? 0,
+      error: r.error, unauthorised: r.unauthorised,
+    };
+  }
+  const entry = { view, tasks: r.data.tasks, statuses, fields, at: Date.now(), truncated: r.data.truncated };
+  putCache(entry);
+  return { tasks: entry.tasks, statuses, fields, view, at: entry.at };
+}
+
+/** A bare list, for an address that named one directly. */
+async function listTasksOf(token: string, listId: string, me?: string) {
+  const { rawListTasks } = await import("./clickup.ts");
+  return rawListTasks(token, listId, me);
 }
