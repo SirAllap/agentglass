@@ -17,6 +17,7 @@
  * and adding `Bearer` produces a 401 that looks exactly like a wrong token.
  */
 import { singleFlight } from "./singleflight.ts";
+import { writesAllowed } from "./clickupviews.ts";
 import { secretFor, annotate, redacted, fingerprint } from "./credentials.ts";
 import type { ProviderTask, ClickUpUser, ClickUpWorkspace, ListStatus, ListField, TaskDetail } from "../../shared/providers.ts";
 
@@ -574,6 +575,16 @@ export async function viewTasks(
  * read-only and turning it on is a deliberate act — the same reasoning
  * `TASK_WRITE_ENABLED` uses, pointed the other way.
  */
+export function clickupWriteEnabled(): boolean {
+  // The environment variable is a floor, not the only way in: somebody running
+  // the app headless can force it on, and somebody using the app can turn it on
+  // from the panel that shows them what it does. Both are explicit acts; asking
+  // for an env var to tick a checkbox is not more secure, only less usable.
+  if (process.env.AGENTGLASS_CLICKUP_WRITE === "1") return true;
+  return writesAllowed();
+}
+
+/** @deprecated Read `clickupWriteEnabled()` — this is a snapshot at import. */
 export const CLICKUP_WRITE_ENABLED = process.env.AGENTGLASS_CLICKUP_WRITE === "1";
 
 export interface WriteOutcome {
@@ -633,7 +644,7 @@ async function put(pathname: string, token: string, body: unknown): Promise<Call
 export async function assignSelf(taskId: string, on: boolean, expectUpdated?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
-  if (!CLICKUP_WRITE_ENABLED) return { ok: false, error: "Writing to ClickUp is switched off" };
+  if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const me = redacted("clickup")?.accountId;
   if (!me) return { ok: false, error: "Do not know which ClickUp account this is" };
   const stale = await guardUnchanged(token, taskId, expectUpdated);
@@ -652,7 +663,7 @@ export async function assignSelf(taskId: string, on: boolean, expectUpdated?: nu
 export async function setStatus(taskId: string, status: string, expectUpdated?: number): Promise<WriteOutcome> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
-  if (!CLICKUP_WRITE_ENABLED) return { ok: false, error: "Writing to ClickUp is switched off" };
+  if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   if (!status.trim()) return { ok: false, error: "no status given" };
   const stale = await guardUnchanged(token, taskId, expectUpdated);
   if (stale) return { ok: false, conflict: true, error: stale };
@@ -666,7 +677,7 @@ export async function setStatus(taskId: string, status: string, expectUpdated?: 
 export async function setField(taskId: string, fieldId: string, optionId: string): Promise<WriteOutcome> {
   const token = secretFor("clickup");
   if (!token) return { ok: false, error: "ClickUp is not connected" };
-  if (!CLICKUP_WRITE_ENABLED) return { ok: false, error: "Writing to ClickUp is switched off" };
+  if (!clickupWriteEnabled()) return { ok: false, error: "Writing to ClickUp is switched off" };
   const ctl = new AbortController();
   const kill = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {

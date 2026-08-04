@@ -598,7 +598,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   here: string;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
 }) {
-  const [boards, setBoards] = useState<{ views: SavedView[]; current?: string; writeEnabled: boolean } | null>(null);
+  const [boards, setBoards] = useState<{ views: SavedView[]; current?: string; writeEnabled: boolean; writeForced?: boolean } | null>(null);
   const [data, setData] = useState<ViewTasksResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -611,6 +611,7 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   const [sel, setSel] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Pending | null>(null);
   const [statusPick, setStatusPick] = useState<string[]>([]);
+  const [confirmWrite, setConfirmWrite] = useState(false);
   const [folded, setFolded] = useState<Record<string, boolean>>({});
   /* A card fetched by id rather than found on this board. Kept beside the
      board's own rows instead of mixed into them: it belongs to some other list
@@ -765,10 +766,24 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
         <button onClick={() => setAdding((o) => !o)} className="text-[11px] px-2 py-0.5 rounded-full"
           style={{ border: edge(14), color: "var(--text3)" }}>＋ board</button>
         <span className="flex-1" />
-        {!boards.writeEnabled && (
-          <span className="text-[10px] px-2 py-0.5 rounded-full" title="Set AGENTGLASS_CLICKUP_WRITE=1 to enable changes"
-            style={{ color: "var(--text4)", border: edge(12) }}>read-only</span>
-        )}
+        {/* The switch, where the consequence is. It was an environment variable
+            only, which meant the one person who could see what it does was the
+            one person who could not turn it on. */}
+        <button onClick={async () => {
+            const on = !boards.writeEnabled;
+            if (on && !confirmWrite) { setConfirmWrite(true); return; }
+            setConfirmWrite(false);
+            await api.clickupSetWrites(on);
+            await loadBoards();
+            setNote({ ok: true, text: on ? "Changes to ClickUp are now allowed" : "Back to read-only" });
+          }}
+          title={boards.writeForced ? "Forced on by AGENTGLASS_CLICKUP_WRITE=1" : boards.writeEnabled ? "Changes are allowed — click to stop that" : "Let this app change cards on your board"}
+          className="text-[10px] px-2 py-0.5 rounded-full"
+          style={boards.writeEnabled
+            ? { color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 40%, transparent)" }
+            : { color: "var(--text4)", border: edge(12) }}>
+          {boards.writeEnabled ? "can edit" : "read-only"}
+        </button>
         <button onClick={() => void load(data?.view?.id, true)} disabled={busy}
           className="text-[10.5px] px-2.5 py-0.5 rounded-lg"
           style={{ border: edge(16), color: "var(--text2)", opacity: busy ? 0.5 : 1 }}>
@@ -776,6 +791,27 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
         </button>
       </div>
 
+      {confirmWrite && (
+        <div className="px-5 py-2 shrink-0 flex items-center gap-3 flex-wrap"
+          style={{ background: "color-mix(in srgb, var(--warning) 9%, transparent)", borderBottom: edge(10) }}>
+          <div className="text-[11.5px]" style={{ color: "var(--text2)" }}>
+            <b style={{ color: "var(--warning)" }}>Allow changes to this board?</b>
+            <div className="text-[10.5px]" style={{ color: "var(--text3)" }}>
+              Moving a card or assigning yourself fires your workspace's automations and notifies your
+              team. Each change still asks first. There is no undo from here.
+            </div>
+          </div>
+          <span className="flex-1" />
+          <button onClick={async () => { setConfirmWrite(false); await api.clickupSetWrites(true); await loadBoards(); }}
+            className="text-[11px] px-3 py-1 rounded-lg"
+            style={{ background: "color-mix(in srgb, var(--warning) 22%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--warning) 50%, transparent)", color: "var(--text)" }}>
+            Allow
+          </button>
+          <button onClick={() => setConfirmWrite(false)} className="text-[11px] px-2 py-1 rounded-lg"
+            style={{ color: "var(--text3)" }}>Cancel</button>
+        </div>
+      )}
       {adding && (
         <AddBoardBar value={urlText} onValue={setUrlText} onAdd={addBoard} onClose={() => setAdding(false)} busy={busy} />
       )}
@@ -890,11 +926,22 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
                     anywhere is one you use. */}
                 <button onClick={() => setFolded((f) => ({ ...f, [g.status]: !f[g.status] }))}
                   aria-expanded={!folded[g.status]}
-                  className="w-full flex items-center gap-2.5 px-5 py-2 text-left hover:bg-white/5"
+                  title={folded[g.status] ? "Show these" : "Hide these"}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-white/5"
                   style={{ borderTop: gi ? edge(9) : undefined }}>
-                  <span aria-hidden className="inline-block text-center"
-                    style={{ color: "var(--text3)", fontSize: 11, width: 12,
-                      transform: folded[g.status] ? "none" : "rotate(90deg)", transition: "transform 110ms ease" }}>▸</span>
+                  {/* A drawn chevron, not a text glyph. `▸` at a readable size
+                      renders as a speck in this font — it was still a speck
+                      after being told to be eleven pixels — and the thing it
+                      controls is a section of the board. This is a real 20px
+                      target with a stroke somebody can see. */}
+                  <span aria-hidden className="inline-flex items-center justify-center shrink-0"
+                    style={{ width: 20, height: 20, borderRadius: 6, background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none"
+                      style={{ transform: folded[g.status] ? "none" : "rotate(90deg)", transition: "transform 120ms ease" }}>
+                      <path d="M4 2.5 L8.5 6 L4 9.5" stroke="var(--text2)" strokeWidth="1.8"
+                        strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </span>
                   <StatusPill status={g.status} color={g.color} dim={g.done} />
                   <span className="text-[10.5px] tabular-nums" style={{ color: "var(--text3)" }}>{g.rows.length}</span>
                   {g.points > 0 && (

@@ -919,10 +919,25 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   // Cleared when the scope changes so each tab (mine / review / all) starts
   // fresh; "all" can be hundreds of rows and a facet beats scrolling.
   const [query, setQuery] = useState("");
-  // Somebody sent us here looking for a particular pull request. Applied on
-  // each new request rather than once, so asking twice for two different cards
-  // works the second time too.
-  useEffect(() => { if (active && jumpTo) setQuery(jumpTo); }, [active, jumpTo]);
+  /*
+   * Somebody sent us here looking for one particular pull request.
+   *
+   * The search alone was not enough, and the failure was quiet: the view opens
+   * on "Needs my review" and falls back to "Mine", so a number belonging to a
+   * colleague's pull request produced "No open pull requests of yours" — a true
+   * sentence about the wrong question. The bucket has to travel with the query.
+   *
+   * `all` for both, including state: a card's pull request is frequently merged
+   * already, and being told it does not exist because it is closed is the same
+   * dead end wearing different words.
+   */
+  useEffect(() => {
+    if (!active || !jumpTo) return;
+    setQuery(jumpTo);
+    setFilter("all");
+    setStateSel("all");
+    fellBack.current = true; // and do not let the empty-list fallback move us
+  }, [active, jumpTo]);
   // The query filters the rows already loaded LIVE and client-side (visiblePrs),
   // so typing is instant. The SERVER copy — which re-runs `gh` to search across
   // the pages the client does not hold — is debounced off it. Before this, every
