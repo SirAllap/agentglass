@@ -221,7 +221,7 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 
 export function TopBar({
   workspace, onOpenProject, onOpenPalette, quiet, needs,
-  needsList, onNeedChat, onNeedApprove, onNeedProject,
+  needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal,
 }: {
   workspace: string | null;
   onOpenProject: () => void;
@@ -242,6 +242,7 @@ export function TopBar({
   onNeedChat: (chatId: string) => void;
   onNeedApprove: () => void;
   onNeedProject: (root: string) => void;
+  onNeedTerminal: () => void;
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
@@ -390,6 +391,7 @@ export function TopBar({
         onChat={(id) => { setNeedsOpen(false); onNeedChat(id); }}
         onApprove={() => { setNeedsOpen(false); onNeedApprove(); }}
         onProject={(root) => { setNeedsOpen(false); onNeedProject(root); }}
+        onTerminal={() => { setNeedsOpen(false); onNeedTerminal(); }}
       />
 
       {/* ── the plan, the clock, the way in ───────────────────────── */}

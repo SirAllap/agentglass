@@ -72,7 +72,8 @@ import {
   rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
 } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
-import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
+import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
+import { listPanes, focusPaneAnywhere } from "./tmuxctl.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
@@ -1778,6 +1779,38 @@ const server = Bun.serve<WsData>({
     // 84s under load); single-flighted here so the several tabs / the
     // new-terminal + ⚙-menu that ask at the same instant share one walk rather
     // than each launching the whole thing.
+    /**
+     * Where the machine's agents are sitting, in tmux terms.
+     *
+     * Asked on demand — when the bar's panel opens — and never polled. This is
+     * a `list-panes` plus a walk of /proc per pane, which is cheap once and
+     * pointless on a timer: nobody is looking at the answer between the moment
+     * they press the chip and the moment they click through it.
+     *
+     * Scoped like every other read. Without it, a cockpit opened for one
+     * project would answer "here is where every agent on this machine is",
+     * which is the same leak the live seam had.
+     */
+    if (pathname === "/terminal/panes") {
+      // The socket a terminal was last attached to is a hint, not a
+      // requirement: the servers are discovered from the socket directory, so
+      // this answers whether or not a terminal has ever been opened here.
+      const panes = listPanes(lastTmuxTarget()?.socket)
+        .filter((p) => !p.agentCwds.length || p.agentCwds.some((c) => sessionInScope({ cwd_path: c })))
+        // The socket is a filesystem path and stays on this side of the wire.
+        .map(({ socket: _s, ...p }) => p);
+      return json({ ok: true, panes });
+    }
+
+    /** Put one of them in front of whoever is attached. The ids are validated
+     *  against tmux's own syntax in focusPane() before they reach a command. */
+    if (pathname === "/terminal/panes/focus" && req.method === "POST") {
+      let b: { sessionId?: unknown; windowId?: unknown; paneId?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const ok = focusPaneAnywhere(lastTmuxTarget()?.socket, String(b.sessionId ?? ""), String(b.windowId ?? ""), String(b.paneId ?? ""));
+      return json(ok ? { ok } : { ok, error: "tmux would not go there — the pane may be gone" }, ok ? 200 : 409);
+    }
+
     if (pathname === "/terminal/commands") {
       const root = url.searchParams.get("root") || "";
       return body(await singleFlight(`cmds:${root}`, async () => JSON.stringify(await projectCommands(root))));

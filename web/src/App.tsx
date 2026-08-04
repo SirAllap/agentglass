@@ -697,6 +697,7 @@ export default function App() {
         onNeedChat={openChatFor}
         onNeedApprove={approveOnDash}
         onNeedProject={switchProject}
+        onNeedTerminal={() => goView("term")}
       />
 
       <Workspace

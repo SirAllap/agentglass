@@ -20,6 +20,10 @@
  */
 import { readFileSync, readlinkSync } from "node:fs";
 import type { TmuxWindow } from "../../shared/types.ts";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { parsePanes, PANE_FORMAT, type PaneRow } from "./paneloc.ts";
 
 /** How long a tmux call may take before we give up on it. Generous for a local
  *  socket, and short enough that a wedged tmux server cannot stall the poll. */
@@ -423,4 +427,114 @@ export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
   // The blanking is the part that matters; if it took, we borrowed the bar and
   // the caller must remember to give it back.
   return blank && (on || styled);
+}
+
+// ---------------------------------------------------------------------------
+// Panes.
+//
+// Windows are what the tab strip needs; panes are what "take me to the agent
+// that is waiting" needs, because that is the granularity an agent runs at.
+// Both come off the same client's server — see paneloc.ts for why the join key
+// is the agent's own working directory and not the pane's.
+// ---------------------------------------------------------------------------
+
+const PANE_ID = /^%\d+$/;
+const SESSION_ID = /^\$\d+$/;
+
+/**
+ * Every tmux server this user could be running.
+ *
+ * Discovered from the socket directory rather than from one of our own clients,
+ * because the question "where is that agent sitting" has an answer whether or
+ * not this app has a terminal open — the tmux server has been running all along
+ * and holds every pane in it. Requiring a client first made the feature depend
+ * on a view the user might never have visited, and answer "open the terminal
+ * once" to a question that was already answerable.
+ *
+ * The known client's socket goes first when there is one: it is the server the
+ * user is demonstrably using, so its panes are the likeliest match and the
+ * ordering costs nothing.
+ */
+export function tmuxSockets(known?: string[]): string[][] {
+  const dir = join(process.env.TMUX_TMPDIR || tmpdir(), `tmux-${process.getuid?.() ?? 0}`);
+  // Normalised to a path, always. A client can name its server three ways — no
+  // flag (the default socket), `-L name`, `-S path` — and they can all be the
+  // SAME server. Adding the known client's spelling alongside the directory
+  // listing put that server in the list twice, and every pane on it came back
+  // twice with it. tmux resolves all three to a file in this directory, so
+  // resolving them here is what makes "the same server" one entry.
+  const pathOf = (args: string[]): string => {
+    const i = args.indexOf("-S");
+    if (i >= 0 && args[i + 1]) return args[i + 1]!;
+    const l = args.indexOf("-L");
+    if (l >= 0 && args[l + 1]) return join(dir, args[l + 1]!);
+    return join(dir, "default");
+  };
+
+  let found: string[] = [];
+  try { found = readdirSync(dir).map((n) => join(dir, n)); }
+  catch { /* no socket directory: no tmux has ever run here */ }
+
+  // The known client's server first when there is one — it is demonstrably the
+  // one the user is on, so its panes are the likeliest match — and then the
+  // rest, each once.
+  const first = known ? pathOf(known) : null;
+  const ordered = first ? [first, ...found.filter((p) => p !== first)] : found;
+  return ordered.map((p) => ["-S", p]);
+}
+
+/**
+ * Every pane on every one of them.
+ *
+ * Rows carry the socket they came from so a later "take me there" reaches the
+ * same server. Panes are addressed by tmux ids, which are unique per server and
+ * not across them, so acting on an id without knowing its socket is how you end
+ * up selecting a window in somebody else's session.
+ */
+export function listPanes(known?: string[]): (PaneRow & { socket: string[] })[] {
+  const rows: (PaneRow & { socket: string[] })[] = [];
+  for (const socket of tmuxSockets(known)) {
+    // Only servers somebody is attached to. "Take me there" means nothing on a
+    // server nobody is looking at, and skipping them is not a nicety: this
+    // project's own test suite leaves a tmux server behind on a stray socket,
+    // and a resurrect/continuum config then restores the user's real sessions
+    // into it — so an unattached server can be a convincing duplicate of the
+    // one you actually work in, with different pane ids. Offering those was
+    // offering to move a window nobody would see move.
+    if (!tmux(socket, ["list-clients", "-F", "#{client_tty}"])?.trim()) continue;
+    const out = tmux(socket, ["list-panes", "-a", "-F", PANE_FORMAT]);
+    if (out) rows.push(...parsePanes(out).map((r) => ({ ...r, socket })));
+  }
+  return rows;
+}
+
+/**
+ * Put a pane in front of the person attached to it.
+ *
+ * Three steps because a pane can be anywhere: move the client to the pane's
+ * session if it is showing another, then the window, then the pane. Doing only
+ * the last two lands silently on nothing when the pane is in a session no client
+ * is attached to — the normal case for someone who keeps a session per project.
+ *
+ * Every id is checked against tmux's own syntax before it is passed. These
+ * arrive from the UI, and a socket reachable from the UI must never be a way to
+ * hand tmux an arbitrary argument — the same rule the terminal's own command
+ * paths follow.
+ */
+export function focusPane(socket: string[], sessionId: string, windowId: string, paneId: string): boolean {
+  if (!SESSION_ID.test(sessionId) || !WINDOW_ID.test(windowId) || !PANE_ID.test(paneId)) return false;
+  // `switch-client` with no -c moves the most recently used client on this
+  // server, which is the one the user was last looking at.
+  if (tmux(socket, ["switch-client", "-t", sessionId]) === null) return false;
+  if (tmux(socket, ["select-window", "-t", windowId]) === null) return false;
+  return tmux(socket, ["select-pane", "-t", paneId]) !== null;
+}
+
+/** Find the server holding this pane, then go there. The socket is never sent
+ *  to the client and never accepted from it — a filesystem path from the UI is
+ *  exactly what must not reach a spawn. */
+export function focusPaneAnywhere(known: string[] | undefined, sessionId: string, windowId: string, paneId: string): boolean {
+  if (!PANE_ID.test(paneId)) return false;
+  const row = listPanes(known).find((r) => r.paneId === paneId);
+  return row ? focusPane(row.socket, sessionId, windowId, paneId) : false;
 }

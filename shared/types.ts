@@ -1880,3 +1880,25 @@ export interface IssueStartResult {
   ok: boolean; error?: string; work?: IssueWork; prompt?: string; cwd?: string;
 }
 export interface IssueActionResult { ok: boolean; error?: string; detail?: string; dirty?: string[] }
+
+/**
+ * A tmux pane, and the agent found running inside it.
+ *
+ * `agentCwds` is the join key the UI matches a waiting session against — the
+ * directories the agent processes inside this pane are in, which is what their
+ * hook events report. Deliberately not `path`: that is the shell's directory,
+ * and on a real machine several panes share it while the agent in one of them
+ * sits in a worktree. A list because panes nest agents, and taking only the
+ * outermost named the wrong directory. Empty where none was found, or off
+ * Linux, where /proc is not there to ask.
+ */
+export interface AgentPane {
+  session: string;
+  sessionId: string;
+  windowId: string;
+  windowIndex: string;
+  windowName: string;
+  paneId: string;
+  path: string;
+  agentCwds: string[];
+}
