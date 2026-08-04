@@ -1621,30 +1621,6 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
     if (!nodeId) return;
     await act(on ? "Reaction" : "Reaction removed", () => api.prReactTo(root, nodeId, content, on));
   };
-  const doAssignees = async () => {
-    if (!detail) return;
-    const cur = detail.assignees;
-    const next = await askText({
-      title: `Assignees on #${detail.number}`, confirmLabel: "Save",
-      input: { label: "Comma-separated logins — @me works, remove one by deleting it", initial: cur.join(", ") },
-    });
-    if (next == null) return;
-    const want = next.split(",").map((s) => s.trim().replace(/^@(?!me$)/, "")).filter(Boolean);
-    const add = want.filter((l) => !cur.includes(l));
-    const remove = cur.filter((l) => !want.includes(l));
-    if (add.length === 0 && remove.length === 0) return;
-    await act("Assignees", () => api.prAssignees(root, detail.number, add, remove));
-  };
-  const doMilestone = async () => {
-    if (!detail) return;
-    const next = await askText({
-      title: `Milestone on #${detail.number}`, confirmLabel: "Save",
-      input: { label: "Milestone title — leave empty to clear", initial: detail.milestone ?? "" },
-    });
-    if (next == null) return;
-    if ((next.trim() || null) === (detail.milestone ?? null)) return;
-    await act("Milestone", () => api.prMilestone(root, detail.number, next.trim()));
-  };
   const doReviewers = async () => {
     if (!detail) return;
     // Logins, which is what the endpoint takes. A team arrives here under its
@@ -2007,7 +1983,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                         />
                       )}
                     </div>
-                    <PrSidebar d={d} onLabels={doLabels} onReviewers={doReviewers} onAssignees={doAssignees} onMilestone={doMilestone} />
+                    <PrSidebar d={d} root={root}
+                      onSetLabels={(add, remove) => act("Labels", () => api.prLabels(root, d.number, add, remove))}
+                      onSetReviewers={(add, remove) => act("Reviewers", () => api.prReviewers(root, d.number, add, remove))}
+                      onSetAssignees={(add, remove) => act("Assignees", () => api.prAssignees(root, d.number, add, remove))}
+                      onSetMilestone={(title) => act("Milestone", () => api.prMilestone(root, d.number, title))} />
                   </div>
                 ) : null}
 
@@ -2613,7 +2593,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  * the reason the reading column can be a fixed, comfortable width instead of
  * stretching to the window and leaving half the panel empty.
  */
-function SidebarSection({ title, onEdit, children }: { title: string; onEdit?: () => void; children: React.ReactNode }) {
+function SidebarSection({ title, onEdit, children }: { title: string; onEdit?: (e: React.MouseEvent<HTMLButtonElement>) => void; children: React.ReactNode }) {
   return (
     <div className="py-2.5" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
       <div className="flex items-center gap-2 mb-1.5">
@@ -2643,12 +2623,151 @@ function SidebarPeople({ people, empty }: { people: PrReviewer[]; empty: string 
   );
 }
 
-function PrSidebar({ d, onLabels, onReviewers, onAssignees, onMilestone }: {
-  d: PrDetail;
-  onLabels: () => void; onReviewers: () => void; onAssignees: () => void; onMilestone: () => void;
+type PickOption = { value: string; label: string; sub?: string; color?: string; avatar?: string };
+
+/**
+ * A GitHub-style chooser: a filter box over a list you tick, instead of a
+ * comma-separated line you have to type logins into from memory. The options
+ * are the repository's own — `api.prFacets` (labels, assignees, milestones) and
+ * `api.prMentions` (collaborators, for reviewers), both cached server-side — so
+ * the list is the real set, not whoever happened to appear on the page.
+ *
+ * Rendered through a Portal and positioned `fixed` under its trigger: the
+ * sidebar it opens from scrolls and is only 248px wide, so an absolutely-placed
+ * menu would be clipped. Multi-select commits the diff once, when it closes —
+ * the way GitHub's label menu does — so ticking four labels is one write, not
+ * four. Single-select (milestone) commits on the click.
+ */
+function FieldPicker({ anchor, title, hint, multi, loading, options, selected, onCommit, onClose }: {
+  anchor: DOMRect; title: string; hint: string; multi: boolean; loading: boolean;
+  options: PickOption[]; selected: string[];
+  onCommit: (next: string[]) => void; onClose: () => void;
 }) {
+  const [sel, setSel] = useState<string[]>(selected);
+  const [q, setQ] = useState("");
+  const selRef = useRef(sel); selRef.current = sel;
+  const box = useRef<HTMLDivElement>(null);
+
+  const commitClose = useCallback(() => { onCommit(selRef.current); onClose(); }, [onCommit, onClose]);
+
+  useEffect(() => {
+    const away = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) commitClose(); };
+    // Escape abandons without writing; an outside click or a resize commits, so
+    // the change you made by ticking is not silently lost by looking away.
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose(); } };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", key, true);
+    window.addEventListener("resize", commitClose);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", key, true);
+      window.removeEventListener("resize", commitClose);
+    };
+  }, [commitClose, onClose]);
+
+  const toggle = (v: string) => {
+    if (!multi) { onCommit([v]); onClose(); return; }
+    setSel((s) => s.includes(v) ? s.filter((x) => x !== v) : [...s, v]);
+  };
+
+  const t = q.trim().toLowerCase();
+  const shown = t ? options.filter((o) => o.label.toLowerCase().includes(t) || o.value.toLowerCase().includes(t) || !!o.sub?.toLowerCase().includes(t)) : options;
+
+  const W = 300;
+  const left = Math.round(Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8)));
+  const top = Math.round(Math.min(anchor.bottom + 6, window.innerHeight - 140));
+  const maxH = Math.max(200, window.innerHeight - top - 12);
+
   return (
-    /**
+    <Portal>
+      <div ref={box} className="fixed rounded-lg overflow-hidden flex flex-col"
+        style={{ left, top, width: W, maxHeight: maxH, border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", background: "color-mix(in srgb, var(--bg2) 98%, black)", boxShadow: "0 18px 44px -18px rgba(0,0,0,.8)" }}>
+        <div className="px-3 pt-2 pb-1.5 shrink-0" style={{ borderBottom: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+          <div className="text-[11px] font-semibold" style={{ color: "var(--text)" }}>{title}</div>
+          <div className="text-[10px]" style={{ color: "var(--text3)" }}>{hint}</div>
+        </div>
+        <div className="p-1.5 shrink-0">
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter…"
+            className="w-full px-2 py-1 rounded text-[11px] outline-none"
+            style={{ background: "color-mix(in srgb, var(--text) 8%, transparent)", color: "var(--text)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }} />
+        </div>
+        <div className="overflow-y-auto agx-scroll flex-1 min-h-0 pb-1">
+          {loading ? (
+            <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>Loading…</div>
+          ) : shown.length === 0 ? (
+            <div className="px-3 py-3 text-[11px]" style={{ color: "var(--text3)" }}>No matches.</div>
+          ) : shown.map((o) => {
+            const on = sel.includes(o.value);
+            return (
+              <button key={o.value || "∅"} onClick={() => toggle(o.value)}
+                className="agx-mi w-full text-left flex items-center gap-2 px-2.5 py-1.5 text-[11px]"
+                style={{ color: "var(--text2)" }}>
+                <span className="w-3.5 shrink-0 text-center" style={{ color: on ? "var(--primary)" : "transparent" }}>✓</span>
+                {o.color != null && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: `#${o.color}` }} />}
+                {o.avatar != null && <Avatar login={o.avatar} size={16} />}
+                <span className="truncate">{o.label}</span>
+                {o.sub && <span className="truncate text-[10px] shrink-0 ml-auto" style={{ color: "var(--text3)" }}>{o.sub}</span>}
+              </button>
+            );
+          })}
+        </div>
+        {multi && (
+          <div className="p-1.5 shrink-0 flex" style={{ borderTop: "1px solid color-mix(in srgb, var(--text) 11%, transparent)" }}>
+            <button onClick={commitClose} className="agx-btn ml-auto px-2.5 py-1 rounded text-[10.5px]"
+              style={{ background: "var(--primary)", color: "var(--bg)" }}>Done</button>
+          </div>
+        )}
+      </div>
+    </Portal>
+  );
+}
+
+type Facets = { authors: string[]; assignees: string[]; labels: { name: string; color: string }[]; milestones: string[]; bases: string[] };
+type Mentions = { users: string[]; issues: { number: number; title: string }[] };
+type SidebarField = "reviewers" | "assignees" | "labels" | "milestone";
+
+function PrSidebar({ d, root, onSetLabels, onSetReviewers, onSetAssignees, onSetMilestone }: {
+  d: PrDetail; root: string;
+  onSetLabels: (add: string[], remove: string[]) => Promise<boolean>;
+  onSetReviewers: (add: string[], remove: string[]) => Promise<boolean>;
+  onSetAssignees: (add: string[], remove: string[]) => Promise<boolean>;
+  onSetMilestone: (title: string) => Promise<boolean>;
+}) {
+  const [facets, setFacets] = useState<Facets | null>(null);
+  const [mentions, setMentions] = useState<Mentions | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [picker, setPicker] = useState<{ field: SidebarField; anchor: DOMRect } | null>(null);
+
+  // Lazy, and once: the repository's options are fetched the first time any
+  // picker opens. Both endpoints are cached server-side for a few minutes, so
+  // the second picker is instant and the poll never pays for this.
+  const ensureOptions = useCallback(async () => {
+    if (facets && mentions) return;
+    setLoading(true);
+    const [f, m] = await Promise.all([api.prFacets(root), api.prMentions(root)]);
+    if (f.ok && f.data) setFacets(f.data);
+    if (m.ok && m.data) setMentions(m.data);
+    setLoading(false);
+  }, [root, facets, mentions]);
+
+  const open = (field: SidebarField) => (e: React.MouseEvent<HTMLButtonElement>) => {
+    setPicker({ field, anchor: e.currentTarget.getBoundingClientRect() });
+    void ensureOptions();
+  };
+  const close = () => setPicker(null);
+
+  // Only the fields the picker itself does not already model: it holds `sel`
+  // locally and hands back the final set, so here we diff against what the PR
+  // has now and write just the delta — the shape the endpoints already take.
+  const commitMulti = (was: string[], set: (add: string[], remove: string[]) => Promise<boolean>) => (next: string[]) => {
+    const add = next.filter((x) => !was.includes(x));
+    const remove = was.filter((x) => !next.includes(x));
+    if (add.length || remove.length) void set(add, remove);
+  };
+
+  return (
+    <>
+    {/*
      * Pinned, because it is reference rather than reading.
      *
      * Who is reviewing this, what it is labelled, which milestone it is in —
@@ -2666,21 +2785,21 @@ function PrSidebar({ d, onLabels, onReviewers, onAssignees, onMilestone }: {
      * The height cap and its scrollbar are a safety valve, not the usual case:
      * five short sections fit anywhere, but a PR with thirty reviewers must not
      * pin a list whose bottom cannot then be reached.
-     */
+     */}
     <aside className="sticky top-0 shrink-0 w-[248px] pl-4 hidden lg:block overflow-y-auto agx-scroll overscroll-contain"
       style={{ borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", maxHeight: "calc(100vh - 6rem)" }}>
-      <SidebarSection title="Reviewers" onEdit={onReviewers}>
+      <SidebarSection title="Reviewers" onEdit={open("reviewers")}>
         <SidebarPeople people={d.reviewers} empty="No reviewers" />
       </SidebarSection>
-      <SidebarSection title="Assignees" onEdit={onAssignees}>
+      <SidebarSection title="Assignees" onEdit={open("assignees")}>
         <SidebarPeople people={d.assignees.map((login) => ({ login }))} empty="No one assigned" />
       </SidebarSection>
-      <SidebarSection title="Labels" onEdit={onLabels}>
+      <SidebarSection title="Labels" onEdit={open("labels")}>
         {d.labels.length
           ? <div className="flex flex-wrap gap-1">{d.labels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}</div>
           : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>None yet</span>}
       </SidebarSection>
-      <SidebarSection title="Milestone" onEdit={onMilestone}>
+      <SidebarSection title="Milestone" onEdit={open("milestone")}>
         <span className="text-[11px]" style={{ color: d.milestone ? "var(--text2)" : "var(--text3)" }}>{d.milestone || "No milestone"}</span>
       </SidebarSection>
       {d.linkedIssues.length > 0 && (
@@ -2709,6 +2828,36 @@ function PrSidebar({ d, onLabels, onReviewers, onAssignees, onMilestone }: {
         </SidebarSection>
       )}
     </aside>
+    {picker && (() => {
+      const a = picker.anchor;
+      if (picker.field === "labels") {
+        const was = d.labels.map((l) => l.name);
+        return <FieldPicker anchor={a} title="Apply labels" hint="Tick to add or remove" multi loading={loading}
+          options={(facets?.labels ?? []).map((l) => ({ value: l.name, label: l.name, color: l.color }))}
+          selected={was} onClose={close} onCommit={commitMulti(was, onSetLabels)} />;
+      }
+      if (picker.field === "reviewers") {
+        const was = d.reviewers.map((r) => r.login);
+        return <FieldPicker anchor={a} title="Request reviewers" hint="Collaborators on this repository" multi loading={loading}
+          options={(mentions?.users ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+          selected={was} onClose={close} onCommit={commitMulti(was, onSetReviewers)} />;
+      }
+      if (picker.field === "assignees") {
+        const was = d.assignees;
+        return <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
+          options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+          selected={was} onClose={close} onCommit={commitMulti(was, onSetAssignees)} />;
+      }
+      // Milestone is one-of, not many: picking commits at once, and a leading
+      // "No milestone" entry clears it — passing "" to the endpoint, which is
+      // exactly how the old free-text dialog cleared it too.
+      const was = d.milestone ? [d.milestone] : [""];
+      return <FieldPicker anchor={a} title="Set milestone" hint="Choose one, or clear it" multi={false} loading={loading}
+        options={[{ value: "", label: "No milestone" }, ...(facets?.milestones ?? []).map((m) => ({ value: m, label: m }))]}
+        selected={was} onClose={close}
+        onCommit={(next) => { const title = next[0] ?? ""; if (title !== (d.milestone ?? "")) void onSetMilestone(title); }} />;
+    })()}
+    </>
   );
 }
 
