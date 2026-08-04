@@ -569,7 +569,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "issues";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "tasks";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -602,6 +602,7 @@ export type WsFrame =
    *  each need a different slice of git state, so they re-read what they show
    *  rather than the server guessing which of them cares about what. */
   | { type: "git" }
+  | { type: "tasks" }
   /** A pull request's checks all finished. One frame per PR per verdict — the
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
@@ -1919,4 +1920,106 @@ export interface AgentPane {
   paneId: string;
   path: string;
   agentCwds: string[];
+}
+
+// ---------------------------------------------------------------------------
+// local tasks (Taskwarrior-backed)
+// ---------------------------------------------------------------------------
+
+/** Whether this machine can read a local task list, and if not, why not. The
+ *  two failures are different and the panel says different things about them:
+ *  a missing binary is a thing to install, an unconfigured one is a question
+ *  only the user can answer. */
+export interface TaskCapability {
+  available: boolean;
+  configured: boolean;
+  version?: string;
+  reason?: string;
+}
+
+/**
+ * One task as this app models it.
+ *
+ * Taskwarrior's `id` is deliberately absent: it is a display number, reassigned
+ * whenever the store is garbage-collected, so anything holding one across a
+ * refresh acts on whatever task inherited it. `uuid` is the only reference.
+ *
+ * Notes and URLs are one field in Taskwarrior (annotations) and two here,
+ * because one is prose to read and the other is a link to follow.
+ */
+export interface LocalTask {
+  uuid: string;
+  description: string;
+  status: "pending" | "completed" | "deleted";
+  project: string | null;
+  priority: "H" | "M" | "L" | null;
+  tags: string[];
+  /** Local calendar dates, "YYYY-MM-DD" — converted from Taskwarrior's UTC. */
+  due: string | null;
+  created: string | null;
+  completed: string | null;
+  urgency: number;
+  notes: string[];
+  urls: string[];
+}
+
+export interface TasksListResponse {
+  ok: boolean;
+  tasks: LocalTask[];
+  capability: TaskCapability;
+  error?: string;
+  /** The soonest live reminder per task uuid, so a list of rows can show its
+   *  own without a request per row. */
+  byTask?: Record<string, Reminder>;
+  /** What the store looked like when this was read. Handed back with a write as
+   *  its precondition: if the store has moved since, the row on screen is not
+   *  the row being acted on. */
+  fingerprint?: string;
+}
+
+export interface TaskWriteResponse {
+  ok: boolean;
+  error?: string;
+  /** The store moved underneath — the caller re-renders from `tasks` rather
+   *  than retrying, because a retry against a moved store is the clobber. */
+  conflict?: boolean;
+  tasks?: LocalTask[];
+  fingerprint?: string;
+}
+
+/**
+ * When to tell somebody about something.
+ *
+ * agentglass's own, not Taskwarrior's — which is what lets a reminder fire on a
+ * machine where the task list cannot be read at all. `taskUuid` is nullable and
+ * first-class: a reminder with nothing behind it is a legitimate thing to want.
+ *
+ * `civil` + `zone` are what the human asked for; `due` is those two resolved.
+ * Keeping the pair rather than only the instant is what makes "Monday 9:00"
+ * still mean nine o'clock after the clocks change.
+ */
+export interface Reminder {
+  id: string;
+  taskUuid: string | null;
+  title: string;
+  root: string | null;
+  /** "2026-08-05T09:00" — local wall clock, as typed. */
+  civil: string;
+  /** IANA zone the civil time was written in. */
+  zone: string;
+  due: number;
+  created: number;
+  /** The ledger. Written inside the claim, before any delivery is attempted. */
+  firedAt: number | null;
+  ackedAt: number | null;
+  cancelledAt: number | null;
+  snoozeOf: string | null;
+}
+
+export interface RemindersResponse {
+  ok: boolean;
+  reminders: Reminder[];
+  /** Keyed by task uuid — the soonest live reminder for each, so a list of rows
+   *  can show its own without a query per row. */
+  byTask?: Record<string, Reminder>;
 }

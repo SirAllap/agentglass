@@ -23,7 +23,8 @@ import { ViewRail, type RailPip } from "./ViewRail.tsx";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
 import { FilesView } from "../FilesPanel.tsx";
-import { IssuesView } from "../IssuesPanel.tsx";
+import { TasksView } from "../TasksPanel.tsx";
+import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
 import { GitView } from "../GitPanel.tsx";
 import { DiffView } from "../ChangesModal.tsx";
 import { PrView } from "../PrPanel.tsx";
@@ -100,10 +101,15 @@ export function Workspace({
   const frameRef = useRef<HTMLDivElement>(null);
   const chatWaiting = useSyncExternalStore(subscribeChats, attentionCount, attentionCount);
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
+  const firedReminders = useSyncExternalStore(subscribeReminders, firedCount, firedCount);
 
   const pips: Partial<Record<ViewId, RailPip>> = {
     chat: chatWaiting > 0 ? { count: chatWaiting } : {},
     term: shells > 0 ? { dot: true } : {},
+    // The count of things shouting at you, not the size of your backlog: a
+    // hundred open tasks is a normal Tuesday, and a badge that said so would
+    // be ignored within a day.
+    tasks: firedReminders > 0 ? { count: firedReminders } : {},
   };
 
   /**
@@ -179,7 +185,7 @@ function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusI
 }) {
   switch (id) {
     case "files": return <FilesView active={active} />;
-    case "issues": return <IssuesView active={active} />;
+    case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} />;
     case "git": return <GitView active={active} onOpenChat={openChat} />;
     case "diff": return <DiffView active={active} />;
     case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} />;

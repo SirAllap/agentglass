@@ -21,7 +21,7 @@ export interface AttentionItem {
   id: string;
   level: AttentionLevel;
   /** Which mechanism raised it — for the icon and for grouping in the panel. */
-  source: "gate" | "chat" | "agent" | "insight";
+  source: "gate" | "chat" | "agent" | "insight" | "reminder";
   text: string;
   ts: number;
   /** The session or chat this is about, when there is one, so the UI can offer
@@ -33,6 +33,10 @@ const LEVEL_RANK: Record<AttentionLevel, number> = { blocking: 0, error: 1, warn
 
 export interface AttentionInput {
   gates: PendingGate[];
+  /** Fired and not yet acknowledged. Never merely overdue: a due date offers,
+   *  it does not act — and every one of this user's is already in the past, so
+   *  a due-derived trigger would raise twenty-two alarms at first launch. */
+  reminders?: { id: string; title: string; firedAt: number | null }[];
   insights: Insight[];
   alerts: Alert[];
   chats: Chat[];
@@ -46,8 +50,15 @@ export interface AttentionInput {
  * alone, which lets a stale error from an hour ago outrank an agent that just
  * stopped to ask you something — the exact inversion this ordering fixes.
  */
-export function collectAttention({ gates, insights, alerts, chats, agents }: AttentionInput): AttentionItem[] {
+export function collectAttention({ gates, insights, alerts, chats, agents, reminders }: AttentionInput): AttentionItem[] {
   const out: AttentionItem[] = [];
+
+  // A reminder that has fired is something you asked to be told, and has not
+  // been. It warns rather than blocks: nothing is stopped waiting for it.
+  for (const r of reminders ?? []) {
+    if (!r.firedAt) continue;
+    out.push({ id: "reminder:" + r.id, level: "warn", source: "reminder", text: r.title, ts: r.firedAt });
+  }
 
   // A held tool call is the only thing here where something is *actively*
   // stopped, waiting on a keystroke from you. It always sorts first.

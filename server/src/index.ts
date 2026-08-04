@@ -60,6 +60,11 @@ import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
 import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
+import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
+import {
+  addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
+  remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
+} from "./reminders.ts";
 import { fileTree, findFiles, grepFiles } from "./files.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
@@ -381,6 +386,13 @@ setMergedVerdictHook(() => {
 // Let the alert path reach a connected client, which raises a native OS
 // notification (cross-platform) instead of the Linux-only notify-send.
 setAlertSink({ broadcast: (a) => broadcast({ type: "alert", data: a }), hasClients: () => clients.size > 0 });
+// The task store has a second writer — the user's editor — so a change there
+// reaches the panel through a sweep rather than through anything we did.
+setTaskChangeHook(() => broadcast({ type: "tasks" }));
+// A reminder that fired changes what the panel and the rail should show, and
+// the panel is not necessarily open — so it is pushed, like everything else
+// that happens without the user asking.
+setReminderHook(() => broadcast({ type: "tasks" }));
 // Let the git layer ask what a branch's pull request says its base is. Wired
 // here rather than imported there, because gitwork must not depend on the
 // pull-request layer — same reason as the two hooks above. Reads the PR list
@@ -1599,6 +1611,25 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/issues/work") return json({ work: currentWork(url.searchParams.get("repo") || undefined) });
 
+    // --- tasks (taskwarrior-backed, read-only) ---
+    if (pathname === "/tasks/list") {
+      const snap = await listTasks(url.searchParams.get("force") === "1");
+      const capability = await taskCapability();
+      // The reminders ride along: a row that has one must be able to say so
+      // without a request per row, and they are ours to read cheaply.
+      return json({
+        ok: !snap.error, tasks: snap.tasks, capability, error: snap.error,
+        byTask: remindersFor(snap.tasks.map((t) => t.uuid)),
+        fingerprint: snap.fingerprint,
+        writeEnabled: TASK_WRITE_ENABLED,
+      });
+    }
+    if (pathname === "/tasks/reminders") {
+      const w = url.searchParams.get("window");
+      const window = w === "upcoming" || w === "history" ? w : "live";
+      return json({ ok: true, reminders: listReminders(window), zone: localZone() });
+    }
+
     if (pathname === "/machine/ports") return json(listPorts());
     if (pathname === "/machine/resources") return json(listResources(Number(url.searchParams.get("limit") || 40)));
     // On demand only, and never on a poll: `du` over a checkout walks every
@@ -1675,6 +1706,49 @@ const server = Bun.serve<WsData>({
      * the server decides what runs, which is the same rule the review prompt
      * follows.
      */
+    if (pathname.startsWith("/tasks/write/") && req.method === "POST") {
+      // Every verb carries the fingerprint the client was looking at. A write
+      // whose precondition has moved answers 409 with the fresh list — it is
+      // never retried here, because retrying against a store that moved is
+      // exactly how the other writer's work gets reverted.
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const expect = typeof b.fingerprint === "string" ? b.fingerprint : undefined;
+      const uuid = String(b.uuid ?? "");
+      const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") as string[] : []);
+      const r = pathname === "/tasks/write/add" ? await addTask(String(b.input ?? ""), expect)
+        : pathname === "/tasks/write/done" ? await completeTask(uuid, expect)
+        : pathname === "/tasks/write/reopen" ? await reopenTask(uuid, expect)
+        : pathname === "/tasks/write/delete" ? await deleteTask(uuid, expect)
+        : pathname === "/tasks/write/priority" ? await cyclePriority(uuid, (b.current as "H" | "M" | "L" | null) ?? null, expect)
+        : pathname === "/tasks/write/edit" ? await editTask(uuid, String(b.input ?? ""), strs(b.previousTags), expect)
+        : pathname === "/tasks/write/tags" ? await addTags(uuid, strs(b.tags), expect)
+        : pathname === "/tasks/write/note" ? await replaceNote(uuid, String(b.oldText ?? ""), String(b.newText ?? ""), expect)
+        : pathname === "/tasks/write/bulk" ? await bulkApply(strs(b.uuids), b.action as BulkAction, typeof b.value === "string" ? b.value : null, expect)
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      if (r.ok) broadcast({ type: "tasks" });
+      return json(r, r.conflict ? 409 : r.ok ? 200 : 400);
+    }
+    if (pathname.startsWith("/tasks/remind") && req.method === "POST") {
+      // None of these touch Taskwarrior or its lock. That is what keeps the
+      // engine working when the task list cannot be read at all.
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (pathname === "/tasks/remind") {
+        return json(addReminder({
+          taskUuid: typeof b.taskUuid === "string" ? b.taskUuid : null,
+          title: String(b.title ?? ""),
+          civil: String(b.civil ?? ""),
+          zone: typeof b.zone === "string" ? b.zone : undefined,
+          root: typeof b.root === "string" ? b.root : null,
+        }));
+      }
+      const id = String(b.id ?? "");
+      if (!id) return json({ ok: false, error: "which reminder?" }, 400);
+      if (pathname === "/tasks/reminder/ack") return json(ackReminder(id));
+      if (pathname === "/tasks/reminder/cancel") return json(cancelReminder(id));
+      if (pathname === "/tasks/reminder/snooze") return json(snoozeReminder(id, Number(b.minutes ?? 60)));
+      return json({ ok: false, error: "not found" }, 404);
+    }
     if (pathname.startsWith("/issues/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
@@ -2340,6 +2414,8 @@ setInterval(prune, 3_600_000);
 // abandoned chat gives its memory back and resumes transparently next time.
 // A no-op when the engine is off, tmux is absent, or eviction is disabled.
 startPaneSweeper();
+startTaskSweep();
+startReminderTick();
 
 // Read every Claude Code session on this machine from ~/.claude/projects, then
 // keep watching. This is what makes the dashboard cover all projects at once
