@@ -11,7 +11,30 @@
  * old mistake was letting people pick a font the machine doesn't have, whereupon
  * xterm mis-measured the fallback and the grid "went crazy".
  */
-const TERM_FALLBACK = `"SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Consolas, "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace`;
+/*
+ * The tail every terminal font falls back through — and why DejaVu is in it.
+ *
+ * A monospace stack is not one font. The browser walks it per CHARACTER: the
+ * cell is measured from a latin glyph, and `│` — which most of these faces
+ * either lack or subset away — comes from whichever face further down the list
+ * has it. When those are two different faces, the rule is drawn to a different
+ * em box than the cell it sits in, and a divider that should be one continuous
+ * line comes out dashed, once per row.
+ *
+ * That is exactly what happened. Measured on the machine it was reported from,
+ * the ink height of `│` at 13px: DejaVu Sans Mono 17, the generic monospace 17,
+ * Liberation Mono **15**, against a cell of about 17. This list had Liberation
+ * Mono and no DejaVu, so every terminal — the default and all five choices,
+ * which all end here — resolved its rules to the face that draws them two
+ * pixels short, and every row showed the seam.
+ *
+ * So DejaVu Sans Mono goes ahead of Liberation Mono, which is what Orca's stack
+ * does and why its dividers are solid on the same screen. Not a magic
+ * incantation: it is "prefer a face whose box drawing fills the line box".
+ * Verified by rendering ten stacked rules and counting gaps in the pixels —
+ * seven before, zero after, for the default and for every selectable font.
+ */
+const TERM_FALLBACK = `"SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace`;
 
 // `bundled` faces ship with the app (see web/src/fonts.ts), so they're always
 // available — no OS install, and the availability probe can be skipped for them.
