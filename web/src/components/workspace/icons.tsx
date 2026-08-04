@@ -38,14 +38,12 @@ export function DashIcon({ size = 15 }: P) {
 }
 
 /**
- * A page with its corner turned: a file, said the way every interface has said
- * it for forty years.
+ * A folder — and it is a folder because Diff is now a page.
  *
- * Two attempts got this wrong in opposite directions. A folder behind a page
- * was two outlines overlapping into a smudge at 17px; the stem-and-leaves tree
- * that replaced it was legible but read as a hierarchy, an org chart, a
- * mind-map — anything structural — and crowded its own box besides. This says
- * "file" and nothing else, and it has the whole 24 to breathe in.
+ * This was a page with a turned corner, which is the clearest way to say
+ * "file" there is. It stopped being available the moment the diff glyph became
+ * a document: a rail with two icons meaning "a file" is a rail with neither.
+ * A folder is what the view actually opens on anyway — a checkout you browse.
  */
 export function FilesIcon({ size = 15 }: P) {
   return (
@@ -57,44 +55,39 @@ export function FilesIcon({ size = 15 }: P) {
 }
 
 /**
- * A branch leaving a line: the shape Git's own logo abstracts, and the one
- * every tool in this family draws.
+ * Git's own diamond.
  *
- * It was a vertical line through a ring, which is a record button, a power
- * symbol or an axis depending on who is looking — anything except version
- * control. Three of these icons are git concepts (branch, compare, pull
- * request) and they now share one vocabulary: 3px nodes, 2px strokes, a
- * quarter-circle to turn a corner. Told apart by their topology rather than by
- * decoration, which is what makes them survive being drawn at 17px.
+ * Two attempts before this drew the concept — a line through a ring, then a
+ * branch — and both were things Git happens to do rather than how Git signs
+ * its name. The diamond is the signature, and it is recognised before it is
+ * read.
  */
 export function GitIcon({ size = 15 }: P) {
   return (
-    // 1.7 rather than 2: the diamond carries a branch inside it, and at 17px a
-    // 2px stroke closes the gaps between the two.
+    /* The diamond is how Git signs its name, so it stays. What could not stay
+       is the logo's interior: a three-node branch is more marks than there are
+       pixels for at 17px, and it collapsed into a smudge inside the outline —
+       "es tan mini que no se distingue". Rendered at the rail's own size
+       against four alternatives, the readable budget turned out to be exactly
+       a diagonal and two nodes. The nodes are filled rather than stroked
+       because a 2px ring of radius 1.5 has no hole left at this size; it is a
+       dot whether or not it is drawn as one, so it may as well be a crisp one. */
     <svg {...svg} width={size} height={size} strokeWidth={1.7}>
-      <path d="M12 2.4 21.6 12 12 21.6 2.4 12Z" />
-      <path d="M8.7 15.3 15.3 8.7" />
-      <circle cx="8.7" cy="15.3" r="1.5" />
-      <circle cx="15.3" cy="8.7" r="1.5" />
-      <path d="M11.6 12.4 14.1 14.9" />
-      <circle cx="15.4" cy="16.2" r="1.5" />
+      <path d="M12 1.4 22.6 12 12 22.6 1.4 12Z" />
+      <path d="M8.4 15.6 15.6 8.4" />
+      <circle cx="8.4" cy="15.6" r="2" fill="currentColor" stroke="none" />
+      <circle cx="15.6" cy="8.4" r="2" fill="currentColor" stroke="none" />
     </svg>
   );
 }
 
 /**
- * Two refs pointing at each other: `git compare`, which is what a diff view
- * actually is.
+ * A file carrying a plus and a minus: what a diff IS, rather than what git
+ * calls the command that produces one.
  *
- * The old one was the branch icon with an extra curve — same nodes, same
- * sweep — so at rail size Git and Diff were the same smudge twice. This one
- * reads as a comparison because both arms turn back on themselves: the figure
- * is the same rotated 180°, which is what "compare" looks like.
- *
- * And it has no arrowheads, which the first attempt did. At 56px they were
- * arrows; at the 17px the rail actually draws, three extra strokes each landed
- * on top of the nodes and the whole thing went to mush — "parece un logo
- * hecho". The elbows alone carry the meaning, and they survive being small.
+ * Two earlier goes drew the topology — a branch with a curve, then two elbows
+ * — and both were correct and unreadable: at 17px they were the Git glyph
+ * again, only fuzzier. A page with + and − needs no vocabulary at all.
  */
 export function DiffIcon({ size = 15 }: P) {
   return (
@@ -118,8 +111,8 @@ export function BrowserIcon({ size = 15 }: P) {
   );
 }
 
-/** A pull request: one line carries on, the other asks to come in — the arrow
- *  is the ask, and it is what tells this apart from the compare above. */
+/** A pull request, at Octicons' proportions: one line carries on, the other
+ *  asks to come in, and the arrow is the ask. */
 export function PrIcon({ size = 15 }: P) {
   return (
     <svg {...svg} width={size} height={size}>
@@ -141,11 +134,10 @@ export function PrIcon({ size = 15 }: P) {
  * things, so it identified nothing. The stack over a hull is the shape people
  * actually recognise.
  *
- * Three containers, not five, and the hull is one closed shape rather than a
- * whale with a tail. The tail was the giveaway that this was drawn at 56px and
- * judged there: at 17 it detached from the body and read as a missing piece —
- * "le falta un trozo". What is left is four shapes, all of them bigger than a
- * stroke is wide.
+ * The fin is back, and closer to the real mark. What broke the first version
+ * was not the fin but its size: a thin curl detached from the body at 17px and
+ * read as a missing piece — "le falta un trozo". Drawn heavier and touching
+ * the hull, it holds.
  */
 export function DockerIcon({ size = 15 }: P) {
   return (
