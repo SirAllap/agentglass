@@ -82,7 +82,7 @@ import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
 import { probeAgents, ROSTER } from "./agentprobe.ts";
-import { join as joinPath } from "node:path";
+import { join as joinPath, basename } from "node:path";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller } from "./auth.ts";
 import { activeDevices, markSeen, revokeDevice, type Scope } from "./devices.ts";
@@ -1318,7 +1318,34 @@ const server = Bun.serve<WsData>({
       // One `git check-ignore` per repo, not per file, so the client can fold
       // away build output without having to guess at .gitignore semantics.
       const ignored = markIgnored(changes.map((c) => c.file_path));
-      return json({ changes: changes.map((c) => ({ ...c, ignored: ignored.get(c.file_path) === true })) });
+      /**
+       * Which of these edits are not this project's.
+       *
+       * A session is in scope because its cwd is, and it then writes wherever
+       * it likes: a note under ~/Documents, a scratch script in /tmp. Those are
+       * real edits by a real session of this project — so they are recorded —
+       * but they are not the project, and in a list of 200 they push the code
+       * you opened this view to review off the screen.
+       *
+       * Decided here rather than in the client because "part of the project"
+       * means the repo AND its linked worktrees — orbit-WEB-1042 is orbit —
+       * and only the server has git and the scope to answer that.
+       *
+       * `project` rides along so the chip can name what it filtered against.
+       * The client has the workspace too, but a label from one source and a
+       * filter from another is how a button ends up lying about what it did.
+       */
+      const scope = workspaceRoot();
+      return json({
+        project: scope ? basename(scope) : null,
+        changes: changes.map((c) => ({
+          ...c,
+          ignored: ignored.get(c.file_path) === true,
+          // Unscoped there is no project to be outside of, and the flag stays
+          // off rather than becoming "everything" — absent means never hidden.
+          outside: scope ? !inScope(c.file_path, scope) : false,
+        })),
+      });
     }
 
     // --- commit composer: live git working-tree status + commit ---
