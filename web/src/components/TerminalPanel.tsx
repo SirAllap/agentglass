@@ -1110,6 +1110,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [wtOpen, setWtOpen] = useState(false);
   const [wtQuery, setWtQuery] = useState("");
   const [wtShowAll, setWtShowAll] = useState(false);
+  /** The worktree the focused pane's agent is in, read from its output — shown
+   *  as a fixed strip above the tmux bar and pinned atop the picker. */
+  const [detectedWt, setDetectedWt] = useState<GitRepoRef | null>(null);
   const wtRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
@@ -1174,6 +1177,22 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // back — see focusTerm.
   useDismiss(repoOpen, pickersRef, () => { setRepoOpen(false); focusTerm(); });
   useDismiss(wtOpen, wtRef, () => { setWtOpen(false); setWtQuery(""); setWtShowAll(false); focusTerm(); });
+  // Keep the focused pane's worktree fresh. The agent prints new paths as it
+  // works and xterm's buffer changes without React noticing, so re-read on a
+  // light poll (and whenever the focused pane or the repo list changes) rather
+  // than on render — a bounded scan of the scrollback tail, cheap to repeat.
+  useEffect(() => {
+    if (!open || IS_DEMO) return;
+    const project = here?.worktreeOf || here?.root || root;
+    const cands = repos.filter((r) => r.worktreeOf && (r.worktreeOf || r.root) === project);
+    const run = () => {
+      const d = detectPaneWorktree(sessions.get(paneIds[focusIdx] ?? "")?.term, cands);
+      setDetectedWt((prev) => (prev?.root === d?.root ? prev : d));
+    };
+    run();
+    const id = setInterval(run, 4000);
+    return () => clearInterval(id);
+  }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root]);
 
   const tabs = !IS_DEMO && root ? termSessionsFor(root) : [];
 
@@ -1623,7 +1642,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         // noise the picker was drowning in. A search, or "Show all", looks
                         // through every one.
                         // What THIS pane's agent is working in, read from its terminal output.
-                        const detected = detectPaneWorktree(sess?.term, all.filter((r) => r.worktreeOf));
+                        const detected = detectedWt;
                         const base = (q || wtShowAll || active.length === 0) ? all : active;
                         const list = base.filter((r) => !q || (r.branch + " " + dirName(r.root)).toLowerCase().includes(q)).filter((r) => r.root !== detected?.root);
                         const hiddenCount = all.length - active.length;
@@ -1902,6 +1921,23 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     </div>
                   )}
                 </div>
+
+                {/* The focused pane's worktree, offered right where you are
+                    looking — read from the agent's own output, so it appears the
+                    moment there is a checkout to open and gets out of the way
+                    when there is not. Its changes are one click from here. */}
+                {detectedWt && (
+                  <div className="shrink-0 flex items-center gap-2 px-4 py-1 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--primary) 9%, transparent)" }}>
+                    <span className="shrink-0 text-[8px] uppercase tracking-wider px-1 py-[2px] rounded" title="Read from this pane's agent output" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
+                    <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${detectedWt.branch}\n${detectedWt.root}`}>
+                      <span className="truncate text-[11px] font-medium" style={{ color: "var(--text)" }}>{detectedWt.branch}</span>
+                      <span className="truncate text-[9px]" style={{ color: "var(--text3)" }}>{dirName(detectedWt.root)}</span>
+                    </span>
+                    {detectedWt.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${detectedWt.dirty} changed file${detectedWt.dirty === 1 ? "" : "s"}`}>●{detectedWt.dirty}</span>}
+                    <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn shrink-0 px-2.5 py-0.5 rounded text-[10.5px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open in Source control">Git</button>
+                    <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn shrink-0 px-2.5 py-0.5 rounded text-[10.5px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                  </div>
+                )}
 
                 {/* status line */}
                 <div className="shrink-0 flex items-center gap-3 px-4 py-1.5 border-t text-[9.5px] t-dim2" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
