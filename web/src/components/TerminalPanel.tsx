@@ -1619,7 +1619,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       })()}
                     </div>
                     {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ Split</button>}
-                    <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="Kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ Restart</button>
+                    {/* Under tmux this button does not restart anything: it
+                        drops the pty connection and re-attaches. tmux is a
+                        daemon, so a detach ends the client, not the session —
+                        every window and agent keeps running (see terminal.ts,
+                        "a detach ends the client, not the server"). Calling it
+                        "Restart" beside a pane full of working agents reads as a
+                        button that could throw the work away, which it cannot.
+                        Only a bare, non-tmux shell is actually restarted. */}
+                    <button onClick={restart} disabled={!root || IS_DEMO || disabled} title={tmuxActive ? "Re-attach this terminal to tmux — every window and agent keeps running, nothing is killed" : "Kill this shell and start a fresh one"} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ {tmuxActive ? "Reconnect" : "Restart"}</button>
                     <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>Clear</button>
                     {/* The way back, and it lives here because the way out
                         lives in the strip — which is the thing being hidden.
