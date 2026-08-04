@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/")
+SERVER = os.environ.get("AGENTGLASS_SERVER", "http://127.0.0.1:4000").rstrip("/")
 
 def _agentglass_local_only(url):
     """Refuse to send transcript/telemetry anywhere but this machine.

@@ -393,7 +393,7 @@ The receiver accepts OTLP/HTTP in **both protobuf (the SDK default) and JSON**, 
 no Collector is needed — just aim any exporter's endpoint at the server:
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4000
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4000
 # spans POST to /v1/traces automatically (protobuf or http/json both accepted)
 ```
 
@@ -435,7 +435,7 @@ inference, prompt) to an event the same way.
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` alerts here (Slack/Discord compatible). |
 | `AGENTGLASS_NOTIFY` | — | `1` → fire `notify-send` desktop alerts. |
-| `AGENTGLASS_SERVER` | `http://localhost:4000` | Used by the hook, seed, and OpenCode plugin integrations. |
+| `AGENTGLASS_SERVER` | `http://127.0.0.1:4000` | Used by the hook, seed, and OpenCode plugin integrations. A `localhost` value works too — the hooks rewrite it to `127.0.0.1` before connecting (the server binds IPv4-only, and an IPv6-first `localhost` lookup can cost seconds per event on some hosts). |
 | `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). |
 | `AGENTGLASS_GIT_WRITE_DISABLED` | — | `1` → make the **Source control** panel read-only (no stage / commit / push). |
 | `AGENTGLASS_DOCKER_WRITE_DISABLED` | — | `1` → make the **Docker** panel read-only (no start / stop / restart / rm). |

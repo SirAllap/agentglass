@@ -15,7 +15,7 @@ Safety by design — it NEVER blocks your agents by accident:
 Deny/allow are returned to Claude Code via the PreToolUse permissionDecision.
 
 Env:
-    AGENTGLASS_SERVER   server base url (default http://localhost:4000)
+    AGENTGLASS_SERVER   server base url (default http://127.0.0.1:4000)
     AGENTGLASS_GATE_TIMEOUT  seconds to wait for a human (default 60)
 """
 import argparse
@@ -24,7 +24,7 @@ import os
 import sys
 import urllib.request
 
-DEFAULT_SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000")
+DEFAULT_SERVER = os.environ.get("AGENTGLASS_SERVER", "http://127.0.0.1:4000")
 
 def _agentglass_local_only(url):
     """Refuse to send transcript/telemetry anywhere but this machine.

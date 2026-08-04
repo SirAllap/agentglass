@@ -19,7 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/")
+SERVER = os.environ.get("AGENTGLASS_SERVER", "http://127.0.0.1:4000").rstrip("/")
 
 PLUGIN_FILENAME = "agentglass.js"
 PLUGIN_SRC = Path(__file__).resolve().parent / "opencode-plugin.js"

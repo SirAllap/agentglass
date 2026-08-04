@@ -1,6 +1,9 @@
+import importlib
+import io
 import json
 import os
 import tempfile
+import time
 import unittest
 import unittest.mock
 
@@ -69,6 +72,94 @@ class LocalOnlyGuardTests(unittest.TestCase):
         for url in ("http://localhost:4000", "http://127.0.0.1:4000", "http://[::1]:4000"):
             with self.subTest(url=url):
                 send_event._agentglass_local_only(url)
+
+    def test_localhost_is_rewritten_to_ipv4_loopback(self):
+        # The server binds IPv4-only; resolving `localhost` can try ::1 first
+        # and pay a multi-second refused connect on some hosts.
+        self.assertEqual(
+            send_event._agentglass_local_only("http://localhost:4000"),
+            "http://127.0.0.1:4000",
+        )
+
+    def test_explicit_ipv4_loopback_is_untouched(self):
+        self.assertEqual(
+            send_event._agentglass_local_only("http://127.0.0.1:4000"),
+            "http://127.0.0.1:4000",
+        )
+
+    def test_default_server_avoids_localhost(self):
+        with unittest.mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AGENTGLASS_SERVER", None)
+            importlib.reload(send_event)
+        self.assertNotIn("localhost", send_event.DEFAULT_SERVER)
+
+
+class BreakerTests(unittest.TestCase):
+    """A recent failed send short-circuits the hook so a down server never
+    stalls tool calls; a stale marker lets sends resume."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        patcher = unittest.mock.patch.object(
+            send_event.tempfile, "gettempdir", return_value=self.tmp)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _run_main(self, marker_age_s):
+        marker = send_event._marker_path()
+        with open(marker, "w"):
+            pass
+        os.utime(marker, (time.time() - marker_age_s,) * 2)
+        stdin = io.StringIO('{"session_id":"s1","hook_event_name":"PostToolUse"}')
+        with unittest.mock.patch.object(send_event.sys, "argv",
+                                        ["send_event.py", "--event-type", "PostToolUse"]), \
+             unittest.mock.patch.object(send_event.sys, "stdin", stdin), \
+             unittest.mock.patch.object(send_event, "spawn_detached") as spawn:
+            try:
+                send_event.main()
+            except SystemExit:
+                pass
+        return stdin, spawn
+
+    def test_fresh_marker_skips_the_spawn_and_drains_stdin(self):
+        stdin, spawn = self._run_main(marker_age_s=0)
+        spawn.assert_not_called()
+        self.assertEqual(stdin.read(), "")  # stdin was consumed
+
+    def test_stale_marker_spawns_the_detached_send(self):
+        _, spawn = self._run_main(marker_age_s=send_event.BREAKER_TTL_S + 5)
+        spawn.assert_called_once()
+
+
+class SendDetachedTests(unittest.TestCase):
+    """The detached child deletes its payload file and maintains the marker."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        patcher = unittest.mock.patch.object(
+            send_event.tempfile, "gettempdir", return_value=self.tmp)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.payload = os.path.join(self.tmp, send_event.PAYLOAD_PREFIX + "t.json")
+        with open(self.payload, "w") as f:
+            f.write("{}")
+
+    def test_success_deletes_payload_and_clears_marker(self):
+        with open(send_event._marker_path(), "w"):
+            pass
+        with unittest.mock.patch.object(send_event.urllib.request, "urlopen",
+                                        return_value=unittest.mock.MagicMock()):
+            send_event.send_detached(self.payload, "http://127.0.0.1:4000")
+        self.assertFalse(os.path.exists(self.payload))
+        self.assertFalse(os.path.exists(send_event._marker_path()))
+
+    def test_failure_deletes_payload_and_touches_marker(self):
+        with unittest.mock.patch.object(send_event.urllib.request, "urlopen",
+                                        side_effect=OSError("refused")):
+            send_event.send_detached(self.payload, "http://127.0.0.1:4000")
+        self.assertFalse(os.path.exists(self.payload))
+        self.assertTrue(os.path.exists(send_event._marker_path()))
+        self.assertTrue(send_event._breaker_active())
 
 
 if __name__ == "__main__":

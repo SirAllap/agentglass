@@ -11,7 +11,7 @@ import random
 import time
 import urllib.request
 
-SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000")
+SERVER = os.environ.get("AGENTGLASS_SERVER", "http://127.0.0.1:4000")
 
 def _agentglass_local_only(url):
     """Refuse to send transcript/telemetry anywhere but this machine.
