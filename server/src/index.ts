@@ -61,8 +61,8 @@ import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
 import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, readView } from "./providers.ts";
-import { savedViews, currentView, setCurrent, removeView } from "./clickupviews.ts";
-import { assignSelf, setStatus, setField, taskDetail, CLICKUP_WRITE_ENABLED } from "./clickup.ts";
+import { savedViews, currentView, setCurrent, removeView, cachedFor } from "./clickupviews.ts";
+import { assignSelf, setStatus, setField, taskDetail, findCard, CLICKUP_WRITE_ENABLED } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -1661,6 +1661,13 @@ const server = Bun.serve<WsData>({
       if (!id) return json({ tasks: [], statuses: [], fields: [], at: 0 });
       setCurrent(id);
       return json(await readView(id, url.searchParams.get("force") === "1"));
+    }
+    if (pathname === "/clickup/find") {
+      // The prefix comes from what we have already read, so a bare number is
+      // enough and nobody has to be asked what their ids look like.
+      const seen = savedViews().map((v) => cachedFor(v.id)?.tasks?.[0]?.customId ?? "").find(Boolean) ?? "";
+      const r = await findCard(url.searchParams.get("q") ?? "", seen.replace(/[0-9]+$/, ""));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (pathname === "/clickup/task") {
       const r = await taskDetail(url.searchParams.get("id") ?? "");

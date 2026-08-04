@@ -728,3 +728,67 @@ export async function rawListTasks(
   }
   return { ok: true, data: { tasks: out, truncated: true } };
 }
+
+// ---------------------------------------------------------------------------
+// finding one card
+// ---------------------------------------------------------------------------
+
+/**
+ * A card you know the number of, which is not the same as a board you work from.
+ *
+ * "What was 20542 again?" is a question with no board attached: the card is on
+ * some other list, in a project you are not in, and adding that whole board to
+ * look at one row is absurd. So one card can be fetched on its own.
+ *
+ * The workspace's own id shape is DERIVED rather than configured. These ids are
+ * a prefix and a number, the prefix is the same for every card in a workspace,
+ * and we already hold dozens of them — so typing the number alone is enough,
+ * and nobody has to be asked what their prefix is or told they got it wrong.
+ */
+export function normaliseCardQuery(text: string, knownPrefix: string): string | null {
+  const q = (text || "").trim();
+  if (!q) return null;
+  // Already shaped like an id — letters, a hyphen, digits.
+  if (/^[A-Za-z][\w]*-\d+$/.test(q)) return q.toUpperCase();
+  // A bare number: only meaningful once we have seen what this workspace's ids
+  // look like. Without that, guessing a prefix would produce a 404 that looks
+  // like "no such card" when the truth is "I do not know your naming".
+  if (/^\d{3,}$/.test(q)) return knownPrefix ? `${knownPrefix}${q}` : null;
+  // An internal id: ClickUp's are lowercase alphanumeric, no hyphen.
+  if (/^[a-z0-9]{6,}$/i.test(q) && !/^\d+$/.test(q)) return q;
+  return null;
+}
+
+export interface FoundCard { task: ProviderTask; asked: string }
+
+export async function findCard(text: string, knownPrefix: string): Promise<CallResult<FoundCard>> {
+  const token = secretFor("clickup");
+  if (!token) return { ok: false, error: "ClickUp is not connected" };
+  const asked = normaliseCardQuery(text, knownPrefix);
+  if (!asked) {
+    return { ok: false, error: knownPrefix ? "That does not look like a card id" : "Open a board first, so I know what your ids look like" };
+  }
+  const me = redacted("clickup");
+  const custom = /-/.test(asked);
+  // `custom_task_ids` needs the workspace alongside it — the human id is only
+  // unique within one.
+  const q = custom && me?.workspaceId ? `?custom_task_ids=true&team_id=${encodeURIComponent(me.workspaceId)}` : "";
+  const r = await call<RawTask>(`/task/${encodeURIComponent(asked)}${q}`, token);
+  if (!r.ok) {
+    /*
+     * A card that does not exist answers 401, not 404 — verified against a real
+     * workspace by asking for a number nobody has used. Reported as "refused
+     * this token", that reads as a broken credential and sends somebody to
+     * Settings to reconnect a connection that was never broken.
+     *
+     * There is no way to tell the two apart from here, so the message says
+     * both, in the order they are likely: a mistyped number is common, a
+     * revoked token is not. The card status pill stays untouched, so a genuinely
+     * dead token still shows up where it belongs.
+     */
+    if (r.unauthorised) return { ok: false, error: `No card called ${asked} — or it is one this token cannot see` };
+    return { ok: false, error: r.error ?? `Could not find ${asked}` };
+  }
+  if (!r.data?.id) return { ok: false, error: `No card called ${asked}` };
+  return { ok: true, data: { task: toTask(r.data, me?.accountId), asked } };
+}

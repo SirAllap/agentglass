@@ -495,6 +495,8 @@ const realApi = {
   clickupAddView: (url: string) =>
     post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/add", { url }),
   clickupRemoveView: (id: string) => post<{ ok: boolean }>("/clickup/views/remove", { id }),
+  clickupFind: (q: string) =>
+    get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/clickup/find?q=${encodeURIComponent(q)}`),
   clickupTask: (id: string) =>
     get<{ ok: boolean; error?: string } & Partial<TaskDetail>>(`/clickup/task?id=${encodeURIComponent(id)}`),
   clickupAssign: (id: string, on: boolean, updated?: number) =>
@@ -1011,6 +1013,7 @@ const demoApi: typeof realApi = {
   clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
   clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
   clickupRemoveView: (_i: string) => D({ ok: true }),
+  clickupFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
   clickupTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
   clickupAssign: (_i: string, _o: boolean, _u?: number) => D({ ok: false, error: "not available in the demo" }),
   clickupStatus: (_i: string, _s: string, _u?: number) => D({ ok: false, error: "not available in the demo" }),

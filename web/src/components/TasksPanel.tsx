@@ -611,6 +611,11 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
   const [confirm, setConfirm] = useState<Pending | null>(null);
   const [statusPick, setStatusPick] = useState<string[]>([]);
   const [folded, setFolded] = useState<Record<string, boolean>>({});
+  /* A card fetched by id rather than found on this board. Kept beside the
+     board's own rows instead of mixed into them: it belongs to some other list
+     and pretending otherwise would make the counts lie. */
+  const [found, setFound] = useState<ProviderTask | null>(null);
+  const [finding, setFinding] = useState(false);
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const today = todayStr();
 
@@ -690,7 +695,21 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
     };
   }, [data]);
 
-  const picked = rows.find((t) => t.id === sel) ?? null;
+  // A bare number, or a prefixed id. Loose on purpose — the server decides
+  // what is really a card, and being asked is cheaper than not being offered.
+  const looksLikeId = /^\s*([A-Za-z][\w]*-)?\d{3,}\s*$/.test(q);
+
+  const lookup = useCallback(async () => {
+    setFinding(true);
+    try {
+      const r = await api.clickupFind(q.trim());
+      if (r.ok && r.task) { setFound(r.task); setSel(r.task.id); setNote(null); }
+      else setNote({ ok: false, text: r.error ?? "Could not find that card" });
+    } catch { setNote({ ok: false, text: "Could not reach the server" }); }
+    finally { setFinding(false); }
+  }, [q]);
+
+  const picked = [...rows, ...(found ? [found] : [])].find((t) => t.id === sel) ?? null;
   const anyWho = (data?.tasks ?? []).some((t) => t.assignees.length);
   const anySprint = (data?.tasks ?? []).some((t) => t.sprint);
   const grid = cuGrid(anyWho, anySprint);
@@ -758,8 +777,10 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
         <div className="flex items-center gap-2 flex-1 min-w-[220px] rounded-lg px-2.5 py-1"
           style={{ background: "var(--bg2)", border: edge(14) }}>
           <span className="text-[11px] shrink-0" style={{ color: "var(--text3)" }}>⌕</span>
-          <input value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false}
-            placeholder="Search this board"
+          <input value={q} onChange={(e) => { setQ(e.target.value); if (found) setFound(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && looksLikeId) void lookup(); }}
+            spellCheck={false}
+            placeholder="Search this board, or type a card id"
             className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
             style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
         </div>
@@ -816,7 +837,31 @@ function ClickUpBody({ active, repos, here, onOpenChatWith }: {
             <span>Due</span><span>Pts</span><span />
           </div>
           <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
-            {!rows.length && (
+            {/* Looks like a card number and is not on this board — so offer to
+                go and get it, rather than reporting nothing and leaving you to
+                work out that "not here" is not "does not exist". */}
+            {looksLikeId && !rows.some((t) => (t.customId ?? "").endsWith(q.trim())) && (
+              <button onClick={() => void lookup()} disabled={finding}
+                className="w-full text-left px-5 py-3 hover:bg-white/5"
+                style={{ borderBottom: edge(8) }}>
+                <span className="text-[11.5px]" style={{ color: "var(--primary)" }}>
+                  {finding ? `Looking for ${q.trim()}…` : `Fetch card ${q.trim()} from ClickUp →`}
+                </span>
+                <span className="block text-[10px]" style={{ color: "var(--text4)" }}>
+                  Not on this board. It will be shown on the right without being added here.
+                </span>
+              </button>
+            )}
+            {found && (
+              <div>
+                <div className="px-5 pt-3 pb-1.5 text-[8.5px] uppercase tracking-[0.16em]" style={{ color: "var(--text4)" }}>
+                  Fetched by id · {found.list ?? "elsewhere"}
+                </div>
+                <ClickUpRow t={found} today={today} on={found.id === sel} onPick={() => setSel(found.id)}
+                  grid={grid} showWho={anyWho} showSprint={anySprint} />
+              </div>
+            )}
+            {!rows.length && !found && !looksLikeId && (
               <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>
                 {data?.error ? "Nothing to show — the last read did not get through."
                   : q || tag || mineOnly || statusPick.length ? "Nothing matches that."
