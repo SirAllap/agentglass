@@ -1,4 +1,4 @@
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect, beforeAll, afterEach } from "bun:test";
 
 // One socket, however many things ask for one.
 //
@@ -46,6 +46,11 @@ beforeAll(async () => {
   };
   sysNotify = await import("../src/lib/sysNotify.ts");
 });
+
+// One shared sysNotify module across the whole suite: a mode left "full" or a
+// backoff timer left armed here leaks into the next file and flakes it. Reset
+// every piece of async state after each test.
+afterEach(() => { sysNotify.setSysNotifyMode("off"); sysNotify.__resetNotifyCapability(); });
 
 test("two things asking at once still open one socket", async () => {
   opened = []; socks = [];

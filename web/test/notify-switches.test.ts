@@ -1,4 +1,4 @@
-import { test, expect, beforeAll } from "bun:test";
+import { test, expect, beforeAll, afterEach } from "bun:test";
 
 // The notification pane has two switches because it has two sources: the
 // machine's own notifications, mirrored in, and agentglass's own events. They
@@ -27,6 +27,11 @@ beforeAll(async () => {
   (globalThis as any).location = { hostname: "localhost", origin: "http://localhost:4000" };
   sysNotify = await import("../src/lib/sysNotify.ts");
 });
+
+// Every test shares one sysNotify module (bun runs the suite in one process),
+// so a mode left "full" or a backoff timer left armed leaks into the next file
+// and flakes an unrelated assertion. Tear it all down after each test.
+afterEach(() => { sysNotify.setSysNotifyMode("off"); sysNotify.__resetNotifyCapability(); });
 
 test("the defaults are the designed ones: nothing mirrored, our own alerts on", () => {
   expect(sysNotify.sysNotifyOn()).toBe(false);

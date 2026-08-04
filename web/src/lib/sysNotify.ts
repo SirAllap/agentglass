@@ -233,6 +233,15 @@ function unanswered(reason: string): NotifyCapability {
 /** Tests only — the probe is a module singleton and each case needs a fresh one. */
 export function __resetNotifyCapability() {
   capPromise = null;
+  // Tear down the socket machinery too, not just the cached probe. A test that
+  // armed the backoff (retune → fail → scheduleReopen) left `retryTimer` live;
+  // it fired in a later test, drove a probe through the shared `fetch` mock, and
+  // made an unrelated assertion about the ask count flake. Reset every piece of
+  // async state so nothing outlives the test that created it.
+  retry = 0;
+  opening = false;
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  ws = null;
 }
 
 // ---------------------------------------------------------------------------
