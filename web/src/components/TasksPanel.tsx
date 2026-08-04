@@ -1668,7 +1668,7 @@ function CardDetail({ t, today, statuses, fields, writable, repos, here, onOpenC
           </div>
           {prs.map((p) => (
             <div key={p.number} className="flex items-center gap-2 py-1">
-              <button onClick={() => openPrs(String(p.number))}
+              <button onClick={() => openPrs(String(p.number), p.state === "OPEN" || !p.state ? "open" : "all")}
                 className="text-left flex-1 min-w-0 rounded px-1 -mx-1 hover:bg-white/5"
                 title="Open this in Pull Requests">
                 <span className="tabular-nums" style={{ color: "var(--primary)" }}>#{p.number}</span>

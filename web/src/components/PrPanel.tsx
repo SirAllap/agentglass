@@ -890,8 +890,8 @@ function PrRow({ p, active, onSelect, onReview }: {
 
 export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   active: boolean;
-  /** A search another panel asked us to land on — see lib/openPrs.ts. */
-  jumpTo?: string | null;
+  /** An errand another panel sent us on — see lib/openPrs.ts. */
+  jumpTo?: import("../lib/openPrs.ts").PrJump | null;
   onOpenChatWith?: (cwd: string, prompt: string, title: string) => void;
   /** Hand the review to the user's own tmux instead of to the chat. */
   onReviewInTerminal?: (root: string, number: number) => void;
@@ -940,12 +940,16 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal, jumpTo }: {
   useEffect(() => {
     if (!active || !jumpTo) return;
     if (!beforeJump.current) beforeJump.current = { filter, state: stateSel };
-    setQuery(jumpTo);
+    setQuery(jumpTo.query);
     setFilter("all");
-    setStateSel("all");
+    // Only as wide as the errand needs. `all` is every pull request the
+    // repository has ever had — 16,199 against 389 open on a real one — and it
+    // is asked for only when the thing being looked for is already closed,
+    // which the sender knows and says.
+    setStateSel(jumpTo.scope === "all" ? "all" : "open");
     fellBack.current = true; // and do not let the empty-list fallback move us
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, jumpTo]);
+  }, [active, jumpTo?.n]);
 
   // Clearing the search is the signal that the errand is over.
   useEffect(() => {
