@@ -1363,6 +1363,11 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
     finally { setBusy(false); }
   }, [busy, flash, loadList, selected, loadDetail]);
 
+  // One picker for the masthead's "＋" and the sidebar's ✎ both — lifted here
+  // so it can open from the masthead on every tab, not only where the sidebar
+  // renders.
+  const fieldPicker = usePrFieldPicker(detail, root, act);
+
   const key = repo && detail ? `${repo.key}#${detail.number}` : "";
   // What GitHub already knows you have read, unioned with this browser's copy.
   // GitHub's is the authority — it also un-ticks a file that changed after you
@@ -1913,7 +1918,9 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                 onReviewInTerminal={onReviewInTerminal && d ? () => onReviewInTerminal(root, d.number) : undefined}
                 condensed={condensed}
                 onLabels={doLabels} onReviewers={doReviewers} onCopyLink={doCopyLink}
+                onEditField={fieldPicker.open}
               />
+              {fieldPicker.node}
               <div className="flex border-b shrink-0 overflow-x-auto items-center" style={{ borderColor: "color-mix(in srgb, var(--text) 11%, transparent)" }}>
                 {TABS.map((t) => (
                   <button key={t.id} onClick={() => setTab(t.id)} className="text-[10.5px] px-3 py-1.5 whitespace-nowrap"
@@ -1983,11 +1990,7 @@ export function PrView({ active, onOpenChatWith, onReviewInTerminal }: {
                         />
                       )}
                     </div>
-                    <PrSidebar d={d} root={root}
-                      onSetLabels={(add, remove) => act("Labels", () => api.prLabels(root, d.number, add, remove))}
-                      onSetReviewers={(add, remove) => act("Reviewers", () => api.prReviewers(root, d.number, add, remove))}
-                      onSetAssignees={(add, remove) => act("Assignees", () => api.prAssignees(root, d.number, add, remove))}
-                      onSetMilestone={(title) => act("Milestone", () => api.prMilestone(root, d.number, title))} />
+                    <PrSidebar d={d} onEditField={fieldPicker.open} />
                   </div>
                 ) : null}
 
@@ -2726,21 +2729,26 @@ type Facets = { authors: string[]; assignees: string[]; labels: { name: string; 
 type Mentions = { users: string[]; issues: { number: number; title: string }[] };
 type SidebarField = "reviewers" | "assignees" | "labels" | "milestone";
 
-function PrSidebar({ d, root, onSetLabels, onSetReviewers, onSetAssignees, onSetMilestone }: {
-  d: PrDetail; root: string;
-  onSetLabels: (add: string[], remove: string[]) => Promise<boolean>;
-  onSetReviewers: (add: string[], remove: string[]) => Promise<boolean>;
-  onSetAssignees: (add: string[], remove: string[]) => Promise<boolean>;
-  onSetMilestone: (title: string) => Promise<boolean>;
-}) {
+type PrAct = (label: string, fn: () => Promise<{ ok: boolean; error?: string; detail?: string }>) => Promise<boolean>;
+
+/**
+ * One picker for the whole pull request, shared by the masthead's inline "＋"
+ * buttons and the sidebar's ✎ — lifted here because the masthead shows on every
+ * tab while the sidebar only shows on two, so a picker owned by the sidebar
+ * could not open from the masthead on the Files tab.
+ *
+ * Returns `open(field, event)` for a trigger to call and the picker `node` to
+ * render once. The options are fetched lazily the first time any picker opens
+ * (both endpoints are cached server-side, so the second open is instant), and
+ * each write goes through the same add/remove endpoints, diffed against what
+ * the PR has now.
+ */
+function usePrFieldPicker(d: PrDetail | null, root: string, act: PrAct) {
   const [facets, setFacets] = useState<Facets | null>(null);
   const [mentions, setMentions] = useState<Mentions | null>(null);
   const [loading, setLoading] = useState(false);
   const [picker, setPicker] = useState<{ field: SidebarField; anchor: DOMRect } | null>(null);
 
-  // Lazy, and once: the repository's options are fetched the first time any
-  // picker opens. Both endpoints are cached server-side for a few minutes, so
-  // the second picker is instant and the poll never pays for this.
   const ensureOptions = useCallback(async () => {
     if (facets && mentions) return;
     setLoading(true);
@@ -2750,24 +2758,60 @@ function PrSidebar({ d, root, onSetLabels, onSetReviewers, onSetAssignees, onSet
     setLoading(false);
   }, [root, facets, mentions]);
 
-  const open = (field: SidebarField) => (e: React.MouseEvent<HTMLButtonElement>) => {
+  const open = useCallback((field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => {
     setPicker({ field, anchor: e.currentTarget.getBoundingClientRect() });
     void ensureOptions();
-  };
+  }, [ensureOptions]);
   const close = () => setPicker(null);
 
-  // Only the fields the picker itself does not already model: it holds `sel`
-  // locally and hands back the final set, so here we diff against what the PR
-  // has now and write just the delta — the shape the endpoints already take.
-  const commitMulti = (was: string[], set: (add: string[], remove: string[]) => Promise<boolean>) => (next: string[]) => {
+  // The picker holds its selection locally and hands back the final set; here
+  // we diff it against what the PR has now and write just the delta — the shape
+  // the endpoints already take.
+  const commit = (was: string[], label: string, fn: (add: string[], remove: string[]) => Promise<{ ok: boolean; error?: string; detail?: string }>) => (next: string[]) => {
     const add = next.filter((x) => !was.includes(x));
     const remove = was.filter((x) => !next.includes(x));
-    if (add.length || remove.length) void set(add, remove);
+    if (add.length || remove.length) void act(label, () => fn(add, remove));
   };
 
+  let node: React.ReactNode = null;
+  if (picker && d) {
+    const a = picker.anchor;
+    if (picker.field === "labels") {
+      const was = d.labels.map((l) => l.name);
+      node = <FieldPicker anchor={a} title="Apply labels" hint="Tick to add or remove" multi loading={loading}
+        options={(facets?.labels ?? []).map((l) => ({ value: l.name, label: l.name, color: l.color }))}
+        selected={was} onClose={close} onCommit={commit(was, "Labels", (add, remove) => api.prLabels(root, d.number, add, remove))} />;
+    } else if (picker.field === "reviewers") {
+      const was = d.reviewers.map((r) => r.login);
+      node = <FieldPicker anchor={a} title="Request reviewers" hint="Collaborators on this repository" multi loading={loading}
+        options={(mentions?.users ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+        selected={was} onClose={close} onCommit={commit(was, "Reviewers", (add, remove) => api.prReviewers(root, d.number, add, remove))} />;
+    } else if (picker.field === "assignees") {
+      const was = d.assignees;
+      node = <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
+        options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
+        selected={was} onClose={close} onCommit={commit(was, "Assignees", (add, remove) => api.prAssignees(root, d.number, add, remove))} />;
+    } else {
+      // Milestone is one-of, not many: picking commits at once, and a leading
+      // "No milestone" entry clears it — passing "" to the endpoint, exactly as
+      // the old free-text dialog did.
+      const was = d.milestone ? [d.milestone] : [""];
+      node = <FieldPicker anchor={a} title="Set milestone" hint="Choose one, or clear it" multi={false} loading={loading}
+        options={[{ value: "", label: "No milestone" }, ...(facets?.milestones ?? []).map((m) => ({ value: m, label: m }))]}
+        selected={was} onClose={close}
+        onCommit={(next) => { const title = next[0] ?? ""; if (title !== (d.milestone ?? "")) void act("Milestone", () => api.prMilestone(root, d.number, title)); }} />;
+    }
+  }
+
+  return { open, node };
+}
+
+function PrSidebar({ d, onEditField }: {
+  d: PrDetail;
+  onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
   return (
-    <>
-    {/*
+    /**
      * Pinned, because it is reference rather than reading.
      *
      * Who is reviewing this, what it is labelled, which milestone it is in —
@@ -2785,21 +2829,21 @@ function PrSidebar({ d, root, onSetLabels, onSetReviewers, onSetAssignees, onSet
      * The height cap and its scrollbar are a safety valve, not the usual case:
      * five short sections fit anywhere, but a PR with thirty reviewers must not
      * pin a list whose bottom cannot then be reached.
-     */}
+     */
     <aside className="sticky top-0 shrink-0 w-[248px] pl-4 hidden lg:block overflow-y-auto agx-scroll overscroll-contain"
       style={{ borderLeft: "1px solid color-mix(in srgb, var(--text) 11%, transparent)", maxHeight: "calc(100vh - 6rem)" }}>
-      <SidebarSection title="Reviewers" onEdit={open("reviewers")}>
+      <SidebarSection title="Reviewers" onEdit={(e) => onEditField("reviewers", e)}>
         <SidebarPeople people={d.reviewers} empty="No reviewers" />
       </SidebarSection>
-      <SidebarSection title="Assignees" onEdit={open("assignees")}>
+      <SidebarSection title="Assignees" onEdit={(e) => onEditField("assignees", e)}>
         <SidebarPeople people={d.assignees.map((login) => ({ login }))} empty="No one assigned" />
       </SidebarSection>
-      <SidebarSection title="Labels" onEdit={open("labels")}>
+      <SidebarSection title="Labels" onEdit={(e) => onEditField("labels", e)}>
         {d.labels.length
           ? <div className="flex flex-wrap gap-1">{d.labels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}</div>
           : <span className="text-[10.5px]" style={{ color: "var(--text3)" }}>None yet</span>}
       </SidebarSection>
-      <SidebarSection title="Milestone" onEdit={open("milestone")}>
+      <SidebarSection title="Milestone" onEdit={(e) => onEditField("milestone", e)}>
         <span className="text-[11px]" style={{ color: d.milestone ? "var(--text2)" : "var(--text3)" }}>{d.milestone || "No milestone"}</span>
       </SidebarSection>
       {d.linkedIssues.length > 0 && (
@@ -2828,36 +2872,6 @@ function PrSidebar({ d, root, onSetLabels, onSetReviewers, onSetAssignees, onSet
         </SidebarSection>
       )}
     </aside>
-    {picker && (() => {
-      const a = picker.anchor;
-      if (picker.field === "labels") {
-        const was = d.labels.map((l) => l.name);
-        return <FieldPicker anchor={a} title="Apply labels" hint="Tick to add or remove" multi loading={loading}
-          options={(facets?.labels ?? []).map((l) => ({ value: l.name, label: l.name, color: l.color }))}
-          selected={was} onClose={close} onCommit={commitMulti(was, onSetLabels)} />;
-      }
-      if (picker.field === "reviewers") {
-        const was = d.reviewers.map((r) => r.login);
-        return <FieldPicker anchor={a} title="Request reviewers" hint="Collaborators on this repository" multi loading={loading}
-          options={(mentions?.users ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
-          selected={was} onClose={close} onCommit={commitMulti(was, onSetReviewers)} />;
-      }
-      if (picker.field === "assignees") {
-        const was = d.assignees;
-        return <FieldPicker anchor={a} title="Assign people" hint="Up to 10 assignees" multi loading={loading}
-          options={(facets?.assignees ?? []).map((u) => ({ value: u, label: u, avatar: u }))}
-          selected={was} onClose={close} onCommit={commitMulti(was, onSetAssignees)} />;
-      }
-      // Milestone is one-of, not many: picking commits at once, and a leading
-      // "No milestone" entry clears it — passing "" to the endpoint, which is
-      // exactly how the old free-text dialog cleared it too.
-      const was = d.milestone ? [d.milestone] : [""];
-      return <FieldPicker anchor={a} title="Set milestone" hint="Choose one, or clear it" multi={false} loading={loading}
-        options={[{ value: "", label: "No milestone" }, ...(facets?.milestones ?? []).map((m) => ({ value: m, label: m }))]}
-        selected={was} onClose={close}
-        onCommit={(next) => { const title = next[0] ?? ""; if (title !== (d.milestone ?? "")) void onSetMilestone(title); }} />;
-    })()}
-    </>
   );
 }
 
@@ -2876,14 +2890,18 @@ function prStateBadge(d: { state: PrSummary["state"]; isDraft: boolean }): { tin
   return { tint: "var(--success)", state: "Open", glyph: "◉" };
 }
 
-function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink, condensed }: {
+function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onReviewInTerminal, onLabels, onReviewers, onCopyLink, onEditField, condensed }: {
   d: PrDetail; busy: boolean;
   onEditTitle: () => void; onDraft: () => void; onClose: () => void; onLocalReview: () => void;
   /** Absent when the workspace has no terminal to send it to. */
   onReviewInTerminal?: () => void;
   /** Scrolled past the top: the metadata folds away and the title stays. */
   condensed?: boolean;
+  /** The typed dialog behind the overflow menu; the inline ＋ buttons use the
+   *  picker instead. */
   onLabels: () => void; onReviewers: () => void; onCopyLink: () => void;
+  /** Opens the shared reviewer/label picker anchored to the clicked ＋. */
+  onEditField: (field: SidebarField, e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
   // The PR's own state, which is not the same thing as its check verdict —
   // colouring a merged pull request by whether CI went green says nothing about
@@ -2988,7 +3006,7 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
           {d.reviewers.length === 0
             ? <span style={{ color: "var(--text3)" }}>nobody yet</span>
             : d.reviewers.map((r) => <span key={r.login} className="flex items-center gap-1"><ReviewerFace r={r} size={14} />{r.login}</span>)}
-          <button onClick={onReviewers} disabled={busy} title="Request a review" className="agx-inline-add">＋</button>
+          <button onClick={(e) => onEditField("reviewers", e)} disabled={busy} title="Request a review" className="agx-inline-add">＋</button>
         </Field>
         <Field label="Assignee">
           {d.assignees.length === 0
@@ -3004,7 +3022,7 @@ function Masthead({ d, busy, onEditTitle, onDraft, onClose, onLocalReview, onRev
       {!condensed && (
       <div className="flex gap-1 flex-wrap mt-2.5 items-center">
         {d.labels.map((l) => <Chip key={l.name} text={l.name} tint={l.color ? `#${l.color}` : "var(--primary)"} />)}
-        <button onClick={onLabels} disabled={busy} className="agx-inline-add" style={{ borderStyle: "dashed" }}>＋ Label</button>
+        <button onClick={(e) => onEditField("labels", e)} disabled={busy} className="agx-inline-add" style={{ borderStyle: "dashed" }}>＋ Label</button>
       </div>
       )}
     </div>
