@@ -461,6 +461,10 @@ const realApi = {
     post<TaskWriteResponse>("/tasks/write/tags", { uuid, tags, fingerprint }),
   taskNote: (uuid: string, oldText: string, newText: string, fingerprint?: string) =>
     post<TaskWriteResponse>("/tasks/write/note", { uuid, oldText, newText, fingerprint }),
+  /** The same change to a run of tasks. `applied` comes back because a run can
+   *  stop part-way, and the message on screen has to say how far it got. */
+  taskBulk: (uuids: string[], action: "done" | "priority" | "tag" | "delete", value: string | null, fingerprint?: string) =>
+    post<TaskWriteResponse & { applied?: number }>("/tasks/write/bulk", { uuids, action, value, fingerprint }),
   reminders: (window: "live" | "upcoming" | "history" = "live") =>
     get<RemindersResponse>(`/tasks/reminders?window=${window}`),
   remind: (body: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) =>
@@ -957,6 +961,7 @@ const demoApi: typeof realApi = {
   taskEdit: (_u: string, _i: string, _p: string[], _f?: string) => D({ ok: false, error: "not available in the demo" }),
   taskTags: (_u: string, _t: string[], _f?: string) => D({ ok: false, error: "not available in the demo" }),
   taskNote: (_u: string, _o: string, _n: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskBulk: (_u: string[], _a: string, _v: string | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
   remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),
   reminderAck: (_i: string) => D({ ok: false }),

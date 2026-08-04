@@ -59,6 +59,12 @@ const SOURCES: { id: SourceId; label: string }[] = [
   { id: "local", label: "Local" },
 ];
 
+/** What a finished bulk run says it did. Past tense, and the same words as the
+ *  buttons, so the confirmation is recognisably the thing that was pressed. */
+const LABEL: Record<string, string> = {
+  done: "Completed", priority: "Priority set", tag: "Tagged", delete: "Deleted",
+};
+
 export function TasksView({ active }: { active: boolean }) {
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [root, setRoot] = useState("");
@@ -589,6 +595,9 @@ function LocalBody({ active }: { active: boolean }) {
   const [copiedTags, setCopiedTags] = useState<string[]>([]);
   const [sort, setSort] = useState<SortMode>("reminder");
   const [filter, setFilter] = useState<{ kind: "tag" | "project"; value: string } | null>(null);
+  const [marked, setMarked] = useState<Set<string>>(() => new Set());
+  const [tagFor, setTagFor] = useState<string>("");
+  const [tagging, setTagging] = useState(false);
   const barRef = useRef<HTMLInputElement>(null);
   // Written by `takeFrame` below, so it is the nullable form rather than the
   // read-only one React hands a plain `ref={}`.
@@ -660,10 +669,51 @@ function LocalBody({ active }: { active: boolean }) {
    * `i` reach for the bar and `Escape` leaves it, which is the vocabulary the
    * rest of this app already uses.
    */
+  /*
+   * The rows a bulk action will act on.
+   *
+   * Separate from `sel`, which is where the cursor is: those are two different
+   * questions and conflating them means arrowing past a row silently changes
+   * what the next press will do to. Held as uuids rather than indices, because
+   * the list re-sorts under you — a reminder coming due moves rows — and an
+   * index set would then be pointing at whatever slid into place.
+   */
+  const toggleMark = useCallback((uuid: string) => {
+    setMarked((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(uuid)) next.add(uuid);
+      return next;
+    });
+  }, []);
+
+  /**
+   * One change, applied to everything marked.
+   *
+   * The count comes back from the server rather than being assumed from what
+   * was sent: a run can stop part-way on a store somebody else moved, and
+   * "applied to 7" when three landed is the report that gets believed.
+   */
+  const bulk = useCallback(async (action: "done" | "priority" | "tag" | "delete", value: string | null = null) => {
+    const uuids = [...marked];
+    if (!uuids.length) return;
+    const r = await api.taskBulk(uuids, action, value, fp);
+    if (!r.ok) setNote({ ok: false, text: r.error ?? "that did not go through" });
+    else {
+      const n = r.applied ?? uuids.length;
+      setNote({ ok: true, text: `${LABEL[action]} — ${n} task${n === 1 ? "" : "s"}` });
+      setMarked(new Set());
+    }
+    reload();
+  }, [marked, fp, reload]);
+
   const onKey = useCallback((e: React.KeyboardEvent) => {
     const inBar = document.activeElement === barRef.current;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === "Escape") { barRef.current?.blur(); setEditing(null); setRemindFor(null); return; }
+    if (e.key === "Escape") {
+      barRef.current?.blur(); setEditing(null); setRemindFor(null);
+      setTagging(false); setMarked(new Set());
+      return;
+    }
     if (inBar) return;
     const list = open.concat(showDone ? done : []);
     const at = list.findIndex((t) => t.uuid === sel);
@@ -674,7 +724,15 @@ function LocalBody({ active }: { active: boolean }) {
     };
     const k = e.key;
     const stop = () => { e.preventDefault(); e.stopPropagation(); };
-    if (k === "j" || k === "ArrowDown") { stop(); go(1); }
+    // Tab marks and moves on, the gesture the editor's picker uses. It costs
+    // tabbing out of the panel, which Escape gives back — and a list where the
+    // only way to act on nine tasks is nine presses of the same key is the
+    // reason that trade is worth making.
+    if (k === "Tab" && !e.shiftKey) {
+      if (!cur) { stop(); go(1); return; }
+      stop(); toggleMark(cur.uuid); go(1);
+    }
+    else if (k === "j" || k === "ArrowDown") { stop(); go(1); }
     else if (k === "k" || k === "ArrowUp") { stop(); go(-1); }
     else if (k === "g") { stop(); if (list[0]) setSel(list[0].uuid); }
     else if (k === "G") { stop(); if (list.length) setSel(list[list.length - 1]!.uuid); }
@@ -704,19 +762,27 @@ function LocalBody({ active }: { active: boolean }) {
       void write(() => api.taskTags(cur.uuid, copiedTags, fp));
     }
     else if (k === "d") { if (!cur) return; stop(); void write(() => api.taskDelete(cur.uuid, fp)); }
-  }, [open, done, showDone, sel, fp, write, copiedTags]);
+  }, [open, done, showDone, sel, fp, write, copiedTags, toggleMark]);
 
   if (!data) return <div className="p-5 text-[11.5px]" style={{ color: "var(--text3)" }}>Reading your task list…</div>;
   const cap = data.capability;
   const picked = [...open, ...done].find((t) => t.uuid === sel) ?? null;
 
+  // Every hook this component has is ABOVE this line, and must stay there. An
+  // early return with a `useCallback` after it renders a different number of
+  // hooks depending on whether the list is empty, which React answers with a
+  // blank screen and error #310 — twice, in this file, for exactly this reason.
   if (!open.length && !done.length) return <LocalEmpty cap={cap} done={0} />;
 
   const od = open.filter((t) => overdue(t, today));
   const rest = open.filter((t) => !overdue(t, today));
 
+
+
   const rowProps = (t: LocalTask) => ({
     t, today, on: t.uuid === sel, onPick: () => setSel(t.uuid),
+    marked: marked.has(t.uuid),
+    onMark: () => toggleMark(t.uuid),
     reminder: byTask[t.uuid] ?? null,
     remindOpen: remindFor === t.uuid,
     onRemind: () => setRemindFor((cur) => (cur === t.uuid ? null : t.uuid)),
@@ -731,6 +797,11 @@ function LocalBody({ active }: { active: boolean }) {
     <div ref={takeFrame} tabIndex={-1} onKeyDown={onKey}
       className="flex flex-col flex-1 min-h-0 outline-none">
       <NowBand onChanged={reload} />
+      {marked.size > 0 && (
+        <BulkBar n={marked.size} tagging={tagging} tag={tagFor}
+          onTag={setTagFor} onTagging={setTagging}
+          onRun={bulk} onClear={() => { setMarked(new Set()); setTagging(false); }} />
+      )}
       {/* One field: filter and compose are the same box, because the thing you
           typed and could not find is usually the thing you meant to add. */}
       <div className="flex items-center gap-2 px-5 shrink-0" style={{ height: 36, borderBottom: edge(12) }}>
@@ -809,28 +880,40 @@ const Section = ({ label, tone }: { label: string; tone: string }) => (
   <div className="text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1" style={{ color: tone }}>{label}</div>
 );
 
-function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onCloseRemind, onSetRemind, onToggle, writable, onFilter }: {
+function TaskRow({ t, today, on, onPick, marked, onMark, reminder, remindOpen, onRemind, onCloseRemind, onSetRemind, onToggle, writable, onFilter }: {
   t: LocalTask; today: string; on: boolean; onPick: () => void;
   reminder?: import("../../../shared/types.ts").Reminder | null;
   remindOpen?: boolean; onRemind?: () => void; onCloseRemind?: () => void; onSetRemind?: (civil: string) => void;
   onToggle?: () => void; writable?: boolean;
+  marked?: boolean; onMark?: () => void;
   onFilter?: (kind: "tag" | "project", value: string) => void;
 }) {
   const isDone = t.status === "completed";
   const late = overdue(t, today);
   const dueToday = t.due === today;
-  // `aria-selected` and not only the stripe: the row the keys act on has to be
-  // announced, or a screen reader follows `j` down a list where nothing ever
-  // appears to change.
+  // Two different states, announced as the two different things they are:
+  // `aria-current` is where the cursor sits, `aria-selected` is what a bulk
+  // action would act on. Saying either with a stripe alone leaves a screen
+  // reader following `j` down a list where nothing ever appears to change.
+  //
+  // Modifier-click marks, which is what every list does, and it means the row
+  // needs no permanent checkbox competing with the one that completes it.
   return (
-    <div onClick={onPick} role="row" tabIndex={0} aria-selected={!!on}
+    <div role="row" tabIndex={0}
+      aria-current={on ? "true" : undefined} aria-selected={!!marked}
+      onClick={(e) => { if (e.metaKey || e.ctrlKey) onMark?.(); else onPick(); }}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
       className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-[11.5px] hover:bg-white/5 cursor-pointer"
       style={{
         borderBottom: edge(7),
-        background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : undefined,
+        background: marked
+          ? "color-mix(in srgb, var(--primary) 22%, transparent)"
+          : on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
+      {marked && (
+        <span aria-hidden className="shrink-0 -ml-1 text-[10px]" style={{ color: "var(--primary)" }}>\u2713</span>
+      )}
       {/* The glyph is the switch. Completing is the thing done most and it
           should not need a menu; reopening is the same press, because undoing a
           misclick must be as cheap as the misclick. */}
@@ -942,6 +1025,64 @@ function Note({ text, writable, onToggle }: {
   });
   flush("pEnd");
   return <div className="mb-3">{out}</div>;
+}
+
+/*
+ * What to do with the rows you marked.
+ *
+ * Only on screen when something is marked: a permanently visible strip of
+ * destructive buttons over a list is a thing to mis-click, and this one carries
+ * Delete. Deleting is placed apart from the rest and coloured for the same
+ * reason — it is the only one of these that Taskwarrior cannot undo from here.
+ *
+ * The count is the heading rather than a footnote, because the whole risk of a
+ * bulk action is acting on more than you thought you had.
+ */
+function BulkBar({ n, tagging, tag, onTag, onTagging, onRun, onClear }: {
+  n: number; tagging: boolean; tag: string;
+  onTag: (v: string) => void; onTagging: (v: boolean) => void;
+  onRun: (action: "done" | "priority" | "tag" | "delete", value?: string | null) => void;
+  onClear: () => void;
+}) {
+  const btn = "text-[10.5px] px-2 py-1 rounded-lg whitespace-nowrap";
+  const quiet = { border: edge(18), color: "var(--text2)" };
+  return (
+    <div className="flex items-center gap-1.5 px-4 py-2 flex-wrap"
+      style={{ borderBottom: edge(10), background: "color-mix(in srgb, var(--primary) 8%, transparent)" }}>
+      <span className="text-[11px] font-medium mr-1" style={{ color: "var(--text)" }}>
+        {n} selected
+      </span>
+      {tagging ? (
+        <form className="flex items-center gap-1.5"
+          onSubmit={(e) => { e.preventDefault(); if (tag.trim()) { onRun("tag", tag.trim()); onTagging(false); onTag(""); } }}>
+          <input autoFocus value={tag} onChange={(e) => onTag(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onTagging(false); onTag(""); } }}
+            placeholder="tag to add" spellCheck={false}
+            className="text-[10.5px] px-2 py-1 rounded-lg outline-none"
+            style={{ background: "var(--bg2)", border: edge(20), color: "var(--text)", width: 140 }} />
+          <button type="submit" className={btn} style={quiet}>Add</button>
+        </form>
+      ) : (
+        <>
+          <button className={btn} style={quiet} onClick={() => onRun("done")}>Complete</button>
+          {(["H", "M", "L"] as const).map((p) => (
+            <button key={p} className={btn} style={quiet} onClick={() => onRun("priority", p)}>
+              {p === "H" ? "High" : p === "M" ? "Medium" : "Low"}
+            </button>
+          ))}
+          <button className={btn} style={quiet} onClick={() => onRun("priority", "")}>No priority</button>
+          <button className={btn} style={quiet} onClick={() => onTagging(true)}>Tag…</button>
+          <button className={btn} onClick={() => onRun("delete")}
+            style={{ border: "1px solid color-mix(in srgb, var(--bad) 40%, transparent)", color: "var(--bad)" }}>
+            Delete
+          </button>
+        </>
+      )}
+      <button className={`${btn} ml-auto`} style={{ color: "var(--text3)" }} onClick={onClear}>
+        Clear
+      </button>
+    </div>
+  );
 }
 
 function TaskDetail({ t, today, reminder, onCancel, writable, onToggleNote }: {

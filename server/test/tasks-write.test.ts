@@ -194,3 +194,89 @@ describe("the kill switch", () => {
     expect(R.listReminders("upcoming").length).toBe(before + 1);
   });
 });
+
+describe("the same change to a run of tasks", () => {
+  const uuidsOf = (...needles: string[]) => needles.map((n) => uuidOf(n));
+
+  it.skipIf(!has)("applies it to every selected task and to nothing else", async () => {
+    raw(["rc.confirmation=no", "add", "second one"]);
+    raw(["rc.confirmation=no", "add", "the bystander"]);
+    const picked = uuidsOf("an ordinary task", "second one");
+    const other = uuidOf("the bystander");
+
+    const r = await mod.bulkApply(picked, "priority", "H");
+    expect(r.ok, r.error).toBe(true);
+    expect(r.applied).toBe(2);
+    for (const u of picked) expect(exportOne(u).priority).toBe("H");
+    // The row nobody selected is the whole point: `task` takes a filter, and a
+    // filter is not a selection.
+    expect(exportOne(other).priority).toBeUndefined();
+  });
+
+  it.skipIf(!has)("counts a task named twice once", async () => {
+    const u = uuidOf("an ordinary task");
+    const r = await mod.bulkApply([u, u, u], "priority", "M");
+    expect(r.applied).toBe(1);
+  });
+
+  it.skipIf(!has)("completes a run without touching what it does not model", async () => {
+    raw(["rc.confirmation=no", "add", "carries a uda", "ticket:XYZ-9", "+keepme"]);
+    const u = uuidOf("carries a uda");
+    const r = await mod.bulkApply([u], "done");
+    expect(r.ok, r.error).toBe(true);
+    const after = exportOne(u);
+    expect(after.status).toBe("completed");
+    expect(after.ticket).toBe("XYZ-9");
+    expect(after.tags).toEqual(["keepme"]);
+  });
+
+  it.skipIf(!has)("adds a tag to the whole run", async () => {
+    raw(["rc.confirmation=no", "add", "second one"]);
+    const picked = uuidsOf("an ordinary task", "second one");
+    expect((await mod.bulkApply(picked, "tag", "sprint")).ok).toBe(true);
+    for (const u of picked) expect(exportOne(u).tags).toContain("sprint");
+  });
+
+  it.skipIf(!has)("refuses a value it cannot use BEFORE writing any of them", async () => {
+    // Discovered on the fourth task with three already written is the version
+    // of this that cannot be undone.
+    raw(["rc.confirmation=no", "add", "second one"]);
+    const picked = uuidsOf("an ordinary task", "second one");
+    for (const [action, value] of [["priority", "URGENT"], ["tag", "; rm -rf /"], ["tag", ""]] as const) {
+      const r = await mod.bulkApply(picked, action, value);
+      expect(r.ok, `${action}:${value}`).toBe(false);
+      expect(r.applied ?? 0).toBe(0);
+    }
+    for (const u of picked) expect(exportOne(u).status).toBe("pending");
+  });
+
+  it.skipIf(!has)("refuses anything that is not a task id", async () => {
+    const good = uuidOf("an ordinary task");
+    const r = await mod.bulkApply([good, "1"], "done");
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("that is not a task id");
+    expect(exportOne(good).status).toBe("pending");
+  });
+
+  it("says no to an empty selection rather than succeeding at nothing", async () => {
+    const r = await mod.bulkApply([], "done");
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("nothing is selected");
+  });
+
+  it.skipIf(!has)("stops on a moved store and says how many landed first", async () => {
+    // The chained precondition. Each write's own result is the precondition for
+    // the next, so a run either walks a store nobody else touched or stops
+    // where somebody did — and never reports a partial run as a success.
+    raw(["rc.confirmation=no", "add", "second one"]);
+    const picked = uuidsOf("an ordinary task", "second one");
+    const stale = (await mod.listTasks(true)).fingerprint;
+    raw(["rc.confirmation=no", "add", "the editor got there first"]);
+
+    const r = await mod.bulkApply(picked, "priority", "L", stale);
+    expect(r.ok).toBe(false);
+    expect(r.conflict).toBe(true);
+    expect(r.applied).toBe(0);
+    for (const u of picked) expect(exportOne(u).priority).toBeUndefined();
+  });
+});

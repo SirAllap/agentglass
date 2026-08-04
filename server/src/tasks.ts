@@ -424,32 +424,42 @@ async function withTaskLock<T>(fn: () => Promise<T>): Promise<T> {
 async function runVerb(args: string[], expect?: string): Promise<WriteResult> {
   const bad = await writeGuard();
   if (bad) return { ok: false, error: bad };
-  return withTaskLock(async () => {
-    const before = await listTasks(true);
-    if (before.error) return { ok: false, error: before.error };
-    // The precondition. `expect` is the fingerprint the CLIENT was looking at
-    // when the user pressed the key — not one we took a moment ago, which would
-    // leave no window to detect and would make this decoration. If the store
-    // moved in between, the row on screen is not the row being acted on, and
-    // the honest answer is to say so and re-render from truth.
-    if (expect && before.fingerprint && expect !== before.fingerprint) {
-      return {
-        ok: false, conflict: true, tasks: before.tasks,
-        error: "Neovim changed this task while you were pressing the key — reloaded",
-      };
-    }
-    // No kill on a write. TDB2 rewrites pending.data in place, with no
-    // temp-file-and-rename, so killing it mid-commit truncates the store rather
-    // than failing the write. A slow write is waited out and then verified.
-    const r = await task(["rc.confirmation=no", "rc.gc=0", "rc.hooks=0", "rc.verbose=nothing", ...args]);
-    const after = await listTasks(true);
-    // Never retried. A retry against a store that has moved is precisely how
-    // the clobber happens — the caller re-reads and decides again.
-    if (r.code !== 0 && before.fingerprint === after.fingerprint) {
-      return { ok: false, error: r.stderr.trim() || "task refused the change" };
-    }
-    return { ok: true, tasks: after.tasks, fingerprint: after.fingerprint };
-  });
+  return withTaskLock(() => verbInLock(args, expect));
+}
+
+/**
+ * A verb's body, already holding the lock.
+ *
+ * Split out for the bulk path, which must apply a run of changes without
+ * letting go between them: taking and releasing the lock per task would leave a
+ * window for the editor to write into the middle of the run, and half the
+ * selection would then be acted on against a store the other half never saw.
+ */
+async function verbInLock(args: string[], expect?: string): Promise<WriteResult> {
+  const before = await listTasks(true);
+  if (before.error) return { ok: false, error: before.error };
+  // The precondition. `expect` is the fingerprint the CLIENT was looking at
+  // when the user pressed the key — not one we took a moment ago, which would
+  // leave no window to detect and would make this decoration. If the store
+  // moved in between, the row on screen is not the row being acted on, and
+  // the honest answer is to say so and re-render from truth.
+  if (expect && before.fingerprint && expect !== before.fingerprint) {
+    return {
+      ok: false, conflict: true, tasks: before.tasks,
+      error: "Neovim changed this task while you were pressing the key — reloaded",
+    };
+  }
+  // No kill on a write. TDB2 rewrites pending.data in place, with no
+  // temp-file-and-rename, so killing it mid-commit truncates the store rather
+  // than failing the write. A slow write is waited out and then verified.
+  const r = await task(["rc.confirmation=no", "rc.gc=0", "rc.hooks=0", "rc.verbose=nothing", ...args]);
+  const after = await listTasks(true);
+  // Never retried. A retry against a store that has moved is precisely how
+  // the clobber happens — the caller re-reads and decides again.
+  if (r.code !== 0 && before.fingerprint === after.fingerprint) {
+    return { ok: false, error: r.stderr.trim() || "task refused the change" };
+  }
+  return { ok: true, tasks: after.tasks, fingerprint: after.fingerprint };
 }
 
 /** A uuid, pinned to the shape rather than merely escaped — the same treatment
@@ -595,4 +605,83 @@ export async function replaceNote(uuid: string, oldText: string, newText: string
   if (!away.ok) return away;
   if (!newText.trim()) return away;
   return runVerb([uuid, "annotate", newText], away.fingerprint);
+}
+
+/*
+ * The same change to a run of tasks, as one held lock.
+ *
+ * There is no `task` command for "these seven" — the CLI takes a filter, and a
+ * filter is not a selection: the seven rows on screen are the result of a sort
+ * and a search that no `task` expression reproduces, and one that nearly does
+ * would act on an eighth row nobody could see. So the run is applied one task
+ * at a time.
+ *
+ * One lock for the whole run, not one per task. Taking and releasing it between
+ * tasks would leave a window for the editor to write into the middle, and half
+ * the selection would then be acted on against a store the other half never
+ * saw. The fingerprint is CHAINED for the same reason: each write's own result
+ * is the precondition for the next, so the run either walks a store nobody else
+ * touched or stops at the task where somebody did.
+ *
+ * It stops rather than continuing past a failure, and says how many landed. A
+ * partial result reported as success is how somebody discovers next week that
+ * three of nine were never completed.
+ */
+export type BulkAction = "done" | "priority" | "tag" | "delete";
+
+export interface BulkResult extends WriteResult {
+  /** How many actually landed — the number the message on screen must use. */
+  applied?: number;
+}
+
+/** How many rows one gesture may touch. A selection is made by hand, key by
+ *  key; a four-figure one is a bug in the caller, not a busy afternoon. */
+const BULK_MAX = 200;
+
+export async function bulkApply(
+  uuids: string[], action: BulkAction, value: string | null, expect?: string,
+): Promise<BulkResult> {
+  const bad = await writeGuard();
+  if (bad) return { ok: false, error: bad };
+  if (!uuids.length) return { ok: false, error: "nothing is selected" };
+  if (uuids.length > BULK_MAX) return { ok: false, error: `that is more than ${BULK_MAX} tasks at once` };
+  if (!uuids.every(isUuid)) return { ok: false, error: "that is not a task id" };
+  // Duplicates would apply the same change twice — harmless for `done`, not for
+  // anything that toggles — and would inflate the count reported back.
+  const targets = [...new Set(uuids)];
+
+  // The shape of the change is checked ONCE, before the lock is taken: an
+  // unusable value must not be discovered on the fourth task, with three
+  // already written.
+  let tail: string[];
+  if (action === "done") tail = ["done"];
+  else if (action === "delete") tail = ["delete"];
+  else if (action === "priority") {
+    const p = value ?? "";
+    if (!["", "H", "M", "L"].includes(p)) return { ok: false, error: "that is not a priority" };
+    tail = ["modify", `priority:${p}`];
+  } else if (action === "tag") {
+    if (!value || !TAG_RE.test(value)) return { ok: false, error: "that is not a tag" };
+    tail = ["modify", `+${value}`];
+  } else return { ok: false, error: "no such bulk action" };
+
+  return withTaskLock(async () => {
+    let fp = expect;
+    let applied = 0;
+    for (const uuid of targets) {
+      const r = await verbInLock([uuid, ...tail], fp);
+      if (!r.ok) {
+        return {
+          ...r, applied,
+          error: applied
+            ? `${r.error} — ${applied} of ${targets.length} were changed before that`
+            : r.error,
+        };
+      }
+      fp = r.fingerprint;
+      applied++;
+    }
+    const after = await listTasks(true);
+    return { ok: true, applied, tasks: after.tasks, fingerprint: after.fingerprint };
+  });
 }
