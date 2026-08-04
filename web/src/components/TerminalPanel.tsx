@@ -4,24 +4,36 @@
 // tab-completion, colors, vim/htop/lazygit. Shell sessions are kept alive in a
 // module-level store, so closing the panel (or switching repos) never kills a
 // running job — reopening reattaches to the live session, scrollback intact.
-import { Fragment, useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import { subscribeTermReview, termReview, clearTermReview } from "../lib/termReview.ts";
+import { subscribeTermIssue, termIssue, clearTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
+import { dirName } from "../lib/worktree.ts";
+import { requestWorktreeJump } from "../lib/worktreeJump.ts";
+import { useDialogs } from "./ConfirmDialog.tsx";
+import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
+import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
-import { wantsWebgl, fallBackToDom } from "../lib/termRenderer.ts";
+import { wantsWebgl, wantsCanvas, fallBackToDom } from "../lib/termRenderer.ts";
 import { isFindChord } from "../lib/termKeys.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
+import { THEMES } from "../lib/themes.ts";
+import { deriveAnsi } from "../lib/termPalette.ts";
+import { termOptions } from "../lib/termPrefs.ts";
+import { useModernWidths } from "../lib/termUnicode.ts";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -64,22 +76,42 @@ const repoName = (p: string) => p.split("/").pop() || p;
 const rootStyle = () => getComputedStyle(document.documentElement); // one style-recalc per read batch
 const readVar = (s: CSSStyleDeclaration, name: string, fallback: string) => s.getPropertyValue(name).trim() || fallback;
 const alpha = (hex: string, a: string) => (/^#[0-9a-fA-F]{6}$/.test(hex) ? hex + a : hex);
-function themeFromCss() {
+/** Exported so a one-off terminal — the file peek — paints in the same colours
+ *  as the panel, rather than deriving a second palette that drifts from it. */
+export function themeFromCss() {
   const s = rootStyle();
   const bg = readVar(s, "--bg", "#0d1117");
+  // The 16 ANSI colours: a theme's pinned palette when it has one, otherwise
+  // derived from the same UI colours the rest of the panel already follows — so
+  // switching theme repaints the terminal's own output too, not just its frame.
+  const id = document.documentElement.getAttribute("data-theme") || "";
+  const ansi = THEMES.find((t) => t.id === id)?.ansi ?? deriveAnsi({
+    bg,
+    text: readVar(s, "--text", "#e6edf3"),
+    primary: readVar(s, "--primary", "#a78bfa"),
+    error: readVar(s, "--error", "#f06c75"),
+    success: readVar(s, "--success", "#98c379"),
+    warning: readVar(s, "--warning", "#e5c07b"),
+    info: readVar(s, "--info", "#61afef"),
+  });
   return {
     background: bg,
-    foreground: readVar(s, "--text2", "#c8ccd4"),
+    // The terminal's default text is the theme's PRIMARY text, not the dimmer
+    // secondary — uncoloured output should read as bright/white (like a proper
+    // editor surface), not the washed-out grey that --text2 gave it.
+    foreground: readVar(s, "--text", "#e6edf3"),
     cursor: readVar(s, "--primary", "#a78bfa"),
     cursorAccent: bg,
     selectionBackground: alpha(readVar(s, "--primary", "#a78bfa"), "44"),
-    black: "#5b6472", red: "#f06c75", green: "#98c379", yellow: "#e5c07b",
-    blue: "#61afef", magenta: "#c678dd", cyan: "#56b6c2", white: "#c8ccd4",
-    brightBlack: "#7f8896", brightRed: "#ff7b86", brightGreen: "#b5e08f", brightYellow: "#f0d08a",
-    brightBlue: "#82c0ff", brightMagenta: "#d79be8", brightCyan: "#7fd6df", brightWhite: "#ffffff",
+    ...ansi,
   };
 }
-const TERM_FONT = '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", Menlo, Monaco, "Roboto Mono", Consolas, "Liberation Mono", monospace';
+/* Same order as the rest of the app, so the terminal and the panel around it
+   are not set in two different faces. The Nerd Font stays in the list — behind
+   the stock monospaces rather than in front of them — because prompts and agent
+   CLIs print powerline and icon codepoints no stock monospace carries, and
+   per-glyph fallback picks it up for exactly those and nothing else. */
+const TERM_FONT = '"SF Mono", SFMono-Regular, ui-monospace, "Cascadia Code", Menlo, Monaco, Consolas, "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace';
 
 
 // --- persistent per-repo shell sessions (outlive the panel) ------------------
@@ -254,7 +286,28 @@ function applyThemeLive(s: Sess): () => void {
     // Coalesced: a theme switch rewrites several properties in one tick, and
     // re-theming a terminal forces a full repaint of every cell.
     cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(() => { try { s.term.options.theme = themeFromCss(); } catch { /* disposed */ } });
+    raf = requestAnimationFrame(() => {
+      try {
+        s.term.options.theme = themeFromCss();
+        // Terminal typography rides the same observer (termPrefs pings a root
+        // var when font/size/cursor change). Font and size change the cell box,
+        // so refit when either moves.
+        const o = termOptions();
+        // Line height changes the cell, so it refits for the same reason the
+        // font does: the grid is laid out on a cell measured once.
+        const needFit = s.term.options.fontFamily !== o.fontFamily || s.term.options.fontSize !== o.fontSize
+          || s.term.options.lineHeight !== o.lineHeight;
+        if (s.term.options.fontFamily !== o.fontFamily) s.term.options.fontFamily = o.fontFamily;
+        if (s.term.options.fontSize !== o.fontSize) s.term.options.fontSize = o.fontSize;
+        if (s.term.options.lineHeight !== o.lineHeight) s.term.options.lineHeight = o.lineHeight;
+        if (s.term.options.cursorStyle !== o.cursorStyle) s.term.options.cursorStyle = o.cursorStyle;
+        if (needFit) fitTerm(s);
+        // The WebGL renderer caches cells in a texture atlas and won't always
+        // repaint already-drawn scrollback on a theme swap; force it. On the DOM
+        // renderer this is a cheap no-op beyond the redraw it would do anyway.
+        s.term.refresh(0, s.term.rows - 1);
+      } catch { /* disposed */ }
+    });
   };
   const mo = new MutationObserver(restyle);
   mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "style", "class"] });
@@ -382,11 +435,16 @@ function reconnected(s: Sess) {
 /** A brand-new shell for `root`. Repos hold as many as you open. */
 function createSession(root: string): Sess {
   evictLru(root);
+  const tp = termOptions();
   const term = new Terminal({
-    fontFamily: readVar(rootStyle(), "--font-mono", "") ? `var(--font-mono), ${TERM_FONT}` : TERM_FONT,
-    fontSize: 13,
-    lineHeight: 1.2,
+    fontFamily: tp.fontFamily,
+    fontSize: tp.fontSize,
+    lineHeight: tp.lineHeight,
     cursorBlink: true,
+    // Required before a custom width table can be registered, and harmless
+    // otherwise — see termUnicode.
+    allowProposedApi: true,
+    cursorStyle: tp.cursorStyle,
     /*
      * Scrollback, and why it is not ten thousand any more.
      *
@@ -404,6 +462,10 @@ function createSession(root: string): Sess {
     theme: themeFromCss(),
     macOptionIsMeta: true,
   });
+  // Before anything is written: the width table decides how many columns each
+  // character claims, and a line already parsed under the old one keeps the
+  // widths it was parsed with.
+  useModernWidths(term);
   const fit = new FitAddon();
   term.loadAddon(fit);
   const search = new SearchAddon();
@@ -418,6 +480,11 @@ function createSession(root: string): Sess {
    * refuses anything that is not http(s), which matters more here than
    * anywhere else — the text being linkified is whatever a program printed.
    */
+  // Same guard as the file viewer. A shell here usually has tmux in front of
+  // it, which answers DECRQM itself — but a bare shell running `nvim` does not,
+  // and then xterm 6.0.0 throws inside its own parser and the screen stops
+  // updating. See xtermDecrqm.
+  answerDecrqm(term as never);
   term.loadAddon(new WebLinksAddon((_e, uri) => { openExternal(uri); }));
   /*
    * Draw on the GPU when the machine will let us.
@@ -443,7 +510,15 @@ function createSession(root: string): Sess {
       // to the DOM renderer app-wide and remember it, so no new shell hits it.
       gl.onContextLoss(() => { fallBackToDom(); try { gl.dispose(); } catch { /* already gone */ } });
       term.loadAddon(gl);
-    } catch { /* no WebGL2 here — the DOM renderer stays */ }
+    } catch { /* no WebGL2 here — canvas below, or the DOM renderer */ }
+  } else if (wantsCanvas()) {
+    // Not a consolation prize for missing a GPU: this is the renderer that
+    // draws box-drawing characters itself, so `│` between two tmux panes is a
+    // line rather than whatever the machine's fallback font happens to have.
+    // The DOM renderer cannot do that, and which font you had chosen decided
+    // whether your rules were solid. Failure here is not worth a word to the
+    // user — the DOM renderer takes over and the shell never noticed.
+    try { term.loadAddon(new CanvasAddon()); } catch { /* the DOM renderer stays */ }
   }
   // Shift+Esc closes the panel — plain Esc belongs to the shell (vim, fzf…).
   term.attachCustomKeyEventHandler((e) => {
@@ -735,6 +810,10 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   const [picked, setPicked] = useState<string>(() => { try { return localStorage.getItem(CONSOLE_ROOT_KEY) || ""; } catch { return ""; } });
   const root = picked || fallbackRoot;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  const { ask, dialog } = useDialogs();
+  /** The row for the directory we are standing in — what "here" means, by name,
+   *  what it currently holds, and whether it has uncommitted work in it. */
+  const here = repos.find((r) => r.root === root) ?? null;
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -766,7 +845,10 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   };
   // A local branch with no worktree of its own: switch by checking it out in the
   // console's current directory, then refresh so the list reflects the move.
-  const checkoutHere = (name: string) => {
+  const checkoutHere = async (name: string) => {
+    // Never silently. See lib/checkoutWarning.ts for why each sentence is there.
+    const t = { branch: name, dir: here?.name ?? root.split("/").pop() ?? root, displacing: here?.branch ?? null, dirty: here?.dirty ?? 0 };
+    if (needsCheckoutConfirm(t) && !(await ask(checkoutConfirm(t)))) return;
     api.gitCheckout(root, name).then((r) => {
       if (!r.ok) return;
       setRepoOpen(false); setRepoQuery("");
@@ -856,6 +938,8 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   if (!open) return null;
   return (
     <div className="shrink-0 flex flex-col" style={{ height: `${Math.round(height * 100)}%`, borderTop: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+      {/* Rendered, or the question it asks is a promise nobody ever answers. */}
+      {dialog}
       {/* The strip's own toolbar. Everything in it stops the drag from
           starting — the whole bar is the resize handle, so a click that also
           began a drag would move the console every time you opened a menu. */}
@@ -889,12 +973,21 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
                   <button key={r.root} onClick={() => chooseRepo(r.root)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2"
                     style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 15%, transparent)" : "transparent" }}>
                     {/* Same badge and same name rule as every other picker: a
-                        worktree IS its branch, a project is its folder. */}
+                        worktree IS its branch, a project is its folder — but the
+                        folder is now always said out loud beside it. Naming a
+                        worktree only by its branch means a checkout RENAMES the
+                        row, and that is what made "master turned into a worktree
+                        and the worktree into a branch" the honest description of
+                        what someone saw. The identity of a directory must not
+                        change under a click. */}
                     <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded"
                       style={r.worktreeOf
                         ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" }
                         : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{r.worktreeOf ? "WT" : "REPO"}</span>
-                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={r.root}>{r.worktreeOf ? r.branch : r.name}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={`${r.branch}\n${r.root}`}>{r.worktreeOf ? r.branch : r.name}</span>
+                    {r.worktreeOf && r.name !== r.branch && (
+                      <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>
+                    )}
                     {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
                   </button>
                 ))}
@@ -907,7 +1000,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
                   if (!branches.length) return null;
                   return (
                     <>
-                      <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                      <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
                       {branches.slice(0, 80).map((b) => (
                         <button key={b.name} onClick={() => checkoutHere(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
                           <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
@@ -946,10 +1039,61 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   );
 }
 
+/**
+ * The worktree the focused pane's agent is working in, read from what it prints.
+ *
+ * The process cwd is no help — every agent's shell, its `claude`, and their
+ * children sit in the PARENT repo; the agent reaches into a worktree with
+ * `git -C` and `cd` in subcommands without moving its own directory. But the
+ * tool calls it prints DO name the checkout it edits (`Update(~/code/orbit-
+ * WEB-1042/…)`), and that is on screen. So scan the scrollback bottom-up for the
+ * most recently named worktree folder — matched as a whole path segment, so
+ * `code/orbit` is not caught inside `code/orbit-WEB-1042`. Only linked worktrees
+ * are candidates; the parent repo is the shell's own cwd (the noise) and never
+ * what we mean. Null when nothing recognisable is there (a fresh agent, one in
+ * the repo root), where the caller falls back to the picker.
+ *
+ * Best-effort by nature: it reads output, not a fact the app was handed. Bounded
+ * to the last screens so a stale line from a tmux window switched away from does
+ * not win over the window on screen now.
+ */
+function detectPaneWorktree(term: Terminal | undefined, worktrees: GitRepoRef[]): GitRepoRef | null {
+  if (!term || !worktrees.length) return null;
+  const cands = worktrees.map((r) => ({ r, leaf: dirName(r.root) }));
+  const AFTER = "/ ):'\",";
+  try {
+    const buf = term.buffer.active;
+    const top = buf.baseY + buf.cursorY;
+    for (let y = top; y >= Math.max(0, top - 250); y--) {
+      const line = buf.getLine(y)?.translateToString(true);
+      if (!line) continue;
+      for (const c of cands) {
+        let i = line.indexOf(c.leaf);
+        while (i >= 1) {
+          const after = line[i + c.leaf.length];
+          if (line[i - 1] === "/" && (after === undefined || AFTER.includes(after))) return c.r;
+          i = line.indexOf(c.leaf, i + 1);
+        }
+      }
+    }
+  } catch { /* buffer not ready — fall back to the picker */ }
+  return null;
+}
+
 export function TermView({ active, onClose = () => {} }: { active: boolean; onClose?: () => void }) {
   const open = active;
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  const { ask, dialog } = useDialogs();
   const [root, setRoot] = useState<string>(() => { try { return localStorage.getItem(ROOT_KEY) || ""; } catch { return ""; } });
+  /** The row for the directory we are standing in — what "here" means, by name,
+   *  what it currently holds, and whether it has uncommitted work in it.
+   *
+   *  Below the `root` it reads, and that is not a style point: it sat above,
+   *  and `root` is a `const` from useState, so the lookup ran in its temporal
+   *  dead zone and threw on the panel's first render — a white window for
+   *  anyone whose last view was the terminal. tsc cannot see it because the
+   *  read is inside the `find` callback, where it looks deferred. */
+  const here = repos.find((r) => r.root === root) ?? null;
   const [repoOpen, setRepoOpen] = useState(false);
   const [repoQuery, setRepoQuery] = useState("");
   /** Only whether the server allows commands at all — the list, its dropdown
@@ -958,6 +1102,22 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   /** Both dropdowns live in here, so one listener can tell "clicked outside"
    *  from "clicked a row". */
   const pickersRef = useRef<HTMLDivElement>(null);
+  // The "jump to a worktree's git / changes" dropdown. Separate from the repo
+  // picker above (which switches the terminal itself): this one leaves the
+  // terminal where it is and takes you to Source control / File changes for the
+  // chosen worktree. The worktree is picked, never read from the focused pane —
+  // measured against a live fleet, the pane's cwd is always the parent repo.
+  const [wtOpen, setWtOpen] = useState(false);
+  const [wtQuery, setWtQuery] = useState("");
+  const [wtShowAll, setWtShowAll] = useState(false);
+  /** The worktree the focused pane's agent is in, read from its output — shown
+   *  compact in the status bar and pinned atop the picker. */
+  const [detectedWt, setDetectedWt] = useState<GitRepoRef | null>(null);
+  /** The tmux window the current detection belongs to, so a read that comes up
+   *  empty keeps the last worktree (the agent just stopped printing paths)
+   *  rather than flickering it away — but switching windows starts fresh. */
+  const detectedWinRef = useRef("");
+  const wtRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [, force] = useReducer((x: number) => x + 1, 0);
 
@@ -984,7 +1144,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     api.gitRepos().then(({ repos }) => setRepos(repos)).catch(() => {});
     api.gitBranches(root).then(setBranchData).catch(() => {});
   }, [repoOpen, root]);
-  const checkoutBranch = (name: string) => {
+  const checkoutBranch = async (name: string) => {
+    const t = { branch: name, dir: here?.name ?? root.split("/").pop() ?? root, displacing: here?.branch ?? null, dirty: here?.dirty ?? 0 };
+    if (needsCheckoutConfirm(t) && !(await ask(checkoutConfirm(t)))) return;
     api.gitCheckout(root, name).then((r) => {
       if (!r.ok) return;
       setRepoOpen(false); setRepoQuery("");
@@ -1018,6 +1180,30 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // dismissing it (Escape, an outside click) has to give the shell its cursor
   // back — see focusTerm.
   useDismiss(repoOpen, pickersRef, () => { setRepoOpen(false); focusTerm(); });
+  useDismiss(wtOpen, wtRef, () => { setWtOpen(false); setWtQuery(""); setWtShowAll(false); focusTerm(); });
+  // Keep the focused pane's worktree fresh. The agent prints new paths as it
+  // works and xterm's buffer changes without React noticing, so re-read on a
+  // light poll (and whenever the focused pane or the repo list changes) rather
+  // than on render — a bounded scan of the scrollback tail, cheap to repeat.
+  useEffect(() => {
+    if (!open || IS_DEMO) return;
+    const project = here?.worktreeOf || here?.root || root;
+    const cands = repos.filter((r) => r.worktreeOf && (r.worktreeOf || r.root) === project);
+    const run = () => {
+      const s = sessions.get(paneIds[focusIdx] ?? "");
+      const win = s?.tmuxWindows?.find((w) => w.active)?.id ?? "";
+      const d = detectPaneWorktree(s?.term, cands);
+      // Sticky: a pane's worktree does not vanish because the agent stopped
+      // printing its path, so only a fresh detection replaces it. When the
+      // focused window changes, take whatever the new one reads — even nothing,
+      // so an idle window does not keep wearing its neighbour's worktree.
+      if (win !== detectedWinRef.current) { detectedWinRef.current = win; setDetectedWt(d); }
+      else if (d) setDetectedWt((prev) => (prev?.root === d.root ? prev : d));
+    };
+    run();
+    const id = setInterval(run, 4000);
+    return () => clearInterval(id);
+  }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root]);
 
   const tabs = !IS_DEMO && root ? termSessionsFor(root) : [];
 
@@ -1166,6 +1352,28 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // Keyed by tmux's window id, not the index: a rename in flight must follow the
   // window even if killing another one renumbers the strip underneath it.
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** The same box, for `move-window`: a number rather than a name, so it is a
+   *  separate mode rather than a flag on the one above. */
+  const [moving, setMoving] = useState<string | null>(null);
+
+  /**
+   * `prefix ,` and `prefix .`, arriving from tmux.
+   *
+   * While this strip owns the bar there is no row for tmux to prompt in, so the
+   * keys leave a note on the window instead and the server forwards it once.
+   * Opening our own input here is what makes the takeover honest: the keys
+   * people already have in their fingers keep working, and they land in a box
+   * that looks like the rest of the app rather than in a tmux prompt drawn over
+   * the first line of the shell.
+   *
+   * The server clears the note as it forwards it, so this fires once per press.
+   */
+  useEffect(() => {
+    const asked = tmuxWindows.find((w) => w.ask);
+    if (!asked) return;
+    if (asked.ask === "rename") { setMoving(null); setRenaming(asked.id); }
+    else { setRenaming(null); setMoving(asked.id); }
+  }, [tmuxWindows]);
 
   /*
    * Whether tmux keeps drawing its own status line underneath our tabs.
@@ -1193,6 +1401,30 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     tmuxCmd("status", { visible: tmuxBar });
     try { localStorage.setItem("agentglass-tmux-bar", tmuxBar ? "on" : "off"); } catch { /* private mode */ }
   }, [tmuxActive, tmuxBar, tmuxCmd, tmuxWindows.length]);
+
+  /*
+   * A review asked for from the pull request panel.
+   *
+   * It waits here until there is a tmux to open a window in — the button can be
+   * pressed while this view has never been opened, so the socket may still be
+   * connecting, and a request dropped for arriving early would look like a
+   * button that sometimes does nothing. Cleared on send, not on arrival.
+   */
+  const review = useSyncExternalStore(subscribeTermReview, termReview, termReview);
+  useEffect(() => {
+    if (!review || !tmuxActive) return;
+    tmuxCmd("review", { root: review.root, number: review.number });
+    clearTermReview();
+  }, [review, tmuxActive, tmuxCmd]);
+
+  /** The same door for starting work on an issue: a worktree the server has
+   *  already cut, and a prompt it wrote. Never a command — see termIssue.ts. */
+  const issue = useSyncExternalStore(subscribeTermIssue, termIssue, termIssue);
+  useEffect(() => {
+    if (!issue || !tmuxActive) return;
+    tmuxCmd("issue", { cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo });
+    clearTermIssue();
+  }, [issue, tmuxActive, tmuxCmd]);
 
   const addShell = useCallback(() => {
     if (!root || IS_DEMO) return;
@@ -1259,8 +1491,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden relative">
-                {/* The plan meters moved to the workspace's DynamicIsland, which
-                    covers every view now rather than only the terminal. */}
+      {dialog}
+                {/* The plan meters live in the top bar, which is over every view
+                    rather than only over the terminal. */}
                 <style>{SCROLLBAR_CSS}</style>
                 {/* Pin xterm's own boxes flush. The stylesheet ships no padding
                     today, but it has before and it is one release away from
@@ -1356,7 +1589,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             if (!branches.length) return null;
                             return (
                               <>
-                                <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                                <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
                                 {branches.slice(0, 80).map((b) => (
                                   <button key={b.name} onClick={() => checkoutBranch(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
                                     <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
@@ -1400,9 +1633,104 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       title={status === "unauthorized" ? "This server needs an access token — click to enter it" : "Shell status"}>
                       <span style={{ color: statusDot[status].color }}>●</span>{statusDot[status].label}
                     </span>
+                    {/* Jump straight to a worktree's changes. The worktree is
+                        chosen here rather than inferred from the focused pane:
+                        every agent's pane and process sits in the parent repo,
+                        so there is nothing in the pane to read (see
+                        worktreeJump.ts). Dirty checkouts sort to the top, which
+                        is the one being worked in. */}
+                    <div className="relative" ref={wtRef}>
+                      <button onClick={() => { if (wtOpen) { setWtOpen(false); focusTerm(); } else setWtOpen(true); }} disabled={!root || IS_DEMO || disabled} title="Open a worktree's Source control or File changes" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↗ Worktree ▾</button>
+                      {wtOpen && (() => {
+                        const project = here?.worktreeOf || here?.root || root;
+                        const ACTIVE_MS = 3 * 60 * 60 * 1000; // dirty, or touched within 3h — where an agent actually is
+                        // Worktrees only — the parent repo (the main checkout, on
+                        // its trunk) is where the shell's own cwd sits, not a
+                        // checkout you jump to from a button called Worktree, and
+                        // filtering the diff by its folder would match everything.
+                        const all = repos
+                          .filter((r) => r.worktreeOf && (r.worktreeOf || r.root) === project)
+                          .sort((a, b) => (b.dirty - a.dirty) || (b.touchedAt - a.touchedAt) || dirName(a.root).localeCompare(dirName(b.root)));
+                        const active = all.filter((r) => r.dirty > 0 || (r.touchedAt > 0 && Date.now() - r.touchedAt < ACTIVE_MS));
+                        const q = wtQuery.trim().toLowerCase();
+                        // Empty box shows only what is live — a dozen idle checkouts is the
+                        // noise the picker was drowning in. A search, or "Show all", looks
+                        // through every one.
+                        // What THIS pane's agent is working in, read from its terminal output.
+                        const detected = detectedWt;
+                        const base = (q || wtShowAll || active.length === 0) ? all : active;
+                        const list = base.filter((r) => !q || (r.branch + " " + dirName(r.root)).toLowerCase().includes(q)).filter((r) => r.root !== detected?.root);
+                        const hiddenCount = all.length - active.length;
+                        return (
+                          <div className="absolute right-0 mt-1 rounded-lg text-[11px] shadow-2xl flex flex-col" style={{ zIndex: 30, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 400, maxWidth: "min(90vw, 640px)", maxHeight: 440, overflow: "hidden" }}>
+                            <div className="px-2.5 pt-2 pb-1.5 shrink-0 flex items-center gap-2" style={{ borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                              <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>Open a worktree's changes</span>
+                              {!q && hiddenCount > 0 && (
+                                <button onMouseDown={keepTermFocus} onClick={() => setWtShowAll((v) => !v)} className="agx-btn ml-auto text-[9.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 35%, transparent)" }} title={wtShowAll ? "Show only worktrees with recent activity" : "Show every worktree, active or not"}>{wtShowAll ? `Active only (${active.length})` : `Show all (${all.length})`}</button>
+                              )}
+                            </div>
+                            <input autoFocus value={wtQuery} onChange={(e) => setWtQuery(e.target.value)} placeholder="Filter by ticket or name…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
+                            {detected && !wtQuery && (
+                              /* Auto-detected from the focused pane's agent output — the one you
+                                 almost certainly want, pinned above the list and out of the filter. */
+                              <div className="w-full px-2.5 py-1.5 flex items-center gap-2 shrink-0" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                                <span className="shrink-0 text-[8px] uppercase tracking-wider px-1 py-[2px] rounded self-start mt-0.5" title="Read from this pane's agent output" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
+                                <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${detected.branch}\n${detected.root}`}>
+                                  <span className="truncate font-medium" style={{ color: "var(--text)" }}>{detected.branch}</span>
+                                  <span className="truncate text-[9px]" style={{ color: "var(--text3)" }}>{dirName(detected.root)}</span>
+                                </span>
+                                {detected.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${detected.dirty} changed file${detected.dirty === 1 ? "" : "s"}`}>●{detected.dirty}</span>}
+                                <button onClick={() => { requestWorktreeJump({ view: "git", root: detected.root }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open in Source control">Git</button>
+                                <button onClick={() => { requestWorktreeJump({ view: "diff", filter: dirName(detected.root) }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                              </div>
+                            )}
+                            <div className="agx-scroll overflow-y-auto pb-1" style={{ minHeight: 0 }}>
+                              {list.map((r) => {
+                                const wt = !!r.worktreeOf;
+                                return (
+                                  <div key={r.root} className="w-full px-2.5 py-1.5 flex items-center gap-2" style={{ background: r.root === root ? "color-mix(in srgb, var(--primary) 12%, transparent)" : "transparent" }}>
+                                    <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded self-start mt-0.5" title={wt ? `Worktree of ${r.worktreeOf}` : "Main checkout"} style={wt ? { color: "var(--primary)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 32%, transparent)" } : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>{wt ? "WT" : "REPO"}</span>
+                                    {/* The branch is the descriptive name (`WEB-1042-fix-the-cart`); the
+                                        folder (`orbit-WEB-1042`) is the terse stub below it. A ticket number
+                                        alone is not something anyone recognises without having memorised it. */}
+                                    <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${r.branch}\n${r.root}`}>
+                                      <span className="truncate font-medium" style={{ color: "var(--text)" }}>{wt ? r.branch : r.name}</span>
+                                      <span className="truncate text-[9px]" style={{ color: "var(--text3)" }}>{wt ? dirName(r.root) : r.branch}</span>
+                                    </span>
+                                    {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
+                                    <button onClick={() => { requestWorktreeJump({ view: "git", root: r.root }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} title="Open in Source control">Git</button>
+                                    <button onClick={() => { requestWorktreeJump({ view: "diff", filter: dirName(r.root) }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                                  </div>
+                                );
+                              })}
+                              {list.length === 0 && <div className="px-2.5 py-2 text-[10.5px]" style={{ color: "var(--text3)" }}>{q ? "No match." : active.length === 0 ? "No worktree changed recently." : "No worktrees for this repo."}</div>}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
                     {!tmuxActive && <button onClick={splitPane} disabled={!root || IS_DEMO || disabled || paneIds.length >= 4} title="Show another shell beside this one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", opacity: paneIds.length >= 4 ? 0.45 : 1 }}>⊞ Split</button>}
-                    <button onClick={restart} disabled={!root || IS_DEMO || disabled} title="Kill this shell and start a fresh one" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ Restart</button>
+                    {/* Under tmux this button does not restart anything: it
+                        drops the pty connection and re-attaches. tmux is a
+                        daemon, so a detach ends the client, not the session —
+                        every window and agent keeps running (see terminal.ts,
+                        "a detach ends the client, not the server"). Calling it
+                        "Restart" beside a pane full of working agents reads as a
+                        button that could throw the work away, which it cannot.
+                        Only a bare, non-tmux shell is actually restarted. */}
+                    <button onClick={restart} disabled={!root || IS_DEMO || disabled} title={tmuxActive ? "Re-attach this terminal to tmux — every window and agent keeps running, nothing is killed" : "Kill this shell and start a fresh one"} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>⟲ {tmuxActive ? "Reconnect" : "Restart"}</button>
                     <button onClick={() => sess?.term.clear()} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)" }}>Clear</button>
+                    {/* The way back, and it lives here because the way out
+                        lives in the strip — which is the thing being hidden.
+                        A toggle whose "off" state removes the button that
+                        turns it on is a one-way door. Exactly one of the two
+                        is on screen at any time. */}
+                    {tmuxActive && tmuxWindows.length > 0 && tmuxBar && (
+                      <button onClick={() => setTmuxBar(false)} className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}
+                        title="Draw the window list here instead, and take tmux's row back for the shell">
+                        Use agentglass bar
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1436,7 +1764,12 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                     Same shape as the shell tabs above on purpose: from the
                     user's side this is the same control, and which program is
                     behind it should not change how the workspace looks. */}
-                {tmuxActive && tmuxWindows.length > 0 && (
+                {/* One window list or the other, never both. `tmuxBar` is the
+                    user's answer to "whose bar is this", so it gates the strip
+                    as well as tmux's row — a blanked row under our tabs was two
+                    bars pretending to be one, and a row we keep for a prompt
+                    that no longer arrives there is just a gap. */}
+                {tmuxActive && tmuxWindows.length > 0 && !tmuxBar && (
                   // keepTermFocus so switching tmux windows by click (and the +,
                   // kill, hide-bar buttons) never blurs the pane — tmux keeps
                   // owning the keyboard the instant the tab changes. The rename
@@ -1485,7 +1818,31 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           style={w.id === activeWindow
                             ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
                             : { background: "color-mix(in srgb, var(--bg3) 55%, transparent)", color: "var(--text2)" }}>
-                          <span className="tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>
+                          {/* The index doubles as the move box: `prefix .`
+                              asks which number, and the number it is asking
+                              about is right here. Typing over it is a more
+                              direct answer than a prompt somewhere else. */}
+                          {moving === w.id ? (
+                            <input
+                              autoFocus
+                              defaultValue={String(w.index)}
+                              inputMode="numeric"
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={() => setMoving(null)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") { setMoving(null); focusTerm(); return; }
+                                if (e.key !== "Enter") return;
+                                const to = (e.target as HTMLInputElement).value.trim();
+                                if (/^\d{1,3}$/.test(to) && Number(to) !== w.index) tmuxCmd("move", { window: w.id, name: to });
+                                setMoving(null);
+                                focusTerm();
+                              }}
+                              className="bg-transparent outline-none w-7 text-[10.5px] tabular-nums text-center"
+                              style={{ color: "var(--text)", borderBottom: "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" }}
+                            />
+                          ) : (
+                            <span className="tabular-nums" style={{ color: "var(--text4)" }}>{w.index}</span>
+                          )}
                           {renaming === w.id ? (
                             <input
                               autoFocus
@@ -1519,11 +1876,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       );
                     })}
                     <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
-                    <button onClick={() => setTmuxBar((v) => !v)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
-                      title={tmuxBar
-                        ? "Blank tmux's own status line for this session — it keeps the row, so its prompts and messages still have somewhere to draw"
-                        : "Give tmux's own status line back"}>
-                      {tmuxBar ? "Hide tmux bar" : "Show tmux bar"}
+                    <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
+                      title="Give tmux its own status line back — this strip steps aside, so you are never looking at two window lists">
+                      Use tmux's bar
                     </button>
                   </div>
                 )}
@@ -1607,7 +1962,21 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   ) : (
                     <span>Real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
                   )}
-                  <span className="ml-auto">{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
+                  <span className="ml-auto flex items-center gap-2 shrink-0">
+                    {/* The focused pane's worktree, offered right in the bar —
+                        read from the agent's output, one click to its changes. */}
+                    {detectedWt && (
+                      <span className="flex items-center gap-1.5" title={`This pane's worktree — ${detectedWt.branch}\n${detectedWt.root}`}>
+                        <span className="px-1 rounded text-[8px] uppercase tracking-wider" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>this pane</span>
+                        <span className="truncate max-w-[180px]" style={{ color: "var(--text2)" }}>{dirName(detectedWt.root)}</span>
+                        {detectedWt.dirty > 0 && <span className="tabular-nums" style={{ color: "var(--warning)" }}>●{detectedWt.dirty}</span>}
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn px-1.5 py-[1px] rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git</button>
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn px-1.5 py-[1px] rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                        <span className="t-dim2">·</span>
+                      </span>
+                    )}
+                    <span>{sess ? `${sess.term.cols}×${sess.term.rows}` : ""}</span>
+                  </span>
                 </div>
     </div>
   );

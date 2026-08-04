@@ -131,6 +131,13 @@ export function UsageWidget() {
           <Meter label="weekly" used={u.seven_day.utilization} resets={u.seven_day.resets_at} />
         </div>
       )}
+      {/* Weekly windows that apply to one model. Labelled from the API rather
+          than from a list here, so a new bucket shows up without a release. */}
+      {u.scoped?.map((s) => (
+        <div key={s.name} className="pl-4 border-l" style={{ borderColor: "color-mix(in srgb, var(--border) 45%, transparent)" }}>
+          <Meter label={s.name} used={s.utilization} resets={s.resets_at} />
+        </div>
+      ))}
     </div>
   );
 }

@@ -80,9 +80,13 @@ export const ToolRow = memo(function ToolRow({ e, sub = [], nested = false }: To
           {target.length > firstLine.length && (
             <div className="whitespace-pre-wrap break-all" style={{ ...MONO, color: "var(--text3)" }}>{target}</div>
           )}
+          {/* Bounded and scrollable. The server already clips what it stores,
+              but a clipped output is still thousands of characters, and opening
+              one row to check a command should not push the rest of the
+              conversation off the screen. It scrolls inside itself instead. */}
           {out && (
-            <div className="whitespace-pre-wrap break-all"
-              style={{ ...MONO, color: e.is_error ? "var(--error)" : "var(--text4)" }}>{out}</div>
+            <div className="whitespace-pre-wrap break-all agx-scroll"
+              style={{ ...MONO, color: e.is_error ? "var(--error)" : "var(--text4)", maxHeight: 300, overflowY: "auto" }}>{out}</div>
           )}
           {e.output_clipped && <div className="t-dim2">…output trimmed</div>}
         </div>

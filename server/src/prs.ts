@@ -14,15 +14,15 @@
 // 3. Writes are public. A stray `gh pr merge` is not a UI bug, it is a deploy,
 //    so every mutation goes through `writeGuard` and the irreversible ones are
 //    named separately from the rest.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
 import { inScope } from "./config.ts";
 import type {
   PrRepoId, PrSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
   PrCheckState, PrThread, PrReview, PrComment, PrCommit, PrFile, PrChecklistItem, PrMergeState, CiVerdict,
-  PrAuthored, PrReaction, PrEvent, PrCheckJob,
+  PrAuthored, PrReaction, PrEvent, PrCheckJob, PrReviewer,
 } from "../../shared/types.ts";
 
 /** Same escape hatch the git writes use, so one variable disables both. */
@@ -178,6 +178,15 @@ const ID_TTL_MS = 5 * 60_000;
  * upstream and a panel pointed at the fork shows an empty list forever. That is
  * three lines here and confusing to retrofit later.
  */
+/**
+ * Single-flighted as well as cached, because `gitwork`'s base ladder asks this
+ * once per checkout and launches all of them in one `Promise.all` — twenty-two
+ * on a worktree-heavy repo, every one of them missing an empty cache before any
+ * has filled it. Two `git remote get-url` each is nothing on its own and forty
+ * of them at once, five minutes apart, is not nothing.
+ */
+const idInflight = new Map<string, Promise<PrRepoId | null>>();
+
 export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
   const abs = safeAbs(rootIn);
   if (!abs) return null;
@@ -185,15 +194,25 @@ export async function repoIdFor(rootIn: unknown): Promise<PrRepoId | null> {
   if (!root) return null;
   const hit = idCache.get(root);
   if (hit && Date.now() - hit.at < ID_TTL_MS) return hit.id;
-  let id: PrRepoId | null = null;
-  for (const remote of ["upstream", "origin"]) {
-    const r = await gitAsync(root, ["remote", "get-url", remote]);
-    if (r.code !== 0) continue;
-    id = parseRemote(r.stdout.trim());
-    if (id) break;
-  }
-  idCache.set(root, { at: Date.now(), id });
-  return id;
+  const flying = idInflight.get(root);
+  if (flying) return flying;
+  const p = (async () => {
+    try {
+      let id: PrRepoId | null = null;
+      for (const remote of ["upstream", "origin"]) {
+        const r = await gitAsync(root, ["remote", "get-url", remote]);
+        if (r.code !== 0) continue;
+        id = parseRemote(r.stdout.trim());
+        if (id) break;
+      }
+      idCache.set(root, { at: Date.now(), id });
+      return id;
+    } finally {
+      idInflight.delete(root);
+    }
+  })();
+  idInflight.set(root, p);
+  return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +286,23 @@ export function rollupChecks(raw: RawCheck[] | null | undefined): { rollup: PrCh
 
 /** What we last told the user about each PR, so we tell them once. */
 const latch = new Map<string, "green" | "red">();
+/**
+ * PRs whose suite we have actually watched running.
+ *
+ * The latch alone made every first observation an announcement, so starting the
+ * app told you the standing state of everything you have a stake in — seventeen
+ * "checks green" in one burst, about runs that finished days ago. That is not a
+ * notification, it is an inventory, and it is what makes people stop reading
+ * the ones that matter.
+ *
+ * A notification is for something that happened while you were watching. So a
+ * verdict counts as news only for a PR we saw with checks still running: that
+ * is the difference between "this just went green" and "this was already
+ * green when I arrived". Everything else is recorded silently and reported the
+ * moment it CHANGES, which covers the re-run, the flip from green to red, and
+ * every case anyone actually wants to be interrupted for.
+ */
+const watched = new Set<string>();
 const ciListeners = new Set<(v: CiVerdict) => void>();
 
 export function subscribeCi(fn: (v: CiVerdict) => void): () => void {
@@ -289,11 +325,17 @@ export function subscribeCi(fn: (v: CiVerdict) => void): () => void {
  */
 export function noteCi(repo: PrRepoId, pr: PrSummary): void {
   const key = `${repo.key}#${pr.number}`;
-  if (!pr.checks.allDone) { latch.delete(key); return; }
+  // Seeing it run is what earns the announcement when it lands.
+  if (!pr.checks.allDone) { latch.delete(key); watched.add(key); return; }
   const verdict = pr.checks.verdict;
   if (!verdict) return;
-  if (latch.get(key) === verdict) return;
+  const prev = latch.get(key);
   latch.set(key, verdict);
+  if (prev === verdict) return;
+  // First sight of a suite we never saw running: this is the state of the world
+  // as we found it, not something that happened. Remembered, not announced —
+  // any later change from here is news and does get through.
+  if (prev === undefined && !watched.has(key)) return;
   const v: CiVerdict = {
     repo: repo.nameWithOwner, number: pr.number, title: pr.title, verdict,
     failing: pr.checks.failing.map((c) => c.name), url: pr.url,
@@ -362,6 +404,42 @@ const inflight = new Set<string>();
  * already read), but it is scoped to the user's own cache directory all the
  * same, and a corrupt or unreadable file is simply ignored.
  */
+/**
+ * The base branch an open pull request declares for this head.
+ *
+ * Read straight off the list cache — the rows are already fetched with
+ * `baseRefName` in them (`LIST_FIELDS_FAST`), and that cache survives restarts
+ * on disk, so the answer is usually there before anything has refreshed. No
+ * `gh`, no network: the only subprocess this can reach is `repoIdFor`'s
+ * `git remote get-url`, itself cached for five minutes.
+ *
+ * This exists for `gitwork`'s base ladder, which otherwise has to guess what a
+ * branch was cut from by the shape of history — ambiguous exactly when branches
+ * are stacked, which is exactly when it matters. Null whenever there is nothing
+ * to say (no repo id, cold cache, no pull request for this branch); the caller
+ * falls back to inference.
+ *
+ * An open pull request wins over a closed or merged one: the same branch can
+ * have been proposed twice, and the live proposal is the one whose base is
+ * still being merged into.
+ */
+export async function prBaseOf(rootIn: string, branch: string): Promise<string | null> {
+  if (!branch) return null;
+  const id = await repoIdFor(rootIn);
+  if (!id) return null;
+  const mine = `${id.key}\u0000`;
+  let fallback: string | null = null;
+  for (const [k, e] of listCache) {
+    if (!k.startsWith(mine)) continue;
+    for (const p of e.prs) {
+      if (p.headRefName !== branch || !p.baseRefName) continue;
+      if (p.state === "OPEN") return p.baseRefName;
+      fallback ??= p.baseRefName;
+    }
+  }
+  return fallback;
+}
+
 const CACHE_FILE = join(homedir(), ".cache", "agentglass", "pr-list.json");
 const CACHE_MAX_ENTRIES = 24;
 let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -430,16 +508,51 @@ export function mapSummary(p: any, withChecks: boolean): PrSummary {
   };
 }
 
+/**
+ * `reviewRequests` as the Reviewers column reads them.
+ *
+ * A requested reviewer is a User or a Team, and the two are drawn differently:
+ * a team has a `name` and no face, so it is flagged rather than sent to the
+ * avatar proxy, which would 404 and fall back to initials that look like a
+ * person. Anything else GitHub might add to that union is dropped rather than
+ * rendered as a blank face. The picture itself is derived from the login by the
+ * Avatar component, so no URL travels with the row.
+ */
+export function mapReviewers(nodes: any[] | null | undefined): PrReviewer[] {
+  const out: PrReviewer[] = [];
+  for (const n of nodes ?? []) {
+    const r = n?.requestedReviewer;
+    if (!r) continue;
+    if (typeof r.login === "string" && r.login) out.push({ login: r.login });
+    else if (typeof r.name === "string" && r.name) out.push({ login: r.name, isTeam: true });
+  }
+  return out;
+}
+
 /** One page of the list, and everything the rows need, in a single request. */
 const LIST_PAGE = 25;
 
+/**
+ * The rows, and nothing that costs more than a row is worth.
+ *
+ * `additions`, `deletions`, `changedFiles` and `reviewDecision` used to travel
+ * here, and they are why the panel took two seconds to show anything. Measured
+ * against a repository with 25 open PRs: this query costs ~0.70s without them and
+ * ~1.85s with them — the four fields make GitHub compute a diff stat per PR
+ * before it will answer with any of the list. Three of them are not even drawn
+ * on a row (only `reviewDecision` is, as the review chip); they were paying a
+ * 2.6x first-paint tax for the detail view's benefit.
+ *
+ * They now ride on SEARCH_CHECKS, which runs beside this one and is the slower
+ * of the pair — measured, adding them there costs nothing at all.
+ */
 const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
   search(query:$q, type:ISSUE, first:$first, after:$after){
     issueCount
     pageInfo{hasNextPage endCursor}
     nodes{ ... on PullRequest {
       number title url state isDraft createdAt updatedAt
-      additions deletions changedFiles baseRefName headRefName reviewDecision
+      baseRefName headRefName
       author{login}
       labels(first:10){nodes{name color}}
       assignees(first:5){nodes{login}}
@@ -449,18 +562,28 @@ const SEARCH_ROWS = `query($q:String!,$first:Int!,$after:String){
 }`;
 
 /**
- * The same page, but only its check rollups.
+ * The same page, but only what the rows can afford to wait for.
  *
  * Measured against this repo: the row fields cost ~730ms and `statusCheckRollup`
  * adds ~410ms on top when they travel together. Asked for separately the two
  * run at the same time, so the whole thing costs what the slower one costs
  * (~810ms) instead of their sum — and, more to the point, the rows can be put
  * on screen the moment they land rather than waiting for the checks.
+ *
+ * The diff stats and `reviewDecision` live here rather than on SEARCH_ROWS for
+ * the same reason, and because it is free: measured on that same repo this query
+ * costs ~1.00s either way, while carrying them on the rows query costs it an
+ * extra ~1.15s. This is the slower half of the pair, so the four fields land in
+ * the shadow of work that was happening anyway.
  */
 const SEARCH_CHECKS = `query($q:String!,$first:Int!,$after:String){
   search(query:$q, type:ISSUE, first:$first, after:$after){
     nodes{ ... on PullRequest {
-      number
+      number additions deletions changedFiles reviewDecision
+      reviewRequests(first:5){nodes{requestedReviewer{
+        ... on User{login}
+        ... on Team{name}
+      }}}
       commits(last:1){nodes{commit{statusCheckRollup{
         state
         contexts(first:0){checkRunCountsByState{state count} statusContextCountsByState{state count}}
@@ -590,16 +713,30 @@ async function fetchList(repo: PrRepoId, filter: PrFilter, state: PrState, after
   onRows?.({ rows: bare, ...meta });
 
   const checksRes = await checksP;
-  const rollups = new Map<number, PrCheckRollup>();
+  // The second pass carries the costly row fields as well as the rollups, so a
+  // row is complete the moment this lands. A PR missing from the answer keeps
+  // the first-pass row: `checksLoaded` stays false, the review chip stays off,
+  // and the stats stay at zero — all of which read as "not yet", which is true.
+  type SecondPass = { rollup: PrCheckRollup; stats: Pick<PrSummary, "additions" | "deletions" | "changedFiles" | "reviewDecision" | "reviewers"> };
+  const second = new Map<number, SecondPass>();
   for (const n of checksRes?.data?.search?.nodes ?? []) {
     if (!n?.number) continue;
     const roll = n.commits?.nodes?.[0]?.commit?.statusCheckRollup;
     const ctx = roll?.contexts;
-    rollups.set(n.number, rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, roll?.state));
+    second.set(n.number, {
+      rollup: rollupFromCounts(ctx?.checkRunCountsByState, ctx?.statusContextCountsByState, roll?.state),
+      stats: {
+        additions: n.additions ?? 0,
+        deletions: n.deletions ?? 0,
+        changedFiles: n.changedFiles ?? 0,
+        reviewDecision: n.reviewDecision ?? null,
+        reviewers: mapReviewers(n.reviewRequests?.nodes),
+      },
+    });
   }
   const rows: PrSummary[] = bare.map((r) => {
-    const rollup = rollups.get(r.number);
-    return rollup ? { ...r, checks: rollup, checksLoaded: true } : r;
+    const hit = second.get(r.number);
+    return hit ? { ...r, ...hit.stats, checks: hit.rollup, checksLoaded: true } : r;
   });
   return { rows, ...meta };
 }
@@ -1459,7 +1596,7 @@ export async function prDetail(rootIn: unknown, numberIn: unknown, force = false
     mergeable: p.mergeable || "UNKNOWN",
     mergeState: mergeStateOf(p.mergeStateStatus, !!p.isDraft),
     checklist: parseChecklist(p.body || ""),
-    reviewers: (p.reviewRequests?.nodes || []).map((n: any) => n.requestedReviewer?.login || n.requestedReviewer?.name).filter(Boolean),
+    reviewers: mapReviewers(p.reviewRequests?.nodes),
     assignees: (p.assignees?.nodes || []).map((n: any) => n.login),
     reviews, comments, threads, commits, files,
     forcePushedSinceReview,
@@ -1823,6 +1960,38 @@ export async function deleteComment(rootIn: unknown, nodeId: unknown, kind: unkn
  * what an image diff needs, in the other shape: the raw bytes of a binary file
  * on each side, which the unified diff cannot represent at all.
  */
+/**
+ * A pull request's version of one file, on disk, read-only.
+ *
+ * The working tree cannot answer this: a pull request from somebody else is on
+ * a branch that is not checked out here, so the path either does not exist or
+ * holds a different version of itself — and opening that while calling it the
+ * pull request's file is the quiet kind of wrong.
+ *
+ * Fetched at the head commit into a temp file. Deliberately NOT `git fetch`:
+ * bringing the branch down would write refs into somebody's repository to
+ * satisfy a look, and this needs no repository at all.
+ */
+export async function prFileToTemp(rootIn: unknown, numberIn: unknown, pathIn: unknown): Promise<{ ok: true; file: string; sha: string } | { ok: false; error: string }> {
+  const n = Number(numberIn);
+  const path = typeof pathIn === "string" ? pathIn : "";
+  if (!Number.isInteger(n) || n <= 0 || !path) return { ok: false, error: "invalid file" };
+  const repo = await repoIdFor(rootIn);
+  if (!repo) return { ok: false, error: "no GitHub remote on this repository" };
+  const pr = await ghJson<any>(["api", `repos/${repo.nameWithOwner}/pulls/${n}`]);
+  const sha = pr?.head?.sha;
+  const from = pr?.head?.repo?.full_name || repo.nameWithOwner;
+  if (!sha) return { ok: false, error: "could not resolve the pull request's head" };
+  const r = await gh(["api", `repos/${from}/contents/${encodeURI(path)}?ref=${sha}`, "-H", "Accept: application/vnd.github.raw"]);
+  if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "GitHub would not return that file" };
+  // Named for what it is, and kept out of the repository: a stray file inside a
+  // checkout would show up in somebody's `git status` an hour later.
+  const dir = mkdtempSync(join(tmpdir(), "agentglass-pr-"));
+  const file = join(dir, `${sha.slice(0, 7)}-${path.split("/").pop() || "file"}`);
+  writeFileSync(file, r.stdout);
+  return { ok: true, file, sha };
+}
+
 export async function fileSlice(rootIn: unknown, numberIn: unknown, args: {
   path?: unknown; side?: unknown; from?: unknown; to?: unknown;
 }): Promise<{ ok: boolean; lines?: string[]; start?: number; total?: number; binary?: boolean; url?: string; error?: string }> {
@@ -2019,6 +2188,15 @@ export async function updateBranch(rootIn: unknown, number: unknown): Promise<Pr
   if (!r.ok && /conflict|mergeable/i.test(r.error || "")) {
     return { ok: false, error: "can't update automatically — this branch conflicts with its base. pull the base branch and resolve the merge locally, then push." };
   }
+  // A locked or protected branch, or no write access: gh returns "not
+  // authorized"/"locked"/403, and the raw text is another dead end. The button
+  // is gated on BEHIND + viewerCanUpdate so this should rarely surface, but the
+  // two can race — the branch locks between the read and the click — and a bare
+  // "failed to update branch" is exactly the confusing error we are trying to
+  // avoid here.
+  if (!r.ok && /lock|protect|not authoriz|forbidden|permission|\b403\b/i.test(r.error || "")) {
+    return { ok: false, error: "can't update this branch — it is locked or protected, or you do not have write access. update it on GitHub, or ask someone who can." };
+  }
   return r;
 }
 
@@ -2194,7 +2372,12 @@ export async function closePr(rootIn: unknown, number: unknown, reopen = false):
 // review this pull request with Claude
 // ---------------------------------------------------------------------------
 
-export interface ReviewPromptPlan { ok: boolean; cwd?: string; prompt?: string; branch?: string; error?: string }
+/** Either a plan that can be run, or the reason there isn't one. A union
+ *  rather than one bag of optionals, so a caller that has checked `ok` gets a
+ *  cwd and a prompt that are strings — the shape it is about to execute. */
+export type ReviewPromptPlan =
+  | { ok: true; cwd: string; prompt: string; branch?: string; error?: undefined }
+  | { ok: false; error: string; cwd?: undefined; prompt?: undefined; branch?: undefined };
 
 /**
  * Hand back the prompt to review a pull request, and nothing else.
@@ -2239,28 +2422,43 @@ export async function prepareReviewPrompt(rootIn: unknown, numberIn: unknown): P
   // review to a sha rather than a branch name means a push mid-review does not
   // quietly swap the code underneath it.
   const head = pr.commits[pr.commits.length - 1]?.oid || pr.headRefName;
-  const openThreads = pr.threads.filter((t) => !t.isResolved);
+
+  /*
+   * The number, and what to do with it.
+   *
+   * This used to paste the whole pull request into the chat: title, base and
+   * head, file and line counts, four thousand characters of description, every
+   * open review thread, and a specification of the report format. It filled the
+   * panel — a wall of text you had to scroll past to reach the answer, all of it
+   * describing something the agent can read for itself in one command.
+   *
+   * So it says which pull request and gets out of the way. `gh pr view` carries
+   * the title, the body and the threads; `gh pr diff` carries the change. The
+   * two things worth stating are the ones the agent cannot find out on its own:
+   * that this is read-only, and that the checkout it is sitting in is not this
+   * pull request.
+   */
+  const asked = pr.viewerRequested && !pr.viewerDidAuthor;
   const prompt = [
-    `Review pull request #${pr.number} of ${repo.nameWithOwner}: "${pr.title}".`,
+    `Pull request #${pr.number} of ${repo.nameWithOwner}.`,
     ``,
-    `Read-only: do not change any files, do not commit, do not push, and do not post anything to GitHub. Report back here.`,
+    `Read-only: change nothing, commit nothing, push nothing, and post nothing to GitHub. Answer here.`,
     ``,
-    `Base branch: ${pr.baseRefName}. Head: ${pr.headRefName} at ${head}. ${pr.changedFiles} files, +${pr.additions} −${pr.deletions}.`,
+    `  gh pr view ${pr.number}`,
+    `  gh pr diff ${pr.number}`,
     ``,
-    `The diff:  gh pr diff ${pr.number}`,
-    `A file as the pull request leaves it:  gh api "repos/${repo.nameWithOwner}/contents/<path>?ref=${head}" -H "Accept: application/vnd.github.raw"`,
+    // Worth its line: without it the obvious move is to read the working tree,
+    // which is the same project on a different commit — the surroundings, not
+    // the change.
+    `This checkout is the same project but not this pull request (it is at whatever you have checked out). Read the change from the commands above; use the working tree only for the surroundings.`,
     ``,
-    `This working directory is the same project, but not this pull request: it is on whatever you have checked out, and may be behind. Use it for the surroundings rather than for the change itself — other callers of a helper the diff touches, the tests that cover the path, the convention the change is meant to follow — and read the changed code from the two commands above.`,
-    ``,
-    `## What the author says`,
-    pr.body.slice(0, 4000) || "(no description)",
-    ``,
-    openThreads.length ? `## Review comments still open\n${openThreads.map((t) => `- ${t.path}${t.line ? `:${t.line}` : ""} — ${t.comments[0]?.body.slice(0, 200) ?? ""}`).join("\n")}` : "",
-    ``,
-    `## What I want`,
-    `Find real defects: incorrect logic, unhandled cases, race conditions, missing test coverage for the behaviour being changed.`,
-    `Check whether changed helpers have other callers, and whether the tests actually exercise the new path.`,
-    `Report each finding as: file:line, one sentence on the defect, and a concrete failure case. Say plainly if you find nothing serious.`,
+    `What is this pull request about?`,
+    // Only when it is actually your review that is being waited on. Asking for a
+    // verdict on a pull request nobody asked you to review is how a chat you
+    // opened to understand something turns into one arguing with it.
+    asked
+      ? `\nMy review has been requested on it, so go through the diff as well: what the changes do, and anything that looks wrong. Pinned at ${head}.`
+      : "",
   ].filter((l) => l !== "").join("\n");
 
   return { ok: true, cwd: root, prompt, branch: pr.headRefName };

@@ -20,7 +20,7 @@
 // origin and no port to contend for. Only one instance runs now (see the lock
 // below), but the origin is what makes the store survive a restart.
 
-const { app, BrowserWindow, Menu, ipcMain, protocol, shell } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, protocol, screen, shell } = require("electron");
 const { spawn } = require("child_process");
 const http = require("http");
 const fs = require("fs");
@@ -107,6 +107,62 @@ let mainWindow = null;
 // sidecar can never disagree about what the secret is.
 const CONFIG_DIR = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "agentglass");
 const REMOTE_CFG = path.join(CONFIG_DIR, "remote.json");
+const WINDOW_CFG = path.join(CONFIG_DIR, "window.json");
+
+/**
+ * Where the window was, and how.
+ *
+ * Every launch used to open a fresh 1440x900 in the middle of the screen, so a
+ * maximised window and a chosen size lasted exactly one session. The display
+ * scale already survives a restart (localStorage, re-applied on boot) and the
+ * terminal's font size survives on its own — the window itself was the one
+ * thing that forgot.
+ *
+ * Bounds AND state, because they are different answers: unmaximising a restored
+ * window has to put it somewhere, and "somewhere" should be where it was before
+ * it was maximised rather than a default in the middle of the screen.
+ */
+function readWindowState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(WINDOW_CFG, "utf8"));
+    return {
+      width: Number(s.width) || 1440,
+      height: Number(s.height) || 900,
+      x: Number.isFinite(s.x) ? s.x : undefined,
+      y: Number.isFinite(s.y) ? s.y : undefined,
+      max: s.max === true,
+      full: s.full === true,
+    };
+  } catch {
+    return { width: 1440, height: 900, max: false, full: false };
+  }
+}
+
+function saveWindowState(win) {
+  try {
+    if (win.isDestroyed()) return;
+    const full = win.isFullScreen();
+    const max = win.isMaximized();
+    // `getNormalBounds` rather than `getBounds`: while maximised or fullscreen
+    // the latter is the screen, and saving that would make "restore" a no-op
+    // for ever after — the window would come back maximised-sized and then have
+    // nowhere to unmaximise to.
+    const b = win.getNormalBounds();
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(WINDOW_CFG, JSON.stringify({ ...b, max, full }, null, 2) + "\n");
+  } catch { /* a window state is not worth failing a close over */ }
+}
+
+/** Is this rectangle still on a screen that exists? A window saved on a second
+ *  monitor and reopened without it would otherwise come back off-screen, with
+ *  no way to drag it into view. */
+function onSomeDisplay(b, screen) {
+  if (b.x === undefined || b.y === undefined) return false;
+  return screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return b.x < a.x + a.width && b.x + b.width > a.x && b.y < a.y + a.height && b.y + b.height > a.y;
+  });
+}
 const TOKEN_PATH = path.join(CONFIG_DIR, "token");
 
 function remoteEnabled() {
@@ -397,6 +453,67 @@ async function restartSidecar() {
 // --- desktop capabilities the UI calls through the preload bridge ------------
 
 function registerIpc(win) {
+  // The window controls the app now draws for itself. Trivial, and they have to
+  // exist: `frame: false` removed the only other way to do any of them.
+  ipcMain.handle("ag:winMinimize", () => { win.minimize(); });
+  ipcMain.handle("ag:winToggleMaximize", () => {
+    if (win.isMaximized()) win.unmaximize(); else win.maximize();
+    return win.isMaximized();
+  });
+  ipcMain.handle("ag:winClose", () => { win.close(); });
+  ipcMain.handle("ag:winIsMaximized", () => win.isMaximized());
+  ipcMain.handle("ag:winState", () => ({ max: win.isMaximized(), full: win.isFullScreen() }));
+
+  /*
+   * The app menu, on demand.
+   *
+   * There is deliberately no menu BAR — see the note at setApplicationMenu(null):
+   * this app embeds a real terminal where Alt is part of ordinary use, and an
+   * auto-hiding bar kept dropping over the UI mid-keystroke. Removing it took
+   * the accelerators with it, and `frame: false` then took the last visible
+   * trace of a menu away entirely.
+   *
+   * So it is built here, popped from the "⋯" in our own top bar, and never
+   * installed as the application menu. Alt still does nothing; the menu exists
+   * only while you are pointing at it. Roles rather than hand-written handlers,
+   * so copy/paste/zoom behave exactly as the platform's own would.
+   */
+  ipcMain.handle("ag:appMenu", (_e, x, y) => {
+    const menu = Menu.buildFromTemplate([
+      { label: "Edit", submenu: [
+        { role: "undo" }, { role: "redo" }, { type: "separator" },
+        { role: "cut" }, { role: "copy" }, { role: "paste" }, { role: "selectAll" },
+      ] },
+      { label: "View", submenu: [
+        { role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" }, { type: "separator" },
+        { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" },
+        { role: "togglefullscreen" },
+      ] },
+      { label: "Window", submenu: [
+        { role: "minimize" },
+        { label: win.isMaximized() ? "Restore" : "Maximise", click: () => (win.isMaximized() ? win.unmaximize() : win.maximize()) },
+        { type: "separator" },
+        { role: "close" },
+      ] },
+      { type: "separator" },
+      { label: "Quit agentglass", role: "quit" },
+    ]);
+    // Anchored under the button that opened it, not at the pointer: a menu that
+    // appears wherever the cursor happened to be does not read as belonging to
+    // the control you pressed.
+    menu.popup({ window: win, x: Math.round(x), y: Math.round(y) });
+  });
+  // Maximising by dragging to an edge, going fullscreen with F11, or anything
+  // else the window manager owns does not go through us — so the renderer is
+  // TOLD rather than left to infer, or the glyph says "maximise" on a maximised
+  // window and the clock hides itself at the wrong moment.
+  for (const ev of ["maximize", "unmaximize", "enter-full-screen", "leave-full-screen", "restore"]) {
+    win.on(ev, () => {
+      try { win.webContents.send("ag:winState", { max: win.isMaximized(), full: win.isFullScreen() }); }
+      catch { /* torn down */ }
+    });
+  }
+
   ipcMain.handle("ag:setFullscreen", (_e, on) => { win.setFullScreen(!!on); return win.isFullScreen(); });
   ipcMain.handle("ag:isFullscreen", () => win.isFullScreen());
   ipcMain.handle("ag:setZoom", (_e, f) => { win.webContents.setZoomFactor(f); return f; });
@@ -461,21 +578,172 @@ function setAutostart(on) {
   return app.getLoginItemSettings().openAtLogin;
 }
 
+/** The one session every browser guest shares. Named, and persisted, so logins
+ *  survive a restart — and separate from the app's own session, so browsing
+ *  never touches the cookies or storage of the `agentglass://` origin. It is
+ *  also the seam session profiles would widen, if they are ever wanted. */
+const BROWSER_PARTITION = "persist:agentglass-browser";
+
+/** http(s) only, and no credentials in the URL.
+ *
+ *  Deliberately small and deliberately here rather than shared with the web
+ *  app's address-bar parser: this is the boundary that makes `webviewTag` safe
+ *  to turn on, and a boundary you can read in one screen is worth more than one
+ *  that shares its code with an autocomplete. `main.js` is plain CommonJS with
+ *  no build step and could not import that module anyway. */
+function safeGuestUrl(src) {
+  if (typeof src !== "string" || !src) return null;
+  // The empty page. It is what "leave the home page blank" means, it carries no
+  // content and no origin, and refusing it would make that setting a guest that
+  // never attaches.
+  if (src === "about:blank") return src;
+  try {
+    const u = new URL(src);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    // `https://user:pass@host` in a src attribute is a credential-stuffing
+    // shape, never something a person typed.
+    if (u.username || u.password) return null;
+    return u.toString();
+  } catch { return null; }
+}
+
+/**
+ * Everything enabling `<webview>` costs, paid back in one place.
+ *
+ * A guest is a page the app did not write, so it gets nothing: no preload (it
+ * would inherit the `window.agentglass` bridge and with it the API token), no
+ * Node, no relaxed web security, its own session, and a src that has already
+ * been checked. Fail closed — a src or partition that is not recognised is
+ * refused rather than corrected, because a renderer bug that can choose either
+ * is the whole attack.
+ *
+ * `will-attach-webview` is the only hook that runs before the guest exists;
+ * attributes set in the markup are advisory until this handler agrees with
+ * them.
+ */
+function guardWebviews(win) {
+  win.webContents.on("will-attach-webview", (e, webPreferences, params) => {
+    const src = safeGuestUrl(params.src);
+    if (!src || webPreferences.partition !== BROWSER_PARTITION) {
+      e.preventDefault();
+      return;
+    }
+    // Both spellings: older Electron carries preloadURL alongside preload, and
+    // leaving either is how a guest ends up holding the app's bridge.
+    delete params.preload;
+    delete webPreferences.preload;
+    delete webPreferences.preloadURL;
+    webPreferences.nodeIntegration = false;
+    webPreferences.nodeIntegrationInSubFrames = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+    webPreferences.allowRunningInsecureContent = false;
+    webPreferences.enableBlinkFeatures = "";
+    webPreferences.partition = BROWSER_PARTITION;
+  });
+
+  win.webContents.on("did-attach-webview", (_e, guest) => {
+    // A guest is its own Chromium process and its key events never reach the
+    // renderer, so with a page focused every app shortcut silently stops
+    // working — the workspace cannot be switched or closed and the pane is a
+    // trap. Only the chords that move you *out* are forwarded; everything else
+    // belongs to the page, where Ctrl+L, Ctrl+F and the rest still mean what
+    // they mean in a browser.
+    guest.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown") return;
+      const mod = process.platform === "darwin" ? input.meta : input.control;
+      const jumpsOut = (mod && /^[1-9]$/.test(input.key))
+        || (mod && input.key.toLowerCase() === "w")
+        || input.key === "Escape";
+      if (!jumpsOut) return;
+      event.preventDefault();
+      win.webContents.sendInputEvent({
+        type: "keyDown",
+        keyCode: input.key,
+        modifiers: [
+          input.control && "control", input.meta && "meta",
+          input.shift && "shift", input.alt && "alt",
+        ].filter(Boolean),
+      });
+      win.webContents.focus();
+    });
+
+    // A page opening a window has nowhere to go here: there are no tabs yet, so
+    // it goes where every other external link goes.
+    guest.setWindowOpenHandler(({ url }) => {
+      const safe = safeGuestUrl(url);
+      if (safe) shell.openExternal(safe);
+      return { action: "deny" };
+    });
+  });
+}
+
 function createWindow() {
+  const st = readWindowState();
+  const place = onSomeDisplay(st, screen) ? { x: st.x, y: st.y } : {};
   const win = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: st.width,
+    height: st.height,
+    ...place,
     backgroundColor: "#0f0a1a",
     title: "agentglass",
     autoHideMenuBar: true,
+    /*
+     * No system title bar. The app draws its own.
+     *
+     * The strip at the top of this window already carries the project, the
+     * fleet, the plan meters and the clock; a second bar above it holding
+     * nothing but three buttons is 30px of chrome saying nothing. So the buttons
+     * move in with everything else and the strip becomes the drag region.
+     *
+     * macOS keeps its traffic lights — they are a system affordance people
+     * expect exactly where they are, and `hiddenInset` leaves them in place over
+     * our own bar, which pads itself past them. Everywhere else the window is
+     * frameless and the buttons below are the whole story, which is why they are
+     * wired rather than decorative: with `frame: false` there is no other way to
+     * minimise, maximise or close.
+     */
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" }
+      : { frame: false }),
     icon: path.join(__dirname, "icons", "icon.png"),
-    webPreferences: { preload: path.join(__dirname, "preload.js") },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      // The browser view is a <webview>, which is off by default. See
+      // guardWebviews for what enabling it costs and what pays it back; the
+      // short version is that a guest is a DOM element here rather than a
+      // main-process rectangle, which is the only way it can live inside a
+      // workspace whose views stay mounted and merely toggle visibility.
+      webviewTag: true,
+    },
   });
   registerIpc(win);
+  guardWebviews(win);
   openLinksOutside(win);
   keepUsefulShortcuts(win);
+  // Restored before the page loads, so the window does not visibly snap into
+  // place a beat after it appears.
+  if (st.full) win.setFullScreen(true);
+  else if (st.max) win.maximize();
+
   win.loadURL(`${APP_ORIGIN}/`);
   mainWindow = win;
+
+  // Saved on every settle rather than only on close: a crash, a kill or a
+  // reboot are exactly the times you would most like the window to come back
+  // where it was. Debounced, because a drag or a resize fires continuously.
+  let saveTimer = null;
+  const remember = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveWindowState(win), 400);
+  };
+  for (const ev of ["resize", "move", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
+    win.on(ev, remember);
+  }
+  // And once more on the way out, unthrottled: the debounce would otherwise be
+  // cancelled by the process ending.
+  win.on("close", () => { clearTimeout(saveTimer); saveWindowState(win); });
   win.on("closed", () => { if (mainWindow === win) mainWindow = null; });
 }
 
@@ -534,15 +802,25 @@ function keepUsefulShortcuts(win) {
     if (input.key === "F11") {
       hit(); win.setFullScreen(!win.isFullScreen()); return;
     }
-    if (ctrl && (input.key === "=" || input.key === "+")) {
-      hit(); win.webContents.setZoomLevel(win.webContents.getZoomLevel() + 0.5); return;
-    }
-    if (ctrl && input.key === "-") {
-      hit(); win.webContents.setZoomLevel(win.webContents.getZoomLevel() - 0.5); return;
-    }
-    if (ctrl && input.key === "0") {
-      hit(); win.webContents.setZoomLevel(0);
-    }
+    /*
+     * The zoom keys are NOT handled here, and that is the point.
+     *
+     * They used to be: `preventDefault()` and `setZoomLevel` right in this
+     * handler, which runs in the main process before the renderer sees the
+     * keystroke at all. So the app's own rule — the pointer decides whether you
+     * are sizing the terminal or the window — could never run, because the
+     * keystroke never arrived. Everything zoomed together, always, and no
+     * amount of work in the renderer was ever going to change that.
+     *
+     * The renderer owns them now (see lib/zoomTarget.ts) and asks this process
+     * to scale the window through `ag:setZoom` when that is what was meant.
+     * That also settles a second, quieter conflict: this used to move the zoom
+     * LEVEL while the app's own setting moves the zoom FACTOR, so the two were
+     * fighting over the same number in different units.
+     *
+     * There is no menu bar to supply a default accelerator (setApplicationMenu
+     * is null), so nothing else claims them either.
+     */
   });
 }
 

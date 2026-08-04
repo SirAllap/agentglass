@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
+import { subscribeWorktreeJump, worktreeJump } from "./lib/worktreeJump.ts";
 import { useStats } from "./lib/useStats.ts";
 import { deriveAgents, deriveAlerts, buildTitles, buildRollups } from "./lib/derive.ts";
 import { publishFleet } from "./lib/demoBridge.ts";
@@ -11,38 +12,40 @@ import { subscribeControl } from "./lib/controlBus.ts";
 import { latchChatIntent } from "./lib/chatIntent.ts";
 import type { ControlCmd } from "../../shared/types.ts";
 import { actionFor } from "./lib/keybindings.ts";
-import { currentScale, nudgeScale, resetScale } from "./lib/uiScale.ts";
+import { currentScale } from "./lib/uiScale.ts";
+import { zoomAtPointer, type ZoomResult } from "./lib/zoomTarget.ts";
 import { toggleFullscreen } from "./lib/desktop.ts";
 import { useAlertSound } from "./lib/useSound.ts";
-import { Header } from "./components/Header.tsx";
-import { Kpis } from "./components/Kpis.tsx";
-import { Throughput } from "./components/Throughput.tsx";
-import { ToolMix } from "./components/ToolMix.tsx";
-import { Radar } from "./components/Radar.tsx";
-import { Alerts } from "./components/Alerts.tsx";
-import { Fleet } from "./components/Fleet.tsx";
-import { Feed } from "./components/Feed.tsx";
-import { CostByModel } from "./components/CostByModel.tsx";
-import { Latency } from "./components/Latency.tsx";
-import { Sessions } from "./components/Sessions.tsx";
-import { MissionTimeline } from "./components/MissionTimeline.tsx";
+import { TopBar } from "./components/TopBar.tsx";
+import { DashboardView } from "./components/DashboardView.tsx";
 import { EventModal } from "./components/EventModal.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { HelpLegend } from "./components/HelpLegend.tsx";
 import { StatsModal } from "./components/StatsModal.tsx";
 import { SkillsModal } from "./components/SkillsModal.tsx";
 import { Workspace } from "./components/workspace/Workspace.tsx";
-import { VIEW_IDS, loadViewOrder, loadLastView, type ViewId } from "./components/workspace/views.ts";
+import { VIEW_IDS, visibleIds, isVisibleView, moveView, loadRail, subscribeRail, SHIPPED_RAIL, loadLastView, type ViewId } from "./components/workspace/views.ts";
 import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import { chordFromEvent, viewForChord } from "./lib/keybindings.ts";
+import { onOpenSettings } from "./lib/openSettings.ts";
+import { onOpenPrs } from "./lib/openPrs.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
+import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
+import { ZoomToast } from "./components/ZoomToast.tsx";
+import { NoteToasts } from "./components/NoteToasts.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
 import { ProjectPicker, PICKER_ANSWERED_KEY } from "./components/ProjectPicker.tsx";
+import { NeedsPopover, type NeedsItem } from "./components/NeedsPopover.tsx";
+import { requestPrJump } from "./lib/prJump.ts";
+import { subscribeGates, listGates } from "./lib/gateStore.ts";
+
+/** The last segment of a path — a project's name as anyone says it out loud. */
+const leafOf = (p: string): string => p.split("/").filter(Boolean).pop() ?? p;
 
 /**
  * Wrap a setState so a poll that answers the same thing twice doesn't commit.
@@ -72,12 +75,74 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
-  // One overlay replaced five modals. `wsView` is which view it shows, and it
-  // survives closing — reopening lands you where you left off, because
-  // switching views is the thing you do constantly.
-  const [wsOpen, setWsOpen] = useState(false);
+  /**
+   * Which view the shell is showing.
+   *
+   * There is no `wsOpen` any more. The workspace was a modal you opened over a
+   * dashboard nobody used; it is the window now, so the only state left is
+   * WHICH view — and that is remembered across restarts, because landing where
+   * you left off is the whole point of not having a front door.
+   */
   const [wsView, setWsView] = useState<ViewId>(loadLastView);
+  /** The dashboard is a view like any other, and this is what makes it free
+   *  when it is not the one on screen. */
+  const dashActive = wsView === "dash";
+  /** Where ⌘\ goes back to. Without it, toggling off the dashboard would have
+   *  to pick a view, and picking one for you is how you lose your place. */
+  const lastNonDash = useRef<ViewId>(wsView === "dash" ? "term" : wsView);
+  if (wsView !== "dash") lastNonDash.current = wsView;
+  /** Hiding the view you are standing in cannot leave you standing in it.
+   *
+   *  It is the one rail edit with nowhere to go afterwards: no tab is
+   *  highlighted, ⌘[ has no position to count from, and the only way back is a
+   *  menu two clicks away. Step to the first tab that is still there instead —
+   *  and to ⌘\'s fallback if the whole rail has been emptied, which is a
+   *  layout the user is allowed to make and the app still has to survive. */
+  const rail = useSyncExternalStore(subscribeRail, loadRail, () => SHIPPED_RAIL);
+  /**
+   * Go to a view, putting it back on the rail if it is not on one.
+   *
+   * Every route to a view that is not the rail itself — a dashboard card, "open
+   * this in the browser", a chord somebody bound by hand, a command from the
+   * phone. Hiding a view says "stop showing me this tab", and the honest
+   * reading of asking for it by name afterwards is that you changed your mind.
+   * The alternative is a button that does nothing, which is indistinguishable
+   * from a broken one, and a workspace showing a view with no tab lit is how
+   * you end up unable to get back.
+   */
+  const goView = useCallback((v: ViewId) => {
+    if (!isVisibleView(v)) moveView(v, "work");
+    setWsView(v);
+  }, []);
+
+  // A worktree jump from the Terminal chrome switches to the view it targets;
+  // the git / file-changes panel reads the scope or filter from the same store.
+  // goView, not a bare setWsView, so a view hidden from the rail comes back
+  // rather than switching to a tab that is not there.
+  const wtJump = useSyncExternalStore(subscribeWorktreeJump, worktreeJump);
+  const wtJumpServed = useRef(0);
+  useEffect(() => {
+    if (wtJump && wtJump.n !== wtJumpServed.current) { wtJumpServed.current = wtJump.n; goView(wtJump.view); }
+  }, [wtJump, goView]);
+  useEffect(() => {
+    const visible = visibleIds();
+    // ⌘\'s way back, checked whether or not it is where you are: hiding the
+    // view it points at is silent until the day you press it.
+    if (!visible.includes(lastNonDash.current)) {
+      lastNonDash.current = visible.find((v) => v !== "dash") ?? "term";
+    }
+    if (!visible.includes(wsView) && visible[0]) setWsView(visible[0]);
+  }, [rail, wsView]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // A pane a panel elsewhere asked us to land on — see lib/openSettings.ts.
+  const [settingsPane, setSettingsPane] = useState<string | null>(null);
+  const [prJump, setPrJump] = useState<import("./lib/openPrs.ts").PrJump | null>(null);
+  useEffect(() => onOpenSettings((pane) => { setSettingsPane(pane ?? null); setSettingsOpen(true); }), []);
+  useEffect(() => onOpenPrs((j) => { setPrJump(j); goView("pr"); }), [goView]);
+  /** Which machine tab is open, or none. One piece of state for both surfaces:
+   *  the dashboard header and the workspace rail open the same panel, and a
+   *  second copy would be a second poll of /proc. */
+  const [machine, setMachine] = useState<MachineTab | null>(null);
   const [chatFocus, setChatFocus] = useState<string | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sessionView, setSessionView] = useState<{ id: string; app: string } | null>(null);
@@ -85,14 +150,10 @@ export default function App() {
   // Mirrors the window's zoom for the settings row to read. The scale itself
   // lives in lib/uiScale.ts, applied before this component ever mounts.
   const [scale, setScale] = useState(currentScale);
+  /** The last zoom, for the pill that says what changed and how big it is. */
+  const [zoomed, setZoomed] = useState<(ZoomResult & { n: number }) | null>(null);
   const [workspace, setWorkspace] = useState<string | null>(null);
 
-  // Stable, and it has to be. This is passed down to the terminal, whose mount
-  // effect lists it as a dependency — an inline arrow is a new identity on
-  // every render of this component, which made that effect tear down and
-  // re-run, detaching and re-appending the live xterm DOM. Measured at eleven
-  // times in twenty seconds on a completely idle app.
-  const closeWorkspace = useCallback(() => setWsOpen(false), []);
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
 
@@ -109,8 +170,6 @@ export default function App() {
     projectOpen || sessionView !== null || selected !== null;
   const anyPanelOpenRef = useRef(anyPanelOpen);
   anyPanelOpenRef.current = anyPanelOpen;
-  const wsOpenRef = useRef(wsOpen);
-  wsOpenRef.current = wsOpen;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
   // The catalog is the one panel that can open *over* the workspace, from the
@@ -129,7 +188,11 @@ export default function App() {
   // reading a session meant scrolling a few hundred rows on the same CPU that
   // was still sweeping a radar and pulsing a ring per live agent behind the
   // dim. Same treatment, same attribute.
-  const covered = wsOpen || anyPanelOpen;
+  //
+  // The workspace is no longer one of the cases: it does not cover the
+  // dashboard any more, it REPLACES it — a view that is not on screen is not
+  // mounted, so there is nothing left of it to freeze.
+  const covered = anyPanelOpen || !dashActive;
   useEffect(() => {
     document.documentElement.dataset.ws = covered ? "1" : "0";
   }, [covered]);
@@ -140,12 +203,11 @@ export default function App() {
   // socket's buffer instead gives the panel you are actually reading the main
   // thread to itself, and uncovering flushes it in one go.
   //
-  // NOT while the workspace is open, even though it covers the dashboard just
-  // as thoroughly: the chat panel inside it is a live view fed by these very
-  // events, and holding them would freeze a streaming answer mid-word. A modal
-  // over the workspace (the skills catalog opens there) is left alone for the
-  // same reason.
-  const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen && !wsOpen);
+  // Only for a modal, and never merely because the dashboard is not the view
+  // on screen: the chat panel is a live view fed by these very events, the
+  // fleet spine reads them in every view, and holding them would freeze a
+  // streaming answer mid-word.
+  const { events, conn, lastEvent, openTools } = useLive(anyPanelOpen);
   // The live socket is the app's only real-time source, and until now the chat
   // panel was the one view that never saw it — a resumed session sat frozen on
   // whatever had been true when you opened it while the agent kept working.
@@ -193,23 +255,31 @@ export default function App() {
   // Poll on an interval — NOT on every event. Passing lastEvent.id as `bump`
   // used to refetch /stats on every single event (a per-event server query +
   // full chart re-render). The 4s interval is plenty for a summary.
-  const { stats } = useStats(windowMs, undefined, filter.provider);
+  // Only while the dashboard is the view on screen. It is the app's dearest
+  // poll and it feeds nothing else — see useStats for the numbers.
+  const { stats } = useStats(windowMs, undefined, filter.provider, dashActive);
 
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
 
-  // Filter options change rarely (a new app/event type) — poll slowly, and only
-  // take the new object when it actually differs. Setting state to a fresh copy
-  // of the same data still commits the whole tree; on a poll that answers
-  // identically almost every time, that is a free re-render of the cockpit.
+  /**
+   * The facet lists, for the command palette — fetched when it opens.
+   *
+   * This used to be a 20-second poll for the life of the process, feeding two
+   * dropdowns in the app header. The header is gone and those dropdowns live
+   * inside the dashboard now, which fetches its own; all that is left here is
+   * the palette, which is shut almost always and stale never — a list of source
+   * apps changes when somebody installs a new agent, not between two ticks.
+   *
+   * `keepIfSame` still guards the write: the palette can be opened repeatedly,
+   * and a fresh object with identical contents re-renders the whole tree.
+   */
   useEffect(() => {
-    const take = keepIfSame(setOpts); // once per effect — inside load() its memory would reset each call
-    const load = () => api.filterOptions().then(take).catch(() => {});
-    load();
-    const id = setInterval(load, 20_000);
-    return () => clearInterval(id);
-  }, []);
+    if (!paletteOpen) return;
+    const take = keepIfSame(setOpts);
+    api.filterOptions().then(take).catch(() => {});
+  }, [paletteOpen]);
 
   // Statuses are functions of the clock, not only of the buffer: a session
   // mid-build emits nothing for minutes, and without a tick its card would
@@ -289,6 +359,91 @@ export default function App() {
     [filter.provider, visibleEvents, agentsAll, openTools, sessionProvider, titles]
   );
   const alerts = useMemo(() => deriveAlerts(agents), [agents]);
+  /** Held tool calls. Read here as well as on the dashboard so the bar can tell
+   *  "an agent asked a question" from "an agent is stopped at a gate you can
+   *  let through" — only the second has a button anywhere in this app. */
+  const gates = useSyncExternalStore(subscribeGates, listGates, listGates);
+  /**
+   * The one thing the top bar interrupts for.
+   *
+   * An alert used to live in a panel on a screen nobody opened, which is an
+   * archive rather than an alert. Here it takes the middle of the strip and
+   * carries its own way in, so "an agent is waiting on you" cannot be missed
+   * from any view — and says nothing at all when there is nothing to say.
+   */
+  const needs = useMemo(() => {
+    if (!alerts.length) return null;
+    const first = alerts[0]!;
+    // `agent` is the card key the alert was raised from, so the name shown is
+    // the session's own rather than a uuid the reader has never seen.
+    const who = agents.find((a) => a.key === first.agent);
+    const label = who?.title || who?.source_app || first.agent;
+    return {
+      count: alerts.length,
+      // The name alone. It used to carry "needs you" as well, which spends the
+      // width the reason needs to say something you can already see from the
+      // amber strip it is sitting in.
+      label,
+      // WHAT it wants. The alert has always known — a permission request names
+      // its tool, a notification carries its message — and deriveAlerts used to
+      // replace all of it with one constant string. See becauseOf().
+      because: first.text,
+      // Where it is, and what can be done about it, live on `needsList` — the
+      // chip is only the headline now, and the panel it opens is the thing that
+      // has to know how to act.
+    };
+  }, [alerts, agents]);
+
+  /**
+   * Everything that is waiting on you, with what can honestly be done about it.
+   *
+   * The chip used to be a button that went somewhere: first the dashboard, then
+   * the session — a chat when one existed, and SessionModal otherwise. That last
+   * fallback is the one that had to go. SessionModal is a post-mortem headed
+   * WHAT IT DID; it cannot answer "waiting for your input", so clicking an alarm
+   * covered the terminal you were working in with a read-only summary and left
+   * you no better off.
+   *
+   * So the chip opens a panel instead, and this is what it reads. An action is
+   * listed only when it exists: a chat that can carry the reply, a gate the
+   * dashboard can approve, a project this alert belongs to that is not the one
+   * you have open. When none of them do, the panel says so and names the
+   * directory, which is the useful half of what a destination would have done.
+   */
+  const needsList = useMemo((): NeedsItem[] => {
+    const homeless = alerts.slice(0, 8);
+    return homeless.map((al) => {
+      const who = agents.find((a) => a.key === al.agent);
+      const sessionId = who?.session_id ?? "";
+      const project = who?.project ?? null;
+      // A cockpit watches every project at once, so an alert from another one is
+      // legitimate — but it must say which, or you go looking in the wrong tree.
+      const other = project && workspace && project !== workspace ? leafOf(project) : null;
+      return {
+        key: al.id,
+        sessionId,
+        label: who?.title || who?.source_app || al.agent,
+        because: al.text,
+        level: al.level === "error" ? "error" : "warn",
+        cwd: who?.cwd ?? project,
+        project,
+        otherProject: other,
+        chatId: sessionId ? (chatResuming(sessionId)?.id ?? null) : null,
+        gated: !!sessionId && gates.some((g) => g.session_id === sessionId),
+      };
+    });
+  }, [alerts, agents, workspace, gates]);
+
+  const openChatFor = useCallback((chatId: string) => {
+    setChatFocus(chatId);
+    goView("chat");
+  }, [goView]);
+  /** The Approve buttons live on the dashboard's "What needs you" — the one
+   *  place in the app that can actually let a held tool call through. */
+  const approveOnDash = useCallback(() => { goView("dash"); }, [goView]);
+  const switchProject = useCallback((root: string) => {
+    void api.setWorkspace(root).then((r) => { if (r.ok) setWorkspace(r.workspace); }).catch(() => {});
+  }, []);
   useAlertSound(alerts.length, sound);
 
   // Demo builds only: hand the fleet to whoever is showing this build inside a
@@ -304,8 +459,22 @@ export default function App() {
   // Zoom steps through a fixed ladder rather than taking a target, so every
   // caller (keys, settings, palette) lands on the same rungs. uiScale owns the
   // real value; this only echoes it back for display.
+  /**
+   * Zoom whatever the pointer is over: the terminal's font over a terminal, the
+   * window everywhere else.
+   *
+   * One gesture for what used to be two unrelated ones — Ctrl+/Ctrl− scaled the
+   * window, and the terminal's size was a stepper in Settings → Terminal. So
+   * making the shell readable also blew up the UI, and making the UI readable
+   * shrank nothing you were reading. There is no mode to be in: you are already
+   * pointing at the thing you want bigger.
+   */
   const zoom = useCallback((dir: 1 | -1 | 0) => {
-    setScale(dir === 0 ? resetScale() : nudgeScale(dir));
+    const r = zoomAtPointer(dir);
+    // `n` increments so holding the key reads as one adjustment rather than a
+    // stack of identical toasts — see ZoomToast.
+    setZoomed((cur) => ({ ...r, n: (cur?.n ?? 0) + 1 }));
+    if (r.what === "app") setScale(currentScale());
   }, []);
 
   // Keyboard shortcuts: ⌘K / Ctrl-K palette, ? help, single-letter panels, Esc closes
@@ -330,38 +499,49 @@ export default function App() {
       // cannot be bound, so nothing here can shadow zoom or the palette.
       const chord = chordFromEvent(e);
       if (chord) {
-        const target = viewForChord(chord, loadViewOrder().map((v) => v.id));
+        const target = viewForChord(chord);
         if (target) {
           e.preventDefault();
-          setWsView(target);
-          setWsOpen(true);
+          goView(target);
           return;
         }
       }
 
       if ((e.metaKey || e.ctrlKey) && !e.altKey) {
         const k = e.key;
-        if (k === "=" || k === "+") { e.preventDefault(); setScale(nudgeScale(1)); return; }
-        if (k === "-" || k === "_") { e.preventDefault(); setScale(nudgeScale(-1)); return; }
-        if (k === "0") { e.preventDefault(); setScale(resetScale()); return; }
+        if (k === "=" || k === "+") { e.preventDefault(); zoom(1); return; }
+        if (k === "-" || k === "_") { e.preventDefault(); zoom(-1); return; }
+        if (k === "0") { e.preventDefault(); zoom(0); return; }
 
         // Workspace navigation, and the reason it carries a modifier: these
         // have to work while the caret sits in the chat composer or a commit
         // message, where a bare letter is just a letter.
-        // The user's rail order, not the shipped one: the rail labels each
-        // icon with the number that reaches it, and a tooltip that stops being
-        // true after a reorder is worse than no tooltip.
-        const railIds = loadViewOrder().map((v) => v.id);
+        // The user's rail, not the shipped one: the rail labels each icon with
+        // the number that reaches it, and a tooltip that stops being true after
+        // a reorder is worse than no tooltip. Both drawers, since cycling is
+        // "the next tab along" — but nothing they have hidden, which is not a
+        // tab any more.
+        const cycle = visibleIds();
         if (k === "[" || k === "]") {
           e.preventDefault();
+          if (!cycle.length) return;
           setWsView((cur) => {
-            const i = railIds.indexOf(cur);
-            return railIds[(i + (k === "]" ? 1 : railIds.length - 1)) % railIds.length]!;
+            const i = cycle.indexOf(cur);
+            return cycle[(i + (k === "]" ? 1 : cycle.length - 1) + cycle.length) % cycle.length]!;
           });
-          setWsOpen(true);
           return;
         }
-        if (k === "\\") { e.preventDefault(); setWsOpen((o) => !o); return; }
+        // ⌘\ used to open and close the workspace. There is nothing to open —
+        // it goes to the dashboard and back instead, which is the closest thing
+        // left to "show me the app rather than the work".
+        if (k === "\\") {
+          e.preventDefault();
+          // The ref, not `dashActive`: this handler is subscribed once with an
+          // empty dep array, so a render value read here would be the one from
+          // the mount and ⌘\ would toggle against a view you left long ago.
+          goView(wsViewRef.current === "dash" ? lastNonDash.current : "dash");
+          return;
+        }
       }
       // F11, the way every desktop app binds it. Outside the modifier block —
       // it carries none — and before the bailout below, which would otherwise
@@ -375,15 +555,13 @@ export default function App() {
       // because a focused textarea can swallow it before it reaches here.
       if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
-        // Peel one layer at a time: the catalog opened from the rail sits on
-        // top of the workspace, so it goes first and the workspace stays.
-        if (wsOpenRef.current && skillsOpenRef.current) { setSkillsOpen(false); return; }
+        // Escape closes whatever is ON the shell. It never closes the shell —
+        // there is nothing behind it to go back to any more.
         setSelected(null);
         setPaletteOpen(false);
         setHelpOpen(false);
         setStatsOpen(false);
         setSkillsOpen(false);
-        setWsOpen(false);
         setSearchOpen(false);
         setSessionView(null);
         return;
@@ -411,10 +589,9 @@ export default function App() {
       //
       // There is no version of "is this keystroke meant for the app or for the
       // shell" that a heuristic answers reliably, so the rule is positional
-      // instead of behavioural. Inside the workspace, navigation carries a
-      // modifier — ⌘1..5, ⌘\, ⌘[/] — which no shell will ever consume, and the
-      // rail is a click away.
-      const canNavigate = focusFree && !anyPanelOpenRef.current && !wsOpenRef.current;
+      // instead of behavioural. Navigation carries a modifier — ⌘1..N, ⌘[/] —
+      // which no shell will ever consume, and the rail is a click away.
+      const canNavigate = focusFree && !anyPanelOpenRef.current;
       if (!canNavigate) return;
 
       // Which action owns this letter, according to the user's bindings —
@@ -430,10 +607,15 @@ export default function App() {
       // opens rather than toggles: there is no open workspace to close from
       // here, and ⌘\ is the key that puts it away from inside.
       if (action?.startsWith("view.")) {
+        // Only from the dashboard — the note above says so, but nothing was
+        // enforcing it: off the dashboard, focus falls back to <body> constantly
+        // (a shell losing it, a click on padding), so a bare `g` in the terminal
+        // jumped to git. A workspace view keeps its bare letters as letters; the
+        // modifier chords (⌘1..N) are how you switch once you are in one.
+        if (wsViewRef.current !== "dash") return;
         const view = action.slice(5) as ViewId;
         e.preventDefault();
-        setWsView(view);
-        setWsOpen(true);
+        goView(view);
         return;
       }
 
@@ -464,11 +646,13 @@ export default function App() {
     return subscribeControl((cmd) => {
       switch (cmd.cmd) {
         case "view":
-          setWsView(cmd.to);
-          setWsOpen(true);
+          goView(cmd.to);
           break;
         case "workspace":
-          setWsOpen((o) => (cmd.open === undefined ? !o : cmd.open));
+          // No overlay to toggle any more: an external controller asking for
+          // "the workspace" gets the last view that was not the dashboard,
+          // which is what it was asking to see.
+          setWsView((cur) => (cur === "dash" ? lastNonDash.current : cur));
           break;
         case "esc":
           // The same peel Escape does, minus the focus guards — a remote command
@@ -478,7 +662,6 @@ export default function App() {
           setHelpOpen(false);
           setStatsOpen(false);
           setSkillsOpen(false);
-          setWsOpen(false);
           setSearchOpen(false);
           setSessionView(null);
           break;
@@ -493,14 +676,17 @@ export default function App() {
           setTheme((cur) => nextThemeId(cur, cmd));
           break;
         case "zoom":
-          setScale(cmd.dir === 0 ? resetScale() : nudgeScale(cmd.dir));
+          // Through the same door as the keys, so a remote controller and a
+          // keystroke cannot disagree about what "zoom" means. There is no
+          // pointer in a remote command, so it lands on the window — which is
+          // what an external controller can sensibly mean by it.
+          zoom(cmd.dir);
           break;
         case "chat":
           // Latch before opening: the panel drains the mailbox on mount, so
           // this works whether or not the chat view is already up.
           latchChatIntent(cmd.do);
-          setWsView("chat");
-          setWsOpen(true);
+          goView("chat");
           break;
       }
     });
@@ -524,93 +710,83 @@ export default function App() {
       <ServerBanner />
       <GitMissingBanner />
 
-      <Header
-        conn={conn}
-        windowMs={windowMs}
-        onWindow={setWindowMs}
-        retentionDays={stats?.retention_days}
-        apps={opts.source_apps}
-        types={opts.hook_event_types}
-        providers={providers}
-        filter={filter}
-        onFilter={setFilter}
-        theme={theme}
-        onTheme={setTheme}
-        sound={sound}
-        onSound={() => setSound((s) => !s)}
-        onOpenPalette={() => setPaletteOpen(true)}
-        onOpenHelp={() => setHelpOpen(true)}
-        onOpenStats={() => setStatsOpen(true)}
-        onOpenSkills={() => setSkillsOpen(true)}
-        onOpenWorkspace={() => setWsOpen(true)}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onClear={clearFilters}
-        showUsage={showUsage}
+      <TopBar
         workspace={workspace}
         onOpenProject={() => setProjectOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
+        // On the dashboard the readings step back: the screen below is already
+        // saying all of it, and a strip repeating it is what made the old notch
+        // feel like decoration.
+        quiet={dashActive}
+        needs={needs}
+        needsList={needsList}
+        onNeedChat={openChatFor}
+        onNeedApprove={approveOnDash}
+        onNeedProject={switchProject}
+        onNeedTerminal={() => goView("term")}
+        // A notification that knows what it is about. The panel may be open
+        // over any view and the PR panel may not be mounted at all, so the
+        // request is left in a slot and the view switched — the same shape the
+        // issues panel uses to start a terminal it cannot reach.
+        onNoteGoto={(g) => { requestPrJump(g.repo, g.number); goView("pr"); }}
       />
 
-      <main className="flex-1 min-h-0 p-3 flex flex-col gap-3 overflow-auto tall:overflow-hidden">
-        <div className="shrink-0">
-          <Kpis stats={stats} agents={agents} startedAt={startedAt} epm={epm} />
-        </div>
-
-        {/* Cockpit — fills the viewport on a tall screen; on short laptops it
-            keeps readable panel heights and the page scrolls instead. */}
-        <div className="shrink-0 min-h-0 tall:flex-1 grid grid-cols-1 xl:grid-cols-12 gap-3">
-          <div className="xl:col-span-3 min-w-0 min-h-0 h-[420px] xl:h-[520px] tall:h-auto">
-            <Fleet agents={agents} activeApp={filter.app} onSelect={(a) => setSessionView({ id: a.session_id, app: a.source_app })} />
-          </div>
-
-          {/* Phones: auto-height rows with fixed chart/feed heights — the
-              desktop 520px box clipped Throughput/ToolMix to slivers. */}
-          <div className="xl:col-span-6 min-w-0 min-h-0 grid grid-rows-[auto_400px] sm:grid-rows-[minmax(0,150px)_minmax(0,1fr)] gap-3 h-auto sm:h-[520px] tall:h-auto">
-            <div className="grid grid-cols-1 sm:grid-cols-2 auto-rows-[150px] sm:auto-rows-auto gap-3 min-w-0 min-h-0">
-              <Throughput events={visibleEvents} />
-              <ToolMix events={visibleEvents} />
-            </div>
-            <div className="min-w-0 min-h-0">
-              <Feed events={events} filter={filter} sessionProvider={sessionProvider} onSelect={setSelected} onClearFilter={clearFilters} />
-            </div>
-          </div>
-
-          <div className="xl:col-span-3 min-w-0 min-h-0 grid grid-rows-[3fr_2fr] gap-3 h-[420px] xl:h-[520px] tall:h-auto">
-            <Radar agents={agents} onSelect={(a) => setFilter((f) => ({ ...f, app: a.source_app }))} />
-            <Alerts alerts={alerts} agents={agents} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
-          </div>
-        </div>
-
-        {/* Money row — pinned */}
-        <div className="shrink-0 grid grid-cols-1 xl:grid-cols-3 gap-3 h-auto xl:h-[196px]">
-          <CostByModel stats={stats} />
-          <Latency stats={stats} />
-          <Sessions provider={filter.provider} />
-        </div>
-
-        {/* Mission timeline — pinned */}
-        <div className="shrink-0 h-[140px]">
-          <MissionTimeline stats={stats} />
-        </div>
-      </main>
+      <Workspace
+        prJump={prJump}
+        view={wsView} onView={setWsView}
+        onSkills={() => setSkillsOpen(true)}
+        onSettings={() => setSettingsOpen(true)}
+        onMachine={setMachine}
+        chatFocusId={chatFocus}
+        dashboard={(active) => (
+          <DashboardView
+            active={active}
+            events={events} visibleEvents={visibleEvents}
+            agents={agents} alerts={alerts} stats={stats}
+            sessionProvider={sessionProvider} providers={providers}
+            windowMs={windowMs} onWindow={setWindowMs}
+            filter={filter} onFilter={setFilter} onClearFilter={clearFilters}
+            retentionDays={stats?.retention_days}
+            startedAt={startedAt} epm={epm}
+            onSelectEvent={setSelected}
+            onSelectSession={setSessionView}
+          />
+        )}
+      />
 
       <EventModal event={selected} onClose={() => setSelected(null)} />
       <StatsModal open={statsOpen} onClose={() => setStatsOpen(false)} stats={stats} windowMs={windowMs} />
       <SkillsModal open={skillsOpen} onClose={() => setSkillsOpen(false)} />
-      <Workspace open={wsOpen} view={wsView} onView={setWsView} onClose={closeWorkspace} onSkills={() => setSkillsOpen(true)} chatFocusId={chatFocus} />
+      {/* App-level, not inside a view: it is about the machine, not about
+          whatever you happen to be looking at. */}
+      {machine && (
+        <MachinePanel tab={machine} onTab={setMachine} onClose={() => setMachine(null)}
+          onOpenBrowser={() => { setMachine(null); goView("browser"); }} />
+      )}
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
       {/* Shows once when the app first runs a version it has not run before —
           the update button restarts into a new build and otherwise says nothing
           about what changed. */}
       <WhatsNew />
+      {/* This machine's own notifications, over whatever is on screen — the
+          point of mirroring them at all is that agentglass is what is covering
+          the banner your desktop just drew. App-level and not inside a view, for
+          the same reason MachinePanel is: a Slack ping is not about the panel
+          you happen to be looking at. */}
+      <NoteToasts onGoto={(g) => { requestPrJump(g.repo, g.number); goView("pr"); }} />
+      <ZoomToast zoom={zoomed} />
       <SettingsModal
         open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        jumpTo={settingsPane}
+        onClose={() => { setSettingsOpen(false); setSettingsPane(null); }}
         sound={sound}
         onSound={() => setSound((s) => !s)}
         scale={scale}
         onZoom={zoom}
         onOpenStats={() => setStatsOpen(true)}
         onOpenHelp={() => setHelpOpen(true)}
+        theme={theme}
+        onTheme={setTheme}
       />
       <SessionModal
         sessionId={sessionView?.id ?? null}
@@ -630,8 +806,7 @@ export default function App() {
             title: s.summary?.slice(0, 40) || `${s.source_app}:${s.session_id.slice(0, 8)}`,
           });
           setChatFocus(chat.id);
-          setWsView("chat");
-          setWsOpen(true);
+          goView("chat");
         }}
       />
       <CommandPalette
@@ -644,12 +819,12 @@ export default function App() {
         onTheme={setTheme}
         onStats={() => setStatsOpen(true)}
         onSkills={() => setSkillsOpen(true)}
-        onChanges={() => { setWsView("diff"); setWsOpen(true); }}
-        onGit={() => { setWsView("git"); setWsOpen(true); }}
-        onPr={() => { setWsView("pr"); setWsOpen(true); }}
-        onDocker={() => { setWsView("docker"); setWsOpen(true); }}
-        onTerminal={() => { setWsView("term"); setWsOpen(true); }}
-        onChat={() => { setWsView("chat"); setWsOpen(true); }}
+        onChanges={() => goView("diff")}
+        onGit={() => goView("git")}
+        onPr={() => goView("pr")}
+        onDocker={() => goView("docker")}
+        onTerminal={() => goView("term")}
+        onChat={() => goView("chat")}
         onSearch={() => setSearchOpen(true)}
         onClear={clearFilters}
         onZoom={zoom}

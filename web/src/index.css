@@ -88,9 +88,10 @@
     inset: 0;
     z-index: -1;
     overflow: hidden;
+    /* One faint wash, tied to the accent (a neutral grey by default) — no more
+       blue --info glow. Serious dark stays serious; the accent does the colour. */
     background:
-      radial-gradient(50% 40% at 78% -8%, color-mix(in srgb, var(--primary) 30%, transparent), transparent),
-      radial-gradient(45% 35% at 8% 4%, color-mix(in srgb, var(--info) 22%, transparent), transparent);
+      radial-gradient(46% 34% at 82% -10%, color-mix(in srgb, var(--primary) 7%, transparent), transparent);
   }
   /* Static ambient glows. No filter: a radial-gradient is already soft, so the
      glow is baked into the gradient itself instead of a blur() pass — that
@@ -102,14 +103,11 @@
     width: 64vmax;
     height: 64vmax;
     border-radius: 50%;
-    opacity: 0.5;
-    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 40%, transparent), transparent 66%);
+    opacity: 0.28;
+    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 9%, transparent), transparent 66%);
   }
-  .aurora::after {
-    background: radial-gradient(circle, color-mix(in srgb, var(--info) 38%, transparent), transparent 66%);
-    left: 55%;
-    top: 30%;
-  }
+  /* The old second glow was the blue one; drop it entirely. */
+  .aurora::after { display: none; }
   .aurora-grid {
     position: fixed;
     inset: 0;
@@ -129,9 +127,9 @@
     /* Opaque-ish surface, NO backdrop-filter. A blur here over the animated
        backdrop forced the GPU to re-composite every panel every frame — the
        main cause of the fans. The tint reads the same over the dark ground. */
-    background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 7%, transparent), transparent 42%),
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bg4) 45%, transparent), transparent 42%),
       color-mix(in srgb, var(--bg2) 90%, var(--bg));
-    border: 1px solid color-mix(in srgb, var(--primary) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border2) 60%, transparent);
     border-radius: 1rem;
     box-shadow: 0 18px 40px -28px var(--shadow), inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
     @apply flex flex-col min-h-0 min-w-0;
@@ -160,8 +158,8 @@
   }
   .tile {
     position: relative;
-    background: color-mix(in srgb, var(--bg2) 60%, transparent);
-    border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    background: color-mix(in srgb, var(--bg3) 92%, var(--bg2));
+    border: 1px solid color-mix(in srgb, var(--border2) 55%, transparent);
     border-radius: 0.85rem;
     overflow: hidden;
     @apply px-3.5 py-2.5 flex flex-col gap-0.5;
@@ -170,7 +168,7 @@
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 10%, transparent), transparent 60%);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bg4) 40%, transparent), transparent 60%);
     pointer-events: none;
   }
   .chip {
@@ -264,6 +262,14 @@
 :root[data-ws="1"] [style*="ping-ring"] {
   animation-play-state: paused !important;
 }
+/* The zoom pill's entrance. Short, and only on the way in: it is replaced by
+   the next press, and an exit would leave the old number on screen while the
+   new one is already true. */
+@keyframes agx-zoom-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 @keyframes ping-ring {
   0% { transform: scale(0.6); opacity: 0.8; }
   100% { transform: scale(2.4); opacity: 0; }
@@ -275,11 +281,124 @@
  * only signal a keyboard user has for where they are — nothing in the UI showed
  * focus at all. :focus-visible restores it without putting a ring on every
  * mouse click, and the `!important` is needed to beat the utility classes that
- * cleared it. */
-:focus-visible {
+ * cleared it.
+ *
+ * Except on `tabindex="-1"`, and that exception is the whole point of the
+ * selector below. Eleven panels here carry it — the Git panel, the pull request
+ * list, Files — not to be tabbed to, but so they can be handed focus by script
+ * and then receive j/k. Nobody ever arrives at one by pressing Tab, so a ring
+ * around one tells a keyboard user nothing they did not already know.
+ *
+ * What it does instead is draw a 2px accent rectangle around an entire view.
+ * Those panels already say `outline-none`; the `!important` was overriding
+ * them. And because the ring is an outline at +2px offset on an element flush
+ * inside `overflow-hidden` parents, the right and bottom edges get clipped —
+ * so it reads as a broken border rather than as focus, which is exactly how it
+ * was reported.
+ *
+ * It also only appeared on the first visit to a view after a cold start, which
+ * is the tell. `:focus-visible` on a scripted `.focus()` is a browser
+ * heuristic: with no pointer interaction yet recorded, Chromium treats it as
+ * keyboard focus and paints. One click anywhere and the same call stops
+ * matching. Excluding the element is therefore the fix rather than fighting the
+ * heuristic — this holds whether or not the browser decides to match.
+ *
+ * Anything a user can actually tab to — buttons, links, fields, `tabindex="0"`
+ * — is unaffected. */
+:focus-visible:not([tabindex="-1"]) {
   outline: 2px solid var(--primary) !important;
-  outline-offset: 2px;
+  /* Inside the box, not around it.
+   *
+   * A positive offset paints the ring outside the border box, so it needs
+   * slack around the control to be seen — and plenty of controls have none.
+   * The view tabs and the pinned command chips sit flush inside tight
+   * horizontal strips that are `overflow-hidden` for their own reasons, and
+   * the strip crops whatever the ring puts outside it. What is left is the two
+   * side arcs, which reads as a pair of brackets rather than as focus.
+   *
+   * Measured on one view, 47 controls: at +2px, eight had a clipped ring and
+   * every one of them was cut on the top AND the bottom. At 0 the same eight
+   * were still clipped — they sit exactly flush, so there is no positive
+   * offset small enough to fit. At -2px, none. A ring 2px inside a control
+   * reads as well as one 2px outside it, and an ancestor cannot crop what
+   * never leaves the control. The fields below already worked this way, and
+   * for the same reason. */
+  outline-offset: -2px;
   border-radius: 6px;
+}
+
+/* ...but drawn inside a field that fills its container.
+ *
+ * A text field is laid out edge to edge inside the box that holds it, so an
+ * outline offset outwards is painted over — and past — that box's own border:
+ * focusing the comment composer put a ring around the outside of the card it
+ * lives in. Negative offset keeps the same signal, on the inside, where there
+ * is room for it. */
+:where(textarea, input, select):focus-visible {
+  outline-offset: -2px;
+}
+
+/* A placeholder at a contrast we chose.
+ *
+ * Chromium's default is a grey derived from the text colour with an opacity on
+ * top, which on a dark panel lands well under anything legible — and it is the
+ * one line of text in an empty field, so it is the only thing there to read.
+ * `opacity: 1` because the UA sets one and the colour alone would not win. */
+/* A field that looks like a field.
+ *
+ * Of the 49 text inputs in this app, 26 declared no surface at all: transparent
+ * on the panel, with whatever border the component happened to give it. On the
+ * neutral themes that is an invisible box — the Review tab's comment area was a
+ * placeholder floating on the page with no edge anywhere.
+ *
+ * Both the wash and the edge are mixed from --text rather than from a surface
+ * or a border colour, for the reason the inline code chip is: mixing the text
+ * colour into transparent always moves away from the background, whichever
+ * direction the theme runs, so one rule covers the light themes and the dark
+ * ones.
+ *
+ * `:where()` so this has zero specificity. It is a floor, not a policy: every
+ * component that styles its own field still wins, and the 23 that already do
+ * are untouched.
+ */
+:where(
+  input:not([type]),
+  input[type="text"], input[type="search"], input[type="url"],
+  input[type="email"], input[type="number"], input[type="password"],
+  textarea
+) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border-radius: 6px;
+  color: var(--text);
+}
+
+/* ...except where a field has already said it is bare.
+ *
+ * Eleven fields in this app are laid inside a container that is itself the
+ * visible box — a search row with its own border and a magnifier beside the
+ * input. They mark themselves `bg-transparent`, and the baseline above then
+ * drew a second border and a second radius inside the first: the "filter files"
+ * box looked like an input wearing another input.
+ *
+ * A class beats the zero-specificity baseline, so this is the whole fix for all
+ * eleven, and it reads as the rule it is: a field that declares itself
+ * transparent has a container doing the framing. */
+input.bg-transparent,
+textarea.bg-transparent {
+  border: 0;
+  border-radius: 0;
+}
+
+/* Focus moves the edge, not just the ring: the ring is for the keyboard, and
+   this is for knowing which box you are typing in. */
+:where(input, textarea):focus {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+}
+
+:where(textarea, input)::placeholder {
+  color: var(--text3);
+  opacity: 1;
 }
 
 /* Workspace rail.
@@ -357,103 +476,6 @@
   contain-intrinsic-size: auto 110px;
 }
 
-/* The workspace dynamic island.
- *
- * The one piece of the app pretending to be hardware, and hardware does not
- * repaint itself when you change your wallpaper. Its ground is true #000 --
- * not "very dark purple", not --bg2 -- so on an OLED the pixels above the
- * workspace are genuinely off and the strip runs into the bezel with no seam.
- * A phosphor readout only looks like one over black, too.
- *
- * The theme still gets in, just never on the ground: it tints the lip along
- * the bottom edge, the dividers, the captions, and the shadow the strip casts.
- * Swap themes and almost nothing here moves -- that restraint is the point. */
-/* No cast glow and no veil behind it. Both were doing the same wrong thing:
-   spreading the strip's presence past its own edges, so it read as a bar of
-   chrome with a halo instead of a solid object sitting in the dark. What
-   defines it now is a hairline and its own black — nothing outside the
-   silhouette. */
-.agx-notch {
-  background: linear-gradient(180deg, #000 0%, #000 44%, #08080a 100%);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-top: none;
-  /* A readout, not a document and not a button: no I-beam over the digits, and
-     dragging across it must not paint a text selection. */
-  cursor: default;
-  user-select: none;
-  -webkit-user-select: none;
-  box-shadow: inset 0 -1px 0 0 color-mix(in srgb, var(--primary) 20%, transparent);
-  /* One declaration, not two: a second `transition` further down would silently
-     replace this one and the border-radius would snap. The radius squares off
-     when the inbox attaches beneath. */
-  transition: box-shadow 0.18s ease, border-color 0.18s ease, border-radius 0.18s ease;
-  /* A ceiling, or one long message drags the strip out to the width of the
-     screen. Comfortably wider than the resting readout, so closing never
-     squeezes the pills -- it only stops the inbox from growing sideways. */
-  max-width: min(92vw, 560px);
-}
-/* It is ambient information, not a control, so hovering firms up the hairline
-   rather than offering a button. The pill under the pointer answers with a
-   tint of its own -- enough to say "this thing is reading you" without
-   implying there is something to press. */
-.agx-notch:hover {
-  border-color: rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 -1px 0 0 color-mix(in srgb, var(--primary) 45%, transparent);
-}
-
-/* One reading per pill: the caption names it, the value sits under it.
-   Hovering one lights it up and nothing else -- no box, no outline. Drawing a
-   container around the reading under the pointer put a second rectangle inside
-   a strip that is already a rectangle; brightness says the same thing without
-   adding an edge. The name of the thing still comes from the tooltip. */
-.agx-pill {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 9px;
-  transition: filter 0.15s ease;
-}
-.agx-notch:hover .agx-pill:hover {
-  filter: brightness(1.45);
-}
-.agx-cap {
-  font-size: 7.5px;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  line-height: 1;
-  white-space: nowrap;
-  color: color-mix(in srgb, var(--primary) 30%, rgba(255, 255, 255, 0.46));
-}
-.agx-val {
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-.agx-sep {
-  width: 1px;
-  align-self: stretch;
-  margin: 9px 0;
-  background: color-mix(in srgb, var(--primary) 34%, rgba(255, 255, 255, 0.07));
-}
-.agx-bar {
-  position: relative;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.13);
-  overflow: hidden;
-}
-.agx-bar > i {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 2px;
-  transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* The inbox behind the strip. Continues the notch's shape downward rather than
-   floating over the workspace: same black, same hairline, and only the bottom
-   corners are round, so the strip reads as having grown. */
 /* The draggable seam between a list pane and its content. Wider than the
    hairline it replaces so it can actually be grabbed, but invisible until you
    approach it — a permanent visible handle in four panels would be four pieces
@@ -486,14 +508,11 @@
   .agx-spin { animation-duration: 2s; }
 }
 
-/* The inbox is part of the strip, not a panel under it: no border of its own,
-   no background of its own, no width of its own. It is simply what the notch
-   contains once it has grown, which is why the two never read as two things.
-   The only seam is one hairline separating the readout from the list. */
-.agx-inbox-body {
-  width: 100%;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
+/* The notification list behind the top bar's bell.
+   These were written for the notch, which was carved out of true black and so
+   could dress itself in flat whites. The bar is a themed surface like every
+   other toolbar in this app, so they take their colours from the theme now —
+   otherwise the panel is a black-on-black artefact hanging off a light theme. */
 .agx-inbox-list {
   max-height: 46vh;
   overflow-y: auto;
@@ -506,7 +525,7 @@
 .agx-note-body {
   font-size: 10.5px;
   line-height: 1.45;
-  color: color-mix(in srgb, #fff 62%, transparent);
+  color: var(--text3);
   white-space: pre-wrap;
   /* Long URLs are one unbreakable word; without this they set the container's
      minimum width and the strip grows sideways again. */
@@ -522,26 +541,74 @@
   line-clamp: 2;
   overflow: hidden;
 }
+/* The same body text on a banner rather than in the list. Three lines instead
+   of two: a card that arrives unbidden over your work has one chance to say
+   what it is, and the list behind the bell is where the rest is waiting. */
+.agx-note-toast-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  color: var(--text2);
+}
+/* Opened on the card. Bounded and scrollable rather than unbounded: a card is
+   an overlay, and a five-hundred-word message that grows one would run off the
+   bottom of the screen with its own dismiss button below the fold. */
+.agx-note-toast-open {
+  max-height: 40vh;
+  overflow-y: auto;
+  color: var(--text2);
+}
 .agx-note-row + .agx-note-row {
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 .agx-note-row:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
-/* The one place in the strip that really is a control, so here a pointer and a
-   hover fill are honest rather than misleading. */
+/* Only the rows that lead somewhere. A row that lights up under the pointer and
+   then does nothing is exactly the dead end this class exists to stop being. */
+.agx-note-row-go {
+  cursor: pointer;
+}
+.agx-note-row-go:hover {
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+/* Rows that open rather than travel. The pointer is honest — something happens
+   — but not the primary tint, which in this panel means "this leads somewhere
+   else in the app". */
+.agx-note-row-open {
+  cursor: pointer;
+}
+/* Really a control, so here a pointer and a hover fill are honest rather than
+   misleading. */
 .agx-note-btn {
   font-size: 10px;
   line-height: 1;
   padding: 4px 6px;
   border-radius: 6px;
   cursor: pointer;
-  color: color-mix(in srgb, #fff 55%, transparent);
+  color: var(--text3);
   transition: background 0.12s ease, color 0.12s ease;
+}
+/* The two square controls in a row's corner — disclose and dismiss. Given a
+   real target size rather than a glyph's worth of padding: the arrow used to be
+   a 10px character you had to aim at, which is why the message read as simply
+   cut off with no way to see the rest. */
+.agx-note-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+}
+.agx-note-icon:hover {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
 }
 .agx-note-btn:hover {
   background: color-mix(in srgb, var(--primary) 22%, transparent);
-  color: #fff;
+  color: var(--text);
 }
 /* The link button says where it goes, so it is wider than an icon and belongs
    under the message rather than in the corner with the row's controls. */
@@ -561,36 +628,6 @@
   background: color-mix(in srgb, var(--primary) 26%, transparent);
   border-color: color-mix(in srgb, var(--primary) 55%, transparent);
 }
-
-/* Seven-segment digits, drawn rather than typed: mitred bars with a gap at
-   every corner, over a ghost layer of the segments that are off. That ghost is
-   the tell of a real LCD -- on a cheap alarm clock you can always see the unlit
-   bars of the 8 behind whatever digit is showing. */
-.agx-lcd {
-  display: block;
-}
-.agx-seg {
-  fill: rgba(120, 255, 190, 0.085);
-}
-.agx-seg.on {
-  fill: #b8ffd6;
-  filter: drop-shadow(0 0 4px rgba(80, 255, 170, 0.55));
-}
-
-/* The live-work pips breathe when something is running, so a green shell dot is
-   visibly alive rather than a static light. Paused with the rest of the ambient
-   loops when the page is idle or hidden. */
-@keyframes agx-pip {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-.agx-pip {
-  animation: agx-pip 1.8s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  .agx-pip { animation: none; }
-}
-:root[data-idle="1"] .agx-pip { animation-play-state: paused !important; }
 
 /* A reply that has been asked for and has not started arriving.
 
@@ -718,3 +755,53 @@
   animation: agx-pair-spin 0.9s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) { .pair-spin { animation: none; } }
+
+/*
+ * Row affordances that step forward on approach.
+ *
+ * Dimmed rather than hidden. Hiding them is calmer and it is the wrong trade
+ * here: a control you cannot see is a control nobody knows exists, which is the
+ * exact complaint this panel earned. At 40% they read as available without
+ * competing with the task, and they come to full strength under the pointer.
+ *
+ * `:focus-within` too, because "hover" is not a thing a keyboard can do, and a
+ * headless browser reports `hover: none` — which is why the media query below
+ * must not be the only thing keeping them visible.
+ */
+.agx-onrow { opacity: 0.4; transition: opacity 90ms ease; }
+.agx-row:hover .agx-onrow,
+.agx-row:focus-within .agx-onrow,
+.agx-row[aria-current="true"] .agx-onrow { opacity: 1; }
+@media (hover: none) { .agx-onrow { opacity: 1; } }
+
+/*
+ * A ClickUp card's own markdown, in a 380-pixel column.
+ *
+ * These descriptions are written for a full-width browser: h2 headings, tables,
+ * long inline code. Left alone they set the pane's scroll width and everything
+ * else goes with it. Scaled down and given somewhere to scroll rather than
+ * rewritten — the text belongs to whoever wrote the card.
+ */
+.agx-cu-body :is(h1, h2, h3) { font-size: 12px; margin: 10px 0 4px; }
+.agx-cu-body :is(h1, h2, h3):first-child { margin-top: 0; }
+.agx-cu-body p, .agx-cu-body li { font-size: 11.5px; line-height: 1.5; }
+.agx-cu-body code { font-size: 10.5px; overflow-wrap: anywhere; }
+.agx-cu-body pre { overflow-x: auto; font-size: 10.5px; }
+.agx-cu-body table { display: block; overflow-x: auto; font-size: 10.5px; }
+.agx-cu-body ul, .agx-cu-body ol { padding-left: 16px; margin: 4px 0; }
+
+/*
+ * A ClickUp card's own markdown, in a 380-pixel column.
+ *
+ * These descriptions are written for a full-width browser: h2 headings, tables,
+ * long inline code. Left alone they set the pane's scroll width and drag
+ * everything else sideways with them. Scaled down and given somewhere to scroll
+ * rather than rewritten — the text belongs to whoever wrote the card.
+ */
+.agx-cu-body :is(h1, h2, h3) { font-size: 12px; margin: 10px 0 4px; }
+.agx-cu-body :is(h1, h2, h3):first-child { margin-top: 0; }
+.agx-cu-body p, .agx-cu-body li { font-size: 11.5px; line-height: 1.5; }
+.agx-cu-body code { font-size: 10.5px; overflow-wrap: anywhere; }
+.agx-cu-body pre { overflow-x: auto; font-size: 10.5px; }
+.agx-cu-body table { display: block; overflow-x: auto; font-size: 10.5px; }
+.agx-cu-body ul, .agx-cu-body ol { padding-left: 16px; margin: 4px 0; }

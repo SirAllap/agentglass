@@ -8,6 +8,14 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("agentglass", {
   desktop: true,
   platform: process.platform,
+  // A <webview> exists here and does not in a phone's browser tab, so the
+  // browser view asks before it draws itself. Announced as a capability rather
+  // than inferred from `desktop`, because the two can come apart: an older
+  // shell is still the desktop app and has no guest to give.
+  browser: true,
+  /** The session every guest shares. The renderer must not invent this string:
+   *  the main process refuses to attach a guest on any other partition. */
+  browserPartition: "persist:agentglass-browser",
   // Where the sidecar listens. The renderer is served from agentglass://app,
   // whose hostname says nothing about the API — without this the web app would
   // derive `http://app:4000` from location.hostname and reach nothing.
@@ -35,6 +43,23 @@ contextBridge.exposeInMainWorld("agentglass", {
     const h = (_e, payload) => { try { fn(payload); } catch { /* renderer's problem */ } };
     ipcRenderer.on("ag:server-changed", h);
     return () => ipcRenderer.removeListener("ag:server-changed", h);
+  },
+  // The window's own controls, because the frame that used to carry them is
+  // gone. See main.js for why.
+  winMinimize: () => ipcRenderer.invoke("ag:winMinimize"),
+  winToggleMaximize: () => ipcRenderer.invoke("ag:winToggleMaximize"),
+  winClose: () => ipcRenderer.invoke("ag:winClose"),
+  winIsMaximized: () => ipcRenderer.invoke("ag:winIsMaximized"),
+  winState: () => ipcRenderer.invoke("ag:winState"),
+  /** Pop the app menu under the "⋯" in our own bar. There is no menu bar —
+   *  see main.js — so this is the only route to it. */
+  appMenu: (x, y) => ipcRenderer.invoke("ag:appMenu", x, y),
+  /** Told, not polled: the window manager can maximise or fullscreen this
+   *  window without asking us, and a glyph that guesses is a glyph that lies. */
+  onWinState: (fn) => {
+    const h = (_e, st) => fn({ max: !!st?.max, full: !!st?.full });
+    ipcRenderer.on("ag:winState", h);
+    return () => ipcRenderer.removeListener("ag:winState", h);
   },
   setFullscreen: (on) => ipcRenderer.invoke("ag:setFullscreen", on),
   isFullscreen: () => ipcRenderer.invoke("ag:isFullscreen"),

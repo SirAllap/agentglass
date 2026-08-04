@@ -19,13 +19,33 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TMUX_ISOLATED } from "./tmuxIsolated.ts";
 
-let dir: string, base: string, proc: ReturnType<typeof Bun.spawn> | null = null;
+let dir: string, base: string, socket: string, proc: ReturnType<typeof Bun.spawn> | null = null;
 
 const A = "6b191fd3-f71e-5010-863d-d32334eaf400";
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "agx-panes-"));
+  /*
+   * A socket name no other run can be holding, taken from the temp directory
+   * this run just made.
+   *
+   * It used to be a fixed string, chosen to be one nothing would be listening
+   * on. Nothing guaranteed that. `tmux -L <name>` does not mean "a private
+   * server", it means "the server at this path" — so the moment anything is
+   * already there, this suite is talking to it, and the empty-machine tests
+   * assert against somebody else's sessions. Found the hard way: on the machine
+   * this was written on, that name had a server with the developer's own agents
+   * in it, and the two "no panes at all" tests failed because they were being
+   * shown fourteen real ones.
+   *
+   * That is also the dangerous half. This spawns a full server, and a full
+   * server sweeps idle panes and kills them. It is saved here only by the sweep
+   * refusing to reap a pane it has no prior record of — one accident away from
+   * a test suite ending somebody's work.
+   */
+  socket = `agx-panes-${dir.slice(dir.lastIndexOf("-") + 1)}`;
   const port = 4930 + Math.floor(Math.random() * 20);
   base = `http://127.0.0.1:${port}`;
   proc = Bun.spawn(["bun", "run", new URL("../src/index.ts", import.meta.url).pathname], {
@@ -38,9 +58,9 @@ beforeAll(async () => {
       AGENTGLASS_DB: join(dir, "f.db"),
       AGENTGLASS_SCAN_DISABLED: "1",
       AGENTGLASS_PORT: String(port),
-      // A socket nothing is listening on, so `tmux list-sessions` fails the way
-      // it does on a machine that has never run a pane: cleanly, with nothing.
-      AGENTGLASS_TMUX_SOCKET: "agentglass-test-nothing-here",
+      // This run's own socket, so `tmux list-sessions` fails the way it does on
+      // a machine that has never run a pane: cleanly, with nothing.
+      AGENTGLASS_TMUX_SOCKET: socket,
     },
     stdout: "ignore", stderr: "pipe",
   });
@@ -53,6 +73,14 @@ beforeAll(async () => {
 
 afterAll(() => {
   try { proc?.kill(); } catch { /* already gone */ }
+  // Take the tmux server down with the run that started it. A socket left
+  // behind is what turns a unique name into a fixed one for whoever reuses the
+  // temp directory name next, and it is how the old fixed socket ended up
+  // holding a server for hours.
+  try { Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", socket, "kill-server"], { stdout: "ignore", stderr: "ignore" }); } catch { /* never started one */ }
+  // And the socket file itself: tmux leaves it behind, so a suite that only
+  // killed the server still littered /tmp with one dead socket per run.
+  try { rmSync(join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? ""}`, socket), { force: true }); } catch { /* nothing to remove */ }
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ }
 });
 
@@ -139,9 +167,11 @@ describe("listing what is running", () => {
  * boolean. Its own socket, so it cannot see — or reap — the developer's panes.
  */
 describe("with a pane genuinely running", () => {
-  const SOCK = "agentglass-test-nothing-here";
+  // The same socket the server under test was given — read at call time, since
+  // `beforeAll` is what names it. Naming it twice is how the two halves of this
+  // file drifted onto different servers in the first place.
   const tmuxOk = Bun.spawnSync(["tmux", "-V"]).exitCode === 0;
-  const tmux = (...args: string[]) => Bun.spawnSync(["tmux", "-L", SOCK, ...args]);
+  const tmux = (...args: string[]) => Bun.spawnSync(["tmux", ...TMUX_ISOLATED, "-L", socket, ...args]);
 
   test.skipIf(!tmuxOk)("a pane no open chat points at is named an orphan", async () => {
     tmux("new-session", "-d", "-s", A, "sleep", "300");

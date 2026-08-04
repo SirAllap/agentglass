@@ -131,6 +131,32 @@ export type MdBlock =
   | { kind: "suggestion"; text: string }
   | { kind: "rule" };
 
+/**
+ * Where the `</details>` closing an already-open `<details>` sits, counting
+ * nested pairs — as offsets into the text, not a line number.
+ *
+ * Scanning for the tag instead of matching a line shape is the whole point. The
+ * rule used to be "the tag sits alone on its line", and the shapes people
+ * actually write do not oblige: `<details><summary>…</summary>` on one line is
+ * the form GitHub's own documentation shows and the form every bot emits, and a
+ * `</details>` pressed against the last word of the fold is just as common. Both
+ * fell through to the paragraph rule and put escaped tags on screen — the
+ * collapsed part of a collapsed comment being the one thing that did not work.
+ *
+ * Null when the fold is never closed. That is not an error: an unclosed
+ * `<details>` owns the rest of the document, which is what a browser's parser
+ * does with it too.
+ */
+function matchingClose(text: string): { start: number; end: number } | null {
+  const re = /<(\/?)details\b[^>]*>/gi;
+  let depth = 1;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    if (!m[1]) { depth++; continue; }
+    if (--depth === 0) return { start: m.index, end: m.index + m[0].length };
+  }
+  return null;
+}
+
 /** A table cell is markdown too. Returning the raw text put `**Drift**` on
  *  screen with its asterisks — the bold that a RED/GREEN comparison leans on
  *  was exactly what stopped rendering. */
@@ -139,9 +165,109 @@ const isDivider = (l: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\
 const IMG_MD = /^\s*!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)\s*$/;
 const IMG_HTML = /<img[^>]*\bsrc="(https?:\/\/[^"]+)"[^>]*>/i;
 
+/**
+ * A shields.io badge, read rather than fetched.
+ *
+ * Every CI bot opens with one — `Coverage 75%`, `build passing` — as an SVG on
+ * a third-party host. Fetching it means a request per comment to a domain the
+ * asset proxy does not allow, so what actually appeared was a broken image
+ * where the headline number should be. The URL already carries the label, the
+ * value and the colour, so the pill is drawn from the text and nothing is
+ * fetched at all.
+ *
+ * shields.io's own escaping: fields are separated by `-`, a doubled `--` is a
+ * literal dash, `_` is a space and `__` a literal underscore. Two fields mean
+ * message-colour, three or more mean label-message-colour with the label free
+ * to contain its own separators.
+ */
+export function parseShieldBadge(src: string): { label: string; value: string; color: string } | null {
+  const m = (src || "").match(/^https?:\/\/img\.shields\.io\/badge\/([^?#]+)/i);
+  if (!m) return null;
+  const path = m[1]!.replace(/\.(svg|png|json)$/i, "");
+  const parts: string[] = [];
+  let cur = "";
+  for (let i = 0; i < path.length; i++) {
+    if (path[i] === "-") {
+      if (path[i + 1] === "-") { cur += "-"; i += 1; continue; }
+      parts.push(cur); cur = ""; continue;
+    }
+    cur += path[i];
+  }
+  parts.push(cur);
+  if (parts.length < 2) return null;
+  const un = (s: string) => {
+    let t = s;
+    try { t = decodeURIComponent(s); } catch { /* a stray % is not a reason to drop the badge */ }
+    // One pass, so a literal `__` is not swallowed by the `_`-to-space rule
+    // and handed back as two spaces.
+    return t.replace(/__|_/g, (x) => (x === "__" ? "_" : " "));
+  };
+  const color = parts[parts.length - 1]!;
+  if (parts.length === 2) return { label: "", value: un(parts[0]!), color };
+  return { label: un(parts.slice(0, -2).join("-")), value: un(parts[parts.length - 2]!), color };
+}
+
+/**
+ * One HTML table cell, as markdown.
+ *
+ * The cells are not plain text — a coverage row is a link per file and a bold
+ * TOTAL — and they cannot be passed through as HTML: the table renders with
+ * `dangerouslySetInnerHTML`, so anything arriving from a comment has to go
+ * through `renderInline`, which escapes the lot and then puts back only its own
+ * markup. So the few tags worth keeping are turned into the markdown that means
+ * the same thing, everything else is stripped, and `renderInline` decides what
+ * is safe. `<a>` becomes a markdown link, which is http(s)-only there.
+ */
+export function htmlCellToMarkdown(html: string): string {
+  const t = (html || "")
+    // Only an http(s) target becomes a link. `renderInline` would refuse a
+    // `javascript:` one anyway and leave it as escaped text, but that puts
+    // `[x](javascript:alert(1))` on screen; dropping to the bare text says the
+    // same thing without the litter.
+    .replace(/<a\b[^>]*\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
+      (_m, href: string, txt: string) => (/^https?:\/\//i.test(href) ? `[${stripTags(txt).trim()}](${href})` : stripTags(txt).trim()))
+    .replace(/<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _tag: string, txt: string) => `**${stripTags(txt).trim()}**`)
+    .replace(/<(i|em)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _tag: string, txt: string) => `*${stripTags(txt).trim()}*`)
+    .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_m, txt: string) => `\`${stripTags(txt).trim()}\``)
+    .replace(/<br\s*\/?>/gi, " ");
+  return stripTags(t).replace(/\s+/g, " ").trim();
+}
+
+/**
+ * A table written as HTML rather than as pipes.
+ *
+ * Which is what the coverage bots emit, all on one line — so the markdown table
+ * rule never saw it and the whole thing landed on screen as its own source. A
+ * header row is `<th>`; a table with none gets its first row promoted, because
+ * a table drawn with no head reads as if its first line of data were missing.
+ */
+export function parseHtmlTable(raw: string, autolinkRepo?: string): Extract<MdBlock, { kind: "table" }> | null {
+  const rows: string[][] = [];
+  let head: string[] = [];
+  for (const tr of raw.match(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi) ?? []) {
+    const isHead = /<th\b/i.test(tr);
+    const cells = (tr.match(/<t[hd]\b[^>]*>[\s\S]*?<\/t[hd]>/gi) ?? [])
+      .map((c) => renderInline(htmlCellToMarkdown(c.replace(/^<t[hd]\b[^>]*>/i, "").replace(/<\/t[hd]>$/i, "")), autolinkRepo));
+    if (!cells.length) continue;
+    if (isHead && !head.length) head = cells;
+    else rows.push(cells);
+  }
+  if (!head.length) {
+    if (!rows.length) return null;
+    head = rows.shift()!;
+  }
+  return { kind: "table", head, rows };
+}
+
 export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
   const out: MdBlock[] = [];
-  const lines = (body || "").split(/\r?\n/);
+  // HTML comments are invisible on GitHub and were not on screen here, which is
+  // how a coverage report opened with `<!-- Pytest Coverage Comment: … -->` and
+  // closed with `<!-- Sticky Pull Request Comment… -->`. Bots use them as
+  // machine markers — to find and rewrite their own comment later — so on a CI
+  // comment they are most of the noise. Only whole-line comments go: one buried
+  // mid-sentence is likelier to be someone demonstrating the syntax.
+  const lines = (body || "").replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*$/gm, "").split(/\r?\n/);
   let para: string[] = [];
 
   const flushPara = () => {
@@ -153,24 +279,81 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
 
+    // A fold does not have to start its own line. The coverage bots write
+    //   <a href="…"><img alt="Coverage" src="…"></a><details><summary>…
+    // all on one, and matching `<details>` only at the start of a line meant the
+    // image rule below claimed the whole thing: the badge rendered and the fold
+    // — the table, which is the entire content of the comment — was dropped on
+    // the floor. Split the line in two and let each half meet its own rule.
+    const dAt = line.search(/<details\b/i);
+    if (dAt > 0) {
+      lines.splice(i, 1, line.slice(0, dAt), line.slice(dAt));
+      i -= 1;
+      continue;
+    }
+
+    // An HTML <table>, which is how the coverage bots write theirs — and, like
+    // the fold, all on one line. Same two steps: break the line at the tag, then
+    // take everything up to </table> as one block.
+    const tAt = line.search(/<table\b/i);
+    if (tAt > 0) {
+      lines.splice(i, 1, line.slice(0, tAt), line.slice(tAt));
+      i -= 1;
+      continue;
+    }
+    if (tAt === 0) {
+      flushPara();
+      const rest = [line, ...lines.slice(i + 1)].join("\n");
+      const close = rest.search(/<\/table>/i);
+      const tbl = parseHtmlTable(close < 0 ? rest : rest.slice(0, close), autolinkRepo);
+      if (tbl) out.push(tbl);
+      // Never closed: the table has taken the rest of the document with it.
+      if (close < 0) break;
+      const end = close + "</table>".length;
+      const eaten = rest.slice(0, end).split("\n").length - 1;
+      lines[i + eaten] = rest.slice(end).split("\n")[0]!;
+      i += eaten - 1;
+      continue;
+    }
+
     // <details>: take everything up to the matching </details> and parse it as
     // its own little document, so a folded bot comment keeps its lists and code.
-    const det = line.match(/^\s*<details[^>]*>\s*$/i);
+    //
+    // The fold is handled as text from the opening tag onwards rather than line
+    // by line, because none of the three things that go wrong are line-shaped:
+    // the opener carries its `<summary>` on the same line, the closer is stuck
+    // to the last word, the `<summary>` wraps over three lines. See
+    // `matchingClose`.
+    const det = line.match(/^\s*<details\b[^>]*>/i);
     if (det) {
       flushPara();
+      const rest = [line.slice(det[0].length), ...lines.slice(i + 1)].join("\n");
+      const close = matchingClose(rest);
+      const raw = close ? rest.slice(0, close.start) : rest;
+
+      // The summary, wherever it wrapped — and only this fold's own. A
+      // `<summary>` that comes after a nested `<details>` belongs to that one,
+      // and titling the outer fold with the inner's name is worse than leaving
+      // it untitled.
       let summary = "";
-      const inner: string[] = [];
-      let depth = 1;
-      i++;
-      for (; i < lines.length; i++) {
-        const l = lines[i]!;
-        if (/^\s*<details[^>]*>\s*$/i.test(l)) depth++;
-        if (/^\s*<\/details>\s*$/i.test(l)) { depth--; if (depth === 0) break; }
-        const sum = l.match(/<summary[^>]*>([\s\S]*?)<\/summary>/i);
-        if (sum && !summary) { summary = stripTags(sum[1]!).trim(); continue; }
-        inner.push(l);
+      let inner = raw;
+      const sum = raw.match(/<summary\b[^>]*>([\s\S]*?)<\/summary>/i);
+      const nested = raw.search(/<details\b/i);
+      if (sum && sum.index !== undefined && (nested < 0 || sum.index < nested)) {
+        summary = stripTags(sum[1]!).replace(/\s+/g, " ").trim();
+        inner = raw.slice(0, sum.index) + raw.slice(sum.index + sum[0].length);
       }
-      out.push({ kind: "details", summary: summary || "Details", blocks: parseBody(inner.join("\n"), autolinkRepo) });
+
+      out.push({ kind: "details", summary: summary || "Details", blocks: parseBody(inner, autolinkRepo) });
+
+      // Never closed: the fold has taken the rest of the document with it.
+      if (!close) break;
+      // Otherwise resume at whatever followed `</details>`, which is the tail of
+      // a line as often as it is the next one — so the line is rewritten to that
+      // tail and read again. Two folds on one line come out as two folds.
+      const eaten = rest.slice(0, close.end).split("\n").length - 1;
+      lines[i + eaten] = rest.slice(close.end).split("\n")[0]!;
+      i += eaten - 1;
       continue;
     }
 

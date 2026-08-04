@@ -5,7 +5,6 @@ import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStore.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { IS_MAC_DESKTOP } from "../lib/desktop.ts";
-import { ThemeSwitcher } from "./ThemeSwitcher.tsx";
 import { UsageWidget } from "./UsageWidget.tsx";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
@@ -63,6 +62,42 @@ function SkillsIcon() {
 /* The git/diff/docker/terminal/chat glyphs moved to workspace/icons.tsx when
    their five buttons became one — the rail needs them too. */
 
+/** A cog, not an ellipsis.
+ *
+ *  "⋯" is the glyph for "more of the same kind of thing" — the rest of a menu
+ *  you were already in. This button opens preferences, and every application
+ *  ever written spells that with a cog, which is why it was the one control in
+ *  the header nobody could find without hovering everything first. */
+function GearIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3.1" />
+      <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
+    </svg>
+  );
+}
+
+/** A plug: something is listening on this machine. */
+export function PortsIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 3v5M15 3v5" />
+      <path d="M6 8h12v3a6 6 0 0 1-6 6 6 6 0 0 1-6-6z" />
+      <path d="M12 17v4" />
+    </svg>
+  );
+}
+
+/** A gauge: how much of the machine is left. */
+export function ResourcesIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 18a8 8 0 1 1 16 0" />
+      <path d="M12 18l4-5" />
+    </svg>
+  );
+}
+
 /** Settings button — the overflow menu became a real modal (SettingsModal),
  *  because a flat list of one-liners could not show a toggle's state without
  *  spelling it out in the label. */
@@ -76,13 +111,13 @@ function MoreMenu({ onOpen }: { onOpen: () => void }) {
     <button
       title={pending ? `Settings — ${pending} is available to install` : "Settings — preferences, exports, shortcuts"}
       onClick={onOpen}
-      className="relative h-8 w-8 grid place-items-center rounded-lg text-[15px]"
+      className="relative h-8 w-8 grid place-items-center rounded-lg"
       style={{
         border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)",
         background: "color-mix(in srgb, var(--bg3) 30%, transparent)",
-        color: "var(--text3)",
+        color: "var(--text2)",
       }}>
-      ⋯
+      <GearIcon />
       {pending && (
         // Small, unanimated, and outside the glyph. An update is not urgent —
         // it is worth noticing on the way past, not worth pulling the eye off
@@ -95,8 +130,8 @@ function MoreMenu({ onOpen }: { onOpen: () => void }) {
 }
 
 export function Header({
-  conn, windowMs, onWindow, retentionDays, apps, types, providers, filter, onFilter, theme, onTheme,
-  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenWorkspace, onOpenSettings, onClear, showUsage,
+  conn, windowMs, onWindow, retentionDays, apps, types, providers, filter, onFilter,
+  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenWorkspace, onOpenSettings, onOpenMachine, onClear, showUsage,
   workspace, onOpenProject,
 }: {
   conn: ConnState;
@@ -109,8 +144,6 @@ export function Header({
   providers: string[];
   filter: { app: string; type: string; provider: string };
   onFilter: (f: { app: string; type: string; provider: string }) => void;
-  theme: string;
-  onTheme: (id: string) => void;
   sound: boolean;
   onSound: () => void;
   onOpenPalette: () => void;
@@ -119,6 +152,11 @@ export function Header({
   onOpenSkills: () => void;
   onOpenWorkspace: () => void;
   onOpenSettings: () => void;
+  /** The machine panel, on the tab that was asked for. Beside settings because
+   *  the three are the same kind of thing — this window's own controls, not the
+   *  fleet's — and because they must sit in one place the workspace can
+   *  reproduce exactly. */
+  onOpenMachine: (tab: "ports" | "resources") => void;
   onClear: () => void;
   showUsage: boolean;
   workspace: string | null;
@@ -274,8 +312,12 @@ export function Header({
         </button>
         {/* Skills demoted to a plain icon */}
         <IconBtn title="Skills explorer — browse every available skill (k)" onClick={onOpenSkills}><SkillsIcon /></IconBtn>
+        {/* Ports and resources sit next to settings, and the workspace rail
+            repeats exactly these three in the same order — so "where do I look
+            at the machine" has one answer wherever you happen to be. */}
+        <IconBtn title="Ports — what is listening, and which checkout started it" onClick={() => onOpenMachine("ports")}><PortsIcon /></IconBtn>
+        <IconBtn title="Resources — CPU, memory and disk, by checkout" onClick={() => onOpenMachine("resources")}><ResourcesIcon /></IconBtn>
         <MoreMenu onOpen={onOpenSettings} />
-        <ThemeSwitcher current={theme} onChange={onTheme} />
       </div>
     </header>
   );

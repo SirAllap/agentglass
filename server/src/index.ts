@@ -30,7 +30,7 @@ import { noteAction, actorOf } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
 import { vapidKeys, addSubscription, removeSubscription, removeDevice, deviceId, subscriptions } from "./pushstore.ts";
-import { getUsage } from "./usage.ts";
+import { getUsage, ingestStatusline } from "./usage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
@@ -43,7 +43,7 @@ import {
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
-  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook,
+  worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
   conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
 } from "./gitwork.ts";
@@ -56,6 +56,21 @@ import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor
 import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme } from "./themesync.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
+import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
+import {
+  listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
+} from "./issues.ts";
+import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, readView } from "./providers.ts";
+import { savedViews, currentView, setCurrent, removeView, cachedFor, setWritesAllowed } from "./clickupviews.ts";
+import { assignSelf, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
+import { clickupTasks } from "./clickup.ts";
+import type { ProviderId } from "../../shared/providers.ts";
+import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
+import {
+  addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
+  remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
+} from "./reminders.ts";
+import { fileTree, findFiles, grepFiles } from "./files.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
   startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
@@ -64,20 +79,22 @@ import {
   listPrs, prDetail, prDiff, prAsset, ghCapability, submitReview, addComment, replyToThread,
   editComment, deleteComment, setFileViewed, setAssignees, setMilestone, viewCounts, jobLog, checkJobs, rerunJobs, addLineComment, mentionables, facetOptions, applySuggestion, fileSlice,
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
-  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith,
+  rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
+  prBaseOf,
 } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
-import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
+import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
+import { listPanes, focusPaneAnywhere } from "./tmuxctl.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
-import { workspaceRoot, setWorkspaceRoot, inScope, readBudgets, writeBudgets } from "./config.ts";
+import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, readBudgets, writeBudgets } from "./config.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
 import { probeAgents, ROSTER } from "./agentprobe.ts";
-import { join as joinPath } from "node:path";
+import { join as joinPath, basename } from "node:path";
 import { privateHost } from "./net.ts";
 import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller } from "./auth.ts";
 import { activeDevices, markSeen, revokeDevice, type Scope } from "./devices.ts";
@@ -91,6 +108,7 @@ import { notifyCapability, subscribeNotifications, notifyWatching, openNote } fr
 import { markIgnored } from "./ignored.ts";
 import { withEvidence } from "./evidence.ts";
 
+import { tidyReport } from "./tidy.ts";
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 /** When this process came up. /stats ships it so the dashboard's uptime is
  *  the server's, not the age of the oldest event in the database. */
@@ -374,6 +392,19 @@ setMergedVerdictHook(() => {
 // Let the alert path reach a connected client, which raises a native OS
 // notification (cross-platform) instead of the Linux-only notify-send.
 setAlertSink({ broadcast: (a) => broadcast({ type: "alert", data: a }), hasClients: () => clients.size > 0 });
+// The task store has a second writer — the user's editor — so a change there
+// reaches the panel through a sweep rather than through anything we did.
+setTaskChangeHook(() => broadcast({ type: "tasks" }));
+// A reminder that fired changes what the panel and the rail should show, and
+// the panel is not necessarily open — so it is pushed, like everything else
+// that happens without the user asking.
+setReminderHook(() => broadcast({ type: "tasks" }));
+// Let the git layer ask what a branch's pull request says its base is. Wired
+// here rather than imported there, because gitwork must not depend on the
+// pull-request layer — same reason as the two hooks above. Reads the PR list
+// cache; answers null when there is nothing cached, and the git layer falls
+// back to inferring the base from history.
+setPrBaseHook((root, branch) => prBaseOf(root, branch));
 
 /**
  * Session detail, held briefly, and invalidated when the session gets an event.
@@ -459,8 +490,13 @@ function ingestBody(body: IngestBody) {
   // session refreshes on the next open, while static sessions keep serving from
   // cache. Cheap: one Map delete on a path already doing a DB write.
   sessionCache.delete(event.session_id);
-  broadcast({ type: "event", data: event });
-  broadcast({ type: "session", data: session });
+  // Stored either way — a cockpit scoped today may be unscoped tomorrow, and the
+  // history has to be there when it is. Only the live push is filtered, so that
+  // what arrives while you watch agrees with what a reload would show.
+  if (sessionInScope(session)) {
+    broadcast({ type: "event", data: event });
+    broadcast({ type: "session", data: session });
+  }
   // A Pre opens a call and a Post closes one, so the list the fleet is drawing
   // from just changed. Pushed now rather than up to a tick later, because the
   // moment a tool starts is exactly when the card should say so.
@@ -613,6 +649,12 @@ const server = Bun.serve<WsData>({
         kind: "pty",
         deviceId: caller?.device?.id ?? null,
         root: url.searchParams.get("root") || "",
+        // A path to open, not a command to run. Validated in ptyOpen against
+        // the same scope rule the directory gets.
+        view: url.searchParams.get("view") || undefined,
+        // Editing is asked for explicitly. Absent, the file opens read-only —
+        // see PtyWsData.edit for why that default is the whole point.
+        edit: url.searchParams.get("edit") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,
@@ -891,6 +933,31 @@ const server = Bun.serve<WsData>({
 
     if (pathname === "/insights") return json({ insights: getInsights() });
     if (pathname === "/usage") return json(await getUsage()); // Anthropic plan-limit windows (only meaningful for Claude)
+
+    /*
+     * A live Claude Code session handing over the plan windows it got for free
+     * with its last API response — see hooks/statusline.sh and usage.ts.
+     *
+     * Authenticated like everything else rather than joining the tokenless
+     * intake sinks. Those are append-only telemetry from a process that has no
+     * way to carry a secret; this one does — it runs as the user and reads the
+     * same token file the server does. And unlike an event, what arrives here
+     * *replaces* what the meters say, so on a server bound to anything but
+     * loopback a tokenless version would let anyone on the network decide what
+     * this machine believes about its own plan.
+     */
+    if (pathname === "/statusline" && req.method === "POST") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ error: "invalid json" }, 400);
+      }
+      // `used: false` is a real answer, not a failure: most payloads carry no
+      // rate_limits at all (the CLI only sends them for subscriber sessions,
+      // and only after the first response of the session).
+      return json({ ok: true, used: ingestStatusline(body) });
+    }
 
     // --- control plane: gate ---
     if (pathname === "/gate" && req.method === "POST") {
@@ -1277,7 +1344,34 @@ const server = Bun.serve<WsData>({
       // One `git check-ignore` per repo, not per file, so the client can fold
       // away build output without having to guess at .gitignore semantics.
       const ignored = markIgnored(changes.map((c) => c.file_path));
-      return json({ changes: changes.map((c) => ({ ...c, ignored: ignored.get(c.file_path) === true })) });
+      /**
+       * Which of these edits are not this project's.
+       *
+       * A session is in scope because its cwd is, and it then writes wherever
+       * it likes: a note under ~/Documents, a scratch script in /tmp. Those are
+       * real edits by a real session of this project — so they are recorded —
+       * but they are not the project, and in a list of 200 they push the code
+       * you opened this view to review off the screen.
+       *
+       * Decided here rather than in the client because "part of the project"
+       * means the repo AND its linked worktrees — orbit-WEB-1042 is orbit —
+       * and only the server has git and the scope to answer that.
+       *
+       * `project` rides along so the chip can name what it filtered against.
+       * The client has the workspace too, but a label from one source and a
+       * filter from another is how a button ends up lying about what it did.
+       */
+      const scope = workspaceRoot();
+      return json({
+        project: scope ? basename(scope) : null,
+        changes: changes.map((c) => ({
+          ...c,
+          ignored: ignored.get(c.file_path) === true,
+          // Unscoped there is no project to be outside of, and the flag stays
+          // off rather than becoming "everything" — absent means never hidden.
+          outside: scope ? !inScope(c.file_path, scope) : false,
+        })),
+      });
     }
 
     // --- commit composer: live git working-tree status + commit ---
@@ -1403,6 +1497,10 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
+    // What has piled up in a checkout, and the command that would clear it.
+    // Read-only by construction: the response carries commands as strings, and
+    // there is deliberately no endpoint anywhere that runs one.
+    if (pathname === "/git/tidy") return json(tidyReport(url.searchParams.get("root") || ""));
     // Every git command this server has run — the command log panel.
     if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
     // Every moment this process stopped answering, and what was running. The
@@ -1501,6 +1599,152 @@ const server = Bun.serve<WsData>({
     // is the whole authorisation story. Lets the panel show install guidance for
     // a missing binary instead of the overview's daemon message. Mirrors
     // /git/capability.
+    // --- what this machine is doing: ports, processes, disk ---
+    // Plain reads behind the same origin/rebinding/token gate as everything
+    // else. Each is a spawn or a /proc walk of a few milliseconds, so they are
+    // answered live rather than cached — a stale port list is worse than a slow
+    // one, because it sends you to a server that is not there.
+    // --- github issues ---
+    // The same `gh` plumbing the pull-request panel uses, one query along. A
+    // list, a detail, and the work started from one — see issues.ts for why
+    // starting and FINISHING are the same feature rather than two.
+    if (pathname === "/issues/list") {
+      return json(await listIssues(url.searchParams.get("root") || "", {
+        state: url.searchParams.get("state") || "open",
+        assignee: url.searchParams.get("assignee") || "",
+        search: url.searchParams.get("q") || "",
+        limit: Number(url.searchParams.get("limit") || 60),
+      }));
+    }
+    if (pathname === "/issues/detail") {
+      return json(await issueDetail(url.searchParams.get("root") || "", url.searchParams.get("number")));
+    }
+    if (pathname === "/issues/work") return json({ work: currentWork(url.searchParams.get("repo") || undefined) });
+
+    // --- tasks (taskwarrior-backed, read-only) ---
+    /*
+     * The integrations pane, and the one route that receives a secret.
+     *
+     * `/providers/connect` is the only place in this server where a token
+     * arrives from the browser, and it never goes back the other way: the
+     * response carries a status — who you are, what workspace, how many tasks —
+     * and no credential. See credentials.ts for why that is two functions
+     * rather than a flag.
+     */
+    if (pathname === "/providers") {
+      return json({ providers: await providerStatuses() });
+    }
+    if (pathname === "/providers/workspaces") {
+      return json(await providerWorkspaces((url.searchParams.get("id") ?? "") as ProviderId));
+    }
+    if (pathname.startsWith("/providers/") && req.method === "POST") {
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const id = String(b.id ?? "") as ProviderId;
+      const r = pathname === "/providers/connect"
+          ? await connectProvider(id, String(b.token ?? ""))
+        : pathname === "/providers/disconnect" ? await disconnectProvider(id)
+        : pathname === "/providers/workspace"
+          ? await chooseWorkspace(id, String(b.workspaceId ?? ""), String(b.name ?? ""))
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      return json(r, r.ok ? 200 : 400);
+    }
+    /* Boards, saved by pasting their address. Reads and one write path, and
+       the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
+       clickup.ts for why this one defaults to off while the local list
+       defaults to on. */
+    if (pathname === "/clickup/views") {
+      return json({ views: savedViews(), current: currentView(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+    }
+    if (pathname === "/clickup/view") {
+      const id = url.searchParams.get("id") ?? currentView() ?? "";
+      if (!id) return json({ tasks: [], statuses: [], fields: [], at: 0 });
+      setCurrent(id);
+      return json(await readView(id, url.searchParams.get("force") === "1"));
+    }
+    if (pathname === "/clickup/prs") {
+      // The checkout the search runs in, vetted the same way every other route
+      // vets one: a path outside the configured scope is refused rather than
+      // corrected, and `gh` then runs where the app already lives.
+      const asked = url.searchParams.get("root") ?? "";
+      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const r = await cardPullRequests(
+        url.searchParams.get("card") ?? "",
+        url.searchParams.get("field") ?? undefined,
+        root,
+      );
+      return json(r);
+    }
+    if (pathname === "/clickup/find") {
+      // The prefix comes from what we have already read, so a bare number is
+      // enough and nobody has to be asked what their ids look like.
+      const seen = savedViews().map((v) => cachedFor(v.id)?.tasks?.[0]?.customId ?? "").find(Boolean) ?? "";
+      const r = await findCard(url.searchParams.get("q") ?? "", seen.replace(/[0-9]+$/, ""));
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
+    }
+    if (pathname === "/clickup/task") {
+      const r = await taskDetail(url.searchParams.get("id") ?? "");
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
+    }
+    if (pathname.startsWith("/clickup/") && req.method === "POST") {
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const id = String(b.id ?? "");
+      const seen = typeof b.updated === "number" ? b.updated : undefined;
+      const r = pathname === "/clickup/views/add" ? await addViewByUrl(String(b.url ?? ""))
+        : pathname === "/clickup/views/remove" ? (removeView(id), { ok: true })
+        : pathname === "/clickup/assign" ? await assignSelf(id, b.on !== false, seen)
+        : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
+        : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
+        : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      return json(r, r.ok ? 200 : ("conflict" in r && r.conflict) ? 409 : 400);
+    }
+    if (pathname === "/tasks/provider") {
+      // One provider's list. `force` is what the Refresh button sends; the poll
+      // never sets it, so a page left open cannot burn the rate budget.
+      const snap = await clickupTasks(url.searchParams.get("force") === "1");
+      return json({
+        tasks: snap.tasks, more: snap.more, error: snap.error,
+        unauthorised: snap.unauthorised, at: snap.at,
+      });
+    }
+    if (pathname === "/tasks/list") {
+      const snap = await listTasks(url.searchParams.get("force") === "1");
+      const capability = await taskCapability();
+      // The reminders ride along: a row that has one must be able to say so
+      // without a request per row, and they are ours to read cheaply.
+      return json({
+        ok: !snap.error, tasks: snap.tasks, capability, error: snap.error,
+        byTask: remindersFor(snap.tasks.map((t) => t.uuid)),
+        fingerprint: snap.fingerprint,
+        writeEnabled: TASK_WRITE_ENABLED,
+      });
+    }
+    if (pathname === "/tasks/reminders") {
+      const w = url.searchParams.get("window");
+      const window = w === "upcoming" || w === "history" ? w : "live";
+      return json({ ok: true, reminders: listReminders(window), zone: localZone() });
+    }
+
+    if (pathname === "/machine/ports") return json(listPorts());
+    if (pathname === "/machine/resources") return json(listResources(Number(url.searchParams.get("limit") || 40)));
+    // On demand only, and never on a poll: `du` over a checkout walks every
+    // inode in it, which is seconds on a repository with a node_modules.
+    if (pathname === "/machine/space") return json(spaceFor(url.searchParams.get("root") || ""));
+
+    // --- browsing and searching a checkout ---
+    // Their own switch, not the terminal's: an operator who turned the shell off
+    // gave up filesystem reach deliberately, and this must not hand it back a
+    // listing at a time. Same reasoning as /fs/complete — see fsbrowse.ts.
+    if (pathname.startsWith("/files/")) {
+      if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
+      const root = url.searchParams.get("root") || "";
+      if (pathname === "/files/tree") return json(fileTree(root, url.searchParams.get("rel") || ""));
+      if (pathname === "/files/find") return json(findFiles(root, url.searchParams.get("q") || ""));
+      if (pathname === "/files/grep") return json(grepFiles(root, url.searchParams.get("q") || ""));
+    }
+
     if (pathname === "/docker/capability") return json(await dockerCapability());
     // Single-flighted alongside the git reads: `docker ps`/`docker stats` are
     // slow spawns (seconds each) behind a short cache, and several tabs missing
@@ -1548,6 +1792,87 @@ const server = Bun.serve<WsData>({
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
       if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+    }
+
+    /*
+     * The issue writes.
+     *
+     * Origin-checked and recorded like every other write here. `start` and
+     * `finish` touch the filesystem (a worktree, a branch); `claim`, `comment`
+     * and `state` touch GitHub. None of them takes a command from the client —
+     * the server decides what runs, which is the same rule the review prompt
+     * follows.
+     */
+    if (pathname.startsWith("/tasks/write/") && req.method === "POST") {
+      // Every verb carries the fingerprint the client was looking at. A write
+      // whose precondition has moved answers 409 with the fresh list — it is
+      // never retried here, because retrying against a store that moved is
+      // exactly how the other writer's work gets reverted.
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const expect = typeof b.fingerprint === "string" ? b.fingerprint : undefined;
+      const uuid = String(b.uuid ?? "");
+      const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") as string[] : []);
+      const r = pathname === "/tasks/write/add" ? await addTask(String(b.input ?? ""), expect)
+        : pathname === "/tasks/write/done" ? await completeTask(uuid, expect)
+        : pathname === "/tasks/write/reopen" ? await reopenTask(uuid, expect)
+        : pathname === "/tasks/write/delete" ? await deleteTask(uuid, expect)
+        : pathname === "/tasks/write/priority" ? await cyclePriority(uuid, (b.current as "H" | "M" | "L" | null) ?? null, expect)
+        : pathname === "/tasks/write/edit" ? await editTask(uuid, String(b.input ?? ""), strs(b.previousTags), expect)
+        : pathname === "/tasks/write/tags" ? await addTags(uuid, strs(b.tags), expect)
+        : pathname === "/tasks/write/note" ? await replaceNote(uuid, String(b.oldText ?? ""), String(b.newText ?? ""), expect)
+        : pathname === "/tasks/write/bulk" ? await bulkApply(strs(b.uuids), b.action as BulkAction, typeof b.value === "string" ? b.value : null, expect)
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      if (r.ok) broadcast({ type: "tasks" });
+      return json(r, r.conflict ? 409 : r.ok ? 200 : 400);
+    }
+    if (pathname.startsWith("/tasks/remind") && req.method === "POST") {
+      // None of these touch Taskwarrior or its lock. That is what keeps the
+      // engine working when the task list cannot be read at all.
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      if (pathname === "/tasks/remind") {
+        return json(addReminder({
+          taskUuid: typeof b.taskUuid === "string" ? b.taskUuid : null,
+          title: String(b.title ?? ""),
+          civil: String(b.civil ?? ""),
+          zone: typeof b.zone === "string" ? b.zone : undefined,
+          root: typeof b.root === "string" ? b.root : null,
+        }));
+      }
+      const id = String(b.id ?? "");
+      if (!id) return json({ ok: false, error: "which reminder?" }, 400);
+      if (pathname === "/tasks/reminder/ack") return json(ackReminder(id));
+      if (pathname === "/tasks/reminder/cancel") return json(cancelReminder(id));
+      if (pathname === "/tasks/reminder/snooze") return json(snoozeReminder(id, Number(b.minutes ?? 60)));
+      return json({ ok: false, error: "not found" }, 404);
+    }
+    if (pathname.startsWith("/issues/") && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const root = String(b.root || "");
+      let res: { ok: boolean; error?: string; detail?: string } | null = null;
+      switch (pathname) {
+        case "/issues/start": res = await startIssue(root, b.number, b.mode); break;
+        case "/issues/finish": res = await finishIssue(root, b.number, b.force === true); break;
+        case "/issues/claim": res = await claimIssue(root, b.number, b.comment); break;
+        case "/issues/comment": res = await commentIssue(root, b.number, b.body); break;
+        case "/issues/state": res = await setIssueState(root, b.number, b.close === true); break;
+        default: res = null;
+      }
+      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+    }
+
+    // The one write in the machine panel, and it signals a process. Origin
+    // checked like every other write, recorded like every other write, and
+    // refused for any pid this user does not own — see killPort.
+    if (pathname === "/machine/kill" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = killPort(b.pid);
+      noteAction(srv.requestIP(req)?.address, pathname, b, res, caller);
+      return json(res, res.ok ? 200 : 400);
     }
 
     // --- pull requests (gh-backed) ---
@@ -1622,6 +1947,9 @@ const server = Bun.serve<WsData>({
       switch (pathname) {
         case "/prs/review": res = await submitReview(root, n, b.verb, b.body); break;
         case "/prs/review-with": res = await submitReviewWith(root, n, b.verb, b.body, b.comments); break;
+        // A pull request's version of a file, on disk, so it can be opened. The
+        // working tree cannot answer for a branch that is not checked out here.
+        case "/prs/file-temp": res = await prFileToTemp(root, n, b.path); break;
         case "/prs/comment": res = await addComment(root, n, b.body); break;
         case "/prs/reply": res = await replyToThread(root, n, b.commentId, b.body); break;
         case "/prs/thread-resolved": res = await setThreadResolved(root, b.threadId, b.resolved); break;
@@ -1656,6 +1984,38 @@ const server = Bun.serve<WsData>({
     // 84s under load); single-flighted here so the several tabs / the
     // new-terminal + ⚙-menu that ask at the same instant share one walk rather
     // than each launching the whole thing.
+    /**
+     * Where the machine's agents are sitting, in tmux terms.
+     *
+     * Asked on demand — when the bar's panel opens — and never polled. This is
+     * a `list-panes` plus a walk of /proc per pane, which is cheap once and
+     * pointless on a timer: nobody is looking at the answer between the moment
+     * they press the chip and the moment they click through it.
+     *
+     * Scoped like every other read. Without it, a cockpit opened for one
+     * project would answer "here is where every agent on this machine is",
+     * which is the same leak the live seam had.
+     */
+    if (pathname === "/terminal/panes") {
+      // The socket a terminal was last attached to is a hint, not a
+      // requirement: the servers are discovered from the socket directory, so
+      // this answers whether or not a terminal has ever been opened here.
+      const panes = listPanes(lastTmuxTarget()?.socket)
+        .filter((p) => !p.agentCwds.length || p.agentCwds.some((c) => sessionInScope({ cwd_path: c })))
+        // The socket is a filesystem path and stays on this side of the wire.
+        .map(({ socket: _s, ...p }) => p);
+      return json({ ok: true, panes });
+    }
+
+    /** Put one of them in front of whoever is attached. The ids are validated
+     *  against tmux's own syntax in focusPane() before they reach a command. */
+    if (pathname === "/terminal/panes/focus" && req.method === "POST") {
+      let b: { sessionId?: unknown; windowId?: unknown; paneId?: unknown };
+      try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const ok = focusPaneAnywhere(lastTmuxTarget()?.socket, String(b.sessionId ?? ""), String(b.windowId ?? ""), String(b.paneId ?? ""));
+      return json(ok ? { ok } : { ok, error: "tmux would not go there — the pane may be gone" }, ok ? 200 : 409);
+    }
+
     if (pathname === "/terminal/commands") {
       const root = url.searchParams.get("root") || "";
       return body(await singleFlight(`cmds:${root}`, async () => JSON.stringify(await projectCommands(root))));
@@ -2151,6 +2511,8 @@ setInterval(prune, 3_600_000);
 // abandoned chat gives its memory back and resumes transparently next time.
 // A no-op when the engine is off, tmux is absent, or eviction is disabled.
 startPaneSweeper();
+startTaskSweep();
+startReminderTick();
 
 // Read every Claude Code session on this machine from ~/.claude/projects, then
 // keep watching. This is what makes the dashboard cover all projects at once
@@ -2161,8 +2523,13 @@ startScanner(({ event, session }) => {
   // — drop its cached detail here too, or a session being watched live would
   // read stale until the TTL backstop.
   sessionCache.delete(event.session_id);
-  broadcast({ type: "event", data: event });
-  broadcast({ type: "session", data: session });
+  // Stored either way — a cockpit scoped today may be unscoped tomorrow, and the
+  // history has to be there when it is. Only the live push is filtered, so that
+  // what arrives while you watch agrees with what a reload would show.
+  if (sessionInScope(session)) {
+    broadcast({ type: "event", data: event });
+    broadcast({ type: "session", data: session });
+  }
   // A Pre opens a call and a Post closes one, so the list the fleet is drawing
   // from just changed. Pushed now rather than up to a tick later, because the
   // moment a tool starts is exactly when the card should say so.

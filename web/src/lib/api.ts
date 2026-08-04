@@ -1,4 +1,8 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport } from "../../../shared/types.ts";
+import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ViewTasksResponse, TaskDetail, ProviderTask } from "../../../shared/providers.ts";
+
+/** What every ClickUp write answers with: the card as it now stands, or why not. */
+type ClickUpWrite = { ok: boolean; error?: string; conflict?: boolean; task?: ProviderTask };
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -20,6 +24,13 @@ const DESKTOP_API: string | undefined =
   typeof window !== "undefined"
     ? (window as unknown as { agentglass?: { apiOrigin?: string } }).agentglass?.apiOrigin
     : undefined;
+
+/** Running inside the packaged desktop shell on the host machine — the only
+ *  place from which it is safe to broadcast a theme out to the machine's tmux
+ *  and nvim on boot. A phone or a paired browser reaches the same server but
+ *  must never repaint the host's terminals just by loading; they have no
+ *  `apiOrigin`, so this is false for them. */
+export const IS_DESKTOP: boolean = !!DESKTOP_API;
 
 export let SERVER: string =
   (import.meta.env.VITE_CW_SERVER as string | undefined)?.replace(/\/$/, "") ||
@@ -220,8 +231,16 @@ export function adoptServer(next: { origin?: string | null; token?: string | nul
 }
 
 /** WebSocket URL for a real PTY shell in `root` (the in-browser terminal). */
-export const ptyWsUrl = (root: string, cols: number, rows: number) =>
-  withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`);
+export const ptyWsUrl = (root: string, cols: number, rows: number, view?: string, edit = false) =>
+  withToken(`${SERVER.replace(/^http/, "ws")}/terminal/pty?root=${encodeURIComponent(root)}&cols=${cols}&rows=${rows}`
+    // A file to open instead of a shell. A path — the server decides what runs
+    // with it, and refuses one outside the open project.
+    + (view ? `&view=${encodeURIComponent(view)}` : "")
+    // Editable, rather than the read-only default. Asked for explicitly because
+    // the two intents are different: a pull request is somebody else's code in
+    // a temp copy, a file tree is your checkout. The server refuses this for a
+    // temp copy however loudly the client asks.
+    + (view && edit ? "&edit=1" : ""));
 
 async function get<T>(path: string): Promise<T> {
   const r = await fetch(SERVER + path, { headers: authHeaders() });
@@ -250,6 +269,13 @@ const demoPrAction = (): PrActionResult => ({ ok: false, error: "the demo is rea
 
 const realApi = {
   recent: (limit = 300) => get<WatchEvent[]>(`/events/recent?limit=${limit}`),
+  /** Where the machine's agents are sitting, in tmux terms. Asked on demand —
+   *  when the bar's panel opens — never polled: nobody reads the answer between
+   *  pressing the chip and clicking through it. */
+  agentPanes: () => get<{ ok: boolean; reason?: string; panes: AgentPane[] }>("/terminal/panes"),
+  /** Put one in front of whoever is attached to tmux. */
+  focusPane: (p: { sessionId: string; windowId: string; paneId: string }) =>
+    post<{ ok: boolean; error?: string }>("/terminal/panes/focus", p),
   /** Scope + discovered projects. `workspace` is set when this instance was
    *  opened for a single project. */
   projects: () => get<{ projects: { source_app: string; path: string }[]; scanning: boolean; workspace: string | null }>("/projects"),
@@ -285,7 +311,7 @@ const realApi = {
   // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
   // and is not. 0 means pruning is off and it really is all time.
   skills: () => get<{ skills: SkillInfo[]; usage_since?: number; generated_at: number }>(`/skills`),
-  changes: (limit = 200) => get<{ changes: FileChange[] }>(`/changes?limit=${limit}`),
+  changes: (limit = 200) => get<{ changes: FileChange[]; project?: string | null }>(`/changes?limit=${limit}`),
   session: (id: string) => get<SessionDetail>(`/session?id=${encodeURIComponent(id)}`),
   /** Sessions with a turn running right now. The only honest answer to "can I
    *  send to this without interrupting it" — see server/src/chat.ts. */
@@ -352,6 +378,7 @@ const realApi = {
   gitLog: (root: string, limit = 100) => get<{ commits: GitCommit[] }>(`/git/log?root=${encodeURIComponent(root)}&limit=${limit}`),
   gitCommitDiff: (root: string, hash: string) => get<{ changes: FileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
   gitStashes: (root: string) => get<{ stashes: GitStash[] }>(`/git/stashes?root=${encodeURIComponent(root)}`),
+  gitTidy: (root: string) => get<TidyReport>(`/git/tidy?root=${encodeURIComponent(root)}`),
   gitRemotes: (root: string) => get<{ remotes: GitRemote[] }>(`/git/remotes?root=${encodeURIComponent(root)}`),
   /** Every branch on one remote, as the last fetch left them — the whole list,
    *  filtered and rendered progressively on this side. */
@@ -424,6 +451,109 @@ const realApi = {
   dockerOverview: () => get<DockerOverview>("/docker/overview"),
   dockerStats: () => get<{ stats: DockerStat[] }>("/docker/stats"),
   dockerLogs: (id: string, tail = 400) => get<{ ok: boolean; text: string; error?: string }>(`/docker/logs?id=${encodeURIComponent(id)}&tail=${tail}`),
+
+  // --- local tasks ---
+  tasksList: (force = false) => get<TasksListResponse>(`/tasks/list${force ? "?force=1" : ""}`),
+  taskAdd: (input: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/add", { input, fingerprint }),
+  taskDone: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/done", { uuid, fingerprint }),
+  taskReopen: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/reopen", { uuid, fingerprint }),
+  taskDelete: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/delete", { uuid, fingerprint }),
+  taskPriority: (uuid: string, current: "H" | "M" | "L" | null, fingerprint?: string) =>
+    post<TaskWriteResponse>("/tasks/write/priority", { uuid, current, fingerprint }),
+  taskEdit: (uuid: string, input: string, previousTags: string[], fingerprint?: string) =>
+    post<TaskWriteResponse>("/tasks/write/edit", { uuid, input, previousTags, fingerprint }),
+  taskTags: (uuid: string, tags: string[], fingerprint?: string) =>
+    post<TaskWriteResponse>("/tasks/write/tags", { uuid, tags, fingerprint }),
+  taskNote: (uuid: string, oldText: string, newText: string, fingerprint?: string) =>
+    post<TaskWriteResponse>("/tasks/write/note", { uuid, oldText, newText, fingerprint }),
+  /** The same change to a run of tasks. `applied` comes back because a run can
+   *  stop part-way, and the message on screen has to say how far it got. */
+  taskBulk: (uuids: string[], action: "done" | "priority" | "tag" | "delete", value: string | null, fingerprint?: string) =>
+    post<TaskWriteResponse & { applied?: number }>("/tasks/write/bulk", { uuids, action, value, fingerprint }),
+
+  /* Integrations. `connect` is the only call in this file that sends a secret,
+     and nothing here ever receives one back — the responses carry a status. */
+  providers: () => get<ProvidersResponse>("/providers"),
+  providerConnect: (id: string, token: string) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/connect", { id, token }),
+  providerDisconnect: (id: string) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/disconnect", { id }),
+  providerWorkspaces: (id: string) =>
+    get<{ ok: boolean; workspaces?: { id: string; name: string }[]; error?: string }>(`/providers/workspaces?id=${encodeURIComponent(id)}`),
+  providerWorkspace: (id: string, workspaceId: string, name: string) =>
+    post<{ ok: boolean; error?: string; status?: ProviderStatus }>("/providers/workspace", { id, workspaceId, name }),
+  providerTasks: (force = false) =>
+    get<ProviderTasksResponse>(`/tasks/provider${force ? "?force=1" : ""}`),
+
+  /* ClickUp boards. `clickupWrite*` are the only calls in this file that change
+     anything in somebody's company workspace; each one carries the
+     `date_updated` the client was looking at, so a card that moved underneath
+     is refused rather than overwritten. */
+  clickupViews: () => get<{ views: SavedView[]; current?: string; writeEnabled: boolean; writeForced?: boolean }>("/clickup/views"),
+  clickupSetWrites: (on: boolean) => post<{ ok: boolean }>("/clickup/writes", { on }),
+  clickupView: (id?: string, force = false) =>
+    get<ViewTasksResponse>(`/clickup/view?${new URLSearchParams({ ...(id ? { id } : {}), ...(force ? { force: "1" } : {}) })}`),
+  clickupAddView: (url: string) =>
+    post<{ ok: boolean; error?: string; view?: SavedView }>("/clickup/views/add", { url }),
+  clickupRemoveView: (id: string) => post<{ ok: boolean }>("/clickup/views/remove", { id }),
+  clickupPrs: (card: string, field: string, root: string) =>
+    get<{ ok: boolean; prs: { number: number; title: string; state: string; draft?: boolean; url: string; stated?: boolean }[]; error?: string }>(
+      `/clickup/prs?${new URLSearchParams({ card, field, root })}`),
+  clickupFind: (q: string) =>
+    get<{ ok: boolean; error?: string; task?: ProviderTask; asked?: string }>(`/clickup/find?q=${encodeURIComponent(q)}`),
+  clickupTask: (id: string) =>
+    get<{ ok: boolean; error?: string } & Partial<TaskDetail>>(`/clickup/task?id=${encodeURIComponent(id)}`),
+  clickupAssign: (id: string, on: boolean, updated?: number) =>
+    post<ClickUpWrite>("/clickup/assign", { id, on, updated }),
+  clickupStatus: (id: string, status: string, updated?: number) =>
+    post<ClickUpWrite>("/clickup/status", { id, status, updated }),
+  clickupField: (id: string, field: string, value: string) =>
+    post<ClickUpWrite>("/clickup/field", { id, field, value }),
+  reminders: (window: "live" | "upcoming" | "history" = "live") =>
+    get<RemindersResponse>(`/tasks/reminders?window=${window}`),
+  remind: (body: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) =>
+    post<{ ok: boolean; reminder?: Reminder; error?: string }>("/tasks/remind", body),
+  reminderAck: (id: string) => post<{ ok: boolean }>("/tasks/reminder/ack", { id }),
+  reminderCancel: (id: string) => post<{ ok: boolean }>("/tasks/reminder/cancel", { id }),
+  reminderSnooze: (id: string, minutes: number) => post<{ ok: boolean }>("/tasks/reminder/snooze", { id, minutes }),
+
+  // --- github issues ---
+  issuesList: (root: string, state = "open", q = "", assignee = "") =>
+    get<IssuesReport>(`/issues/list?root=${encodeURIComponent(root)}&state=${state}`
+      + `&q=${encodeURIComponent(q)}&assignee=${encodeURIComponent(assignee)}`),
+  issueDetail: (root: string, number: number) =>
+    get<{ ok: boolean; issue?: IssueDetail; error?: string }>(`/issues/detail?root=${encodeURIComponent(root)}&number=${number}`),
+  /** Everything with a worktree still on disk, so the list can say what is in
+   *  progress without asking per row. */
+  issuesWork: (repo = "") => get<{ work: IssueWork[] }>(`/issues/work?repo=${encodeURIComponent(repo)}`),
+  issueStart: (root: string, number: number, mode: StartMode) =>
+    post<IssueStartResult>("/issues/start", { root, number, mode }),
+  /** Put the worktree away. Refused while it is dirty unless `force`. */
+  issueFinish: (root: string, number: number, force = false) =>
+    post<IssueActionResult>("/issues/finish", { root, number, force }),
+  issueClaim: (root: string, number: number, comment?: string) =>
+    post<IssueActionResult>("/issues/claim", { root, number, comment }),
+  issueComment: (root: string, number: number, body: string) =>
+    post<IssueActionResult>("/issues/comment", { root, number, body }),
+  issueState: (root: string, number: number, close: boolean) =>
+    post<IssueActionResult>("/issues/state", { root, number, close }),
+
+  // --- what this machine is doing: ports, processes, disk ---
+  /** Every listening TCP socket, with the process behind the ones we own. */
+  machinePorts: () => get<PortsReport>("/machine/ports"),
+  /** Every process this user owns, with the ones descended from this server
+   *  marked. `limit` caps only the rest of the machine — ours all come back. */
+  machineResources: (limit = 40) => get<ResourceReport>(`/machine/resources?limit=${limit}`),
+  /** Where a checkout's disk went, one level down. A `du` walk: seconds on a
+   *  repository with a node_modules, so it is asked for, never polled. */
+  machineSpace: (root: string) => get<SpaceReport>(`/machine/space?root=${encodeURIComponent(root)}`),
+  /** SIGTERM a process we started. Refused for anything this user does not own. */
+  machineKill: (pid: number) => post<{ ok: boolean; error?: string; detail?: string }>("/machine/kill", { pid }),
+
+  // --- browsing and searching a checkout ---
+  filesTree: (root: string, rel = "") => get<TreeReport>(`/files/tree?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}`),
+  filesFind: (root: string, q: string) => get<FindReport>(`/files/find?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
+  filesGrep: (root: string, q: string) => get<GrepReport>(`/files/grep?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`),
   /** Where this server is reachable from another device, whether one has
    *  arrived, and which firewall is the likely reason if none has. */
   remoteStatus: () => get<RemoteStatus>("/remote/status"),
@@ -556,6 +686,11 @@ const realApi = {
   prReact: (root: string, commentId: number, content = "+1") => post<PrActionResult>("/prs/react", { root, commentId, content }),
   prEdit: (root: string, number: number, patch: { title?: string; body?: string; base?: string }) => post<PrActionResult>("/prs/edit", { root, number, ...patch }),
   prLabels: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/labels", { root, number, add, remove }),
+  /** A pull request's version of a file, written to a temp copy so it can be
+   *  opened. The working tree holds whatever branch you have out, which for
+   *  somebody else's pull request is a different file wearing the same path. */
+  prFileTemp: (root: string, number: number, path: string) =>
+    post<{ ok: boolean; file?: string; sha?: string; error?: string }>("/prs/file-temp", { root, number, path }),
   prReviewers: (root: string, number: number, add: string[], remove: string[]) => post<PrActionResult>("/prs/reviewers", { root, number, add, remove }),
   prDraft: (root: string, number: number, draft: boolean) => post<PrActionResult>("/prs/draft", { root, number, draft }),
   prUpdateBranch: (root: string, number: number) => post<PrActionResult>("/prs/update-branch", { root, number }),
@@ -663,6 +798,10 @@ const demoApi: typeof realApi = {
   recent: () => D(demo.recent()),
   // The demo is a showcase of the whole fleet, so it is never scoped.
   projects: () => D({ projects: [], scanning: false, workspace: null }),
+  // No tmux behind a demo build, so there is never a pane to point at — which
+  // lands the panel on the sentence it already has for that case.
+  agentPanes: () => D({ ok: false, reason: "not in the demo", panes: [] as AgentPane[] }),
+  focusPane: (_p: { sessionId: string; windowId: string; paneId: string }) => D({ ok: false, error: "not in the demo" }),
   stats: (windowMs: number, provider?: string) => D(demo.stats(windowMs, provider)),
   usageDaily: (days = 90) => D(demo.usageDaily(days)),
   sessions: (_limit?: number, provider?: string) => D(demo.sessions(provider)),
@@ -722,6 +861,7 @@ const demoApi: typeof realApi = {
   gitLog: (_root: string, _limit?: number) => D(demo.gitLog()),
   gitCommitDiff: (_root: string, hash: string) => D(demo.gitCommitDiff(hash)),
   gitStashes: (_root: string) => D(demo.gitStashes()),
+  gitTidy: (_root: string) => D({ root: "", base: "main", findings: [], error: "not available in the demo" }),
   gitCheckout: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitBranchCreate: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitBranchDelete: (_root: string, _name: string, _force: boolean) => D(demo.gitActionUnavailable()),
@@ -830,6 +970,7 @@ const demoApi: typeof realApi = {
   prDetail: (_root: string, number: number, _force?: boolean) => D(demo.prDetail(number)),
   prDiff: (_root: string, number: number) => D(demo.prDiff(number)),
   prAssetUrl: (raw: string) => raw,
+  prFileTemp: (_r: string, _n: number, _p: string) => D({ ok: false as const, error: "not available in the demo" }),
   prReview: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string) => D(demoPrAction()),
   prReviewWith: (_r: string, _n: number, _v: "approve" | "request_changes" | "comment", _b: string, _c: unknown[]) => D(demoPrAction()),
   prComment: (_r: string, _n: number, _b: string) => D(demoPrAction()),
@@ -853,6 +994,61 @@ const demoApi: typeof realApi = {
   prReviewPrompt: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
   prCommitDiff: (_r: string, _s: string) => D({ ok: false, error: "not available in the demo" }),
   prBranchUrl: (_r: string, _b: string, _g: boolean) => D({ ok: false, error: "not available in the demo" }),
+  // The demo has no machine to report on and no checkout to browse: it is a
+  // fabricated dataset in a browser tab. Empty and honest beats invented — a
+  // fake port list would be the one screen in the tour that lies.
+  tasksList: (_f?: boolean) => D({ ok: true, tasks: [], capability: { available: false, configured: false, reason: "not available in the demo" } }),
+  taskAdd: (_i: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskDone: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskReopen: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskDelete: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskPriority: (_u: string, _c: "H" | "M" | "L" | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskEdit: (_u: string, _i: string, _p: string[], _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskTags: (_u: string, _t: string[], _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskNote: (_u: string, _o: string, _n: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskBulk: (_u: string[], _a: string, _v: string | null, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  providers: () => D({ providers: [] }),
+  providerConnect: (_i: string, _t: string) => D({ ok: false, error: "not available in the demo" }),
+  providerDisconnect: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  providerWorkspaces: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  providerWorkspace: (_i: string, _w: string, _n: string) => D({ ok: false, error: "not available in the demo" }),
+  providerTasks: (_f?: boolean) => D({ tasks: [], more: false, at: 0 }),
+  clickupViews: () => D({ views: [], writeEnabled: false }),
+  clickupSetWrites: (_o: boolean) => D({ ok: false }),
+  clickupView: (_i?: string, _f?: boolean) => D({ tasks: [], statuses: [], fields: [], at: 0 }),
+  clickupAddView: (_u: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupRemoveView: (_i: string) => D({ ok: true }),
+  clickupPrs: (_c: string, _f: string, _r: string) => D({ ok: true, prs: [] }),
+  clickupFind: (_q: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupTask: (_i: string) => D({ ok: false, error: "not available in the demo" }),
+  clickupAssign: (_i: string, _o: boolean, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupStatus: (_i: string, _s: string, _u?: number) => D({ ok: false, error: "not available in the demo" }),
+  clickupField: (_i: string, _f: string, _v: string) => D({ ok: false, error: "not available in the demo" }),
+  reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
+  remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),
+  reminderAck: (_i: string) => D({ ok: false }),
+  reminderCancel: (_i: string) => D({ ok: false }),
+  reminderSnooze: (_i: string, _m: number) => D({ ok: false }),
+  issuesList: (_r: string, _s?: string, _q?: string, _a?: string) => D({ ok: false, issues: [], error: "not available in the demo" }),
+  issueDetail: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
+  issuesWork: (_repo?: string) => D({ work: [] }),
+  issueStart: (_r: string, _n: number, _m: StartMode) => D({ ok: false, error: "not available in the demo" }),
+  issueFinish: (_r: string, _n: number, _f?: boolean) => D({ ok: false, error: "not available in the demo" }),
+  issueClaim: (_r: string, _n: number, _c?: string) => D({ ok: false, error: "not available in the demo" }),
+  issueComment: (_r: string, _n: number, _b: string) => D({ ok: false, error: "not available in the demo" }),
+  issueState: (_r: string, _n: number, _c: boolean) => D({ ok: false, error: "not available in the demo" }),
+  machinePorts: () => D({ ports: [], mine: 0, external: 0, error: "not available in the demo" }),
+  // Zeroed rather than invented: the demo has no machine to report on, and a
+  // plausible-looking 40% would be a lie the panel has no way to caveat.
+  machineResources: (_l?: number) => D({
+    procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false,
+    machine: { cpu: null, cores: 0, memUsed: 0, memTotal: 0, swapUsed: 0, swapTotal: 0, tempC: null, load1: 0, diskFree: 0, diskTotal: 0 },
+  }),
+  machineSpace: (_r: string) => D({ root: "", bytes: 0, freeable: 0, dirs: [], error: "not available in the demo" }),
+  machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
+  filesTree: (_r: string, _rel?: string) => D({ ok: false, root: "", rel: "", entries: [], error: "not available in the demo" }),
+  filesFind: (_r: string, _q: string) => D({ ok: false, files: [], truncated: false, via: "", error: "not available in the demo" }),
+  filesGrep: (_r: string, _q: string) => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "not available in the demo" }),
 };
 
 export const api = IS_DEMO ? demoApi : realApi;
@@ -877,10 +1073,17 @@ export interface UsageWindow {
   remaining: number;
   resets_at: string | null;
 }
+/** A weekly window scoped to one model — the "Fable" bar. Named rather than
+ *  keyed: the label is the server's to choose, and this week's bucket is not
+ *  necessarily next week's. Mirrors server/src/usage.ts. */
+export interface UsageScopedWindow extends UsageWindow {
+  name: string;
+}
 export interface UsagePayload {
   available: boolean;
   five_hour?: UsageWindow;
   seven_day?: UsageWindow;
+  scoped?: UsageScopedWindow[];
   fetched_at: number;
   error?: string;
 }

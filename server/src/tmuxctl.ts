@@ -18,8 +18,11 @@
  * and the panel keeps its own chrome, which is the correct fallback rather than
  * a degraded one.
  */
-import { readFileSync, readlinkSync } from "node:fs";
+import { readFileSync, readlinkSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { TmuxWindow } from "../../shared/types.ts";
+import { parsePanes, PANE_FORMAT, type PaneRow } from "./paneloc.ts";
 
 /** How long a tmux call may take before we give up on it. Generous for a local
  *  socket, and short enough that a wedged tmux server cannot stall the poll. */
@@ -169,10 +172,16 @@ export function parseWindows(out: string): TmuxWindow[] {
     if (!line.trim()) continue;
     // Tab-separated, because window names routinely contain spaces and a
     // space-separated format would split "npm run dev" into three windows.
-    const [id, index, name, active, flags] = line.split("\t");
+    const [id, index, name, active, flags, ask] = line.split("\t");
     const i = Number(index);
     if (!WINDOW_ID.test(id ?? "") || !Number.isInteger(i)) continue;
-    windows.push({ id: id!, index: i, name: name ?? "", active: active === "1", flags: (flags ?? "").trim() });
+    const asked = (ask ?? "").trim();
+    windows.push({
+      id: id!, index: i, name: name ?? "", active: active === "1", flags: (flags ?? "").trim(),
+      // Anything else in the option is someone else's, or ours from a version
+      // that meant something different by it. Ignored rather than forwarded.
+      ...(asked === "rename" || asked === "move" ? { ask: asked } : {}),
+    });
   }
   return windows;
 }
@@ -210,7 +219,11 @@ export function readFrame(c: TmuxClient): TmuxFrame | null {
     "list-clients", "-F", "c\t#{client_tty}\t#{session_name}\t#{session_id}",
     ";",
     "list-windows", "-a",
-    "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}",
+    // `@agx-ask` rides along in the format string rather than in a second
+    // call: this is polled twice a second per attached client, and a prompt
+    // that costs an extra subprocess every sweep is a prompt that costs more
+    // than the feature is worth.
+    "-F", "w\t#{session_id}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t#{window_raw_flags}\t#{@agx-ask}",
   ]);
   if (!out) return null;
   const f = parseFrame(out, c.tty);
@@ -279,7 +292,7 @@ export function prefixKeys(t: TmuxTarget): string[] {
  * this server hands out, and "the panel can run arbitrary tmux commands" would
  * quietly widen it further.
  */
-export type TmuxAction = "select" | "new" | "kill" | "rename";
+export type TmuxAction = "select" | "new" | "kill" | "rename" | "move";
 
 /** Window names are echoed back into a shell prompt and a status line, so they
  *  are held to printable, single-line, and short. tmux itself is happy with far
@@ -322,6 +335,24 @@ export function runAction(t: TmuxTarget, action: TmuxAction, window?: string, na
       if (id === null || !clean) return false;
       return tmux(t.socket, ["rename-window", "-t", id, clean]) !== null;
     }
+    case "move": {
+      // A destination index, and nothing else. `name` carries it because the
+      // wire already has that field, but it is parsed as a number here rather
+      // than passed through — `move-window -t` takes a target spec, and a
+      // string from a client reaching that unchecked is a way to address
+      // another session entirely.
+      // Matched as digits before it is a number, because `Number("")` is 0 and
+      // an empty box would otherwise mean "move it to the front" — which is a
+      // real move, applied to a window whose owner typed nothing and pressed
+      // Enter. `Number(" 7 ")` is 7 for the same reason: parsing is not a check.
+      const raw = (name ?? "").trim();
+      const to = Number(raw);
+      if (id === null || !/^\d{1,3}$/.test(raw)) return false;
+      // `-s` is what moves; `-t` on its own would move the *current* window.
+      // Bare, not `-b`: the user named an index and that is the index they get,
+      // with tmux renumbering around it exactly as `prefix .` would have.
+      return tmux(t.socket, ["move-window", "-s", id, "-t", `${t.id}:${to}`]) !== null;
+    }
     default:
       return false;
   }
@@ -360,46 +391,300 @@ function statusInConfig(t: TmuxTarget): string {
 /**
  * Take tmux's status line over for this session, or give it back.
  *
- * Taking it over used to mean `status off`, which is not the same thing as
- * taking it over — it is removing it, and tmux still needs somewhere to put a
- * prompt. With no status row allocated, `prefix ,`, `prefix .`, `prefix :` and
- * every `display-message` (continuum's "Tmux environment saved!", say) are
- * drawn *over the top line of the shell*, because that is the row where the
- * status line would have been. The pane's own content is untouched underneath
- * and comes back when the message clears, so nothing is lost — it just looks
- * like the terminal is being scribbled on, and the line you were reading is
- * gone while you answer.
+ * The panel draws its own tab strip, so two window lists on screen is one too
+ * many — and the answer has to be one or the other, never both, because a
+ * blanked row that still takes a row is neither.
  *
- * So the row is blanked rather than removed: `status on` with an empty
- * `status-format[0]`, styled in the terminal's own default colours so an empty
- * bar is invisible against the panel. tmux keeps a row it can draw prompts and
- * messages into, the tab strip stays the only window list on screen, and the
- * shell keeps every line it had. The cost is honest and small: one row, which
- * is what the status line was costing anyway.
+ * This blanked the row rather than removing it, and the reason was real: with
+ * no status row allocated, `prefix ,`, `prefix .`, `prefix :` and every
+ * `display-message` are drawn over the top line of the shell, because that is
+ * the row where the status line would have been. Nothing is lost — the pane's
+ * content is untouched underneath and comes back when the message clears — but
+ * it looks like the terminal is being scribbled on.
+ *
+ * The row is now removed, and the prompts are taken instead of tolerated:
+ * `prefix ,` and `prefix .` are rebound to leave a note on the window
+ * (`@agx-ask`), which the sweep already reading this session picks up and hands
+ * to the panel, which opens its own input. Same keys, same muscle memory, a row
+ * of screen back, and a rename box that matches the app it is drawn in.
+ *
+ * What is left is what we cannot intercept: a plugin's own `display-message`
+ * still paints over the top line for its two seconds. That is the honest cost
+ * of the row, and it is the one the user chose by taking the row back.
  *
  * Opt-in, and it has to be: these are session options, not client ones, so a
  * second client attached to the same session from a real terminal is affected
  * too. `set-option -u` puts each one back exactly as their config had it,
  * rather than guessing at a default.
  */
+/**
+ * A new window in the user's own tmux, already running something.
+ *
+ * Separate from `runAction`'s `new` on purpose. That one opens an empty window
+ * and is driven by a button; this one opens a window with a command in it, and
+ * a command is a much larger thing to hand a websocket. So `argv` is never
+ * client text: the caller builds it from something the server itself resolved.
+ *
+ * Passed as separate arguments rather than a shell string — tmux runs a bare
+ * string through the user's login shell, and this one is fish on the machine
+ * where that was last discovered the hard way.
+ */
+export function newWindowRunning(t: TmuxTarget, cwd: string, name: string, argv: string[]): boolean {
+  const clean = sanitizeWindowName(name);
+  return tmux(t.socket, [
+    "new-window", "-t", t.id, "-c", cwd,
+    ...(clean ? ["-n", clean] : []),
+    ...argv,
+  ]) !== null;
+}
+
+/**
+ * The prompts we take over, and what tmux does with them by default.
+ *
+ * Rebound conditionally on `@agx-owned`, a session option set only while the
+ * panel holds the bar — key bindings are global to the tmux server, so an
+ * unconditional rebind would take rename away from every other session on the
+ * machine, including one attached from a real terminal where tmux's own prompt
+ * is the right answer.
+ */
+const PROMPTS = [
+  { key: ",", ask: "rename" },
+  { key: ".", ask: "move" },
+] as const;
+
+/** What `list-keys` says this key does right now, verbatim and re-issuable.
+ *  Captured before overwriting so release can put back exactly what was there —
+ *  the same rule `set-option -u` follows for the options, rather than guessing
+ *  at a default that varies by tmux version and by the user's own config. */
+function bindingFor(t: TmuxTarget, key: string): string | null {
+  const out = tmux(t.socket, ["list-keys", "-T", "prefix", key]);
+  return out?.trim() || null;
+}
+
+function takePrompts(t: TmuxTarget) {
+  for (const { key, ask } of PROMPTS) {
+    const had = bindingFor(t, key);
+    // Stored on the session, so release needs no memory of its own and a server
+    // that was killed rather than closed still leaves the way back written down.
+    if (had) tmux(t.socket, ["set-option", "-t", t.id, `@agx-had-${ask}`, had]);
+    tmux(t.socket, [
+      "bind-key", "-T", "prefix", key,
+      "if-shell", "-F", "#{@agx-owned}",
+      `set-option -w @agx-ask ${ask}`,
+      // The false branch is the binding as it was, so every session this server
+      // is NOT drawing keeps the prompt it has always had.
+      had ? had.replace(/^bind-key\s+(-T\s+\S+\s+)?\S+\s+/, "") : (ask === "rename"
+        ? 'command-prompt -I "#W" "rename-window -- %%"'
+        : 'command-prompt "move-window -t \'%%\'"'),
+    ]);
+  }
+}
+
+/**
+ * Put the prompt keys back exactly as they were.
+ *
+ * Through `source-file` rather than by rebuilding an argv, because the thing
+ * being restored is a tmux command *line* — `command-prompt -I "#W"
+ * "rename-window -- %%"` — and splitting that on whitespace tears the quoted
+ * arguments into pieces. tmux's own parser is the only thing that reads its
+ * syntax correctly, so it is handed the line and asked to run it.
+ */
+function releasePrompts(t: TmuxTarget) {
+  const lines: string[] = [];
+  for (const { ask } of PROMPTS) {
+    const had = (tmux(t.socket, ["show-options", "-qv", "-t", t.id, `@agx-had-${ask}`]) || "").trim();
+    // `list-keys` prints a complete `bind-key …` line, so this is the user's
+    // binding verbatim and not our idea of what the default should have been.
+    if (had.startsWith("bind-key")) lines.push(had);
+    tmux(t.socket, ["set-option", "-t", t.id, "-u", `@agx-had-${ask}`]);
+  }
+  if (!lines.length) return;
+  // 0600 in a fresh 0700 dir: this is a file another local user must not be
+  // able to swap for one of their own between the write and tmux reading it.
+  let dir: string | null = null;
+  try {
+    dir = mkdtempSync(join(tmpdir(), "agentglass-tmuxkeys-"));
+    const f = join(dir, "restore.conf");
+    writeFileSync(f, `${lines.join("\n")}\n`, { mode: 0o600, flag: "wx" });
+    tmux(t.socket, ["source-file", f]);
+  } catch { /* the bindings stay conditional on a flag that is now unset, which behaves as before */ }
+  finally { if (dir) try { rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ } }
+}
+
+/** Take the note off a window once the panel has been told about it. One sweep
+ *  is all it should live for; left set, the panel would reopen its input every
+ *  half second. */
+export function clearAsk(t: TmuxTarget, window: string): void {
+  tmux(t.socket, ["set-option", "-w", "-t", window, "-u", "@agx-ask"]);
+}
+
+/** Sockets this process has already swept. See releaseStale. */
+const swept = new Set<string>();
+
+/**
+ * Give back every status line a previous run of this app took and never
+ * returned.
+ *
+ * The release path is keyed off in-memory state (`tmuxStatusHiddenOn`), so it
+ * runs when the panel closes and when the shell exits — and not at all when the
+ * process is killed, OOMed, or goes down with the laptop lid. What is left
+ * behind is a tmux session with `status off` and `@agx-owned` still set: no
+ * status line, `prefix ,` leaving notes nobody reads, and no way for the user
+ * to know why. It heals only if they happen to open the panel on that same
+ * session again and then close it properly.
+ *
+ * So it is swept instead, once per tmux server, the first time this process
+ * touches one. At that moment the claim is stale BY DEFINITION: no shell in
+ * this process has taken anything yet, so any `@agx-owned` it finds belongs to
+ * a run that is gone.
+ *
+ * The restore is exact rather than a guess, because the way back was written
+ * onto the session itself — `@agx-had-rename` and `@agx-had-move` outlive the
+ * process that set them, which is the whole reason they live there instead of
+ * in a variable.
+ */
+export function releaseStale(c: TmuxClient): void {
+  const key = c.socket.join(" ");
+  if (swept.has(key)) return;
+  swept.add(key);
+  const out = tmux(c.socket, ["list-sessions", "-F", "#{session_id}\t#{@agx-owned}"]);
+  if (!out) return;
+  for (const line of out.split("\n")) {
+    const [id, owned] = line.split("\t");
+    if (!id || owned?.trim() !== "1") continue;
+    setStatusLine({ pid: c.pid, socket: c.socket, session: "", id }, true);
+  }
+}
+
 export function setStatusLine(t: TmuxTarget, visible: boolean): boolean {
   if (visible) {
+    releasePrompts(t);
+    tmux(t.socket, ["set-option", "-t", t.id, "-u", "@agx-owned"]);
     // Give everything back, and do not stop at the first failure: a session that
     // kept `status-format[0]` blank because `status` failed to restore is a
     // session with an invisible status line and no way to know why.
     return BORROWED.map((opt) => tmux(t.socket, ["set-option", "-t", t.id, "-u", opt]) !== null).every(Boolean);
   }
-  // Nothing to borrow from someone whose config runs without one. They already
-  // live with prompts drawing over their shell in every other terminal they
-  // use, and adding a row here would be the panel deciding it knows better.
+  // Nothing to take from someone whose config runs without one — there is no
+  // row to reclaim, and the panel's strip is already the only window list.
   if (statusInConfig(t) === "off") return false;
-  const set = (opt: string, val: string) => tmux(t.socket, ["set-option", "-t", t.id, opt, val]) !== null;
-  const on = set("status", "on");
-  // `bg=default` is the terminal's background, which is the panel's background,
-  // so the row reads as part of the app rather than as a bar with nothing in it.
-  const styled = set("status-style", "bg=default,fg=default");
-  const blank = set("status-format[0]", "");
-  // The blanking is the part that matters; if it took, we borrowed the bar and
-  // the caller must remember to give it back.
-  return blank && (on || styled);
+  // Set before the rebind, so a keypress landing between the two finds the flag
+  // already true rather than falling through to a prompt with nowhere to draw.
+  tmux(t.socket, ["set-option", "-t", t.id, "@agx-owned", "1"]);
+  takePrompts(t);
+  // The row itself. `status off` rather than a blanked `status-format[0]`: a row
+  // held open for prompts that no longer arrive there is just a gap.
+  const off = tmux(t.socket, ["set-option", "-t", t.id, "status", "off"]) !== null;
+  if (!off) { releasePrompts(t); tmux(t.socket, ["set-option", "-t", t.id, "-u", "@agx-owned"]); }
+  return off;
+}
+
+// ---------------------------------------------------------------------------
+// Panes.
+//
+// Windows are what the tab strip needs; panes are what "take me to the agent
+// that is waiting" needs, because that is the granularity an agent runs at.
+// Both come off the same client's server — see paneloc.ts for why the join key
+// is the agent's own working directory and not the pane's.
+// ---------------------------------------------------------------------------
+
+const PANE_ID = /^%\d+$/;
+const SESSION_ID = /^\$\d+$/;
+
+/**
+ * Every tmux server this user could be running.
+ *
+ * Discovered from the socket directory rather than from one of our own clients,
+ * because the question "where is that agent sitting" has an answer whether or
+ * not this app has a terminal open — the tmux server has been running all along
+ * and holds every pane in it. Requiring a client first made the feature depend
+ * on a view the user might never have visited, and answer "open the terminal
+ * once" to a question that was already answerable.
+ *
+ * The known client's socket goes first when there is one: it is the server the
+ * user is demonstrably using, so its panes are the likeliest match and the
+ * ordering costs nothing.
+ */
+export function tmuxSockets(known?: string[]): string[][] {
+  const dir = join(process.env.TMUX_TMPDIR || tmpdir(), `tmux-${process.getuid?.() ?? 0}`);
+  // Normalised to a path, always. A client can name its server three ways — no
+  // flag (the default socket), `-L name`, `-S path` — and they can all be the
+  // SAME server. Adding the known client's spelling alongside the directory
+  // listing put that server in the list twice, and every pane on it came back
+  // twice with it. tmux resolves all three to a file in this directory, so
+  // resolving them here is what makes "the same server" one entry.
+  const pathOf = (args: string[]): string => {
+    const i = args.indexOf("-S");
+    if (i >= 0 && args[i + 1]) return args[i + 1]!;
+    const l = args.indexOf("-L");
+    if (l >= 0 && args[l + 1]) return join(dir, args[l + 1]!);
+    return join(dir, "default");
+  };
+
+  let found: string[] = [];
+  try { found = readdirSync(dir).map((n) => join(dir, n)); }
+  catch { /* no socket directory: no tmux has ever run here */ }
+
+  // The known client's server first when there is one — it is demonstrably the
+  // one the user is on, so its panes are the likeliest match — and then the
+  // rest, each once.
+  const first = known ? pathOf(known) : null;
+  const ordered = first ? [first, ...found.filter((p) => p !== first)] : found;
+  return ordered.map((p) => ["-S", p]);
+}
+
+/**
+ * Every pane on every one of them.
+ *
+ * Rows carry the socket they came from so a later "take me there" reaches the
+ * same server. Panes are addressed by tmux ids, which are unique per server and
+ * not across them, so acting on an id without knowing its socket is how you end
+ * up selecting a window in somebody else's session.
+ */
+export function listPanes(known?: string[]): (PaneRow & { socket: string[] })[] {
+  const rows: (PaneRow & { socket: string[] })[] = [];
+  for (const socket of tmuxSockets(known)) {
+    // Only servers somebody is attached to. "Take me there" means nothing on a
+    // server nobody is looking at, and skipping them is not a nicety: this
+    // project's own test suite leaves a tmux server behind on a stray socket,
+    // and a resurrect/continuum config then restores the user's real sessions
+    // into it — so an unattached server can be a convincing duplicate of the
+    // one you actually work in, with different pane ids. Offering those was
+    // offering to move a window nobody would see move.
+    if (!tmux(socket, ["list-clients", "-F", "#{client_tty}"])?.trim()) continue;
+    const out = tmux(socket, ["list-panes", "-a", "-F", PANE_FORMAT]);
+    if (out) rows.push(...parsePanes(out).map((r) => ({ ...r, socket })));
+  }
+  return rows;
+}
+
+/**
+ * Put a pane in front of the person attached to it.
+ *
+ * Three steps because a pane can be anywhere: move the client to the pane's
+ * session if it is showing another, then the window, then the pane. Doing only
+ * the last two lands silently on nothing when the pane is in a session no client
+ * is attached to — the normal case for someone who keeps a session per project.
+ *
+ * Every id is checked against tmux's own syntax before it is passed. These
+ * arrive from the UI, and a socket reachable from the UI must never be a way to
+ * hand tmux an arbitrary argument — the same rule the terminal's own command
+ * paths follow.
+ */
+export function focusPane(socket: string[], sessionId: string, windowId: string, paneId: string): boolean {
+  if (!SESSION_ID.test(sessionId) || !WINDOW_ID.test(windowId) || !PANE_ID.test(paneId)) return false;
+  // `switch-client` with no -c moves the most recently used client on this
+  // server, which is the one the user was last looking at.
+  if (tmux(socket, ["switch-client", "-t", sessionId]) === null) return false;
+  if (tmux(socket, ["select-window", "-t", windowId]) === null) return false;
+  return tmux(socket, ["select-pane", "-t", paneId]) !== null;
+}
+
+/** Find the server holding this pane, then go there. The socket is never sent
+ *  to the client and never accepted from it — a filesystem path from the UI is
+ *  exactly what must not reach a spawn. */
+export function focusPaneAnywhere(known: string[] | undefined, sessionId: string, windowId: string, paneId: string): boolean {
+  if (!PANE_ID.test(paneId)) return false;
+  const row = listPanes(known).find((r) => r.paneId === paneId);
+  return row ? focusPane(row.socket, sessionId, windowId, paneId) : false;
 }

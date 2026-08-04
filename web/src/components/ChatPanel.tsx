@@ -15,6 +15,8 @@ import { CHAT_EFFORTS } from "../../../shared/types.ts";
 import type { GitRepoRef, SessionRollup, ChatEffort } from "../../../shared/types.ts";
 import { api } from "../lib/api.ts";
 import { Markdown } from "../lib/markdown.tsx";
+import { ALLOW_DEFAULT, initialAllowed } from "../lib/chatAllowlist.ts";
+import { foldPreview, hiddenLineCount, isLongMessage } from "../lib/chatFold.ts";
 import { ToolRow } from "./ToolRow.tsx";
 import { ToolFeed } from "./ToolFeed.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
@@ -71,9 +73,6 @@ const MODES = [
 ];
 const CWD_KEY = "agentglass.chatCwd";
 const ALLOW_KEY = "agentglass.chatAllowedTools";
-// A starting point that covers the reading and inspection an assistant reaches
-// for constantly, without granting anything that writes or leaves the machine.
-const ALLOW_DEFAULT = "Read Glob Grep Bash(git status) Bash(git log:*) Bash(git diff:*) Bash(gh pr view:*)";
 const repoName = (p: string) => p.split("/").pop() || p;
 
 const selCls = "text-[10.5px] px-2 py-1 rounded-md outline-none";
@@ -94,6 +93,41 @@ const selStyle = { background: "color-mix(in srgb, var(--bg3) 50%, transparent)"
  * default, which is exactly what nobody asked to read. Liveness is the tool
  * feed's running call and the composer's caret; this stays folded.
  */
+/**
+ * A message that is too long to sit in a conversation whole.
+ *
+ * Almost always a pasted prompt — a review brief with its rules, its context
+ * and a block of JSON — which rendered in full takes the panel and pushes the
+ * reply you came to read off the bottom of it. Folded, the conversation is a
+ * conversation again.
+ *
+ * The top is kept rather than a summary: these are somebody's own words, and
+ * the first lines are the part that says what they are. Reopening is a toggle
+ * rather than a one-way reveal, because the reason to expand one of these is
+ * usually to check a single line and then get out of the way again.
+ */
+function Foldable({ text, children }: { text: string; children: (shown: string) => React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  if (!isLongMessage(text)) return <>{children(text)}</>;
+  const hidden = hiddenLineCount(text);
+  return (
+    <>
+      {children(open ? text : foldPreview(text))}
+      <button onClick={() => setOpen(!open)} aria-expanded={open}
+        className="mt-1.5 text-[10px] px-2 py-0.5 rounded-full hover:opacity-80"
+        style={{
+          color: "var(--primary-hover)",
+          border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)",
+          background: "color-mix(in srgb, var(--primary) 10%, transparent)",
+        }}>
+        {/* What it costs to open. A fold that will not say how much it is
+            hiding is a fold nobody opens. */}
+        {open ? "Show less" : `Show ${hidden} more line${hidden === 1 ? "" : "s"}`}
+      </button>
+    </>
+  );
+}
+
 function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
   const [open, setOpen] = useState(false);
   const lines = text.trim().split("\n");
@@ -604,7 +638,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
   // Shared by every chat and remembered across launches: the set of tools you
   // trust is a property of how you work, not of one conversation.
   const [allowed, setAllowed] = useState(() => {
-    try { return localStorage.getItem(ALLOW_KEY) ?? ALLOW_DEFAULT; } catch { return ALLOW_DEFAULT; }
+    try { return initialAllowed(localStorage.getItem(ALLOW_KEY)); } catch { return ALLOW_DEFAULT; }
   });
   useEffect(() => { try { localStorage.setItem(ALLOW_KEY, allowed); } catch { /* private mode */ } }, [allowed]);
   const [query, setQuery] = useState("");
@@ -1286,8 +1320,20 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                               // panel behind it, and on some themes the two roles
                               // were indistinguishable. The left border is what
                               // survives a theme that flattens the fills.
+                              // Filled, not tinted. At 26% over the panel every
+                              // user bubble was within a shade of the surface
+                              // behind it, so on the darker themes the two
+                              // speakers read as one voice. A filled accent is
+                              // the one treatment that survives every palette,
+                              // and it is what puts a conversation on screen
+                              // instead of a transcript.
+                              // Half the accent rather than a quarter of it, and
+                              // no further: past about this the body text stops
+                              // being reliably legible on it across the themes,
+                              // and a bubble you cannot read is a worse problem
+                              // than two that look alike.
                               background: m.role === "user"
-                                ? "color-mix(in srgb, var(--primary) 26%, var(--bg2))"
+                                ? "color-mix(in srgb, var(--primary) 50%, var(--bg2))"
                                 : "color-mix(in srgb, var(--bg3) 85%, var(--bg))",
                               border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)",
                               borderLeft: `3px solid ${m.role === "user" ? "var(--primary)" : "color-mix(in srgb, var(--info) 70%, transparent)"}`,
@@ -1296,8 +1342,12 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             {/* Role and time, the way the session view has always
                                 shown them — their absence is most of why the two
                                 read as different products. */}
+                            {/* On the filled user bubble the old
+                                `--primary-hover` label sat on its own colour and
+                                vanished; the agent's still gets the accent it
+                                always had, because its bubble is a surface. */}
                             <div className="text-[9px] uppercase tracking-wider mb-1 flex items-center gap-2"
-                              style={{ color: m.role === "user" ? "var(--primary-hover)" : "var(--info)" }}>
+                              style={{ color: m.role === "user" ? "var(--text)" : "var(--info)", opacity: m.role === "user" ? 0.75 : 1 }}>
                               <span>{m.role}</span>
                               <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
                             </div>
@@ -1332,7 +1382,17 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                                 {m.imagesDropped} image{m.imagesDropped > 1 ? "s" : ""} sent with this turn, not kept when the chat was restored
                               </div>
                             )}
-                            {m.text ? <Markdown text={m.text} /> : (m.streaming ? <TypingDots /> : "")}
+                            {/* A reading measure. `max-w-[86%]` bounds the
+                                bubble against the panel, which on a 1600px
+                                window is a 1400px line — the eye loses the
+                                start of the next one on every wrap. Characters
+                                rather than pixels, so it holds when the display
+                                size or the font changes. */}
+                            <div style={{ maxWidth: "82ch" }}>
+                              {m.text
+                                ? <Foldable text={m.text}>{(shown) => <Markdown text={shown} />}</Foldable>
+                                : (m.streaming ? <TypingDots /> : "")}
+                            </div>
                             {m.streaming && m.text && <span className="t-dim2 agx-caret">▍</span>}
                           </div>
                           </div>

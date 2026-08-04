@@ -1,0 +1,493 @@
+// The plan meters, and the failure they are actually going to meet.
+//
+// /api/oauth/usage limits per account, and every Claude Code session on the
+// machine draws on the same budget — measured on one: three calls inside four
+// minutes was enough to be answered 429, while the numbers being asked about
+// had not moved. So a 429 is not an outage worth reporting, it is the weather.
+// What this file pins is what the meters do while it blows: keep the last true
+// reading, or blank out and say "Rate-limited" at somebody who only wanted to
+// know how much of their week was left.
+//
+// Time is injected rather than waited for — the rate-limited window is a day
+// long. The module holds one process-wide cache by design, so these run as a
+// single story in order rather than as independent cases.
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const dir = mkdtempSync(join(tmpdir(), "agx-plan-usage-"));
+const creds = join(dir, "credentials.json");
+writeFileSync(creds, JSON.stringify({ claudeAiOauth: { accessToken: "test-token" } }));
+// Read when the module loads, so both have to be set before the import below.
+// The config home is a scratch directory on purpose: the module refuses to read
+// or write a real reading under `bun test` unless pointed at one.
+process.env.CLAUDE_CREDENTIALS = creds;
+process.env.XDG_CONFIG_HOME = dir;
+const onDisk = join(dir, "agentglass", "usage-last.json");
+
+let usage: typeof import("../src/usage.ts");
+const realFetch = globalThis.fetch;
+/** What the endpoint answers next. */
+let reply: () => Response = () => new Response("{}", { status: 500 });
+/** How many times the endpoint was actually asked — the point of the free feed
+ *  is that accepting one means not asking. */
+let calls = 0;
+
+beforeAll(async () => {
+  globalThis.fetch = (async () => { calls++; return reply(); }) as unknown as typeof fetch;
+  usage = await import("../src/usage.ts");
+});
+afterAll(() => { globalThis.fetch = realFetch; });
+
+const ok = (fiveHour: number, sevenDay: number) => () =>
+  new Response(JSON.stringify({
+    five_hour: { utilization: fiveHour, resets_at: "2026-08-03T11:39:59Z" },
+    seven_day: { utilization: sevenDay, resets_at: "2026-08-05T12:59:59Z" },
+  }), { status: 200 });
+const failing = (code: number) => () => new Response("{}", { status: code });
+
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+const T0 = 1_700_000_000_000;
+
+describe("how long a reading outlives the fetch that got it", () => {
+  test("a day for a 429, half an hour for anything else", () => {
+    expect(usage.staleWindowFor(429)).toBe(24 * HOUR);
+    expect(usage.staleWindowFor(500)).toBe(30 * MIN);
+    // No status at all is a network error — nothing says it will pass quickly.
+    expect(usage.staleWindowFor(null)).toBe(30 * MIN);
+    // And a dead token is worth admitting to rather than papering over for a
+    // day: those numbers will never refresh until somebody logs in again.
+    expect(usage.staleWindowFor(401)).toBe(30 * MIN);
+  });
+});
+
+describe("through a burst of 429s", () => {
+  test("a good fetch reads both windows", async () => {
+    reply = ok(13, 51);
+    const u = await usage.getUsage(T0);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(13);
+    expect(u.seven_day?.utilization).toBe(51);
+    expect(u.error).toBeUndefined();
+  });
+
+  test("a 429 keeps the numbers, and dates them to when they were read", async () => {
+    reply = failing(429);
+    // Past the TTL, so this really does go to the network and really does fail.
+    const u = await usage.getUsage(T0 + 16 * MIN);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(13);
+    expect(u.seven_day?.utilization).toBe(51);
+    // Dated to the read, not to now. This is the whole reason the strip can say
+    // "40m old" instead of implying the number is live.
+    expect(u.fetched_at).toBe(T0);
+    expect(u.error).toContain("429");
+  });
+
+  test("still keeping them most of a day later", async () => {
+    reply = failing(429);
+    const u = await usage.getUsage(T0 + 20 * HOUR);
+    expect(u.available).toBe(true);
+    expect(u.seven_day?.utilization).toBe(51);
+    expect(u.fetched_at).toBe(T0);
+  });
+
+  test("but not past the day — at some point they really are wrong", async () => {
+    reply = failing(429);
+    const u = await usage.getUsage(T0 + 25 * HOUR);
+    expect(u.available).toBe(false);
+    expect(u.error).toContain("429");
+  });
+});
+
+describe("an ordinary failure is not given a day", () => {
+  const T1 = T0 + 26 * HOUR;
+
+  test("a 500 shortly after a good read still shows it", async () => {
+    reply = ok(20, 60);
+    expect((await usage.getUsage(T1)).available).toBe(true);
+    reply = failing(500);
+    const u = await usage.getUsage(T1 + 16 * MIN);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(20);
+  });
+
+  test("and stops once the reading is half an hour old", async () => {
+    reply = failing(500);
+    const u = await usage.getUsage(T1 + 32 * MIN);
+    expect(u.available).toBe(false);
+  });
+});
+
+// A grace window measured in hours is worth nothing if the reading it protects
+// dies with the process, and this process restarts every time the desktop app
+// is rebuilt. Measured on the machine this was written for: a rebuild at 13:51,
+// and by 13:59 the strip read "Rate-limited" while the endpoint answered 429 to
+// every attempt to earn the first reading back. Starting blind into a burst of
+// 429s is unrecoverable by definition — there is nothing to show and no way to
+// get anything to show.
+describe("across a restart", () => {
+  const T2 = T0 + 40 * HOUR;
+
+  test("a good reading is written down, and a restart still has it", async () => {
+    usage.__test_forgetEverything();
+    reply = ok(7, 44);
+    expect((await usage.getUsage(T2)).available).toBe(true);
+    expect(await Bun.file(onDisk).json()).toMatchObject({ available: true, fetched_at: T2 });
+
+    // The restart itself: everything this process knew is gone, and the
+    // endpoint is in no mood to replace it.
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    const u = await usage.getUsage(T2 + 5 * MIN);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(7);
+    expect(u.seven_day?.utilization).toBe(44);
+    // Dated to the read it came from, not to the boot that found it, so the
+    // strip still says how old it is.
+    expect(u.fetched_at).toBe(T2);
+    expect(u.error).toContain("429");
+  });
+
+  test("a reading from days ago is not resurrected", async () => {
+    // The file is not a licence to show anything forever: what comes off disk
+    // faces the same staleness rules as what never left memory.
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    expect((await usage.getUsage(T2 + 3 * 24 * HOUR)).available).toBe(false);
+  });
+
+  test("a half-written or hand-edited file starts blind rather than inventing one", async () => {
+    // Every one of these is something a crash mid-write or a curious person
+    // with an editor can leave behind.
+    for (const junk of ["", "{", "{}", "null", '{"available":false}', '{"available":true}', '{"available":true,"fetched_at":"soon"}']) {
+      await Bun.write(onDisk, junk);
+      usage.__test_forgetEverything();
+      reply = failing(429);
+      expect((await usage.getUsage(T2 + 4 * 24 * HOUR)).available).toBe(false);
+    }
+  });
+});
+
+// The reading that costs nothing.
+//
+// Claude Code pipes `rate_limits` to its statusLine command on every turn,
+// carried on the Messages API response it already made. hooks/statusline.sh
+// forwards it here, which is the same account-wide numbers the endpoint above
+// answers with — except this copy is free, and the endpoint answers 429 to a
+// third call inside four minutes.
+describe("a reading handed over by a live session", () => {
+  const T3 = T0 + 60 * HOUR;
+  const statusline = (five: unknown, seven?: unknown) => ({
+    model: { display_name: "Opus" },
+    rate_limits: { five_hour: five, seven_day: seven },
+  });
+
+  test("both windows, with the reset time the CLI sends", async () => {
+    usage.__test_forgetEverything();
+    // A poll first, so the hourly floor is satisfied and this case is about the
+    // ingest alone. On a genuinely cold process the floor fires straight away
+    // — deliberately, since that is how the scoped windows get in early rather
+    // than an hour after boot.
+    reply = ok(1, 1);
+    await usage.getUsage(T3 - MIN);
+    // resets_at arrives as seconds since the epoch.
+    const at = Math.floor((T3 + 3 * HOUR) / 1000);
+    expect(usage.ingestStatusline(
+      statusline({ used_percentage: 13, resets_at: at }, { used_percentage: 51 }), T3,
+    )).toBe(true);
+
+    calls = 0;
+    const u = await usage.getUsage(T3);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(13);
+    expect(u.five_hour?.remaining).toBe(87);
+    expect(u.five_hour?.resets_at).toBe(new Date(at * 1000).toISOString());
+    expect(u.seven_day?.utilization).toBe(51);
+    // The whole point: nothing was asked of the endpoint.
+    expect(calls).toBe(0);
+  });
+
+  test("accepting one postpones the next fetch by a full TTL", async () => {
+    // Free numbers are a reason not to spend budget, not a reason to spend it
+    // sooner. Ten minutes on, still nothing asked — the poll's hourly floor is
+    // a separate rule and is pinned in its own describe below, so this one
+    // starts from a fetch of its own rather than inheriting an old one.
+    usage.__test_forgetEverything();
+    reply = ok(13, 51);
+    await usage.getUsage(T3);
+    usage.ingestStatusline(statusline({ used_percentage: 13 }, { used_percentage: 51 }), T3);
+    calls = 0;
+    reply = failing(429);
+    expect((await usage.getUsage(T3 + 10 * MIN)).five_hour?.utilization).toBe(13);
+    expect(calls).toBe(0);
+  });
+
+  test("it is what a restart finds", async () => {
+    usage.__test_forgetEverything();
+    calls = 0;
+    reply = failing(429);
+    const u = await usage.getUsage(T3 + 20 * MIN);
+    expect(u.available).toBe(true);
+    expect(u.five_hour?.utilization).toBe(13);
+    expect(u.fetched_at).toBe(T3);
+  });
+
+  test("`utilization` is accepted as the endpoint's name for the same number", () => {
+    usage.__test_forgetEverything();
+    expect(usage.ingestStatusline(statusline({ utilization: 7 }), T3)).toBe(true);
+  });
+
+  test("a percentage outside 0..100 is clamped rather than drawn off the end", async () => {
+    usage.__test_forgetEverything();
+    usage.ingestStatusline(statusline({ used_percentage: 140 }, { used_percentage: -3 }), T3);
+    const u = await usage.getUsage(T3);
+    expect(u.five_hour?.utilization).toBe(100);
+    expect(u.seven_day?.utilization).toBe(0);
+  });
+
+  test("a reset time in milliseconds is not read as the year 58,000", async () => {
+    usage.__test_forgetEverything();
+    const ms = T3 + HOUR;
+    usage.ingestStatusline(statusline({ used_percentage: 5, resets_at: ms }), T3);
+    expect((await usage.getUsage(T3)).five_hour?.resets_at).toBe(new Date(ms).toISOString());
+
+    // And an ISO string, should the schema ever drift to one.
+    usage.__test_forgetEverything();
+    usage.ingestStatusline(statusline({ used_percentage: 5, resets_at: "2026-08-05T12:00:00Z" }), T3);
+    expect((await usage.getUsage(T3)).five_hour?.resets_at).toBe("2026-08-05T12:00:00.000Z");
+  });
+
+  test("a payload with nothing in it changes nothing", async () => {
+    usage.__test_forgetEverything();
+    for (const junk of [
+      null, undefined, {}, { rate_limits: null }, { rate_limits: {} },
+      statusline(undefined, undefined),
+      statusline({ used_percentage: "lots" }),
+      statusline({ resets_at: 123 }),
+    ]) {
+      expect(usage.ingestStatusline(junk, T3)).toBe(false);
+    }
+    // Nothing was accepted, so there is still no reading to show — the feed
+    // cannot half-fill the meters with a payload it could not read. The file
+    // has to be cleared for that to mean anything: a reading persisted earlier
+    // would be restored here, correctly, and hide the very thing being asked.
+    await Bun.write(onDisk, "");
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    expect((await usage.getUsage(T3)).available).toBe(false);
+  });
+});
+
+// The per-model weekly window — the "Fable" bar.
+//
+// It arrives in two different shapes for the same fact, so both are read here:
+// the usage endpoint puts it in `limits` as a `weekly_scoped` entry naming its
+// model under `scope.model.display_name`, while a statusline payload has the
+// CLI's flatter `model_scoped`. The flat `seven_day_opus`-style fields that
+// look like the obvious home for this still arrive and are null on every
+// account seen.
+describe("weekly windows scoped to one model", () => {
+  const T4 = T0 + 80 * HOUR;
+
+  const withLimits = () => () => new Response(JSON.stringify({
+    five_hour: { utilization: 38, resets_at: "2026-08-03T16:40:00Z" },
+    seven_day: { utilization: 61, resets_at: "2026-08-05T13:00:00Z" },
+    seven_day_opus: null,
+    limits: [
+      { kind: "session", group: "session", percent: 38, scope: null, is_active: false },
+      { kind: "weekly_all", group: "weekly", percent: 61, scope: null, is_active: true },
+      // is_active false, and a real reading all the same — see below.
+      { kind: "weekly_scoped", group: "weekly", percent: 0, resets_at: null,
+        scope: { model: { id: null, display_name: "Fable" } }, is_active: false },
+    ],
+  }), { status: 200 });
+
+  test("read from the endpoint's limits array, named by the API", async () => {
+    usage.__test_forgetEverything();
+    reply = withLimits();
+    const u = await usage.getUsage(T4);
+    expect(u.scoped).toHaveLength(1);
+    expect(u.scoped?.[0]).toEqual({ name: "Fable", utilization: 0, remaining: 100, resets_at: null });
+    // The session and weekly-all entries are the same numbers as the top-level
+    // windows; taking them too would draw every bar twice.
+    expect(u.five_hour?.utilization).toBe(38);
+    expect(u.seven_day?.utilization).toBe(61);
+  });
+
+  test("`is_active: false` is not a reason to drop it", async () => {
+    // is_active marks which limit is currently BINDING — weekly_all, here — not
+    // whether the entry means anything. Filtering on it is a shipped bug in
+    // another client, and it would hide the Fable bar almost all of the time.
+    usage.__test_forgetEverything();
+    reply = withLimits();
+    expect((await usage.getUsage(T4)).scoped?.[0]?.name).toBe("Fable");
+  });
+
+  test("and it survives a restart with everything else", async () => {
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    const u = await usage.getUsage(T4 + 20 * MIN);
+    expect(u.available).toBe(true);
+    expect(u.scoped?.[0]?.name).toBe("Fable");
+  });
+
+  test("read from a statusline payload's flatter shape too", () => {
+    usage.__test_forgetEverything();
+    expect(usage.ingestStatusline({
+      rate_limits: {
+        five_hour: { used_percentage: 38 },
+        model_scoped: [
+          { display_name: "Fable", utilization: 4, resets_at: "2026-08-05T13:00:00Z" },
+          { display_name: "Opus", utilization: 12, resets_at: null },
+        ],
+      },
+    }, T4)).toBe(true);
+  });
+
+  test("what the statusline sent comes back out, in order", async () => {
+    const u = await usage.getUsage(T4);
+    expect(u.scoped?.map((s) => `${s.name}:${s.utilization}`)).toEqual(["Fable:4", "Opus:12"]);
+    expect(u.scoped?.[0]?.resets_at).toBe("2026-08-05T13:00:00.000Z");
+  });
+
+  test("unreadable entries are dropped, and none at all is absent rather than empty", async () => {
+    usage.__test_forgetEverything();
+    reply = () => new Response(JSON.stringify({
+      five_hour: { utilization: 5 },
+      limits: [
+        { kind: "weekly_scoped", percent: 3, scope: { model: {} } },        // no name
+        { kind: "weekly_scoped", percent: "some", scope: { model: { display_name: "X" } } },
+        { kind: "weekly_scoped", scope: { model: { display_name: "Y" } } }, // no percent
+        null,
+        "nonsense",
+      ],
+    }), { status: 200 });
+    const u = await usage.getUsage(T4 + 40 * MIN);
+    // Absent, not `[]` — a client rendering `scoped` should not have to tell
+    // "no scoped windows" from "an empty list of them".
+    expect(u.scoped).toBeUndefined();
+    expect(u.five_hour?.utilization).toBe(5);
+  });
+
+  test("a percentage is clamped onto the bar it has to fit", async () => {
+    usage.__test_forgetEverything();
+    reply = () => new Response(JSON.stringify({
+      five_hour: { utilization: 5 },
+      limits: [{ kind: "weekly_scoped", percent: 150, scope: { model: { display_name: "Z" } } }],
+    }), { status: 200 });
+    expect((await usage.getUsage(T4 + 80 * MIN)).scoped?.[0]?.utilization).toBe(100);
+  });
+});
+
+// The feed is the fresher source; the poll is the fuller one.
+//
+// Captured from a live session: the CLI's `rate_limits` carries five_hour and
+// seven_day and nothing else, while the endpoint reports a scoped weekly window
+// for the same account in the same minute. Since accepting a feed postpones the
+// poll by a TTL, an ingest that blanked the scoped windows would mean the bar
+// they draw never appears at all.
+describe("the scoped windows survive the feed that cannot see them", () => {
+  const T5 = T0 + 120 * HOUR;
+  const polled = () => () => new Response(JSON.stringify({
+    five_hour: { utilization: 30 },
+    seven_day: { utilization: 50 },
+    limits: [{ kind: "weekly_scoped", percent: 2, resets_at: null, scope: { model: { display_name: "Fable" } } }],
+  }), { status: 200 });
+  // Exactly what a real session sends: no model_scoped at all.
+  const fromSession = (five: number) => ({ rate_limits: { five_hour: { used_percentage: five }, seven_day: { used_percentage: 50 } } });
+
+  test("a poll brings them, a session's payload does not blank them", async () => {
+    usage.__test_forgetEverything();
+    reply = polled();
+    expect((await usage.getUsage(T5)).scoped?.[0]?.name).toBe("Fable");
+
+    expect(usage.ingestStatusline(fromSession(31), T5 + MIN)).toBe(true);
+    const u = await usage.getUsage(T5 + MIN);
+    // The fresh numbers are the session's…
+    expect(u.five_hour?.utilization).toBe(31);
+    // …and the scoped window it knows nothing about is still there.
+    expect(u.scoped?.[0]).toEqual({ name: "Fable", utilization: 2, remaining: 98, resets_at: null });
+  });
+
+  test("carried across many ingests, the way a real session feeds", async () => {
+    for (let i = 0; i < 5; i++) usage.ingestStatusline(fromSession(32 + i), T5 + (2 + i) * MIN);
+    expect((await usage.getUsage(T5 + 7 * MIN)).scoped?.[0]?.utilization).toBe(2);
+  });
+
+  test("a payload that DOES carry them wins over what was kept", async () => {
+    usage.ingestStatusline({
+      rate_limits: {
+        five_hour: { used_percentage: 40 },
+        model_scoped: [{ display_name: "Fable", utilization: 9, resets_at: null }],
+      },
+    }, T5 + 10 * MIN);
+    expect((await usage.getUsage(T5 + 10 * MIN)).scoped?.[0]?.utilization).toBe(9);
+  });
+
+  test("but not carried forever — a day out they are dropped, not shown", async () => {
+    // Same bound a rate-limited reading gets, for the same reason: past it the
+    // number is no longer a fact about this week.
+    // A day out, the hourly floor will also want a poll — pin it to a failure
+    // so nothing can supply the scoped windows and this stays a question about
+    // what was carried.
+    reply = failing(429);
+    expect(usage.ingestStatusline(fromSession(45), T5 + 25 * HOUR)).toBe(true);
+    expect((await usage.getUsage(T5 + 25 * HOUR)).scoped).toBeUndefined();
+  });
+});
+
+// The poll has a floor a feed cannot push out.
+//
+// An ingest moves `cacheAt`, deliberately — free numbers are a reason not to
+// spend budget. But a session posting every fifteen seconds moves it forever,
+// and only the poll can see the per-model windows, so without a floor that bar
+// never appears at all on a machine with an agent running.
+describe("a live feed cannot silence the endpoint forever", () => {
+  const T6 = T0 + 200 * HOUR;
+  const feed = (n: number) => ({ rate_limits: { five_hour: { used_percentage: n }, seven_day: { used_percentage: 50 } } });
+  const withScoped = () => () => new Response(JSON.stringify({
+    five_hour: { utilization: 10 }, seven_day: { utilization: 20 },
+    limits: [{ kind: "weekly_scoped", percent: 6, resets_at: null, scope: { model: { display_name: "Fable" } } }],
+  }), { status: 200 });
+
+  test("a session feeding non-stop still lets the poll through once an hour", async () => {
+    usage.__test_forgetEverything();
+    reply = withScoped();
+    await usage.getUsage(T6);            // the first poll
+    calls = 0;
+
+    // Fifty minutes of a session posting every fifteen seconds. None of it
+    // should reach the network.
+    for (let t = 0; t < 50 * MIN; t += 15_000) {
+      usage.ingestStatusline(feed(11), T6 + t);
+      await usage.getUsage(T6 + t);
+    }
+    expect(calls).toBe(0);
+
+    // Past the hour, the next look goes and asks.
+    usage.ingestStatusline(feed(12), T6 + 61 * MIN);
+    await usage.getUsage(T6 + 61 * MIN);
+    expect(calls).toBe(1);
+  });
+
+  test("and that is how the scoped window gets in at all", async () => {
+    // The point of the floor: the feed cannot carry this, so if the poll never
+    // runs it is never seen.
+    const u = await usage.getUsage(T6 + 61 * MIN);
+    expect(u.scoped?.[0]).toEqual({ name: "Fable", utilization: 6, remaining: 94, resets_at: null });
+  });
+
+  test("a failing endpoint is not hammered by the floor", async () => {
+    // Stamped on the attempt rather than on success, so a run of 429s past the
+    // hour does not fire at every single caller.
+    usage.__test_forgetEverything();
+    reply = failing(429);
+    await usage.getUsage(T6 + 2 * HOUR);
+    calls = 0;
+    for (let i = 0; i < 20; i++) await usage.getUsage(T6 + 2 * HOUR + i * 1000);
+    expect(calls).toBe(0);
+  });
+});

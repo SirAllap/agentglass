@@ -13,6 +13,11 @@ deps (stdlib only).
 Notes:
   * Idempotent — re-running re-points the send_event.py path in place and never
     duplicates entries or disturbs your other hooks (magia, guards, etc.).
+  * It also takes the `statusLine` slot, CHAINING whatever was there: Claude Code
+    pipes `rate_limits` to that command on every turn, which is the plan usage
+    the dashboard would otherwise pay a rate-limited endpoint for. Your own
+    status line is passed the same stdin, owns the output, and comes back
+    untouched on --uninstall. POSIX only; skipped on Windows.
   * The target settings file is backed up (`*.bak.agentglass.<timestamp>`) before
     any change, and only when there is actually a change to make.
   * `--source-app` is intentionally omitted so each project auto-labels in the
@@ -24,6 +29,8 @@ Notes:
 import argparse
 import json
 import os
+import re
+import shlex
 import shutil
 import sys
 import time
@@ -31,6 +38,26 @@ import time
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
 SEND_EVENT = os.path.join(HOOKS_DIR, "send_event.py")
 MARKER = "send_event.py"  # substring that identifies a hook command as ours
+
+STATUSLINE = os.path.join(HOOKS_DIR, "statusline.sh")
+# Our status line, recognised by SHAPE rather than by a filename substring.
+#
+# This was `"statusline.sh" in cmd`, and the collision it caused is the kind
+# that eats somebody's config in silence: a status line of their own called
+# `mi-statusline.sh`, `custom-statusline.sh` or the widely used
+# `ccstatusline.sh` all CONTAIN "statusline.sh". The installer read them as
+# ours, tried to unwrap a command that was never wrapped, found no third
+# argument, and dropped it. Nothing failed and nothing was said; their status
+# line was simply gone after installing.
+#
+# The path is not usable as the marker either — the repo moves, and an install
+# from an older checkout has to stay recognisable. So: our command always
+# begins `sh "…/hooks/statusline.sh"`, and that shape is what is matched.
+SL_RE = re.compile(r'^sh\s+"(?:.*/)?hooks/statusline\.sh"')
+
+
+def _is_ours_statusline(cmd):
+    return bool(cmd) and SL_RE.match(cmd.strip()) is not None
 
 # event -> (matcher or None, attach transcript for token/cost)
 EVENTS = {
@@ -78,6 +105,67 @@ def _hook_python():
     return "py"
 
 
+def _statusline_command(chained):
+    """Our forwarder, told what it is wrapping.
+
+    The wrapped command travels as a quoted argument rather than being stashed
+    somewhere out of sight: it is then visible in the same settings.json the
+    user is reading, and uninstall has everything it needs to put things back
+    without consulting any state of ours.
+    """
+    cmd = 'sh "%s"' % STATUSLINE
+    return cmd + " " + shlex.quote(chained) if chained else cmd
+
+
+def _chained_from(cmd):
+    """What our wrapper was told to call, so re-installing re-points the script
+    path without forgetting the status line it wraps."""
+    if not _is_ours_statusline(cmd):
+        return None
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        return None
+    return parts[2] if len(parts) >= 3 else None
+
+
+def install_statusline(cfg):
+    """Take the statusLine slot, chaining whatever was there.
+
+    Unlike hooks, statusLine is a single slot rather than a list, so there is no
+    way to add to it without owning it. Owning it is only acceptable because the
+    previous command is called on every render with the same stdin and owns the
+    output — see hooks/statusline.sh, where every path out still runs the chain.
+
+    Skipped on Windows: the forwarder is POSIX sh, and a status line that fails
+    is one the user sees on every single render. The usage endpoint poll keeps
+    working there, just without the free feed.
+    """
+    if os.name == "nt":
+        return
+    if not os.path.exists(STATUSLINE):
+        return
+    current = cfg.get("statusLine")
+    cur_cmd = current.get("command") if isinstance(current, dict) else None
+    # Already ours: re-point the script path, keep what it wraps.
+    chained = _chained_from(cur_cmd) if _is_ours_statusline(cur_cmd) else cur_cmd
+    cfg["statusLine"] = {"type": "command", "command": _statusline_command(chained)}
+
+
+def uninstall_statusline(cfg):
+    """Give the status line back. Ours goes, whatever it wrapped returns, and a
+    slot that was empty before us is left empty."""
+    current = cfg.get("statusLine")
+    cur_cmd = current.get("command") if isinstance(current, dict) else None
+    if not _is_ours_statusline(cur_cmd):
+        return
+    chained = _chained_from(cur_cmd)
+    if chained:
+        cfg["statusLine"] = {"type": "command", "command": chained}
+    else:
+        del cfg["statusLine"]
+
+
 def do_install(cfg):
     """Append our forwarder to each event, first stripping any prior agentglass
     entry (so a moved clone re-points cleanly). All other hooks are preserved."""
@@ -96,6 +184,7 @@ def do_install(cfg):
             entry["matcher"] = matcher
         arr.append(entry)
         hooks[event] = arr
+    install_statusline(cfg)
 
 
 def do_uninstall(cfg):
@@ -109,6 +198,7 @@ def do_uninstall(cfg):
             del hooks[event]
     if "hooks" in cfg and not cfg["hooks"]:
         del cfg["hooks"]
+    uninstall_statusline(cfg)
 
 
 def main():

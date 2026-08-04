@@ -10,7 +10,11 @@ import { test, expect, beforeAll } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-process.env.AGENTGLASS_TMUX_SOCKET = "agentglass-test-never-started";
+// Unique per run, like the state dirs below. A fixed socket name is not a
+// private server — it is a path, and anything already listening there is what
+// the suite ends up talking to.
+const SOCKET = `agx-pane-test-${process.pid}`;
+process.env.AGENTGLASS_TMUX_SOCKET = SOCKET;
 process.env.AGENTGLASS_STATE_DIR = join(tmpdir(), `agx-pane-test-${process.pid}`);
 process.env.AGENTGLASS_CLAUDE_HOME = join(tmpdir(), `agx-claude-home-${process.pid}`);
 
@@ -52,7 +56,7 @@ test("the attach command names our socket, not the user's default server", () =>
   const cmd = pane.attachCommand("6f1c9b52-0000-4000-8000-0123456789ab");
   // The `-L` is the whole reason the user's own tmux (and their resurrect saves)
   // are untouched. A command without it would attach to their server.
-  expect(cmd).toContain("-L agentglass-test-never-started");
+  expect(cmd).toContain(`-L ${SOCKET}`);
   expect(cmd).toContain("attach -t 6f1c9b52-0000-4000-8000-0123456789ab");
 });
 
@@ -260,4 +264,42 @@ test("a genuinely swallowed Enter is still retried", () => {
 
 test("an emptied box is taken as sent", () => {
   expect(mod.__submitVerdict("● thinking…\n❯ \n────────", "write me a test")).toBe("sent");
+});
+
+// The pane's command must not be run by the user's login shell.
+//
+// tmux executes a bare command string with the login shell, and the string
+// below is POSIX — `$?`, `exec`, `;`. On a machine whose shell is fish that is
+// a syntax error ("In fish, please use $status"), so the command died on the
+// spot, the session died with it, and the tmux server exited leaving an
+// orphaned socket. The chat reported "the pane never became ready in 45s" over
+// an empty screen, because by the time anything looked there was nothing to
+// look at — a message that points nowhere near a shell.
+//
+// Asserted on the argv rather than by starting a pane: reproducing it for real
+// needs a machine whose login shell is not POSIX, which CI is not.
+test("the pane command is handed to sh, not to whatever the user's shell is", () => {
+  const argv = pane.newSessionArgv("6f1c9b52-0000-4000-8000-0123456789ab", "/tmp", ["claude", "--model", "opus"]);
+  const i = argv.indexOf("sh");
+  expect(i).toBeGreaterThan(-1);
+  expect(argv[i + 1]).toBe("-c");
+  // The command is the argument to `sh -c`, and the last word, so nothing can
+  // be appended after it and end up interpreted by something else.
+  expect(argv[i + 2]).toBe(argv[argv.length - 1]);
+  expect(argv[argv.length - 1]).toContain("$?");
+});
+
+test("the session is still named, placed and sized as before", () => {
+  const argv = pane.newSessionArgv("6f1c9b52-0000-4000-8000-0123456789ab", "/some/dir", ["claude"]);
+  expect(argv.slice(0, 2)).toEqual(["new-session", "-d"]);
+  expect(argv[argv.indexOf("-s") + 1]).toBe("6f1c9b52-0000-4000-8000-0123456789ab");
+  expect(argv[argv.indexOf("-c") + 1]).toBe("/some/dir");
+  expect(argv[argv.indexOf("-x") + 1]).toBe("200");
+});
+
+test("an argument with a quote in it cannot break out of the command", () => {
+  const argv = pane.newSessionArgv("6f1c9b52-0000-4000-8000-0123456789ab", "/tmp", ["claude", "--say", "it's; rm -rf /"]);
+  const cmd = argv[argv.length - 1]!;
+  // Single-quoted with the POSIX '\'' escape, so the `;` stays inside the word.
+  expect(cmd).toContain(`'it'\\''s; rm -rf /'`);
 });

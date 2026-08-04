@@ -316,6 +316,16 @@ export interface TmuxWindow {
   name: string;
   active: boolean;
   flags: string;
+  /**
+   * A prompt tmux would have drawn, handed to the panel instead.
+   *
+   * While the panel owns the status line there is no row for tmux to draw a
+   * command prompt into, so `prefix ,` and `prefix .` set a window option here
+   * rather than prompting. The server reads it on its next sweep, clears it,
+   * and the panel opens its own input on that window. Absent almost always —
+   * it exists for the one sweep between the keystroke and the panel reacting.
+   */
+  ask?: "rename" | "move";
 }
 
 /** A tool call held at the gate, awaiting a remote approve/deny. */
@@ -503,6 +513,14 @@ export interface FileChange {
    *  buries the edits worth reviewing. Absent means "not asked" / "unknown",
    *  which is never hidden. */
   ignored?: boolean;
+  /** This path is not in the open project — not the scoped repo, and not any of
+   *  its linked worktrees. A session of this project still writes notes and
+   *  scratch files elsewhere, and those are recorded like any other edit; they
+   *  are just not what you opened a project-scoped diff to read. Hidden by
+   *  default, on the same terms as `ignored`. Absent (and always so on an
+   *  unscoped instance, where there is no project to be outside of) means never
+   *  hidden. */
+  outside?: boolean;
 }
 
 /** A tool call the server sees as still running: a PreToolUse with no matching
@@ -551,7 +569,7 @@ export type Liveness = "working" | "stuck" | "lost" | "unknown";
  * *type*; the UI (web/src/components/workspace/views.ts) attaches the icons,
  * labels and hotkeys and re-exports this so both sides name one set.
  */
-export type ViewId = "git" | "diff" | "pr" | "docker" | "term" | "chat";
+export type ViewId = "dash" | "git" | "diff" | "pr" | "docker" | "term" | "chat" | "browser" | "files" | "tasks";
 
 /**
  * A UI-navigation command from an external controller (a Stream Deck, a phone),
@@ -584,6 +602,7 @@ export type WsFrame =
    *  each need a different slice of git state, so they re-read what they show
    *  rather than the server guessing which of them cares about what. */
   | { type: "git" }
+  | { type: "tasks" }
   /** A pull request's checks all finished. One frame per PR per verdict — the
    *  server holds the latch, so a suite of sixty-one checks sends one of these,
    *  not sixty-one. */
@@ -1243,6 +1262,14 @@ export interface PrCheckRollup {
 
 export interface PrLabel { name: string; color?: string }
 
+/** Somebody asked for a review. A team has no avatar and no login, so it is
+ *  named rather than pictured — the row must not draw a broken image for it. */
+export interface PrReviewer {
+  /** A user's login, or a team's name when `isTeam`. */
+  login: string;
+  isTeam?: boolean;
+}
+
 export interface PrSummary {
   number: number;
   title: string;
@@ -1262,6 +1289,10 @@ export interface PrSummary {
   assignees: string[];
   /** Milestone title, or null when the PR is on no milestone. */
   milestone: string | null;
+  /** Who has been asked to review, for the list's Reviewers column. Arrives on
+   *  the same second pass as `checks` — until then it is empty, which reads as
+   *  "not yet" rather than "nobody was asked". */
+  reviewers?: PrReviewer[];
   checks: PrCheckRollup;
   /** This checkout is on the PR's head branch — "you are here". */
   isCurrentBranch?: boolean;
@@ -1439,7 +1470,11 @@ export interface PrDetail extends PrSummary {
   /** Parsed out of the body — unchecked boxes are a merge signal on repos
    *  whose template carries a real checklist. */
   checklist: PrChecklistItem[];
-  reviewers: string[];
+  /** Same shape the row carries, and required here because the detail always
+   *  fetches them. It used to be a bare `string[]`, which `extends PrSummary`
+   *  made a compile error the moment the row learned about teams — and, before
+   *  that, meant the sidebar asked the avatar proxy for a portrait of a team. */
+  reviewers: PrReviewer[];
   assignees: string[];
   reviews: PrReview[];
   comments: PrComment[];
@@ -1766,4 +1801,304 @@ export interface RemoteStatus {
    *  open right now, which is the difference between "is here" and "was here". */
   devices: RemoteDevice[];
   firewall: FirewallHint | null;
+}
+
+// --- what this machine is doing, and what is in this checkout ---------------
+// Defined here rather than imported from server/src, so the web bundle names
+// the same shapes without pulling a module that reads /proc into the browser.
+// The server's machine.ts and files.ts are the authorities; these mirror them.
+
+/** One listening TCP socket. */
+/** One thing that has piled up in a checkout, and the line that clears it. */
+export interface TidyFinding {
+  id: string;
+  title: string;
+  what: string;
+  items: string[];
+  extra: number;
+  /** Null where there is no command safe enough to offer — see `note`. */
+  command: string | null;
+  note?: string;
+  /**
+   * The three questions somebody should be able to answer before pressing
+   * Enter on a command that changes their repository, and could not answer
+   * from the list alone.
+   *
+   * `why` is the evidence — the actual thing git said that put this row here,
+   * so the finding is checkable rather than trusted. `effect` is what the
+   * command does, in plain words. `risk` is the worst case, including the
+   * common one where git simply refuses.
+   */
+  why: string;
+  effect: string;
+  risk: string;
+  /**
+   * Items that are in the list but deliberately NOT in the command.
+   *
+   * Watching it run is what put this here: seven branches deleted cleanly and
+   * two refused, in red, because they were checked out in a worktree. Both
+   * refusals were predictable — `git worktree list` names every branch that is
+   * checked out — so the panel knew and said nothing, and let the user find
+   * out from stderr.
+   */
+  blocked: { name: string; why: string }[];
+  /** A few lines of monospace drawing. The situations here are all shapes —
+   *  something pointing at something that is gone — and a shape is faster to
+   *  see than to read. */
+  diagram: string[];
+}
+
+export interface TidyReport {
+  root: string;
+  base: string;
+  findings: TidyFinding[];
+  error?: string;
+}
+
+export interface PortEntry {
+  port: number;
+  addr: string;
+  proc: string | null;
+  pid: number | null;
+  /** Where the process was started — the worktree, nine times out of ten. */
+  cwd: string | null;
+  /** Owned by the user running the server: the only ones we can name, and the
+   *  only ones we would ever signal. */
+  mine: boolean;
+  /** Seconds since it started, or null when /proc would not say. Age is the
+   *  difference between "the dev server I just started" and "something that
+   *  has been holding a port since this morning". */
+  ageSec: number | null;
+  /**
+   * Its ancestry runs through an agent's tool-call shell.
+   *
+   * A fact, not a verdict: an agent starts a server on purpose all the time.
+   * What it buys is the answer to "who started this, then" for a process
+   * nobody in front of the screen remembers launching — which is the whole
+   * question you ask when a port is taken and you do not know by what.
+   */
+  fromAgent: boolean;
+  /** Its working directory is gone. Whatever checkout it was serving has been
+   *  deleted underneath it, so nothing it is doing can still matter. */
+  cwdGone: boolean;
+}
+export interface PortsReport { ports: PortEntry[]; mine: number; external: number; error?: string }
+
+/** One process worth showing. */
+export interface ProcEntry {
+  pid: number;
+  ppid: number;
+  comm: string;
+  cmd: string;
+  /** Percent of one core since the previous sample, or null on the first one —
+   *  a rate needs two readings. */
+  cpu: number | null;
+  rss: number;
+  cwd: string | null;
+  /** Descended from this server (or from a tmux it started). */
+  ours: boolean;
+}
+export interface MachineTotals {
+  /** Busy percent across all cores, 0..100; null on the first sample. */
+  cpu: number | null;
+  cores: number;
+  memUsed: number;
+  memTotal: number;
+  swapUsed: number;
+  swapTotal: number;
+  /** Hottest thermal zone in °C, or null where the kernel exposes none. */
+  tempC: number | null;
+  load1: number;
+  diskFree: number;
+  diskTotal: number;
+}
+
+export interface ResourceReport {
+  procs: ProcEntry[];
+  /** The whole machine, so the panel can say what share of it is ours. */
+  machine: MachineTotals;
+  totalCpu: number | null;
+  totalRss: number;
+  oursCpu: number | null;
+  oursRss: number;
+  seen: number;
+  rated: boolean;
+}
+
+export interface SpaceDir { path: string; name: string; bytes: number; reclaimable: boolean }
+export interface SpaceReport { root: string; bytes: number; freeable: number; dirs: SpaceDir[]; error?: string }
+
+export interface FileEntry {
+  name: string;
+  rel: string;
+  dir: boolean;
+  size?: number;
+  /** Git status in this checkout: M, A, D, R, ? untracked, · something below. */
+  status?: string;
+}
+export interface TreeReport { ok: boolean; root: string; rel: string; entries: FileEntry[]; error?: string }
+export interface FindReport { ok: boolean; files: string[]; truncated: boolean; via: string; error?: string }
+export interface GrepHit { rel: string; line: number; text: string; at: number; len: number }
+export interface GrepReport { ok: boolean; hits: GrepHit[]; files: number; truncated: boolean; via: string; error?: string }
+
+// --- github issues ---------------------------------------------------------
+// Mirrors server/src/issues.ts, which is the authority.
+
+export interface IssueLabel { name: string; color: string }
+export interface IssueRow {
+  number: number;
+  title: string;
+  state: string;
+  author: string;
+  labels: IssueLabel[];
+  assignees: string[];
+  comments: number;
+  updatedAt: string;
+  url: string;
+}
+/** How work on an issue was started, and where it lives. */
+export type StartMode = "worktree" | "shell" | "claude" | "plan" | "branch";
+export interface IssueWork {
+  number: number;
+  repo: string;
+  branch: string;
+  path: string;
+  mode: StartMode;
+  window?: string;
+  startedAt: number;
+}
+export interface IssueDetail extends IssueRow {
+  body: string;
+  createdAt: string;
+  milestone: string | null;
+  work: IssueWork | null;
+}
+export interface IssuesReport { ok: boolean; issues: IssueRow[]; error?: string }
+export interface IssueStartResult {
+  ok: boolean; error?: string; work?: IssueWork; prompt?: string; cwd?: string;
+}
+export interface IssueActionResult { ok: boolean; error?: string; detail?: string; dirty?: string[] }
+
+/**
+ * A tmux pane, and the agent found running inside it.
+ *
+ * `agentCwds` is the join key the UI matches a waiting session against — the
+ * directories the agent processes inside this pane are in, which is what their
+ * hook events report. Deliberately not `path`: that is the shell's directory,
+ * and on a real machine several panes share it while the agent in one of them
+ * sits in a worktree. A list because panes nest agents, and taking only the
+ * outermost named the wrong directory. Empty where none was found, or off
+ * Linux, where /proc is not there to ask.
+ */
+export interface AgentPane {
+  session: string;
+  sessionId: string;
+  windowId: string;
+  windowIndex: string;
+  windowName: string;
+  paneId: string;
+  path: string;
+  agentCwds: string[];
+}
+
+// ---------------------------------------------------------------------------
+// local tasks (Taskwarrior-backed)
+// ---------------------------------------------------------------------------
+
+/** Whether this machine can read a local task list, and if not, why not. The
+ *  two failures are different and the panel says different things about them:
+ *  a missing binary is a thing to install, an unconfigured one is a question
+ *  only the user can answer. */
+export interface TaskCapability {
+  available: boolean;
+  configured: boolean;
+  version?: string;
+  reason?: string;
+}
+
+/**
+ * One task as this app models it.
+ *
+ * Taskwarrior's `id` is deliberately absent: it is a display number, reassigned
+ * whenever the store is garbage-collected, so anything holding one across a
+ * refresh acts on whatever task inherited it. `uuid` is the only reference.
+ *
+ * Notes and URLs are one field in Taskwarrior (annotations) and two here,
+ * because one is prose to read and the other is a link to follow.
+ */
+export interface LocalTask {
+  uuid: string;
+  description: string;
+  status: "pending" | "completed" | "deleted";
+  project: string | null;
+  priority: "H" | "M" | "L" | null;
+  tags: string[];
+  /** Local calendar dates, "YYYY-MM-DD" — converted from Taskwarrior's UTC. */
+  due: string | null;
+  created: string | null;
+  completed: string | null;
+  urgency: number;
+  notes: string[];
+  urls: string[];
+}
+
+export interface TasksListResponse {
+  ok: boolean;
+  tasks: LocalTask[];
+  capability: TaskCapability;
+  error?: string;
+  /** The soonest live reminder per task uuid, so a list of rows can show its
+   *  own without a request per row. */
+  byTask?: Record<string, Reminder>;
+  /** What the store looked like when this was read. Handed back with a write as
+   *  its precondition: if the store has moved since, the row on screen is not
+   *  the row being acted on. */
+  fingerprint?: string;
+}
+
+export interface TaskWriteResponse {
+  ok: boolean;
+  error?: string;
+  /** The store moved underneath — the caller re-renders from `tasks` rather
+   *  than retrying, because a retry against a moved store is the clobber. */
+  conflict?: boolean;
+  tasks?: LocalTask[];
+  fingerprint?: string;
+}
+
+/**
+ * When to tell somebody about something.
+ *
+ * agentglass's own, not Taskwarrior's — which is what lets a reminder fire on a
+ * machine where the task list cannot be read at all. `taskUuid` is nullable and
+ * first-class: a reminder with nothing behind it is a legitimate thing to want.
+ *
+ * `civil` + `zone` are what the human asked for; `due` is those two resolved.
+ * Keeping the pair rather than only the instant is what makes "Monday 9:00"
+ * still mean nine o'clock after the clocks change.
+ */
+export interface Reminder {
+  id: string;
+  taskUuid: string | null;
+  title: string;
+  root: string | null;
+  /** "2026-08-05T09:00" — local wall clock, as typed. */
+  civil: string;
+  /** IANA zone the civil time was written in. */
+  zone: string;
+  due: number;
+  created: number;
+  /** The ledger. Written inside the claim, before any delivery is attempted. */
+  firedAt: number | null;
+  ackedAt: number | null;
+  cancelledAt: number | null;
+  snoozeOf: string | null;
+}
+
+export interface RemindersResponse {
+  ok: boolean;
+  reminders: Reminder[];
+  /** Keyed by task uuid — the soonest live reminder for each, so a list of rows
+   *  can show its own without a query per row. */
+  byTask?: Record<string, Reminder>;
 }

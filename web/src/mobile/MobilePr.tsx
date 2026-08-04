@@ -211,7 +211,7 @@ export function MobilePr({ open, root, number, onBack, toast, onOpenChatWith }: 
                     <span style={{ color: "var(--error)" }}>−{d.deletions}</span> · {d.changedFiles} files
                   </dd>
                   {d.reviewers.length > 0 && (<><dt style={{ color: "var(--text3)" }}>Reviewers</dt>
-                    <dd style={{ color: "var(--text2)" }}>{d.reviewers.join(", ")}</dd></>)}
+                    <dd style={{ color: "var(--text2)" }}>{d.reviewers.map((r) => r.login).join(", ")}</dd></>)}
                 </dl>
               </div>
             )}

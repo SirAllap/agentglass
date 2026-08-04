@@ -10,6 +10,9 @@ import { adoptServer } from "./api.ts";
 type DesktopBridge = {
   desktop: true;
   platform: string;
+  /** Absent on shells built before the browser view existed. */
+  browser?: boolean;
+  browserPartition?: string;
   setFullscreen: (on: boolean) => Promise<boolean>;
   isFullscreen: () => Promise<boolean>;
   setZoom: (factor: number) => Promise<number>;
@@ -19,6 +22,16 @@ type DesktopBridge = {
   setRemote?: (on: boolean) => Promise<boolean>;
   revokeRemote?: () => Promise<boolean>;
   onServerChanged?: (fn: (p: { origin?: string | null; token?: string | null }) => void) => () => void;
+  /** The window's own controls. Optional because an older shell still has a
+   *  system title bar and does not need them — and because a renderer that
+   *  assumed they were there would draw three dead buttons in a browser tab. */
+  winMinimize?: () => Promise<void>;
+  winToggleMaximize?: () => Promise<boolean>;
+  winClose?: () => Promise<void>;
+  winIsMaximized?: () => Promise<boolean>;
+  winState?: () => Promise<{ max: boolean; full: boolean }>;
+  appMenu?: (x: number, y: number) => Promise<void>;
+  onWinState?: (fn: (st: { max: boolean; full: boolean }) => void) => () => void;
 };
 
 function bridge(): DesktopBridge | null {
@@ -31,6 +44,17 @@ function bridge(): DesktopBridge | null {
 export const IS_DESKTOP = bridge() !== null;
 
 export const IS_MAC_DESKTOP = IS_DESKTOP && bridge()?.platform === "darwin";
+
+/** Whether a page can be embedded — a `<webview>`, which exists in the shell
+ *  and not in a phone's browser tab. Checked rather than assumed from
+ *  IS_DESKTOP so that an older shell, which is still the desktop app, does not
+ *  render a view it cannot fill. */
+export const HAS_BROWSER = bridge()?.browser === true;
+
+/** The session guests run in. The main process attaches a guest on this
+ *  partition and refuses every other, so it is read from the shell rather than
+ *  written down twice. */
+export const BROWSER_PARTITION = bridge()?.browserPartition ?? "";
 
 /** Whether the app is set to launch at login. Null when not applicable (a
  *  browser tab) or when the shell refuses to answer — the caller renders
@@ -195,3 +219,28 @@ export function followServerChanges(): () => void {
     window.dispatchEvent(new CustomEvent("agentglass:server-changed"));
   });
 }
+
+/**
+ * The window's minimise / maximise / close, when this shell draws its own.
+ *
+ * Null in a browser tab and on a shell old enough to still have a system title
+ * bar, which is exactly when the buttons must not be drawn: three controls that
+ * do nothing are worse than a title bar.
+ */
+export const WINDOW_CONTROLS = (() => {
+  const b = bridge();
+  if (!b?.winMinimize || !b.winToggleMaximize || !b.winClose) return null;
+  return {
+    minimize: () => { void b.winMinimize!().catch(() => {}); },
+    toggleMaximize: () => { void b.winToggleMaximize!().catch(() => {}); },
+    close: () => { void b.winClose!().catch(() => {}); },
+    /** Maximised AND fullscreen, in one answer — they are different states and
+     *  two different parts of the bar care about them. */
+    state: () => b.winState?.() ?? Promise.resolve({ max: false, full: false }),
+    /** The app menu, popped under a point in window coordinates. Null-safe:
+     *  an older shell has a real menu bar and needs no button for it. */
+    menu: b.appMenu ? (x: number, y: number) => { void b.appMenu!(x, y).catch(() => {}); } : null,
+    /** Subscribe to changes the window manager made without asking us. */
+    subscribe: (fn: (st: { max: boolean; full: boolean }) => void) => b.onWinState?.(fn) ?? (() => {}),
+  };
+})();

@@ -95,7 +95,24 @@ const BRIDGE = materializeBridge(bridgeFile);
 // processes without bound. Each idle shell costs a pty and a sleeping process.
 const MAX_SESSIONS = Math.max(4, Number(process.env.AGENTGLASS_MAX_TERMINALS || 200));
 
-export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number };
+export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
+  /** A file to open in an editor instead of dropping to a shell. A PATH, never
+   *  a command: this socket is reachable from the UI, and "run this string"
+   *  would turn a terminal into arbitrary execution. The server picks what
+   *  runs; see editorFor. */
+  view?: string;
+  /**
+   * Open that file for EDITING rather than for reading.
+   *
+   * Two different intents, and they must not be one flag with a default. Read
+   * is what a diff and a pull request want — you are looking at somebody's
+   * code, often a copy of a branch you do not even have. Write is what a file
+   * tree wants — it is your checkout and the reason you opened it is to change
+   * it. Defaulting to write would make every glance at a review one keystroke
+   * away from editing a file nobody meant to touch; defaulting to read (as it
+   * does) makes the editable case say so.
+   */
+  edit?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
 
 type Session = {
@@ -103,6 +120,11 @@ type Session = {
   mode: "pty" | "pipe";
   grouped: boolean;
   sizeDir: string | null; // tmp dir holding the resize file (pty_bridge mode)
+  /** The temp dir holding a pull request's fetched copy of a file, when this
+   *  session is one of those. Removed with the session: a viewer that leaves a
+   *  directory behind every time it opens is a slow leak nobody notices until
+   *  /tmp is full of them. */
+  viewDir: string | null;
   closed: boolean;
   exited: boolean;
   killTimer: ReturnType<typeof setTimeout> | null;
@@ -133,6 +155,23 @@ type Session = {
 };
 const sessions = new Map<PtyWs, Session>();
 
+/**
+ * The last tmux client any terminal here was attached to.
+ *
+ * Kept because the question "which pane is that agent in" outlives the panel
+ * that can answer it: the tmux server goes on running with every pane in it
+ * whether or not this app has a shell open, and the top bar can be asked from
+ * any view. A target from a shell that has since closed still names a reachable
+ * server — the socket is the durable half — and if it does not, the tmux call
+ * simply fails and the caller reports no panes.
+ *
+ * Null until a terminal has been opened once this run, which is the honest
+ * answer: we learn the socket by finding a client on it, and until then we do
+ * not know which of the machine's tmux servers is the user's.
+ */
+let lastTarget: TmuxTarget | null = null;
+export const lastTmuxTarget = (): TmuxTarget | null => lastTarget;
+
 const clampCols = (v: unknown) => Math.min(500, Math.max(20, Math.floor(Number(v)) || 0));
 const clampRows = (v: unknown) => Math.min(300, Math.max(5, Math.floor(Number(v)) || 0));
 
@@ -158,7 +197,9 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveClient, readFrame, runAction, setStatusLine, prefixKeys, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { prepareReviewPrompt } from "./prs.ts";
+import { claudeCode } from "./agents/claudecode.ts";
 import { applyThemeTo } from "./themesync.ts";
 
 const enc = new TextEncoder();
@@ -214,6 +255,25 @@ function fallbackCwd(): string {
   return "/";
 }
 
+/**
+ * What opens a file for reading.
+ *
+ * The user's own choice first — somebody who set $VISUAL meant it — then the
+ * editors most likely to be installed, and `less` last so a machine with no
+ * editor still shows the file rather than an error. Resolved from PATH, so a
+ * name that is not installed is skipped rather than spawned and failed.
+ */
+export function editorFor(env: NodeJS.ProcessEnv = process.env): string | null {
+  const asked = (env.VISUAL || env.EDITOR || "").trim();
+  const candidates = [...(asked ? [asked] : []), "nvim", "vim", "vi", "less"];
+  for (const c of candidates) {
+    // A configured $EDITOR can carry flags ("code -w"); take the binary.
+    const bin = c.split(/\s+/)[0]!;
+    if (Bun.which(bin)) return c;
+  }
+  return null;
+}
+
 /** WebSocket opened at /terminal/pty — spawn the shell and start pumping. */
 export function ptyOpen(ws: PtyWs) {
   const d = ws.data as PtyWsData;
@@ -242,6 +302,47 @@ export function ptyOpen(ws: PtyWs) {
   const { shell, args } = pickShell();
   const baseEnv = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor" };
 
+  /*
+   * Opening a file rather than a shell.
+   *
+   * The path is held to the same rule the directory is: absolute, inside the
+   * open project, and actually there. A path that fails any of those does NOT
+   * fall back to opening something else — it falls back to a plain shell in the
+   * directory, because silently viewing a different file is worse than viewing
+   * none. `run` is built here from a validated path and a resolved binary, so
+   * nothing the client sent is ever interpreted as a command.
+   */
+  const wanted = d.view ? safeAbs(d.view) : null;
+  const tempCopy = !!wanted && wanted.startsWith(join(tmpdir(), "agentglass-pr-"));
+  // In scope, or a copy this server itself wrote: a pull request's file is
+  // fetched to a temp path precisely because it is not in the workspace, and
+  // the check has to admit that without admitting /tmp in general.
+  const viewable = !!wanted && (inScope(wanted) || tempCopy);
+  const editor = viewable && existsSync(wanted!) ? editorFor() : null;
+  /*
+   * Read-only unless the caller asked for an editor, and never for a copy.
+   *
+   * Opened from a diff or a pull request — places you go to *look* — an editor
+   * is one keystroke from changing a file nobody meant to touch, in a worktree
+   * that may be somebody else's, with no diff to notice it in. So read is the
+   * default and write is a request.
+   *
+   * The temp copy is read-only whatever the caller asked, and that is not
+   * caution: it is a fetched snapshot of a branch under /tmp, so a save there
+   * writes to a file that will be deleted, having changed nothing anybody will
+   * ever see. Refusing the edit is the honest answer; accepting it silently is
+   * not.
+   *
+   * `-R` marks the buffer read-only; `-M` also takes 'modifiable' and 'write'
+   * away, so it refuses the edit rather than refusing the save. Neither is a
+   * sandbox — `:set ma` still exists — and that is the right level: a guard
+   * against the accident, not a cage around somebody who means it.
+   */
+  const bin = editor ? editor.split(/\s+/)[0]! : "";
+  const readOnly = !d.edit || tempCopy;
+  const readonlyFlags = readOnly && /\b(nvim|vim|view)$/.test(bin) ? ["-R", "-M"] : [];
+  const run = editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : [shell, ...args];
+
   let argv: string[];
   let mode: Session["mode"] = "pty";
   let sizeDir: string | null = null;
@@ -250,13 +351,13 @@ export function ptyOpen(ws: PtyWs) {
     sizeDir = mkdtempSync(join(tmpdir(), "agentglass-pty-"));
     writeSizeFile(sizeDir, rows, cols);
     env = { ...baseEnv, AGENTGLASS_PTY_SIZE_FILE: join(sizeDir, "size") };
-    argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, BRIDGE, shell, ...args];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), PYTHON, BRIDGE, ...run];
   } else if (HAS_SCRIPT) {
     env = { ...baseEnv, COLUMNS: String(cols), LINES: String(rows) };
-    argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", `exec ${shell} ${args.join(" ")}`, "/dev/null"];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), "script", "-qfec", `exec ${run.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ")}`, "/dev/null"];
   } else {
     mode = "pipe";
-    argv = [...(HAS_SETSID ? ["setsid"] : []), shell, "-i"];
+    argv = [...(HAS_SETSID ? ["setsid"] : []), ...(editor ? run : [shell, "-i"])];
   }
 
   let proc: ReturnType<typeof Bun.spawn>;
@@ -269,7 +370,12 @@ export function ptyOpen(ws: PtyWs) {
     return;
   }
 
-  const session: Session = { proc, mode, grouped: HAS_SETSID, sizeDir, closed: false, exited: false, killTimer: null };
+  // Only ours, and only the directory we made — never the file's own folder,
+  // which for a working-tree peek is somebody's repository.
+  const viewDir = editor && wanted!.startsWith(join(tmpdir(), "agentglass-pr-"))
+    ? wanted!.slice(0, wanted!.lastIndexOf("/"))
+    : null;
+  const session: Session = { proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null };
   sessions.set(ws, session);
   ctl(ws, { t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir });
 
@@ -346,9 +452,15 @@ export function ptyOpen(ws: PtyWs) {
     // restore, which switches the client to the restored session and kills the
     // one it attached to. A target cached at attach time points at that dead
     // session for the rest of the shell's life.
-    if (!session.tmuxClient) session.tmuxClient = resolveClient(proc.pid);
+    if (!session.tmuxClient) {
+      session.tmuxClient = resolveClient(proc.pid);
+      // First contact with this tmux server: hand back anything a previous run
+      // took and was killed before returning. See releaseStale.
+      if (session.tmuxClient) releaseStale(session.tmuxClient);
+    }
     const frame = session.tmuxClient ? readFrame(session.tmuxClient) : null;
     if (frame) {
+      lastTarget = frame.target;
       if (frame.target.id !== session.tmux?.id) followSession(frame.target);
       else session.tmux = frame.target; // a rename keeps the id and changes the name
     } else {
@@ -358,6 +470,23 @@ export function ptyOpen(ws: PtyWs) {
       session.tmux = null;
     }
     const windows = frame?.windows ?? [];
+    /**
+     * A prompt tmux would have drawn, taken off the window and forwarded once.
+     *
+     * Cleared here rather than by the panel: the note is on the tmux side and
+     * the sweep is the only thing holding a target for it, and leaving it set
+     * would have the panel reopening its rename box twice a second for as long
+     * as the option lived. Forwarded first, cleared second — the frame below
+     * still carries `ask`, and the next sweep will not.
+     */
+    if (frame && windows.some((w) => w.ask)) {
+      for (const w of windows) if (w.ask) clearAsk(frame.target, w.id);
+      // Deliberately outside the change check below: two renames in a row on
+      // the same window are the same shape, and the second must still open the
+      // box. `sent` is reset so the following sweep — which no longer carries
+      // the note — is seen as a change and clears it from the client's copy.
+      sent = "";
+    }
     // Only speak when something changed. A tab strip that re-renders on every
     // tick is a tab strip that drops the click you were halfway through. The
     // session is part of "changed": switching between two sessions with the
@@ -478,7 +607,10 @@ export function ptyOpen(ws: PtyWs) {
 export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   const s = sessions.get(ws);
   if (!s) return;
-  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean };
+  // `number`/`root` ride along only for {cmd:"review"} — see below, where the
+  // server builds what runs rather than taking a command string off the wire.
+  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean;
+    number?: number; root?: string; cwd?: string; prompt?: string; agent?: boolean; yolo?: boolean };
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
     // A keystroke is the least ambiguous "a human is waiting on this process"
@@ -518,8 +650,91 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       return;
     }
     if (!s.tmux) return;
+
+    /*
+     * Open a pull request review in a window of the user's own tmux.
+     *
+     * Deliberately a review of a *number* rather than a "run this": the client
+     * sends an integer and a directory it already had, and the server builds
+     * everything that will actually execute — the same prompt the chat uses,
+     * from `prepareReviewPrompt`, which is also where the scope check lives.
+     * Handing this socket a command string instead would have turned four
+     * button actions into arbitrary execution in the user's shell.
+     */
+    if (msg.cmd === "review") {
+      const target = s.tmux;
+      const number = msg.number;
+      // A review of nothing, in nowhere, is not a request this can serve.
+      if (typeof number !== "number" || !msg.root) return;
+      const root = msg.root;
+      // Kept off `ptyMessage`'s signature: it is called for every keystroke on
+      // this socket, and making the hot path return a promise to serve one
+      // message would be a poor trade.
+      void (async () => {
+        const plan = await prepareReviewPrompt(root, number);
+        if (!plan.ok) return;
+        const bin = claudeCode.bin();
+        if (!bin) return;
+        // The prompt as a single argument. Claude Code takes a positional
+        // prompt and submits it, so the window opens with the review already
+        // running rather than with something typed that nobody pressed return
+        // on.
+        newWindowRunning(target, plan.cwd, `pr-${number}`, [bin, plan.prompt]);
+        s.tmuxSweep?.();
+      })();
+      return;
+    }
+
+    /*
+     * Start work on an issue in a window of the user's own tmux.
+     *
+     * The directory has already been created by the server (issues.ts cut the
+     * worktree) and the prompt was written there too — this only opens a window
+     * and, when asked, starts the agent in it. The client still never sends a
+     * command: the binary comes from claudeCode.bin() and the prompt is a single
+     * positional argument, exactly as the pull-request review does it.
+     *
+     * The scope check is owed even though the path came from us, because this
+     * socket is reachable from the UI and "we made it earlier" is not something
+     * this handler can verify.
+     */
+    if (msg.cmd === "issue") {
+      const target = s.tmux;
+      const cwd = safeAbs(msg.cwd);
+      if (!cwd || !inScope(cwd) || !existsSync(cwd)) return;
+      const name = typeof msg.name === "string" ? msg.name : "issue";
+      const prompt = typeof msg.prompt === "string" ? msg.prompt : "";
+      if (msg.agent === true && prompt) {
+        const bin = claudeCode.bin();
+        /*
+         * The permission prompts, off when asked for — and only ever as this
+         * one fixed argument.
+         *
+         * The client sends a boolean and the server owns the string. That is
+         * the same rule this handler already follows for the command itself:
+         * what runs is decided here, so a socket reachable from the UI cannot
+         * become a way to pass arbitrary arguments to a binary. `yolo === true`
+         * buys exactly one flag and nothing else.
+         *
+         * It is worth offering because the failure it prevents is silent: an
+         * agent handed a card, left in another tmux window, stopping on its
+         * first tool call and waiting for an answer nobody is there to give.
+         * And it is worth being a CHOICE for the mirror-image reason.
+         */
+        const args = msg.yolo === true ? ["--dangerously-skip-permissions", prompt] : [prompt];
+        // No agent available is not a reason to open nothing: a shell in the
+        // right worktree is still most of what was asked for.
+        if (bin) newWindowRunning(target, cwd, name, [bin, ...args]);
+        else newWindowRunning(target, cwd, name, []);
+      } else {
+        newWindowRunning(target, cwd, name, []);
+      }
+      s.tmuxSweep?.();
+      return;
+    }
+
     const action = msg.cmd as TmuxAction;
-    if (!["select", "new", "kill", "rename"].includes(action)) return;
+    if (!["select", "new", "kill", "rename", "move"].includes(action)) return;
     if (!runAction(s.tmux, action, msg.window, msg.name)) return;
     // Answer now rather than at the next tick. The command has already been
     // applied by the time it returns, so the strip can be correct within a
@@ -551,6 +766,7 @@ function cleanup(ws: PtyWs, s: Session) {
   // user's real terminal, and nothing there would point back at us.
   if (s.tmuxStatusHiddenOn) { setStatusLine(s.tmuxStatusHiddenOn, true); s.tmuxStatusHiddenOn = null; }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
+  if (s.viewDir) { try { rmSync(s.viewDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.viewDir = null; }
 }
 
 /** Hang up every live shell and remove their temp dirs. Called when the server

@@ -178,7 +178,7 @@ export function SessionModal({ sessionId, sourceApp, onClose, onFilter, onResume
                       ) : sessionCwd(d) ? (
                         <button onClick={() => { onResume(d); onClose(); }} className="chip cursor-pointer"
                           title={`Continue this conversation in ${sessionCwd(d)} — claude keeps the full context`}
-                          style={{ color: "var(--ok, #34d399)", background: "color-mix(in srgb, #34d399 15%, transparent)", borderColor: "color-mix(in srgb, #34d399 45%, transparent)" }}>
+                          style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)", borderColor: "color-mix(in srgb, var(--success) 45%, transparent)" }}>
                           ↩ Resume in chat
                         </button>
                       ) : (

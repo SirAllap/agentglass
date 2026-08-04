@@ -1,9 +1,10 @@
-import { memo, Fragment, createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { memo, Fragment, createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { subscribeWorktreeJump, worktreeJump } from "../lib/worktreeJump.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
-import type { FileChange, DiffHunk, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
+import type { FileChange, DiffHunk, WalkthroughResult } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
-import { CommitModal } from "./CommitModal.tsx";
+import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { api } from "../lib/api.ts";
 import { buildTitles } from "../lib/derive.ts";
 import { usePoll } from "../lib/usePoll.ts";
@@ -16,7 +17,7 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 
 const HATCH = "repeating-linear-gradient(45deg, transparent, transparent 5px, color-mix(in srgb, var(--border) 10%, transparent) 5px, color-mix(in srgb, var(--border) 10%, transparent) 6px)";
 // Typical diff/coding font stack (honors an app --font-mono override if set).
-const DIFF_FONT = 'var(--font-mono, "JetBrainsMono Nerd Font Mono"), "JetBrainsMono Nerd Font", "JetBrains Mono", "SF Mono", ui-monospace, "Cascadia Code", "Fira Code", "Menlo", "Monaco", "Roboto Mono", "Consolas", "Liberation Mono", monospace';
+const DIFF_FONT = 'var(--font-mono, "SF Mono"), SFMono-Regular, ui-monospace, "Cascadia Code", "Menlo", "Monaco", "Consolas", "Liberation Mono", "JetBrainsMono Nerd Font Mono", monospace';
 // Diff font + programming ligatures (== -> => etc.) — JetBrains Mono & friends.
 export const CODE_FONT_STYLE = { fontFamily: DIFF_FONT, fontFeatureSettings: '"calt" 1, "liga" 1' } as const;
 // Confine text selection to the side the drag started on (split view) so
@@ -34,6 +35,9 @@ export const LINEBTN_CSS = '.agx-gutter{position:relative}.agx-linebtn{position:
 export const LineMenuCtx = createContext<{ permalink?: (line: number, side: DiffSide) => string | null } | null>(null);
 
 export const SCROLLBAR_CSS = '.agx-scroll{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--primary) 45%,transparent) transparent}.agx-scroll::-webkit-scrollbar{width:11px;height:11px}.agx-scroll::-webkit-scrollbar-track{background:transparent}.agx-scroll::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--primary) 38%,transparent);border-radius:999px;border:3px solid transparent;background-clip:padding-box}.agx-scroll::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--primary) 62%,transparent);background-clip:padding-box}.agx-scroll::-webkit-scrollbar-corner{background:transparent}';
+/** The directory an editor should open in. The server checks it is a repo and
+ *  in scope before using it, and falls back to the workspace root if not. */
+const rootOfPath = (p: string) => p.slice(0, p.lastIndexOf("/")) || p;
 const cellBg = (k?: string) => (k === "del" ? "color-mix(in srgb, var(--error) 13%, transparent)" : k === "add" ? "color-mix(in srgb, var(--success) 13%, transparent)" : "transparent");
 const cellFg = (k?: string) => (k === "del" ? "var(--error)" : k === "add" ? "var(--success)" : "var(--text3)");
 // Opaque variant of the row tint — for the sticky line-number gutter, so
@@ -92,7 +96,7 @@ function attachWordDiff(rows: URow[]): void {
 }
 
 function Marked({ segs, kind }: { segs: Seg[]; kind: "del" | "add" }) {
-  const bg = kind === "del" ? "color-mix(in srgb, var(--error) 30%, transparent)" : "color-mix(in srgb, var(--success) 30%, transparent)";
+  const bg = kind === "del" ? "color-mix(in srgb, var(--error) 22%, transparent)" : "color-mix(in srgb, var(--success) 22%, transparent)";
   return <>{segs.map((s, i) => (s.hi ? <span key={i} style={{ background: bg, borderRadius: "2px" }}>{s.text}</span> : <span key={i}>{s.text}</span>))}</>;
 }
 
@@ -116,7 +120,7 @@ const Code = memo(function Code({ text, segs, kind }: { text: string; segs?: Seg
   }, [hl, lang, theme, text]);
   if (!tokens) return segs ? <Marked segs={segs} kind={kind === "del" ? "del" : "add"} /> : <>{text || " "}</>;
   const ranges = changedRanges(segs);
-  const hiBg = kind === "del" ? "color-mix(in srgb, var(--error) 32%, transparent)" : "color-mix(in srgb, var(--success) 32%, transparent)";
+  const hiBg = kind === "del" ? "color-mix(in srgb, var(--error) 23%, transparent)" : "color-mix(in srgb, var(--success) 23%, transparent)";
   const out: React.ReactNode[] = [];
   let off = 0, key = 0;
   for (const tok of tokens) {
@@ -184,47 +188,13 @@ function inSel(sel: LineSel, n: number | null | undefined, side: DiffSide): bool
  * GitHub does a multi-line comment.
  */
 function LineBtn({ n, side, onPick }: { n: number | null | undefined; side: DiffSide; onPick?: (p: LinePick) => void }) {
-  const menu = useContext(LineMenuCtx);
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
   if (!onPick || n == null) return null;
-  const rn = side === "RIGHT" ? `R${n}` : `L${n}`;
-  const onClick = (e: React.MouseEvent) => {
-    // Shift-click keeps the fast range gesture, and with no PR context (the
-    // working-tree changes modal) there is nothing to offer but "comment", so
-    // click goes straight to it as before. Otherwise: the GitHub menu.
-    if (e.shiftKey || !menu) { onPick({ line: n, side, shift: e.shiftKey }); return; }
-    const r = ref.current!.getBoundingClientRect();
-    setPos({ top: r.bottom + 4, left: Math.min(r.left, window.innerWidth - 244) });
-    setOpen(true);
-  };
-  const Item = ({ label, glyph, onSel }: { label: string; glyph: React.ReactNode; onSel: () => void }) => (
-    <button role="menuitem" onClick={() => { onSel(); setOpen(false); }}
-      className="w-full text-left flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg hover:bg-white/5" style={{ color: "var(--text2)" }}>
-      <span className="grid place-items-center shrink-0" style={{ width: 16, color: "var(--text3)" }}>{glyph}</span>{label}
-    </button>
-  );
   return (
-    <>
-      <button ref={ref} onClick={onClick} data-open={open ? "1" : undefined}
-        title={`Line ${n} — comment, suggest a change; shift-click to cover a range`}
-        aria-label={`Line ${n} actions`} aria-haspopup="menu" aria-expanded={open}
-        className="agx-linebtn">+</button>
-      {open && (
-        <Portal>
-          <div className="fixed inset-0" style={{ zIndex: 9998 }} onClick={() => setOpen(false)} />
-          <div role="menu" className="fixed p-1 rounded-xl text-[11.5px]"
-            style={{ top: pos.top, left: pos.left, minWidth: 224, zIndex: 9999, background: "color-mix(in srgb, var(--bg2) 97%, black)", border: "1px solid color-mix(in srgb, var(--border) 70%, transparent)", boxShadow: "0 24px 60px -18px rgba(0,0,0,0.7)", backdropFilter: "blur(18px)" }}>
-            <Item glyph="+" label={`Add comment on line ${rn}`} onSel={() => onPick({ line: n, side, shift: false, mode: "comment" })} />
-            <Item glyph="±" label={`Suggest change on line ${rn}`} onSel={() => onPick({ line: n, side, shift: false, mode: "suggest" })} />
-            {menu?.permalink && (
-              <Item glyph="🔗" label="Copy link" onSel={() => { const u = menu.permalink!(n, side); if (u) void navigator.clipboard?.writeText(u); }} />
-            )}
-          </div>
-        </Portal>
-      )}
-    </>
+    <button
+      onClick={(e) => onPick({ line: n, side, shift: e.shiftKey })}
+      title={`Line ${n} — comment; shift-click to cover a range`}
+      aria-label={`Comment on line ${n}`}
+      className="agx-linebtn">+</button>
   );
 }
 
@@ -235,7 +205,7 @@ export function UnifiedDiff({ c, wrap, hunkAction, rowAfter, onPick, sel }: { c:
     <div className="agx-scroll flex-1 min-w-0 overflow-auto text-[12px] leading-[1.6]" data-vscroll style={CODE_FONT_STYLE}>
       {hunks.map(({ h, rows }, hi) => (
         <div key={hi}>
-          <div data-hunk className="sticky top-0 z-20 py-0.5 t-dim2" style={{ background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+          <div data-hunk className="z-10 py-0.5 t-dim2" style={{ position: "var(--agx-hunk-pos, sticky)" as React.CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
             <span className="sticky left-0 inline-flex items-center gap-3 px-3">
               <span className="whitespace-pre">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
               {hunkAction && hunkAction(hi)}
@@ -255,7 +225,13 @@ export function UnifiedDiff({ c, wrap, hunkAction, rowAfter, onPick, sel }: { c:
                     <LineBtn n={r.newN ?? r.oldN} side={r.newN != null ? "RIGHT" : "LEFT"} onPick={onPick} />
                     <span className="opacity-40">{r.newN ?? ""}</span>
                   </div>
-                  <div className={`${wrapCls} px-1.5`} style={{ background: inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? "color-mix(in srgb, var(--primary) 20%, transparent)" : cellBg(r.kind), color: cellFg(r.kind) }}>
+                  {/* `data-ln` names the row the way a search result does —
+                      "R412", "L88" — so a hit found across every file has
+                      somewhere to scroll to. Side follows the same rule the
+                      matcher uses: a removal exists on the left, everything
+                      else is reported where the reader will look for it. */}
+                  <div data-ln={r.newN != null ? `R${r.newN}` : r.oldN != null ? `L${r.oldN}` : undefined}
+                    className={`${wrapCls} px-1.5`} style={{ background: inSel(sel ?? null, r.newN, "RIGHT") || inSel(sel ?? null, r.oldN, "LEFT") ? "color-mix(in srgb, var(--primary) 20%, transparent)" : cellBg(r.kind), color: cellFg(r.kind) }}>
                     <span className="select-none opacity-60">{r.kind === "add" ? "+" : r.kind === "del" ? "−" : " "} </span><Code text={r.text} segs={r.segs} kind={r.kind} />
                   </div>
                   {after && <div style={{ gridColumn: "1 / -1" }}>{after}</div>}
@@ -325,7 +301,7 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
   const side = (which: "l" | "r") =>
     hunks.map(({ h, rows }, hi) => (
       <div key={hi} style={{ minWidth: "max-content" }}>
-        <div data-hunk className="sticky top-0 z-20 py-0.5 t-dim2 whitespace-pre" style={{ background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+        <div data-hunk className="z-10 py-0.5 t-dim2 whitespace-pre" style={{ position: "var(--agx-hunk-pos, sticky)" as React.CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
           <span className="sticky left-0 inline-block px-3">@@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@</span>
         </div>
         {rows.map((row, ri) => {
@@ -338,7 +314,8 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
           const after = rowAfter?.(row.r?.num, row.l?.num);
           return (
             <Fragment key={ri}>
-              <div className="flex" style={{ minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
+              <div data-ln={cell ? `${which === "l" ? "L" : "R"}${cell.num}` : undefined}
+                className="flex" style={{ minWidth: "100%", background: cell ? cellBg(cell.kind) : HATCH }}>
                 <div data-side={which} className="text-right pr-1.5 tabular-nums select-none shrink-0 sticky left-0 z-[1] agx-gutter" style={{ width: "3.6ch", background: numBg(cell?.kind), boxShadow: "1px 0 0 0 color-mix(in srgb, var(--border) 22%, transparent)" }}>
                   <LineBtn n={cell?.num} side={which === "l" ? "LEFT" : "RIGHT"} onPick={onPick} />
                   <span className="opacity-40">{cell?.num ?? ""}</span>
@@ -360,7 +337,7 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
         <style>{SPLIT_SEL_CSS}</style>
         {hunks.map(({ h, rows }, hi) => (
           <div key={hi}>
-            <div data-hunk className="sticky top-0 z-20 px-3 py-0.5 t-dim2 whitespace-pre" style={{ background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
+            <div data-hunk className="z-10 px-3 py-0.5 t-dim2 whitespace-pre" style={{ position: "var(--agx-hunk-pos, sticky)" as React.CSSProperties["position"], top: "var(--agx-hunk-top, 0px)", background: "color-mix(in srgb, var(--info) 12%, var(--bg))" }}>
               @@ -{h.oldStart},{h.oldLines} +{h.newStart},{h.newLines} @@
             </div>
             <div className="grid" style={{ gridTemplateColumns: "3.6ch minmax(0,1fr) 3.6ch minmax(0,1fr)" }}>
@@ -369,9 +346,9 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
                 return (
                   <div key={ri} className="contents">
                     <div data-side="l" className="text-right pr-1.5 tabular-nums select-none" style={{ background: row.l ? cellBg(row.l.kind) : HATCH }}><span className="opacity-40">{row.l?.num ?? ""}</span></div>
-                    <div data-side="l" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.l ? cellBg(row.l.kind) : HATCH, color: cellFg(row.l?.kind) }}>{row.l ? <Code text={row.l.text} segs={row.l.segs} kind={row.l.kind} /> : ""}</div>
-                    <div data-side="r" className="text-right pr-1.5 tabular-nums select-none border-l" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }}><span className="opacity-40">{row.r?.num ?? ""}</span></div>
-                    <div data-side="r" className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, color: cellFg(row.r?.kind) }}>{row.r ? <Code text={row.r.text} segs={row.r.segs} kind={row.r.kind} /> : ""}</div>
+                    <div data-side="l" data-ln={row.l ? `L${row.l.num}` : undefined} className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.l ? cellBg(row.l.kind) : HATCH, color: cellFg(row.l?.kind) }}>{row.l ? <Code text={row.l.text} segs={row.l.segs} kind={row.l.kind} /> : ""}</div>
+                    <div data-side="r" className="text-right pr-1.5 tabular-nums select-none border-l" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}><span className="opacity-40">{row.r?.num ?? ""}</span></div>
+                    <div data-side="r" data-ln={row.r ? `R${row.r.num}` : undefined} className="whitespace-pre-wrap break-all px-1.5" style={{ background: row.r ? cellBg(row.r.kind) : HATCH, color: cellFg(row.r?.kind) }}>{row.r ? <Code text={row.r.text} segs={row.r.segs} kind={row.r.kind} /> : ""}</div>
                     {after && <div style={{ gridColumn: "1 / -1" }}>{after}</div>}
                   </div>
                 );
@@ -389,7 +366,7 @@ export function SplitDiff({ c, wrap, rowAfter, onPick, sel }: { c: FileChange; w
       <div ref={leftRef} data-side="l" className="agx-scroll flex-1 min-w-0" style={{ overflowX: "auto", overflowY: "hidden" }} onWheel={onLeftWheel}>
         {side("l")}
       </div>
-      <div ref={rightRef} data-side="r" data-vscroll className="agx-scroll flex-1 min-w-0 border-l" style={{ overflow: "auto", borderColor: "color-mix(in srgb, var(--border) 35%, transparent)" }} onScroll={syncTop}>
+      <div ref={rightRef} data-side="r" data-vscroll className="agx-scroll flex-1 min-w-0 border-l" style={{ overflow: "auto", borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }} onScroll={syncTop}>
         {side("r")}
       </div>
     </div>
@@ -525,7 +502,7 @@ function ReviewDot({ on, onClick, title }: { on: boolean; onClick?: (e: React.Mo
   );
 }
 
-function FileItem({ c, active, reviewed, info, onSelect, onToggleReviewed }: { c: FileChange; active: boolean; reviewed: boolean; info?: WalkthroughFile; onSelect: () => void; onToggleReviewed: () => void }) {
+function FileItem({ c, active, reviewed, onSelect, onToggleReviewed }: { c: FileChange; active: boolean; reviewed: boolean; onSelect: () => void; onToggleReviewed: () => void }) {
   const base = c.file_path.split("/").pop();
   return (
     <div
@@ -541,33 +518,24 @@ function FileItem({ c, active, reviewed, info, onSelect, onToggleReviewed }: { c
     >
       <div className="flex items-center gap-1.5">
         <ReviewDot on={reviewed} onClick={(e) => { e.stopPropagation(); onToggleReviewed(); }} title={reviewed ? "Mark unreviewed (x)" : "Mark reviewed (x)"} />
-        <TypeTag c={c} override={info?.tag} />
+        <TypeTag c={c} />
         <span className="text-[11.5px] font-medium truncate" style={{ color: reviewed ? "var(--text3)" : "var(--text)" }}>{base}</span>
         <span className="ml-auto flex items-center gap-1.5 shrink-0 text-[10px] tabular-nums">
           {c.additions > 0 && <span style={{ color: "var(--success)" }}>+{c.additions}</span>}
           {c.deletions > 0 && <span style={{ color: "var(--error)" }}>−{c.deletions}</span>}
         </span>
       </div>
-      {info?.description ? (
-        // The clock stays even when a description takes the line: with the list
-        // grouped by day, "when" is half of what you are reading it for.
-        <div className="mt-0.5 flex items-center gap-1.5 text-[10px] pl-[22px]" style={{ color: "var(--text3)" }}>
-          <span className="truncate min-w-0" title={info.description}>{info.description}</span>
-          <span className="ml-auto shrink-0 tabular-nums opacity-80">{fmtTime(c.timestamp)}</span>
-        </div>
-      ) : (
         <div className="flex items-center gap-1.5 mt-0.5 text-[9.5px] t-dim2 pl-[22px]">
           <span className="truncate min-w-0" title={c.file_path}>{dirOf(c.file_path)}</span>
           <span className="ml-auto shrink-0 opacity-80">{c.tool}</span>
           <span className="shrink-0">{fmtTime(c.timestamp)}</span>
         </div>
-      )}
     </div>
   );
 }
 
-function GroupBlock({ g, collapsed, selId, reviewed, descMap, onToggleCollapse, onSelect, onToggleReviewed, onToggleGroup }: {
-  g: FileGroup; collapsed: boolean; selId: number | null; reviewed: Set<number>; descMap: Map<string, WalkthroughFile>;
+function GroupBlock({ g, collapsed, selId, reviewed, onToggleCollapse, onSelect, onToggleReviewed, onToggleGroup }: {
+  g: FileGroup; collapsed: boolean; selId: number | null; reviewed: Set<number>;
   onToggleCollapse: () => void; onSelect: (id: number) => void; onToggleReviewed: (id: number) => void; onToggleGroup: (g: FileGroup, next: boolean) => void;
 }) {
   const revCount = g.items.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0);
@@ -606,7 +574,7 @@ function GroupBlock({ g, collapsed, selId, reviewed, descMap, onToggleCollapse, 
       {!collapsed && (
         <div className="mt-0.5 space-y-0.5">
           {g.items.map((c) => (
-            <FileItem key={c.id} c={c} active={c.id === selId} reviewed={reviewed.has(c.id)} info={descMap.get(c.file_path)} onSelect={() => onSelect(c.id)} onToggleReviewed={() => onToggleReviewed(c.id)} />
+            <FileItem key={c.id} c={c} active={c.id === selId} reviewed={reviewed.has(c.id)} onSelect={() => onSelect(c.id)} onToggleReviewed={() => onToggleReviewed(c.id)} />
           ))}
         </div>
       )}
@@ -666,7 +634,7 @@ export function ThemePicker({ value, onChange, error }: { value: string; onChang
       {open && (
         <div
           className="agx-scroll absolute right-0 mt-1 rounded-lg py-1 text-[10.5px] shadow-2xl"
-          style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 55%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
+          style={{ zIndex: 40, background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", minWidth: 178, maxHeight: 340, overflowY: "auto" }}
         >
           <Row id="auto" name="Auto (app theme)" />
           <div className="px-2.5 pt-1.5 pb-0.5 text-[8.5px] uppercase tracking-wider t-dim2">Dark</div>
@@ -747,24 +715,28 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const [q, setQ] = useState("");
   /** Ignored files start folded away — see `visible` below. */
   const [showIgnored, setShowIgnored] = useState(false);
+  const [showOutside, setShowOutside] = useState(false);
+  /** What the server filtered against, so the chip names the same project the
+   *  flag was computed from. Null on an unscoped instance. */
+  const [project, setProject] = useState<string | null>(null);
   /** Split whichever grouping is chosen by day as well. */
   const [byDate, setByDate] = useState(false);
   const [selId, setSelId] = useState<number | null>(null);
   const [wrap, setWrap] = useState(false);
   const [split, setSplit] = useState(true);
   const [copied, setCopied] = useState<null | "path" | "diff">(null);
+  /** A file being read whole, over the modal. */
+  const [peek, setPeek] = useState<Peek | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>(() => {
     try { const v = localStorage.getItem(GROUPBY_KEY); if (v === "session" || v === "agent" || v === "folder" || v === "tool") return v; } catch { /* ignore */ }
     return "session";
   });
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [reviewed, setReviewed] = useState<Set<number>>(() => new Set());
-  const [commitOpen, setCommitOpen] = useState(false);
-  const [walk, setWalk] = useState<WalkthroughResult | null>(null);
-  const [walkLoading, setWalkLoading] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
-  const walkReqSig = useRef<string | null>(null); // guards stale walkthrough responses
+  const wtJump = useSyncExternalStore(subscribeWorktreeJump, worktreeJump);
+  const wtJumpServed = useRef(0);
 
   useEffect(() => {
     if (!open) return;
@@ -781,6 +753,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     } else {
       api.changes(200).then((r) => {
         setChanges(r.changes);
+        setProject(r.project ?? null);
         setSelId(r.changes[0]?.id ?? null);
       }).catch(() => setChanges([]));
     }
@@ -793,6 +766,19 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     requestAnimationFrame(() => frameRef.current?.focus());
   }, [open]);
 
+  // A worktree jump from the Terminal chrome seeds the file-path filter with the
+  // worktree's folder name. Declared after the open-reset above (which clears
+  // the filter every time this view is shown) and depending on `open` so it
+  // re-applies in the same pass the view becomes active — and served once per
+  // request `n`, so re-opening File changes later never replays a stale filter.
+  useEffect(() => {
+    if (!open) return;
+    if (wtJump && wtJump.view === "diff" && wtJump.filter != null && wtJump.n !== wtJumpServed.current) {
+      wtJumpServed.current = wtJump.n;
+      setQ(wtJump.filter);
+    }
+  }, [open, wtJump]);
+
   // The fleet keeps editing while this is open, so a list loaded once goes
   // stale within a turn. Refreshed in place rather than through the effect
   // above: that one resets the filter, the collapsed groups and the selection,
@@ -802,6 +788,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   // in already resolved, and re-fetching would replace them with the fleet's.
   usePoll(open && !presetChanges, () => {
     api.changes(200).then((r) => {
+      setProject(r.project ?? null);
       setChanges((prev) => {
         // Same ids in the same order → keep the old array so nothing downstream
         // re-renders or re-highlights on an unchanged poll.
@@ -835,31 +822,42 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
    * silently: the count is shown and one click brings them back, because a list
    * that quietly drops entries is worse than a long one.
    */
-  const ignoredCount = useMemo(() => all.reduce((n, c) => n + (c.ignored ? 1 : 0), 0), [all]);
-  const visible = useMemo(() => (showIgnored ? all : all.filter((c) => !c.ignored)), [all, showIgnored]);
+  /**
+   * And the same for files that are not this project's.
+   *
+   * A session is in scope because its cwd is; where it writes is another
+   * question. A cockpit scoped to one repo still fills with a note
+   * under ~/Documents and a scratch script in /tmp — real edits by a real
+   * session of this project, and not one of them the project. Same treatment as
+   * the ignored ones for the same reason: folded away, counted, one click back.
+   *
+   * Each chip counts the rows IT is hiding — a file that is both ignored and
+   * outside is not claimed by both, or you click "+1 outside", nothing appears,
+   * and the count looks like a lie when it was the other filter still holding
+   * the row down.
+   */
+  const outsideCount = useMemo(
+    () => all.reduce((n, c) => n + (c.outside && (showIgnored || !c.ignored) ? 1 : 0), 0),
+    [all, showIgnored],
+  );
+  const ignoredCount = useMemo(
+    () => all.reduce((n, c) => n + (c.ignored && (showOutside || !c.outside) ? 1 : 0), 0),
+    [all, showOutside],
+  );
+  const visible = useMemo(
+    () => all.filter((c) => (showIgnored || !c.ignored) && (showOutside || !c.outside)),
+    [all, showIgnored, showOutside],
+  );
   const filtered = useMemo(() => (q ? visible.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : visible), [visible, q]);
   const groups = useMemo(() => groupChanges(filtered, groupBy, titles, byDate), [filtered, groupBy, titles, byDate]);
   const shown = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const totals = useMemo(() => all.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }), [all]);
   const revCount = useMemo(() => all.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0), [all, reviewed]);
   const selected = useMemo(() => shown.find((c) => c.id === selId) ?? shown[0] ?? null, [shown, selId]);
-  const commitPaths = useMemo(() => [...new Set(all.map((c) => c.file_path))], [all]);
-  const walkSig = useMemo(() => changesetSig(all), [all]);
   // Shiki highlighter + theme/bold controls (shared with the git panel).
   const { hilite, themePref, setThemePref, bold, setBold, hiliteError } = useDiffHighlight(selected?.file_path);
   // Restore a cached walkthrough for the current changeset (on open / when the
   // changeset changes) so it persists across close/reopen and never re-runs.
-  useEffect(() => {
-    if (!open) return;
-    walkReqSig.current = null;
-    setWalkLoading(false);
-    setWalk(all.length ? (readWalkCache()[walkSig] ?? null) : null);
-  }, [open, walkSig]);
-  const descMap = useMemo(() => {
-    const m = new Map<string, WalkthroughFile>();
-    for (const f of walk?.files ?? []) m.set(f.path, f);
-    return m;
-  }, [walk]);
   const groupKeyOf = useMemo(() => {
     const m = new Map<number, string>();
     for (const g of groups) for (const it of g.items) m.set(it.id, g.key);
@@ -919,28 +917,6 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     }).catch(() => {});
   };
 
-  const explain = (force = false) => {
-    if (walkLoading || !all.length) return;
-    if (!force) {
-      const cached = readWalkCache()[walkSig];
-      if (cached) { setWalk(cached); return; } // instant — no LLM call
-    }
-    const reqSig = walkSig;
-    walkReqSig.current = reqSig;
-    setWalkLoading(true);
-    const files = commitPaths.map((p) => {
-      const c = all.find((x) => x.file_path === p);
-      return { path: p, tool: c?.tool, additions: c?.additions, deletions: c?.deletions, patch: c ? unifiedText(c) : "" };
-    });
-    api.walkthrough(files)
-      .then((r) => {
-        if (walkReqSig.current !== reqSig) return; // changeset moved on — drop stale result
-        setWalk(r);
-        if (r.available && !r.error) writeWalkCache(reqSig, r); // cache only good results
-      })
-      .catch((e) => { if (walkReqSig.current === reqSig) setWalk({ available: true, reviewFocus: "", files: [], error: String(e) }); })
-      .finally(() => { if (walkReqSig.current === reqSig) setWalkLoading(false); });
-  };
 
   const onKey = (e: React.KeyboardEvent) => {
     const inInput = /input|textarea/i.test((e.target as HTMLElement)?.tagName ?? "");
@@ -952,6 +928,8 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     else if (k === "p") { e.preventDefault(); e.stopPropagation(); jumpHunk(-1); }
     else if (k === "w") { e.preventDefault(); e.stopPropagation(); setWrap((w) => !w); }
     else if (k === "c") { e.preventDefault(); e.stopPropagation(); copy("path"); }
+    // `o` for open, beside `c` for copy: the two things you do with a path.
+    else if (k === "o" && selected) { e.preventDefault(); e.stopPropagation(); setPeek({ root: rootOfPath(selected.file_path), path: selected.file_path, label: selected.file_path }); }
     else if (k === "x") { e.preventDefault(); e.stopPropagation(); if (selected) toggleReviewed(selected.id); }
   };
 
@@ -978,47 +956,23 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         onClick={onBack}
                         title={backLabel || "Back"}
                         className="text-[11px] px-2.5 py-1 rounded-lg transition-colors"
-                        style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                        style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg3) 45%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)" }}
                       >← {backLabel || "Back"}</button>
                     )}
-                    {changes && all.length > 0 && (
-                      <button
-                        onClick={() => explain(!!walk)}
-                        disabled={walkLoading}
-                        title={walk ? "Re-run the AI walkthrough (overwrites the cached one)" : "AI walkthrough — one line per file + a review focus (cached per changeset)"}
-                        className="text-[11px] px-2.5 py-1 rounded-lg transition-colors"
-                        style={{ color: "var(--text)", background: "color-mix(in srgb, var(--info) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--info) 28%, transparent)", opacity: walkLoading ? 0.6 : 1 }}
-                      >{walkLoading ? "✨ Explaining…" : walk ? "✨ Re-explain" : "✨ Explain"}</button>
-                    )}
-                    {changes && all.length > 0 && (
-                      <button
-                        onClick={() => setCommitOpen(true)}
-                        title="Compose a git commit from these changes"
-                        className="text-[11px] px-2.5 py-1 rounded-lg transition-colors"
-                        style={{ color: "var(--text)", background: "color-mix(in srgb, var(--primary) 16%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)" }}
-                      >⎇ Commit…</button>
-                    )}
+                    {/* "Explain" and "Commit…" lived here and are gone. Both
+                        were answers to questions this view is no longer where
+                        you ask: committing belongs to the Git view, which has
+                        the staging area and the branch, and an AI walkthrough
+                        of somebody else's changeset is a chat away. What is
+                        left is what this view is actually for — reading the
+                        diff — and two fewer buttons is two fewer things to
+                        read past to get to it. */}
                     {/* only when framed as a modal — inside the workspace the
                         rail owns closing */}
                     {onClose && <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>}
                   </div>
                 </div>
 
-                {(walk?.reviewFocus || walk?.error) && (
-                  <div className="px-5 py-1.5 border-b shrink-0 text-[11px]" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)", background: "color-mix(in srgb, var(--info) 6%, transparent)" }}>
-                    {walk?.reviewFocus ? (
-                      <><span className="t-dim2 uppercase tracking-wide text-[9px] mr-2">Review focus</span><span style={{ color: "var(--text)" }}>{walk.reviewFocus}</span></>
-                    ) : (
-                      <span style={{ color: "var(--warning)" }}>{walk?.error}</span>
-                    )}
-                    {/* Named, not silently missing — see GitPanel. */}
-                    {!!walk?.withheld?.length && (
-                      <div className="mt-1 text-[10px] t-dim2">
-                        Not sent: {walk.withheld.join(", ")} — credential files are kept out of the prompt.
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 <div className="flex-1 min-h-0 flex">
                   {/* master — grouped file list */}
@@ -1028,7 +982,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         value={q} onChange={(e) => setQ(e.target.value)}
                         placeholder="Filter by file path…"
                         className="w-full px-3 py-1.5 rounded-lg text-[11px] outline-none"
-                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", color: "var(--text)" }}
+                        style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--text) 16%, transparent)", color: "var(--text)" }}
                       />
                       {/* One row, one height. `flex-wrap` rather than letting a
                           chip grow: on a narrow panel the row wraps as a row,
@@ -1082,6 +1036,24 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             }}
                           >{showIgnored ? `✕ ${ignoredCount} ignored` : `+ ${ignoredCount} ignored`}</button>
                         )}
+                        {/* Only when there is a project to be outside of, and
+                            only when something actually is. Named, because
+                            "outside" alone raises the question this answers:
+                            outside WHAT. */}
+                        {outsideCount > 0 && (
+                          <button
+                            onClick={() => setShowOutside((v) => !v)}
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
+                            title={showOutside
+                              ? `Hide edits outside ${project ?? "this project"}`
+                              : `${outsideCount} file${outsideCount === 1 ? "" : "s"} outside ${project ?? "this project"} ${outsideCount === 1 ? "is" : "are"} hidden — notes, scratch files, anything this project's sessions touched elsewhere`}
+                            style={{
+                              background: showOutside ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                              color: showOutside ? "var(--text)" : "var(--text3)",
+                              border: `1px solid color-mix(in srgb, var(--border) ${showOutside ? 45 : 18}%, transparent)`,
+                            }}
+                          >{showOutside ? `✕ ${outsideCount} outside` : `+ ${outsideCount} outside`}</button>
+                        )}
                         {changes && all.length > 0 && (
                           <span className="ml-auto text-[9.5px] t-dim2 tabular-nums" title="Files reviewed">{revCount}/{visible.length}</span>
                         )}
@@ -1103,7 +1075,6 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           collapsed={collapsed.has(g.key) && !q}
                           selId={selected?.id ?? null}
                           reviewed={reviewed}
-                          descMap={descMap}
                           onToggleCollapse={() => toggleCollapse(g.key)}
                           onSelect={select}
                           onToggleReviewed={toggleReviewed}
@@ -1119,7 +1090,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                   <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                     {selected ? (
                       <>
-                        <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                        <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}>
                           <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={selected.file_path}>{selected.file_path}</span>
                           <span className="shrink-0 text-[10.5px] tabular-nums flex items-center gap-1.5">
                             {selected.additions > 0 && <span style={{ color: "var(--success)" }}>+{selected.additions}</span>}
@@ -1131,6 +1102,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             <Toggle on={wrap} onClick={() => setWrap((w) => !w)} title="Toggle line wrap (w)">Wrap</Toggle>
                             <ThemePicker value={themePref} onChange={setThemePref} error={hiliteError} />
                             <Toggle on={bold} onClick={() => setBold((b) => !b)} title="Bold keywords, functions & types (Neovim-style)">Bold</Toggle>
+                            {/* The diff answers what changed. When the answer is
+                                in what did not — the function above, the import
+                                at the top — this is the way to it, on the file
+                                already selected, without going to find a
+                                terminal and putting it in the right checkout. */}
+                            <Toggle onClick={() => setPeek({ root: rootOfPath(selected.file_path), path: selected.file_path, label: selected.file_path })}
+                              title="Open the whole file in an editor (o)">⧉ Open</Toggle>
                             <Toggle onClick={() => copy("path")} title="Copy file path (c)">{copied === "path" ? "Copied ✓" : "Path"}</Toggle>
                             <Toggle onClick={() => copy("diff")} title="Copy unified diff">{copied === "diff" ? "Copied ✓" : "Diff"}</Toggle>
                           </div>
@@ -1138,12 +1116,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         <div ref={paneRef} className="flex-1 min-h-0 flex relative" style={{ background: "var(--bg)" }}>
                           <HiliteCtx.Provider value={selected.hunks.reduce((n, h) => n + h.lines.length, 0) > 3000 ? { ...hilite, theme: null } : hilite}>{split ? <SplitDiff c={selected} wrap={wrap} /> : <UnifiedDiff c={selected} wrap={wrap} />}</HiliteCtx.Provider>
                         </div>
-                        <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                        <div className="shrink-0 px-4 py-1 border-t text-[9.5px] t-dim2 flex items-center gap-3" style={{ borderColor: "color-mix(in srgb, var(--text) 16%, transparent)" }}>
                           <span><b className="font-semibold">j/k</b> file</span>
                           <span><b className="font-semibold">n/p</b> hunk</span>
                           <span><b className="font-semibold">x</b> reviewed</span>
                           <span><b className="font-semibold">w</b> wrap</span>
                           <span><b className="font-semibold">c</b> copy path</span>
+                          <span><b className="font-semibold">o</b> open file</span>
                           <span className="ml-auto tabular-nums">{selected.hunks.length} hunk{selected.hunks.length === 1 ? "" : "s"}</span>
                         </div>
                       </>
@@ -1154,7 +1133,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                     )}
                   </div>
                 </div>
-      <CommitModal open={commitOpen} onClose={() => setCommitOpen(false)} paths={commitPaths} />
+      {peek && <PeekFile peek={peek} onClose={() => setPeek(null)} />}
     </div>
   );
 }
@@ -1174,7 +1153,7 @@ export function ChangesModal({ open, onClose, ...rest }: Omit<DiffViewProps, "ac
                 initial={{ opacity: 0, scale: 0.95, y: 14 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.96, y: 8 }}
                 transition={{ type: "spring", stiffness: 330, damping: 30 }}
                 className="w-[95vw] h-[95vh] rounded-2xl flex flex-col pointer-events-auto outline-none overflow-hidden"
-                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
+                style={{ background: "var(--bg2)", border: "1px solid color-mix(in srgb, var(--text) 24%, transparent)", boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)" }}
               >
                 <DiffView active={open} onClose={onClose} {...rest} />
               </motion.div>

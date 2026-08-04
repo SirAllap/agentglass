@@ -1,4 +1,5 @@
 // Applied as CSS custom properties on :root by applyTheme().
+import { floorTiers } from "./contrast.ts";
 //
 // The list leads with community-proven palettes — the ones people already read
 // code in all day (Catppuccin, GitHub, Tokyo Night, Dracula, One Dark, Gruvbox,
@@ -8,16 +9,33 @@
 // Grouping into dark/light is by --bg luminance (see ThemeSwitcher), so a new
 // entry needs no flag — just put a dark bg in the dark run and a light one below.
 
-import { SERVER } from "./api.ts";
+import { SERVER, authHeaders, IS_DESKTOP } from "./api.ts";
+import type { AnsiPalette } from "./termPalette.ts";
+import { applyAccent } from "./accent.ts";
 
 export interface Theme {
   id: string;
   name: string;
   preview: { primary: string; secondary: string; accent: string };
   vars: Record<string, string>;
+  /** The terminal's 16-colour palette. Omit it and the terminal derives one
+   *  from `vars` (see termPalette.ts); pin it when the canonical palette is
+   *  part of the theme's identity, as with Gruvbox, Nord, Solarized, Dracula. */
+  ansi?: AnsiPalette;
 }
 
 export const THEMES: Theme[] = [
+  // --- serious neutral defaults, the pair behind System / Dark / Light ---
+  // A monochrome pair built on the way a good neutral UI carries contrast: it
+  // separates regions by TONE, not by lines. The reading surface (the terminal)
+  // is a dark grey — never pure black — panels step up from it in even
+  // increments (#1e1e1e → #262626 → #404040), text sits bright against them
+  // (#fafafa, with #a1a1a1 for dim), and borders are a faint accent rather than
+  // the thing doing the separating. The primary is a grey, not a brand hue;
+  // semantic colours are the only chroma.
+  { id: "graphite", name: "Graphite", preview: {"primary":"#1e1e1e","secondary":"#262626","accent":"#e5e5e5"}, vars: {"--bg":"#1e1e1e","--bg2":"#262626","--bg3":"#2e2e2e","--bg4":"#404040","--text":"#fafafa","--text2":"#d4d4d4","--text3":"#a1a1a1","--text4":"#808080","--border":"#383840","--border2":"#4c4c54","--primary":"#e5e5e5","--primary-hover":"#fafafa","--success":"#86efac","--warning":"#fbbf24","--error":"#ff6568","--info":"#60a5fa","--shadow":"rgba(0, 0, 0, 0.7)"} },
+  { id: "porcelain", name: "Porcelain", preview: {"primary":"#ffffff","secondary":"#f5f5f5","accent":"#171717"}, vars: {"--bg":"#ffffff","--bg2":"#f5f5f5","--bg3":"#ececec","--bg4":"#e2e2e2","--text":"#0a0a0a","--text2":"#383838","--text3":"#737373","--text4":"#909090","--border":"#d9d9de","--border2":"#c4c4ca","--primary":"#171717","--primary-hover":"#000000","--success":"#15803d","--warning":"#b45309","--error":"#e40014","--info":"#2563eb","--shadow":"rgba(0, 0, 0, 0.12)"} },
+
   // --- community-proven dark palettes ---
   { id: "github-dark", name: "GitHub Dark", preview: {"primary":"#0d1117","secondary":"#161b22","accent":"#58a6ff"}, vars: {"--bg":"#0d1117","--bg2":"#161b22","--bg3":"#21262d","--bg4":"#30363d","--text":"#e6edf3","--text2":"#c9d1d9","--text3":"#8b949e","--text4":"#6e7681","--border":"#30363d","--border2":"#444c56","--primary":"#58a6ff","--primary-hover":"#79c0ff","--success":"#3fb950","--warning":"#d29922","--error":"#f85149","--info":"#58a6ff","--shadow":"rgba(1, 4, 9, 0.85)"} },
   { id: "github-dark-dimmed", name: "GitHub Dark Dimmed", preview: {"primary":"#22272e","secondary":"#2d333b","accent":"#6cb6ff"}, vars: {"--bg":"#22272e","--bg2":"#2d333b","--bg3":"#373e47","--bg4":"#444c56","--text":"#cdd9e5","--text2":"#adbac7","--text3":"#768390","--text4":"#636e7b","--border":"#444c56","--border2":"#545d68","--primary":"#6cb6ff","--primary-hover":"#96d0ff","--success":"#57ab5a","--warning":"#c69026","--error":"#e5534b","--info":"#6cb6ff","--shadow":"rgba(0, 0, 0, 0.8)"} },
@@ -25,10 +43,10 @@ export const THEMES: Theme[] = [
   { id: "catppuccin-macchiato", name: "Catppuccin Macchiato", preview: {"primary":"#24273a","secondary":"#363a4f","accent":"#8aadf4"}, vars: {"--bg":"#24273a","--bg2":"#363a4f","--bg3":"#494d64","--bg4":"#5b6078","--text":"#cad3f5","--text2":"#b8c0e0","--text3":"#a5adcb","--text4":"#8087a2","--border":"#494d64","--border2":"#5b6078","--primary":"#8aadf4","--primary-hover":"#b7bdf8","--success":"#a6da95","--warning":"#eed49f","--error":"#ed8796","--info":"#7dc4e4","--shadow":"rgba(24, 25, 38, 0.7)"} },
   { id: "catppuccin-frappe", name: "Catppuccin Frappé", preview: {"primary":"#303446","secondary":"#414559","accent":"#8caaee"}, vars: {"--bg":"#303446","--bg2":"#414559","--bg3":"#51576d","--bg4":"#626880","--text":"#c6d0f5","--text2":"#b5bfe2","--text3":"#a5adce","--text4":"#838ba7","--border":"#51576d","--border2":"#626880","--primary":"#8caaee","--primary-hover":"#babbf1","--success":"#a6d189","--warning":"#e5c890","--error":"#e78284","--info":"#85c1dc","--shadow":"rgba(35, 38, 52, 0.7)"} },
   { id: "tokyo-night", name: "Tokyo Night", preview: {"primary":"#1a1b26","secondary":"#24283b","accent":"#7aa2f7"}, vars: {"--bg":"#1a1b26","--bg2":"#24283b","--bg3":"#292e42","--bg4":"#414868","--text":"#c0caf5","--text2":"#a9b1d6","--text3":"#828bb8","--text4":"#565f89","--border":"#292e42","--border2":"#414868","--primary":"#7aa2f7","--primary-hover":"#9eb6ff","--success":"#9ece6a","--warning":"#e0af68","--error":"#f7768e","--info":"#7dcfff","--shadow":"rgba(0, 0, 0, 0.75)"} },
-  { id: "dracula", name: "Dracula", preview: {"primary":"#282a36","secondary":"#343746","accent":"#bd93f9"}, vars: {"--bg":"#282a36","--bg2":"#343746","--bg3":"#44475a","--bg4":"#565872","--text":"#f8f8f2","--text2":"#e2e2dc","--text3":"#a8abbd","--text4":"#6272a4","--border":"#44475a","--border2":"#565872","--primary":"#bd93f9","--primary-hover":"#d6b3ff","--success":"#50fa7b","--warning":"#f1fa8c","--error":"#ff5555","--info":"#8be9fd","--shadow":"rgba(0, 0, 0, 0.8)"} },
+  { id: "dracula", name: "Dracula", preview: {"primary":"#282a36","secondary":"#343746","accent":"#bd93f9"}, vars: {"--bg":"#282a36","--bg2":"#343746","--bg3":"#44475a","--bg4":"#565872","--text":"#f8f8f2","--text2":"#e2e2dc","--text3":"#a8abbd","--text4":"#6272a4","--border":"#44475a","--border2":"#565872","--primary":"#bd93f9","--primary-hover":"#d6b3ff","--success":"#50fa7b","--warning":"#f1fa8c","--error":"#ff5555","--info":"#8be9fd","--shadow":"rgba(0, 0, 0, 0.8)"}, ansi: {"black":"#21222c","red":"#ff5555","green":"#50fa7b","yellow":"#f1fa8c","blue":"#bd93f9","magenta":"#ff79c6","cyan":"#8be9fd","white":"#f8f8f2","brightBlack":"#6272a4","brightRed":"#ff6e6e","brightGreen":"#69ff94","brightYellow":"#ffffa5","brightBlue":"#d6acff","brightMagenta":"#ff92df","brightCyan":"#a4ffff","brightWhite":"#ffffff"} },
   { id: "one-dark", name: "One Dark", preview: {"primary":"#282c34","secondary":"#2c313c","accent":"#61afef"}, vars: {"--bg":"#282c34","--bg2":"#2c313c","--bg3":"#3b4048","--bg4":"#4b5263","--text":"#abb2bf","--text2":"#9da5b4","--text3":"#7f848e","--text4":"#5c6370","--border":"#3b4048","--border2":"#4b5263","--primary":"#61afef","--primary-hover":"#82c4ff","--success":"#98c379","--warning":"#e5c07b","--error":"#e06c75","--info":"#56b6c2","--shadow":"rgba(0, 0, 0, 0.75)"} },
-  { id: "gruvbox-dark", name: "Gruvbox Dark", preview: {"primary":"#282828","secondary":"#3c3836","accent":"#fe8019"}, vars: {"--bg":"#282828","--bg2":"#3c3836","--bg3":"#504945","--bg4":"#665c54","--text":"#ebdbb2","--text2":"#d5c4a1","--text3":"#bdae93","--text4":"#928374","--border":"#504945","--border2":"#665c54","--primary":"#fe8019","--primary-hover":"#fabd2f","--success":"#b8bb26","--warning":"#fabd2f","--error":"#fb4934","--info":"#83a598","--shadow":"rgba(0, 0, 0, 0.85)"} },
-  { id: "solarized-dark", name: "Solarized Dark", preview: {"primary":"#002b36","secondary":"#073642","accent":"#268bd2"}, vars: {"--bg":"#002b36","--bg2":"#073642","--bg3":"#0d4b5a","--bg4":"#14606f","--text":"#93a1a1","--text2":"#839496","--text3":"#657b83","--text4":"#586e75","--border":"#0f4a58","--border2":"#1a6472","--primary":"#268bd2","--primary-hover":"#4ba6e8","--success":"#859900","--warning":"#b58900","--error":"#dc322f","--info":"#2aa198","--shadow":"rgba(0, 0, 0, 0.7)"} },
+  { id: "gruvbox-dark", name: "Gruvbox Dark", preview: {"primary":"#282828","secondary":"#3c3836","accent":"#fe8019"}, vars: {"--bg":"#282828","--bg2":"#3c3836","--bg3":"#504945","--bg4":"#665c54","--text":"#ebdbb2","--text2":"#d5c4a1","--text3":"#bdae93","--text4":"#928374","--border":"#504945","--border2":"#665c54","--primary":"#fe8019","--primary-hover":"#fabd2f","--success":"#b8bb26","--warning":"#fabd2f","--error":"#fb4934","--info":"#83a598","--shadow":"rgba(0, 0, 0, 0.85)"}, ansi: {"black":"#282828","red":"#cc241d","green":"#98971a","yellow":"#d79921","blue":"#458588","magenta":"#b16286","cyan":"#689d6a","white":"#a89984","brightBlack":"#928374","brightRed":"#fb4934","brightGreen":"#b8bb26","brightYellow":"#fabd2f","brightBlue":"#83a598","brightMagenta":"#d3869b","brightCyan":"#8ec07c","brightWhite":"#ebdbb2"} },
+  { id: "solarized-dark", name: "Solarized Dark", preview: {"primary":"#002b36","secondary":"#073642","accent":"#268bd2"}, vars: {"--bg":"#002b36","--bg2":"#073642","--bg3":"#0d4b5a","--bg4":"#14606f","--text":"#93a1a1","--text2":"#839496","--text3":"#657b83","--text4":"#586e75","--border":"#0f4a58","--border2":"#1a6472","--primary":"#268bd2","--primary-hover":"#4ba6e8","--success":"#859900","--warning":"#b58900","--error":"#dc322f","--info":"#2aa198","--shadow":"rgba(0, 0, 0, 0.7)"}, ansi: {"black":"#073642","red":"#dc322f","green":"#859900","yellow":"#b58900","blue":"#268bd2","magenta":"#d33682","cyan":"#2aa198","white":"#eee8d5","brightBlack":"#002b36","brightRed":"#cb4b16","brightGreen":"#586e75","brightYellow":"#657b83","brightBlue":"#839496","brightMagenta":"#6c71c4","brightCyan":"#93a1a1","brightWhite":"#fdf6e3"} },
 
   // --- house dark palettes ---
   { id: "midnight-purple", name: "Midnight Purple", preview: {"primary":"#0f0a1a","secondary":"#1a1333","accent":"#a78bfa"}, vars: {"--bg":"#0f0a1a","--bg2":"#1a1333","--bg3":"#2d1b4e","--bg4":"#3f2766","--text":"#f3e8ff","--text2":"#e9d5ff","--text3":"#d8b4fe","--text4":"#c084fc","--border":"#6d28d9","--border2":"#7e22ce","--primary":"#a78bfa","--primary-hover":"#c4b5fd","--success":"#34d399","--warning":"#fbbf24","--error":"#f472b6","--info":"#a78bfa","--shadow":"rgba(0, 0, 0, 0.8)"} },
@@ -38,7 +56,7 @@ export const THEMES: Theme[] = [
   { id: "ember", name: "Ember", preview: {"primary":"#140d08","secondary":"#21150d","accent":"#fb923c"}, vars: {"--bg":"#140d08","--bg2":"#21150d","--bg3":"#332114","--bg4":"#452c1a","--text":"#fff7ed","--text2":"#ffedd5","--text3":"#fed7aa","--text4":"#fdba74","--border":"#7c2d12","--border2":"#9a3412","--primary":"#fb923c","--primary-hover":"#fdba74","--success":"#34d399","--warning":"#facc15","--error":"#f87171","--info":"#60a5fa","--shadow":"rgba(0, 0, 0, 0.8)"} },
   { id: "rosewood", name: "Rosewood", preview: {"primary":"#16090f","secondary":"#241019","accent":"#fb7185"}, vars: {"--bg":"#16090f","--bg2":"#241019","--bg3":"#3b1a28","--bg4":"#522437","--text":"#fff1f2","--text2":"#ffe4e6","--text3":"#fecdd3","--text4":"#fda4af","--border":"#881337","--border2":"#9f1239","--primary":"#fb7185","--primary-hover":"#fda4af","--success":"#34d399","--warning":"#fbbf24","--error":"#ef4444","--info":"#60a5fa","--shadow":"rgba(0, 0, 0, 0.8)"} },
   { id: "deep-sea", name: "Deep Sea", preview: {"primary":"#081517","secondary":"#0e2226","accent":"#2dd4bf"}, vars: {"--bg":"#081517","--bg2":"#0e2226","--bg3":"#163439","--bg4":"#1f464d","--text":"#ecfeff","--text2":"#cffafe","--text3":"#a5f3fc","--text4":"#67e8f9","--border":"#155e63","--border2":"#0e7490","--primary":"#2dd4bf","--primary-hover":"#5eead4","--success":"#4ade80","--warning":"#fbbf24","--error":"#fb7185","--info":"#22d3ee","--shadow":"rgba(0, 0, 0, 0.8)"} },
-  { id: "nord", name: "Nord", preview: {"primary":"#2e3440","secondary":"#3b4252","accent":"#88c0d0"}, vars: {"--bg":"#2e3440","--bg2":"#3b4252","--bg3":"#434c5e","--bg4":"#4c566a","--text":"#eceff4","--text2":"#e5e9f0","--text3":"#d8dee9","--text4":"#aab4c5","--border":"#4c566a","--border2":"#5e81ac","--primary":"#88c0d0","--primary-hover":"#8fbcbb","--success":"#a3be8c","--warning":"#ebcb8b","--error":"#bf616a","--info":"#81a1c1","--shadow":"rgba(0, 0, 0, 0.6)"} },
+  { id: "nord", name: "Nord", preview: {"primary":"#2e3440","secondary":"#3b4252","accent":"#88c0d0"}, vars: {"--bg":"#2e3440","--bg2":"#3b4252","--bg3":"#434c5e","--bg4":"#4c566a","--text":"#eceff4","--text2":"#e5e9f0","--text3":"#d8dee9","--text4":"#aab4c5","--border":"#4c566a","--border2":"#5e81ac","--primary":"#88c0d0","--primary-hover":"#8fbcbb","--success":"#a3be8c","--warning":"#ebcb8b","--error":"#bf616a","--info":"#81a1c1","--shadow":"rgba(0, 0, 0, 0.6)"}, ansi: {"black":"#3b4252","red":"#bf616a","green":"#a3be8c","yellow":"#ebcb8b","blue":"#81a1c1","magenta":"#b48ead","cyan":"#88c0d0","white":"#e5e9f0","brightBlack":"#4c566a","brightRed":"#bf616a","brightGreen":"#a3be8c","brightYellow":"#ebcb8b","brightBlue":"#81a1c1","brightMagenta":"#b48ead","brightCyan":"#8fbcbb","brightWhite":"#eceff4"} },
   { id: "carbon", name: "Carbon", preview: {"primary":"#0a0a0a","secondary":"#161616","accent":"#d4d4d4"}, vars: {"--bg":"#0a0a0a","--bg2":"#161616","--bg3":"#262626","--bg4":"#363636","--text":"#fafafa","--text2":"#e5e5e5","--text3":"#a3a3a3","--text4":"#8a8a8a","--border":"#404040","--border2":"#525252","--primary":"#d4d4d4","--primary-hover":"#fafafa","--success":"#4ade80","--warning":"#facc15","--error":"#f87171","--info":"#60a5fa","--shadow":"rgba(0, 0, 0, 0.9)"} },
   { id: "high-contrast-dark", name: "High Contrast Dark", preview: {"primary":"#000000","secondary":"#0d0d0d","accent":"#ffffff"}, vars: {"--bg":"#000000","--bg2":"#0d0d0d","--bg3":"#1a1a1a","--bg4":"#262626","--text":"#ffffff","--text2":"#ffffff","--text3":"#cccccc","--text4":"#999999","--border":"#ffffff","--border2":"#cccccc","--primary":"#ffffff","--primary-hover":"#cccccc","--success":"#00e676","--warning":"#ffd600","--error":"#ff1744","--info":"#40c4ff","--shadow":"rgba(0, 0, 0, 1)"} },
   { id: "colorblind-dark", name: "Colorblind Dark", preview: {"primary":"#101418","secondary":"#1a2027","accent":"#56b4e9"}, vars: {"--bg":"#101418","--bg2":"#1a2027","--bg3":"#263039","--bg4":"#33404c","--text":"#f8fafc","--text2":"#e2e8f0","--text3":"#cbd5e1","--text4":"#94a3b8","--border":"#475569","--border2":"#64748b","--primary":"#56b4e9","--primary-hover":"#85c8ef","--success":"#009e73","--warning":"#f0e442","--error":"#d55e00","--info":"#0072b2","--shadow":"rgba(0, 0, 0, 0.8)"} },
@@ -46,7 +64,7 @@ export const THEMES: Theme[] = [
   // --- community-proven light palettes ---
   { id: "github-light", name: "GitHub Light", preview: {"primary":"#ffffff","secondary":"#f6f8fa","accent":"#0969da"}, vars: {"--bg":"#ffffff","--bg2":"#f6f8fa","--bg3":"#eaeef2","--bg4":"#d0d7de","--text":"#1f2328","--text2":"#414852","--text3":"#656d76","--text4":"#8c959f","--border":"#d0d7de","--border2":"#afb8c1","--primary":"#0969da","--primary-hover":"#0550ae","--success":"#1a7f37","--warning":"#9a6700","--error":"#cf222e","--info":"#0969da","--shadow":"rgba(31, 35, 40, 0.15)"} },
   { id: "catppuccin-latte", name: "Catppuccin Latte", preview: {"primary":"#eff1f5","secondary":"#e6e9ef","accent":"#1e66f5"}, vars: {"--bg":"#eff1f5","--bg2":"#e6e9ef","--bg3":"#dce0e8","--bg4":"#ccd0da","--text":"#4c4f69","--text2":"#5c5f77","--text3":"#6c6f85","--text4":"#8c8fa1","--border":"#ccd0da","--border2":"#bcc0cc","--primary":"#1e66f5","--primary-hover":"#0b57d0","--success":"#40a02b","--warning":"#df8e1d","--error":"#d20f39","--info":"#179299","--shadow":"rgba(76, 79, 105, 0.15)"} },
-  { id: "solarized-light", name: "Solarized Light", preview: {"primary":"#fdf6e3","secondary":"#eee8d5","accent":"#268bd2"}, vars: {"--bg":"#fdf6e3","--bg2":"#eee8d5","--bg3":"#e3ddc9","--bg4":"#d3ceb8","--text":"#586e75","--text2":"#657b83","--text3":"#839496","--text4":"#93a1a1","--border":"#ddd6c1","--border2":"#c9c2ad","--primary":"#268bd2","--primary-hover":"#1a6fad","--success":"#859900","--warning":"#b58900","--error":"#dc322f","--info":"#2aa198","--shadow":"rgba(88, 110, 117, 0.15)"} },
+  { id: "solarized-light", name: "Solarized Light", preview: {"primary":"#fdf6e3","secondary":"#eee8d5","accent":"#268bd2"}, vars: {"--bg":"#fdf6e3","--bg2":"#eee8d5","--bg3":"#e3ddc9","--bg4":"#d3ceb8","--text":"#586e75","--text2":"#657b83","--text3":"#839496","--text4":"#93a1a1","--border":"#ddd6c1","--border2":"#c9c2ad","--primary":"#268bd2","--primary-hover":"#1a6fad","--success":"#859900","--warning":"#b58900","--error":"#dc322f","--info":"#2aa198","--shadow":"rgba(88, 110, 117, 0.15)"}, ansi: {"black":"#073642","red":"#dc322f","green":"#859900","yellow":"#b58900","blue":"#268bd2","magenta":"#d33682","cyan":"#2aa198","white":"#eee8d5","brightBlack":"#002b36","brightRed":"#cb4b16","brightGreen":"#586e75","brightYellow":"#657b83","brightBlue":"#839496","brightMagenta":"#6c71c4","brightCyan":"#93a1a1","brightWhite":"#fdf6e3"} },
 
   // --- house light twins: the dark palettes above, adapted to light surfaces ---
   { id: "midnight-purple-light", name: "Midnight Purple Light", preview: {"primary":"#faf5ff","secondary":"#f3e8ff","accent":"#7c3aed"}, vars: {"--bg":"#faf5ff","--bg2":"#f3e8ff","--bg3":"#e9d5ff","--bg4":"#d8b4fe","--text":"#2e1065","--text2":"#4c1d95","--text3":"#6d28d9","--text4":"#7c3aed","--border":"#d8b4fe","--border2":"#c084fc","--primary":"#7c3aed","--primary-hover":"#6d28d9","--success":"#059669","--warning":"#d97706","--error":"#db2777","--info":"#7c3aed","--shadow":"rgba(109, 40, 217, 0.25)"} },
@@ -65,6 +83,30 @@ export const THEMES: Theme[] = [
 export const DEFAULT_THEME = "github-dark";
 
 /**
+ * The decorative and second-flavour palettes, demoted behind a "more themes"
+ * disclosure in the picker — kept for tinkering, never removed. Anything NOT in
+ * this set is a curated default, so a new serious theme shows up front with no
+ * extra flag, the same way the rest of this file avoids per-theme booleans.
+ */
+export const EXPERIMENTAL_THEME_IDS = new Set<string>([
+  "github-dark-dimmed", "catppuccin-macchiato", "catppuccin-frappe",
+  "midnight-purple", "dark", "dark-blue", "forest", "ember", "rosewood", "deep-sea",
+  "midnight-purple-light", "light", "blue-light", "forest-light", "ember-light",
+  "rosewood-light", "deep-sea-light", "nord-light",
+  // The old neutral pair — superseded as defaults by Graphite/Porcelain, kept here.
+  "carbon", "paper",
+]);
+
+/** Dark by the luminance of its background — no per-theme flag needed. Shared by
+ *  the picker to split each list into a dark run and a light one. */
+export function isDarkTheme(t: Theme): boolean {
+  const hex = (t.vars["--bg"] ?? "#000").replace("#", "");
+  const v = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex;
+  const n = parseInt(v, 16);
+  return 0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255) < 128;
+}
+
+/**
  * Paint the app in a theme.
  *
  * `sync` carries the palette out to tmux and nvim, and defaults to off because
@@ -75,8 +117,15 @@ export function applyTheme(id: string, { sync = false } = {}) {
   const known = THEMES.find((x) => x.id === id);
   const t = known || THEMES[0];
   const root = document.documentElement;
-  for (const [k, v] of Object.entries(t.vars)) root.style.setProperty(k, v);
+  // A floor under the dim tiers before they are painted. Thirty-odd themes each
+  // picked --text2/3/4 by eye, and 555 places in this app ask for one of them —
+  // including plenty of text that is not chrome. A theme that already clears
+  // its target comes through untouched; see floorTiers.
+  const vars = floorTiers(t.vars as Record<string, string>);
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   root.setAttribute("data-theme", t.id);
+  // Lay the chosen accent over the theme's primary, so it survives a switch.
+  applyAccent();
   // Only ever persist a theme that exists. An id we don't recognise still gets
   // painted in the fallback, but writing that fallback back to storage would
   // turn one bad read into the permanent loss of a real choice.
@@ -97,14 +146,76 @@ export function pickTheme(id: string) {
 }
 
 function syncTheme(t: Theme) {
+  // authHeaders, not a bare content-type: `/theme/sync` sits behind the same
+  // token gate as every other route, so a token-protected server (any box with
+  // remote access on) answered 401 and dropped the sync on the floor. Without
+  // this, tmux and nvim silently kept whatever palette was last written while a
+  // token was not yet required — days stale, and never a visible error.
   void fetch(`${SERVER}/theme/sync`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({ name: t.name, vars: t.vars }),
   }).catch(() => { /* no server (the static demo), or it declined */ });
 }
 
+/* System / Dark / Light — the mode toggle above the palette grid.
+ *
+ * "system" tracks the OS and flips between the two serious neutral defaults;
+ * "dark"/"light" pin one of them; picking any named palette from the grid drops
+ * the mode to "custom". The chosen theme id is still what gets persisted and
+ * applied — the mode is a thin layer over it, remembered so a system-mode user
+ * boots into the palette the OS is on right now, not the one it was on last. */
+export type ThemeMode = "system" | "dark" | "light" | "custom";
+export const SERIOUS_DARK = "graphite";
+export const SERIOUS_LIGHT = "porcelain";
+const MODE_KEY = "agentglass-theme-mode";
+
+export function themeMode(): ThemeMode {
+  try { const m = localStorage.getItem(MODE_KEY); if (m === "system" || m === "dark" || m === "light") return m; } catch {}
+  return "custom";
+}
+
+function systemIsDark(): boolean {
+  try { return window.matchMedia("(prefers-color-scheme: dark)").matches; } catch { return true; }
+}
+
+/** The theme id a mode resolves to right now (null for "custom"). */
+export function resolveThemeMode(mode: ThemeMode): string | null {
+  if (mode === "dark") return SERIOUS_DARK;
+  if (mode === "light") return SERIOUS_LIGHT;
+  if (mode === "system") return systemIsDark() ? SERIOUS_DARK : SERIOUS_LIGHT;
+  return null;
+}
+
+/** Remember the mode without re-applying — used when a grid pick is itself one
+ *  of the serious pair, so the segment stays in step without a double paint. */
+export function persistThemeMode(mode: ThemeMode): void {
+  try { if (mode === "custom") localStorage.removeItem(MODE_KEY); else localStorage.setItem(MODE_KEY, mode); } catch {}
+}
+
+/** Choose System/Dark/Light: remember it and apply the matching serious theme.
+ *  Returns the applied id so the caller can keep its own state in step. */
+export function applyThemeMode(mode: ThemeMode): string | null {
+  persistThemeMode(mode);
+  const id = resolveThemeMode(mode);
+  if (id) pickTheme(id);
+  return id;
+}
+
+/** Re-apply on OS change while in system mode. Call once at boot. */
+export function watchSystemTheme(): void {
+  try {
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+      if (themeMode() !== "system") return;
+      applyTheme(systemIsDark() ? SERIOUS_DARK : SERIOUS_LIGHT, { sync: IS_DESKTOP });
+    });
+  } catch { /* no matchMedia (headless) */ }
+}
+
 export function initialTheme(): string {
+  // System mode resolves live off the OS; pinned modes and custom picks are
+  // whatever was last written to the theme key (applyThemeMode/pickTheme wrote it).
+  if (themeMode() === "system") return resolveThemeMode("system") ?? DEFAULT_THEME;
   try { return localStorage.getItem("agentglass-theme") || DEFAULT_THEME; } catch { return DEFAULT_THEME; }
 }
 

@@ -1,63 +1,87 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { Portal } from "../Portal.tsx";
+// The shell. Not an overlay any more — the application.
+//
+// This was a modal: a Portal, a scrim, an AnimatePresence, and a frame inset
+// from the viewport that you opened with ⌘\ and closed with Escape. That shape
+// made sense when it was five separate panels being consolidated. It stopped
+// making sense the day it became the thing people are inside 99% of the time:
+// the app's front door was a screen nobody visited, and the thing everybody
+// used was a dialog on top of it.
+//
+// So the frame IS the window now. No scrim, no open/close, nothing to return
+// to — and the dashboard did not disappear, it moved into the rail beside every
+// other view, entire and unchanged.
+//
+// Mounting changed with it. Every view used to mount as soon as the workspace
+// opened and stay mounted for the life of the process, which is what kept a
+// half-written commit message alive while you looked at the diff. That is still
+// true of a view you have BEEN to; what changed is that a view you have never
+// opened does not exist yet. On a fresh window that is one view rather than
+// eight, and the dashboard — fourteen panels and a poll every four seconds — is
+// not among them until you ask for it.
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ViewRail, type RailPip } from "./ViewRail.tsx";
 import { VIEWS, saveLastView, type ViewId } from "./views.ts";
 import { subscribe as subscribeChats, attentionCount, listChats, newChat, requestChatFocus, setActiveChatId, update as updateChat } from "../../lib/chatStore.ts";
+import { FilesView } from "../FilesPanel.tsx";
+import { TasksView } from "../TasksPanel.tsx";
+import { subscribeReminders, firedCount } from "../../lib/reminderStore.ts";
 import { GitView } from "../GitPanel.tsx";
 import { DiffView } from "../ChangesModal.tsx";
 import { PrView } from "../PrPanel.tsx";
 import { DockerView } from "../DockerPanel.tsx";
 import { TermView, subscribeSessions, liveSessionCount } from "../TerminalPanel.tsx";
 import { ChatView } from "../ChatPanel.tsx";
-import { DynamicIsland, NOTCH_BAND } from "./DynamicIsland.tsx";
+import { BrowserView } from "../BrowserPanel.tsx";
+import { requestTermReview } from "../../lib/termReview.ts";
 
-const BODY = {
-  git: GitView,
-  diff: DiffView,
-  pr: PrView,
-  docker: DockerView,
-  term: TermView,
-  chat: ChatView,
-} as const;
-
-/** One overlay, six views.
+/**
+ * Views that keep running with the door shut.
  *
- *  Every view mounts as soon as the workspace opens and stays mounted until it
- *  closes — switching only flips visibility. That is the whole point: the old
- *  five-separate-modals shape tore a panel down on every switch, so a commit
- *  message half-written in git evaporated the moment you looked at the diff.
- *  Polling is gated on `active` rather than on mount, so the four views you
- *  aren't looking at keep their state without costing anything on the network.
+ * Everything else is free when it is not on screen — that is the contract this
+ * shell exists for. These two are the deliberate exceptions and they are not an
+ * oversight: a terminal holds a pty and a chat holds a stream, and unmounting
+ * either would kill a session nobody asked to end. The cost is real, and it is
+ * the price of them being sessions rather than screens.
  */
+const KEEP_RUNNING = new Set<ViewId>(["term", "chat"]);
+
+/*
+ * There is no fleet column here, and there was one for about an hour.
+ *
+ * The argument for it was "know what each agent is doing without leaving the
+ * work". Built and used, it did not hold: the dashboard's own session panel
+ * already says all of it and says it better, most rows on a real machine are
+ * `tmp · SessionStart` rather than anything actionable, and it charged 190px of
+ * every view for the privilege. The one thing it was genuinely for — noticing
+ * that something wants you — belongs to the top bar, which interrupts from
+ * every view and costs no width at all.
+ */
+
 export function Workspace({
-  open, view, onView, onClose, onSkills, chatFocusId,
+  view, onView, onSkills, onSettings, onMachine, chatFocusId, dashboard, prJump,
 }: {
-  open: boolean;
   view: ViewId;
   onView: (v: ViewId) => void;
-  onClose: () => void;
   onSkills: () => void;
+  onSettings: () => void;
+  onMachine: (tab: "ports" | "resources") => void;
   chatFocusId?: string | null;
+  /** The dashboard is a view like any other, but its data lives at the root
+   *  (the live socket feeds the chat store too), so it arrives already built
+   *  and is handed its own `active` here like everything else. */
+  dashboard: (active: boolean) => React.ReactNode;
+  /** A pull-request errand another panel sent — see lib/openPrs.ts. */
+  prJump?: import("../../lib/openPrs.ts").PrJump | null;
 }) {
-  // Same reason as App's onClose: this reaches a view's effect dependencies,
-  // and a fresh arrow each render is a remount nobody asked for.
   const openChat = useCallback(() => onView("chat"), [onView]);
 
   /**
    * Start a chat already pointed at a directory, with a prompt waiting.
    *
-   * The prompt lands in the composer rather than being sent: a PR review is a
-   * real Claude run that costs real tokens, and it should not begin because you
-   * clicked a button one pane over. You read it, then you send it.
-   *
-   * `requestChatFocus` rather than `setActiveChatId` alone, because the panel
-   * reads the first and only writes the second: without it the chat was created
-   * and filled behind whichever tab was already up.
-   *
-   * A seeded tab that was never sent is reused rather than duplicated. Clicking
-   * the same button twice means "show me that again", not "give me a second
-   * copy of it"; a review already under way is left alone.
+   * The prompt lands in the composer rather than being sent: a review is a real
+   * Claude run that costs real tokens, and it should not begin because you
+   * clicked a button one pane over. A seeded tab that was never sent is reused
+   * rather than duplicated — clicking twice means "show me that again".
    */
   const openChatWith = useCallback((cwd: string, prompt: string, title: string) => {
     const spare = listChats().find((c) => c.cwd === cwd && c.title === title && !c.messages.length && !c.sending);
@@ -67,123 +91,111 @@ export function Workspace({
     requestChatFocus(chat.id);
     onView("chat");
   }, [onView]);
-  const frameRef = useRef<HTMLDivElement>(null);
 
+  /** Send a pull request review to the user's own tmux, and go there to watch
+   *  it. Left as a request rather than called directly: the terminal view owns
+   *  the socket, and may not be mounted when the button is pressed. */
+  const reviewInTerminal = useCallback((root: string, number: number) => {
+    requestTermReview(root, number);
+    onView("term");
+  }, [onView]);
+
+  const frameRef = useRef<HTMLDivElement>(null);
   const chatWaiting = useSyncExternalStore(subscribeChats, attentionCount, attentionCount);
   const shells = useSyncExternalStore(subscribeSessions, liveSessionCount, liveSessionCount);
+  const firedReminders = useSyncExternalStore(subscribeReminders, firedCount, firedCount);
 
   const pips: Partial<Record<ViewId, RailPip>> = {
     chat: chatWaiting > 0 ? { count: chatWaiting } : {},
     term: shells > 0 ? { dot: true } : {},
+    // The count of things shouting at you, not the size of your backlog: a
+    // hundred open tasks is a normal Tuesday, and a badge that said so would
+    // be ignored within a day.
+    tasks: firedReminders > 0 ? { count: firedReminders } : {},
   };
 
-  useEffect(() => { if (open) saveLastView(view); }, [open, view]);
-
-  // Focus the frame on open so Escape and the rail's arrow keys work without
-  // needing a click first.
+  /**
+   * Which views have ever been opened.
+   *
+   * A view enters this set the first time you go to it and never leaves, which
+   * is what preserves the state everything here depends on — a filter typed in
+   * the diff, a repo picked in git, a scroll position in a pull request. What it
+   * does NOT do is build all of them up front for somebody who only wanted a
+   * terminal.
+   */
+  const [visited, setVisited] = useState<Set<ViewId>>(() => new Set<ViewId>([view]));
   useEffect(() => {
-    if (!open) return;
+    setVisited((cur) => (cur.has(view) ? cur : new Set(cur).add(view)));
+    saveLastView(view);
+  }, [view]);
+
+  const mounted = useMemo(
+    () => VIEWS.filter((v) => visited.has(v.id) || KEEP_RUNNING.has(v.id)),
+    [visited],
+  );
+
+  // Focus the frame on mount, so the rail's arrow keys and the view shortcuts
+  // work without a click first.
+  useEffect(() => {
     const id = requestAnimationFrame(() => frameRef.current?.focus());
     return () => cancelAnimationFrame(id);
-  }, [open]);
+  }, []);
 
   return (
-    <Portal>
-      <AnimatePresence>
-        {open && (
-          <>
-            <motion.div
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              transition={{ duration: 0.12 }}
-              // No backdrop-filter. A blur re-runs over whatever sits beneath it
-              // every time that repaints, and beneath this is an animating
-              // dashboard in a software-composited webview, so the blur was
-              // charged to the CPU on every frame. The scrim alone reads the
-              // same at this opacity.
-              className="fixed inset-0" style={{ zIndex: 10000, background: "rgba(0,0,0,0.72)" }}
-              onClick={onClose}
-            />
-            {/* The top padding is the notch's band, and the height is clamped
-                so the frame can never grow back into it. Centring alone was not
-                enough: 95vh leaves 2.5vh of clearance, which is 28px on a 1123px
-                window — less than the strip is tall, so it covered the view's
-                header and ate clicks meant for it. Reserving the band makes the
-                overlap zero at every window size instead of at most of them. */}
-            <div
-              className="fixed inset-0 flex items-center justify-center px-3 pb-3 pointer-events-none"
-              style={{ zIndex: 10001, paddingTop: NOTCH_BAND }}
-            >
-              <motion.div
-                ref={frameRef}
-                tabIndex={-1}
-                role="dialog"
-                aria-label="Workspace"
-                // Opacity only, and briefly. A spring on scale/y re-rasterises a
-                // 95vw x 95vh surface on every frame of the transition, which is
-                // what made opening the workspace feel like a stall instead of a
-                // switch.
-                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                transition={{ duration: 0.12, ease: "easeOut" }}
-                // Fills its padding box rather than picking its own 95vw/95vh:
-                // the container already states the margins (12px at the sides
-                // and bottom, the notch's band at the top), and a viewport
-                // percentage on top of that made the side gaps four times the
-                // bottom one — 50px against 12px on this display.
-                className="w-full rounded-2xl flex pointer-events-auto outline-none overflow-hidden"
-                style={{
-                  height: `calc(100vh - ${NOTCH_BAND + 12}px)`,
-                  background: "var(--bg2)",
-                  border: "1px solid color-mix(in srgb, var(--border) 60%, transparent)",
-                  boxShadow: "0 30px 80px -20px rgba(0,0,0,0.8)",
-                }}
-              >
-                <ViewRail view={view} onSelect={onView} onClose={onClose} onSkills={onSkills} pips={pips} />
+    <div ref={frameRef} tabIndex={-1} className="flex-1 min-h-0 flex outline-none">
+      <ViewRail view={view} onSelect={onView} onSkills={onSkills}
+        onSettings={onSettings} onMachine={onMachine} pips={pips} />
 
-                <div className="relative flex-1 min-w-0">
-                  {VIEWS.map((v) => {
-                    const View = BODY[v.id];
-                    const active = v.id === view;
-                    return (
-                      <div
-                        key={v.id}
-                        // `visibility`, not `display:none`: xterm's fit addon
-                        // measures its container, and a display:none parent
-                        // measures 0x0, which is how a hidden terminal comes
-                        // back reflowed to a single column.
-                        //
-                        // NOT `content-visibility: hidden`: these views are
-                        // absolutely stacked and chat is last in the DOM, so a
-                        // content-visibility box still hit-tests and the hidden
-                        // top view swallows clicks meant for the active one
-                        // beneath it. `visibility: hidden` does not.
-                        className="absolute inset-0 flex flex-col min-h-0"
-                        style={{ visibility: active ? "visible" : "hidden" }}
-                        aria-hidden={!active}
-                      >
-                        {/* term and chat can dismiss the workspace from the
-                            inside — Shift+Esc in the shell, Escape in the
-                            composer — so they alone need onClose. */}
-                        <View
-                          active={active}
-                          {...(v.id === "chat" ? { focusId: chatFocusId, onClose } : {})}
-                          {...(v.id === "git" ? { onOpenChat: openChat } : {})}
-                          {...(v.id === "pr" ? { onOpenChatWith: openChatWith } : {})}
-                          {...(v.id === "term" ? { onClose } : {})}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-              </motion.div>
+      <div className="relative flex-1 min-w-0">
+        {mounted.map((v) => {
+          const active = v.id === view;
+          return (
+            <div
+              key={v.id}
+              // `visibility`, not `display:none`: xterm's fit addon measures its
+              // container, and a display:none parent measures 0x0 — which is how
+              // a hidden terminal comes back reflowed to a single column.
+              //
+              // NOT `content-visibility: hidden`: these views are absolutely
+              // stacked and a content-visibility box still hit-tests, so a
+              // hidden view on top would swallow clicks meant for the active one
+              // beneath it. `visibility: hidden` does not.
+              className="absolute inset-0 flex flex-col min-h-0"
+              style={{ visibility: active ? "visible" : "hidden" }}
+              aria-hidden={!active}
+            >
+              {v.id === "dash"
+                ? dashboard(active)
+                : <Body id={v.id} active={active} openChat={openChat} openChatWith={openChatWith} prJump={prJump}
+                    reviewInTerminal={reviewInTerminal} chatFocusId={chatFocusId} />}
             </div>
-            {/* One ambient status surface for the whole overlay -- clock, plan
-                meters, live-work pulse and the events worth looking up for. It
-                hangs off the frame's top edge and covers every view, which is
-                why it lives here rather than inside any one of them. */}
-            <DynamicIsland />
-          </>
-        )}
-      </AnimatePresence>
-    </Portal>
+          );
+        })}
+      </div>
+    </div>
   );
+}
+
+/** The non-dashboard views, and the props each one wants. Split out so the map
+ *  above stays about mounting rather than about plumbing. */
+function Body({ id, active, openChat, openChatWith, reviewInTerminal, chatFocusId, prJump }: {
+  id: ViewId; active: boolean;
+  openChat: () => void;
+  openChatWith: (cwd: string, prompt: string, title: string) => void;
+  reviewInTerminal: (root: string, number: number) => void;
+  chatFocusId?: string | null;
+  prJump?: import("../../lib/openPrs.ts").PrJump | null;
+}) {
+  switch (id) {
+    case "files": return <FilesView active={active} />;
+    case "tasks": return <TasksView active={active} onOpenChatWith={openChatWith} />;
+    case "git": return <GitView active={active} onOpenChat={openChat} />;
+    case "diff": return <DiffView active={active} />;
+    case "pr": return <PrView active={active} onOpenChatWith={openChatWith} onReviewInTerminal={reviewInTerminal} jumpTo={prJump} />;
+    case "docker": return <DockerView active={active} />;
+    case "term": return <TermView active={active} />;
+    case "chat": return <ChatView active={active} focusId={chatFocusId} />;
+    case "browser": return <BrowserView active={active} />;
+    default: return null;
+  }
 }

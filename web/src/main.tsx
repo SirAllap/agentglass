@@ -3,16 +3,25 @@ import ReactDOM from "react-dom/client";
 import App from "./App.tsx";
 import { MobileApp } from "./mobile/MobileApp.tsx";
 import { PairScreen } from "./PairScreen.tsx";
-import { adoptServer } from "./lib/api.ts";
+import { adoptServer, IS_DESKTOP } from "./lib/api.ts";
 import { ticketFromUrl, clearTicketFromUrl } from "./lib/pairing.ts";
 import { phoneLayoutNow } from "./lib/viewport.ts";
 import { followServerChanges } from "./lib/desktop.ts";
-import { applyTheme, initialTheme, watchThemeStorage } from "./lib/themes.ts";
+import { applyTheme, initialTheme, watchThemeStorage, watchSystemTheme } from "./lib/themes.ts";
 import { restoreScale } from "./lib/uiScale.ts";
 import "./index.css";
+import "./fonts.ts"; // bundled monospace faces — see fonts.ts
 
-applyTheme(initialTheme());
+// Re-broadcast on boot, not only on a deliberate pick: the persisted theme IS
+// the user's last deliberate choice, and without this the machine's tmux/nvim
+// kept whatever palette was synced the last time the switcher was clicked —
+// days stale — while the cockpit itself moved on. Gated to the desktop shell so
+// a phone or a paired browser opening the cockpit never repaints the host's
+// terminals; see IS_DESKTOP.
+applyTheme(initialTheme(), { sync: IS_DESKTOP });
 watchThemeStorage();
+// When the mode is "System", follow the OS between the two serious defaults live.
+watchSystemTheme();
 // The webview always launches at 100%, so the saved zoom has to be re-asked for
 // on every start. Fire-and-forget: it resolves a tick later and the window
 // reflows into it, which is far less jarring than blocking the first paint.

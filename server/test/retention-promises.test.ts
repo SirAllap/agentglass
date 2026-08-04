@@ -31,12 +31,13 @@ describe("the promises SECURITY.md makes about retention", () => {
       "db.ts:events",
       "db.ts:events_fts",
       "db.ts:gates",
+      "db.ts:reminders",
       "db.ts:sessions",
     ]);
-    // …and all four are inside pruneOldRows, bounded by the cutoff.
+    // …and all five are inside pruneOldRows, bounded by the cutoff.
     const prune = src.slice(src.indexOf("export function pruneOldRows"));
     const body = prune.slice(0, prune.indexOf("\n}\n"));
-    for (const t of ["events_fts", "events", "sessions", "gates"]) {
+    for (const t of ["events_fts", "events", "sessions", "gates", "reminders"]) {
       expect(body, `DELETE FROM ${t} escaped pruneOldRows`).toContain(`DELETE FROM ${t}`);
     }
   });
@@ -75,7 +76,14 @@ describe("the promises SECURITY.md makes about retention", () => {
    * tripwire quietly stops being one. So the exception is listed, and the test
    * below makes it earn its place on every run.
    */
-  const REVIEWED = new Set(["/pair/forget"]);
+  const REVIEWED = new Set([
+    "/pair/forget",
+    // Deletes a task in Taskwarrior — the user's own list, in their own store,
+    // which agentglass reads and does not record. Nothing of ours is removed,
+    // and refusing a task manager the ability to delete a task would be an odd
+    // reading of a promise about telemetry. The test below holds it to that.
+    "/tasks/write/delete",
+  ]);
 
   test("the reviewed exceptions still touch no stored data", () => {
     const idx = read("server/src/index.ts");

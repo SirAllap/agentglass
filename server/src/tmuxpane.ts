@@ -174,6 +174,39 @@ export async function listPanes(): Promise<string[]> {
  *  The command is wrapped so the pane outlives the CLI: when `claude` exits —
  *  crash, /exit, an OOM kill — the pane stays with a line saying so, instead of
  *  vanishing and leaving the UI to infer what happened from an absence. */
+/** The tmux arguments that start a pane. Exported so the shape can be asserted
+ *  without starting a tmux server — the bug this guards against was invisible
+ *  from the outside, and reproducing it needs a machine whose login shell is not
+ *  POSIX. */
+export function newSessionArgv(name: string, cwd: string, argv: string[]): string[] {
+  const quoted = argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
+  const cmd = `${quoted}; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' "$?"; exec sleep 86400`;
+  return [
+    "new-session", "-d",
+    "-s", name,
+    "-c", cwd,
+    // A generous fixed size. The pane is never shown as a terminal in the app —
+    // the chat is rendered from the transcript — but Claude Code lays its TUI out
+    // to the pane width, and a narrow pane makes the text it writes to the
+    // transcript no different while making an attached human's view miserable.
+    "-x", "200", "-y", "50",
+    // Run by `sh`, explicitly, rather than handed to tmux as a bare string.
+    //
+    // A bare string is executed with the *user's login shell*, and `cmd` is
+    // POSIX: `$?`, `exec`, `;`. On a machine whose shell is fish that is a
+    // syntax error — "In fish, please use $status" — so the command died
+    // instantly, the session went with it, and the tmux server exited leaving
+    // an orphaned socket behind. What the chat then reported was "the pane
+    // never became ready in 45s" with an empty screen under it, because by the
+    // time anything looked there was nothing left to look at. Nothing about
+    // that message points at a shell.
+    //
+    // The pane is ours, not a place anybody types: `sh` is the right shell for
+    // it whatever the user has chosen for themselves.
+    "sh", "-c", cmd,
+  ];
+}
+
 export async function startPane(name: string, cwd: string, argv: string[]): Promise<TmuxResult> {
   if (!validPaneName(name)) return { ok: false, stdout: "", stderr: "invalid pane name" };
   // The one call in this module that CREATES something. Everything else asks
@@ -183,19 +216,7 @@ export async function startPane(name: string, cwd: string, argv: string[]): Prom
   if (IS_TEST && !process.env.AGENTGLASS_TMUX_SOCKET) {
     return { ok: false, stdout: "", stderr: "refusing to start a pane in tests without AGENTGLASS_TMUX_SOCKET" };
   }
-  const quoted = argv.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
-  const cmd = `${quoted}; printf '\\n[agentglass] the CLI exited (%s). This pane is kept for inspection.\\n' "$?"; exec sleep 86400`;
-  return tmux([
-    "new-session", "-d",
-    "-s", name,
-    "-c", cwd,
-    // A generous fixed size. The pane is never shown as a terminal in the app —
-    // the chat is rendered from the transcript — but Claude Code lays its TUI out
-    // to the pane width, and a narrow pane makes the text it writes to the
-    // transcript no different while making an attached human's view miserable.
-    "-x", "200", "-y", "50",
-    cmd,
-  ]);
+  return tmux(newSessionArgv(name, cwd, argv));
 }
 
 export async function killPane(name: string): Promise<void> {
