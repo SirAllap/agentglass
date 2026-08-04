@@ -183,6 +183,10 @@ Two things about retention are easy to get wrong:
 - **The rollup has no expiry at all.** Nothing prunes it, and there is no path
   in the product that removes a row from it. It is designed to be kept for
   years.
+- **The task list is read, not recorded.** Tasks live in your Taskwarrior store
+  and agentglass keeps no copy, so deleting one there is not this promise's
+  business — it is your list, and the app is a second window onto it. What
+  agentglass stores about tasks is the reminders you set, above.
 - **A reminder you have answered ages out; one you have not never does.** The
   reminders table is pruned on the same cutoff as the events, but only for rows
   that have been acknowledged or cancelled. A reminder still waiting for you is

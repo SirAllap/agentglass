@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -62,6 +62,12 @@ beforeAll(async () => {
 });
 
 afterAll(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* fine */ } });
+
+beforeEach(() => {
+  // Same reason as tasks-write.test.ts: one process, one module, two fixtures.
+  process.env.TASKDATA = join(dir, "data"); process.env.TASKRC = join(dir, "taskrc");
+  mod.__resetTaskPaths();
+});
 
 describe("reading the store", () => {
   it.skipIf(!has)("keeps a task due today out of overdue", async () => {

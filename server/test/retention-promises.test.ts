@@ -76,7 +76,14 @@ describe("the promises SECURITY.md makes about retention", () => {
    * tripwire quietly stops being one. So the exception is listed, and the test
    * below makes it earn its place on every run.
    */
-  const REVIEWED = new Set(["/pair/forget"]);
+  const REVIEWED = new Set([
+    "/pair/forget",
+    // Deletes a task in Taskwarrior — the user's own list, in their own store,
+    // which agentglass reads and does not record. Nothing of ours is removed,
+    // and refusing a task manager the ability to delete a task would be an odd
+    // reading of a promise about telemetry. The test below holds it to that.
+    "/tasks/write/delete",
+  ]);
 
   test("the reviewed exceptions still touch no stored data", () => {
     const idx = read("server/src/index.ts");

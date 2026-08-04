@@ -582,8 +582,26 @@ function LocalBody({ active }: { active: boolean }) {
   const [sel, setSel] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
   const [remindFor, setRemindFor] = useState<string | null>(null);
+  const [input, setInput] = useState("");
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const today = todayStr();
   const byTask = data?.byTask ?? {};
+  const fp = data?.fingerprint;
+
+  /**
+   * Every write carries the fingerprint this list was read at.
+   *
+   * A conflict is not retried and not swallowed: the store moved, so the row
+   * that was on screen is not the row the click meant, and the only honest
+   * thing is to say so and re-render from what came back.
+   */
+  const write = useCallback(async (fn: () => Promise<{ ok: boolean; error?: string; conflict?: boolean }>) => {
+    const r = await fn();
+    if (!r.ok) setNote({ ok: false, text: r.error ?? "that did not go through" });
+    else setNote(null);
+    reload();
+    return r.ok;
+  }, [reload]);
   const setRemind = useCallback(async (t: LocalTask, civil: string) => {
     setRemindFor(null);
     await api.remind({ taskUuid: t.uuid, title: t.description, civil });
@@ -615,11 +633,37 @@ function LocalBody({ active }: { active: boolean }) {
     onRemind: () => setRemindFor((cur) => (cur === t.uuid ? null : t.uuid)),
     onCloseRemind: () => setRemindFor(null),
     onSetRemind: (civil: string) => void setRemind(t, civil),
+    onToggle: () => void write(() => (t.status === "completed" ? api.taskReopen(t.uuid, fp) : api.taskDone(t.uuid, fp))),
+    writable: cap.configured,
   });
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <NowBand onChanged={reload} />
+      {/* One field: filter and compose are the same box, because the thing you
+          typed and could not find is usually the thing you meant to add. */}
+      <div className="flex items-center gap-2 px-5 shrink-0" style={{ height: 36, borderBottom: edge(12) }}>
+        <span className="text-[12px]" style={{ color: "var(--text3)" }}>⌕</span>
+        <input value={input} onChange={(e) => setInput(e.target.value)}
+          onKeyDown={async (e) => {
+            if (e.key !== "Enter" || !input.trim()) return;
+            e.preventDefault();
+            if (await write(() => api.taskAdd(input, fp))) setInput("");
+          }}
+          spellCheck={false}
+          placeholder={cap.configured
+            ? "Filter, or type a task and press Enter — !h  #3  +tag  @project"
+            : "Filter"}
+          className="flex-1 min-w-0 bg-transparent outline-none text-[12px]"
+          style={{ color: "var(--text)", caretColor: "var(--primary)" }} />
+        <ParseStrip input={input} />
+      </div>
+      {note && (
+        <div className="px-5 py-1 text-[10.5px] shrink-0" style={{
+          color: note.ok ? "var(--success)" : "var(--warning)",
+          background: `color-mix(in srgb, var(--${note.ok ? "success" : "warning"}) 10%, transparent)`,
+        }}>{note.text}</div>
+      )}
       <div className="flex flex-1 min-h-0">
       <div className="agx-scroll flex-1 min-w-0 overflow-y-auto">
         {!open.length && <LocalEmpty cap={cap} done={done.length} />}
@@ -653,26 +697,41 @@ const Section = ({ label, tone }: { label: string; tone: string }) => (
   <div className="text-[8.5px] uppercase tracking-[0.2em] px-5 pt-3 pb-1" style={{ color: tone }}>{label}</div>
 );
 
-function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onCloseRemind, onSetRemind }: {
+function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onCloseRemind, onSetRemind, onToggle, writable }: {
   t: LocalTask; today: string; on: boolean; onPick: () => void;
   reminder?: import("../../../shared/types.ts").Reminder | null;
   remindOpen?: boolean; onRemind?: () => void; onCloseRemind?: () => void; onSetRemind?: (civil: string) => void;
+  onToggle?: () => void; writable?: boolean;
 }) {
   const isDone = t.status === "completed";
   const late = overdue(t, today);
   const dueToday = t.due === today;
   return (
-    <button onClick={onPick}
-      className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-[11.5px] hover:bg-white/5"
+    <div onClick={onPick} role="row" tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter") onPick(); }}
+      className="w-full text-left flex items-center gap-2.5 px-4 py-2 text-[11.5px] hover:bg-white/5 cursor-pointer"
       style={{
         borderBottom: edge(7),
         background: on ? "color-mix(in srgb, var(--primary) 15%, transparent)" : undefined,
         boxShadow: on ? "inset 2px 0 0 0 var(--primary)" : undefined,
       }}>
-      <span className="w-3.5 text-center shrink-0"
-        style={{ color: isDone ? "var(--text3)" : t.priority === "H" ? "var(--warning)" : t.priority ? "var(--text3)" : "var(--text4)" }}>
-        {isDone ? "✓" : t.priority ? "●" : "○"}
-      </span>
+      {/* The glyph is the switch. Completing is the thing done most and it
+          should not need a menu; reopening is the same press, because undoing a
+          misclick must be as cheap as the misclick. */}
+      {onToggle && writable ? (
+        <button onClick={(e) => { e.stopPropagation(); onToggle(); }}
+          title={isDone ? "Reopen" : "Mark done"}
+          aria-label={isDone ? `Reopen ${t.description}` : `Mark ${t.description} done`}
+          className="w-3.5 text-center shrink-0 rounded"
+          style={{ color: isDone ? "var(--text3)" : t.priority === "H" ? "var(--warning)" : t.priority ? "var(--text3)" : "var(--text4)" }}>
+          {isDone ? "✓" : t.priority ? "●" : "○"}
+        </button>
+      ) : (
+        <span className="w-3.5 text-center shrink-0"
+          style={{ color: isDone ? "var(--text3)" : t.priority === "H" ? "var(--warning)" : t.priority ? "var(--text3)" : "var(--text4)" }}>
+          {isDone ? "✓" : t.priority ? "●" : "○"}
+        </span>
+      )}
       <span className="flex-1 min-w-0 truncate" title={t.description}
         style={isDone ? { textDecoration: "line-through", color: "var(--text3)" } : { color: "var(--text)" }}>
         {t.description}
@@ -709,7 +768,7 @@ function TaskRow({ t, today, on, onPick, reminder, remindOpen, onRemind, onClose
           <RemindPopover task={t} onClose={onCloseRemind} onSet={onSetRemind} />
         )}
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -802,4 +861,61 @@ function LocalStrip({ active, onOpen }: { active: boolean; onOpen: () => void })
       )}
     </div>
   );
+}
+
+/**
+ * What the parser is about to keep, shown before Enter.
+ *
+ * The grammar is lossy by design — `+word` becomes a tag and leaves the text —
+ * and the only place that is dangerous is when the user meant the literal
+ * characters. Rendering the parse as it is typed makes that visible while it
+ * can still be undone, which is the difference between a shortcut and a trap.
+ */
+function ParseStrip({ input }: { input: string }) {
+  const p = useMemo(() => parseLocal(input), [input]);
+  if (!input.trim()) return null;
+  const seg = (text: string, color: string) => (
+    <span key={text} style={{ color }}>{text}</span>
+  );
+  const bits = [
+    p.description ? seg(`"${p.description}"`, "var(--text2)") : null,
+    p.priority ? seg(`!${p.priority}`, "var(--warning)") : null,
+    ...p.tags.map((t) => seg(`+${t}`, "var(--text3)")),
+    p.project ? seg(`@${p.project}`, "var(--info)") : null,
+    p.due ? seg(`→ ${p.due.slice(5)}`, "var(--text3)") : null,
+  ].filter(Boolean);
+  if (!p.description && bits.length) {
+    return <span className="text-[10px] shrink-0" style={{ color: "var(--error)" }}>That is all labels and no task.</span>;
+  }
+  return (
+    <span className="text-[10px] shrink-0 flex items-center gap-2 overflow-hidden whitespace-nowrap">
+      {bits}
+    </span>
+  );
+}
+
+/**
+ * The same grammar the server parses, for the strip above.
+ *
+ * Duplicated deliberately and kept small: the server is the one that decides
+ * what a write means, and this only has to be honest about what it is going to
+ * say. A shared module would drag the server's Bun imports into the bundle.
+ */
+function parseLocal(input: string): { description: string; priority: string | null; tags: string[]; project: string | null; due: string | null } {
+  const out = { description: "", priority: null as string | null, tags: [] as string[], project: null as string | null, due: null as string | null };
+  let s = input.replace(/\*([^*]+)$/u, " ");
+  s = s.replace(/(?:^|\s)!([hmlHML])(?=\s|$)/gu, (_, p: string) => { out.priority = p.toUpperCase(); return " "; });
+  s = s.replace(/(?:^|\s)#(\d{1,4})(?=\s|$)/gu, (_, n: string) => {
+    const d = new Date(); d.setDate(d.getDate() + Number(n));
+    const q = (x: number) => String(x).padStart(2, "0");
+    out.due = `${d.getFullYear()}-${q(d.getMonth() + 1)}-${q(d.getDate())}`;
+    return " ";
+  });
+  s = s.replace(/(?:^|\s)due:(\d{4}-\d{2}-\d{2})(?=\s|$)/gu, (_, d: string) => { out.due = d; return " "; });
+  s = s.replace(/(?:^|\s)\+([^\s]+)/gu, (m: string, t: string) =>
+    /^[\p{L}\p{N}_-]{1,40}$/u.test(t) ? (out.tags.push(t), " ") : m);
+  s = s.replace(/(?:^|\s)@([^\s]+)/gu, (m: string, p: string) =>
+    /^[\p{L}\p{N}._-]{1,60}$/u.test(p) ? ((out.project = p), " ") : m);
+  out.description = s.replace(/\s+/gu, " ").trim();
+  return out;
 }

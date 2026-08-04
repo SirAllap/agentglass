@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -449,6 +449,10 @@ const realApi = {
 
   // --- local tasks ---
   tasksList: (force = false) => get<TasksListResponse>(`/tasks/list${force ? "?force=1" : ""}`),
+  taskAdd: (input: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/add", { input, fingerprint }),
+  taskDone: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/done", { uuid, fingerprint }),
+  taskReopen: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/reopen", { uuid, fingerprint }),
+  taskDelete: (uuid: string, fingerprint?: string) => post<TaskWriteResponse>("/tasks/write/delete", { uuid, fingerprint }),
   reminders: (window: "live" | "upcoming" | "history" = "live") =>
     get<RemindersResponse>(`/tasks/reminders?window=${window}`),
   remind: (body: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) =>
@@ -937,6 +941,10 @@ const demoApi: typeof realApi = {
   // fabricated dataset in a browser tab. Empty and honest beats invented — a
   // fake port list would be the one screen in the tour that lies.
   tasksList: (_f?: boolean) => D({ ok: true, tasks: [], capability: { available: false, configured: false, reason: "not available in the demo" } }),
+  taskAdd: (_i: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskDone: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskReopen: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
+  taskDelete: (_u: string, _f?: string) => D({ ok: false, error: "not available in the demo" }),
   reminders: (_w?: "live" | "upcoming" | "history") => D({ ok: true, reminders: [] }),
   remind: (_b: { taskUuid?: string | null; title: string; civil: string; zone?: string; root?: string | null }) => D({ ok: false, error: "not available in the demo" }),
   reminderAck: (_i: string) => D({ ok: false }),

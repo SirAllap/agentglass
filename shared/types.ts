@@ -1971,6 +1971,20 @@ export interface TasksListResponse {
   /** The soonest live reminder per task uuid, so a list of rows can show its
    *  own without a request per row. */
   byTask?: Record<string, Reminder>;
+  /** What the store looked like when this was read. Handed back with a write as
+   *  its precondition: if the store has moved since, the row on screen is not
+   *  the row being acted on. */
+  fingerprint?: string;
+}
+
+export interface TaskWriteResponse {
+  ok: boolean;
+  error?: string;
+  /** The store moved underneath — the caller re-renders from `tasks` rather
+   *  than retrying, because a retry against a moved store is the clobber. */
+  conflict?: boolean;
+  tasks?: LocalTask[];
+  fingerprint?: string;
 }
 
 /**

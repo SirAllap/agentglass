@@ -60,7 +60,7 @@ import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
 import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
-import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep } from "./tasks.ts";
+import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, TASK_WRITE_ENABLED } from "./tasks.ts";
 import {
   addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
@@ -1620,6 +1620,8 @@ const server = Bun.serve<WsData>({
       return json({
         ok: !snap.error, tasks: snap.tasks, capability, error: snap.error,
         byTask: remindersFor(snap.tasks.map((t) => t.uuid)),
+        fingerprint: snap.fingerprint,
+        writeEnabled: TASK_WRITE_ENABLED,
       });
     }
     if (pathname === "/tasks/reminders") {
@@ -1704,6 +1706,23 @@ const server = Bun.serve<WsData>({
      * the server decides what runs, which is the same rule the review prompt
      * follows.
      */
+    if (pathname.startsWith("/tasks/write/") && req.method === "POST") {
+      // Every verb carries the fingerprint the client was looking at. A write
+      // whose precondition has moved answers 409 with the fresh list — it is
+      // never retried here, because retrying against a store that moved is
+      // exactly how the other writer's work gets reverted.
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const expect = typeof b.fingerprint === "string" ? b.fingerprint : undefined;
+      const uuid = String(b.uuid ?? "");
+      const r = pathname === "/tasks/write/add" ? await addTask(String(b.input ?? ""), expect)
+        : pathname === "/tasks/write/done" ? await completeTask(uuid, expect)
+        : pathname === "/tasks/write/reopen" ? await reopenTask(uuid, expect)
+        : pathname === "/tasks/write/delete" ? await deleteTask(uuid, expect)
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      if (r.ok) broadcast({ type: "tasks" });
+      return json(r, r.conflict ? 409 : r.ok ? 200 : 400);
+    }
     if (pathname.startsWith("/tasks/remind") && req.method === "POST") {
       // None of these touch Taskwarrior or its lock. That is what keeps the
       // engine working when the task list cannot be read at all.
