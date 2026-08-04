@@ -49,7 +49,7 @@ import {
   type RailPlace, type ViewId,
 } from "./workspace/views.ts";
 import { AppearancePane } from "./ThemePicker.tsx";
-import { InstallConsole } from "./InstallConsole.tsx";
+import { ShellConsole } from "./ShellConsole.tsx";
 
 /** A heading inside a Section, for a pane that answers the same question about
  *  two different sources. Without it "Quiet" and "Alert sounds" sit in one flat
@@ -1002,7 +1002,7 @@ function DepRow({ d, home }: { d: DepReport; home: string }) {
     {/* Expanded in place rather than in a modal: the row you clicked stays on
         screen above it, so what is being installed and why is still readable
         while you decide. */}
-    {console && canType && <InstallConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} />}
+    {console && canType && <ShellConsole command={d.install!} cwd={home} onClose={() => setConsole(false)} />}
     </div>
   );
 }

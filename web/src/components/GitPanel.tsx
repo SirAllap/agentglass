@@ -6,9 +6,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
-import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile } from "../../../shared/types.ts";
+import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile, TidyReport } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { BasePicker } from "./BasePicker.tsx";
+import { ShellConsole } from "./ShellConsole.tsx";
 import { RescueModal } from "./RescueModal.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { api } from "../lib/api.ts";
@@ -27,7 +28,7 @@ import { SidebarGrip } from "./SidebarGrip.tsx";
 
 const unifiedText = (c: GitFileChange) => c.hunks.map((h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n${h.lines.join("\n")}`).join("\n");
 
-type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "stashes" | "worktrees";
+type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "stashes" | "worktrees" | "tidy";
 
 /**
  * Views, grouped the way lazygit groups its panels.
@@ -37,16 +38,88 @@ type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "st
  * reflog are two readings of "history", so each pair sits under one heading and
  * you tab between them rather than hunting along a row of eight equal buttons.
  */
+/**
+ * What has piled up in this checkout, and the command that would clear it.
+ *
+ * Nothing here runs anything. Each finding shows exactly what it found and
+ * offers the line as text; pressing `>_` opens a real shell with that line
+ * typed at the prompt and stops. The Enter is the user's, on their own
+ * repository — which is the whole request this was built for: "tell me how to
+ * clean it, and make sure you touch nothing in git."
+ */
+function TidyView({ report, root, busy }: { report: TidyReport | null; root: string; busy: boolean }) {
+  const [open, setOpen] = useState<string | null>(null);
+  if (busy && !report) return <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>Looking through the checkout…</div>;
+  if (!report) return null;
+  if (report.error) return <div className="p-4 text-[11.5px]" style={{ color: "var(--error)" }}>{report.error}</div>;
+  if (!report.findings.length) {
+    return <div className="p-4 text-[11.5px]" style={{ color: "var(--text3)" }}>Nothing has piled up here — no stale branches, no dangling worktrees, no loose objects worth packing.</div>;
+  }
+  return (
+    <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2.5">
+      {report.findings.map((f) => {
+        const total = f.items.length + f.extra;
+        return (
+          <div key={f.id} className="rounded-lg overflow-hidden" style={{ border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>
+            <div className="flex items-start gap-3 px-3 py-2">
+              <span className="min-w-0 flex-1">
+                <span className="flex items-baseline gap-2">
+                  <span className="text-[12.5px]" style={{ color: "var(--text)" }}>{f.title}</span>
+                  <span className="text-[10px] tabular-nums" style={{ color: "var(--text3)" }}>{total}</span>
+                </span>
+                <span className="block text-[10.5px] mt-0.5" style={{ color: "var(--text2)" }}>{f.what}</span>
+              </span>
+              {/* Offered only where there is a line safe enough to offer. The
+                  stashes finding has none, deliberately, and says why. */}
+              {f.command && (
+                <button onClick={() => setOpen((v) => (v === f.id ? null : f.id))}
+                  className="shrink-0 text-[10.5px] px-2 py-1 rounded-lg whitespace-nowrap"
+                  style={open === f.id
+                    ? { color: "var(--text)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }
+                    : { color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 34%, transparent)" }}
+                  title="Open a shell here with the command typed in — you press Enter">
+                  {">_ Clean up"}
+                </button>
+              )}
+            </div>
+            {/* The names, because a count is not something anybody can agree to.
+                Deleting nine branches is a decision about nine branches. */}
+            <div className="px-3 pb-2 flex flex-wrap gap-1">
+              {f.items.map((i) => (
+                <span key={i} className="text-[10px] px-1.5 py-0.5 rounded truncate max-w-[280px]" title={i}
+                  style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--text) 6%, transparent)" }}>{i}</span>
+              ))}
+              {f.extra > 0 && <span className="text-[10px] px-1.5 py-0.5" style={{ color: "var(--text3)" }}>+{f.extra} more</span>}
+            </div>
+            {f.note && (
+              <div className="px-3 pb-2 text-[10px]" style={{ color: f.command ? "var(--text3)" : "var(--warning)" }}>{f.note}</div>
+            )}
+            {open === f.id && f.command && (
+              <div className="px-3 pb-3">
+                <ShellConsole command={f.command} cwd={root} onClose={() => setOpen(null)} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 const VIEW_GROUPS: { label: string; views: View[] }[] = [
   { label: "Files", views: ["changes"] },
   { label: "History", views: ["log", "reflog"] },
   { label: "Refs", views: ["branches", "remotes", "tags"] },
   { label: "Worktrees", views: ["worktrees"] },
   { label: "Stash", views: ["stashes"] },
+  // Last, and it earns the place: this is the tab you open when the others
+  // have got long, which is the only time it has anything to say.
+  { label: "Tidy", views: ["tidy"] },
 ];
 const VIEW_LABEL: Record<View, string> = {
   changes: "Changes", log: "Log", reflog: "Reflog", branches: "Branches",
   remotes: "Remotes", tags: "Tags", stashes: "Stashes", worktrees: "Worktrees",
+  tidy: "Tidy",
 };
 /** Left-to-right order — the order `[` / `]` walk, and the order the number
  *  keys index into. Derived from the groups so the two can't drift apart. */
@@ -137,6 +210,8 @@ function dirName(p: string, root: string) {
 const VIEW_KEYS: Record<View, [string, string][]> = {
   changes: [["j/k", "file"], ["space", "stage"], ["x", "discard"], ["`", "tree/flat"], ["-/=", "fold"]],
   log: [["j/k", "commit"]],
+  // Nothing to steer: the tab is a list of findings and a button per finding.
+  tidy: [],
   reflog: [["j/k", "entry"]],
   branches: [["j/k", "branch"], ["space", "switch"], ["d", "delete"]],
   // `space` is the harmless one on purpose — see rowAction: checkout and
@@ -559,6 +634,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [graph, setGraph] = useState<GitGraphLine[]>([]);
   const [stashes, setStashes] = useState<GitStash[]>([]);
   const [worktrees, setWorktrees] = useState<GitWorktree[]>([]);
+  const [tidy, setTidy] = useState<TidyReport | null>(null);
   /** The rescue prompt, and the promise deleteHeldByWorktrees() is parked on
    *  while it is open. Null means no prompt; resolving with null is a cancel. */
   const [rescue, setRescue] = useState<{ reports: WorktreeLeftovers[]; resolve: (v: Map<string, string[]> | null) => void; progress?: string } | null>(null);
@@ -806,6 +882,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     else if (view === "log") track(api.gitGraph(root, 500, logScope), (r) => { setGraph(r.lines); setGraphBranch(r.branch); });
     else if (view === "stashes") track(api.gitStashes(root), (r) => setStashes(r.stashes));
     else if (view === "worktrees") track(api.gitWorktrees(root), (r) => setWorktrees(r.worktrees));
+    else if (view === "tidy") track(api.gitTidy(root), setTidy);
     else if (view === "remotes") {
       // Two answers, because the pane asks two questions: which remotes there
       // are (the picker) and what is on the selected one (the list). Asked
@@ -1999,7 +2076,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                   </div>
                 )}
 
-                {view === "changes" ? (
+                {view === "tidy" ? (
+                  <TidyView report={tidy} root={root} busy={busyView === "tidy"} />
+                ) : view === "changes" ? (
                   <div className="flex-1 min-h-0 flex">
                     <div className="shrink-0 flex flex-col min-h-0" style={{ width: sidebarW }}>
                       {!tree?.clean && (

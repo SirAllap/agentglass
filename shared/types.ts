@@ -1809,6 +1809,25 @@ export interface RemoteStatus {
 // The server's machine.ts and files.ts are the authorities; these mirror them.
 
 /** One listening TCP socket. */
+/** One thing that has piled up in a checkout, and the line that clears it. */
+export interface TidyFinding {
+  id: string;
+  title: string;
+  what: string;
+  items: string[];
+  extra: number;
+  /** Null where there is no command safe enough to offer — see `note`. */
+  command: string | null;
+  note?: string;
+}
+
+export interface TidyReport {
+  root: string;
+  base: string;
+  findings: TidyFinding[];
+  error?: string;
+}
+
 export interface PortEntry {
   port: number;
   addr: string;

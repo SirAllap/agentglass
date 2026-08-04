@@ -1,6 +1,11 @@
 /**
  * A real shell, with the command already typed and the Enter left to you.
  *
+ * Built for installing a missing dependency; it turned out to be the shape any
+ * command with consequences wants, so tidying a git checkout uses it too. The
+ * name says shell rather than install because there are two callers now and
+ * the second one deletes branches.
+ *
  * The alternative was an Install button, and it is the wrong shape for this
  * job in three ways. Half of these installs need `sudo`, and an app that asks
  * for a password is an app you have to trust with it — here the password is
@@ -26,7 +31,7 @@ import { termOptions } from "../lib/termPrefs.ts";
 import { themeFromCss } from "./TerminalPanel.tsx";
 import { isRemoteScript } from "../../../shared/deps.ts";
 
-export function InstallConsole({ command, cwd, onClose }: {
+export function ShellConsole({ command, cwd, onClose }: {
   /** Typed into the shell verbatim, and never followed by a newline. */
   command: string;
   /** Where the shell opens. Which checkout hardly matters — `apt-get install`

@@ -103,6 +103,7 @@ import { notifyCapability, subscribeNotifications, notifyWatching, openNote } fr
 import { markIgnored } from "./ignored.ts";
 import { withEvidence } from "./evidence.ts";
 
+import { tidyReport } from "./tidy.ts";
 const PORT = Number(process.env.AGENTGLASS_PORT || 4000);
 /** When this process came up. /stats ships it so the dashboard's uptime is
  *  the server's, not the age of the oldest event in the database. */
@@ -1491,6 +1492,10 @@ const server = Bun.serve<WsData>({
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
     if (pathname === "/git/stashes") return json({ stashes: stashList(url.searchParams.get("root") || "") });
+    // What has piled up in a checkout, and the command that would clear it.
+    // Read-only by construction: the response carries commands as strings, and
+    // there is deliberately no endpoint anywhere that runs one.
+    if (pathname === "/git/tidy") return json(tidyReport(url.searchParams.get("root") || ""));
     // Every git command this server has run — the command log panel.
     if (pathname === "/git/commandlog") return json({ entries: gitCommandLog(Number(url.searchParams.get("since") || 0)) });
     // Every moment this process stopped answering, and what was running. The

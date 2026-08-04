@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport } from "../../../shared/types.ts";
 import { DEPS, type DepsResponse } from "../../../shared/deps.ts";
 import * as demo from "./demo.ts";
 
@@ -374,6 +374,7 @@ const realApi = {
   gitLog: (root: string, limit = 100) => get<{ commits: GitCommit[] }>(`/git/log?root=${encodeURIComponent(root)}&limit=${limit}`),
   gitCommitDiff: (root: string, hash: string) => get<{ changes: FileChange[] }>(`/git/commit-diff?root=${encodeURIComponent(root)}&hash=${encodeURIComponent(hash)}`),
   gitStashes: (root: string) => get<{ stashes: GitStash[] }>(`/git/stashes?root=${encodeURIComponent(root)}`),
+  gitTidy: (root: string) => get<TidyReport>(`/git/tidy?root=${encodeURIComponent(root)}`),
   gitRemotes: (root: string) => get<{ remotes: GitRemote[] }>(`/git/remotes?root=${encodeURIComponent(root)}`),
   /** Every branch on one remote, as the last fetch left them — the whole list,
    *  filtered and rendered progressively on this side. */
@@ -817,6 +818,7 @@ const demoApi: typeof realApi = {
   gitLog: (_root: string, _limit?: number) => D(demo.gitLog()),
   gitCommitDiff: (_root: string, hash: string) => D(demo.gitCommitDiff(hash)),
   gitStashes: (_root: string) => D(demo.gitStashes()),
+  gitTidy: (_root: string) => D({ root: "", base: "main", findings: [], error: "not available in the demo" }),
   gitCheckout: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitBranchCreate: (_root: string, _name: string) => D(demo.gitActionUnavailable()),
   gitBranchDelete: (_root: string, _name: string, _force: boolean) => D(demo.gitActionUnavailable()),
