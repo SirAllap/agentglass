@@ -1156,7 +1156,22 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
   const quiet = useSyncExternalStore(subscribeNotifyQuiet, notifyQuiet, () => false);
   const own = useSyncExternalStore(subscribeAppNotify, appNotify, () => true);
   const [notifyCap, setNotifyCap] = useState<NotifyCapability | null>(null);
-  useEffect(() => { if (open) void notifyCapability().then(setNotifyCap); }, [open]);
+  // Asked while the modal is open, and asked AGAIN while the answer is "we could
+  // not ask". The desktop shell starts its server a beat after the window, so a
+  // probe that lands in that gap used to leave this row reading "Unavailable —
+  // server unreachable" over a server that had been up for an hour.
+  useEffect(() => {
+    if (!open) return;
+    let dead = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const ask = () => void notifyCapability().then((c) => {
+      if (dead) return;
+      setNotifyCap(c);
+      if (c.transient) timer = setTimeout(ask, 2000);
+    });
+    ask();
+    return () => { dead = true; if (timer) clearTimeout(timer); };
+  }, [open]);
   const [enginePref, setEnginePref] = useState<ChatEnginePref>(() => chatEnginePref());
   // Asked while the modal is open rather than at startup: it is a subprocess
   // probe on the server, and nothing outside this row needs the answer.
@@ -1428,11 +1443,17 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                     <Group>From your desktop</Group>
                     <Toggle
                       on={sysNotify !== "off"}
-                      disabled={notifyCap ? !notifyCap.supported : true}
+                      // Disabled only on a verdict. "We could not reach the
+                      // server to ask" is not one, and greying the switch out
+                      // for it makes a passing startup race look like a machine
+                      // that cannot do this at all.
+                      disabled={notifyCap ? !notifyCap.supported && !notifyCap.transient : true}
                       onClick={() => setSysNotifyOn(sysNotify === "off")}
                       label="Mirror this machine's notifications"
                       hint={notifyCap && !notifyCap.supported
-                        ? `Unavailable — ${notifyCap.reason}`
+                        ? (notifyCap.transient
+                          ? `Checking — ${notifyCap.reason}`
+                          : `Unavailable — ${notifyCap.reason}`)
                         : "Slack, mail, calendar — whatever pops up behind agentglass while it is covering your screen. A copy, never an interception: your desktop still shows its own."} />
                     {sysNotify !== "off" && (
                       <>

@@ -33,7 +33,19 @@ export type SystemNote = {
    */
   goto?: { kind: "pr"; repo: string; number: number };
 };
-export type NotifyCapability = { supported: boolean; reason?: string };
+export type NotifyCapability = {
+  supported: boolean;
+  reason?: string;
+  /**
+   * We never got an answer — the server was unreachable or declined to say.
+   *
+   * Different from `supported: false`, which is a verdict about this machine and
+   * stands for the session. This one means "ask again": the desktop shell starts
+   * its server a beat after the window, so the first probe of a cold start can
+   * land before anything is listening.
+   */
+  transient?: boolean;
+};
 
 const KEY = "agentglass.sysNotify";
 /** The detail level to come back to when the switch is turned on again, so
@@ -174,18 +186,53 @@ export function subscribeNotifyQuiet(fn: (q: boolean) => void): () => void {
 }
 
 // ---------------------------------------------------------------------------
-// Capability. Asked once, cached, and never allowed to reject: a host that
-// cannot do this is a host where the feature is absent, not one where
-// something failed.
+// Capability.
+//
+// Asked once and never allowed to reject: a host that cannot do this is a host
+// where the feature is absent, not one where something failed.
+//
+// The distinction that matters, and that this did not use to make: "this
+// machine has no notification bus" is an ANSWER, and worth remembering for the
+// session. "I could not reach the server to ask" is not an answer at all, and
+// caching it is how the feature died on a cold start.
+//
+// Measured on the desktop app: the window comes up at 15:50:17 and the server
+// sidecar is listening at 15:51:21. The renderer's first probe lands in that
+// gap, gets a network error, and the cached "unavailable — server unreachable"
+// then outlived the server that had since started. The switch read as ON,
+// Settings read as unavailable, and nothing was watching the bus — the exact
+// shape of the original complaint, one layer down.
 // ---------------------------------------------------------------------------
 
 let capPromise: Promise<NotifyCapability> | null = null;
 
 export function notifyCapability(): Promise<NotifyCapability> {
-  capPromise ??= fetch(SERVER + "/notifications/capability", { headers: authHeaders() })
-    .then((r) => (r.ok ? (r.json() as Promise<NotifyCapability>) : { supported: false, reason: "server does not support it" }))
-    .catch(() => ({ supported: false, reason: "server unreachable" }));
+  capPromise ??= probeCapability();
   return capPromise;
+}
+
+async function probeCapability(): Promise<NotifyCapability> {
+  try {
+    const r = await fetch(SERVER + "/notifications/capability", { headers: authHeaders() });
+    // A non-2xx here is the server declining to say — an auth token that is not
+    // configured yet, a route from an older build. Also not an answer about
+    // this machine.
+    if (!r.ok) return unanswered(`the server replied ${r.status}`);
+    return (await r.json()) as NotifyCapability;
+  } catch {
+    return unanswered("the server was not reachable when we asked");
+  }
+}
+
+/** Not a verdict: drop the cache so the next caller asks again. */
+function unanswered(reason: string): NotifyCapability {
+  capPromise = null;
+  return { supported: false, transient: true, reason };
+}
+
+/** Tests only — the probe is a module singleton and each case needs a fresh one. */
+export function __resetNotifyCapability() {
+  capPromise = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -348,14 +395,35 @@ async function open() {
   opening = true;
   try {
     const cap = await notifyCapability();
+    if (!cap.supported) {
+      // Giving up here is right for a machine with no notification bus and
+      // wrong for a server that had not finished starting — and the second one
+      // leaves the switch reading ON with nothing watching, silently, until the
+      // app is restarted. So: a verdict stops, a non-answer comes back.
+      if (cap.transient) scheduleReopen();
+      return;
+    }
     // Re-read everything the await could have changed: the feature may have been
     // switched off while the probe was in flight, and a socket may have been
     // opened by the caller that lost this race.
-    if (!cap.supported || !wanted() || ws) return;
+    if (!wanted() || ws) return;
     attach();
   } finally {
     opening = false;
   }
+}
+
+/**
+ * Come back and try again, with the same backoff a dropped socket uses.
+ *
+ * Shared deliberately: "the server is not up yet" and "the server went away"
+ * are the same situation from here, and they were drifting apart as two copies
+ * of the same delay calculation.
+ */
+function scheduleReopen() {
+  if (retryTimer || !wanted()) return;
+  const delay = Math.min(30_000, 1000 * 2 ** retry++);
+  retryTimer = setTimeout(() => { retryTimer = null; retune(); }, delay);
 }
 
 function attach() {
@@ -379,12 +447,10 @@ function attach() {
   sock.onclose = () => {
     if (ws !== sock) return;
     ws = null;
-    if (!wanted()) return;
     // Backing off rather than hammering: the common reason for a close is that
     // the server went away, and it is not coming back any faster for being
     // asked every second.
-    const delay = Math.min(30_000, 1000 * 2 ** retry++);
-    retryTimer = setTimeout(() => { retryTimer = null; retune(); }, delay);
+    scheduleReopen();
   };
   sock.onerror = () => { /* onclose does the recovery */ };
 }
