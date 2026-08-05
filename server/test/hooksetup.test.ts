@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { applyHooks, hookStatus, hooksDir, _internal } from "../src/hooksetup.ts";
+import { applyHooks, hookStatus, hooksDir, hookCommand, _internal } from "../src/hooksetup.ts";
 
 const { doInstall, doUninstall, isOurs, EVENTS, MARKER } = _internal;
 
@@ -50,6 +50,28 @@ describe("merge logic (pure, no disk)", () => {
     expect(cmd("SessionStart")).not.toContain("--add-chat");
     // the script path is quoted (spaced paths break the command otherwise)
     expect(cmd("Stop")).toContain('"/x/hooks/send_event.py"');
+  });
+
+  test("every command fails open, on every event", () => {
+    // Claude Code reads exit 2 from a PreToolUse hook as "deny", and python
+    // exits 2 when the script is missing. The path written here is absolute
+    // and outlives the clone, so a `git clean` or a rename turns the forwarder
+    // into a block on every tool call in every session — including the ones
+    // needed to undo it. Asserted on all nine because PreToolUse is the one
+    // that denies and the others are the ones nobody would think to check.
+    const cfg: any = {};
+    doInstall(cfg, "/x/hooks/send_event.py", "python3");
+    for (const [event] of EVENTS) {
+      expect(cfg.hooks[event][0].hooks[0].command, event).toEndWith("|| exit 0");
+    }
+  });
+
+  test("and on Windows, in the shell Windows actually runs", () => {
+    // `|| exit 0` in cmd.exe exits the whole shell, not the command — `exit /b`
+    // is the one that returns a status. Passed explicitly so this holds on the
+    // machine running the suite rather than only on a Windows one.
+    expect(hookCommand("py", "C:\\ag\\send_event.py", "Stop", true, true)).toEndWith("|| exit /b 0");
+    expect(hookCommand("python3", "/x/send_event.py", "Stop", true, false)).toEndWith("|| exit 0");
   });
 
   test("a third party's hooks in the same events are preserved", () => {
