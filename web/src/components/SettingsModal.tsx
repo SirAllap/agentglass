@@ -1526,19 +1526,20 @@ export function SettingsModal({ open, onClose, sound, onSound, scale, onZoom, on
                   )}
                   {pane === "terminal" && (
                   <Section title="Terminal">
-                    {/* GPU (WebGL) is faster on heavy output, but on some Linux
-                        GPU/compositor stacks it can leave the terminal blank
-                        white — so Auto uses it everywhere except Linux, where it
-                        picks Compatibility. Switch to Compatibility by hand if a
-                        shell ever goes blank; it applies to newly opened shells. */}
+                    {/* GPU (WebGL) is fastest but blanks white on some Linux
+                        GPU/compositor stacks; Canvas is the same drawing minus
+                        the GPU — fast, and no context to lose — so Auto uses GPU
+                        everywhere except Linux, where it uses Canvas. DOM is the
+                        last resort, and the slow one. All apply to new shells. */}
                     <Choice<RendererPref>
                       label="Terminal renderer"
-                      hint="GPU is faster; Compatibility is the safe choice if the terminal ever goes blank. Applies to newly opened shells."
+                      hint="GPU is fastest; Canvas is nearly as fast and never blanks; DOM is the slow fallback. Applies to newly opened shells."
                       value={renderer}
                       onPick={(v) => { setRenderer(v); setRendererPref(v); }}
                       options={[
                         { v: "auto", label: "Auto" },
                         { v: "gpu", label: "GPU" },
+                        { v: "canvas", label: "Canvas" },
                         { v: "dom", label: "Compatibility" },
                       ]} />
 
