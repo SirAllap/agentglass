@@ -19,8 +19,10 @@
     "setup": "python3 hooks/install_hooks.py",
     "setup:undo": "python3 hooks/install_hooks.py --uninstall",
     "connect": "python3 hooks/connect_otel.py",
+    "connect:opencode": "python3 hooks/connect_opencode.py",
+    "connect:opencode:undo": "python3 hooks/connect_opencode.py --undo",
     "connect:undo": "python3 hooks/connect_otel.py --undo",
-    "postinstall": "node -e \"console.log('agentglass: run [bun run setup] to wire Claude Code hooks, [bun run connect] for OTel CLIs')\""
+    "postinstall": "node -e \"console.log('agentglass: run [bun run setup] to wire Claude Code hooks, [bun run connect] for OTel CLIs, [bun run connect:opencode] for OpenCode')\""
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

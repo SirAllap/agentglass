@@ -972,6 +972,31 @@ bun run connect:undo     # unwire them again
 
 Start a new `gemini` / `codex` session after connecting and it streams straight in.
 
+### OpenCode — a plugin, because it has no OTLP exporter
+
+OpenCode does not export OpenTelemetry and has no hook system to wire, but it
+does load plain JS from its own plugin directory. So this one is a file copy:
+
+```bash
+bun run connect:opencode        # deploy the plugin (also: make connect-opencode)
+bun run connect:opencode:undo   # remove it again
+```
+
+It writes one dependency-free file to `~/.config/opencode/plugins/agentglass.js`
+— nothing else in your OpenCode config is touched, no `package.json` is edited
+and no package is installed. The plugin subscribes to OpenCode's event bus and
+POSTs the same normalised events to `/ingest` that the Claude Code hooks do, so
+prompts, tool calls, usage and subagents all land in the same fleet.
+
+Safe to re-run, and deliberately timid about a directory this app does not own:
+it refuses to replace an `agentglass.js` that is not ours, backs up before
+overwriting one that is, and on `--undo` leaves an unrelated plugin of that name
+exactly where it is. It also refuses to deploy at all if `AGENTGLASS_SERVER`
+points off this machine, rather than wiring up an endpoint and relying on the
+plugin to decline later.
+
+Start a new `opencode` session after connecting for it to take effect.
+
 ### Anything else — point its OTLP exporter here
 
 The receiver accepts OTLP/HTTP in **both protobuf (the SDK default) and JSON**, so
