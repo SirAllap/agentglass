@@ -269,7 +269,7 @@
   .end .acts{margin-bottom:18px;}
   .end .meta{font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--text4); line-height:2.1;}
 
-  /* ═══════════ MFD — one glass, six modes ═══════════ */
+  /* ═══════════ MFD — one glass, eight modes ═══════════ */
   .mfd-wrap{max-width:1120px; margin:0 auto; padding:40px 30px 0;}
   .mfd-head h2{font-family:var(--sans); font-size:clamp(26px,3.6vw,42px); font-weight:750; letter-spacing:-.034em; line-height:1.06; margin-bottom:14px; text-wrap:balance;}
   .mfd-head h2 em{font-style:normal; color:var(--primary);}
@@ -1671,10 +1671,10 @@
     </div>
     <div class="reel-screen">
       <img src="hero.gif" width="1100" height="619" loading="lazy" decoding="async" width="1100" height="619" loading="lazy" decoding="async"
-           alt="agentglass running: the live cockpit with spend, sessions and the radar, then the workspace — source control, diff review, Docker and chat, each one keystroke away.">
+           alt="agentglass running: the live cockpit with spend, sessions and the radar, then the workspace — source control, diff review, pull requests, tasks, Docker, chat and a file browser, each one keystroke away.">
       <div class="reel-glass" aria-hidden="true"></div>
     </div>
-    <figcaption>The cockpit, then the workspace — <b>git, diff, docker, chat</b>, one keystroke each. No cuts, no speed-up.</figcaption>
+    <figcaption>The cockpit, then the workspace — <b>git, diff, PR, tasks, docker, chat, files</b>, one keystroke each. No cuts, no speed-up.</figcaption>
   </figure>
 </section>
 
@@ -1682,12 +1682,12 @@
 <section class="mfd-wrap rise" id="workspace">
   <div class="mfd-head">
     <span class="eyebrow">The workspace</span>
-    <h2>One glass. <em>Six modes.</em> One key each.</h2>
-    <p class="mfd-sub">A cockpit does not give you six screens. It gives you one, and a way to change what it is.
-      <b>Press G, D, P, O, T or C</b> — on your actual keyboard.</p>
+    <h2>One glass. <em>Eight modes.</em> One key each.</h2>
+    <p class="mfd-sub">A cockpit does not give you eight screens. It gives you one, and a way to change what it is.
+      <b>Press G, D, P, I, O, T, C or E</b> — on your actual keyboard.</p>
   </div>
 
-  <div class="mfd" id="mfd" tabindex="0" role="group" aria-label="Multi-function display. Press G, D, P, O, T or C to change mode.">
+  <div class="mfd" id="mfd" tabindex="0" role="group" aria-label="Multi-function display. Press G, D, P, I, O, T, C or E to change mode.">
     <div class="brk tl"></div><div class="brk tr"></div><div class="brk bl"></div><div class="brk br"></div>
 
     <div class="mfd-bar">
@@ -1737,6 +1737,15 @@
         <div class="keys"><span class="kk">J K</span> move <span class="kk">↵</span> open <span class="kk">M</span> merge — OR inside a facet, AND across</div>
       </div>
 
+      <div class="pg" data-k="i">
+        <div class="pg-h">TASKS · GITHUB ISSUES · START →</div>
+        <div class="row"><span class="pr">#214</span><span class="f">cart total is a cent low on 3-for-2</span><span class="tag">bug</span><span class="tag dim">pricing</span></div>
+        <div class="row"><span class="pr">#209</span><span class="f">idempotency keys on the webhook</span><span class="tag">in&nbsp;progress</span></div>
+        <div class="row"><span class="pr">#198</span><span class="f">inventory drifts after a partial refund</span><span class="tag">bug</span><span class="tag dim">inventory</span></div>
+        <div class="row dim"><span class="pr">#187</span><span class="f">skeleton the product grid while it loads</span><span class="tag dim">good first issue</span></div>
+        <div class="keys"><span class="kk">↵</span> open <span class="kk">S</span> Start → cuts a worktree, a branch, or a Claude window</div>
+      </div>
+
       <div class="pg" data-k="o">
         <div class="pg-h">DOCKER · COMPOSE PROJECT shop</div>
         <div class="row"><i class="s ok"></i><span class="f">api</span><span class="n">up 4h</span><span class="tag">cpu 12% · 340MB</span></div>
@@ -1767,15 +1776,27 @@
         <div class="msg cl">The PSP returns 502 on ~2% of calls. <span class="tool">Read</span> src/routes/checkout.ts, <span class="tool">Grep</span> charge( — there is no retry. Adding one<span class="car"></span></div>
         <div class="keys"><span class="kk">↵</span> send <span class="kk">⇧↵</span> newline — the session joins the fleet on the radar</div>
       </div>
+
+      <div class="pg" data-k="e">
+        <div class="pg-h">FILES · TREE + NAME / CONTENT SEARCH</div>
+        <div class="row"><i class="s dm"></i><span class="f">src/</span><span class="tag dim">3 dirs · 8 files</span></div>
+        <div class="row"><i class="s ok"></i>M<span class="f">src/routes/checkout.ts</span><span class="n">+18 −4</span></div>
+        <div class="row"><span class="f">src/services/pricing.ts</span><span class="n">2.9 KB</span></div>
+        <div class="row"><span class="f">package.json</span><span class="n">1.2 KB</span></div>
+        <div class="row dim"><span class="f">README.md</span><span class="n">3.7 KB</span></div>
+        <div class="keys"><span class="kk">/</span> find by name <span class="kk">⇧/</span> search contents <span class="kk">↵</span> open — edits in the app's own editor</div>
+      </div>
     </div>
 
     <div class="osb" id="osb" role="tablist">
       <button data-k="g"><b>G</b><span>SRC</span></button>
       <button data-k="d"><b>D</b><span>DIFF</span></button>
       <button data-k="p"><b>P</b><span>PR</span></button>
+      <button data-k="i"><b>I</b><span>TASKS</span></button>
       <button data-k="o"><b>O</b><span>DOCKER</span></button>
       <button data-k="t"><b>T</b><span>TERM</span></button>
       <button data-k="c"><b>C</b><span>CHAT</span></button>
+      <button data-k="e"><b>E</b><span>FILES</span></button>
     </div>
   </div>
 </section>
@@ -1783,7 +1804,7 @@
 <div class="three rise">
   <div class="c"><h3>Every contact</h3><p>Every tool call, token and dollar. <b>Every provider.</b> Every project on the machine — history is there the moment you open it.</p></div>
   <div class="c"><h3>Range to compaction</h3><p><b>Distance from centre is context used.</b> A contact at the edge is about to forget half of what you told it. No terminal shows you that.</p></div>
-  <div class="c"><h3>Weapons free</h3><p>Not just a display. Diffs, commits, <b>pull requests merged</b>, docker, a real shell, chat. <b>One key each.</b></p></div>
+  <div class="c"><h3>Weapons free</h3><p>Not just a display. Diffs, commits, <b>pull requests merged</b>, issues to worktrees, docker, a real shell, chat, files. <b>One key each.</b></p></div>
   <div class="c"><h3>On your airframe</h3><p>SQLite on your disk. Loopback by default. <b>Nothing phones home.</b> The app ships its own server.</p></div>
 </div>
 
@@ -4005,7 +4026,7 @@ sudo apt install ./agentglass_*.deb</code>
 </script>
 <script>
 /* ══════════════════════════════════════════════════════════════════════
-   The MFD. One display, six modes, one key each — the same six keys the
+   The MFD. One display, eight modes, one key each — the same eight keys the
    app itself uses. The auto-cycle is not a carousel: it is POST /control
    driving the cockpit from outside, announced when it happens, and it
    stands down the moment you take the controls.
@@ -4019,14 +4040,16 @@ sudo apt install ./agentglass_*.deb</code>
   const annEl=document.getElementById("mfdAnn");
   const pages=[...screen.querySelectorAll(".pg")];
   const btns=[...document.querySelectorAll("#osb button")];
-  const KEYS=["g","d","p","o","t","c"];
+  const KEYS=["g","d","p","i","o","t","c","e"];
   const META={
     g:["SRC","acme/shop-api · main ↑2"],
     d:["DIFF","src/routes/checkout.ts · +18 −4"],
     p:["PR","acme/shop-api · 23 open · 2 need you"],
+    i:["TASKS","acme/shop-api · 5 open · #214 assigned to you"],
     o:["DOCKER","compose project shop · 4 containers"],
     t:["TERM","~/code/acme/shop-api · tmux 3 windows"],
-    c:["CHAT","opus 5 · acceptEdits · resumable"]
+    c:["CHAT","opus 5 · acceptEdits · resumable"],
+    e:["FILES","acme/shop-api · src/routes/checkout.ts"]
   };
   const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
   let cur="g", taken=false, timer=null, visible=false;
