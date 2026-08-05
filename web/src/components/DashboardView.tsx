@@ -163,7 +163,10 @@ export function DashboardView({
             Fleet, Cost and Latency under the middle column, Sessions under
             Alerts. */}
         <div className="shrink-0 grid grid-cols-1 xl:grid-cols-12 gap-3 h-auto xl:grid-rows-[196px_140px]">
-          <div className="xl:col-span-3 xl:row-span-2 min-w-0 min-h-0 h-[196px] xl:h-auto">
+          {/* Taller than its row-mates below xl: Usage spans two rows at xl, so
+              a 196px box that fits Cost or Latency leaves the quota headline
+              and the provider meters fighting over ~50px. */}
+          <div className="xl:col-span-3 xl:row-span-2 min-w-0 min-h-0 h-[350px] xl:h-auto">
             <UsageBox />
           </div>
           <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><CostByModel stats={stats} /></div>

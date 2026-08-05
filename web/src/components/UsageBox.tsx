@@ -4,7 +4,7 @@ import {
   subscribeProviderUsage, providerUsage, usageLoaded,
   usedColor, resetLabel, ageLabel,
 } from "../lib/usageStore.ts";
-import type { ProviderUsage } from "../../../shared/types.ts";
+import type { ProviderUsage, QuotaWindow } from "../../../shared/types.ts";
 
 /**
  * Plan quota for every provider the cockpit can drive.
@@ -17,16 +17,28 @@ import type { ProviderUsage } from "../../../shared/types.ts";
  */
 function Meter({ label, used, resets }: { label: string; used: number; resets: string | null }) {
   const color = usedColor(used);
+  const pct = Math.max(0, Math.min(100, used));
   return (
     <div className="flex items-center gap-2 min-w-0"
       title={`${label}: ${used}% used${resets ? ` — resets ${resetLabel(resets)}` : ""}`}>
       <span className="text-[9px] uppercase tracking-[0.14em] t-dim2 w-11 shrink-0">{label}</span>
       <div className="h-1.5 flex-1 min-w-0 rounded-full overflow-hidden"
         style={{ background: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
-        <div className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${Math.min(100, used)}%`, background: color }} />
+        {/* Nothing at all at 0%: a rounded nub reads as "some", and the one
+            number this panel must never overstate is consumption. */}
+        {pct > 0 && (
+          <div className="h-full rounded-full transition-all duration-700"
+            style={{
+              width: `${pct}%`,
+              background: `linear-gradient(90deg, color-mix(in srgb, ${color} 45%, transparent), ${color})`,
+            }} />
+        )}
       </div>
-      <span className="text-[11px] font-semibold tabular-nums shrink-0" style={{ color }}>{used}%</span>
+      {/* When a window comes back is only decision-relevant for the window
+          that is closest to running out, and that one is the headline, where
+          it gets the full "resets Wed 3:00 PM" rather than two cramped
+          characters. The rest keep it in the row's tooltip. */}
+      <span className="text-[11px] font-semibold tabular-nums shrink-0 w-8 text-right" style={{ color }}>{used}%</span>
     </div>
   );
 }
@@ -41,13 +53,16 @@ const DIVIDER = "1px solid color-mix(in srgb, var(--border) 30%, transparent)";
 function Row({ u, first }: { u: ProviderUsage; first: boolean }) {
   const age = ageLabel(u.observedAt);
   return (
-    <div className="flex flex-col gap-1 py-1.5" style={first ? undefined : { borderTop: DIVIDER }}>
+    <div className="flex flex-col gap-1.5 py-2.5" style={first ? undefined : { borderTop: DIVIDER }}>
       <div className="flex items-baseline gap-2 min-w-0">
         <span className="text-[11.5px] font-medium truncate" style={{ color: "var(--text)" }}>{u.label}</span>
         {u.plan && <span className="chip shrink-0 text-[9px] uppercase tracking-wide">{u.plan}</span>}
         {/* The age belongs next to the number it qualifies, not in a tooltip:
             a weeks-old Codex reading looks exactly like a fresh one. */}
         {u.available && age && <span className="ml-auto text-[9.5px] t-dim2 shrink-0">{age}</span>}
+        {/* No "no reading" chip here: the note under the row already says the
+            absence in its own words ("Quota not reported."), and a chip saying
+            it again is the duplication that copy was shortened to remove. */}
       </div>
       {u.available
         ? (u.windows.length
@@ -80,18 +95,63 @@ export function panelState(loaded: boolean, rows: ProviderUsage[] | null): "load
   return loaded ? "unreachable" : "loading";
 }
 
+/**
+ * The window that runs out first, across every provider.
+ *
+ * This is the question the panel is opened to answer — the meters below it are
+ * the detail behind it — so it gets stated once, in full size, instead of
+ * being left for the eye to find among five bars of similar length. Providers
+ * that cannot report are skipped rather than counted as zero: "nothing is
+ * close to its limit" and "nobody would say" are different answers.
+ */
+export function tightestWindow(rows: ProviderUsage[] | null): { provider: string; window: QuotaWindow } | null {
+  let best: { provider: string; window: QuotaWindow } | null = null;
+  for (const u of rows ?? []) {
+    if (!u.available) continue;
+    for (const w of u.windows) {
+      if (!best || w.usedPercent > best.window.usedPercent) best = { provider: u.label, window: w };
+    }
+  }
+  return best;
+}
+
+/** The headline: one number, big, in the colour its level has earned. */
+function Headline({ provider, window: w }: { provider: string; window: QuotaWindow }) {
+  const color = usedColor(w.usedPercent);
+  return (
+    <div className="shrink-0 pb-2.5" style={{ borderBottom: DIVIDER }}>
+      <div className="text-[9px] uppercase tracking-[0.16em] t-dim2">Closest to its limit</div>
+      <div className="flex items-baseline gap-2.5 mt-1 min-w-0">
+        <span className="font-sans text-[30px] font-semibold leading-none tabular-nums" style={{ color }}>
+          {w.usedPercent}%
+        </span>
+        <div className="flex flex-col min-w-0 gap-0.5">
+          <span className="text-[11px] truncate" style={{ color: "var(--text2)" }}>{provider} · {w.label}</span>
+          {w.resetsAt && <span className="text-[10px] t-dim2 truncate">resets {resetLabel(w.resetsAt)}</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function UsageBox() {
   const rows = useSyncExternalStore(subscribeProviderUsage, providerUsage, () => null);
   const loaded = useSyncExternalStore(subscribeProviderUsage, usageLoaded, () => false);
   const state = panelState(loaded, rows);
+  const top = tightestWindow(rows);
 
   return (
     <Panel eyebrow="Usage" title="Plan quota" right={<span className="text-[10px] t-dim2">By provider</span>}>
-      <div className="h-full min-h-0 overflow-y-auto agx-scroll flex flex-col">
+      <div className="h-full min-h-0 flex flex-col">
         {state === "loading" && <span className="text-[11px] t-dim2 py-2">Reading plan quota…</span>}
         {state === "unreachable" && <span className="text-[11px] t-dim2 py-2">Could not reach the server for plan quota.</span>}
         {state === "empty" && <span className="text-[11px] t-dim2 py-2 leading-snug">No connected agent reports plan quota. Connect one in Settings › Agents.</span>}
-        {rows && rows.map((u, i) => <Row key={u.provider} u={u} first={i === 0} />)}
+        {top && <Headline provider={top.provider} window={top.window} />}
+        {rows && (
+          <div className="min-h-0 flex-1 overflow-y-auto agx-scroll">
+            {rows.map((u, i) => <Row key={u.provider} u={u} first={i === 0} />)}
+          </div>
+        )}
       </div>
     </Panel>
   );
