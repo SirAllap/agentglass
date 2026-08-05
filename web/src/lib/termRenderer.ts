@@ -25,11 +25,11 @@
 //
 // localStorage `agentglass.term.webgl`:
 //   "gpu"        force WebGL
-//   "dom"/"off"  force the DOM renderer ("off" kept for back-compat, and it is
-//                what a context loss writes to remember the fallback)
+//   "canvas"     force the 2D canvas renderer — what a lost GL context drops to
+//   "dom"/"off"  force the DOM renderer ("off" kept for back-compat)
 //   "auto"/unset the platform default below
 export const RENDERER_KEY = "agentglass.term.webgl";
-export type RendererPref = "auto" | "gpu" | "dom";
+export type RendererPref = "auto" | "gpu" | "canvas" | "dom";
 
 const isLinux = () => {
   try { return /\bLinux\b/.test(navigator.userAgent) && !/Android/i.test(navigator.userAgent); }
@@ -41,6 +41,7 @@ export function rendererPref(): RendererPref {
   try {
     const v = localStorage.getItem(RENDERER_KEY);
     if (v === "gpu") return "gpu";
+    if (v === "canvas") return "canvas";
     if (v === "dom" || v === "off") return "dom";
     return "auto";
   } catch { return "auto"; }
@@ -54,23 +55,37 @@ export function setRendererPref(p: RendererPref): void {
   } catch { /* private mode — nothing we can do */ }
 }
 
-// A context loss this session drops us to DOM even if localStorage can't be written.
-let sessionForceDom = false;
+// A lost GL context this session pins us off WebGL even if localStorage can't be
+// written. Not "force DOM": we still want canvas, so this is its own flag.
+let sessionNoWebgl = false;
 
 /** Whether a newly created terminal should load the WebGL renderer. */
 export function wantsWebgl(): boolean {
-  if (sessionForceDom) return false;
+  if (sessionNoWebgl) return false;
   const p = rendererPref();
   if (p === "gpu") return true;
-  if (p === "dom") return false;
+  if (p === "dom" || p === "canvas") return false;
   return !isLinux(); // auto: GPU off on Linux by default, where the white-out lives
 }
 
-/** A lost context left the terminal blank — fall back to DOM for good. */
-export function fallBackToDom(): void {
-  sessionForceDom = true;
-  try { localStorage.setItem(RENDERER_KEY, "dom"); } catch { /* session flag still holds */ }
+/**
+ * A lost WebGL context left the terminal blank — drop off the GPU for good.
+ *
+ * To canvas, not DOM: canvas is the same drawing the GPU renderer does, minus
+ * the GPU — it has no GL context to lose, and it is far faster than the DOM
+ * renderer, which builds a node per cell and stalls on any burst of output (a
+ * build log, or the redraw storm of dragging a tmux pane border). Persisting
+ * "dom" here used to strand anyone who hit the white-out once on the slowest
+ * renderer for good; "canvas" keeps the speed without the context to lose.
+ */
+export function fallBackToCanvas(): void {
+  sessionNoWebgl = true;
+  try { localStorage.setItem(RENDERER_KEY, "canvas"); } catch { /* session flag still holds */ }
 }
+
+/** Test-only: clear the session no-WebGL latch so cases do not leak into each
+ *  other. Never called in the app — the latch is meant to hold for a session. */
+export function __resetRendererSession(): void { sessionNoWebgl = false; }
 
 /**
  * Should this terminal draw on a 2D canvas?
@@ -86,5 +101,5 @@ export function fallBackToDom(): void {
  * with no 2D canvas at all still lands on DOM, through the caller's catch.
  */
 export function wantsCanvas(): boolean {
-  return !wantsWebgl() && rendererPref() !== "dom" && !sessionForceDom;
+  return !wantsWebgl() && rendererPref() !== "dom";
 }
