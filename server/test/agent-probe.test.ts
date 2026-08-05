@@ -83,11 +83,17 @@ describe("what is on this machine", () => {
     }
   });
 
-  test("and every entry names the file connecting it would write", () => {
+  test("and every entry that writes a config names the file", () => {
     // It is a file in somebody's home directory, so it is said rather than
     // implied — including for Claude Code, whose path comes from the hook
     // installer rather than from the roster.
+    //
+    // A `chat` agent is exempt because there is no such file: it reports by
+    // being run from the chat panel, so connecting it writes nothing anywhere.
+    // An empty path is the honest answer, and inventing one to satisfy this
+    // would put a filename in the UI that nothing ever reads or writes.
     for (const r of probeAgents(never, never)) {
+      if (r.via === "chat") { expect(r.configPath, r.id).toBe(""); continue; }
       expect(r.configPath, r.id).toBeTruthy();
       expect(r.configPath.length, r.id).toBeGreaterThan(1);
     }

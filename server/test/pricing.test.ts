@@ -100,6 +100,50 @@ describe("costUsd", () => {
     expect(cost).toBe(DEFAULT_PRICE.input);
   });
 
+  test("MiniMax M3 and M2.7 are priced at their standard rates, not the doubled ones", () => {
+    // $0.60/$2.40 is the trap here, and it is a plausible one: it is M3's
+    // long-context rate (the whole request doubles past 512K input tokens) AND
+    // the price of the `-highspeed` M2.7 variant, so it turns up next to these
+    // models often enough to look like the headline number. Every other row in
+    // this table quotes the standard rate, and a table that quoted the ceiling
+    // for one vendor would report twice the real spend on ordinary turns.
+    for (const id of ["MiniMax-M3", "MiniMax-M2.7"]) {
+      expect(priceFor(id), id).toMatchObject({
+        input: 0.3,
+        output: 1.2,
+        cache_write: 0.375,
+        cache_read: 0.06,
+      });
+    }
+    expect(priceFor("MiniMax-M3")?.label).toBe("MiniMax M3");
+    expect(priceFor("MiniMax-M2.7")?.label).toBe("MiniMax M2.7");
+  });
+
+  test("a MiniMax model this table has not met is still priced as MiniMax", () => {
+    // shared/models.ts labels any `minimax` id "MiniMax", so without the
+    // catch-all row the next model out of that vendor would read as a named
+    // MiniMax model charged at DEFAULT_PRICE — $3/$15, ten times over. The
+    // catch-all has to stay LAST of the three, which is what the labels assert:
+    // hoisted above them it would swallow M3 and M2.7 too.
+    expect(priceFor("MiniMax-M4-preview")).toMatchObject({ label: "MiniMax", input: 0.3, output: 1.2 });
+    expect(priceFor("minimax-text-01")?.label).toBe("MiniMax");
+    expect(priceFor("MiniMax-M3")?.label).toBe("MiniMax M3");
+    expect(priceFor("MiniMax-M2.7")?.label).toBe("MiniMax M2.7");
+  });
+
+  test("MiniMax cost math sums each token class at its own rate", () => {
+    const cost = costUsd(
+      {
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_creation_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+      },
+      "MiniMax-M3",
+    );
+    expect(cost).toBeCloseTo(0.3 + 1.2 + 0.375 + 0.06, 10);
+  });
+
   test("missing usage fields count as zero", () => {
     expect(costUsd({}, "claude-sonnet-4")).toBe(0);
     expect(costUsd({ input_tokens: 0 }, null)).toBe(0);

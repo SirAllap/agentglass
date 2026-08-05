@@ -371,6 +371,17 @@ describe("the address you paste", () => {
     expect(parseViewUrl("https://notclickup.example/1/v/l/6-1-1")).toBe(null);
   });
 
+  it("refuses a host that merely ends in the domain", () => {
+    // `endsWith("clickup.com")` alone accepts these: they are somebody else's
+    // registrable domains, not a ClickUp subdomain.
+    for (const host of ["notclickup.com", "evilclickup.com", "clickup.com.example.net"]) {
+      expect(parseViewUrl(`https://${host}/9000001/v/l/6-901715483311-1`), host).toBe(null);
+    }
+    // The apex and a real subdomain still read.
+    expect(parseViewUrl("https://clickup.com/9000001/v/l/6-901715483311-1")?.kind).toBe("view");
+    expect(parseViewUrl("https://app.clickup.com/9000001/v/l/6-901715483311-1")?.kind).toBe("view");
+  });
+
   it("refuses nothing, and rubbish", () => {
     for (const bad of ["", "   ", "hello", "https://example.clickup.com/", "https://example.clickup.com/9000001"]) {
       expect(parseViewUrl(bad), JSON.stringify(bad)).toBe(null);

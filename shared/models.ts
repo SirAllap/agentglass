@@ -20,6 +20,7 @@
 /** Raw fragment → display label. Order matters: specific before general. */
 const MODEL_LABELS: [string, string][] = [
   ["kimi-code/k3", "K3"], ["kimi-k3", "K3"], ["moonshot/k3", "K3"],
+  ["minimax-m2.7", "MiniMax M2.7"], ["minimax-m3", "MiniMax M3"], ["minimax", "MiniMax"],
   ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"], ["fable", "Fable"],
   ["mythos", "Mythos"],
   ["gpt-4o-mini", "GPT-4o mini"], ["gpt-4o", "GPT-4o"],
@@ -63,6 +64,7 @@ export function providerOf(raw: string | null | undefined): string {
   if (/gpt|davinci|openai|\bo1\b|\bo3\b|\bo4\b/.test(m)) return "OpenAI";
   if (/gemini|palm|bison|flash|google|vertex/.test(m)) return "Google";
   if (/kimi|moonshot/.test(m) || m === "k3" || m.startsWith("k3[")) return "Moonshot";
+  if (/minimax/.test(m)) return "MiniMax";
   if (/deepseek/.test(m)) return "DeepSeek";
   if (/grok|xai/.test(m)) return "xAI";
   if (/mistral|mixtral|codestral/.test(m)) return "Mistral";

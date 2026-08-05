@@ -110,6 +110,23 @@ export const PRICE_TABLE: ModelPrice[] = [
   // Flat across the whole 1M window — there is no long-context tier to add.
   { match: ["kimi-code/k3", "kimi-k3", "moonshot/k3"], exact: ["k3"], label: "K3", input: 3, output: 15, cache_write: 3, cache_read: 0.3 },
 
+  // --- MiniMax ---
+  // Standard rates, like every other row here. M3 doubles the WHOLE request
+  // past 512K input tokens and M2.7 has a `-highspeed` variant at 2x, and both
+  // of those land on $0.60/$2.40 — which is how the long-context number ends up
+  // looking like the headline one. Cache creation is 1.25x input, cache reads a
+  // fifth of it, the same shape on both models.
+  // `exact` is compared against a lower-cased id (see priceFor), so these are
+  // spelled that way — `MiniMax-M2.7` here would simply never fire.
+  { match: ["minimax-m2.7"], exact: ["minimax-m2.7"], label: "MiniMax M2.7", input: 0.3, output: 1.2, cache_write: 0.375, cache_read: 0.06 },
+  { match: ["minimax-m3"], exact: ["minimax-m3"], label: "MiniMax M3", input: 0.3, output: 1.2, cache_write: 0.375, cache_read: 0.06 },
+  // The catch-all, and the reason it is here: shared/models.ts already labels
+  // any `minimax` id "MiniMax", so without a price row to match it a model this
+  // table has not met yet reads as a named MiniMax model billed at
+  // DEFAULT_PRICE — the Sonnet-tier $3/$15, ten times over. Wrong by a little
+  // beats wrong by an order of magnitude, and it must stay last of the three.
+  { match: ["minimax"], label: "MiniMax", input: 0.3, output: 1.2, cache_write: 0.375, cache_read: 0.06 },
+
   // --- others (approx) ---
   { match: ["deepseek"], label: "DeepSeek", input: 0.27, output: 1.1, cache_write: 0, cache_read: 0.07 },
   { match: ["grok"], label: "Grok", input: 2, output: 10, cache_write: 0, cache_read: 0 },

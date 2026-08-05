@@ -20,7 +20,7 @@
 
 Point any AI coding agent at agentglass — via Claude Code hooks or any OpenTelemetry GenAI exporter (OpenAI Codex, Gemini CLI, Bedrock, LangChain, LiteLLM…) — and watch every agent, tool call, token, and dollar move in real time. Cost tracking, tool-latency percentiles, error timelines, session lifecycles, one switch that filters the whole cockpit by provider, and 22 themes. It persists across reloads (unlike a pure in-browser stream).
 
-And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **Tasks** panel that turns a GitHub issue straight into a worktree, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), a **chat** panel that drives local Claude Code sessions, and a **file browser** that opens into the same editor — all a keystroke apart in one window, under a bar that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
+And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **Tasks** panel that turns a GitHub issue straight into a worktree, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), a **chat** panel that drives local Claude Code, Codex *and* Antigravity sessions, and a **file browser** that opens into the same editor — all a keystroke apart in one window, under a bar that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
 
 ### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/demo/)
 
@@ -217,17 +217,115 @@ Electron window compositor rather than xterm.
 
 ![terminal panel](.github/assets/terminal.png)
 
-### 💬 Chat — drive Claude sessions from the browser &nbsp;`c`
+### 💬 Chat — drive Claude, Codex and Antigravity sessions from the browser &nbsp;`c`
 
-Multi-chat against your **local `claude` CLI**: pick a repo/worktree, a model,
-and a permission mode (plan → default / acceptEdits → bypass), then converse —
+Multi-chat against your **local `claude`, `codex` or `agy` CLI**: pick a repo/worktree,
+a model, and a permission mode (plan → default / acceptEdits → bypass), then converse —
 replies stream in, tool calls appear as chips, and follow-ups resume the same
 session. Sessions you start here show up in the fleet like any other agent.
 
+#### Which models the Chat panel offers
+
+Every list is the CLI's own answer rather than a table in this repo. Codex reads
+its `models_cache.json`; Antigravity answers `agy models`. Claude Code publishes
+no list at all — there is no `claude models` subcommand, no `--list-models`, and
+nothing cached on disk — so its catalogue lives in
+[`shared/claude-models.json`](shared/claude-models.json).
+
+It is **data, not code**: edit that file and the dropdown follows on the next
+request. No rebuild, no restart.
+
+```json
+{ "id": "claude-opus-5", "display_name": "Claude Opus 5", "status": "active",
+  "release_date": "2026-07-24", "scheduled_shutdown_date": "2027-07-24" }
+```
+
+A model is offered until its `scheduled_shutdown_date` has passed — that date is
+the last day it appears, so it drops out the day after, and the panel stops
+offering retired models without anyone editing anything. `status` is recorded for
+the reader and is deliberately *not* a filter: a `superseded` model still answers
+until it is actually retired, and hiding it early would remove a choice that
+works. A row with no shutdown date never expires, which reads as "no retirement
+announced".
+
+To change the list without touching the checkout — a packaged install, or a
+read-only one — put your own copy at `~/.config/agentglass/claude-models.json`,
+or point `AGENTGLASS_CLAUDE_MODELS` at a file. Ids are validated against the same
+expression that guards the spawn, so an entry that could not be sent is never
+offered.
+
+#### A second agent: OpenAI Codex
+
+The same panel drives **`codex`** as well. When both CLIs are on the machine an
+agent picker appears next to the repo — it is switchable until the chat has a
+thread, then frozen, because a resume id belongs to the CLI that minted it and
+there is no meaning to handing a live conversation from one to the other.
+
+Codex brings its own vocabulary rather than borrowing Claude's. Its modes are
+filesystem sandboxes (**Read-only**, **Write in this repo**, **⚡ Full access**)
+instead of per-tool permissions, so there is no allowlist box for a Codex chat —
+it decides at the filesystem boundary, not per tool call. The model list is read
+from Codex's own `models_cache.json`, so it follows whatever your CLI currently
+offers instead of a table in this repo that goes stale on every release. Pasted
+and dropped images are Claude-only: `codex exec` takes images as file paths
+rather than content blocks, so the panel says so instead of dropping them
+silently.
+
+A Codex chat shows **tokens but no cost and no context meter**. `codex exec`
+reports neither a price nor a per-turn prompt size, and a bar drawn at 0 / 400k
+would be a claim about a session we know nothing about. Its token counts are
+cumulative for the whole thread rather than per turn, so they are assigned
+rather than added up — and its input count includes the cached part, which is
+subtracted back out so the "In" row means the same thing for both agents.
+
+Install and authenticate the Codex CLI separately, then make sure the `codex`
+executable is on the server's `PATH` when agentglass starts. The chat panel uses
+`codex exec --json` for new turns and `codex exec resume` for follow-ups; it does
+not replace the CLI's own login or configuration. Set `CODEX_HOME` when Codex
+keeps its state somewhere other than `~/.codex` — the model cache and rollout
+history are read from that location. To turn off the Codex integration while
+leaving Claude chat available, set `AGENTGLASS_CODEX_DISABLED=1` before starting
+the server.
+
+#### A third agent: Google Antigravity
+
+The panel drives **`agy`** as well — Google's agentic CLI, and a **separate
+product from the Gemini CLI**: a separate binary with separate state, whose
+model list spans Anthropic and open-weight models as well as Google's. Wiring
+one does nothing for the other, and the Gemini CLI keeps its own OpenTelemetry
+route onto the radar unchanged.
+
+Its four modes line up with Claude's — **Ask**, **Plan**, **Auto-accept edits**,
+**⚡ Bypass** — because it really does decide per tool call rather than by
+drawing a line around the filesystem. The model list comes from `agy models`, so
+it follows whatever your CLI currently offers. Like Codex, it takes images as
+file paths rather than content blocks, so pasted images are refused with a
+sentence instead of being dropped.
+
+Two honest gaps, both consequences of Antigravity exporting no telemetry of its
+own:
+
+- **Only chats started here appear in the fleet.** Claude reports through hooks
+  and Codex through OpenTelemetry; Antigravity reports through neither, so
+  agentglass turns the frames of the turns *it* runs into events. An `agy` you
+  ran in a terminal stays invisible.
+- **There is no ↩ resume for it, and no cost or context meter.** Antigravity
+  keeps each conversation as a SQLite database of protobuf blobs on an
+  undocumented internal schema, so there is no history to replay; and the stream
+  reports neither a price nor a context window. Tokens are shown, because those
+  it does report.
+
+Install and authenticate the CLI separately, and make sure `agy` is on the
+server's `PATH` when agentglass starts. To turn it off while leaving the other
+two, set `AGENTGLASS_ANTIGRAVITY_DISABLED=1`.
+
 **↩ resume** picks up a session that already exists — including one you started
-in a terminal — with its full context intact. Sessions that are still running
-are listed but can't be picked: a claude session has a single owner, and a
-second writer on the same transcript corrupts its history.
+in a terminal — with its full context intact, and opens it against the CLI that
+created it. Sessions that are still running are listed but can't be picked: a
+session has a single owner, and a second writer on the same transcript corrupts
+its history. For Codex the replayed history comes from its rollout in
+`$CODEX_HOME/sessions` (`~/.codex/sessions` by default), since the OpenTelemetry
+stream that puts Codex on the radar carries tool calls but none of the words.
 
 **What a session shows:** the conversation is a **timeline**, not only a chat
 log. Tool runs interleave with messages, each tool card carries the head of its
@@ -763,7 +861,8 @@ are:
   also have accounts, any of them could reach the server and its shell **as
   your user**. Set `AGENTGLASS_TOKEN` to lock it to you, and/or disable the
   capability surfaces: `AGENTGLASS_TERMINAL_DISABLED=1`, `AGENTGLASS_FS_BROWSE_DISABLED=1`,
-  `AGENTGLASS_CHAT_DISABLED=1`, `AGENTGLASS_GIT_WRITE_DISABLED=1`,
+  `AGENTGLASS_CHAT_DISABLED=1`, `AGENTGLASS_CODEX_DISABLED=1`,
+  `AGENTGLASS_ANTIGRAVITY_DISABLED=1`, `AGENTGLASS_GIT_WRITE_DISABLED=1`,
   `AGENTGLASS_DOCKER_WRITE_DISABLED=1`.
 - **⚠️ Exposing it to a network is a three-part deliberate act.** `AGENTGLASS_BIND=0.0.0.0`
   hands the shell, git write and Docker control to that network. Do it only with
@@ -774,9 +873,13 @@ are:
   If a device still can't reach it, the host firewall is dropping the packets:
   the panel names it and prints the command that opens the port to your subnet
   only. Tailnet (Tailscale) addresses count as private under `TRUST_LAN` too.
-- **⚠️ Browser-driven autonomy is opt-in.** The Chat panel's `bypassPermissions`
-  mode (`claude --dangerously-skip-permissions`) is honored only when
-  `AGENTGLASS_CHAT_BYPASS=1`; otherwise it's downgraded to a prompting default.
+- **⚠️ Browser-driven autonomy is opt-in.** The Chat panel's unattended modes —
+  `bypassPermissions` for Claude (`claude --dangerously-skip-permissions`),
+  `full-access` for Codex (`codex --dangerously-bypass-approvals-and-sandbox`)
+  and `always-proceed` for Antigravity (`agy --dangerously-skip-permissions`) —
+  are honored only when `AGENTGLASS_CHAT_BYPASS=1`. One opt-in covers all three,
+  since it is the same decision. Without it Claude is downgraded to a prompting
+  default, Codex to its read-only sandbox, and Antigravity to asking.
 - **Your data stays local.** Events live in a local SQLite file, written
   owner-only (`0700` dir, `0600` file) on POSIX; on Windows, which has no POSIX
   mode bits, it falls back to your account's default ACL. Outbound calls are few and all of them are yours to
@@ -956,7 +1059,11 @@ in its own buckets rather than charged again as ordinary input.
 | `AGENTGLASS_GIT_TIMEOUT_SECONDS` | `120` | Ceiling on a single git subprocess. |
 | `AGENTGLASS_FS_BROWSE_DISABLED` | — | `1` → disable directory completion in the project picker (`/fs/complete`). Separate from the terminal switch on purpose: disabling the shell should not leave the directory tree readable. |
 | `AGENTGLASS_CHAT_DISABLED` | — | `1` → disable the **Chat** panel (no `claude` sessions can be started from the browser). |
-| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's `bypassPermissions` mode (`claude --dangerously-skip-permissions`). Off by default: the mode is downgraded to a prompting default unless you opt in. |
+| `AGENTGLASS_CLAUDE_MODELS` | — | Path to the Claude model catalogue, overriding the copy in the checkout. See **Which models the Chat panel offers**. |
+| `AGENTGLASS_CODEX_DISABLED` | — | `1` → disable the **Codex** agent in the Chat panel, leaving Claude chat available. Codex is offered whenever a `codex` executable is on the server's `PATH`. |
+| `AGENTGLASS_ANTIGRAVITY_DISABLED` | — | `1` → disable the **Antigravity** agent in the Chat panel, leaving the other two available. Antigravity is offered whenever an `agy` executable is on the server's `PATH`. Independent of the Gemini CLI, which is a different product and is not driven from the chat panel at all. |
+| `CODEX_HOME` | `~/.codex` | Codex's own override for where it keeps its state. agentglass reads the model cache and the rollout history (resumed-thread transcripts) from there. |
+| `AGENTGLASS_CHAT_BYPASS` | — | `1` → allow the Chat panel's unattended modes: `bypassPermissions` for Claude (`--dangerously-skip-permissions`), `full-access` for Codex (`--dangerously-bypass-approvals-and-sandbox`) and `always-proceed` for Antigravity (`--dangerously-skip-permissions`). Off by default; one opt-in covers all three, since it is the same decision. |
 | `AGENTGLASS_CHAT_ENGINE` | `process` | `tmux` → new chats run as a live `claude` in a pane on agentglass's own tmux server instead of one `claude -p` per turn. Faster per turn (the CLI's session start is paid once, not every message) and the session is attachable from your own terminal; costs a warm CLI (~380MB, growing with use) for as long as the chat is warm. Per-chat in **Settings → Preferences → How new chats run**. |
 | `AGENTGLASS_TMUX_SOCKET` | `agentglass` | Socket name for that server (`tmux -L <name>`). It is always launched with a config of our own (`-f`), never your `~/.tmux.conf` — otherwise tpm/resurrect/continuum would come with it and continuum's autosave would overwrite your own saved layout in the shared `~/.tmux/resurrect/`. |
 | `AGENTGLASS_TMUX_IDLE_MINUTES` | `30` | Minutes a chat pane may sit unused before its CLI is reclaimed. The next turn resumes the session transparently (one slower turn). `0` disables eviction and keeps every warm chat resident. |
@@ -1020,6 +1127,9 @@ cannot be configured by `export` at all.
 | `GET /terminal/commands?root=` | Ready-to-run project commands: Makefile targets **with descriptions** + `package.json` scripts (runner-aware), from the repo root **and its subfolders** (`make -C …`), grouped by folder. |
 | `GET /chat/enabled` · `POST /chat/send` | Drive a local `claude` session in a repo (streamed JSONL) — gated by `AGENTGLASS_CHAT_DISABLED`. `send` takes an optional `engine` (`process` \| `tmux`). |
 | `GET /chat/attach` | The `tmux attach` command for a chat running on the pane engine, and whether its pane is still up. |
+| `GET /codex/enabled` · `POST /codex/send` | The same, driving a local `codex` session (`codex exec --json`, `codex exec resume` for follow-ups) — gated by `AGENTGLASS_CODEX_DISABLED`. `enabled` carries the model list read from Codex's own cache. |
+| `GET /codex/transcript?id=` | What a Codex thread said, read from its rollout under `$CODEX_HOME/sessions`. The OTel stream carries its tool calls but none of the prose, so this is what a resumed Codex chat replays. |
+| `GET /antigravity/enabled` · `POST /antigravity/send` | The same for a local `agy` session (`agy -p … --output-format stream-json`, `--conversation` for follow-ups) — gated by `AGENTGLASS_ANTIGRAVITY_DISABLED`. `enabled` carries the model list from `agy models`. `send` also turns the turn's own frames into events, since Antigravity reports to nothing else. There is no transcript route: its conversations are protobuf inside SQLite. |
 | `GET /prs/capability · /prs/list · /prs/detail · /prs/diff · /prs/commit-diff · /prs/branch-url` | Pull requests through the `gh` CLI, per repository: capability probe, the list for a scope tab, one PR's full detail, its diff, a single commit's diff. Cached, with check states filled by a second batched GraphQL pass. |
 | `POST /prs/{review,review-with,comment,reply,thread-resolved,react,edit,labels,reviewers,draft,update-branch,rerun,merge,close}` | Pull-request actions — **gated** by `AGENTGLASS_GIT_WRITE_DISABLED` and by the active scope. |
 | `POST /prs/review-prompt` | The prompt to review a PR with Claude, and the directory to run it in. Reads only, so the write switch does not gate it; the active scope still does. |

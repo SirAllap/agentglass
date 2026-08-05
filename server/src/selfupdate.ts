@@ -211,6 +211,44 @@ export async function updateStatus(): Promise<UpdateStatus> {
   return out;
 }
 
+/**
+ * The same question, answered for a caller outside the desktop shell.
+ *
+ * `updateStatus()` is desktop-only for good reasons — it names the clone on
+ * disk, names the remote the updater pulls from, and carries the tail of the
+ * last update log, which is raw script output with paths in it. None of that
+ * should reach a browser tab, and least of all a paired phone.
+ *
+ * But refusing outright cost more than it protected. The About pane is the only
+ * place this build's version is written down, and it reads it from here, so
+ * under `bun run dev`, under single-port mode, and on a phone the pane got a 403
+ * and sat on "Reading version…" for good. The identity of the build — version,
+ * commit, when it was built — is not a secret; the provenance is. So this
+ * answers the first and drops the second.
+ *
+ * No network, either: the update button is not on offer here, so there is
+ * nothing a `git ls-remote` could inform. `blocked` is what the pane renders
+ * instead of the button, and saying where updating does work beats a blank.
+ */
+export function viewerStatus(): UpdateStatus {
+  const info = buildInfo();
+  return {
+    ok: true,
+    available: false,
+    // Rebuilt field by field rather than spread-and-blank: a field added to
+    // BuildInfo later should have to be named here before it can leave the
+    // machine, instead of arriving on a phone because nobody thought about it.
+    info: {
+      version: info.version, commit: info.commit, builtAt: info.builtAt,
+      baseTag: info.baseTag, distance: info.distance,
+      source: "", origin: "",
+    },
+    branch: "", behind: 0, ahead: 0, incoming: [],
+    // `last` is deliberately absent — see above.
+    blocked: "self-update runs from the desktop app — open agentglass there to install a release",
+  };
+}
+
 let running = false;
 
 export async function startUpdate(): Promise<{ ok: boolean; error?: string; log?: string }> {

@@ -68,7 +68,7 @@ const GEMINI = () => join(dir, ".gemini", "settings.json");
 describe("what the pane is told", () => {
   test("every known agent, installed or not", async () => {
     const r = await agents();
-    expect(r.agents.map((a: Json) => a.id).sort()).toEqual(["claude-code", "codex", "gemini"]);
+    expect(r.agents.map((a: Json) => a.id).sort()).toEqual(["antigravity", "claude-code", "codex", "gemini"]);
   });
 
   test("with the file connecting it would write, under this machine's HOME", async () => {

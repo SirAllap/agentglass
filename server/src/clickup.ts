@@ -499,7 +499,9 @@ export function parseViewUrl(raw: string): ParsedViewUrl | null {
     // Not a URL — maybe somebody pasted just the path, or just an id.
   }
   // The domain, not the subdomain. Anything else is not ours to interpret.
-  if (host && !host.endsWith("clickup.com")) return null;
+  // The `.` matters: a bare endsWith("clickup.com") also accepts
+  // `notclickup.com` and `evilclickup.com`, which are somebody else's hosts.
+  if (host && host !== "clickup.com" && !host.endsWith(".clickup.com")) return null;
 
   const m = VIEW_PATH.exec(path);
   if (m) {
