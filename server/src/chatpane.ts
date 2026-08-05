@@ -121,7 +121,13 @@ const INPUT_ROWS = /^❯(.*)$/gm;
  *  that the pane would not accept the prompt. Both prompts had in fact been
  *  queued, and both ran. */
 const BOX_HINTS: RegExp[] = [
-  /^\s*Try "/,                                  // an empty box in a fresh session
+  // Anchored at BOTH ends, and that is the whole design of this list: a hint is
+  // the only thing on its row, while a prompt that merely starts the same way
+  // carries on past it. Unanchored, `Try "` also matched a real prompt —
+  // `Try "npm test" first, then look at the failures` — and a box holding one
+  // read as empty, so waitPasted never saw the paste land and the turn was
+  // reported as a pane that would not take it.
+  /^\s*Try ".*"\s*$/,                           // an empty box in a fresh session
   /^\s*Press up to edit queued messages\s*$/,   // an empty box with prompts queued
 ];
 
