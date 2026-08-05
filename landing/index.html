@@ -17,7 +17,7 @@
 <meta property="og:image" content="https://sirallap.github.io/agentglass/og.png">
 <meta property="og:image:width" content="2400">
 <meta property="og:image:height" content="1260">
-<meta property="og:image:alt" content="agentglass — a satellite pass: a lit world with one live contact riding its orbit, standing for a fleet of AI coding agents, and beside it a phone showing an agent held on a permission">
+<meta property="og:image:alt" content="agentglass — the glass over a fleet of AI coding agents: a heads-up radar with the headline EIGHT ARE FLYING, YOU CAN SEE ONE, and one contact resolved under the lens showing the app's live tool calls">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="agentglass — mission control for every AI coding agent">
 <meta name="twitter:description" content="Every AI coding agent on your machine, on one screen. Claude Code, Codex, Gemini CLI — watch every tool call, token and dollar live, and hold a dangerous call until you decide. Now from your phone, too.">
@@ -39,12 +39,12 @@
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   html{scroll-behavior:smooth;}
-  body{background:#030407; color:var(--text); font-family:var(--mono); -webkit-font-smoothing:antialiased; overflow-x:hidden;}
+  body{background:var(--page-base,#030407); color:var(--text); font-family:var(--mono); -webkit-font-smoothing:antialiased; overflow-x:hidden;}
   a{color:inherit; text-decoration:none;}
   ::selection{background:var(--primary); color:var(--bg);}
 
   .hud{position:relative; height:100svh; min-height:680px; overflow:hidden; cursor:crosshair;
-       background:#030407;}
+       background:var(--page-base,#030407);}
   .hud canvas{position:absolute; inset:0; width:100%; height:100%; display:block; z-index:2;}
   .hud.nogl canvas{display:none;}
   .chrome{position:absolute; inset:0; z-index:4; pointer-events:none; display:flex; flex-direction:column;}
@@ -551,7 +551,7 @@
      That is what looking down actually does — the HUD does not fall away,
      your eyeline leaves it. */
   .stagewrap{perspective:1500px; perspective-origin:50% 0%; position:sticky; top:0; z-index:0;}
-  .console{background:#030407; z-index:2;}
+  .console{background:var(--page-base,#030407); z-index:2;}
   .hud{
     transform-origin:50% 0%;
     transform:
@@ -2986,10 +2986,10 @@ sudo apt install ./agentglass_*.deb</code>
        out of the instrument, and it still repaints the page, the hero and the
        app behind the glass in one go. -->
   <div class="themer" id="themer" aria-label="Phosphor">
-    <span class="cap">Phosphor</span>
-    <span class="nm" id="thName">Midnight Purple</span>
+    <span class="cap">Theme</span>
+    <span class="nm" id="thName">Graphite</span>
   </div>
-  <p class="meta">Open source · MIT · Bun + SQLite · React + Vite · Electron · 22 phosphors · macOS, Linux, Windows</p>
+  <p class="meta">Open source · MIT · Bun + SQLite · React + Vite · Electron · Dark + Light · macOS, Linux, Windows</p>
 </section>
 
 <footer class="plate">
@@ -3063,22 +3063,34 @@ sudo apt install ./agentglass_*.deb</code>
   function applyTheme(id,remember){
     const t=THEMES.find(x=>x.id===id)||FALLBACK; T=t;
     for(const [k,v] of Object.entries(t.vars)) document.documentElement.style.setProperty(k,v);
+    // The hero is projected light on a dark combiner, so a dark theme keeps the
+    // deep near-black base it was tuned on; a light theme gets its own surface,
+    // which is what lets the page — and the headline over the glass — go light
+    // without sinking into it.
+    const light=lum(t.vars["--bg"])>=128;
+    document.documentElement.style.setProperty("--page-base", light ? t.vars["--bg"] : "#030407");
     document.getElementById("thName").textContent=t.name;
     [...document.querySelectorAll(".themer button")].forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.id===t.id)));
     if(remember){ try{ localStorage.setItem(LS_THEME,t.id); }catch(e){} }
   }
   const themer=document.getElementById("themer");
-  DARKS.forEach(t=>{
+  // Only the serious pair the app ships on — Dark (Graphite) and Light
+  // (Porcelain). No phosphor grid: the star theme is Graphite, and the choice
+  // here is the same Dark/Light the app offers, nothing more.
+  [["graphite","Dark"],["porcelain","Light"]].forEach(([id,label])=>{
+    const th=THEMES.find(x=>x.id===id); if(!th) return;
     const b=document.createElement("button");
-    b.dataset.id=t.id; b.title=t.name; b.setAttribute("aria-label",t.name);
-    b.style.background=t.vars["--primary"]; b.style.color=t.vars["--primary"];
-    b.addEventListener("click",()=>applyTheme(t.id,true)); themer.appendChild(b);
+    b.dataset.id=id; b.title=label; b.setAttribute("aria-label",label);
+    b.style.background=th.vars["--bg"]; b.style.color=th.vars["--primary"];
+    b.addEventListener("click",()=>applyTheme(id,true)); themer.appendChild(b);
   });
   (function(){
     let saved=null; try{ saved=localStorage.getItem(LS_THEME); }catch(e){}
-    const t=THEMES.find(x=>x.id===saved);
-    if(!t) return applyTheme(FALLBACK.id,false);
-    applyTheme(DARKS.includes(t) ? t.id : darkTwin(t).id, false);
+    // A saved Graphite/Porcelain pick wins; otherwise follow the OS like the
+    // app's "system" mode — Graphite when the OS is dark, Porcelain when light.
+    if(saved==="graphite"||saved==="porcelain") return applyTheme(saved,false);
+    const osLight = typeof matchMedia==="function" && matchMedia("(prefers-color-scheme: light)").matches;
+    applyTheme(osLight ? "porcelain" : "graphite", false);
   })();
   const V=k=>T.vars[k];
   function parse(c){ c=String(c).trim();
