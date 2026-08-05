@@ -27,7 +27,7 @@ import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow } from "../../
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
-import { wantsWebgl, wantsCanvas, fallBackToDom } from "../lib/termRenderer.ts";
+import { wantsWebgl, wantsCanvas, fallBackToCanvas } from "../lib/termRenderer.ts";
 import { isFindChord } from "../lib/termKeys.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
 import { THEMES } from "../lib/themes.ts";
@@ -507,8 +507,9 @@ function createSession(root: string): Sess {
     try {
       const gl = new WebglAddon();
       // A lost context can leave the terminal blank-white with no repaint. Drop
-      // to the DOM renderer app-wide and remember it, so no new shell hits it.
-      gl.onContextLoss(() => { fallBackToDom(); try { gl.dispose(); } catch { /* already gone */ } });
+      // off the GPU app-wide and remember it — to canvas, not the slow DOM
+      // renderer — so no new shell hits it and none crawls either.
+      gl.onContextLoss(() => { fallBackToCanvas(); try { gl.dispose(); } catch { /* already gone */ } });
       term.loadAddon(gl);
     } catch { /* no WebGL2 here — canvas below, or the DOM renderer */ }
   } else if (wantsCanvas()) {
