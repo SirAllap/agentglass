@@ -1,6 +1,16 @@
 # A browser in agentglass — tier 1
 
-The desktop-only viewer: a seventh workspace view holding a real page, with an
+> **Status — shipped.** This is the design note as it was written before the
+> feature was built, kept as the record of *why* `<webview>` and not
+> `WebContentsView`. The view exists now: `web/src/components/BrowserPanel.tsx`,
+> `id: "browser"` in `views.ts` (key `b`, desktop builds only). Two things have
+> dated since: it is no longer the "seventh" view — the 0.8 redesign made the
+> workspace the whole window and the rail carries ten — and where the note below
+> says the workspace is an "overlay", read "the view layer". The mount-once,
+> toggle-visibility model it leans on is unchanged, which is why the `<webview>`
+> decision still holds.
+
+The desktop-only viewer: a workspace view holding a real page, with an
 address bar and back/forward/reload. No profiles, no cookie import, no agent
 driving. Those are tier 2 and 3, and the point of stopping here is to find out
 whether the thing gets used before paying for them.
