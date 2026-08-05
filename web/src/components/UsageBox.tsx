@@ -122,7 +122,11 @@ function Headline({ provider, window: w }: { provider: string; window: QuotaWind
     <div className="shrink-0 pb-2.5" style={{ borderBottom: DIVIDER }}>
       <div className="text-[9px] uppercase tracking-[0.16em] t-dim2">Closest to its limit</div>
       <div className="flex items-baseline gap-2.5 mt-1 min-w-0">
-        <span className="font-sans text-[30px] font-semibold leading-none tabular-nums" style={{ color }}>
+        {/* A 30px number in a 36px line box. `leading-none` sets the box to
+            exactly the font size, which the digits overshoot — harmless on its
+            own, but it makes the panel measure as overflowing when it is not,
+            and this is the panel whose whole job is now to never scroll. */}
+        <span className="font-sans text-[30px] font-semibold leading-[1.2] tabular-nums" style={{ color }}>
           {w.usedPercent}%
         </span>
         <div className="flex flex-col min-w-0 gap-0.5">
@@ -147,11 +151,12 @@ export function UsageBox() {
         {state === "unreachable" && <span className="text-[11px] t-dim2 py-2">Could not reach the server for plan quota.</span>}
         {state === "empty" && <span className="text-[11px] t-dim2 py-2 leading-snug">No connected agent reports plan quota. Connect one in Settings › Agents.</span>}
         {top && <Headline provider={top.provider} window={top.window} />}
-        {rows && (
-          <div className="min-h-0 flex-1 overflow-y-auto agx-scroll">
-            {rows.map((u, i) => <Row key={u.provider} u={u} first={i === 0} />)}
-          </div>
-        )}
+        {/* No scroller. Anthropic's window list has no fixed length — the
+            per-model weekly buckets in providerusage.ts are pushed as the plan
+            reports them — so this panel sizes to whatever it is given and the
+            grid cell around it grows to match. A quota you have to scroll to
+            find is a quota you will not look at. */}
+        {rows && rows.map((u, i) => <Row key={u.provider} u={u} first={i === 0} />)}
       </div>
     </Panel>
   );

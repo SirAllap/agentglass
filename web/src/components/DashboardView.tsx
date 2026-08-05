@@ -162,17 +162,22 @@ export function DashboardView({
             both. The columns line up with the cockpit above: Usage under
             Fleet, Cost and Latency under the middle column, Sessions under
             Alerts. */}
-        <div className="shrink-0 grid grid-cols-1 xl:grid-cols-12 gap-3 h-auto xl:grid-rows-[196px_140px]">
-          {/* Taller than its row-mates below xl: Usage spans two rows at xl, so
-              a 196px box that fits Cost or Latency leaves the quota headline
-              and the provider meters fighting over ~50px. */}
-          <div className="xl:col-span-3 xl:row-span-2 min-w-0 min-h-0 h-[350px] xl:h-auto">
+        {/* The rows are minimums, not heights: Usage spans both of them and its
+            length is set by how many quota windows the providers report, which
+            is not a number this layout gets to fix. Letting the row grow is
+            what keeps that panel off a scrollbar of its own. */}
+        <div className="shrink-0 grid grid-cols-1 xl:grid-cols-12 gap-3 h-auto xl:grid-rows-[minmax(196px,auto)_minmax(140px,auto)]">
+          <div className="xl:col-span-3 xl:row-span-2 min-w-0 min-h-0 h-auto">
             <UsageBox />
           </div>
-          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><CostByModel stats={stats} /></div>
-          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><Latency stats={stats} /></div>
-          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-auto"><Sessions provider={filter.provider} /></div>
-          <div className="xl:col-span-9 min-w-0 min-h-0 h-[140px] xl:h-auto"><MissionTimeline stats={stats} /></div>
+          {/* Pinned, not auto: these three are the reason the row has a minimum
+              at all, and letting them size to content grows the row for
+              everyone — they are each taller than 196px if asked. Only the
+              Usage cell above is allowed to ask for more. */}
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><CostByModel stats={stats} /></div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><Latency stats={stats} /></div>
+          <div className="xl:col-span-3 min-w-0 min-h-0 h-[196px] xl:h-[196px]"><Sessions provider={filter.provider} /></div>
+          <div className="xl:col-span-9 min-w-0 min-h-0 h-[140px] xl:h-[140px]"><MissionTimeline stats={stats} /></div>
         </div>
       </div>
     </div>
