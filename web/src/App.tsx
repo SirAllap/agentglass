@@ -3,7 +3,7 @@ import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
 import { subscribeWorktreeJump, worktreeJump } from "./lib/worktreeJump.ts";
 import { useStats } from "./lib/useStats.ts";
-import { deriveAgents, deriveAlerts, buildTitles, buildRollups } from "./lib/derive.ts";
+import { deriveAgents, deriveAlerts, buildTitles, buildRollups, providersSeen } from "./lib/derive.ts";
 import { publishFleet } from "./lib/demoBridge.ts";
 import { providerOf } from "./lib/format.ts";
 import { api, IS_DEMO } from "./lib/api.ts";
@@ -325,22 +325,29 @@ export default function App() {
   const providerSig = useRef("");
   const sessionProvider = useMemo(() => {
     const map = new Map<string, string>();
+    // The session roll-up first, because `events` is a capped window and this
+    // question is not about the last few minutes. A quiet agent — a Codex or
+    // Antigravity chat that ran nine events an hour ago — drops out of that
+    // buffer as soon as a busy Claude session fills it, and every provider it
+    // was the only evidence for silently left the filter with it. The dashboard
+    // then offered "Anthropic" as the only provider ever seen, while the
+    // server's own scoped answer listed three models.
+    for (const s of sessions) if (s.model_name) map.set(s.session_id, providerOf(s.model_name));
+    // Then the live buffer, which is the fresher of the two: a session that
+    // started since the last sessions poll is here and nowhere else, and its
+    // model may have resolved after that roll-up was taken.
     for (const a of agentsAll) if (a.model_name) map.set(a.session_id, providerOf(a.model_name));
     const sig = [...map].map(([k, v]) => k + "\u0000" + v).join("\u0001");
     if (sig === providerSig.current) return providerRef.current;
     providerSig.current = sig;
     providerRef.current = map;
     return map;
-  }, [agentsAll]);
+  }, [agentsAll, sessions]);
   // "unknown" (sessions whose model never resolved) is kept as a real bucket so
   // it can be filtered to and the per-provider views reconcile with the total,
   // but sorted to the end so it never leads the list. Header renders it as
   // "Unknown".
-  const providers = useMemo(() => {
-    const seen = new Set(sessionProvider.values());
-    const known = [...seen].filter((p) => p !== "unknown").sort();
-    return seen.has("unknown") ? [...known, "unknown"] : known;
-  }, [sessionProvider]);
+  const providers = useMemo(() => providersSeen(sessions, agentsAll), [sessions, agentsAll]);
   // The Anthropic plan meters only make sense when Anthropic is what you're
   // looking at (no filter + Anthropic present, or explicitly filtered to it).
   const showUsage = (!filter.provider && providers.includes("Anthropic")) || filter.provider === "Anthropic";

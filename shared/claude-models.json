@@ -1,0 +1,73 @@
+{
+  "_comment": [
+    "The models the Chat panel offers for Claude Code.",
+    "",
+    "Data, not code: edit this file and the dropdown follows on the next request —",
+    "no rebuild, no restart. Claude Code publishes no model list of its own (there",
+    "is no `claude models` subcommand and no on-disk cache, unlike Codex's",
+    "models_cache.json and `agy models`), so this catalogue is the only source",
+    "there is. Keeping it here rather than in a TypeScript array is what lets it be",
+    "corrected the day Anthropic ships something.",
+    "",
+    "A model is offered until its scheduled_shutdown_date has passed. `status` is",
+    "recorded for the reader and is deliberately NOT a filter: a superseded model",
+    "still answers until it is retired, and hiding it early would take away a",
+    "choice that still works.",
+    "",
+    "To override without editing the checkout, put your own copy at",
+    "$XDG_CONFIG_HOME/agentglass/claude-models.json (~/.config/agentglass/), or",
+    "point AGENTGLASS_CLAUDE_MODELS at a file."
+  ],
+  "models": [
+    {
+      "id": "claude-opus-5",
+      "display_name": "Claude Opus 5",
+      "status": "active",
+      "release_date": "2026-07-24",
+      "scheduled_shutdown_date": "2027-07-24"
+    },
+    {
+      "id": "claude-opus-5[1m]",
+      "display_name": "Claude Opus 5 · 1M",
+      "status": "active",
+      "release_date": "2026-07-24",
+      "scheduled_shutdown_date": "2027-07-24",
+      "_note": "Same model, asking for the 1M context window. Not a duplicate: the suffix is what `claude` reads to pick a window behind an LLM gateway or on Bedrock / Vertex / Foundry, where the plain id really does mean 200k. On the first-party API the two are the same choice."
+    },
+    {
+      "id": "claude-sonnet-5",
+      "display_name": "Claude Sonnet 5",
+      "status": "active",
+      "release_date": "2026-06-30",
+      "scheduled_shutdown_date": "2027-06-30"
+    },
+    {
+      "id": "claude-fable-5",
+      "display_name": "Claude Fable 5",
+      "status": "active",
+      "release_date": "2026-06-09",
+      "scheduled_shutdown_date": "2027-06-09"
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "display_name": "Claude Haiku 4.5",
+      "status": "active",
+      "release_date": "2025-10-15",
+      "scheduled_shutdown_date": "2026-10-15"
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "display_name": "Claude Sonnet 4.6",
+      "status": "superseded",
+      "release_date": "2026-02-17",
+      "scheduled_shutdown_date": "2027-02-17"
+    },
+    {
+      "id": "claude-opus-4-6",
+      "display_name": "Claude Opus 4.6",
+      "status": "superseded",
+      "release_date": "2026-02-05",
+      "scheduled_shutdown_date": "2027-02-05"
+    }
+  ]
+}

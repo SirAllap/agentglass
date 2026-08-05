@@ -148,6 +148,55 @@ Mapping (see `server/src/otlp.ts`):
 One-command CLI wiring (Gemini / Codex) is documented in the README under
 **Any provider — via OpenTelemetry**.
 
+### Adding a CLI you can talk to, not only watch
+
+OpenTelemetry gets a CLI onto the radar. Driving one from the chat panel is a
+separate seam, and Codex is the worked example of it — `server/src/codex.ts`
+alongside `server/src/chat.ts`. The division that makes it cheap:
+
+- **The server spawns and streams, and does not translate.** It runs the binary
+  non-interactively in a scoped git directory and pipes its JSONL back verbatim,
+  plus an `agx_error` frame of its own when the process never got going. Every
+  guard is shared — `safeAbs` / `repoRootOf` / `inScope`, the `setsid` process
+  group so stopping a turn reaches the whole job tree, the keepalive, and the
+  first-run watchdog that names the login command.
+- **One file in the browser knows the vocabulary.** `web/src/lib/codexFrames.ts`
+  turns Codex's `item.completed` frames into the same `ChatMsg` / `ChatTool` /
+  `ChatUsage` the Claude path fills. Nothing below the store branches on which
+  CLI produced a turn, which is what lets one panel render both.
+- **The differences that remain are real ones, and are surfaced rather than
+  papered over.** Codex has a sandbox where Claude has permission modes; it
+  reports cumulative thread tokens where Claude reports per-turn; it reports no
+  cost and no context window at all. Each of those is a visible difference in
+  the panel, not a fabricated equivalence.
+
+A third CLI repeats that shape, and Google Antigravity is the proof it holds:
+`server/src/antigravity.ts` beside the other two, `web/src/lib/antigravityFrames.ts`
+beside `codexFrames.ts`, and `AgentKind` gaining a member. What the third one
+changed is worth knowing before you add a fourth:
+
+- **The per-agent differences moved into a table.** `AGENTS` in
+  `web/src/lib/agents.ts` holds the label, the binary, the defaults, the
+  unattended mode, and whether the CLI takes attachments or has a replayable
+  transcript. Two agents justified `agent === "codex" ? … : …`; three did not,
+  because a missed branch is silent — a Claude default quietly applied to
+  something that is not Claude. Add the entry, not the branches.
+- **An agent may report through the panel itself.** Claude reaches the fleet
+  over hooks and Codex over OpenTelemetry, but Antigravity exports neither, so
+  its own stream is teed into `ingestBody` — `frameToEvent` maps frames to
+  `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` /
+  `Turn complete`. That is the `via: "chat"` kind in the agent roster. It only
+  covers chats started here, which is said plainly rather than implied.
+- **Check what the usage numbers actually mean before trusting them.** Codex
+  reports cumulative thread totals and Antigravity reports per-turn figures.
+  They look identical on the wire and are assigned in one case and added in the
+  other; getting it backwards over-reports spend severalfold and nothing fails
+  loudly.
+- **A capability the CLI has not got is left off, not faked.** Antigravity has
+  no readable transcript (protobuf inside SQLite), no price, and no context
+  window, so there is no resume route and the cost and context rows stay hidden
+  rather than being filled from a table in this repo.
+
 ## 2. Use the gate in your own harness
 
 `POST /gate` is a generic approval primitive: hold an action until a human
@@ -326,7 +375,8 @@ folder instead.
 ### Auth and write gates
 
 See the README security table (`AGENTGLASS_TOKEN`, `AGENTGLASS_GIT_WRITE_DISABLED`,
-`AGENTGLASS_DOCKER_WRITE_DISABLED`, `AGENTGLASS_CHAT_DISABLED`, …). Intake routes
+`AGENTGLASS_DOCKER_WRITE_DISABLED`, `AGENTGLASS_CHAT_DISABLED`,
+`AGENTGLASS_CODEX_DISABLED`, …). Intake routes
 (`/ingest`, OTLP) stay tokenless on purpose — local hooks and OTel exporters
 have no way to carry a secret — while everything else needs the token when set.
 

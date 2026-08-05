@@ -49,8 +49,14 @@ const STARTUP_TIMEOUT_MS = Number(process.env.AGENTGLASS_CHAT_STARTUP_TIMEOUT_MS
 // gateway, on Bedrock / Vertex / Foundry, and for Opus 4.6 — which is why it
 // survives here rather than being dropped now that `contextWindow.ts` knows
 // the families outright.
-const MODEL_RE = /^[a-z0-9][a-z0-9.-]{2,48}(\[[a-z0-9]{1,8}\])?$/;
-const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
+//
+// Exported because codex.ts validates the same two things for the same reason.
+// The shapes happen to coincide rather than being made to: a Codex model id
+// (`gpt-5.6-luna`) is already inside this alphabet, and a Codex thread id is a
+// UUID, which SESSION_RE already accepts. If the two ever diverge, codex.ts
+// grows its own pair rather than this one being widened to cover both.
+export const MODEL_RE = /^[a-z0-9][a-z0-9.-]{2,48}(\[[a-z0-9]{1,8}\])?$/;
+export const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9-]{7,64}$/;
 
 // A pre-approved tool spec, e.g. `Read`, `Edit`, `Bash(git status)`,
 // `Bash(gh pr view:*)`. Deliberately narrow: letters for the tool name, and an

@@ -9,10 +9,38 @@ import { recordNote, fireDesktopAlert } from "./sysNotify.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
-// Stop hammering a server that won't come back. ~2 minutes of failed reconnects
-// (the backoff tops out at 8s) is long enough to ride out a restart but short
-// enough not to loop forever; becoming visible again resets and retries.
+// Stop *hammering* a server that won't come back. ~2 minutes of failed
+// reconnects (the backoff tops out at 8s) is long enough to ride out a restart.
 const GIVE_UP_MS = 120_000;
+/**
+ * What the retry slows to after that, rather than stopping.
+ *
+ * It used to stop outright, and the only way back was `visibilitychange` — which
+ * a tab sitting in the foreground never receives. So a tab left open and watched
+ * through an outage longer than two minutes disconnected permanently: no events,
+ * no chats, nothing, until somebody reloaded it or happened to switch tabs and
+ * back. The comment here claimed "becoming visible again resets and retries",
+ * which was true of every tab except the one being looked at.
+ *
+ * Slow enough that an unreachable server is not being hammered — one attempt a
+ * minute against a socket that fails immediately is nothing — and quick enough
+ * that a server coming back is noticed without the user doing anything.
+ */
+const IDLE_RETRY_MS = 60_000;
+
+/**
+ * How long to wait before the next reconnect attempt.
+ *
+ * Exported because the invariant worth pinning is not a number but the absence
+ * of one: this always returns a delay. It never says "stop", which is what the
+ * old code did once `failingForMs` passed the give-up window — leaving a
+ * foreground tab, the only kind that receives no `visibilitychange`, dead until
+ * it was reloaded.
+ */
+export function reconnectDelay(failingForMs: number, retry: number): number {
+  if (failingForMs > GIVE_UP_MS) return IDLE_RETRY_MS;
+  return Math.min(8000, 500 * 2 ** retry);
+}
 
 export type ConnState = "connecting" | "open" | "closed" | "unauthorized";
 
@@ -142,8 +170,10 @@ export function useLive(paused = false, keepEvents = true): LiveData {
 
       setConn("closed");
       if (!firstFailAt.current) firstFailAt.current = Date.now();
-      if (Date.now() - firstFailAt.current > GIVE_UP_MS) return; // gave up — see visibility reset
-      reconnectTimer.current = setTimeout(connect, Math.min(8000, 500 * 2 ** retry.current++));
+      // Past the give-up window the backoff stops growing and simply goes
+      // quiet — it never stops. A foreground tab has no other way back.
+      const wait = reconnectDelay(Date.now() - firstFailAt.current, retry.current++);
+      reconnectTimer.current = setTimeout(connect, wait);
     };
     ws.onerror = () => ws.close();
     ws.onmessage = (msg) => {
@@ -341,11 +371,28 @@ export function useLive(paused = false, keepEvents = true): LiveData {
       wsRef.current = null;
       connect();
     };
+    /**
+     * The network came back. Don't sit out a slow retry over it.
+     *
+     * Distinct from the visibility path, which covers a tab returning from the
+     * background: this covers a tab nobody has touched — laptop resumed, wifi
+     * reconnected, VPN back — where nothing about the tab has changed and the
+     * only news is that the machine can reach things again.
+     */
+    const onOnline = () => {
+      if (disposed.current || connRef.current === "open" || connRef.current === "unauthorized") return;
+      if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; }
+      retry.current = 0;
+      firstFailAt.current = 0;
+      connect();
+    };
     document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("online", onOnline);
     window.addEventListener("agentglass:server-changed", onServerChanged);
     return () => {
       disposed.current = true;
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("online", onOnline);
       window.removeEventListener("agentglass:server-changed", onServerChanged);
       if (timer.current) clearTimeout(timer.current);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
