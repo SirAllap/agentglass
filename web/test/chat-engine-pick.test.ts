@@ -68,3 +68,30 @@ test("no preference means the server decides, which is a real answer", () => {
   // configurable default and the browser must not silently override it.
   expect(engineFor({ sessionId: "", engine: undefined })).toBeUndefined();
 });
+
+// The pane engine is Claude's. The preference that selects it is global, and
+// the send path has always ignored it for the other two CLIs — so before this,
+// turning tmux on made every Codex and Antigravity chat claim a pane in the
+// header that the turn was never going to open: an attach command to copy for
+// a pane that did not exist, and a "⧉ tmux on send" chip that was just wrong.
+test("an agent that cannot run in a pane ignores the preference entirely", () => {
+  setChatEnginePref("tmux");
+  for (const agent of ["codex", "antigravity"] as const) {
+    // Both states a chat can be in: not yet started, and already holding a
+    // thread. Neither may come back as "tmux".
+    expect(engineFor({ agent, sessionId: "", engine: undefined }), agent).toBe("process");
+    expect(engineFor({ agent, sessionId: "thread-1234", engine: "tmux" }), agent).toBe("process");
+  }
+  // Claude is unaffected — this narrows the answer for two agents, it does not
+  // change what the preference means.
+  expect(engineFor({ agent: "claude", sessionId: "", engine: undefined })).toBe("tmux");
+});
+
+test("a caller with no agent field still reads as Claude", () => {
+  // Everything written down before chats had a second agent was a Claude chat,
+  // and chatPersist restores those with `agent` filled in — but a bare
+  // `{sessionId, engine}` from anywhere else must keep its old meaning rather
+  // than silently becoming "process".
+  setChatEnginePref("tmux");
+  expect(engineFor({ sessionId: "", engine: undefined })).toBe("tmux");
+});

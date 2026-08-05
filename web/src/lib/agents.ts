@@ -48,6 +48,17 @@ export type AgentSpec = {
    *  is in this app's own store and Codex keeps a JSONL rollout; Antigravity
    *  keeps protobuf blobs inside SQLite, which is not something to guess at. */
   hasTranscript: boolean;
+  /** Whether the effort dial does anything. `--effort` is Claude's flag. Codex
+   *  has a `reasoning.effort` of its own and Antigravity has nothing like it,
+   *  so this is "the dial as it exists today applies", not "this CLI cannot
+   *  think harder" — mapping the dial per agent is its own piece of work. */
+  hasEffort: boolean;
+  /** Whether this CLI can run in a tmux pane. Only Claude: the pane engine
+   *  attaches to `claude` interactively, and the other two are always the
+   *  streamed subprocess. Without this the engine preference leaks across —
+   *  a Codex chat would offer to copy an attach command for a pane that is
+   *  never opened. */
+  canPane: boolean;
 };
 
 export const DEFAULT_MODEL = "claude-opus-5";
@@ -68,16 +79,19 @@ export const AGENTS: Record<AgentKind, AgentSpec> = {
     label: "Claude", cli: "claude",
     defaultModel: DEFAULT_MODEL, defaultMode: DEFAULT_MODE,
     bypassMode: "bypassPermissions", canAttach: true, hasTranscript: true,
+    hasEffort: true, canPane: true,
   },
   codex: {
     label: "Codex", cli: "codex",
     defaultModel: DEFAULT_CODEX_MODEL, defaultMode: DEFAULT_CODEX_MODE,
     bypassMode: "full-access", canAttach: false, hasTranscript: true,
+    hasEffort: false, canPane: false,
   },
   antigravity: {
     label: "Antigravity", cli: "agy",
     defaultModel: DEFAULT_ANTIGRAVITY_MODEL, defaultMode: DEFAULT_ANTIGRAVITY_MODE,
     bypassMode: "always-proceed", canAttach: false, hasTranscript: false,
+    hasEffort: false, canPane: false,
   },
 };
 

@@ -1,4 +1,5 @@
 import { test, expect, beforeAll, describe } from "bun:test";
+import { readFileSync } from "node:fs";
 
 // A chat is bound to one CLI for its life. These pin the three places that
 // binding has to survive or be enforced: which agent a session on the radar
@@ -169,5 +170,44 @@ describe("persistence", () => {
     // pointed at a CLI this build has never heard of.
     persist.saveChats([chat({ agent: "gemini" })], "c1-abc");
     expect(persist.loadChats().chats[0].agent).toBe("claude");
+  });
+});
+
+/*
+ * The controls that are Claude's, on a panel that now drives three CLIs.
+ *
+ * agents.ts says why this is a table and not a run of ternaries: "a missed one
+ * is silent — a Claude default quietly applied to something that is not
+ * Claude". These two arrived on the panel after the agent split was written, so
+ * they had no entry and no gate, and a Codex chat drew both: a thinking dial
+ * whose value the send path never passes, and a pane chip for a pane that is
+ * never opened.
+ *
+ * Asserted against the source because the property is which JSX is reachable,
+ * and that is what a future edit would break — same reason running-panes.test.ts
+ * reads the panel this way.
+ */
+describe("the Claude-only controls", () => {
+  const read = (p: string) => readFileSync(new URL("../" + p, import.meta.url), "utf8");
+
+  test("the effort dial is offered only where --effort is a real flag", () => {
+    expect(read("src/components/ChatPanel.tsx"))
+      .toContain("{AGENTS[active.agent].hasEffort && <EffortDial chat={active} />}");
+  });
+
+  test("every agent has an answer for both, so a fourth CLI cannot inherit one", () => {
+    // The point of the table: adding an agent is an entry, not a search. A new
+    // spec missing either flag is a type error, and one that guesses `true` is
+    // this assertion.
+    for (const [kind, spec] of Object.entries(store.AGENTS)) {
+      expect(typeof spec.hasEffort, kind).toBe("boolean");
+      expect(typeof spec.canPane, kind).toBe("boolean");
+      if (kind !== "claude") {
+        expect(spec.hasEffort, kind).toBe(false);
+        expect(spec.canPane, kind).toBe(false);
+      }
+    }
+    expect(store.AGENTS.claude.hasEffort).toBe(true);
+    expect(store.AGENTS.claude.canPane).toBe(true);
   });
 });

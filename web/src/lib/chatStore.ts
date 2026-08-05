@@ -170,8 +170,17 @@ export async function answerPane(id: string, key: string): Promise<void> {
  *
  *  Shared by the send path and the header so the two can never disagree — the
  *  header claiming one engine while the turn used the other is the bug this
- *  whole function exists to end. */
-export function engineFor(chat: Pick<Chat, "sessionId" | "engine">): ChatEngine | undefined {
+ *  whole function exists to end.
+ *
+ *  An agent that cannot run in a pane answers `process` whatever the preference
+ *  says. The preference is global and the send path already ignores it for
+ *  anything but Claude, so without this the header spoke for a pane the turn
+ *  was never going to open: a Codex chat offering to copy an attach command,
+ *  and a "⧉ tmux on send" chip that was simply not true. `agent` is optional so
+ *  a caller holding a bare `{sessionId, engine}` — the tests, and any older
+ *  call site — still reads as Claude, which is what it was. */
+export function engineFor(chat: Pick<Chat, "sessionId" | "engine"> & { agent?: AgentKind }): ChatEngine | undefined {
+  if (chat.agent && !AGENTS[chat.agent].canPane) return "process";
   return chat.sessionId ? chat.engine : (chatEnginePref() ?? undefined);
 }
 

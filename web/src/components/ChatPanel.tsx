@@ -1367,7 +1367,11 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text2)" }}
                           />
                         )}
-                        <EffortDial chat={active} />
+                        {/* Same reasoning as the allowlist above: `--effort` is
+                            Claude's flag, and the send path only passes it on a
+                            Claude turn, so on the other two this dial would set
+                            a value that goes nowhere. */}
+                        {AGENTS[active.agent].hasEffort && <EffortDial chat={active} />}
                         {/* Claude Code's own settings, which are global rather
                             than per chat — so a button rather than something
                             you have to remember is a slash command. Only in
