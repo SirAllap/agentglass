@@ -5,7 +5,6 @@ import { IS_DEMO, reauthPrompt } from "../lib/api.ts";
 import { subscribeUpdate, updateState, updateAvailable } from "../lib/updateStore.ts";
 import { MOD_KEY } from "../lib/format.ts";
 import { IS_MAC_DESKTOP } from "../lib/desktop.ts";
-import { UsageWidget } from "./UsageWidget.tsx";
 import { Logo } from "./Logo.tsx";
 import { Select } from "./Select.tsx";
 import { subscribe as subscribeChats, attentionCount } from "../lib/chatStore.ts";
@@ -131,7 +130,7 @@ function MoreMenu({ onOpen }: { onOpen: () => void }) {
 
 export function Header({
   conn, windowMs, onWindow, retentionDays, apps, types, providers, filter, onFilter,
-  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenWorkspace, onOpenSettings, onOpenMachine, onClear, showUsage,
+  sound, onSound, onOpenPalette, onOpenHelp, onOpenStats, onOpenSkills, onOpenWorkspace, onOpenSettings, onOpenMachine, onClear,
   workspace, onOpenProject,
 }: {
   conn: ConnState;
@@ -158,7 +157,6 @@ export function Header({
    *  reproduce exactly. */
   onOpenMachine: (tab: "ports" | "resources") => void;
   onClear: () => void;
-  showUsage: boolean;
   workspace: string | null;
   onOpenProject: () => void;
 }) {
@@ -274,9 +272,6 @@ export function Header({
       </div>{/* middle scroll zone */}
 
       <div className="shrink-0 flex items-center gap-1.5 sm:gap-2 ml-auto sm:ml-0 max-w-full overflow-x-auto agw-noscrollbar">
-        {/* Anthropic plan meters — only shown when viewing Anthropic (it's the
-            one provider with a usage API), and only where there's room. */}
-        {showUsage && <div className="hidden 2xl:block"><UsageWidget /></div>}
         {/* A keyboard-palette chip is dead weight on touch — hide it there. */}
         <button onClick={onOpenPalette} className="h-8 hidden sm:flex items-center gap-1.5 px-2.5 rounded-lg text-[11px]" style={selStyle}>
           <span>{MOD_KEY}K</span><span className="hidden sm:inline t-dim2">Search</span>

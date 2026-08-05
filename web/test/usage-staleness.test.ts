@@ -46,11 +46,11 @@ describe("saying how old a reading is", () => {
 
 describe("the strip keeps answering the question it exists to answer", () => {
   test("the meters take the age rather than being replaced by a word", () => {
-    expect(bar).toContain('<PlanMeter tag="5h" pct={five.utilization} age={age}');
-    expect(bar).toContain('<PlanMeter tag="week" pct={week.utilization} age={age}');
+    expect(bar).toContain("pct={w.usedPercent} age={age}");
     // The age comes from when the reading was taken, which is what the server
-    // preserves across a failed refresh.
-    expect(bar).toContain("stalenessLabel(u.fetched_at)");
+    // preserves across a failed refresh — and for Codex is the last turn that
+    // ran, which can be days back.
+    expect(bar).toContain("stalenessLabel(u.observedAt)");
   });
 
   test("a stale meter is legible as stale without losing its number", () => {
@@ -58,11 +58,21 @@ describe("the strip keeps answering the question it exists to answer", () => {
     expect(bar).toContain("opacity: age ? 0.55 : 1");
   });
 
-  test('"rate-limited" is only reachable with no reading at all', () => {
-    // It lives in the `!u?.available` arm. The fix is not that the word is
-    // gone, it is that the server almost always has something for the other
-    // arm — so the word now means what it says.
-    expect(bar).toContain('const rateLimited = !u?.available && usageError()?.includes("429")');
+  test('"no reading" is only reachable with no reading at all', () => {
+    // It lives in the `!u.available` arm. The fix is not that the word is gone,
+    // it is that the server almost always has something for the other arm — so
+    // the word now means what it says. It replaced "rate-limited" when the
+    // meters stopped being Anthropic's alone: 429 is one of several reasons a
+    // provider has nothing to say, and the provider's own sentence — in the
+    // tooltip here, in full on the dashboard box and in Stats — tells them
+    // apart instead of guessing.
+    expect(bar).toContain("const unread = !!u && !u.available");
+    expect(bar).toContain("title={u?.note ??");
+  });
+
+  test("the meters follow the agent you are driving, not one vendor", () => {
+    expect(bar).toContain("providerInContext(");
+    expect(bar).toContain("usageOf(ctx)");
   });
 });
 
@@ -70,29 +80,33 @@ describe("the strip keeps answering the question it exists to answer", () => {
 // called it rather than from a list of model names kept here, because a strip
 // that only knows last quarter's models quietly stops mentioning your limits.
 describe("weekly windows scoped to one model", () => {
-  const widget = read("src/components/UsageWidget.tsx");
+  const providers = read("../server/src/providerusage.ts");
 
-  test("the strip draws one meter per scoped window, labelled by the API", () => {
-    expect(bar).toContain("u?.scoped?.map((s) => (");
-    expect(bar).toContain("tag={s.name} pct={s.utilization} age={age}");
+  test("the strip draws one meter per window the provider reports", () => {
+    // Scoped windows stopped being a second list the strip has to know about:
+    // the server folds them into `windows`, so the bar draws whatever came
+    // back and a new bucket needs no change here.
+    expect(bar).toContain("u?.windows.map((w) => (");
+    expect(bar).toContain("tag={w.label} pct={w.usedPercent} age={age}");
     // No model name may DECIDE anything — mentioning one in a comment is fine,
     // branching on one is the thing that goes stale.
-    expect(bar).not.toMatch(/name\s*===\s*['"]/);
+    expect(bar).not.toMatch(/label\s*===\s*['"]/);
     expect(bar).not.toContain('tag="FABLE"');
   });
 
-  test("the header widget draws them too, from the same field", () => {
-    expect(widget).toContain("u.scoped?.map");
-    expect(widget).toContain("label={s.name}");
-    expect(widget).not.toMatch(/name\s*===\s*['"]/);
+  test("the server carries them through, labelled by the API", () => {
+    expect(providers).toContain("for (const s of u.scoped ?? [])");
+    expect(providers).toContain("label: s.name");
+    expect(providers).not.toMatch(/s\.name\s*===\s*['"]/);
   });
 
   test("they carry the same staleness marking as the rest", () => {
-    // A scoped meter going stale silently while the two beside it say so would
-    // be worse than not drawing it. Checked as "no meter is drawn without it"
-    // rather than by naming the three we happen to have today.
-    const meters = bar.match(/<PlanMeter[^>]*>/g) ?? [];
-    expect(meters.length).toBeGreaterThanOrEqual(3);
+    // A scoped meter going stale silently while the ones beside it say so would
+    // be worse than not drawing it. One list means one call site, so this is
+    // now "the call site carries the age" — and that no second one appeared
+    // beside it without it.
+    const meters = bar.match(/<PlanMeter[\s\S]*?\/>/g) ?? [];
+    expect(meters.length).toBeGreaterThanOrEqual(1);
     for (const m of meters) expect(m).toContain("age={age}");
   });
 });

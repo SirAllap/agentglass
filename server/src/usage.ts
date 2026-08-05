@@ -8,7 +8,16 @@ import { homedir, tmpdir } from "os";
 import { join } from "path";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-const CRED_PATH = process.env.CLAUDE_CREDENTIALS || join(homedir(), ".claude", ".credentials.json");
+/** Where the OAuth credentials live.
+ *
+ *  Resolved per call rather than at import, like `lastGoodPath()` and for the
+ *  same reason: this module is now imported by two suites — its own and the
+ *  provider-usage one — and whichever loaded first used to freeze the path for
+ *  the other. A test that points `CLAUDE_CREDENTIALS` at a scratch file has to
+ *  get that file whether or not it was the first through the door. */
+function credPath(): string {
+  return process.env.CLAUDE_CREDENTIALS || join(homedir(), ".claude", ".credentials.json");
+}
 
 export interface UsageWindow {
   utilization: number; // 0..100 used
@@ -115,9 +124,13 @@ function lastGoodPath(): string {
 }
 
 /** Under `bun test`, only a scratch directory may be touched — the same rule
- *  config.ts applies, so no suite reads or overwrites a real reading. */
-const OFF_LIMITS = process.env.NODE_ENV === "test"
-  && !(process.env.XDG_CONFIG_HOME ?? "").startsWith(tmpdir());
+ *  config.ts applies, so no suite reads or overwrites a real reading. Asked per
+ *  call for the reason `credPath()` gives: the answer depends on an environment
+ *  a test sets before its own import, and import order is not ours to choose. */
+function offLimits(): boolean {
+  return process.env.NODE_ENV === "test"
+    && !(process.env.XDG_CONFIG_HOME ?? "").startsWith(tmpdir());
+}
 
 let restored = false;
 /** Read once per process, and only to seed `lastGood` — never to answer a
@@ -127,7 +140,7 @@ let restored = false;
 async function restoreLastGood(): Promise<void> {
   if (restored) return;
   restored = true;
-  if (OFF_LIMITS) return;
+  if (offLimits()) return;
   try {
     const j = (await Bun.file(lastGoodPath()).json()) as UsagePayload;
     // Anything hand-edited or half-written is simply not a reading.
@@ -146,7 +159,7 @@ async function restoreLastGood(): Promise<void> {
 /** Fire and forget. A reading that fails to persist is worth less on the next
  *  boot, which is not worth failing a request over. */
 function persistLastGood(u: UsagePayload): void {
-  if (OFF_LIMITS) return;
+  if (offLimits()) return;
   Bun.write(lastGoodPath(), JSON.stringify(u)).catch(() => {});
 }
 
@@ -175,7 +188,7 @@ class UsageHttpError extends Error {
 
 async function token(): Promise<string | null> {
   try {
-    const c = (await Bun.file(CRED_PATH).json()) as any;
+    const c = (await Bun.file(credPath()).json()) as any;
     return c?.claudeAiOauth?.accessToken ?? c?.accessToken ?? null;
   } catch {
     return null;

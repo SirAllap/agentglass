@@ -314,7 +314,15 @@ export function setActiveChatId(id: string) {
   if (id === activeChatId) return;
   activeChatId = id;
   persistSoon();
+  // Surfaces outside the panel (the notch's quota gauge) need to hear about
+  // this too, not just disk. Without it a subscriber sees the old active
+  // chat until some unrelated chat event happens to fire an emit.
+  emit();
 }
+
+/** Which chat the panel is showing. Exported so surfaces outside the panel —
+ *  the notch's quota gauge — can tell which agent you are actually driving. */
+export const getActiveChatId = (): string => activeChatId;
 
 /**
  * Ask the panel to bring a chat to the front.
