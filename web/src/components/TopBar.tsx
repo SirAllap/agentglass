@@ -15,10 +15,13 @@
 // rather than on the near-black the notch needed to read as "carved out of the
 // screen". That is what makes it belong to the theme instead of floating over it.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { api, type UsagePayload } from "../lib/api.ts";
-import { subscribeUsage, usageError } from "./UsageWidget.tsx";
+import { api } from "../lib/api.ts";
+import { subscribeProviderUsage, usageOf } from "../lib/usageStore.ts";
+import { providerInContext } from "../lib/providerContext.ts";
+import { windowLabel } from "../../../shared/quota.ts";
 import { stalenessLabel } from "../lib/usageAge.ts";
-import { subscribe as subscribeChats, listChats } from "../lib/chatStore.ts";
+import { subscribe as subscribeChats, listChats, getActiveChatId, getChat } from "../lib/chatStore.ts";
+import type { AgentKind } from "../lib/agents.ts";
 import { subscribeSessions, liveSessionCount } from "./TerminalPanel.tsx";
 import { clock24, subscribeClock24 } from "../lib/clockPref.ts";
 import { updateAvailable, subscribeUpdate, updateState } from "../lib/updateStore.ts";
@@ -30,6 +33,10 @@ import { NeedsPopover, type NeedsItem } from "./NeedsPopover.tsx";
 export const TOP_BAR_H = 30;
 
 const edge = (pct: number) => `1px solid color-mix(in srgb, var(--text) ${pct}%, transparent)`;
+
+/** The seven-day window's label, asked of the same function that made it rather
+ *  than spelled out here, so the two cannot drift apart. */
+const WEEKLY = windowLabel(10080);
 
 /** Anything clickable inside a drag region has to opt out of it, or the window
  *  moves instead of the button firing. */
@@ -222,6 +229,7 @@ function PlanMeter({ tag, pct, age, dim, hideUnder }: {
 export function TopBar({
   workspace, onOpenProject, onOpenPalette, quiet, needs,
   needsList, onNeedChat, onNeedApprove, onNeedProject, onNeedTerminal, onNoteGoto,
+  filterProvider = "",
 }: {
   workspace: string | null;
   onOpenProject: () => void;
@@ -245,6 +253,10 @@ export function TopBar({
   onNeedTerminal: () => void;
   /** A notification that knows where it belongs. */
   onNoteGoto: (g: { kind: "pr"; repo: string; number: number }) => void;
+  /** The dashboard's provider filter, which decides whose plan the meters
+   *  show when no chat is focused. Wired to the focused chat's agent in the
+   *  commit after this one. */
+  filterProvider?: string;
 }) {
   const time = useMinuteClock();
   const win = useWindowState();
@@ -255,16 +267,34 @@ export function TopBar({
   const chip = useRef<HTMLButtonElement>(null);
   const [needsOpen, setNeedsOpen] = useState(false);
 
-  const [u, setU] = useState<UsagePayload | null>(null);
-  useEffect(() => subscribeUsage(setU), []);
-  const rateLimited = !u?.available && usageError()?.includes("429");
-  const five = u?.five_hour;
-  const week = u?.seven_day;
+  // One gauge, for the provider in context — the agent whose chat is focused,
+  // or failing that whatever the dashboard is filtered to. The strip is a
+  // glance, so three providers' meters here would be two too many; the
+  // dashboard box and Stats are where all of them are listed side by side.
+  //
+  // Which chat is focused is read straight from chatStore rather than taken as
+  // a prop: that is the one place the live answer exists, kept current by the
+  // chat panel's own tab switching. The dashboard's filter is the fallback for
+  // when no chat is focused at all — and it is usually empty exactly while you
+  // are deep in a chat, which is why the filter alone was not enough.
+  const activeId = useSyncExternalStore(subscribeChats, getActiveChatId, () => "");
+  const focusedAgent: AgentKind | null = getChat(activeId)?.agent ?? null;
+  const [, bumpUsage] = useState(0);
+  useEffect(() => subscribeProviderUsage(() => bumpUsage((n) => n + 1)), []);
+  const ctx = providerInContext(focusedAgent, filterProvider);
+  const u = ctx ? usageOf(ctx) : null;
+  // A provider that has no reading to give right now — rate-limited, signed
+  // out, or one that never reports at all. Worth saying out loud: a meter that
+  // silently stops moving reads as "you have used nothing", the opposite of
+  // what is true. The reason is the provider's own sentence, in the tooltip.
+  const unread = !!u && !u.available;
   // How old the numbers are, and only once that is worth saying. The meters keep
   // their last good reading through a burst of 429s rather than vanishing, which
   // is only honest if they also say when it was taken. The clock beside them
   // re-renders this strip every minute, so this stays current without a timer.
-  const age = u?.available ? stalenessLabel(u.fetched_at) : null;
+  // Codex's reading only moves when a turn runs, so it can be days old and the
+  // age is the whole difference between a number and a lie.
+  const age = u?.available && u.observedAt ? stalenessLabel(u.observedAt) : null;
 
   const alarm = !!needs?.count;
 
@@ -398,23 +428,27 @@ export function TopBar({
 
       {/* ── the plan, the clock, the way in ───────────────────────── */}
       <div className="flex items-center gap-2.5 shrink-0">
-        {/* Rate-limited is worth saying out loud: a meter that silently stops
-            moving reads as "you have used nothing", which is the opposite. */}
-        {rateLimited ? (
-          <Item cap="plan" title="The usage endpoint answered 429 — the meters are the last good reading">
-            <span className="text-[9.5px]" style={{ color: "var(--warning)" }}>rate-limited</span>
+        {/* No reading is worth saying out loud: a meter that silently stops
+            moving reads as "you have used nothing", which is the opposite. The
+            word is short because the strip is narrow; the sentence explaining
+            which failure it was rides in the tooltip, and both the dashboard
+            box and Stats print it in full. */}
+        {unread ? (
+          <Item cap="plan" title={u?.note ?? `No plan reading for ${u?.label ?? "this agent"} right now`}>
+            <span className="text-[9.5px]" style={{ color: "var(--warning)" }}>no reading</span>
           </Item>
         ) : (
           <>
-            {five && <PlanMeter tag="5h" pct={five.utilization} age={age} dim={quiet} hideUnder="md" />}
-            {week && <PlanMeter tag="week" pct={week.utilization} age={age} dim={quiet} hideUnder="sm" />}
-            {/* Per-model weekly windows, labelled with whatever the API called
-                them. Not hardcoded to any model name: the plan that has one
-                bucket this week can have another next week, and a bar that only
-                knows last quarter's models quietly stops mentioning your
-                limits. */}
-            {u?.scoped?.map((s) => (
-              <PlanMeter key={s.name} tag={s.name} pct={s.utilization} age={age} dim={quiet} hideUnder="md" />
+            {/* Every window the provider reports, labelled with whatever it
+                called them — the five-hour and weekly buckets, and for Anthropic
+                the per-model weekly ones too. Not hardcoded to any model name:
+                the plan that has one bucket this week can have another next
+                week, and a bar that only knows last quarter's models quietly
+                stops mentioning your limits. The longest window is the last to
+                go on a narrow screen, being the one that matters at a glance. */}
+            {u?.windows.map((w) => (
+              <PlanMeter key={w.label} tag={w.label} pct={w.usedPercent} age={age} dim={quiet}
+                hideUnder={w.label === WEEKLY ? "sm" : "md"} />
             ))}
           </>
         )}

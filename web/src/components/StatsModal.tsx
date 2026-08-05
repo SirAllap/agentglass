@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import type { StatsSummary, UsageHistory } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { fmtUsd, fmtTokens, fmtEq, eqTitle, typeColor } from "../lib/format.ts";
+import { subscribeProviderUsage, providerUsage, usageLoaded, usedColor, resetLabel, ageLabel } from "../lib/usageStore.ts";
+import { panelState } from "./UsageBox.tsx";
 
 const WINDOW_LABELS: [number, string][] = [
   [15 * 60_000, "last 15m"],
@@ -160,6 +162,53 @@ function BarList({
   );
 }
 
+
+/**
+ * Plan quota, with room for what the dashboard box has no space for: plan
+ * type, the exact reset time, and when the reading was taken.
+ *
+ * Shares `panelState` with `UsageBox` rather than re-deriving it: the store's
+ * `firstFetchDone` flips true in a `.finally()`, so "loaded" and "has rows"
+ * are independent — a failed first poll is loaded with no rows, a state
+ * distinct from both "still loading" and "have data" that a naive
+ * `if (!rows) return null` would render as nothing at all.
+ */
+function UsageSection() {
+  const rows = useSyncExternalStore(subscribeProviderUsage, providerUsage, () => null);
+  const loaded = useSyncExternalStore(subscribeProviderUsage, usageLoaded, () => false);
+  const state = panelState(loaded, rows);
+
+  if (state === "loading") return <div className="t-dim2 text-[11px] py-3">Reading plan quota…</div>;
+  if (state === "unreachable") return <div className="t-dim2 text-[11px] py-3">Could not reach the server for plan quota.</div>;
+  if (state === "empty") return <div className="t-dim2 text-[11px] py-3">No connected agent reports plan quota. Connect one in Settings › Agents.</div>;
+
+  return (
+    <div className="flex flex-col gap-2">
+      {rows!.map((u) => (
+        <div key={u.provider} className="flex flex-col gap-1">
+          <div className="flex items-baseline gap-2">
+            <span className="text-[12px]" style={{ color: "var(--text)" }}>{u.label}</span>
+            {u.plan && <span className="chip text-[9px] uppercase">{u.plan}</span>}
+            {u.observedAt && <span className="text-[10px] t-dim2 ml-auto">read {ageLabel(u.observedAt)}</span>}
+          </div>
+          {u.available
+            ? (u.windows.length
+              ? u.windows.map((w) => (
+                  <div key={w.label} className="flex items-center gap-2 text-[10.5px]">
+                    <span className="w-12 t-dim2">{w.label}</span>
+                    <span className="tabular-nums font-semibold" style={{ color: usedColor(w.usedPercent) }}>
+                      {w.usedPercent}%
+                    </span>
+                    {w.resetsAt && <span className="t-dim2">resets {resetLabel(w.resetsAt)}</span>}
+                  </div>
+                ))
+              : <span className="text-[10.5px] t-dim2">No quota windows reported.</span>)
+            : <span className="text-[10.5px] t-dim2">{u.note ?? "No usage note provided."}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // Gentle per-widget drift so each glass panel feels alive, not gridded.
 // Kept small so adjacent cards never drift close enough to touch.
@@ -367,6 +416,11 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                       ))}
                     </div>
                   )}
+                </Widget>
+
+                {/* quota and spend answer the same question from opposite ends */}
+                <Widget title="plan quota · by provider" i={7} full>
+                  <UsageSection />
                 </Widget>
                 </div>{/* stack (gap-6 between heatmap, columns, apps) */}
                 </div>{/* content w-1040 */}

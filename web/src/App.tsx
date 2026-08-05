@@ -348,9 +348,6 @@ export default function App() {
   // but sorted to the end so it never leads the list. Header renders it as
   // "Unknown".
   const providers = useMemo(() => providersSeen(sessions, agentsAll), [sessions, agentsAll]);
-  // The Anthropic plan meters only make sense when Anthropic is what you're
-  // looking at (no filter + Anthropic present, or explicitly filtered to it).
-  const showUsage = (!filter.provider && providers.includes("Anthropic")) || filter.provider === "Anthropic";
   // Selecting a provider scopes EVERYTHING the client derives from the event
   // buffer — feed, tool-mix, throughput, radar, fleet, KPIs. /stats (cost,
   // latency, timeline) is scoped in parallel on the server via useStats(provider).
@@ -725,6 +722,8 @@ export default function App() {
         // saying all of it, and a strip repeating it is what made the old notch
         // feel like decoration.
         quiet={dashActive}
+        // Whose plan the meters show, when no chat is focused to answer it.
+        filterProvider={filter.provider}
         needs={needs}
         needsList={needsList}
         onNeedChat={openChatFor}

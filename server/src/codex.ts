@@ -73,7 +73,7 @@ const err = (msg: string, status = 400) => new Response(msg + "\n", { status, he
 /** Where Codex keeps its state. `CODEX_HOME` is Codex's own override and is
  *  honoured here so an operator who moved it does not silently get an empty
  *  list. */
-const codexHome = () => process.env.CODEX_HOME || join(homedir(), ".codex");
+export const codexHome = () => process.env.CODEX_HOME || join(homedir(), ".codex");
 
 /**
  * A last resort, not the source of truth.

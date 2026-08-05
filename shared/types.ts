@@ -207,6 +207,39 @@ export interface UsageHistory {
   rollup_from: string | null;
 }
 
+/** Named `QuotaWindow`, not `UsageWindow`: that name used to belong to the
+ *  Anthropic-specific `{ utilization, remaining, resets_at }` in
+ *  web/src/lib/api.ts. Two differently-shaped types under one name, in a
+ *  file that consumed both, was a trap. That shape and its last consumer
+ *  were deleted once this feature replaced them, but the distinct name is
+ *  kept so a future `UsageWindow` cannot silently collide again. */
+export type QuotaWindow = {
+  /** "5h", "weekly" — derived from the provider's window length. */
+  label: string;
+  /** Window length in minutes, so consumers can order short-before-long
+   *  without parsing the label back into a number. */
+  minutes: number;
+  usedPercent: number;
+  /** ISO 8601, or null when the provider does not say. */
+  resetsAt: string | null;
+};
+
+export type ProviderUsage = {
+  provider: "anthropic" | "codex" | "antigravity";
+  /** How the provider is named on screen. */
+  label: string;
+  available: boolean;
+  windows: QuotaWindow[];
+  /** Plan name where the provider reports one ("plus", "max"). */
+  plan?: string;
+  /** When this reading was taken, epoch ms. Live for Anthropic; the last
+   *  recorded turn for Codex. Absent when there is no reading. */
+  observedAt?: number;
+  /** Why there is nothing, when there is nothing. Rendered to the user, so it
+   *  is a sentence rather than an error code. */
+  note?: string;
+};
+
 export interface SkillUsage {
   skill: string;
   calls: number;

@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport, ProviderUsage } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ViewTasksResponse, TaskDetail, ProviderTask } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
@@ -354,7 +354,8 @@ const realApi = {
   exportUrl: (fmt: "csv" | "json", kind: "events" | "daily" = "events") =>
     withToken(`${SERVER}/export?format=${fmt}${kind === "daily" ? "&kind=daily" : ""}`),
   skillsExportUrl: (fmt: "md" | "csv" | "json" = "md") => withToken(`${SERVER}/skills/export?format=${fmt}`),
-  usage: () => get<UsagePayload>(`/usage`),
+  providerUsage: () => get<ProviderUsage[]>(`/usage/providers`),
+  refreshCodexUsage: () => post<{ ok: boolean; error?: string }>(`/usage/codex/refresh`, {}),
   // usage_since: the epoch the call counts are known from. They are bounded
   // by AGENTGLASS_RETENTION_DAYS, so a bare count reads as a lifetime total
   // and is not. 0 means pruning is off and it really is all time.
@@ -850,7 +851,8 @@ const demoApi: typeof realApi = {
   exportUrl: (fmt: "csv" | "json", kind: "events" | "daily" = "events") =>
     kind === "daily" ? demo.dailyExportUri(fmt) : demo.eventsExportUri(fmt),
   skillsExportUrl: () => demo.skillsExportUri(),
-  usage: () => D(demo.usage() as UsagePayload),
+  providerUsage: () => D(demo.providerUsage() as ProviderUsage[]),
+  refreshCodexUsage: () => D({ ok: false, error: "not available in the demo" }),
   skills: () => D(demo.skills()),
   changes: () => D(demo.changes()),
   session: (id: string) => D(demo.session(id)),
@@ -1120,22 +1122,3 @@ export interface PushDevice {
   lastOkAt: number | null;
 }
 
-export interface UsageWindow {
-  utilization: number;
-  remaining: number;
-  resets_at: string | null;
-}
-/** A weekly window scoped to one model — the "Fable" bar. Named rather than
- *  keyed: the label is the server's to choose, and this week's bucket is not
- *  necessarily next week's. Mirrors server/src/usage.ts. */
-export interface UsageScopedWindow extends UsageWindow {
-  name: string;
-}
-export interface UsagePayload {
-  available: boolean;
-  five_hour?: UsageWindow;
-  seven_day?: UsageWindow;
-  scoped?: UsageScopedWindow[];
-  fetched_at: number;
-  error?: string;
-}
