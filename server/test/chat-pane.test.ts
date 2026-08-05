@@ -303,3 +303,70 @@ test("an argument with a quote in it cannot break out of the command", () => {
   // Single-quoted with the POSIX '\'' escape, so the `;` stays inside the word.
   expect(cmd).toContain(`'it'\\''s; rm -rf /'`);
 });
+
+// --- a prompt sent while the CLI is busy -------------------------------------
+// Typing into Claude Code mid-turn does not fail and does not interrupt: the
+// prompt is queued and runs when the current turn ends. The engine had no name
+// for that state and read it as two different wrong ones, so two prompts that
+// were accepted — and that ran — were both reported to the user as errors.
+
+/** Captured from a live pane whose network had dropped mid-turn. The CLI is
+ *  still working on the first prompt, two prompts sent from the chat since are
+ *  queued behind it, and the input box shows the hint it draws while it holds
+ *  them. Note that the queued prompts carry the box's own `❯` glyph at column
+ *  zero, exactly as the live box does. */
+const QUEUED = [
+  "❯ why does the release build fail on a clean checkout?",
+  "",
+  "✳ Unable to connect to API (ENOTIMP) · Retrying in 8s · attempt 5/10",
+  "",
+  "❯ continue",
+  "❯ continue",
+  "                              ✗ Auto-update failed · Run claude doctor",
+  "",
+  "❯ Press up to edit queued messages",
+].join("\n");
+
+test("the input box's hint is not something the user typed", () => {
+  // The whole bug in one assertion. Read as content, the hint is text that is
+  // neither empty nor the prompt we pasted — which is the exact signature of a
+  // picker having opened, and is what got reported as one.
+  expect(mod.inputBox(QUEUED)?.trim()).toBe("");
+  expect(mod.inputBox('❯ Try "edit config.ts to add a flag"')?.trim()).toBe("");
+});
+
+test("a queued prompt is accepted, not diverted into a picker", () => {
+  // Reported as: "This opened an interactive prompt in the chat's tmux pane."
+  // Nothing had opened. The prompt was queued, and it ran.
+  expect(mod.__submitVerdict(QUEUED, "continue")).toBe("queued");
+  expect(mod.__isQueued(QUEUED)).toBe(true);
+});
+
+test("a second prompt is not compared against the hint left by the first", () => {
+  // Reported as: "the chat pane would not accept the prompt." With the hint
+  // already on screen before the paste, the old box reader handed it back as
+  // though it were our text, and every Enter afterwards compared it against
+  // itself and looked swallowed — so the turn pressed Enter into a live pane
+  // until it timed out. An empty-reading box keeps the paste wait waiting.
+  expect(mod.__submitVerdict(QUEUED, "Press up to edit queued messages")).toBe("queued");
+  expect(mod.inputBox(QUEUED)?.trim()).not.toBe("Press up to edit queued messages");
+});
+
+test("a queued pane is not mistaken for a menu, or for one gone idle", () => {
+  // The two states either side of it. Reading queued as `needsYou` would send
+  // the user to their terminal to finish a prompt that does not exist; reading
+  // it as idle would end the turn ~8s in, because the box reads empty and
+  // nothing says "esc to interrupt" while the CLI waits.
+  expect(mod.__needsYou(QUEUED)).toBe(false);
+  expect(mod.__isRunning(QUEUED)).toBe(false);
+  expect(mod.__isQueued(NORMAL)).toBe(false);
+  expect(mod.__isQueued(IDLE_AFTER_LOCAL_COMMAND)).toBe(false);
+  expect(mod.__isQueued(MODEL_PICKER)).toBe(false);
+});
+
+test("a picker still wins over a queue, so Enter is never pressed into a menu", () => {
+  // Ordering, again: the queue check sits below the picker check. Enter in a
+  // `/model` or `/effort` menu writes the user's real settings.json, and no
+  // other state may be allowed to reach past that guard.
+  expect(mod.__submitVerdict(`${MODEL_PICKER}\n❯ Press up to edit queued messages`, "/model")).toBe("diverted");
+});
