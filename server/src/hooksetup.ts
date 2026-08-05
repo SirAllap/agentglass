@@ -106,16 +106,37 @@ function asArray(v: unknown): any[] {
   return Array.isArray(v) ? v : [];
 }
 
+/**
+ * One event's command line, and the `|| exit 0` that keeps it advisory.
+ *
+ * Claude Code reads exit code 2 from a PreToolUse hook as "deny this tool
+ * call", and python exits 2 when it cannot open the script it was given. So a
+ * forwarder that has been moved, renamed or deleted stops being telemetry and
+ * becomes a machine-wide block: every tool call, in every session, in every
+ * project, including the ones needed to undo it. The path written here is
+ * absolute and lives in ~/.claude/settings.json, which outlives this clone.
+ *
+ * Telemetry must never be able to gate tool execution. send_event.py already
+ * exits 0 on every path it controls; this covers the one it does not.
+ *
+ * Kept identical to `hook_command` in hooks/install_hooks.py — the two write
+ * the same file and a settings.json is not allowed to depend on which one did.
+ */
+export function hookCommand(python: string, sendEvent: string, event: string, addChat: boolean, windows = process.platform === "win32"): string {
+  // Quote the script path unconditionally: a clone under a spaced path breaks
+  // the hook command on every platform, not only Windows.
+  let cmd = `${python} "${sendEvent}" --event-type ${event}`;
+  if (addChat) cmd += " --add-chat";
+  return cmd + (windows ? " || exit /b 0" : " || exit 0");
+}
+
 // Append our forwarder to each event after stripping any prior agentglass entry
 // (so a moved install re-points cleanly). Every other hook is preserved.
 function doInstall(cfg: any, sendEvent: string, python: string, statusline?: string): void {
   const hooks = (cfg.hooks ??= {});
   for (const [event, matcher, addChat] of EVENTS) {
     const arr = asArray(hooks[event]).filter((e) => !isOurs(e));
-    // Quote the script path unconditionally: a clone under a spaced path breaks
-    // the hook command on every platform, not only Windows.
-    let cmd = `${python} "${sendEvent}" --event-type ${event}`;
-    if (addChat) cmd += " --add-chat";
+    const cmd = hookCommand(python, sendEvent, event, addChat);
     const entry: any = { hooks: [{ type: "command", command: cmd }] };
     if (matcher !== null) entry.matcher = matcher;
     arr.push(entry);

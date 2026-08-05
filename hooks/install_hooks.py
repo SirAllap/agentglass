@@ -166,6 +166,30 @@ def uninstall_statusline(cfg):
         del cfg["statusLine"]
 
 
+def hook_command(python, send_event, event, add_chat):
+    """One event's command line, and the `|| exit 0` that keeps it advisory.
+
+    Claude Code reads exit code 2 from a PreToolUse hook as "deny this tool
+    call", and python exits 2 when it cannot open the script it was given. So a
+    forwarder that has been moved, renamed or deleted stops being telemetry and
+    starts being a machine-wide block: every tool call, in every session, in
+    every project, including the ones you would need to undo it. The path here
+    is absolute and written into ~/.claude/settings.json, which outlives this
+    clone — `git clean`, a rename, a checkout somewhere else, and it is gone.
+
+    Telemetry must never be able to gate tool execution, so the exit status is
+    swallowed. Nothing is lost by it: send_event.py already exits 0 on every
+    path it controls, and this covers the one it does not.
+    """
+    # Quote the script path unconditionally: a clone living under a spaced
+    # path ("/Users/x/My Projects/…", "C:\Users\…") breaks the hook command
+    # on every platform, not just Windows.
+    cmd = f'{python} "{send_event}" --event-type {event}'
+    if add_chat:
+        cmd += " --add-chat"
+    return cmd + (" || exit /b 0" if os.name == "nt" else " || exit 0")
+
+
 def do_install(cfg):
     """Append our forwarder to each event, first stripping any prior agentglass
     entry (so a moved clone re-points cleanly). All other hooks are preserved."""
@@ -173,12 +197,7 @@ def do_install(cfg):
     python = _hook_python()
     for event, (matcher, add_chat) in EVENTS.items():
         arr = [e for e in hooks.get(event, []) if not _is_ours(e)]
-        # Quote the script path unconditionally: a clone living under a spaced
-        # path ("/Users/x/My Projects/…", "C:\Users\…") breaks the hook command
-        # on every platform, not just Windows.
-        cmd = f'{python} "{SEND_EVENT}" --event-type {event}'
-        if add_chat:
-            cmd += " --add-chat"
+        cmd = hook_command(python, SEND_EVENT, event, add_chat)
         entry = {"hooks": [{"type": "command", "command": cmd}]}
         if matcher is not None:
             entry["matcher"] = matcher

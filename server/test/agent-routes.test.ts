@@ -100,7 +100,11 @@ describe("connecting one", () => {
     expect(String(r.detail).length).toBeGreaterThan(10);
     const cfg = JSON.parse(readFileSync(GEMINI(), "utf8"));
     expect(cfg.telemetry).toMatchObject({ enabled: true, traces: true });
-    expect(String(cfg.telemetry.otlpEndpoint)).toContain("localhost");
+    // Loopback by literal address, not by name. This endpoint is what the
+    // exporter dials on every span, and the server binds IPv4-only — a
+    // `localhost` that resolves to ::1 first would make each one pay a refused
+    // connect before falling back.
+    expect(String(cfg.telemetry.otlpEndpoint)).toContain("127.0.0.1");
   });
 
   test("and the probe agrees, without claiming anything has arrived", async () => {

@@ -63,6 +63,12 @@ connect: ## Auto-connect OTel-capable CLIs (Codex, Gemini, …) to agentglass
 connect-undo: ## Undo the OTel auto-connect
 	python3 hooks/connect_otel.py --undo
 
+connect-opencode: ## Deploy the agentglass plugin into OpenCode (reports to /ingest)
+	python3 hooks/connect_opencode.py
+
+connect-opencode-undo: ## Remove the agentglass OpenCode plugin again
+	python3 hooks/connect_opencode.py --undo
+
 assets: ## Regenerate the README screenshots and hero GIF (demo data only)
 	@echo "==> demo stills + hero.gif"
 	cd web && bun run build:demo
@@ -109,5 +115,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test smoke perf soak typecheck start setup setup-undo connect connect-undo demo-feed assets \
+.PHONY: help install dev server web build test smoke perf soak typecheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open
