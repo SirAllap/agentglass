@@ -3038,11 +3038,12 @@ sudo apt install ./agentglass_*.deb</code>
      near-black text on near-black glass and every headline vanished. The
      light twins belong to the app, where there is a white surface to sit on.
 
-     The choice carries into the demo through the same localStorage key the
-     app reads. Deliberately one-way on arrival: if a visitor's saved theme is
-     a light one, we show its dark twin here and DO NOT write — flipping
-     somebody's app out of light mode because they read a landing page would
-     be rude. Picking a phosphor here is a choice, and that we do carry over.
+     The choice carries into the demo behind the glass through the same
+     localStorage key the app reads — the two are one origin — so the page and
+     the app under the lens are always the same palette. We write the resolved
+     theme id but not the mode, unless the visitor pinned Dark or Light here or
+     in the app: an OS-resolved boot never overrides a real choice, so nobody is
+     flipped out of a light mode they set because they read a landing page.
      ══════════════════════════════════════════════════════════════════ */
   const LS_THEME="agentglass-theme";      // the app and the demo read this
   const lum=hex=>{const h=hex.replace("#",""), n=parseInt(h.length===3?h.replace(/./g,c=>c+c):h,16);
@@ -3060,6 +3061,11 @@ sudo apt install ./agentglass_*.deb</code>
     return DARKS.find(x=>x.name.startsWith(base)) || FALLBACK;
   }
   let T=FALLBACK;
+  const MODE_KEY="agentglass-theme-mode";   // the app's own dark/light/system flag
+  /* Reload the app behind the glass so it re-reads the theme we just wrote. It
+     is same-origin, so this is allowed; it is mostly occluded, so the reload is
+     barely seen. Safe before `beyond` exists (boot) via the guard. */
+  function reloadBeyond(){ try{ if(beyond&&beyond.frame&&beyond.frame.contentWindow) beyond.frame.contentWindow.location.reload(); }catch(e){} }
   function applyTheme(id,remember){
     const t=THEMES.find(x=>x.id===id)||FALLBACK; T=t;
     for(const [k,v] of Object.entries(t.vars)) document.documentElement.style.setProperty(k,v);
@@ -3071,7 +3077,12 @@ sudo apt install ./agentglass_*.deb</code>
     document.documentElement.style.setProperty("--page-base", light ? t.vars["--bg"] : "#030407");
     document.getElementById("thName").textContent=t.name;
     [...document.querySelectorAll(".themer button")].forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.id===t.id)));
-    if(remember){ try{ localStorage.setItem(LS_THEME,t.id); }catch(e){} }
+    // Write the theme id so the demo behind the glass — same origin — boots on
+    // the same palette, dark boxes on a white page no more. Only an explicit
+    // pick writes the mode: an OS-resolved boot leaves it, so a visitor who has
+    // not chosen still tracks their OS, and one who has — in the app or here —
+    // is never flipped out of it.
+    try{ localStorage.setItem(LS_THEME,t.id); if(remember) localStorage.setItem(MODE_KEY, light?"light":"dark"); }catch(e){}
   }
   const themer=document.getElementById("themer");
   // Only the serious pair the app ships on — Dark (Graphite) and Light
@@ -3082,13 +3093,14 @@ sudo apt install ./agentglass_*.deb</code>
     const b=document.createElement("button");
     b.dataset.id=id; b.title=label; b.setAttribute("aria-label",label);
     b.style.background=th.vars["--bg"]; b.style.color=th.vars["--primary"];
-    b.addEventListener("click",()=>applyTheme(id,true)); themer.appendChild(b);
+    b.addEventListener("click",()=>{ applyTheme(id,true); reloadBeyond(); }); themer.appendChild(b);
   });
   (function(){
-    let saved=null; try{ saved=localStorage.getItem(LS_THEME); }catch(e){}
-    // A saved Graphite/Porcelain pick wins; otherwise follow the OS like the
-    // app's "system" mode — Graphite when the OS is dark, Porcelain when light.
-    if(saved==="graphite"||saved==="porcelain") return applyTheme(saved,false);
+    // A pinned Dark/Light (in the app or here) wins; otherwise follow the OS
+    // like the app's "system" mode — Graphite when dark, Porcelain when light.
+    let mode=null; try{ mode=localStorage.getItem(MODE_KEY); }catch(e){}
+    if(mode==="dark") return applyTheme("graphite",false);
+    if(mode==="light") return applyTheme("porcelain",false);
     const osLight = typeof matchMedia==="function" && matchMedia("(prefers-color-scheme: light)").matches;
     applyTheme(osLight ? "porcelain" : "graphite", false);
   })();
@@ -3242,7 +3254,10 @@ sudo apt install ./agentglass_*.deb</code>
     c.beginPath();
     c.moveTo(x+cut,y); c.lineTo(x+w,y); c.lineTo(x+w,y+hh-cut);
     c.lineTo(x+w-cut,y+hh); c.lineTo(x,y+hh); c.lineTo(x,y+cut); c.closePath();
-    c.fillStyle="rgba(2,4,10,"+(0.88*al).toFixed(3)+")"; c.fill();
+    // The surface the resolved block is written on: near-black over a dark
+    // combiner, near-white over a light one, so the block owns its own pixels
+    // in either theme instead of being a dark box on a white page.
+    c.fillStyle="rgba("+(lum(T.vars["--bg"])>=128?"245,245,247":"2,4,10")+","+(0.88*al).toFixed(3)+")"; c.fill();
     c.strokeStyle=ink(col,.45*al); c.lineWidth=1; c.stroke();
   }
   /* Symbology that has to survive a lit background under it. A dark halo is
