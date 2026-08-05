@@ -18,8 +18,7 @@
  * them silently multiplied the repository's weight.
  */
 import { existsSync, mkdtempSync, renameSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /** The width the README shows a full-bleed shot at. */
 export const STILL_W = 1760;
@@ -29,7 +28,10 @@ export const THEME_W = 880;
 export function finishStill(file: string, width: number = STILL_W) {
   // Via a scratch directory: ffmpeg cannot read and write the same path in one
   // invocation, and it must not leave a half-written asset behind if it fails.
-  const work = mkdtempSync(join(tmpdir(), "agx-still-"));
+  // Kept beside the target rather than in the system tmp: when they land on
+  // different filesystems (tmp is often a tmpfs) the closing rename fails with
+  // EXDEV, and same-directory keeps that rename atomic as well as cross-device.
+  const work = mkdtempSync(join(dirname(file), ".agx-still-"));
   try {
     const pal = join(work, "palette.png");
     const out = join(work, "out.png");

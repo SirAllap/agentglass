@@ -6,7 +6,7 @@ import { parseControlCmd } from "../src/control.ts";
 
 describe("parseControlCmd — view", () => {
   test("accepts every real view id", () => {
-    for (const to of ["git", "diff", "pr", "docker", "term", "chat"]) {
+    for (const to of ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files"]) {
       expect(parseControlCmd({ cmd: "view", to })).toEqual({ cmd: "view", to } as never);
     }
   });

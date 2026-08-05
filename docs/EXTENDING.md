@@ -265,8 +265,8 @@ curl -sS http://localhost:4000/control \
 
 | `cmd` | Fields | Effect |
 | --- | --- | --- |
-| `view` | `to`: `git`\|`diff`\|`pr`\|`docker`\|`term`\|`chat` | open the workspace on that view |
-| `workspace` | `open?`: boolean | toggle (absent) or set the workspace overlay |
+| `view` | `to`: `dash`\|`git`\|`diff`\|`pr`\|`tasks`\|`docker`\|`term`\|`chat`\|`browser`\|`files` | switch the window to that view |
+| `workspace` | `open?`: boolean | toggle (absent) or set — swaps between the dashboard and the last view, the way `Ctrl+\` does |
 | `esc` | — | close panels / workspace, as Escape does |
 | `open` | `what`: `stats`\|`skills`\|`search`\|`help`\|`palette` | open that panel |
 | `theme` | `name?`: id, or `dir?`: `1`\|`-1` | pin a palette, or step the list |
@@ -305,7 +305,7 @@ Add a palette to `THEMES`, restart the UI, pick it in the theme switcher.
 
 ### A view in the workspace
 
-The six views are a list, and the rail, the shortcuts and the tooltips all read
+The views are a list, and the rail, the shortcuts and the tooltips all read
 from it — so most of a new view is one entry:
 
 ```ts

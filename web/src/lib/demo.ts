@@ -13,6 +13,8 @@ import type {
   GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, DockerOverview, DockerStat, DockerActionResult,
   PrRepoId, PrSummary, PrDetail, PrThread, PrCheck, PrCheckRollup, PrCheckState, PrListResponse,
   UsageDay, UsageHistory, ActionRecord, ProviderUsage,
+  IssueRow, IssueDetail, IssuesReport, IssueWork, FileEntry, TreeReport, FindReport,
+  PortsReport, PortEntry, ResourceReport, ProcEntry, SpaceReport, SpaceDir,
 } from "../../../shared/types.ts";
 import { modelLabelOf, providerOf } from "./format.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
@@ -1122,4 +1124,128 @@ export function prDetail(n: number): { ok: boolean; detail?: PrDetail; error?: s
 }
 export function prDiff(n: number): { ok: boolean; text?: string; error?: string } {
   return n === 482 ? { ok: true, text: PR_482_DIFF } : { ok: true, text: "" };
+}
+
+// --- Tasks: GitHub issues, fabricated for the demo -------------------------
+const isoAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
+const ISSUES: IssueDetail[] = [
+  {
+    number: 214, title: "Cart total is a cent low on 3-for-2 bundles", state: "OPEN", author: "mira",
+    labels: [{ name: "bug", color: "d73a4a" }, { name: "pricing", color: "0e8a16" }], assignees: ["you"], comments: 4,
+    updatedAt: isoAgo(2 * 3600_000), url: "https://github.com/acme/shop-api/issues/214",
+    createdAt: isoAgo(2 * 86400_000), milestone: "Checkout hardening", work: null,
+    body: "Rounding runs per line and again on the subtotal. Repro: three of SKU-8841 under the 3-for-2 promo — the total lands a cent low. Round once, on the order total.",
+  },
+  {
+    number: 209, title: "Idempotency keys on the payments webhook", state: "OPEN", author: "you",
+    labels: [{ name: "reliability", color: "1d76db" }], assignees: [], comments: 1,
+    updatedAt: isoAgo(6 * 3600_000), url: "https://github.com/acme/payments-svc/issues/209",
+    createdAt: isoAgo(4 * 86400_000), milestone: null,
+    work: { number: 209, repo: "payments-svc", branch: "209-webhook-idempotency", path: "/home/dev/code/payments-svc-209", mode: "worktree", startedAt: Date.now() - 3600_000 },
+    body: "A retried Stripe event double-credits the wallet. Store the event id and short-circuit a repeat inside the same transaction.",
+  },
+  {
+    number: 198, title: "Inventory count drifts after a partial refund", state: "OPEN", author: "ana",
+    labels: [{ name: "bug", color: "d73a4a" }, { name: "inventory", color: "5319e7" }], assignees: ["you"], comments: 7,
+    updatedAt: isoAgo(26 * 3600_000), url: "https://github.com/acme/inventory-svc/issues/198",
+    createdAt: isoAgo(9 * 86400_000), milestone: "Checkout hardening", work: null,
+    body: "A partial refund restocks the full quantity. The restock should mirror the refunded lines, not the original order.",
+  },
+  {
+    number: 187, title: "Skeleton the product grid while it loads", state: "OPEN", author: "you",
+    labels: [{ name: "ux", color: "fbca04" }, { name: "good first issue", color: "7057ff" }], assignees: [], comments: 0,
+    updatedAt: isoAgo(3 * 86400_000), url: "https://github.com/acme/shop-web/issues/187",
+    createdAt: isoAgo(5 * 86400_000), milestone: null, work: null,
+    body: "The grid pops in. A skeleton for the first paint would settle the layout.",
+  },
+  {
+    number: 176, title: "Checkout 500s on an empty cart instead of redirecting", state: "OPEN", author: "sam",
+    labels: [{ name: "bug", color: "d73a4a" }], assignees: [], comments: 2,
+    updatedAt: isoAgo(4 * 86400_000), url: "https://github.com/acme/shop-web/issues/176",
+    createdAt: isoAgo(7 * 86400_000), milestone: null, work: null,
+    body: "Hitting /checkout with nothing in the cart throws. It should bounce to the cart with a note.",
+  },
+];
+export function issues(state = "open", q = "", assignee = ""): IssuesReport {
+  const t = q.trim().toLowerCase();
+  const rows = ISSUES
+    .filter((i) => state === "all" || i.state.toLowerCase() === state)
+    .filter((i) => !t || i.title.toLowerCase().includes(t))
+    .filter((i) => !assignee || i.assignees.includes("you"))
+    .map((i): IssueRow => ({
+      number: i.number, title: i.title, state: i.state, author: i.author,
+      labels: i.labels, assignees: i.assignees, comments: i.comments, updatedAt: i.updatedAt, url: i.url,
+    }));
+  return { ok: true, issues: rows };
+}
+export function issueDetail(n: number): { ok: boolean; issue?: IssueDetail; error?: string } {
+  const d = ISSUES.find((i) => i.number === n);
+  return d ? { ok: true, issue: d } : { ok: false, error: "no such issue in the demo" };
+}
+export function issuesWork(): { work: IssueWork[] } {
+  return { work: ISSUES.map((i) => i.work).filter((w): w is IssueWork => !!w) };
+}
+
+// --- Files: a checkout's tree, fabricated for the demo ---------------------
+export function filesTree(rel = ""): TreeReport {
+  const e = (name: string, dir: boolean, status?: string, size?: number): FileEntry => ({ name, rel: rel ? `${rel}/${name}` : name, dir, status, size });
+  const T: Record<string, FileEntry[]> = {
+    "": [e("src", true), e("public", true), e("tests", true), e("package.json", false, "M", 1240), e("README.md", false, undefined, 3810), e("tsconfig.json", false, undefined, 410), e("vite.config.ts", false, undefined, 690), e(".gitignore", false, undefined, 120)],
+    "src": [e("components", true), e("lib", true), e("routes", true), e("App.tsx", false, "M", 4102), e("main.tsx", false, undefined, 620), e("index.css", false, "?", 1840)],
+    "src/components": [e("Cart.tsx", false, "M", 5211), e("Checkout.tsx", false, "A", 3980), e("ProductCard.tsx", false, undefined, 2140), e("Header.tsx", false, undefined, 1180)],
+    "src/lib": [e("pricing.ts", false, "M", 2960), e("api.ts", false, undefined, 5320), e("format.ts", false, undefined, 880)],
+  };
+  return { ok: true, root: "/home/dev/code/shop-web", rel, entries: T[rel] ?? T[""] };
+}
+export function filesFind(q: string): FindReport {
+  const all = ["src/components/Cart.tsx", "src/components/Checkout.tsx", "src/lib/pricing.ts", "src/routes/checkout.ts", "package.json", "README.md"];
+  const t = q.trim().toLowerCase();
+  return { ok: true, files: t ? all.filter((f) => f.toLowerCase().includes(t)) : all, truncated: false, via: "demo" };
+}
+
+// --- Ports: what is listening on this (fictional) dev machine ---------------
+const GB = 1024 ** 3, MB = 1024 ** 2;
+export function machinePorts(): PortsReport {
+  const ports: PortEntry[] = [
+    { port: 5173, addr: "127.0.0.1", proc: "vite", pid: 48213, cwd: "/home/dev/code/shop-web", mine: true, ageSec: 5400, fromAgent: true, cwdGone: false },
+    { port: 3000, addr: "127.0.0.1", proc: "bun", pid: 48090, cwd: "/home/dev/code/shop-api", mine: true, ageSec: 5460, fromAgent: true, cwdGone: false },
+    { port: 8080, addr: "0.0.0.0", proc: "node", pid: 47771, cwd: "/home/dev/code/inventory-svc", mine: true, ageSec: 12600, fromAgent: true, cwdGone: false },
+    { port: 4317, addr: "127.0.0.1", proc: "otelcol", pid: 4102, cwd: null, mine: true, ageSec: 86400, fromAgent: false, cwdGone: false },
+    { port: 5432, addr: "127.0.0.1", proc: "postgres", pid: 1893, cwd: null, mine: false, ageSec: 259200, fromAgent: false, cwdGone: false },
+    { port: 9229, addr: "127.0.0.1", proc: "node", pid: 41220, cwd: "/home/dev/code/payments-svc-209", mine: true, ageSec: 640, fromAgent: true, cwdGone: false },
+    { port: 4173, addr: "127.0.0.1", proc: "node", pid: 30112, cwd: "/home/dev/code/shop-web-old", mine: true, ageSec: 46800, fromAgent: true, cwdGone: true },
+  ];
+  return { ports, mine: ports.filter((p) => p.mine).length, external: ports.filter((p) => p.addr === "0.0.0.0").length };
+}
+
+// --- Resources: this machine's load and the processes that are ours ---------
+export function machineResources(_limit = 40): ResourceReport {
+  const P = (pid: number, ppid: number, comm: string, cmd: string, cpu: number, rssMB: number, cwd: string | null, ours: boolean): ProcEntry =>
+    ({ pid, ppid, comm, cmd, cpu, rss: Math.round(rssMB * MB), cwd, ours });
+  const procs: ProcEntry[] = [
+    P(48213, 48090, "node", "vite dev --host 127.0.0.1", 41.2, 512, "/home/dev/code/shop-web", true),
+    P(48090, 1, "bun", "bun run --hot src/index.ts", 22.8, 288, "/home/dev/code/shop-api", true),
+    P(41220, 1, "node", "node --inspect dist/server.js", 63.4, 421, "/home/dev/code/payments-svc-209", true),
+    P(47771, 1, "node", "node build/index.js", 8.1, 196, "/home/dev/code/inventory-svc", true),
+    P(46001, 1, "claude", "claude --dangerously-skip-permissions", 4.7, 174, "/home/dev/code/shop-web", true),
+    P(1893, 1, "postgres", "postgres -D /var/lib/postgres/data", 2.3, 640, null, false),
+    P(9931, 1, "chrome", "chrome --type=renderer", 17.9, 903, null, false),
+  ];
+  const oursRss = procs.filter((p) => p.ours).reduce((s, p) => s + p.rss, 0);
+  const oursCpu = procs.filter((p) => p.ours).reduce((s, p) => s + (p.cpu ?? 0), 0);
+  return {
+    procs, totalRss: procs.reduce((s, p) => s + p.rss, 0), totalCpu: procs.reduce((s, p) => s + (p.cpu ?? 0), 0),
+    oursRss, oursCpu, seen: procs.length, rated: true,
+    machine: { cpu: 38.6, cores: 16, memUsed: Math.round(18.4 * GB), memTotal: 32 * GB, swapUsed: Math.round(1.2 * GB), swapTotal: 8 * GB, tempC: 57, load1: 3.7, diskFree: Math.round(411.5 * GB), diskTotal: 1024 * GB },
+  };
+}
+export function machineSpace(root = "/home/dev/code/shop-web"): SpaceReport {
+  const dirs: SpaceDir[] = [
+    { path: `${root}/node_modules`, name: "node_modules", bytes: Math.round(1.42 * GB), reclaimable: true },
+    { path: `${root}/dist`, name: "dist", bytes: Math.round(210 * MB), reclaimable: true },
+    { path: `${root}/.vite`, name: ".vite", bytes: Math.round(96 * MB), reclaimable: true },
+    { path: `${root}/src`, name: "src", bytes: Math.round(18 * MB), reclaimable: false },
+    { path: `${root}/public`, name: "public", bytes: Math.round(7 * MB), reclaimable: false },
+  ];
+  return { root, bytes: dirs.reduce((s, d) => s + d.bytes, 0), freeable: dirs.filter((d) => d.reclaimable).reduce((s, d) => s + d.bytes, 0), dirs };
 }
