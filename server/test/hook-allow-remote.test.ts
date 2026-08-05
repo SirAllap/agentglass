@@ -15,6 +15,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
 const python = ["python3", "python", "py"].find(
   (exe) => spawnSync(exe, ["--version"], { stdio: "ignore" }).status === 0,
@@ -85,5 +86,48 @@ describe("the hooks' local-only guard", () => {
     const stderr = await runHook("send_event.py", url, "1");
     expect(stderr).not.toContain("refusing non-local server");
     expect((await received).source_app).toBeString();
+  });
+});
+
+/*
+ * The other half of the same guard: `localhost` is allowed, and rewritten.
+ *
+ * Allowed because it is this machine, which is all the guard is about.
+ * Rewritten because of what it costs — the server binds IPv4-only, so on a host
+ * whose resolver answers ::1 first, every single event pays a refused IPv6
+ * connect before falling back to IPv4. Doing it in the guard rather than only
+ * in the default is what carries the fix to installs that already wrote
+ * `localhost` into a settings.json months ago.
+ */
+describe("what the hooks actually connect to", () => {
+  test.if(!!python)("a localhost URL is delivered to 127.0.0.1", async () => {
+    // Bound to 127.0.0.1 only. A hook that really resolved `localhost` could
+    // still land here on most machines, so the assertion is on the Host header:
+    // that is the address the client dialled, spelled out.
+    let resolveHost!: (h: string | null) => void;
+    const received = Promise.race([
+      new Promise<string | null>((r) => { resolveHost = r; }),
+      Bun.sleep(5_000).then(() => { throw new Error("the event never arrived"); }),
+    ]);
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) { await req.text(); resolveHost(req.headers.get("host")); return new Response("ok"); },
+    });
+    servers.push(server);
+
+    const stderr = await runHook("send_event.py", `http://localhost:${server.port}`, undefined);
+    expect(stderr).not.toContain("refusing non-local server");
+    expect(await received).toBe(`127.0.0.1:${server.port}`);
+  });
+
+  test("the default written into every hook is already the fast one", () => {
+    // The rewrite is the safety net for what is already installed; the default
+    // is what a fresh setup gets, and it should not need the net.
+    for (const name of HOOKS) {
+      const src = readFileSync(new URL("../../hooks/" + name, import.meta.url), "utf8");
+      expect(src, name).toContain("http://127.0.0.1:4000");
+      expect(src, name).not.toContain('"http://localhost:4000"');
+    }
   });
 });

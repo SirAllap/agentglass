@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/")
+SERVER = os.environ.get("AGENTGLASS_SERVER", "http://127.0.0.1:4000").rstrip("/")
 
 def _agentglass_local_only(url):
     """Refuse to send transcript/telemetry anywhere but this machine.
@@ -31,17 +31,28 @@ def _agentglass_local_only(url):
     set it), and the payloads carry full session content. Opt out explicitly
     with AGENTGLASS_ALLOW_REMOTE=1 if you really run the server elsewhere."""
     import os
-    from urllib.parse import urlparse
+    from urllib.parse import urlparse, urlunparse
     # Exactly "1": a truthy test would let AGENTGLASS_ALLOW_REMOTE=0 — which
     # reads as "off" to every person who writes it — switch the guard off
     # instead of on. So would "false", "no" and "off".
     if os.environ.get("AGENTGLASS_ALLOW_REMOTE") == "1":
-        return
+        return url
     u = urlparse(url or "")
     if u.scheme not in ("http", "https") or (u.hostname or "") not in ("localhost", "127.0.0.1", "::1"):
         import sys
         sys.stderr.write("[agentglass] refusing non-local server %r\n" % url)
         sys.exit(0)
+    # `localhost` is still allowed above — it is this machine, which is the only
+    # thing the guard is about. It is rewritten because of what it costs: the
+    # server binds IPv4-only, and on a host whose resolver answers ::1 first
+    # every event pays a refused IPv6 connect before falling back. That is
+    # microseconds on most machines and seconds on some. Rewriting here rather
+    # than only in the default means an install that already wrote `localhost`
+    # into its settings.json gets the fix without re-running setup.
+    if u.hostname == "localhost":
+        netloc = "127.0.0.1" + (":%d" % u.port if u.port else "")
+        url = urlunparse(u._replace(netloc=netloc))
+    return url
 
 
 
@@ -153,7 +164,8 @@ def main() -> None:
     # says it does.
     ap.add_argument("--only", choices=sorted(WIRERS), help="connect (or unwire) just this agent")
     args = ap.parse_args()
-    _agentglass_local_only(SERVER)
+    global SERVER
+    SERVER = _agentglass_local_only(SERVER)
 
     if args.postinstall and os.environ.get("AGENTGLASS_NO_OTEL"):
         print("[agentglass] AGENTGLASS_NO_OTEL set — skipping OTel auto-connect.")

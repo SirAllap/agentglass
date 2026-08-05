@@ -77,9 +77,14 @@ describe("what the README tells people about reaching this from elsewhere", () =
     // Quoted in the README because the mistake it prevents — pointing the hooks
     // at a public hostname — looks like the obvious thing to do once a tunnel
     // exists.
-    expect(section).toContain("http://localhost:4000");
-    expect(repo("hooks/send_event.py")).toContain('"http://localhost:4000"');
-    expect(repo("hooks/gate_event.py")).toContain('"http://localhost:4000"');
+    //
+    // The literal address matters as much as the claim: it is 127.0.0.1 rather
+    // than localhost because the server binds IPv4-only, and a resolver that
+    // answers ::1 first makes every event pay a refused connect. A README that
+    // still said localhost would be documenting the slow path as the default.
+    expect(section).toContain("http://127.0.0.1:4000");
+    expect(repo("hooks/send_event.py")).toContain('"http://127.0.0.1:4000"');
+    expect(repo("hooks/gate_event.py")).toContain('"http://127.0.0.1:4000"');
   });
 
   test("the reverse-proxy variable it names is the one the guard reads", () => {

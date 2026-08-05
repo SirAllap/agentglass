@@ -451,7 +451,7 @@ because Tailscale looked like a bigger setup than it is.
 Either way, **the tunnel is for the browser, not for the hooks.** Everything
 that reports into agentglass — the Claude Code hooks, the OTel exporters, the
 gate that holds a tool call — posts to the server on the machine it is running
-on, at `http://localhost:4000`. It has to: the hook scripts refuse to send a
+on, at `http://127.0.0.1:4000`. It has to: the hook scripts refuse to send a
 transcript anywhere but this host, precisely because a cloned repository can set
 `AGENTGLASS_SERVER` in its own `settings.json` and would otherwise redirect your
 prompts and file contents to somebody else. Pointing them at a public hostname
@@ -978,7 +978,7 @@ The receiver accepts OTLP/HTTP in **both protobuf (the SDK default) and JSON**, 
 no Collector is needed — just aim any exporter's endpoint at the server:
 
 ```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4000
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4000
 # spans POST to /v1/traces automatically (protobuf or http/json both accepted)
 ```
 
@@ -1024,7 +1024,7 @@ in its own buckets rather than charged again as ordinary input.
 | `AGENTGLASS_PRICING` | — | Path to a JSON pricing override (see `server/src/pricing.ts`). |
 | `AGENTGLASS_WEBHOOK` | — | POST `{text}` alerts here (Slack/Discord compatible). |
 | `AGENTGLASS_NOTIFY` | — | `1` → fire desktop alerts. A connected client (browser or desktop app) raises a **native OS notification** on any platform; `notify-send` is the fallback for a headless server with nothing attached to show it. Does **not** gate Web Push to a phone, which is subscribed per device from the companion's own settings — see [Alerts that reach a locked phone](#alerts-that-reach-a-locked-phone). |
-| `AGENTGLASS_SERVER` | `http://localhost:4000` | Used by the hook/seed scripts. Refused unless it points at this machine — see the next row. |
+| `AGENTGLASS_SERVER` | `http://127.0.0.1:4000` | Used by the hook/seed scripts. Refused unless it points at this machine — see the next row. A `localhost` value is accepted and rewritten to `127.0.0.1` before connecting: the server binds IPv4-only, so on a host that resolves `localhost` to `::1` first, every event pays a refused connect before falling back. |
 | `AGENTGLASS_ALLOW_REMOTE` | — | `1` → let the hook scripts post to a **non-local** `AGENTGLASS_SERVER`. Off by default and deliberately awkward: those payloads carry full session transcripts, and `AGENTGLASS_SERVER` can be set by a repo-local `settings.json` — so a cloned repository could otherwise redirect your transcripts to somebody else's host. Set it only if you genuinely run the server on another machine. |
 | `VITE_CW_SERVER` | `http://<host>:4000` | UI → server URL (build/dev time). Unset, the UI resolves same-origin when the server itself served it (single-port mode), `:4000` otherwise. |
 | `AGENTGLASS_GIT_WRITE_DISABLED` | — | `1` → make the **Source control** panel read-only (no stage / commit / push). Also makes the **Pull requests** panel read-only — no merge, close, review submit or branch update. |
