@@ -106,8 +106,20 @@ async function main() {
       await cdp.send("Emulation.setDeviceMetricsOverride", { width: W, height: h, deviceScaleFactor: SCALE, mobile: false });
       await Bun.sleep(1200);
     };
-    const need = Number(await cdp.ev(`(()=>{const a=document.querySelector('.aurora');return a?a.scrollHeight:0})()`)) || 1600;
-    const TALL = Math.min(2200, need + 8);
+    // The rail boots on the git view — loadLastView() defaults to it — so the
+    // dashboard is selected for its own shot rather than assumed to be up. (The
+    // `.aurora` this used to measure is the animated backdrop, present on every
+    // view, so the shot was whatever the rail booted into, sized to the backdrop
+    // — which is how the dashboard still ended up being the git panel.)
+    await cdp.ev(`(()=>{document.querySelector('[data-view="dash"]')?.click();return 1})()`);
+    await Bun.sleep(1500);
+    // Size the viewport to the dashboard, not the dashboard to the viewport: its
+    // content is a scroller, so measure where it starts plus how tall it runs
+    // and give it exactly that. A guessed constant clips the bottom row — cost,
+    // performance, timeline — the first time a card is added.
+    const need = Number(await cdp.ev(`(()=>{const s=[...document.querySelectorAll('.agx-scroll')].filter(e=>e.offsetParent);
+      let m=0; for(const e of s){const r=e.getBoundingClientRect(); m=Math.max(m,Math.ceil(r.top+e.scrollHeight));} return m;})()`)) || 1600;
+    const TALL = Math.min(2400, need + 24);
     console.log(`dashboard needs ${need}px; panels shot at ${W}x${PANEL_H}`);
 
     /** Take a still, and optionally hold it in the GIF for `beats` frames.
@@ -163,6 +175,13 @@ async function main() {
           .find(b=>/^Files\\b/.test(b.textContent.trim()));b?.click();return !!b})()`);
         await Bun.sleep(1800);
       }
+      // Tasks opens with an empty detail pane ("Pick an issue"); open the first
+      // one so the shot shows an issue read, not half a blank column.
+      if (id === "tasks") {
+        await cdp.ev(`(()=>{const b=[...document.querySelectorAll('button')]
+          .find(b=>/Cart total is a cent low/.test(b.textContent||''));b?.click();return !!b})()`);
+        await Bun.sleep(1400);
+      }
       await capture(id, STILLS_ONLY ? 0 : 16);
     }
 
@@ -198,9 +217,16 @@ async function main() {
       const ok = await cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme',${lit(t)});window.dispatchEvent(new StorageEvent('storage',{key:'agentglass-theme'}));return 1}catch{return 0}})()`);
       if (!ok) continue;
       await cdp.ev(`location.reload()`);
-      await until(cdp, `document.querySelector('#root')?.children.length`, `the ${t} theme`);
-      await setViewport(PANEL_H);
-      await Bun.sleep(2200);
+      // Wait for the rail itself, not just #root: the reload restores the last
+      // view (not the dashboard), and clicking before the rail has mounted is
+      // what left both theme shots on the empty chat pane.
+      await until(cdp, `document.querySelector('[data-view="dash"]')`, `the ${t} rail`);
+      await Bun.sleep(700);
+      // Back to the dashboard for every theme, at its own height, so the Dark
+      // and Light shots are the same picture in two palettes.
+      await cdp.ev(`(()=>{document.querySelector('[data-view="dash"]')?.click();return 1})()`);
+      await Bun.sleep(1800);
+      await setViewport(TALL);
       await capture(`theme-${t}`, 0, tw);
     }
 
