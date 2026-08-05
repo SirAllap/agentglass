@@ -108,7 +108,7 @@ export function branchNameFor(number: number, title: string): string {
 export function worktreePathFor(root: string, number: number, title: string): string {
   const parent = dirname(root);
   const name = basename(root).replace(/\.git$/, "");
-  const slug = branchNameFor(number, title).replace(/^issue-/, "issue-");
+  const slug = branchNameFor(number, title);
   return join(parent, `${name}-${slug}`);
 }
 
