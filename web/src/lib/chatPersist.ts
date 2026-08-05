@@ -13,6 +13,7 @@
 // also on disk in claude's own transcript, but the *set of open tabs* is known
 // nowhere but here.
 
+import { asAgent } from "./chatStore.ts";
 import type { Chat, ChatMsg, ChatTool } from "./chatStore.ts";
 
 const KEY = "agentglass.chats.v1";
@@ -31,7 +32,7 @@ const MAX_BYTES = 2_000_000;
 /** What actually gets written. Everything absent from here is either not
  *  serializable or not true after a reload. */
 type StoredChat = Pick<Chat,
-  | "id" | "cwd" | "model" | "resolvedModel" | "mode" | "title" | "sessionId" | "draft"
+  | "id" | "cwd" | "agent" | "model" | "resolvedModel" | "mode" | "title" | "sessionId" | "draft"
   | "queued" | "createdAt" | "unread" | "renamed" | "attention" | "usage" | "liveFrom"
   | "engine" | "attachCommand" | "effort">
   & { messages: ChatMsg[] };
@@ -69,7 +70,7 @@ function pack(c: Chat): StoredChat {
   if (last && last.role === "assistant" && !last.text && !last.tools.length) messages = messages.slice(0, -1);
 
   return {
-    id: c.id, cwd: c.cwd, model: c.model,
+    id: c.id, cwd: c.cwd, agent: c.agent, model: c.model,
     // The window the CLI actually resolved, which is what the context meter
     // measures against. Without it a restored chat measures a 1M session against
     // the 200k default until its next turn re-reports one.
@@ -93,6 +94,12 @@ function pack(c: Chat): StoredChat {
 function unpack(s: StoredChat): Chat {
   return {
     ...s,
+    // Written down since chats gained a second agent. Everything saved before
+    // that was a Claude chat, so a missing field is not corruption — it is an
+    // older payload saying what it knew. Defaulting it costs nothing and means
+    // the version number does not have to move, which would have thrown those
+    // tabs away instead.
+    agent: asAgent(s.agent),
     messages: (s.messages ?? []).map((m) => ({ ...m, streaming: undefined })),
     sending: false,
     abort: null,

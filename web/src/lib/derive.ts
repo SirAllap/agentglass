@@ -1,7 +1,9 @@
 import type { WatchEvent, OpenToolCall, Liveness, SessionRollup } from "../../../shared/types.ts";
 import { agentKey, fmtMs, sessionTitle } from "./format.ts";
+import { providerOf, UNKNOWN } from "../../../shared/models.ts";
 import { sessionWorktree } from "./worktree.ts";
 import { ctxLimitOf } from "./contextWindow.ts";
+import type { AgentKind } from "./agents.ts";
 
 export type AgentStatus = "working" | "waiting" | "errored" | "idle";
 
@@ -545,3 +547,94 @@ export const sessionIsLive = (
   s: { ended_at?: number | null; last_seen: number },
   now = Date.now(),
 ): boolean => !s.ended_at && now - s.last_seen < SESSION_LIVE_MS;
+
+/**
+ * Which CLI owns a session on the radar.
+ *
+ * The question only has to be answered to resume one: a thread id means
+ * something to the binary that minted it and nothing to the other, so opening a
+ * Codex session as a Claude chat would hand `claude --resume` an id it has
+ * never seen and fail on the first turn.
+ *
+ * `source_app` is the stronger signal and is checked first. It is whatever the
+ * exporter called itself — Codex's OTel records arrive as `codex_exec` from
+ * `codex exec` and `codex_cli_rs` from the TUI, so this matches on the prefix
+ * rather than on either exact name. Claude Code's hooks send the project
+ * directory's name instead, which is why the model is the fallback and not the
+ * primary: it is the only thing a session with an unfamiliar `source_app` has
+ * to go on.
+ *
+ * Defaults to Claude, because that is the overwhelming majority of what this
+ * app sees and because being wrong in that direction is the recoverable one:
+ * `claude --resume` with a stranger's id reports an unknown session, while
+ * `codex exec resume` would be asked to continue a conversation it does not
+ * have.
+ */
+/**
+ * Which CLI could pick this session back up, or null if none of them could.
+ *
+ * Deliberately not `agentOf`, and the difference is the whole point of having
+ * both. `agentOf` answers "whose is this?" and falls back to Claude, because
+ * for labelling a session that is the overwhelmingly likely answer and being
+ * wrong costs a wrong icon. Resuming cannot use a fallback: a Gemini CLI
+ * session would be offered as a Claude one and hand `claude --resume` an id it
+ * has never seen, which fails on the first turn with nothing to explain it.
+ *
+ * So Claude is only accepted when something corroborates it. An unresolved
+ * model still counts — early Claude Code rows recorded no model, and those are
+ * exactly the old sessions worth reaching for — but a session positively
+ * identified as somebody else's (Gemini CLI, an OTel exporter this panel cannot
+ * drive) is refused rather than guessed at.
+ */
+export const resumableAgent = (
+  s: { source_app?: string | null; model_name?: string | null },
+): AgentKind | null => {
+  const a = agentOf(s);
+  if (a !== "claude") return a; // named itself; nothing to second-guess
+  const p = providerOf(s.model_name);
+  return p === "Anthropic" || p === UNKNOWN ? "claude" : null;
+};
+
+export const agentOf = (s: { source_app?: string | null; model_name?: string | null }): AgentKind => {
+  const app = (s.source_app ?? "").toLowerCase();
+  // Antigravity is matched on `source_app` alone, and only on `source_app`.
+  // Its events are minted by this server (server/src/antigravity.ts), which
+  // sets the name, so the signal is exact rather than a guess — and the model
+  // is no help at all here: `agy` runs Claude and open-weight models as
+  // happily as Gemini ones, so a model-name fallback would file half its
+  // sessions under the wrong CLI.
+  if (app.startsWith("antigravity")) return "antigravity";
+  if (app.startsWith("codex")) return "codex";
+  if (/^(gpt|o[134])[-.]/i.test(s.model_name ?? "")) return "codex";
+  return "claude";
+};
+
+/**
+ * Every provider the cockpit has seen, for the header's filter.
+ *
+ * Takes both sources on purpose. `agents` is derived from the live event
+ * buffer, which is capped: a quiet agent — a Codex or Antigravity chat that ran
+ * nine events an hour ago — falls out of it as soon as a busy Claude session
+ * fills it, and any provider it was the only evidence for leaves the filter
+ * with it. That is how the dashboard came to offer "Anthropic" as the only
+ * provider ever seen while the server's own scoped answer listed three models.
+ *
+ * `sessions` is the roll-up over the whole retention window, so it carries the
+ * quiet ones; `agents` is the fresher of the two and carries a session that
+ * started since the last poll. Neither alone is right.
+ *
+ * `unknown` — sessions whose model never resolved — is kept as a real bucket so
+ * it can be filtered to and the per-provider views still add up, but sorted
+ * last so it never leads the list.
+ */
+export function providersSeen(
+  sessions: { session_id: string; model_name?: string | null }[],
+  agents: { session_id: string; model_name?: string | null }[],
+): string[] {
+  const bySession = new Map<string, string>();
+  for (const s of sessions) if (s.model_name) bySession.set(s.session_id, providerOf(s.model_name));
+  for (const a of agents) if (a.model_name) bySession.set(a.session_id, providerOf(a.model_name));
+  const seen = new Set(bySession.values());
+  const known = [...seen].filter((p) => p !== UNKNOWN).sort();
+  return seen.has(UNKNOWN) ? [...known, UNKNOWN] : known;
+}

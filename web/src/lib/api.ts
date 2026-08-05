@@ -1,4 +1,4 @@
-import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport } from "../../../shared/types.ts";
+import type { WatchEvent, SessionRollup, StatsSummary, SkillInfo, FileChange, DiffHunk, Insight, SearchHit, PendingGate, GateRecord, SessionDetail, GitStatusResponse, CommitResult, WalkthroughResult, WalkthroughInputFile, GitRepoRef, FsCompletion, WorkingTree, GitActionResult, GitBranch, GitCommit, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, GitLogEntry, DockerOverview, DockerStat, DockerActionResult, DockerCapability, TerminalCommands, CodexStatus, AgentCliStatus, AgentModel, ChatImage, ConflictBlock, BlockChoice, UpdateStatus, ReleaseNotes, PrListResponse, PrDetail, PrActionResult, GitCapability, HookSetupStatus, HookSetupResult, PrCheckJob, ChatEngine, TmuxEngineInfo, ChatEffort, RemoteStatus, PairState, PairedDevice, DeviceScope, ChatPaneList, Budget, BudgetStatus, AgentProbe, UsageHistory, ActionRecord, IssuesReport, IssueDetail, IssueWork, IssueStartResult, IssueActionResult, StartMode, PortsReport, ResourceReport, SpaceReport, TreeReport, FindReport, GrepReport, AgentPane, TasksListResponse, RemindersResponse, Reminder, TaskWriteResponse, TidyReport } from "../../../shared/types.ts";
 import type { ProvidersResponse, ProviderStatus, ProviderTasksResponse, SavedView, ViewTasksResponse, TaskDetail, ProviderTask } from "../../../shared/providers.ts";
 
 /** What every ClickUp write answers with: the card as it now stands, or why not. */
@@ -170,6 +170,54 @@ export class ChatStreamError extends Error {
     );
     this.name = "ChatStreamError";
   }
+}
+
+/**
+ * POST a turn and read the ndjson stream it answers with, a frame at a time.
+ *
+ * Shared by both agents because none of this is agent-specific: the framing,
+ * the three ways a turn can fail, and the reader are properties of how the
+ * server streams a subprocess, not of which subprocess it streamed. What the
+ * frames *mean* diverges completely, and that lives in the two parsers above
+ * the store.
+ */
+async function turnStream(
+  path: string,
+  payload: Record<string, unknown>,
+  onEvent: (o: Record<string, unknown>) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let res: Response;
+  // A fetch that throws before a response has arrived never reached the
+  // server, which is a different problem from one that dies mid-turn — the
+  // turn has not started, so there is nothing running to go back to.
+  try {
+    res = await fetch(SERVER + path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new ChatStreamError("unreachable", "");
+  }
+  // A refusal — chat disabled, out of scope, a bad directory — comes back as
+  // plain text with a 4xx, not ndjson. Without this it fell into the reader
+  // below, failed to parse as JSON, and was skipped line by line, so the user
+  // was told nothing at all about why their turn did not run.
+  if (!res.ok) throw new ChatStreamError("refused", (await res.text().catch(() => "")).trim(), res.status);
+  if (!res.body) { try { onEvent(JSON.parse(await res.text())); } catch { /* non-json */ } return; }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  const flush = (line: string) => { const t = line.trim(); if (t) { try { onEvent(JSON.parse(t)); } catch { /* skip */ } } };
+  try {
+    for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let nl; while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); } }
+  } catch (e) {
+    // The turn was accepted and then the connection died under it. The raw
+    // error is opaque (a bare "TypeError: Load failed" or similar, depending
+    // on the engine) and says nothing about what happened — the cause is
+    // named here instead, where it is known.
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new ChatStreamError("dropped", "");
+  }
+  flush(buf);
 }
 
 /** Tell an auth failure apart from a plain outage. A browser WebSocket can't
@@ -713,7 +761,12 @@ const realApi = {
   // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
   terminalCommands: (root: string) => get<TerminalCommands>(`/terminal/commands?root=${encodeURIComponent(root)}`),
   // --- multi-chat: drive a claude session from the browser ---
-  chatEnabled: () => get<{ enabled: boolean; bypass?: boolean; tmuxEngine?: TmuxEngineInfo }>("/chat/enabled"),
+  // `models` rides along for the same reason it does on the other two agents:
+  // the panel cannot usefully draw a model picker without knowing what the CLI
+  // will accept, and asking twice would let it render one for a CLI that turns
+  // out not to be there. Claude's list is data on the server
+  // (shared/claude-models.json) rather than a table compiled in here.
+  chatEnabled: () => get<{ enabled: boolean; bypass?: boolean; models?: AgentModel[]; tmuxEngine?: TmuxEngineInfo }>("/chat/enabled"),
   /** The command that hands a chat to the user's own terminal, and whether its
    *  pane is up right now. Assembled server-side so the socket name never has to
    *  be duplicated here. */
@@ -734,39 +787,27 @@ const realApi = {
    *  pane belonging to a chat in another window is not an orphan. */
   chatPanes: (open: string[]) =>
     get<ChatPaneList>(`/chat/panes?open=${encodeURIComponent(open.join(","))}`),
-  chatStream: async (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) => {
-    let res: Response;
-    // A fetch that throws before a response has arrived never reached the
-    // server, which is a different problem from one that dies mid-turn — the
-    // turn has not started, so there is nothing running to go back to.
-    try {
-      res = await fetch(SERVER + "/chat/send", { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(payload), signal });
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") throw e;
-      throw new ChatStreamError("unreachable", "");
-    }
-    // A refusal — chat disabled, out of scope, a bad directory — comes back as
-    // plain text with a 4xx, not ndjson. Without this it fell into the reader
-    // below, failed to parse as JSON, and was skipped line by line, so the user
-    // was told nothing at all about why their turn did not run.
-    if (!res.ok) throw new ChatStreamError("refused", (await res.text().catch(() => "")).trim(), res.status);
-    if (!res.body) { try { onEvent(JSON.parse(await res.text())); } catch { /* non-json */ } return; }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = "";
-    const flush = (line: string) => { const t = line.trim(); if (t) { try { onEvent(JSON.parse(t)); } catch { /* skip */ } } };
-    try {
-      for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value, { stream: true }); let nl; while ((nl = buf.indexOf("\n")) >= 0) { flush(buf.slice(0, nl)); buf = buf.slice(nl + 1); } }
-    } catch (e) {
-      // The turn was accepted and then the connection died under it. The raw
-      // error is opaque (a bare "TypeError: Load failed" or similar, depending
-      // on the engine) and says nothing about what happened — the cause is
-      // named here instead, where it is known.
-      if (e instanceof DOMException && e.name === "AbortError") throw e;
-      throw new ChatStreamError("dropped", "");
-    }
-    flush(buf);
-  },
+  chatStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string; allowedTools?: string[]; images?: ChatImage[]; engine?: ChatEngine; effort?: ChatEffort }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
+    turnStream("/chat/send", payload, onEvent, signal),
+
+  // --- multi-chat: the same panel, driving codex instead ---
+  // Codex takes neither an allowlist nor pasted images, so its payload is the
+  // Claude one minus the two things it has no equivalent for.
+  codexEnabled: () => get<CodexStatus>("/codex/enabled"),
+  // What a codex thread said, read from Codex's own rollout on disk. The OTel
+  // stream that puts Codex on the radar carries tool calls but no prose, so this
+  // is the only source for a resumed thread's history — see codexTranscript().
+  codexTranscript: (id: string) => get<{ timeline: SessionDetail["timeline"] }>(`/codex/transcript?id=${encodeURIComponent(id)}`),
+  codexStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
+    turnStream("/codex/send", payload, onEvent, signal),
+
+  // --- multi-chat: the same panel, driving google antigravity ---
+  // No transcript call to match the other two: Antigravity keeps a conversation
+  // as protobuf inside SQLite, so there is nothing readable to ask for.
+  antigravityEnabled: () => get<AgentCliStatus>("/antigravity/enabled"),
+  antigravityStream: (payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void, signal?: AbortSignal) =>
+    turnStream("/antigravity/send", payload, onEvent, signal),
+
   dockerStart: (id: string) => post<DockerActionResult>("/docker/start", { id }),
   dockerStop: (id: string) => post<DockerActionResult>("/docker/stop", { id }),
   dockerRestart: (id: string) => post<DockerActionResult>("/docker/restart", { id }),
@@ -921,7 +962,7 @@ const demoApi: typeof realApi = {
   dockerInspect: (_id: string) => D({ ok: false, env: [] as string[], config: "", error: "not available in the demo" }),
   dockerTop: (_id: string) => D({ ok: false, text: "", error: "not available in the demo" }),
   terminalCommands: (_root: string) => D({ enabled: false, make: [], scripts: [] } as TerminalCommands),
-  chatEnabled: () => D({ enabled: false, tmuxEngine: { available: false, reason: "the demo runs no local processes", defaultOn: false } }),
+  chatEnabled: () => D({ enabled: false, models: [] as AgentModel[], tmuxEngine: { available: false, reason: "the demo runs no local processes", defaultOn: false } }),
   chatAttach: (_session: string) => D({ command: "", live: false }),
   chatPaneClose: (_session: string) => D({ killed: false }),
   chatPaneKey: (_session: string, _key: string) => D({ screen: "" }),
@@ -933,6 +974,19 @@ const demoApi: typeof realApi = {
     onEvent({ type: "system", subtype: "init", session_id: "demo" });
     onEvent({ type: "assistant", message: { content: [{ type: "text", text: "(chat is disabled in the demo — run agentglass locally to drive real Claude sessions)" }] } });
     onEvent({ type: "result", result: "" });
+  },
+  codexEnabled: () => D({ enabled: false, models: [] } as CodexStatus),
+  codexTranscript: (_id: string) => D({ timeline: [] as SessionDetail["timeline"] }),
+  codexStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
+    onEvent({ type: "thread.started", thread_id: "demo" });
+    onEvent({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: "(chat is disabled in the demo — run agentglass locally to drive real Codex sessions)" } });
+    onEvent({ type: "turn.completed", usage: {} });
+  },
+  antigravityEnabled: () => D({ enabled: false, models: [] } as AgentCliStatus),
+  antigravityStream: async (_payload: { cwd: string; message: string; model: string; mode: string; resumeId: string }, onEvent: (o: Record<string, unknown>) => void) => {
+    onEvent({ event: "init", conversation_id: "demo-0000-0000-0000-demodemodemo", init: { model: "demo" } });
+    onEvent({ event: "step_update", step_update: { step_index: 0, state: "DONE", step_type: "agent_response", text_delta: "(chat is disabled in the demo — run agentglass locally to drive real Antigravity sessions)" } });
+    onEvent({ event: "result", result: { status: "SUCCESS", usage: {} } });
   },
   dockerStart: (_id: string) => D(demo.dockerActionUnavailable()),
   dockerStop: (_id: string) => D(demo.dockerActionUnavailable()),

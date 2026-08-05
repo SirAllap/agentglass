@@ -81,6 +81,22 @@ export const ROSTER: Roster[] = [
     install: "npm i -g @openai/codex",
     connects: "OpenTelemetry logs → /v1/logs",
   },
+  {
+    // Google's agentic CLI, and a separate product from the Gemini CLI above —
+    // separate binary, separate state, and a model list that spans Anthropic
+    // and open-weight models as well as Google's. Wiring one does nothing for
+    // the other.
+    id: "antigravity",
+    label: "Google Antigravity",
+    bin: "agy",
+    via: "chat",
+    // It keeps state under ~/.gemini/antigravity-cli, but nothing there is a
+    // connection this app writes or reads, so there is no path worth showing.
+    configPath: () => "",
+    match: "antigravity",
+    install: "https://antigravity.google/docs/cli",
+    connects: "the chat panel, which turns its own turns into events",
+  },
 ];
 
 /**
@@ -90,8 +106,14 @@ export const ROSTER: Roster[] = [
  * it by hand — or ran the CLI's own reset — should see that reflected instead
  * of a state this app wrote down once.
  */
-function wired(a: Roster, path: string): boolean {
+function wired(a: Roster, path: string, found: boolean): boolean {
   if (a.via === "hooks") return hookStatus().installed;
+  // Nothing to wire and nothing that could be unwired: a `chat` agent reports
+  // because this server is the thing running it, so being installed is the
+  // whole of being connected. It has to be said that way round — answering a
+  // flat `true` here would report a CLI nobody has installed as connected and
+  // waiting for its first event, which is the one state it can never reach.
+  if (a.via === "chat") return found;
   if (!existsSync(path)) return false;
   let text: string;
   try { text = readFileSync(path, "utf8"); } catch { return false; }
@@ -140,7 +162,7 @@ export function probeAgents(
       configPath: path,
       found: !!found,
       path: found,
-      connected: wired(a, path),
+      connected: wired(a, path, !!found),
       // Independent of `connected` on purpose. A config that was written and an
       // event that arrived are different facts, and the gap between them is
       // exactly where this feature earns its place: it is the state somebody

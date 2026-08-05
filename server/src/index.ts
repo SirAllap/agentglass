@@ -87,6 +87,9 @@ import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, last
 import { listPanes, focusPaneAnywhere } from "./tmuxctl.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
+import { claudeModels } from "./claudemodels.ts";
+import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
+import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
 import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
 import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, readBudgets, writeBudgets } from "./config.ts";
@@ -477,6 +480,18 @@ setInterval(pushOpenTools, OPEN_TOOL_TICK_MS).unref?.();
 
 /** Normalize → persist → broadcast → alert. Shared by /ingest and /v1/traces. */
 function ingestBody(body: IngestBody) {
+  // Codex's OTel records say everything about a turn except where it ran, so a
+  // cockpit scoped to a project — the default — filtered every one of them out
+  // and OpenAI never appeared in the provider list. The panel knows the
+  // directory because it launched the turn; this is where that is handed back.
+  //
+  // Only fills a gap, never overwrites: an agent that reports its own location
+  // is the better source, and this must not relabel it.
+  const payload = (body.payload ?? {}) as Record<string, unknown>;
+  if (!payload.cwd && !payload.project_path && body.session_id) {
+    const known = codexCwd(String(body.session_id));
+    if (known) body = { ...body, payload: { ...payload, cwd: known.cwd, project_path: known.root } };
+  }
   const n = normalize(body);
   // Live seam only: a skewed sender's clock must not decide which time window
   // its events land in. Backfill inserts elsewhere and keeps its real times.
@@ -860,6 +875,12 @@ const server = Bun.serve<WsData>({
       if (agent.via === "hooks") {
         const r = applyHooks(undo ? "uninstall" : "install");
         return json({ ...r, agents: probeAgents() });
+      }
+      // A `chat` agent has no wiring to apply: it reports because this server
+      // runs it. Refusing plainly beats spawning connect_otel.py with an id it
+      // has never heard of and returning whatever that prints.
+      if (agent.via === "chat") {
+        return json({ ok: false, error: `${agent.label} needs no connecting — it reports through the chat panel that runs it`, agents: probeAgents() }, 400);
       }
 
       const dir = hooksDir();
@@ -2040,6 +2061,11 @@ const server = Bun.serve<WsData>({
       return json({
         enabled: CHAT_ENABLED,
         bypass: CHAT_BYPASS_ALLOWED,
+        // Claude's list now arrives the same way Codex's and Antigravity's do,
+        // so the panel has one path for all three instead of a table compiled
+        // into the bundle for one of them. Read from shared/claude-models.json,
+        // filtered to what has not reached its shutdown date.
+        models: claudeModels(),
         tmuxEngine: { available: pane.available, reason: pane.reason, defaultOn: CHAT_ENGINE_DEFAULT === "tmux" },
       });
     }
@@ -2148,6 +2174,53 @@ const server = Bun.serve<WsData>({
       if (!pane.available) return json({ error: pane.reason }, 400);
       if (!validPaneName(id)) return json({ error: "invalid session id" }, 400);
       return json({ command: attachCommand(id), live: await paneAlive(id) });
+    }
+
+    // --- multi-chat: the same panel, driving codex instead ---
+    // `models` comes back with `enabled` rather than from a route of its own:
+    // the panel needs both to draw a single dropdown, and asking twice would
+    // let it render a model picker for a CLI that turns out not to be there.
+    if (pathname === "/codex/enabled") {
+      return json({ enabled: CODEX_ENABLED, bypass: CODEX_BYPASS_ALLOWED, models: CODEX_ENABLED ? codexModels() : [] });
+    }
+    if (pathname === "/codex/send" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      // Same reasoning as /chat/send: the launch is the auditable fact, not the
+      // turn, and the prompt is already in Codex's own rollout.
+      noteAction(srv.requestIP(req)?.address, "/codex/send",
+        { root: b.cwd, name: b.model }, { ok: true }, caller);
+      return codexStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images);
+    }
+    // What a Codex thread said, for a chat adopting it from the fleet. The
+    // OTel stream carries tool calls but no prose, so this reads Codex's own
+    // rollout — see codexTranscript(). Single-flighted like /session: several
+    // panels opening the same thread should read the file once.
+    if (pathname === "/codex/transcript") {
+      const id = url.searchParams.get("id") || "";
+      return body(await singleFlight(`codex:${id}`, async () => JSON.stringify({ timeline: codexTranscript(id) })));
+    }
+
+    // --- multi-chat: the same panel, driving google antigravity ---
+    // No /antigravity/transcript to match the two above: Antigravity keeps each
+    // conversation as a SQLite database of protobuf blobs on an undocumented
+    // internal schema, so there is nothing here that could be read without
+    // guessing at it — see server/src/antigravity.ts.
+    if (pathname === "/antigravity/enabled") {
+      return json({ enabled: ANTIGRAVITY_ENABLED, bypass: ANTIGRAVITY_BYPASS_ALLOWED, models: ANTIGRAVITY_ENABLED ? await antigravityModels() : [] });
+    }
+    if (pathname === "/antigravity/send" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
+      noteAction(srv.requestIP(req)?.address, "/antigravity/send",
+        { root: b.cwd, name: b.model }, { ok: true }, caller);
+      // `ingestBody` is handed in rather than imported by antigravity.ts, which
+      // would be a cycle. It is also what puts an Antigravity chat on the radar
+      // at all: unlike Claude (hooks) and Codex (OTel), this CLI reports to
+      // nobody, so its own frames are the only source there is.
+      return antigravityStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images, ingestBody);
     }
 
     // --- LLM walkthrough: AI-authored review itinerary for the changes ---

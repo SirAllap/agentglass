@@ -1154,6 +1154,35 @@ export interface TerminalCommands {
   scripts: ProjectCommand[]; // package.json scripts, runner-aware
 }
 
+/** A model one of the chat CLIs currently offers.
+ *
+ *  Always read from the CLI itself rather than from a table in this repo —
+ *  Codex from its own `models_cache.json`, Antigravity from `agy models`. A
+ *  list checked in here is wrong the day the vendor ships anything, and the
+ *  failure is silent: the dropdown keeps offering an id the CLI no longer
+ *  serves. */
+export interface AgentModel {
+  id: string;    // the slug passed to the CLI's model flag
+  label: string; // the CLI's own display name, or the slug when it has none
+}
+
+/** What the chat panel needs to decide whether to offer a CLI at all, and what
+ *  to put in its model dropdown if it does. Both travel together because the
+ *  panel cannot usefully draw one without the other. */
+export interface AgentCliStatus {
+  enabled: boolean;  // the binary is on PATH and not disabled by env
+  bypass?: boolean;  // the operator opted into the unattended mode
+  models: AgentModel[];
+}
+
+/** Named for the agents that use them. The shapes are identical — what differs
+ *  is where the list comes from, which is each server module's business — so
+ *  these stay aliases rather than three copies drifting apart. */
+export type CodexModel = AgentModel;
+export type CodexStatus = AgentCliStatus;
+export type AntigravityModel = AgentModel;
+export type AntigravityStatus = AgentCliStatus;
+
 /** Whether `git` is on this machine at all. `available: false` is a first-class
  *  UI state — the git/diff/PR panels and the terminal all need git — not an
  *  error to bury behind an empty "no repos found". */
@@ -1685,8 +1714,12 @@ export interface KnownAgent {
   label: string;
   /** The executable looked for on PATH. */
   bin: string;
-  /** How it reports: our own hook forwarder, or its OpenTelemetry exporter. */
-  via: "hooks" | "otel";
+  /** How it reports: our own hook forwarder, its OpenTelemetry exporter, or —
+   *  for a CLI that exports neither — the chat panel driving it, which turns
+   *  the frames of its own turns into events. `chat` agents have nothing to
+   *  connect and nothing to undo, and are only ever seen while a chat here is
+   *  running them. */
+  via: "hooks" | "otel" | "chat";
   /** The file connecting it writes. Shown, so nobody has to guess. */
   configPath: string;
   /** A fragment of the `source_app` its events arrive under. Not the whole
