@@ -67,23 +67,23 @@ const SCREENS: {
 
 const figure = (shots: string[]) => `<meta charset="utf-8"><style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{width:${FIG.w}px;height:${FIG.h}px;overflow:hidden;background:#0f0a1a;
+body{width:${FIG.w}px;height:${FIG.h}px;overflow:hidden;background:#141414;
   font-family:ui-monospace,"SF Mono",Menlo,monospace}
 .bg{position:absolute;inset:0;background:
-  radial-gradient(50% 42% at 78% -10%,color-mix(in srgb,#a78bfa 22%,transparent),transparent),
-  radial-gradient(46% 38% at 8% 2%,color-mix(in srgb,#a78bfa 16%,transparent),transparent),
-  linear-gradient(180deg,#150e26,#0f0a1a 60%)}
+  radial-gradient(50% 42% at 78% -10%,color-mix(in srgb,#e5e5e5 7%,transparent),transparent),
+  radial-gradient(46% 38% at 8% 2%,color-mix(in srgb,#e5e5e5 5%,transparent),transparent),
+  linear-gradient(180deg,#1c1c1c,#141414 60%)}
 .grid{position:absolute;inset:0;
-  background-image:linear-gradient(color-mix(in srgb,#a78bfa 6%,transparent) 1px,transparent 1px),
-    linear-gradient(90deg,color-mix(in srgb,#a78bfa 6%,transparent) 1px,transparent 1px);
+  background-image:linear-gradient(color-mix(in srgb,#e5e5e5 4%,transparent) 1px,transparent 1px),
+    linear-gradient(90deg,color-mix(in srgb,#e5e5e5 4%,transparent) 1px,transparent 1px);
   background-size:36px 36px;
   -webkit-mask-image:radial-gradient(120% 100% at 50% 0%,#000,transparent 82%)}
 .row{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:58px}
 figure{position:relative}
 figure img{display:block;width:416px;height:900px;border-radius:24px;
-  box-shadow:0 44px 90px -34px rgba(0,0,0,.95),0 0 0 1px color-mix(in srgb,#6d28d9 55%,transparent)}
+  box-shadow:0 44px 90px -34px rgba(0,0,0,.95),0 0 0 1px color-mix(in srgb,#4c4c54 70%,transparent)}
 figcaption{position:absolute;left:0;right:0;bottom:-34px;text-align:center;font-size:14px;
-  letter-spacing:.22em;text-transform:uppercase;color:#c084fc}
+  letter-spacing:.22em;text-transform:uppercase;color:#a1a1a1}
 </style>
 <div class="bg"></div><div class="grid"></div>
 <div class="row">${SCREENS.map((s, i) =>
@@ -106,19 +106,34 @@ async function main() {
       "--no-default-browser-check", "--disable-gpu", "--no-sandbox", "--force-color-profile=srgb",
       // Deterministic frames: otherwise each shot catches the queue's
       // entry animations wherever they happened to be.
-      "--force-prefers-reduced-motion", url],
+      // Start blank: the theme injection and the mobile emulation are set up
+      // over CDP first, then the page is navigated once — a load that already
+      // carries both, so there is no reload to drop the phone layout.
+      "--force-prefers-reduced-motion", "about:blank"],
     stdout: "ignore", stderr: "ignore",
   });
 
   try {
     const cdp = await connect(port);
+    // Two things, injected to run at document-start on the demo document, before
+    // the app reads either — so the very first (and only) load already carries
+    // them, with no reload to drop the mobile emulation:
+    //   - Graphite (SERIOUS_DARK), the serious dark, not the old purple.
+    //   - The phone-layout override. The published demo deliberately shows the
+    //     cockpit to a phone visitor (wantsPhoneLayout returns false when demo),
+    //     but this shot IS the companion, so the "mobile" override — which wins
+    //     ahead of the demo rule — forces it.
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `try{localStorage.setItem('agentglass-theme','graphite');localStorage.setItem('agentglass-theme-mode','dark');localStorage.setItem('agentglass_layout','mobile');}catch(e){}`,
+    });
     // mobile:true is what makes the layout switch — it is a coarse pointer,
     // not only a narrow window, that decides (web/src/lib/viewport.ts).
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: PHONE.w, height: PHONE.h, deviceScaleFactor: PHONE.scale, mobile: true,
     });
     await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
-    await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount");
+    await cdp.send("Page.navigate", { url });
+    await until(cdp, `document.querySelector('#root')?.children.length`, "the graphite phone");
     await until(cdp, `[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Repos'))`,
       "the phone layout (is this build wide-only?)");
     await Bun.sleep(2500); // let the demo stream seed a queue

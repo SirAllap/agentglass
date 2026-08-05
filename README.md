@@ -10,9 +10,9 @@
 
 <a href="https://trendshift.io/repositories/86777?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-86777" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/86777/daily?language=TypeScript" alt="SirAllap%2Fagentglass | Trendshift" width="250" height="55"/></a>
 
-![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20pr%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat-34d399) ![desktop](https://img.shields.io/badge/desktop-Electron%20app-47848f) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
+![stack](https://img.shields.io/badge/server-Bun%20%2B%20SQLite-black) ![ui](https://img.shields.io/badge/ui-React%20%2B%20Vite%20%2B%20Motion%20%2B%20Shiki-61dafb) ![workspace](https://img.shields.io/badge/workspace-diff%20%C2%B7%20git%20%C2%B7%20pr%20%C2%B7%20tasks%20%C2%B7%20docker%20%C2%B7%20term%20%C2%B7%20chat%20%C2%B7%20files-34d399) ![desktop](https://img.shields.io/badge/desktop-Electron%20app-47848f) ![themes](https://img.shields.io/badge/themes-22-a78bfa) ![license](https://img.shields.io/badge/license-MIT-green)
 
-![agentglass in action — the live cockpit, then the workspace: source control, diff review, pull requests, Docker and chat, one keystroke away](.github/assets/hero.gif)
+![agentglass in action — the live cockpit, then the workspace: source control, diff review, pull requests, tasks, Docker, chat and a file browser, one keystroke away](.github/assets/hero.gif)
 
 ![the cockpit — every session, spend, throughput, tool mix and what needs you](.github/assets/dashboard.png)
 
@@ -20,7 +20,7 @@
 
 Point any AI coding agent at agentglass — via Claude Code hooks or any OpenTelemetry GenAI exporter (OpenAI Codex, Gemini CLI, Bedrock, LangChain, LiteLLM…) — and watch every agent, tool call, token, and dollar move in real time. Cost tracking, tool-latency percentiles, error timelines, session lifecycles, one switch that filters the whole cockpit by provider, and 22 themes. It persists across reloads (unlike a pure in-browser stream).
 
-And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), and a **chat** panel that drives local Claude Code, Codex *and* Antigravity sessions — all behind one keystroke, under a bar that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
+And it's not just a viewer. agentglass carries a full **workspace** in the same cockpit — the idea is simple: browser, terminal, IDE panels, agent telemetry… all in one place. A syntax-highlighted **diff** viewer for everything the fleet changed, a **lazygit**-style source-control panel (stage, commit, push), a **pull-request** panel that reviews and merges without opening a browser, a **Tasks** panel that turns a GitHub issue straight into a worktree, a **lazydocker**-style Docker panel (containers, logs, stats), a **real terminal** (an actual PTY shell on your machine, not an emulation), a **chat** panel that drives local Claude Code, Codex *and* Antigravity sessions, and a **file browser** that opens into the same editor — all a keystroke apart in one window, under a bar that mirrors your desktop notifications so nothing is lost while you are fullscreen. Ships as a **native desktop app**, server included.
 
 ### ▶ [**Live demo →**](https://sirallap.github.io/agentglass/demo/)
 
@@ -87,11 +87,13 @@ config file:
 
 ## More than a dashboard — a workspace
 
-Watching is only half of it. agentglass grew a set of **lazygit / lazydocker-style panels** — plus a real terminal and a Claude chat — that live right in the cockpit, so you can go from *seeing* what the fleet did to *acting* on it without leaving the tab. Keyboard-driven, and they wear the same 22 themes.
+Watching is only half of it. agentglass grew a set of **lazygit / lazydocker-style panels** — plus a real terminal, a Claude chat, GitHub issues and a file browser — that live right in the app, so you can go from *seeing* what the fleet did to *acting* on it without leaving the tab. Keyboard-driven, and they wear the same 22 themes.
 
-They live in one **workspace**: `Ctrl+\` (`⌘\`) opens it over the dashboard, a rail down the left switches between the six views, and `Esc` puts you back. Every view has the same fixed-height title bar and the same list width, so switching changes the panel and nothing else moves.
+The 0.8 redesign made the workspace **the whole window** rather than a modal over the dashboard. A **rail** down the left switches between the views, and the dashboard — the cockpit above — is now the first of them, one key away whenever you want it back. Every view has the same fixed-height title bar and the same list width, so switching changes the panel and nothing else moves.
 
-**Two kinds of shortcut, because they answer different questions.** On the dashboard, bare letters jump straight in — `g` `d` `p` `o` `t` `c`. Inside the workspace every keystroke belongs to whatever has focus, usually a shell, so navigation there carries a modifier: `Ctrl+1`–`Ctrl+6` for the rail in order, `Ctrl+[` / `Ctrl+]` to cycle. Both sets are rebindable in **Settings ▸ Shortcuts**, and the modified one takes any combination you like — `Ctrl+Alt+J` is recorded exactly as you hold it.
+The rail carries **Dashboard** `1`, **Git** `g`, **Diff** `d`, **Pull requests** `p`, **Tasks** `i`, **Docker** `o`, **Terminal** `t`, **Chat** `c`, a **Browser** `b` where the build has one, and **Files** `e`. Drag it to reorder — put the terminal at the bottom if that is where your thumb goes — and the numbered shortcuts follow your arrangement, so the tooltips never start lying. Drag the seam beside any list to resize it; every view shares that width, and it is remembered.
+
+**Two kinds of shortcut, because they answer different questions.** On the dashboard, bare letters jump straight to a view — `g` `d` `p` `i` `o` `t` `c` `e`. Inside any other view every keystroke belongs to whatever has focus, usually a shell, so navigation there carries a modifier: `Ctrl+1`…`Ctrl+N` walk the rail in order, `Ctrl+[` / `Ctrl+]` cycle it, and `Ctrl+\` (`⌘\`) toggles between the dashboard and the last view you were in. Both sets are rebindable in **Settings ▸ Shortcuts**, and the modified one takes any combination you like — `Ctrl+Alt+J` is recorded exactly as you hold it.
 
 ![settings — every shortcut, rebindable, with the key that works anywhere beside the one that works on the dashboard](.github/assets/settings-shortcuts.png)
 
@@ -113,7 +115,7 @@ Every Edit/Write the fleet makes, gathered into one reviewable, chaptered list. 
 
 ![diff viewer](.github/assets/diff.png)
 
-### 🌿 Source control — lazygit, in the dashboard &nbsp;`g`
+### 🌿 Source control — lazygit, in the workspace &nbsp;`g`
 
 A live view of any repo's working tree (repos are discovered from the fleet's own file paths). Stage / unstage / discard, **interactive hunk staging**, a commit composer, branches (checkout / create / delete), log, reflog, remotes, tags, worktrees and stashes — plus push / pull / fetch. Keyboard-driven (`j/k` move · `s/u` stage · `x` discard · `1`–`8` jump to a tab) and **write-gated**, so it's read-only until you opt in.
 
@@ -157,7 +159,13 @@ Check results notify you only for the pull requests you have a stake in — the 
 
 Nothing blocks on the network: the server has one thread, so every read is a cached answer that shows its own age. Check states come back in **one batched GraphQL query** rather than a subprocess per pull request, which is what makes a fifty-row list affordable.
 
-### 🐳 Docker — lazydocker, in the dashboard &nbsp;`o`
+### ✅ Tasks — every issue and to-do you owe, in one place &nbsp;`i`
+
+GitHub issues for one repository, your own local to-do list, and ClickUp, under a single rail tab. The GitHub half opens on what is assigned to you, each row carrying its labels, its assignee, the comment count and how long since it moved. Open one and the column beside it reads the whole issue — body, labels, milestone, assignees, open or closed — and **Start →** turns it into work: a worktree, a plain branch, or a tmux window with Claude and the prompt already written, so a task goes from *read* to *being worked* without a detour through the terminal. An issue already underway wears an **in progress** chip, because the app knows which worktrees it started.
+
+![tasks — GitHub issues for a repo, one opened to its detail, and Start → to cut the worktree](.github/assets/tasks.png)
+
+### 🐳 Docker — lazydocker, in the workspace &nbsp;`o`
 
 Containers, images, volumes and networks in one **stacked column** whose headers never leave — so "is anything dangling?" is answerable without navigating away from the container you are watching. Containers group by compose project with live CPU / memory in aligned columns, and a **dense** toggle drops the image line when you would rather fit more on screen.
 
@@ -165,7 +173,7 @@ Select one and the pane beside it carries **logs · info · env · config · top
 
 ![docker panel](.github/assets/docker.png)
 
-### ▶ Terminal — a real shell, in the dashboard &nbsp;`t`
+### ▶ Terminal — a real shell, in the workspace &nbsp;`t`
 
 Not a command-runner imitation: the server opens **your login shell inside a
 real PTY** (xterm.js in front, a pseudo-terminal behind a WebSocket), in any
@@ -332,6 +340,22 @@ discoverable).
 ---
 
 ![chat panel](.github/assets/chat.png)
+
+---
+
+### 📁 Files — browse and search a checkout, and open a file to edit &nbsp;`e`
+
+A file tree for any checkout the fleet has touched, one level at a time so a repo with a `node_modules` in it stays cheap to walk. Two searches, because they are two questions: **Names** finds the file called X, **Contents** finds the code that says X. Open a file and it comes up in the app's own editor — the same one the diff viewer and the pull-request panel use — to read, or to edit and save.
+
+![files — a checkout's tree, with name and content search](.github/assets/files.png)
+
+### 🔌 Ports & Resources — what this machine is doing
+
+Two tabs of a panel that opens from the foot of the rail, over whatever view you are in. **Ports** lists everything listening — the port, the process, the checkout it was started from, how long it has held the socket, and whether an agent started it — so "what is on 3000, and who started it" has an answer without reaching for `lsof`. It flags a server whose checkout was deleted underneath it, and the one process that is not yours it will name but never signal. **Resources** is the machine's own load — CPU, memory, swap, disk and temperature — with the fleet's own processes broken out from the rest, and a per-checkout disk measure a click away.
+
+![ports — what is listening, and from which checkout](.github/assets/ports.png)
+
+![resources — CPU, memory and disk, and which share is the fleet's](.github/assets/resources.png)
 
 ---
 
@@ -537,7 +561,7 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 | 🤖 **Per-model breakdown** | Cost & token split across every model — Claude, GPT, Gemini, and more — from a tunable pricing table. |
 | 🧵 **Session lifecycle** | Timeline of every session: start→end, duration, tokens, cost. |
 | 📈 **Anthropic plan usage** | 5-hour + weekly plan-limit meters — shown only when you're viewing Anthropic (the one provider with a usage API), on wide screens. |
-| ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `o` Docker · `t` terminal · `c` chat · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
+| ⌨ **Command palette + shortcuts** | `Ctrl-K` to filter, switch theme, change window, export; `d` diffs · `g` git · `p` pull requests · `i` tasks · `o` Docker · `t` terminal · `c` chat · `e` files · `k` skills · `s` stats · `/` search; click any event for full details; click an agent to filter to it. |
 | 🎨 **22 themes** | 11 dark palettes (Midnight Purple, Forest, Ember, Nord, …), each with a light twin — instant switch, remembered. |
 | 🔔 **Alerts** | Web Push to a locked phone (end-to-end encrypted, no account anywhere) — a held gate arrives with **Allow and Deny on the notification** — plus webhook (Slack/Discord), desktop notify and an optional in-app chime. |
 | 💰 **Budgets** | *"No more than $40 a month on this repository."* Per-project and per-model, warned at 80% rather than only when you cross it, counted from the daily rollup as well as live events so a monthly budget really means a month. Settings ▸ Preferences. |
@@ -545,15 +569,13 @@ Most agent dashboards show a live event feed and forget everything on refresh. a
 
 ### Themes
 
-22 palettes — 11 dark, each with a light twin. A few:
+22 palettes — 11 dark, each with a light twin. The two the app is serious on, the same dashboard in each:
 
-| Forest | Ember | Deep Sea |
-|---|---|---|
-| ![forest](.github/assets/theme-forest.png) | ![ember](.github/assets/theme-ember.png) | ![deep sea](.github/assets/theme-deep-sea.png) |
+| Dark | Light |
+|---|---|
+| ![dark theme](.github/assets/theme-dark.png) | ![light theme](.github/assets/theme-light.png) |
 
-Every dark palette has a matching light twin — e.g. Midnight Purple Light:
-
-![light theme](.github/assets/theme-light.png)
+The rest — Midnight Purple, Forest, Ember, Nord, Deep Sea, Rosewood, Carbon and their light twins — switch instantly and are remembered.
 
 ---
 
@@ -1136,6 +1158,10 @@ cannot be configured by `export` at all.
 | `GET /prs/capability · /prs/list · /prs/detail · /prs/diff · /prs/commit-diff · /prs/branch-url` | Pull requests through the `gh` CLI, per repository: capability probe, the list for a scope tab, one PR's full detail, its diff, a single commit's diff. Cached, with check states filled by a second batched GraphQL pass. |
 | `POST /prs/{review,review-with,comment,reply,thread-resolved,react,edit,labels,reviewers,draft,update-branch,rerun,merge,close}` | Pull-request actions — **gated** by `AGENTGLASS_GIT_WRITE_DISABLED` and by the active scope. |
 | `POST /prs/review-prompt` | The prompt to review a PR with Claude, and the directory to run it in. Reads only, so the write switch does not gate it; the active scope still does. |
+| `GET /issues/list · /issues/detail · /issues/work` | GitHub issues through the `gh` CLI, per repository — the list for a state, one issue's full detail, and which of them this machine already holds a worktree for. Cached like the PR routes. |
+| `POST /issues/{start,finish,claim,comment,state}` | Start an issue as a worktree / branch / Claude window, finish it, claim it, comment, open or close — **gated** by `AGENTGLASS_GIT_WRITE_DISABLED` and the active scope. |
+| `GET /files/tree · /files/find · /files/grep` | A checkout's file tree one level at a time, filename search, and full-text content search — read, scoped to a repo the fleet has touched. |
+| `GET /machine/ports · /machine/resources · /machine/space` · `POST /machine/kill` | What is listening (port, process, the checkout it was started from, age, agent-started), the machine's CPU / memory / disk load with the fleet's own processes broken out, and a per-checkout disk measure. `kill` signals a process — **gated**. |
 | `GET /hooks/status` · `POST /hooks/install · /hooks/uninstall` | Whether the Claude Code hooks are wired into `~/.claude/settings.json`, and wiring or removing them — what **Settings ▸ Hooks** calls, so a packaged app needs no clone. |
 | `GET /health` | Liveness plus an identity marker (`service: "agentglass"`), so a client can tell our server from a stranger on the same port. Token-exempt. |
 | `GET /usage` | Anthropic plan-limit windows (5-hour / weekly) for the usage meters. |
@@ -1169,6 +1195,9 @@ cannot be configured by `export` at all.
                                                        │      ├─ docker.ts       live containers (lazydocker)
                                                        │      ├─ terminal.ts     real PTY shells over WS (+ make/script catalog)
                                                        │      ├─ chat.ts         drive local `claude` sessions (stream-json)
+                                                       │      ├─ issues.ts       GitHub issues via gh, start one as a worktree
+                                                       │      ├─ files.ts        checkout tree, filename & content search
+                                                       │      ├─ machine.ts       listening ports, CPU/mem/disk, per-repo space
                                                        │      ├─ gate.ts         approve/deny control plane
                                                        │      ├─ walkthrough.ts  local-Claude "Explain" of a diff set
                                                        │      └─ WS /stream ─┐
@@ -1205,6 +1234,7 @@ Where this is going — themes, not dates. The living version is the issue track
 - Voice input in chat — [#92](https://github.com/SirAllap/agentglass/issues/92)
 
 **Recently shipped** — see the [releases](https://github.com/SirAllap/agentglass/releases) for the full record.
+- **v0.8.0** — the redesign: the workspace stops being a modal over the dashboard and becomes the window itself, with the cockpit demoted to the first view on a rail you can reorder. Three new views arrive with it — **Tasks** (GitHub issues and your own list, with **Start →** to cut a worktree from an issue), a **Files** browser that opens into the app's own editor, and a **Ports & Resources** panel for what this machine is listening on and how hard it is working. The terminal learned to jump to the git/diff of whatever worktree its focused pane is in, and the desktop's own notifications are mirrored into the app so nothing is missed while it is fullscreen. See the [release](https://github.com/SirAllap/agentglass/releases/latest) for the full record.
 - **v0.7.0**: the phone stops being something you have to remember to check. Real Web Push wakes it with the screen off ([#409](https://github.com/SirAllap/agentglass/issues/409), [#412](https://github.com/SirAllap/agentglass/issues/412), [#413](https://github.com/SirAllap/agentglass/issues/413)), and what it wakes you into is a queue with the next move written on it ([#405](https://github.com/SirAllap/agentglass/issues/405), [#404](https://github.com/SirAllap/agentglass/issues/404)).
   - **Push.** Web Push written against the spec and verified byte for byte against another implementation ([#409](https://github.com/SirAllap/agentglass/issues/409)). VAPID keys are minted once, on demand, without the race that left the losing caller silent ([#418](https://github.com/SirAllap/agentglass/issues/418)). Four routes so a phone can subscribe, resubscribe and forget ([#411](https://github.com/SirAllap/agentglass/issues/411), [#419](https://github.com/SirAllap/agentglass/issues/419)), a service worker behind a switch you turn on ([#413](https://github.com/SirAllap/agentglass/issues/413)), and a `deliver()` that reaches a phone with its screen off ([#412](https://github.com/SirAllap/agentglass/issues/412)). Tap the alert and you land on the thing it was about ([#417](https://github.com/SirAllap/agentglass/issues/417)). Only an agent that is *stopped* is worth waking a pocket for ([#420](https://github.com/SirAllap/agentglass/issues/420)). An iPhone in a browser tab was being told push works when it does not, and is not any more ([#414](https://github.com/SirAllap/agentglass/issues/414)). You can prove the whole path works without waiting for an agent to block ([#415](https://github.com/SirAllap/agentglass/issues/415)).
   - **The companion.** One writer per session, so two devices cannot answer the same agent at once ([#391](https://github.com/SirAllap/agentglass/issues/391)). The chat rides the live socket instead of polling, and a phone nobody is looking at is not polled at all ([#392](https://github.com/SirAllap/agentglass/issues/392), [#388](https://github.com/SirAllap/agentglass/issues/388)); it stopped dropping what the agent did ([#395](https://github.com/SirAllap/agentglass/issues/395)); and the chat list is one you can trust and search ([#396](https://github.com/SirAllap/agentglass/issues/396)). Destinations you can name ([#393](https://github.com/SirAllap/agentglass/issues/393)), one rule for when two things are the same project ([#394](https://github.com/SirAllap/agentglass/issues/394)), a confirmation before the taps that cannot be undone ([#383](https://github.com/SirAllap/agentglass/issues/383)), and errors that say what is actually wrong ([#397](https://github.com/SirAllap/agentglass/issues/397), [#399](https://github.com/SirAllap/agentglass/issues/399)). A review happens on the phone and is addressed correctly ([#402](https://github.com/SirAllap/agentglass/issues/402)), and a red check is read there instead of sending you out to a browser ([#406](https://github.com/SirAllap/agentglass/issues/406)). The tab bar floats now, with settings riding on the pill ([#425](https://github.com/SirAllap/agentglass/issues/425), [#429](https://github.com/SirAllap/agentglass/issues/429)), and the dark band along the bottom turned out to be fifteen closed sheets each casting a shadow into it ([#431](https://github.com/SirAllap/agentglass/issues/431)).

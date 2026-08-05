@@ -3,9 +3,11 @@ import type { ControlCmd, ViewId } from "../../shared/types.ts";
 // The allowlists the validator checks against. Held here, at the trust
 // boundary, rather than derived from the UI: a /control body is untrusted input,
 // and every field it can set must map to a closed set before it is broadcast to
-// every browser tab. Kept in step with shared/types.ts by hand — the set of
-// views changes about once a year, and control.test.ts pins these values.
-const VIEW_IDS: readonly ViewId[] = ["git", "diff", "pr", "docker", "term", "chat"];
+// every browser tab. Kept in step with shared/types.ts by hand, and
+// control.test.ts pins these values — the 0.8 redesign made the dashboard a
+// view and added tasks, files and the browser, so an external controller can
+// reach every one of them, not the six the workspace used to hold.
+const VIEW_IDS: readonly ViewId[] = ["dash", "git", "diff", "pr", "tasks", "docker", "term", "chat", "browser", "files"];
 type OpenWhat = Extract<ControlCmd, { cmd: "open" }>["what"];
 const OPEN_WHAT: readonly OpenWhat[] = ["stats", "skills", "search", "help", "palette"];
 type ChatDo = Extract<ControlCmd, { cmd: "chat" }>["do"];

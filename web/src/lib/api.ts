@@ -1083,25 +1083,23 @@ const demoApi: typeof realApi = {
   reminderAck: (_i: string) => D({ ok: false }),
   reminderCancel: (_i: string) => D({ ok: false }),
   reminderSnooze: (_i: string, _m: number) => D({ ok: false }),
-  issuesList: (_r: string, _s?: string, _q?: string, _a?: string) => D({ ok: false, issues: [], error: "not available in the demo" }),
-  issueDetail: (_r: string, _n: number) => D({ ok: false, error: "not available in the demo" }),
-  issuesWork: (_repo?: string) => D({ work: [] }),
+  issuesList: (_r: string, s = "open", q = "", a = "") => D(demo.issues(s, q, a)),
+  issueDetail: (_r: string, n: number) => D(demo.issueDetail(n)),
+  issuesWork: (_repo?: string) => D(demo.issuesWork()),
   issueStart: (_r: string, _n: number, _m: StartMode) => D({ ok: false, error: "not available in the demo" }),
   issueFinish: (_r: string, _n: number, _f?: boolean) => D({ ok: false, error: "not available in the demo" }),
   issueClaim: (_r: string, _n: number, _c?: string) => D({ ok: false, error: "not available in the demo" }),
   issueComment: (_r: string, _n: number, _b: string) => D({ ok: false, error: "not available in the demo" }),
   issueState: (_r: string, _n: number, _c: boolean) => D({ ok: false, error: "not available in the demo" }),
-  machinePorts: () => D({ ports: [], mine: 0, external: 0, error: "not available in the demo" }),
-  // Zeroed rather than invented: the demo has no machine to report on, and a
-  // plausible-looking 40% would be a lie the panel has no way to caveat.
-  machineResources: (_l?: number) => D({
-    procs: [], totalCpu: null, totalRss: 0, oursCpu: null, oursRss: 0, seen: 0, rated: false,
-    machine: { cpu: null, cores: 0, memUsed: 0, memTotal: 0, swapUsed: 0, swapTotal: 0, tempC: null, load1: 0, diskFree: 0, diskTotal: 0 },
-  }),
-  machineSpace: (_r: string) => D({ root: "", bytes: 0, freeable: 0, dirs: [], error: "not available in the demo" }),
+  // Fabricated, like the rest of the demo: a fictional dev machine with the
+  // Acme Shop services listening and a plausible load. Clearly a showcase, not
+  // this machine — the demo ships to GitHub Pages with no server behind it.
+  machinePorts: () => D(demo.machinePorts()),
+  machineResources: (l = 40) => D(demo.machineResources(l)),
+  machineSpace: (r: string) => D(demo.machineSpace(r)),
   machineKill: (_p: number) => D({ ok: false, error: "not available in the demo" }),
-  filesTree: (_r: string, _rel?: string) => D({ ok: false, root: "", rel: "", entries: [], error: "not available in the demo" }),
-  filesFind: (_r: string, _q: string) => D({ ok: false, files: [], truncated: false, via: "", error: "not available in the demo" }),
+  filesTree: (_r: string, rel = "") => D(demo.filesTree(rel)),
+  filesFind: (_r: string, q: string) => D(demo.filesFind(q)),
   filesGrep: (_r: string, _q: string) => D({ ok: false, hits: [], files: 0, truncated: false, via: "", error: "not available in the demo" }),
 };
 

@@ -52,7 +52,7 @@ const PANEL_H = 1080;
 const GIF_W = 1100, GIF_FPS = 12;
 /** How a still goes from a 3840px CDP capture to the asset the README shows —
  *  see scripts/still.ts for why that step exists at all. */
-import { finishStill, STILL_W, THEME_W } from "./still.ts";
+import { finishStill, STILL_W } from "./still.ts";
 /** Chrome, the protocol and the static server for the demo build. */
 import { connect, findChrome, key, lit, serveDist, until, DEMO_BASE } from "./cdp.ts";
 
@@ -90,6 +90,19 @@ async function main() {
     await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount");
     await Bun.sleep(2500); // let the demo stream seed a few events
 
+    // Serious dark for every shot — the house dark is Graphite (SERIOUS_DARK),
+    // not the old blue "dark", set before the viewport is probed so nothing is
+    // captured mid-repaint. Both keys: the theme id and the mode segment, so
+    // however the app resolves the theme on boot it lands on Graphite. (The key
+    // is `agentglass-theme`, hyphenated; a dotted `agentglass.theme` reaches
+    // nobody, and the mode is `agentglass-theme-mode`.)
+    const setTheme = (id: string, mode: string) =>
+      cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme',${lit(id)});localStorage.setItem('agentglass-theme-mode',${lit(mode)});return 1}catch{return 0}})()`);
+    await setTheme("graphite", "dark");
+    await cdp.ev(`location.reload()`);
+    await until(cdp, `document.querySelector('#root')?.children.length`, "the graphite theme");
+    await Bun.sleep(2500);
+
     // Size the viewport to the dashboard rather than cropping the dashboard to
     // the viewport. setDeviceMetricsOverride rather than a window size: the
     // window carries chrome of an unknown height, so asking for 1600 gives an
@@ -98,8 +111,20 @@ async function main() {
       await cdp.send("Emulation.setDeviceMetricsOverride", { width: W, height: h, deviceScaleFactor: SCALE, mobile: false });
       await Bun.sleep(1200);
     };
-    const need = Number(await cdp.ev(`(()=>{const a=document.querySelector('.aurora');return a?a.scrollHeight:0})()`)) || 1600;
-    const TALL = Math.min(2200, need + 8);
+    // The rail boots on the git view — loadLastView() defaults to it — so the
+    // dashboard is selected for its own shot rather than assumed to be up. (The
+    // `.aurora` this used to measure is the animated backdrop, present on every
+    // view, so the shot was whatever the rail booted into, sized to the backdrop
+    // — which is how the dashboard still ended up being the git panel.)
+    await cdp.ev(`(()=>{document.querySelector('[data-view="dash"]')?.click();return 1})()`);
+    await Bun.sleep(1500);
+    // Size the viewport to the dashboard, not the dashboard to the viewport: its
+    // content is a scroller, so measure where it starts plus how tall it runs
+    // and give it exactly that. A guessed constant clips the bottom row — cost,
+    // performance, timeline — the first time a card is added.
+    const need = Number(await cdp.ev(`(()=>{const s=[...document.querySelectorAll('.agx-scroll')].filter(e=>e.offsetParent);
+      let m=0; for(const e of s){const r=e.getBoundingClientRect(); m=Math.max(m,Math.ceil(r.top+e.scrollHeight));} return m;})()`)) || 1600;
+    const TALL = Math.min(2400, need + 24);
     console.log(`dashboard needs ${need}px; panels shot at ${W}x${PANEL_H}`);
 
     /** Take a still, and optionally hold it in the GIF for `beats` frames.
@@ -139,7 +164,7 @@ async function main() {
     // in the middle, which silently turned Ctrl+3 from Docker into PRs and
     // Ctrl+5 from Chat into the terminal. Two README assets were captured
     // under the wrong name because of it. An id cannot drift.
-    const views = ["git", "diff", "pr", "docker", "chat"];
+    const views = ["git", "diff", "pr", "tasks", "files", "docker", "chat"];
     await key(cdp, "\\", { ctrlKey: true });
     await until(cdp, `document.querySelector('[role="tablist"][aria-label="Workspace views"]')`, "the workspace");
     await Bun.sleep(1200);
@@ -155,7 +180,25 @@ async function main() {
           .find(b=>/^Files\\b/.test(b.textContent.trim()));b?.click();return !!b})()`);
         await Bun.sleep(1800);
       }
+      // Tasks opens with an empty detail pane ("Pick an issue"); open the first
+      // one so the shot shows an issue read, not half a blank column.
+      if (id === "tasks") {
+        await cdp.ev(`(()=>{const b=[...document.querySelectorAll('button')]
+          .find(b=>/Cart total is a cent low/.test(b.textContent||''));b?.click();return !!b})()`);
+        await Bun.sleep(1400);
+      }
       await capture(id, STILLS_ONLY ? 0 : 16);
+    }
+
+    // Ports and Resources are an overlay, not a rail view — opened from the
+    // rail's own buttons (aria-labelled) and dismissed with Escape.
+    for (const [label, name] of [["Ports", "ports"], ["Resources", "resources"]] as const) {
+      const ok = await cdp.ev(`(()=>{const b=document.querySelector('button[aria-label=${lit(label)}]');b?.click();return !!b})()`);
+      if (!ok) { console.warn(`  ! no "${label}" button — skipped`); continue; }
+      await Bun.sleep(1600);
+      await capture(name, STILLS_ONLY ? 0 : 14);
+      await key(cdp, "Escape");
+      await Bun.sleep(500);
     }
 
     // Settings, which is where today's shortcuts and About live.
@@ -170,19 +213,29 @@ async function main() {
     await key(cdp, "Escape");
     await Bun.sleep(600);
 
-    // Themes, each on the dashboard so they are comparable. The first three
-    // share a 3-column table in the README; light gets a row of its own.
-    const themes: [string, number][] = [
-      ["forest", THEME_W], ["ember", THEME_W], ["deep-sea", THEME_W], ["light", STILL_W],
+    // Themes, on the dashboard so they are comparable. The two serious defaults,
+    // side by side: Graphite (Dark) and Porcelain (Light). The filenames stay
+    // theme-dark / theme-light — that is what each is, a dark shot and a light
+    // one — while the palette is the serious pair, not the old blue and white.
+    const themes: [string, string, string][] = [
+      ["graphite", "dark", "theme-dark"],
+      ["porcelain", "light", "theme-light"],
     ];
-    for (const [t, tw] of themes) {
-      const ok = await cdp.ev(`(()=>{try{localStorage.setItem('agentglass.theme',${lit(t)});window.dispatchEvent(new StorageEvent('storage',{key:'agentglass.theme'}));return 1}catch{return 0}})()`);
+    for (const [id, mode, name] of themes) {
+      const ok = await setTheme(id, mode);
       if (!ok) continue;
       await cdp.ev(`location.reload()`);
-      await until(cdp, `document.querySelector('#root')?.children.length`, `the ${t} theme`);
-      await setViewport(PANEL_H);
-      await Bun.sleep(2200);
-      await capture(`theme-${t}`, 0, tw);
+      // Wait for the rail itself, not just #root: the reload restores the last
+      // view (not the dashboard), and clicking before the rail has mounted is
+      // what left both theme shots on the empty chat pane.
+      await until(cdp, `document.querySelector('[data-view="dash"]')`, `the ${id} rail`);
+      await Bun.sleep(700);
+      // Back to the dashboard for every theme, at its own height, so the Dark
+      // and Light shots are the same picture in two palettes.
+      await cdp.ev(`(()=>{document.querySelector('[data-view="dash"]')?.click();return 1})()`);
+      await Bun.sleep(1800);
+      await setViewport(TALL);
+      await capture(name, 0, STILL_W);
     }
 
     cdp.close();
