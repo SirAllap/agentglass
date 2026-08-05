@@ -20,7 +20,10 @@ def _agentglass_local_only(url):
     with AGENTGLASS_ALLOW_REMOTE=1 if you really run the server elsewhere."""
     import os
     from urllib.parse import urlparse
-    if os.environ.get("AGENTGLASS_ALLOW_REMOTE"):
+    # Exactly "1": a truthy test would let AGENTGLASS_ALLOW_REMOTE=0 — which
+    # reads as "off" to every person who writes it — switch the guard off
+    # instead of on. So would "false", "no" and "off".
+    if os.environ.get("AGENTGLASS_ALLOW_REMOTE") == "1":
         return
     u = urlparse(url or "")
     if u.scheme not in ("http", "https") or (u.hostname or "") not in ("localhost", "127.0.0.1", "::1"):
