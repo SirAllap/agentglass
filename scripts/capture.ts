@@ -52,7 +52,7 @@ const PANEL_H = 1080;
 const GIF_W = 1100, GIF_FPS = 12;
 /** How a still goes from a 3840px CDP capture to the asset the README shows —
  *  see scripts/still.ts for why that step exists at all. */
-import { finishStill, STILL_W, THEME_W } from "./still.ts";
+import { finishStill, STILL_W } from "./still.ts";
 /** Chrome, the protocol and the static server for the demo build. */
 import { connect, findChrome, key, lit, serveDist, until, DEMO_BASE } from "./cdp.ts";
 
@@ -89,6 +89,14 @@ async function main() {
     const cdp = await connect(port);
     await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount");
     await Bun.sleep(2500); // let the demo stream seed a few events
+
+    // Serious dark for every shot — the house "Dark" palette, set before the
+    // viewport is probed so nothing is captured mid-repaint. (The theme key is
+    // `agentglass-theme`, hyphenated; a dotted `agentglass.theme` reaches nobody.)
+    await cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme','dark');return 1}catch{return 0}})()`);
+    await cdp.ev(`location.reload()`);
+    await until(cdp, `document.querySelector('#root')?.children.length`, "the dark theme");
+    await Bun.sleep(2500);
 
     // Size the viewport to the dashboard rather than cropping the dashboard to
     // the viewport. setDeviceMetricsOverride rather than a window size: the
@@ -139,7 +147,7 @@ async function main() {
     // in the middle, which silently turned Ctrl+3 from Docker into PRs and
     // Ctrl+5 from Chat into the terminal. Two README assets were captured
     // under the wrong name because of it. An id cannot drift.
-    const views = ["git", "diff", "pr", "docker", "chat"];
+    const views = ["git", "diff", "pr", "tasks", "files", "docker", "chat"];
     await key(cdp, "\\", { ctrlKey: true });
     await until(cdp, `document.querySelector('[role="tablist"][aria-label="Workspace views"]')`, "the workspace");
     await Bun.sleep(1200);
@@ -158,6 +166,17 @@ async function main() {
       await capture(id, STILLS_ONLY ? 0 : 16);
     }
 
+    // Ports and Resources are an overlay, not a rail view — opened from the
+    // rail's own buttons (aria-labelled) and dismissed with Escape.
+    for (const [label, name] of [["Ports", "ports"], ["Resources", "resources"]] as const) {
+      const ok = await cdp.ev(`(()=>{const b=document.querySelector('button[aria-label=${lit(label)}]');b?.click();return !!b})()`);
+      if (!ok) { console.warn(`  ! no "${label}" button — skipped`); continue; }
+      await Bun.sleep(1600);
+      await capture(name, STILLS_ONLY ? 0 : 14);
+      await key(cdp, "Escape");
+      await Bun.sleep(500);
+    }
+
     // Settings, which is where today's shortcuts and About live.
     await key(cdp, "Escape");
     await Bun.sleep(700);
@@ -170,13 +189,13 @@ async function main() {
     await key(cdp, "Escape");
     await Bun.sleep(600);
 
-    // Themes, each on the dashboard so they are comparable. The first three
-    // share a 3-column table in the README; light gets a row of its own.
+    // Themes, on the dashboard so they are comparable. The two serious
+    // defaults, side by side: the house Dark and Light.
     const themes: [string, number][] = [
-      ["forest", THEME_W], ["ember", THEME_W], ["deep-sea", THEME_W], ["light", STILL_W],
+      ["dark", STILL_W], ["light", STILL_W],
     ];
     for (const [t, tw] of themes) {
-      const ok = await cdp.ev(`(()=>{try{localStorage.setItem('agentglass.theme',${lit(t)});window.dispatchEvent(new StorageEvent('storage',{key:'agentglass.theme'}));return 1}catch{return 0}})()`);
+      const ok = await cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme',${lit(t)});window.dispatchEvent(new StorageEvent('storage',{key:'agentglass-theme'}));return 1}catch{return 0}})()`);
       if (!ok) continue;
       await cdp.ev(`location.reload()`);
       await until(cdp, `document.querySelector('#root')?.children.length`, `the ${t} theme`);
