@@ -335,6 +335,24 @@ test("the input box's hint is not something the user typed", () => {
   expect(mod.inputBox('❯ Try "edit config.ts to add a flag"')?.trim()).toBe("");
 });
 
+test("but a prompt that merely starts like a hint is still a prompt", () => {
+  // The cost of getting this wrong is silent and total: a box holding real text
+  // that reads as empty is one waitPasted never sees the paste land in, so the
+  // turn spends its deadline pressing Enter and then reports a pane that would
+  // not accept the prompt. A hint owns its whole row; a prompt carries on past
+  // it, which is what both anchors are for.
+  for (const typed of [
+    'Try "npm test" first, then look at the failures',
+    'Try "bun run build" and tell me what breaks',
+    "Try the other approach",
+  ]) {
+    expect(mod.inputBox(`❯ ${typed}`)?.trim(), typed).toBe(typed);
+  }
+  // And the same on the other hint, so neither can be loosened alone.
+  expect(mod.inputBox("❯ Press up to edit queued messages, then rerun")?.trim())
+    .toBe("Press up to edit queued messages, then rerun");
+});
+
 test("a queued prompt is accepted, not diverted into a picker", () => {
   // Reported as: "This opened an interactive prompt in the chat's tmux pane."
   // Nothing had opened. The prompt was queued, and it ran.
