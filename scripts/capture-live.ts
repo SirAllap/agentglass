@@ -40,6 +40,12 @@ async function main() {
   // Isolated everything: its own config, data and cache, so this run cannot see
   // — or write to — whatever the operator actually has installed.
   const home = mkdtempSync(join(tmpdir(), "agx-shot-home-"));
+  // Pre-seed the scope so the app boots straight into the scratch repo. Without
+  // a persisted `root` a desktop launch has no "current folder" and opens the
+  // first-run "Open a project" picker over everything — which then sits over
+  // the shot no matter what is dismissed after.
+  mkdirSync(join(home, "config", "agentglass"), { recursive: true });
+  writeFileSync(join(home, "config", "agentglass", "config.json"), JSON.stringify({ root: REPO }));
   const profile = mkdtempSync(join(tmpdir(), "agx-shot-chrome-"));
   const port = 4700 + Math.floor(Math.random() * 100);
   const dport = 9600 + Math.floor(Math.random() * 100);
@@ -50,10 +56,26 @@ async function main() {
       ...process.env,
       AGENTGLASS_PORT: String(port),
       AGENTGLASS_ROOT: REPO,
+      // discoverRepos no longer sweeps the disk — it reads telemetry and the
+      // configured repo dirs. This throwaway HOME has no session history, so
+      // without this the repo picker is empty ("No repos seen yet") and the
+      // terminal never gets a shell. Point it straight at the scratch repo.
+      AGENTGLASS_REPO_DIRS: REPO,
       AGENTGLASS_DB: join(home, "agentglass.db"),
       XDG_CONFIG_HOME: join(home, "config"),
       XDG_DATA_HOME: join(home, "data"),
       XDG_CACHE_HOME: join(home, "cache"),
+      // The operator's own shell exports leak in through ...process.env, and on
+      // a machine already running agentglass they are hostile to a headless
+      // shot: AGENTGLASS_BIND=0.0.0.0 + TRUST_LAN mint a token the tokenless
+      // capture page cannot present (so every API 401s and the repo picker is
+      // empty), and AGENTGLASS_WEB_DIR points at the installed app rather than
+      // the bundle this run just built. Pin them back to a loopback, no-auth,
+      // serve-the-fresh-build server.
+      AGENTGLASS_BIND: "127.0.0.1",
+      AGENTGLASS_TRUST_LAN: "0",
+      AGENTGLASS_WEB_DIR: join(ROOT, "web", "dist"),
+      AGENTGLASS_PTY_SIZE_FILE: "",
       AGENTGLASS_TOKEN: "",
       // A neutral shell for the shot. HOME points at the throwaway directory so
       // no rc file runs and PS1 survives, and the prompt is set explicitly
@@ -97,6 +119,20 @@ async function main() {
     // rather than assuming a position.
     await cdp.ev(`(()=>{const b=[...document.querySelectorAll('[data-view]')].find(e=>e.dataset.view==='term');b?.click();return 1})()`);
     await Bun.sleep(2500);
+
+    // The live build discovers repos from session history, and this throwaway
+    // HOME has none — so the terminal opens on "Pick a repo" rather than a shell.
+    // Open the picker and choose the scratch repo; only then does the PTY start
+    // and there is a `.xterm-helper-textarea` to type into.
+    await cdp.ev(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>/Pick a repo/.test(b.textContent||''));b?.click();return !!b})()`);
+    // The picker fetches on open and the first git call spawns subprocesses, so
+    // wait for the row to actually appear rather than guessing a delay — clicking
+    // before it loads was what left the picker on "No repos seen yet".
+    await until(cdp, `[...document.querySelectorAll('button')].some(b=>/shop-api/.test(b.textContent||''))`, "the scratch repo in the picker", 15_000);
+    await cdp.ev(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>/shop-api/.test(b.textContent||''));b?.click();return !!b})()`);
+    // The PTY opens and the login shell draws its first prompt.
+    await until(cdp, `document.querySelector('.xterm-helper-textarea')`, "the shell", 15_000);
+    await Bun.sleep(2000);
 
     // Something worth reading, typed into the real shell.
     await cdp.ev(`(()=>{const t=document.querySelector('.xterm-helper-textarea');t?.focus();return 1})()`);
