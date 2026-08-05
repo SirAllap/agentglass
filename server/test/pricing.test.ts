@@ -100,6 +100,43 @@ describe("costUsd", () => {
     expect(cost).toBe(DEFAULT_PRICE.input);
   });
 
+  test("MiniMax M3 and M2.7 use their own rates instead of the fallback", () => {
+    // The model ids are short and do not share the Gemini/OpenAI collision
+    // problem, but a bare `minimax` substring would otherwise fall through to
+    // DEFAULT_PRICE — the Sonnet-tier $3/$15 — and over-report cost ~5x.
+    expect(priceFor("MiniMax-M3")).toMatchObject({
+      label: "MiniMax M3",
+      input: 0.6,
+      output: 2.4,
+      cache_write: 0.6,
+      cache_read: 0.12,
+    });
+    expect(priceFor("MiniMax-M2.7")).toMatchObject({
+      label: "MiniMax M2.7",
+      input: 0.3,
+      output: 1.2,
+      cache_write: 0.375,
+      cache_read: 0.06,
+    });
+    // M2.7 must be matched before the M3 row — "minimax-m2.7" contains neither
+    // "minimax-m3" nor a context suffix, and a reversed order would price it at
+    // the M3 rate. This is the load-bearing-property assertion for the order.
+    expect(priceFor("MiniMax-M2.7")?.label).not.toBe("MiniMax M3");
+  });
+
+  test("MiniMax cost math sums each token class at its own rate", () => {
+    const cost = costUsd(
+      {
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_creation_tokens: 1_000_000,
+        cache_read_tokens: 1_000_000,
+      },
+      "MiniMax-M3",
+    );
+    expect(cost).toBeCloseTo(0.6 + 2.4 + 0.6 + 0.12, 10);
+  });
+
   test("missing usage fields count as zero", () => {
     expect(costUsd({}, "claude-sonnet-4")).toBe(0);
     expect(costUsd({ input_tokens: 0 }, null)).toBe(0);

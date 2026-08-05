@@ -110,6 +110,13 @@ export const PRICE_TABLE: ModelPrice[] = [
   // Flat across the whole 1M window — there is no long-context tier to add.
   { match: ["kimi-code/k3", "kimi-k3", "moonshot/k3"], exact: ["k3"], label: "K3", input: 3, output: 15, cache_write: 3, cache_read: 0.3 },
 
+  // --- MiniMax ---
+  // M3 keeps cache creation at the input rate (cache_write === input); M2.7
+  // charges cache creation at 1.25x input. Both discount cache reads to a tenth
+  // of input. Order matters: M2.7 is matched before the generic M3 row.
+  { match: ["minimax-m2.7"], exact: ["MiniMax-M2.7"], label: "MiniMax M2.7", input: 0.3, output: 1.2, cache_write: 0.375, cache_read: 0.06 },
+  { match: ["minimax-m3"], exact: ["MiniMax-M3"], label: "MiniMax M3", input: 0.6, output: 2.4, cache_write: 0.6, cache_read: 0.12 },
+
   // --- others (approx) ---
   { match: ["deepseek"], label: "DeepSeek", input: 0.27, output: 1.1, cache_write: 0, cache_read: 0.07 },
   { match: ["grok"], label: "Grok", input: 2, output: 10, cache_write: 0, cache_read: 0 },
