@@ -104,7 +104,17 @@ async function main() {
     });
 
     const cdp = await connect(dport);
-    await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount", 25_000);
+    // Injected to run at document-start on the reloaded page, before the app
+    // reads any of them — so they are in place a tick early rather than a tick
+    // late (setItem-then-reload left the first-run picker sitting over the shot):
+    //   - Graphite (SERIOUS_DARK), so the terminal matches the other shots.
+    //   - agentglass.projectChosen, so the first-run "Open a project" picker,
+    //     which keys off that flag, never opens over the terminal.
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+      source: `try{localStorage.setItem('agentglass-theme','graphite');localStorage.setItem('agentglass-theme-mode','dark');localStorage.setItem('agentglass.projectChosen','1');}catch(e){}`,
+    });
+    await cdp.send("Page.reload");
+    await until(cdp, `document.querySelector('#root')?.children.length`, "the graphite terminal", 25_000);
     await Bun.sleep(2500);
     // 16:9, matching the other workspace panels in capture.ts — the terminal
     // fills its height, so the dashboard's taller viewport would only add floor.
@@ -134,6 +144,15 @@ async function main() {
     await until(cdp, `document.querySelector('.xterm-helper-textarea')`, "the shell", 15_000);
     await Bun.sleep(2000);
 
+    // Close the first-run "Open a project" picker BEFORE typing. Left open it
+    // steals the keyboard: the PS1 that hides the operator's user@host never
+    // reaches the shell, and the raw prompt — a real hostname — lands in the
+    // shot. Click its scrim (the backdrop, whose onClick is the dismiss), with
+    // Escape as a fallback, then let focus settle back on the terminal.
+    await cdp.ev(`(()=>{const s=document.querySelector('.agx-scrim');s&&s.click();return !!s})()`);
+    await key(cdp, "Escape");
+    await Bun.sleep(700);
+
     // Something worth reading, typed into the real shell.
     await cdp.ev(`(()=>{const t=document.querySelector('.xterm-helper-textarea');t?.focus();return 1})()`);
     await Bun.sleep(400);
@@ -156,6 +175,10 @@ async function main() {
       await Bun.sleep(1600);
     }
     await Bun.sleep(2000);
+    // Safety net: if the picker is somehow up again, close it on its scrim
+    // before the shutter (it was already dismissed before typing).
+    await cdp.ev(`(()=>{const s=document.querySelector('.agx-scrim');s&&s.click();return !!s})()`);
+    await Bun.sleep(500);
     const file = join(OUT, "terminal.png");
     writeFileSync(file, await cdp.shot());
     finishStill(file);

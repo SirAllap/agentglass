@@ -90,12 +90,17 @@ async function main() {
     await until(cdp, `document.querySelector('#root')?.children.length`, "the app to mount");
     await Bun.sleep(2500); // let the demo stream seed a few events
 
-    // Serious dark for every shot — the house "Dark" palette, set before the
-    // viewport is probed so nothing is captured mid-repaint. (The theme key is
-    // `agentglass-theme`, hyphenated; a dotted `agentglass.theme` reaches nobody.)
-    await cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme','dark');return 1}catch{return 0}})()`);
+    // Serious dark for every shot — the house dark is Graphite (SERIOUS_DARK),
+    // not the old blue "dark", set before the viewport is probed so nothing is
+    // captured mid-repaint. Both keys: the theme id and the mode segment, so
+    // however the app resolves the theme on boot it lands on Graphite. (The key
+    // is `agentglass-theme`, hyphenated; a dotted `agentglass.theme` reaches
+    // nobody, and the mode is `agentglass-theme-mode`.)
+    const setTheme = (id: string, mode: string) =>
+      cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme',${lit(id)});localStorage.setItem('agentglass-theme-mode',${lit(mode)});return 1}catch{return 0}})()`);
+    await setTheme("graphite", "dark");
     await cdp.ev(`location.reload()`);
-    await until(cdp, `document.querySelector('#root')?.children.length`, "the dark theme");
+    await until(cdp, `document.querySelector('#root')?.children.length`, "the graphite theme");
     await Bun.sleep(2500);
 
     // Size the viewport to the dashboard rather than cropping the dashboard to
@@ -208,26 +213,29 @@ async function main() {
     await key(cdp, "Escape");
     await Bun.sleep(600);
 
-    // Themes, on the dashboard so they are comparable. The two serious
-    // defaults, side by side: the house Dark and Light.
-    const themes: [string, number][] = [
-      ["dark", STILL_W], ["light", STILL_W],
+    // Themes, on the dashboard so they are comparable. The two serious defaults,
+    // side by side: Graphite (Dark) and Porcelain (Light). The filenames stay
+    // theme-dark / theme-light — that is what each is, a dark shot and a light
+    // one — while the palette is the serious pair, not the old blue and white.
+    const themes: [string, string, string][] = [
+      ["graphite", "dark", "theme-dark"],
+      ["porcelain", "light", "theme-light"],
     ];
-    for (const [t, tw] of themes) {
-      const ok = await cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme',${lit(t)});window.dispatchEvent(new StorageEvent('storage',{key:'agentglass-theme'}));return 1}catch{return 0}})()`);
+    for (const [id, mode, name] of themes) {
+      const ok = await setTheme(id, mode);
       if (!ok) continue;
       await cdp.ev(`location.reload()`);
       // Wait for the rail itself, not just #root: the reload restores the last
       // view (not the dashboard), and clicking before the rail has mounted is
       // what left both theme shots on the empty chat pane.
-      await until(cdp, `document.querySelector('[data-view="dash"]')`, `the ${t} rail`);
+      await until(cdp, `document.querySelector('[data-view="dash"]')`, `the ${id} rail`);
       await Bun.sleep(700);
       // Back to the dashboard for every theme, at its own height, so the Dark
       // and Light shots are the same picture in two palettes.
       await cdp.ev(`(()=>{document.querySelector('[data-view="dash"]')?.click();return 1})()`);
       await Bun.sleep(1800);
       await setViewport(TALL);
-      await capture(`theme-${t}`, 0, tw);
+      await capture(name, 0, STILL_W);
     }
 
     cdp.close();
