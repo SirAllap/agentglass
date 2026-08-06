@@ -36,7 +36,76 @@
     --shadow:rgba(0,0,0,.8);
     --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
     --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+
+    /* THE GLASS PALETTE. Everything above is the page; --g-* is the glass, and
+       the two part company in light mode — see the note below. Seeded here with
+       the same values so the instruments are never left with an undefined
+       variable in the moments before the script runs. */
+    --g-page-base:#030407; --g-shadow:rgba(0,0,0,.8);
+    --g-bg:#0f0a1a; --g-bg2:#1a1333; --g-bg3:#2d1b4e; --g-bg4:#3f2766;
+    --g-text:#f3e8ff; --g-text2:#e9d5ff; --g-text3:#d8b4fe; --g-text4:#c084fc;
+    --g-border:#6d28d9; --g-border2:#7e22ce; --g-primary:#a78bfa; --g-primary-hover:#c4b5fd;
+    --g-success:#34d399; --g-warning:#fbbf24; --g-error:#f472b6; --g-info:#a78bfa;
+
+    --syn-kw:#f472b6; --syn-nm:#fbbf24; --syn-fx:#a78bfa; --syn-ty:#c4b5fd;
   }
+
+  /* ══════════════════════════════════════════════════════════════════
+     A LIGHT PAGE, AND THE GLASS ON IT.
+
+     A head-up display is projected light on a dark combiner. Every
+     instrument on this page is drawn that way — the hero and its shader,
+     the readout, the reel, the MFD, the start-up checklist, the
+     annunciator rail — near-black ground with the symbology added on top
+     of it in light, and a good deal of that ground is written into the
+     stylesheet as a fixed near-black because it is a screen, not a
+     surface the visitor's palette gets a say in.
+
+     Light mode used to hand exactly those elements the light palette's
+     near-black TEXT while their ground stayed near-black, and every
+     instrument on the page went to an unreadable slab.
+
+     So the page splits in two, the way a cockpit does. The console —
+     prose, cards, the app mock, the download panel, the footer — follows
+     the theme all the way into a white page. The glass keeps the dark
+     palette it is drawn for: the script publishes the theme's dark twin
+     as --g-*, and the rule below re-declares the palette from it inside
+     each instrument, so nothing further down has to know which mode the
+     page is on. The shader reads the same twin for its ink.
+
+     What is left are the few places where a hardcoded black plate sits on
+     the CONSOLE rather than on the glass, and those do need the page's own
+     mode: they are the `html.pagelight` rules, kept together here.
+     ══════════════════════════════════════════════════════════════════ */
+  .hud, .rd, .reel, .mfd, .ck, .ann-rail{
+    /* re-stated, not just re-declared: `color` was computed on <body> out of
+       the page's palette, and everything in here that never names a colour of
+       its own — the MFD's own status bar, for one — would keep inheriting it */
+    color:var(--text);
+    --page-base:var(--g-page-base); --shadow:var(--g-shadow);
+    --bg:var(--g-bg); --bg2:var(--g-bg2); --bg3:var(--g-bg3); --bg4:var(--g-bg4);
+    --text:var(--g-text); --text2:var(--g-text2); --text3:var(--g-text3); --text4:var(--g-text4);
+    --border:var(--g-border); --border2:var(--g-border2);
+    --primary:var(--g-primary); --primary-hover:var(--g-primary-hover);
+    --success:var(--g-success); --warning:var(--g-warning); --error:var(--g-error); --info:var(--g-info);
+  }
+  html.pagelight{--syn-kw:#be185d; --syn-nm:#a16207; --syn-fx:#6d28d9; --syn-ty:#7c3aed;}
+  /* the console's own scanlines are white light on a dark deck; on a white
+     one they have to be the shadow between the lines instead */
+  html.pagelight .console::after{
+    background:repeating-linear-gradient(180deg, rgba(0,0,0,.014) 0 1px, transparent 1px 4px);}
+  /* the coaming: a hard black lip under a dark glass, a soft drop shadow
+     under a bright one, and its specular runs in the accent rather than in
+     a white that has nothing left to be brighter than */
+  html.pagelight .coam{
+    background:linear-gradient(180deg,
+      color-mix(in srgb,var(--primary) 34%,transparent) 0 1px,
+      rgba(0,0,0,.16) 1px,
+      rgba(0,0,0,.07) 45%,
+      transparent);}
+  html.pagelight .coam::after{
+    background:linear-gradient(90deg, transparent, color-mix(in srgb,var(--primary) 85%,transparent) 22%,
+      color-mix(in srgb,var(--primary) 45%,transparent) 50%, color-mix(in srgb,var(--primary) 85%,transparent) 78%, transparent);}
   *{box-sizing:border-box; margin:0; padding:0;}
   html{scroll-behavior:smooth;}
   body{background:var(--page-base,#030407); color:var(--text); font-family:var(--mono); -webkit-font-smoothing:antialiased; overflow-x:hidden;}
@@ -74,6 +143,12 @@
        can be shown as the app — which is the entire point of putting it
        there. */
     filter:brightness(.86) saturate(.98) contrast(1.02);}
+  /* A light-mode visitor carries a light palette into the demo, and a white
+     world behind the combiner leaves the symbology — which is drawn in light —
+     with nothing to be brighter than. A tinted combiner is exactly the thing
+     that fixes that in the real article: tint it further until the world
+     behind sits below the ink on the glass. */
+  html.pagelight .beyond iframe{filter:brightness(.34) saturate(.9) contrast(1.05);}
 
   /* The combiner treatment — scanlines, phosphor haze, vignette — over
      everything the glass carries, symbology and world alike. It used to be
@@ -145,14 +220,19 @@
     display:inline-flex; align-items:center; gap:7px; flex-wrap:wrap;
     margin:0 0 18px; padding:8px 11px;
     border:1px solid color-mix(in srgb,var(--primary) 26%,transparent);
-    background:color-mix(in srgb,#000 45%,transparent);
+    /* the plate is a shade of the ground it sits on, not a black one: on the
+       white console a 45%-black plate was a grey box with the console's own
+       near-black caption unreadable inside it */
+    background:color-mix(in srgb,var(--bg2) 72%,transparent);
     clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);
   }
   .themer .cap{font-size:9px; letter-spacing:.2em; text-transform:uppercase; color:var(--text4);}
   .themer .nm{font-size:9px; letter-spacing:.14em; text-transform:uppercase; color:var(--primary); min-width:92px;}
-  .themer button{width:13px; height:13px; border:1px solid rgba(255,255,255,.2); cursor:pointer; padding:0; transition:transform .14s;}
-  .themer button:hover,.themer button:focus-visible{transform:scale(1.3); outline:none; border-color:#fff;}
-  .themer button[aria-pressed="true"]{box-shadow:0 0 0 1px #000,0 0 0 2.5px currentColor;}
+  /* the swatch is the palette it selects, so its edge and its selected ring
+     have to come from the page instead of assuming a dark one behind them */
+  .themer button{width:13px; height:13px; border:1px solid color-mix(in srgb,var(--text) 25%,transparent); cursor:pointer; padding:0; transition:transform .14s;}
+  .themer button:hover,.themer button:focus-visible{transform:scale(1.3); outline:none; border-color:var(--text);}
+  .themer button[aria-pressed="true"]{box-shadow:0 0 0 1px var(--bg),0 0 0 2.5px currentColor;}
   @media (max-width:820px){ .rail a:not(.gh){display:none;} }
 
   /* ══════════════════════════════════════════════════════════════════
@@ -177,7 +257,7 @@
     border-radius:1rem; overflow:hidden;
     background:linear-gradient(180deg, color-mix(in srgb,var(--primary) 8%,transparent), transparent 42%),
                color-mix(in srgb,var(--bg2) 96%,var(--bg));
-    box-shadow:0 30px 70px -26px rgba(0,0,0,.92), inset 0 1px 0 0 rgba(255,255,255,.05);
+    box-shadow:0 30px 70px -26px var(--shadow), inset 0 1px 0 0 rgba(255,255,255,.05);
     animation:slidein .34s cubic-bezier(.2,.9,.25,1) both;
   }
   @keyframes slidein{from{opacity:0; transform:translateY(16px) scale(.985);} to{opacity:1; transform:none;}}
@@ -206,7 +286,9 @@
     font-family:var(--sans); font-size:12.5px; font-weight:600; padding:8px 0; flex:1;
     border-radius:7px; cursor:pointer; transition:filter .16s;
   }
-  .crow .allow{background:var(--success); border:1px solid var(--success); color:#062015;}
+  /* ink on a filled accent is the ground, as everywhere else here: a fixed
+     near-black one is unreadable on the darker greens the light palettes use */
+  .crow .allow{background:var(--success); border:1px solid var(--success); color:var(--bg);}
   .crow .deny{background:transparent; border:1px solid color-mix(in srgb,var(--error) 55%,transparent); color:var(--error);}
   .crow button:hover,.crow button:focus-visible{filter:brightness(1.15); outline:none;}
   .crow button:focus-visible{box-shadow:0 0 0 2px var(--bg),0 0 0 4px currentColor;}
@@ -803,7 +885,9 @@
   .dlc-f a{color:var(--primary); text-decoration:underline; text-underline-offset:2px;}
   .dlc-c{
     display:block; font-size:10.5px; line-height:1.65; color:var(--text2); white-space:pre-wrap; word-break:break-all;
-    background:color-mix(in srgb,#000 45%,transparent); padding:8px 10px;
+    /* a shade of the card, not a black wash: on a white card the wash was a
+       mid-grey box with near-black type in it */
+    background:color-mix(in srgb,var(--bg3) 82%,transparent); padding:8px 10px;
     border-left:2px solid color-mix(in srgb,var(--primary) 45%,transparent);
   }
   .dl-note{font-size:11.5px; line-height:1.85; color:var(--text4); margin-top:16px; max-width:96ch;}
@@ -1235,7 +1319,7 @@
 .pk .mb-btn.sm{min-height:42px;padding:0 13px;font-size:11.5px;border-radius:11px}
 .pk .mb-btn.acc{background:var(--primary-hover);border-color:var(--primary-hover);color:var(--bg);font-weight:700;
   box-shadow:0 6px 20px -8px var(--primary)}
-.pk .mb-btn.ok{background:var(--success);border-color:var(--success);color:#06231a;font-weight:700}
+.pk .mb-btn.ok{background:var(--success);border-color:var(--success);color:var(--bg);font-weight:700}
 .pk .mb-btn.no{color:var(--error);background:color-mix(in srgb,var(--error) 12%,transparent);
   border-color:color-mix(in srgb,var(--error) 42%,transparent)}
 .pk .mb-btn.busy{opacity:.72}
@@ -1357,7 +1441,7 @@
   background:var(--primary-hover);box-shadow:0 0 12px var(--primary)}
 .pk .mb-nav .badge{position:absolute;top:10px;right:calc(50% - 23px);min-width:17px;height:17px;border-radius:9px;
   font-size:9.5px;display:grid;place-items:center;padding:0 5px;font-weight:700;font-variant-numeric:tabular-nums;
-  background:var(--warning);color:#2a1d02;box-shadow:0 0 0 2px color-mix(in srgb,var(--bg2) 88%,transparent)}
+  background:var(--warning);color:var(--bg);box-shadow:0 0 0 2px color-mix(in srgb,var(--bg2) 88%,transparent)}
 
 /* toasts — what happened, in the past tense, after it happened */
 .pk .mb-toasts{position:absolute;left:14px;right:14px;z-index:35;display:flex;flex-direction:column;gap:9px;
@@ -1429,7 +1513,7 @@
 /* the diff, from MobileDiff.tsx */
 .pk .mb-diff{font-size:11.5px;line-height:1.62;border-radius:14px;overflow:hidden;
   border:1px solid color-mix(in srgb,var(--border) 32%,transparent);
-  background:color-mix(in srgb,#000 30%,transparent)}
+  background:color-mix(in srgb,var(--bg3) 70%,transparent)}
 .pk .mb-dl{display:flex;width:100%;text-align:left;align-items:flex-start}
 .pk .mb-dl .g{flex:none;width:34px;padding:1px 7px 1px 0;text-align:right;color:var(--text4);opacity:.5;
   user-select:none;font-size:10px;font-variant-numeric:tabular-nums}
@@ -1442,11 +1526,14 @@
 .pk .mb-dl.del .g,.pk .mb-dl.del .s{color:var(--error);opacity:.95}
 .pk .mb-dl.hdr{background:color-mix(in srgb,var(--primary) 10%,transparent);color:var(--text4);
   font-size:10.5px;padding:4px 0}
-.pk .kw{color:#f472b6} .pk .nm2{color:#fbbf24} .pk .fx{color:#a78bfa} .pk .ty{color:#c4b5fd}
+/* the diff's syntax colours. The phone is the app, and the app mock follows the
+   page — so these are the one place on the console that needs a second set: the
+   pastels are tuned to glow on a dark editor and go to nothing on a white one. */
+.pk .kw{color:var(--syn-kw)} .pk .nm2{color:var(--syn-nm)} .pk .fx{color:var(--syn-fx)} .pk .ty{color:var(--syn-ty)}
 .pk .mb-note{font-size:10.5px;line-height:1.6;color:var(--text3)}
 .pk .mb-note b{color:var(--text2)}
 .pk .logs{border-radius:12px;padding:11px 12px;font-size:11px;line-height:1.7;white-space:pre-wrap;
-  background:color-mix(in srgb,#000 42%,transparent);
+  background:color-mix(in srgb,var(--bg3) 80%,transparent);
   border:1px solid color-mix(in srgb,var(--border) 32%,transparent);color:var(--text3);flex:1;min-height:0;
   overflow:hidden}
 .pk .logs .e{color:var(--error);font-weight:700} .pk .logs .w{color:var(--warning)}
@@ -3031,12 +3118,17 @@ sudo apt install ./agentglass_*.deb</code>
   /* ══════════════════════════════════════════════════════════════════
      PHOSPHOR.
 
-     The app ships 22 palettes — 11 dark and their light twins. This page
-     offers the 11 dark ones only, and that is not an oversight: a head-up
-     display is projected light on a dark combiner. The page's own base is
-     #030407 and the WebGL scene is painted onto it, so a light palette put
-     near-black text on near-black glass and every headline vanished. The
-     light twins belong to the app, where there is a white surface to sit on.
+     The app ships 22 palettes — 11 dark and their light twins. A light one
+     changes the page, never the glass: a head-up display is projected light
+     on a dark combiner, the WebGL scene is painted onto a #030407 base, and
+     handing that base a light palette put near-black symbology on near-black
+     glass and made every headline vanish.
+
+     So a light palette dresses the console — prose, cards, the app mock, the
+     footer — and the instruments keep its dark twin, published as --g-* for
+     the stylesheet (see the note in the CSS) and held in `T` for the shader
+     and the symbology ink. Dark palettes are their own twin, and nothing
+     about them changes.
 
      The choice carries into the demo behind the glass through the same
      localStorage key the app reads — the two are one origin — so the page and
@@ -3050,10 +3142,9 @@ sudo apt install ./agentglass_*.deb</code>
     return 0.2126*((n>>16)&255)+0.7152*((n>>8)&255)+0.0722*(n&255);};
   const DARKS=THEMES.filter(t=>lum(t.vars["--bg"])<128);
   // Graphite is the house dark now, and the page's identity with it — not the
-  // old Midnight Purple. A visitor with no saved palette, and anyone whose saved
-  // one is a light theme, lands here on Graphite. (The hero is a dark HUD by
-  // construction — see above — so this page stays dark; the serious pair's light
-  // half, Porcelain, is carried for the app/demo, not painted on the glass.)
+  // old Midnight Purple. A visitor with no saved palette lands here on Graphite,
+  // and it is the glass palette of last resort for any theme with no dark twin
+  // of its own.
   const FALLBACK=DARKS.find(t=>t.id==="graphite")||DARKS[0];
   /* a light palette's dark counterpart, by name: "Ember Light" → "Ember" */
   function darkTwin(t){
@@ -3067,14 +3158,23 @@ sudo apt install ./agentglass_*.deb</code>
      barely seen. Safe before `beyond` exists (boot) via the guard. */
   function reloadBeyond(){ try{ if(beyond&&beyond.frame&&beyond.frame.contentWindow) beyond.frame.contentWindow.location.reload(); }catch(e){} }
   function applyTheme(id,remember){
-    const t=THEMES.find(x=>x.id===id)||FALLBACK; T=t;
-    for(const [k,v] of Object.entries(t.vars)) document.documentElement.style.setProperty(k,v);
-    // The hero is projected light on a dark combiner, so a dark theme keeps the
-    // deep near-black base it was tuned on; a light theme gets its own surface,
-    // which is what lets the page — and the headline over the glass — go light
-    // without sinking into it.
+    const t=THEMES.find(x=>x.id===id)||FALLBACK;
+    const root=document.documentElement;
+    for(const [k,v] of Object.entries(t.vars)) root.style.setProperty(k,v);
+    // The page takes the palette as it is; a light one gets its own white
+    // ground, which is what lets the console go light instead of sitting on a
+    // near-black base it was never meant to be read on.
     const light=lum(t.vars["--bg"])>=128;
-    document.documentElement.style.setProperty("--page-base", light ? t.vars["--bg"] : "#030407");
+    root.style.setProperty("--page-base", light ? t.vars["--bg"] : "#030407");
+    root.classList.toggle("pagelight", light);
+    // The glass is projected light on a dark combiner in every mode, so the
+    // instruments — and the shader's ink, through T — run on the dark twin.
+    const glass=light ? darkTwin(t) : t; T=glass;
+    for(const [k,v] of Object.entries(glass.vars)) root.style.setProperty("--g"+k.slice(1),v);
+    root.style.setProperty("--g-page-base","#030407");
+    // the browser's own chrome is part of the page, not part of the glass
+    const tc=document.querySelector('meta[name="theme-color"]');
+    if(tc) tc.setAttribute("content", light ? t.vars["--bg"] : "#030407");
     document.getElementById("thName").textContent=t.name;
     [...document.querySelectorAll(".themer button")].forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.id===t.id)));
     // Write the theme id so the demo behind the glass — same origin — boots on
