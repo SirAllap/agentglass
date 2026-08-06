@@ -113,6 +113,15 @@ def main():
         "payload": payload,
         "model_name": model_name,
     }
+    # Which tmux pane this agent is in. Nothing in the payload says so, and
+    # nothing on the server can work it out: several agents share one working
+    # directory, so a pane cannot be matched by cwd, and the session id in the
+    # process environment is the one it LAUNCHED with — on a resumed session it
+    # names a transcript that does not exist. This hook, though, is a child of
+    # the agent, so it simply inherits the answer.
+    pane = os.environ.get("TMUX_PANE")
+    if pane:
+        body["tmux_pane"] = pane
     if chat is not None:
         body["chat"] = chat
 
