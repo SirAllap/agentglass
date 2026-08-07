@@ -49,8 +49,13 @@ jobs:
         with:
           bun-version: latest
 
+      # --frozen-lockfile, unlike the other workflows: a release binary has to be
+      # the committed lockfile's build, and `bun install` rewriting bun.lock
+      # would make the tree dirty — which now shows up in the stamp on every
+      # installer anyone downloads. A stale lockfile failing here, loudly, is
+      # the better end of that trade.
       - name: Install
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build web
         run: cd web && bun run build
@@ -72,18 +77,24 @@ jobs:
           # back to a single model id and the dropdown looks broken.
           cp shared/claude-models.json electron/staging/claude-models.json
 
-      # Sync the package version to the tag so a v0.2.0 tag ships v0.2.0 files.
-      - name: Sync version to the tag
+      # The version the artefacts carry, from the tag. It used to be written
+      # INTO electron/package.json by a step here, and that quietly cost the
+      # build stamp its meaning: every input to the package is copied off disk,
+      # so a CI run that edits a tracked file is a build of a tree that is not
+      # the tag. With the stamp now hashing that tree, the edit would have put
+      # `+dirty` on every release binary — a warning that fires on every build
+      # is a warning nobody reads.
+      #
+      # `-c.extraMetadata.version` does the same job without touching the
+      # checkout. Measured on electron-builder 26.15 rather than assumed, since
+      # the fear was that only the in-asar manifest would pick it up: with
+      # `-c.extraMetadata.version=9.9.9` the artefact is agentglass_9.9.9_amd64.deb,
+      # latest-linux.yml says `version: 9.9.9`, the deb's control Version is
+      # 9.9.9, and `git status electron/package.json` is empty afterwards.
+      - name: Version from the tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
-        run: |
-          node -e '
-            const fs = require("fs")
-            const f = "electron/package.json"
-            const p = JSON.parse(fs.readFileSync(f, "utf8"))
-            p.version = process.argv[1]
-            fs.writeFileSync(f, JSON.stringify(p, null, 2) + "\n")
-          ' "${GITHUB_REF_NAME#v}"
+        run: echo "PKG_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       # Stamp provenance INTO staging, next to the sidecar CI just compiled, so
       # the installer carries build-info.json (version/commit/origin/baseTag)
@@ -105,7 +116,22 @@ jobs:
         working-directory: electron
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bunx electron-builder ${{ matrix.builder }} --publish never
+        run: |
+          # An `if`, not `[ -n … ] && ver=(…)`: GitHub runs `run:` under `-e`, so
+          # the && form exits the step with 1 on every non-tag build — the test
+          # failing IS the last command.
+          ver=()
+          if [ -n "${PKG_VERSION:-}" ]; then ver=(-c.extraMetadata.version="$PKG_VERSION"); fi
+          bunx electron-builder ${{ matrix.builder }} "${ver[@]}" --publish never
+
+      # The stamp has to describe what was packaged, and build.mjs necessarily
+      # runs before electron-builder copies the files. Re-hashing the tree here
+      # closes that window — and on a runner it also catches the other way this
+      # can go wrong: a step that edits the checkout between the two. That is
+      # exactly what the version sync used to do.
+      - name: Check the stamp still describes the tree
+        shell: bash
+        run: node electron/build.mjs --check-stamp electron/staging/build-info.json
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')

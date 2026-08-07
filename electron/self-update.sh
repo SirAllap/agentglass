@@ -65,10 +65,55 @@ say "installing dependencies"
 ( cd "$SRC/electron" && bun install --silent ) || fail "electron dependencies failed"
 
 say "building and installing (this stops the running app)"
-bash "$SRC/electron/install-local.sh" || fail "build or install failed — the installed app is untouched"
+# The old wording here promised "the installed app is untouched", which was only
+# true for a failure before the copy — install-local.sh replaces the files
+# halfway through. It now reports which side of that line it stopped on, and
+# reopens whatever it took down, so the honest thing to say is "read the log".
+bash "$SRC/electron/install-local.sh" || fail "build or install failed — see the lines above for what state the install was left in"
 
-say "relaunching"
 BIN="$HOME/.local/bin/agentglass"
+APP="$HOME/.local/share/agentglass-desktop"
+
+# Did the installer put the app back?
+#
+# This used to launch one unconditionally, and install-local.sh has ended with
+# start_app since 22 July, so every update from the button started TWO apps a
+# millisecond apart and let requestSingleInstanceLock (electron/main.js) decide
+# which of them lived. Harmless while the two were identical; not harmless once
+# they stopped being. Measured over 20 runs against the real binary: 1.2–1.6 ms
+# between the launches, 79–101 ms of spread in when they reached the lock, and
+# the second one won 12 times out of 20. A coin flip, in other words, and the
+# side that wins here is the WRONG one — it is a bare launch, with none of the
+# arguments or the scoping that stop_app captured off the instance it stopped.
+#
+# So this now only opens the app when nothing came back, which is the one case
+# the installer deliberately does not cover: it reopens what it took down, and
+# takes nothing down if nothing was running. Pressing Update in a window that
+# has since died should still leave an app open.
+#
+# From the clone, because that is where install-local.sh sourced it from too.
+WHY="nothing was running when this finished"
+if [ -f "$SRC/electron/appctl.sh" ]; then
+  # shellcheck source=appctl.sh
+  . "$SRC/electron/appctl.sh"
+  # Bounded, because start_app's `setsid env … agentglass` spends its first
+  # instants as /usr/bin/env, and main_pids matches on the binary behind the
+  # pid. Asking too early answers "nothing came back" about an app that did.
+  for _ in $(seq 40); do [ -n "$(main_pids)" ] && break; sleep 0.1; done
+  if [ -n "$(main_pids)" ]; then
+    say "done — running $TAG (the install reopened it)"
+    finish true
+    exit 0
+  fi
+else
+  # Say which of the two this is. Without appctl.sh there is no way to ask
+  # whether an app came back, and reporting a check that never ran as though it
+  # had is the same class of lie as an installer printing "installed:" over a
+  # copy that failed.
+  WHY="could not tell whether the install reopened anything"
+fi
+
+say "$WHY — opening $TAG"
 if [ -x "$BIN" ]; then
   # Its own session, so the app does not die along with this script.
   setsid nohup "$BIN" >/dev/null 2>&1 </dev/null &

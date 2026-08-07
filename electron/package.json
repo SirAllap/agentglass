@@ -2,10 +2,13 @@
   "name": "agentglass-electron",
   "private": true,
   "version": "0.8.0",
-  "description": "Every AI coding agent on your machine, on one screen — live cost, tokens and tool calls across every provider, and a hold on anything dangerous until you say go.",
+  "description": "Every AI coding agent on your machine, on one screen \u2014 live cost, tokens and tool calls across every provider, and a hold on anything dangerous until you say go.",
   "author": "SirAllap",
   "homepage": "https://github.com/SirAllap/agentglass",
-  "repository": { "type": "git", "url": "https://github.com/SirAllap/agentglass.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SirAllap/agentglass.git"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -14,31 +17,83 @@
     "dist:dir": "node build.mjs && electron-builder --dir"
   },
   "devDependencies": {
-    "electron": "^33.2.0",
-    "electron-builder": "^25.1.8"
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "app.agentglass.desktop",
     "productName": "agentglass",
     "executableName": "agentglass",
     "artifactName": "agentglass_${version}_${arch}.${ext}",
-    "directories": { "output": "dist-app" },
-    "files": ["main.js", "preload.js", "icons/**"],
+    "directories": {
+      "output": "dist-app"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeCliInspectArguments": false,
+      "enableNodeOptionsEnvironmentVariable": false
+    },
+    "files": [
+      "main.js",
+      "guest-guard.js",
+      "preload.js",
+      "icons/**"
+    ],
     "extraResources": [
-      { "from": "../web/dist", "to": "web" },
-      { "from": "staging", "to": "." },
-      { "from": "../hooks", "to": "hooks", "filter": ["**/*", "!__pycache__", "!__pycache__/**", "!*.pyc"] }
+      {
+        "from": "../web/dist",
+        "to": "web"
+      },
+      {
+        "from": "staging",
+        "to": "."
+      },
+      {
+        "from": "../hooks",
+        "to": "hooks",
+        "filter": [
+          "**/*",
+          "!__pycache__",
+          "!__pycache__/**",
+          "!*.pyc"
+        ]
+      },
+      {
+        "from": "../bin",
+        "to": "bin"
+      },
+      {
+        "from": "../skills",
+        "to": "skills"
+      }
     ],
     "publish": [
-      { "provider": "github", "owner": "SirAllap", "repo": "agentglass" }
+      {
+        "provider": "github",
+        "owner": "SirAllap",
+        "repo": "agentglass"
+      }
     ],
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Development",
       "icon": "icons/icon-512.png",
       "maintainer": "SirAllap <noreply@users.noreply.github.com>"
     },
-    "mac": { "target": ["dmg"], "icon": "icons/icon.icns" },
-    "win": { "target": ["nsis"], "icon": "icons/icon.ico" }
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "icons/icon.icns"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "icons/icon.ico"
+    }
   }
 }
