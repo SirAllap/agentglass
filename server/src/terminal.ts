@@ -20,6 +20,7 @@ import { readdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
+import { isViewTemp, viewTempDirOf } from "./viewtemp.ts";
 import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWindow, PtyServerFrame, PtyClientMessage } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
@@ -461,7 +462,7 @@ export function ptyOpen(ws: PtyWs) {
    * nothing the client sent is ever interpreted as a command.
    */
   const wanted = d.view ? safeAbs(d.view) : null;
-  const tempCopy = !!wanted && wanted.startsWith(join(tmpdir(), "agentglass-pr-"));
+  const tempCopy = !!wanted && isViewTemp(wanted);
   // In scope, or a copy this server itself wrote: a pull request's file is
   // fetched to a temp path precisely because it is not in the workspace, and
   // the check has to admit that without admitting /tmp in general.
@@ -552,9 +553,7 @@ export function ptyOpen(ws: PtyWs) {
 
   // Only ours, and only the directory we made — never the file's own folder,
   // which for a working-tree peek is somebody's repository.
-  const viewDir = editor && wanted!.startsWith(join(tmpdir(), "agentglass-pr-"))
-    ? wanted!.slice(0, wanted!.lastIndexOf("/"))
-    : null;
+  const viewDir = editor ? viewTempDirOf(wanted!) : null;
   const session: Session = {
     proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null,
     phoneAttach: attach

@@ -84,7 +84,7 @@ import {
   addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
 } from "./reminders.ts";
-import { fileText, fileTree, findFiles, grepFiles, listRefs, filesExist } from "./files.ts";
+import { fileText, fileToTemp, fileTree, findFiles, grepFiles, listRefs, filesExist } from "./files.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
   startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
@@ -2220,6 +2220,8 @@ const server = Bun.serve<WsData>({
       // `ref` is optional everywhere: absent means this working tree, which is
       // what every existing caller sends and must keep meaning.
       if (pathname === "/files/read") return json(fileText(root, url.searchParams.get("rel") || "", url.searchParams.get("ref") || undefined));
+      // A ref's copy written out so the editor can open it — see fileToTemp.
+      if (pathname === "/files/temp") return json(fileToTemp(root, url.searchParams.get("rel") || "", url.searchParams.get("ref") || ""));
       if (pathname === "/files/find") return json(findFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined));
       if (pathname === "/files/grep") return json(grepFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined));
       if (pathname === "/files/refs") return json(listRefs(root));

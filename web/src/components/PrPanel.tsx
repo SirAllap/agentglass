@@ -4881,11 +4881,37 @@ function buildFileTree(files: PrFile[]): TreeNode {
   return { ...root, dirs: new Map([...root.dirs].map(([k, v]) => [k, squash(v)])) };
 }
 
+/**
+ * "Open the whole file", and the second and a half it takes to say anything.
+ *
+ * This does not read the checkout: the pull request's copy is fetched from
+ * GitHub — the pull request itself to resolve its head, then the file at that
+ * commit — so two network round trips happen before a pane can appear. Without
+ * a pending state the click answered nothing for a beat, which reads as a click
+ * that missed, and the second click starts the whole thing again.
+ *
+ * Its own component because the state is per file and these are rendered from a
+ * list: one flag on the parent would put every Open button in the header into
+ * the same spinner.
+ */
+function PeekButton({ path, onPeek }: { path: string; onPeek: (p: string) => void | Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button disabled={busy}
+      onClick={async () => { setBusy(true); try { await onPeek(path); } finally { setBusy(false); } }}
+      title={busy ? "Fetching this file from GitHub at the pull request's head commit…" : "Open the whole file in an editor"}
+      className="agx-btn shrink-0 flex items-center gap-1.5 text-[10px] px-1.5 py-0.5 rounded"
+      style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
+      {busy ? <><span className="agx-spin" style={{ width: 9, height: 9 }} />Opening…</> : "⧉ Open"}
+    </button>
+  );
+}
+
 function FileTree({ node, sel, onPick, onPeek, seen, drafts, depth = 0 }: {
   node: TreeNode; sel: string | null; onPick: (p: string) => void;
   /** Open the whole file in an editor, over the panel. The diff shows what
    *  changed; this is for the times the answer is in the part that did not. */
-  onPeek?: (p: string) => void;
+  onPeek?: (p: string) => void | Promise<void>;
   seen: (p: string) => boolean; drafts: (p: string) => number; depth?: number;
 }) {
   return (
@@ -5152,7 +5178,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
    *  the Review tab it is otherwise buried in. */
   onDropDraft: (d: DraftComment) => void;
   /** Open a file whole, over the panel, in an editor. */
-  onPeek?: (path: string) => void;
+  onPeek?: (path: string) => void | Promise<void>;
   onResolve: (t: PrThread) => void; onReply: (t: PrThread, body: string) => Promise<boolean>;
   onApply?: (t: PrThread, text: string) => void; busy: boolean;
 }) {
@@ -5828,13 +5854,7 @@ function FilesTab({ d, root, byPath, loaded, seenFiles, onSeen, sel, onSel, onSh
                   the top — and reaching it meant finding a terminal, getting it
                   into the right checkout, and typing the path, by which point
                   you have lost the list you were working from. */}
-              {onPeek && (
-                <button onClick={() => onPeek(f.path)} title="Open the whole file in an editor"
-                  className="agx-btn shrink-0 text-[10px] px-1.5 py-0.5 rounded"
-                  style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}>
-                  ⧉ Open
-                </button>
-              )}
+              {onPeek && <PeekButton path={f.path} onPeek={onPeek} />}
               {/* "Viewed" is state you keep for the length of a review, not a
                   one-off tick — a switch says that and a checkbox does not. */}
               <button onClick={() => seenAndFold(f.path)} title={done ? "Mark not viewed" : "Mark viewed"}
