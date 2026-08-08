@@ -106,8 +106,18 @@ jobs:
   # red phone should not hide a green dashboard or wait behind vite.
   mobile:
     runs-on: ubuntu-latest
+    # `mobile/` arrives in a later commit than this workflow does: the phone and
+    # the job that tests it were split into separate pull requests, so on the
+    # branch that introduces the job the directory is not there yet, and `npm ci`
+    # died in eight seconds on a path that did not exist. It is also the honest
+    # condition for main, which has no mobile/ until the phone lands.
     steps:
       - uses: actions/checkout@v7
+      - name: Is there a phone to test?
+        id: phone
+        run: |
+          if [ -d mobile ]; then echo "there=yes" >> "$GITHUB_OUTPUT"
+          else echo "there=no" >> "$GITHUB_OUTPUT"; echo "::notice::no mobile/ in this tree — nothing to test"; fi
       # No setup-node: `npm ci` IS Node, so every runner image carries one, and
       # the only floor this job has is `import.meta.dirname` in the two
       # generators below — Node 20.11, which every current image is long past.
@@ -124,6 +134,7 @@ jobs:
       # terminal-html.ts. Skip this and the typecheck fails on a missing module
       # rather than on anything real.
       - name: Install (mobile)
+        if: steps.phone.outputs.there == 'yes'
         working-directory: mobile
         run: npm ci
       # The workspace install is not redundant, and not for the reason you would
@@ -137,11 +148,13 @@ jobs:
       # dependency chosen by the registry rather than by the repo, silently, in
       # the only job that runs the server outside `build`.
       - name: Install (workspace — the server those two suites boot)
+        if: steps.phone.outputs.there == 'yes'
         run: bun install
       # Both configs: the app against React Native, the suites against
       # bun-types. `types` replaces rather than adds, so one file cannot hold
       # both — see mobile/tsconfig.test.json.
       - name: Typecheck mobile (app and tests)
+        if: steps.phone.outputs.there == 'yes'
         working-directory: mobile
         run: npm run typecheck
       # `npm test` is `bun test`; no --timeout here because the only suite that
@@ -150,5 +163,6 @@ jobs:
       # depending on a flag somebody has to remember. That file self-skips
       # wherever /usr/bin/google-chrome, tmux or python3 is absent.
       - name: Tests (mobile)
+        if: steps.phone.outputs.there == 'yes'
         working-directory: mobile
         run: npm test
