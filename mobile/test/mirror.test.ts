@@ -92,6 +92,35 @@ describe("reading the typed line off the screen", () => {
     expect(doc).not.toContain("replace(/s+$/");
     expect(doc).toContain("var PROMPT = /^[\\s"); // likewise doubled
     expect(doc).toContain("\\u276f");
+    // The sentence that EXPLAINS all this has to survive the trip too, and it
+    // did not: written with one backslash it reached the page with the
+    // backslash eaten — the warning swallowed by the thing it warns about.
+    // Harmless, and the only escape in that file that really collapsed, which
+    // is why it is worth one line to keep it from coming back.
+    //
+    // Positive only, for the reason three lines up: the page's prose is ABOUT
+    // this bug, so a check for the broken spelling finds the explanation. That
+    // trap has now caught this test twice.
+    expect(doc).toContain("lone \\s in one is not an escape");
+  });
+
+  test("what the page ships is a character class, not the letter s", () => {
+    /*
+     * The check above reads the page's TEXT, which is the right way round for a
+     * file no runtime here ever executes. This one takes the two regexes back
+     * out of it and runs them, because a static scanner reading this source
+     * sees `\\s` and can conclude the page ships a plain "s" — and the answer
+     * to that is not an argument, it is the behaviour.
+     */
+    const doc = terminalDocument({ palette: C, columns: 80 });
+    const trim = new RegExp(/replace\(\/(.*?)\/, ''\)/.exec(
+      doc.slice(doc.indexOf("raw.slice(match[0].length)")))![1]!);
+    // The bug this replaced: /s+$/ turns "git status" into "git statu".
+    expect("git status".replace(trim, "")).toBe("git status");
+    expect("git status   ".replace(trim, "")).toBe("git status");
+    // And the prompt's own class eats whitespace rather than the letter.
+    expect(prompt().test("  > ")).toBe(true);
+    expect(typedOn("ssss > x")).toBeNull();
   });
 
   test("an agent's prompt, captured from a real pane", () => {

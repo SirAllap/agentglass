@@ -139,6 +139,22 @@ async function connect(url: string): Promise<Cdp> {
   const pending = new Map<number, (value: Record<string, unknown>) => void>();
   const listeners = new Map<string, ((params: Record<string, unknown>) => void)[]>();
 
+  /*
+   * Both dispatches below look up a handler with a name that came off the wire,
+   * which is the shape of a real vulnerability — with a plain OBJECT. A frame
+   * claiming `"__proto__"` or `"constructor"` would find something inherited,
+   * and calling it dispatches somewhere nobody wrote.
+   *
+   * These are Maps, and that is the whole answer: a Map resolves only keys that
+   * were `set`. Measured — `__proto__`, `constructor`, `toString` and `valueOf`
+   * all come back `undefined`, and so does the string `"1"` against the number
+   * key `1`. The `?.()` then makes a miss a no-op rather than a throw. The only
+   * callables in reach are the ones this function put there: a promise resolver
+   * keyed by a local counter, and listeners keyed by our own literals.
+   *
+   * Written down because a scanner flags this every time and the answer is not
+   * visible at the call site — it is in the choice of Map over {}.
+   */
   ws.onmessage = (m: { data: string }) => {
     const frame = JSON.parse(m.data) as { id?: number; method?: string; result?: unknown; params?: unknown };
     if (frame.id !== undefined) pending.get(frame.id)?.((frame.result ?? {}) as Record<string, unknown>);

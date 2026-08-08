@@ -582,8 +582,21 @@ export function terminalDocument({ palette, columns }: TerminalDocOptions): stri
      * apart — both are a space in a cell — so one of them has to be chosen.
      */
     // Doubled, like PROMPT above: this whole file is a template literal, and a
-    // lone \s in one is not an escape — it collapses to a plain "s", so this
+    // lone \\s in one is not an escape — it collapses to a plain "s", so this
     // read /s+$/ and trimmed the letter s off the end of people's commands.
+    // Doubled HERE too, in the PROSE, which is the part nobody thinks to
+    // double: written singly, the sentence above reached the page with its
+    // backslash eaten — the warning swallowed by the thing it warns about.
+    // Harmless, since it is a comment and both regexes are correct on the
+    // emitted page (the trim leaves the trailing letter on "git status" and
+    // takes the spaces), but it was the one escape in this file that really did
+    // collapse, and it is the one a scanner points at.
+    //
+    // Two things this cost while being fixed, both already written down in this
+    // file and both collected again anyway: a backtick in a comment here closes
+    // the template literal and the file stops compiling; and spelling the
+    // BROKEN form out in prose puts it in the page, where the test looking for
+    // it cannot tell an explanation from a regression.
     return raw.slice(match[0].length).replace(/\\s+$/, '');
   };
   var reportLine = function () {

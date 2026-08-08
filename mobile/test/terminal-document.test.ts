@@ -47,15 +47,46 @@ describe("the document it hands the WebView", () => {
     expect(() => new Function(engine)).not.toThrow();
   });
 
+  /*
+   * This check is about what the page can be told to LOAD, and it used to read
+   * weaker than it looked.
+   *
+   * All three assertions ran on `doc` with `<script>…</script>` cut out of it,
+   * and the two about attributes only worked by accident: the cut matches the
+   * bare lowercase tag, so a `<script src=…>` survived it and was there to be
+   * caught. Widen that pattern to the case-insensitive, attribute-tolerant form
+   * a scanner asks for and the very thing being looked for gets cut out first —
+   * a green test that has stopped testing. An attribute lives in the TAG, so
+   * those two now read the whole document and nothing is cut.
+   *
+   * The cut is still needed for the third one: the bundled engine carries XML
+   * namespace URLs (w3.org), which are strings in code and not fetches.
+   *
+   * And a filter that recognises only `<script>` exactly is only complete if
+   * that is the only spelling in the input — so that is asserted rather than
+   * assumed. Measured on the real document: 796,527 characters, exactly two
+   * script tags, both bare and lowercase, no `<link>` at all, and cutting the
+   * two blocks removes 430,793 characters and every URL with them.
+   */
   test("nothing in it is fetched", () => {
-    /*
-     * The page carries its own engine and its own stylesheet because a WebView
-     * has no network here. A `src` or an `href` would be a terminal that can be
-     * told to load something, on a screen that is showing a live shell.
-     */
+    // A src or an href would be a terminal that can be told to load something,
+    // on a screen that is showing a live shell. Read on the WHOLE document.
+    expect(doc).not.toMatch(/<script[^>]+src=/i);
+    expect(doc).not.toMatch(/<link[^>]+href=/i);
+  });
+
+  test("the only spelling of a script tag in it is the one the cut below knows", () => {
+    // What makes an exact-match filter complete: no `<SCRIPT>`, no attributes,
+    // no `</script >`. If the generator ever writes one, this says so instead
+    // of the cut silently missing it.
+    expect([...doc.matchAll(/<script[^>]*>/gi)].map((m) => m[0])).toEqual(["<script>", "<script>"]);
+    expect([...doc.matchAll(/<\/script\s*>/gi)].map((m) => m[0])).toEqual(["</script>", "</script>"]);
+  });
+
+  test("no URL survives once its own code is set aside", () => {
     const html = doc.replace(/<script>[\s\S]*?<\/script>/g, "");
-    expect(html).not.toMatch(/<script[^>]+src=/i);
-    expect(html).not.toMatch(/<link[^>]+href=/i);
+    // The cut has to have done its job, or the assertion under it is vacuous.
+    expect(doc.length - html.length).toBeGreaterThan(100_000);
     expect(html).not.toMatch(/https?:\/\//);
   });
 
