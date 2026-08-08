@@ -209,7 +209,27 @@ beforeAll(async () => {
     await Bun.sleep(250);
     if (await cdp.value<boolean>(`!!(window.AGX && (window.__agx || []).some(function (m) { return m.t === 'ready'; }))`)) break;
   }
-});
+  /*
+   * A budget for the hook, because this one cannot fit in bun's 5s default and
+   * never could: it launches Chrome, serves the document, opens a CDP socket
+   * and then waits on the loop above, which is allowed 40 × 250ms = 10 seconds
+   * on its own. It fit on a dev box by finishing long before either ceiling.
+   *
+   * Measured on ubuntu-latest: `(fail) (unnamed) [5000.30ms] — a
+   * beforeEach/afterEach hook timed out for this test`, the whole file's worth
+   * of assertions lost to a hook that was still starting a browser. It ran
+   * green there twice before and went red on a commit that changed two version
+   * fields and a lockfile, which is what a test sitting exactly on a timeout
+   * looks like from the outside.
+   *
+   * The budget goes HERE and not on `bun test --timeout` for the whole job:
+   * the other 31 suites in this directory are pure-module tests that finish in
+   * milliseconds, and a tight default is what turns a genuine hang in one of
+   * them into a fast red instead of a five-minute one. The server job raises
+   * its ceiling globally for the opposite reason — there, most suites do real
+   * git and spawn work.
+   */
+}, 120_000);
 
 afterAll(() => {
   cdp?.close();
@@ -800,7 +820,11 @@ describe.if(HAVE_CHROME && HAVE_TMUX && HAVE_PY)("how far the pane actually move
       }
     })();
     await Bun.sleep(1500);
-  });
+    // Same reason as the outer hook: a tmux server, a websocket and a 1.5s
+    // settle share the 5s default with whatever the runner is doing at the
+    // time. It is not asserting anything about the clock, so the ceiling only
+    // decides whether a slow machine gets to run the tests at all.
+  }, 120_000);
 
   afterAll(async () => {
     pumping = false;
