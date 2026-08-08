@@ -38,6 +38,8 @@ import { THEMES } from "../lib/themes.ts";
 import { deriveAnsi } from "../lib/termPalette.ts";
 import { termOptions, copyOnSelect, rightClickPaste } from "../lib/termPrefs.ts";
 import { useModernWidths } from "../lib/termUnicode.ts";
+import { dragHold } from "../lib/dragHold.ts";
+import { mouseModeGuard, type MouseModeGuard } from "../lib/mouseModeGuard.ts";
 import { CloseButton } from "./CloseButton.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
@@ -210,6 +212,68 @@ const sessionsFor = (root: string) => [...sessions.values()].filter((s) => s.roo
  *  you open the terminal. The console strip keeps using sessionsFor to find it. */
 const termSessionsFor = (root: string) => sessionsFor(root).filter((s) => s.title !== CONSOLE_TITLE);
 const notify = (s: Sess) => { s.subs.forEach((fn) => fn()); rosterChanged(); };
+
+/**
+ * Fits owed to terminals the user is currently dragging inside.
+ *
+ * Reported as two bugs and it is one: a selection dragged up a pane stops on
+ * its own halfway through the paragraph, and a tmux divider dragged sideways
+ * stops halfway and needs grabbing again. Both gestures live entirely inside
+ * tmux — with mouse mode on, xterm reports the pointer to the shell and tmux is
+ * what selects and what resizes — and both end the instant tmux's client
+ * changes size. `fitTerm` is that resize: it calls `term.resize()`, whose
+ * `onResize` sends the new grid to the server, which SIGWINCHes the shell.
+ *
+ * Measured against a real tmux over a real pty, with the drag sent as the exact
+ * SGR reports xterm produces: a 30-column divider drag moves 30 columns
+ * untouched and 13 with one resize dropped in at column 15; a 25-row selection
+ * holds all 25 rows untouched and 11 with one resize dropped in at row 12. In
+ * both the drag dies exactly where the resize landed.
+ *
+ * The refit is not wrong, only badly timed — so it waits for the button rather
+ * than being dropped. What arms this is a mousedown on a terminal's own holder,
+ * so the panel's own drags (the console strip's top edge) still refit live as
+ * they always have: those resize the slot on purpose and nothing is mid-gesture
+ * inside the shell.
+ */
+const fitHold = dragHold<Sess>((s) => fitTerm(s));
+
+/**
+ * The second way a drag dies, which is not the panel's doing but is the panel's
+ * to survive: xterm unbinds the `document` listener that reports the drag as
+ * soon as the shell turns mouse tracking off, and putting the mode back does
+ * not put the listener back. See mouseModeGuard for the measurement. One guard
+ * per session, because the byte stream it filters is per terminal.
+ */
+const modeGuards = new Map<Sess, MouseModeGuard>();
+const guardFor = (s: Sess) => {
+  let g = modeGuards.get(s);
+  if (!g) { g = mouseModeGuard(); modeGuards.set(s, g); }
+  return g;
+};
+
+/** Released on the window rather than the element: a drag ends wherever the
+ *  pointer happens to be by then, which is regularly outside the terminal it
+ *  started in. `blur` too, because a window that loses focus mid-drag (an
+ *  alt-tab, a dialog from another app) never sees the mouseup at all, and a
+ *  latch left set would hold every fit for the rest of the session. */
+function releaseTermDrag() {
+  window.removeEventListener("mouseup", releaseTermDrag);
+  window.removeEventListener("blur", releaseTermDrag);
+  fitHold.end();
+  // Hand the terminals back whatever was withheld from them, now that there is
+  // no gesture left for it to interrupt.
+  for (const [s, guard] of modeGuards) {
+    const held = guard.flush();
+    if (held.length) try { s.term.write(held); } catch { /* disposed mid-drag */ }
+  }
+}
+function armTermDrag() {
+  if (fitHold.active()) return;
+  fitHold.begin();
+  window.addEventListener("mouseup", releaseTermDrag);
+  window.addEventListener("blur", releaseTermDrag);
+}
 
 // --- roster: "is any shell alive?", for the workspace rail ---------------------
 // Per-session `subs` answer "did *this* shell change"; nothing could answer
@@ -386,7 +450,13 @@ function connect(s: Sess) {
   s.ws = ws;
   ws.onmessage = (ev) => {
     if (s.ws !== ws) return; // a stale socket (replaced by ⟲ new shell) must not touch the session
-    if (typeof ev.data !== "string") { s.term.write(new Uint8Array(ev.data as ArrayBuffer)); return; }
+    if (typeof ev.data !== "string") {
+      const bytes = new Uint8Array(ev.data as ArrayBuffer);
+      // Only while the user is dragging inside a terminal — see mouseModeGuard.
+      // Every other chunk of every other second goes through untouched.
+      s.term.write(fitHold.active() ? guardFor(s).filter(bytes) : bytes);
+      return;
+    }
     /*
      * The protocol, from the one declaration of it.
      *
@@ -609,6 +679,11 @@ function createSession(root: string): Sess {
     if (sel) navigator.clipboard?.writeText(sel).catch(() => { /* no clipboard permission */ });
   });
   const holder = document.createElement("div");
+  // Every gesture that can be interrupted by a refit starts here — see fitHold.
+  // On the holder rather than on xterm's own element because xterm calls
+  // `preventDefault` on its mousedown, and because the holder is what outlives
+  // a renderer swap.
+  holder.addEventListener("mousedown", armTermDrag);
   // Opaque themed backing, so any frame where the renderer paints nothing (a
   // WebGL context loss, a swap to the DOM renderer) shows the terminal's own
   // background colour instead of a white flash.
@@ -696,6 +771,10 @@ type TermCore = {
  * overlay (see the style block below) and takes no layout width.
  */
 function fitTerm(s: Sess) {
+  // Not while the user is dragging inside this terminal — see fitHold. The fit
+  // is owed, not cancelled: it runs on the release, when there is no gesture
+  // left for the SIGWINCH to interrupt.
+  if (fitHold.hold(s)) return;
   const el = s.term.element;
   const parent = el?.parentElement;
   const core = (s.term as unknown as TermCore)._core;
@@ -722,6 +801,7 @@ function killSession(s: Sess) {
   s.ws = null; // detach first so the close handler stays quiet
   try { ws?.close(); } catch { /* already gone */ }
   stopDemoFor(s.id);
+  modeGuards.delete(s);
   try { s.term.dispose(); } catch { /* already disposed */ }
   s.holder.remove();
   sessions.delete(s.id);
