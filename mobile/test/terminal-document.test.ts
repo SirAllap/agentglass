@@ -83,23 +83,68 @@ describe("the document it hands the WebView", () => {
     expect([...doc.matchAll(/<\/script\s*>/gi)].map((m) => m[0])).toEqual(["</script>", "</script>"]);
   });
 
+  /*
+   * Every `<script …>` … `</script …>` block removed, by scanning rather than
+   * by a pattern — and the scanning is the point.
+   *
+   * This was a regexp, and no regexp survived review here. `/<script>…<\/script>/g`
+   * drew "does not match upper case <SCRIPT> tags"; tightening it to
+   * `/<script[^>]*>[\s\S]*?<\/script\s*>/gi` drew two more — "does not match
+   * script end tags like `</script\t\n bar>`", which is legal HTML, and
+   * "incomplete multi-character sanitization", which is about a single
+   * `.replace` pass being able to leave a `<script` behind. Those rules exist
+   * to say a regexp is the wrong tool for finding the end of an HTML element,
+   * and they are right about that even here.
+   *
+   * Nothing was ever unsafe: `doc` is a document THIS repository generates,
+   * there is no untrusted input and no browser in this test, and the test above
+   * proves the only spellings present are two bare lowercase `<script>` and two
+   * `</script>`. But a reader of the old line could not see that proof, and
+   * neither could the scanner — a red on every pull request is a real cost for
+   * a guarantee that lives three tests away.
+   *
+   * An index walk has no such ambiguity: find `<script`, take the `>` that ends
+   * that start tag, find `</script`, take the `>` that ends it, drop everything
+   * between. Case-insensitive, indifferent to attributes and to whitespace or
+   * junk before either `>`, and it cannot half-finish — anything it does not
+   * find, it leaves alone, and the length assertion below is what notices.
+   */
+  const withoutScriptBlocks = (s: string): string => {
+    const hay = s.toLowerCase();
+    let out = "", at = 0;
+    for (;;) {
+      const open = hay.indexOf("<script", at);
+      if (open === -1) break;
+      const openEnd = hay.indexOf(">", open);
+      if (openEnd === -1) break;
+      const close = hay.indexOf("</script", openEnd);
+      if (close === -1) break;
+      const closeEnd = hay.indexOf(">", close);
+      if (closeEnd === -1) break;
+      out += s.slice(at, open);
+      at = closeEnd + 1;
+    }
+    return out + s.slice(at);
+  };
+
+  test("the cut handles the spellings a regexp kept getting wrong", () => {
+    // The three shapes the scanner named, plus the two the document actually
+    // has. Written down because the cut is now code rather than a pattern, and
+    // because "it works on today's document" was the weakness of the old one.
+    expect(withoutScriptBlocks("a<script>x</script>b")).toBe("ab");
+    expect(withoutScriptBlocks("a<SCRIPT>x</SCRIPT>b")).toBe("ab");
+    expect(withoutScriptBlocks("a<script type='m'>x</script>b")).toBe("ab");
+    expect(withoutScriptBlocks("a<script>x</script\t\n bar>b")).toBe("ab");
+    expect(withoutScriptBlocks("a<script>x</script>b<script>y</script>c")).toBe("abc");
+    // Nothing to cut is not the same as everything cut.
+    expect(withoutScriptBlocks("plain")).toBe("plain");
+    // An unterminated block is left alone rather than eating the rest of the
+    // document — the length assertion below is what turns that into a failure.
+    expect(withoutScriptBlocks("a<script>x")).toBe("a<script>x");
+  });
+
   test("no URL survives once its own code is set aside", () => {
-    /*
-     * The cut matches every spelling the test above CHECKS FOR, not just the
-     * two the document happens to contain today.
-     *
-     * It read `/<script>[\s\S]*?<\/script>/g` — exact, lowercase, no
-     * attributes — and was sound, because the test above proves those are the
-     * only spellings present. CodeQL flags it anyway ("Bad HTML filtering
-     * regexp: this regular expression does not match upper case <SCRIPT>
-     * tags"), and it is right to: the guarantee lives in a different test, and
-     * a reader of this line cannot see it. Nothing is weakened by matching
-     * what the assertion above already tolerates — `<SCRIPT>`, attributes, and
-     * `</script >` — and if the generator ever emits one of those, this cut
-     * keeps working instead of silently leaving a block of code in `html` for
-     * the URL assertion below to scan.
-     */
-    const html = doc.replace(/<script[^>]*>[\s\S]*?<\/script\s*>/gi, "");
+    const html = withoutScriptBlocks(doc);
     // The cut has to have done its job, or the assertion under it is vacuous.
     expect(doc.length - html.length).toBeGreaterThan(100_000);
     expect(html).not.toMatch(/https?:\/\//);
