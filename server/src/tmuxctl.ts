@@ -2389,7 +2389,136 @@ export function attachArgvFor(
 export function fitWindow(socket: string[], sessionId: string, windowId: string, cols: number, rows: number): boolean {
   if (!SESSION_ID.test(sessionId) || !WINDOW_ID.test(windowId)) return false;
   if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 20 || rows < 4) return false;
+  markPinned(socket, windowId);
   return tmux(socket, ["resize-window", "-t", `${sessionId}:${windowId}`, "-x", String(cols), "-y", String(rows)]) !== null;
+}
+
+/**
+ * Write the durable "this app pinned this window's size" record, if the window
+ * does not already carry one.
+ *
+ * `windowSizeOptions` writes it for every window of the group at attach, which
+ * covers the fit that runs with the attach itself. It did not cover the fits
+ * that come AFTER, and the gap is a state a machine was found in: a window at
+ * `window-size manual`, 80 columns inside a 285-column terminal, with nobody
+ * attached to it and no mark on it. The way there is the ordinary one — a
+ * phone leaves a window, the teardown restores it and clears the mark, and a
+ * resize from a socket that had not finished dying fits it again — and once
+ * the mark is gone nothing can ever prove the window is ours to put back.
+ *
+ * So the record is written wherever the pin is, not only where the pin usually
+ * starts. `resize-window` sets `window-size manual` as a side effect, so every
+ * call below IS a pin.
+ *
+ * Only when unmarked, and that is what makes it safe to call on every fit: the
+ * value being kept is what the window had before ANY of this touched it, and
+ * overwriting it with `manual` half way through a phone's visit would make the
+ * restore put back the squeeze instead of undoing it.
+ */
+function markPinned(socket: string[], windowId: string): void {
+  if (!WINDOW_ID.test(windowId)) return;
+  const marked = tmux(socket, ["show-options", "-qwv", "-t", windowId, HAD_SIZE]);
+  if (marked === null || marked.trim()) return;
+  const had = tmux(socket, ["show-options", "-qwv", "-t", windowId, "window-size"]);
+  if (had === null) return;
+  // Ledger, claim, then mark — the same order and for the same reasons as
+  // `windowSizeOptions`. See THE PIN LEDGER.
+  notePinnedSocket(socket);
+  tmux(socket, ["set-option", "-w", "-t", windowId, HAD_SIZE_BY, thisRun()]);
+  tmux(socket, ["set-option", "-w", "-t", windowId, HAD_SIZE, had.trim() || HAD_NOTHING]);
+}
+
+/**
+ * How long a window has to be phone-free before this run puts it back.
+ *
+ * Not zero, and the number is the same race the teardown's 1500ms answers from
+ * the other side: switching tabs on the phone closes one socket and opens the
+ * next, and between them there is a moment with the window pinned and no phone
+ * on it. Reclaiming inside that gap gives the desk its width back and takes it
+ * away again as the next attach lands — two reflows of a full-screen program to
+ * arrive back where it started.
+ *
+ * Two seconds is that gap with room, and it is still fast enough that a phone
+ * put down in a pocket is a window back at the desk's size before anybody has
+ * finished looking away.
+ */
+const RECLAIM_AFTER_MS = 2000;
+/**
+ * And how long before looking again at a narrow window that turned out not to
+ * be ours.
+ *
+ * The mark can only be read with a tmux call, and this runs off a poll that
+ * ticks twice a second per attached client. A window somebody narrowed
+ * themselves stays narrow for as long as they want it to, so without a backoff
+ * it would cost a spawn every couple of seconds, for ever, to be told the same
+ * thing. A minute is short enough that a window that BECOMES ours — a phone
+ * fitting it — is picked up while the phone is still on it.
+ */
+const RECHECK_MS = 60_000;
+/** Per socket and window: the next moment this window is worth looking at.
+ *  Cleared the moment a phone is back on it, so a tab switch cannot accumulate
+ *  time towards a reclaim. */
+const freeSince = new Map<string, number>();
+
+/**
+ * Put back a window this app pinned for a phone that is no longer on it.
+ *
+ * WHY THIS EXISTS. The teardown owes the restore and usually pays it: the
+ * socket closes, and 1.5 and 3 seconds later `restoreWindows` gives the desk
+ * its columns back. Three ordinary things stop that from happening, and all of
+ * them leave the same wreck — a window at phone width with nobody on it:
+ *
+ *   the socket never closes (a phone that loses its network hands the server no
+ *   FIN, so the teardown is not scheduled at all);
+ *
+ *   the restore runs while the phone is still attached to that window and
+ *   correctly skips it — both attempts are inside three seconds, and after that
+ *   nothing is watching;
+ *
+ *   this server was killed, or reinstalled, between the fit and the teardown.
+ *
+ * The boot sweep answers the third and only at a boot, and only for a mark left
+ * by a run that is dead. This answers all three while the app is running, off
+ * the poll the tab strip is already paying for.
+ *
+ * The mark is the whole of the authority. A narrow window is not evidence of
+ * anything on its own — somebody who ran `resize-window -x 80` themselves has
+ * exactly that, and undoing it would be this app editing a tmux somebody else
+ * is driving. `@agx-had-size` says the size was taken by us and what it was
+ * before, which is the same proof the boot sweep insists on.
+ */
+export function reclaimPinnedWindow(socket: string[], sessionId: string, windowId: string, free: boolean): boolean {
+  if (!SESSION_ID.test(sessionId) || !WINDOW_ID.test(windowId)) return false;
+  const key = claimKey(socket, windowId);
+  if (!free) { freeSince.delete(key); return false; }
+  const at = freeSince.get(key);
+  if (at === undefined) { freeSince.set(key, Date.now() + RECLAIM_AFTER_MS); return false; }
+  if (Date.now() < at) return false;
+  const mark = tmux(socket, ["show-options", "-qwv", "-t", windowId, HAD_SIZE])?.trim();
+  // Not ours, which is the commonest answer: somebody narrowed their own
+  // window. Asked again in a minute rather than on the next tick — see
+  // RECHECK_MS.
+  if (!mark) { freeSince.set(key, Date.now() + RECHECK_MS); return false; }
+  freeSince.delete(key);
+  // A value this code cannot act on stops being a reason to come back.
+  if (mark !== HAD_NOTHING && !WINDOW_SIZE_VALUE.test(mark)) { clearSizeMark(socket, windowId); return false; }
+  const want = mark === HAD_NOTHING ? "" : mark;
+  /*
+   * `-A` first, the option second. Measured into `restoreWindows` and repeated
+   * in the boot sweep: setting the option alone leaves the window squeezed
+   * (tmux applies `window-size` when something makes it recompute, and nothing
+   * has), and `resize-window` in either form writes `manual`, so the other
+   * order puts the squeeze back over the restore.
+   */
+  tmux(socket, ["resize-window", "-A", "-t", `${sessionId}:${windowId}`]);
+  tmux(socket, want
+    ? ["set-option", "-w", "-t", windowId, "window-size", want]
+    : ["set-option", "-uw", "-t", windowId, "window-size"]);
+  clearSizeMark(socket, windowId);
+  // A pane whose size ends where it started is not redrawn by tmux, and a
+  // program that drew itself at 80 columns stays drawn that way.
+  tmux(socket, ["refresh-client"]);
+  return true;
 }
 
 /**

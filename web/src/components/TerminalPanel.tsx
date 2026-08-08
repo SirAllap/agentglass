@@ -2379,11 +2379,19 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       <div className="flex items-start gap-2">
                         {/* The width sentence has two states, split on `w.phone`,
                             so the present tense is only used when a phone is
-                            actually there. The second is not hypothetical: a
-                            phone that loses its network leaves exactly this —
-                            the fit is a size set on the window, so it outlives
-                            the client that asked for it, and the desk is left
-                            narrow with nothing attached to explain it.
+                            actually there.
+
+                            The second one no longer blames the phone, and that
+                            is a consequence of the server putting these back by
+                            itself: a window a phone pinned carries a mark, and
+                            a marked window with nobody on it is restored within
+                            a couple of seconds without anybody clicking. So by
+                            the time this sentence is on screen the size is one
+                            this app cannot prove it took — most often somebody's
+                            own `resize-window` — and "your phone left without
+                            putting it back" would be a guess presented as a
+                            fact. The numbers are still worth saying, and the
+                            button still works on either.
                             The zoom sentence has one state, because it is only
                             ever shown while a phone is here (see
                             `zoomedByPhone`), and it says the panes are still
@@ -2394,7 +2402,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           {held.narrow && (held.win.phone ? (
                             <>Your phone is driving this window. It is <Cols n={held.narrow.winCols} /> columns while your terminal is <Cols n={held.narrow.deskCols} />, so tmux is drawing everything at phone width.</>
                           ) : (
-                            <>This window is still at phone size: <Cols n={held.narrow.winCols} /> columns to your terminal&apos;s <Cols n={held.narrow.deskCols} />. Your phone left without putting it back.</>
+                            <>This window is <Cols n={held.narrow.winCols} /> columns to your terminal&apos;s <Cols n={held.narrow.deskCols} />, with nothing attached to it at that size. A phone&apos;s reflow is put back on its own, so this one came from somewhere else.</>
                           ))}
                           {held.narrow && held.zoomed && " "}
                           {held.zoomed && (
