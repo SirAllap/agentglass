@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["bun-types"],
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true
+  },
+  /*
+   * The suites, plus everything they reach into: the app's own pure modules
+   * and — for the end-to-end pairing test — the server's. `DOM` is in `lib`
+   * for `WebSocket` and `CloseEvent`, which Bun implements and `bun-types`
+   * does not describe on its own.
+   */
+  "include": ["test/**/*.ts", "src/lib/**/*.ts", "src/notifications/**/*.ts", "../server/src/pairing.ts"]
+}

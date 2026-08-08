@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "agentglass",
+    "slug": "agentglass-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "agentglass",
+    "_comment_userInterfaceStyle": "automatic, not dark: this is what Appearance reports to the app, and pinning it to dark makes Settings' System mode a lie — measured in the emulator, `cmd uimode night no` left getColorScheme() answering dark for ever. The app still opens dark for anybody who has not chosen (see SHIPPED in src/theme.ts); this only stops the manifest from lying about the phone.",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "android": {
+      "package": "app.agentglass.mobile",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0f0a1a"
+      },
+      "edgeToEdgeEnabled": true,
+      "allowBackup": false,
+      "usesCleartextTraffic": true,
+      "permissions": ["android.permission.POST_NOTIFICATIONS"]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "backgroundColor": "#0f0a1a",
+          "imageWidth": 180
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "agentglass uses the camera once, to scan the pairing code on your computer's screen.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "./plugins/with-release-signing.js"
+    ]
+  }
+}
