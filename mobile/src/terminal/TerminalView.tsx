@@ -17,7 +17,7 @@
  * boundary — permanently, and in a TUI that is most of the box drawing.
  */
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { View } from "react-native";
+import { AppState, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import type { PtyClientFrame, PtyServerFrame } from "../../../shared/types.ts";
 import { b64Encode } from "../lib/b64.ts";
@@ -121,6 +121,17 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
    */
   const [measured, setMeasured] = useState(false);
   const [doc] = useState(() => terminalDocument({ palette, columns }));
+  /*
+   * Bumped to open a new socket on the same pane.
+   *
+   * The effect below is keyed on what a connection IS — host, pane, root, fit —
+   * and none of those change when a socket merely dies, so nothing reopened it:
+   * the screen said "Disconnected" and stayed there. Reported from the phone as
+   * "I minimise the app, come back, and the terminal is frozen; I have to tap
+   * another tab" — and tapping another tab is exactly a remount, which is why
+   * that worked and nothing else did.
+   */
+  const [attempt, setAttempt] = useState(0);
 
   /*
    * The palette, as the page's own theme object, recomputed every render.
@@ -281,8 +292,41 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       // `tmux ls` with sessions nobody is in.
       try { ws.close(); } catch { /* already gone */ }
     };
-    // Deliberately only what identifies the CONNECTION. See the refs above.
-  }, [host, pane, root, fit, push, measured]);
+    // Deliberately only what identifies the CONNECTION, plus `attempt`, which
+    // is the one way to ask for the same connection again. See the refs above.
+  }, [host, pane, root, fit, push, measured, attempt]);
+
+  /*
+   * Come back with the app.
+   *
+   * A phone in a pocket loses this socket: Android stops the process's timers
+   * and the network goes with the screen, so the connection is gone long before
+   * anybody looks again. Nothing here noticed, because a dead socket does not
+   * change the pane it was attached to.
+   *
+   * Only on the way IN, and only when there is nothing live. Reconnecting while
+   * the app is away would put a tmux client back on somebody's machine for a
+   * phone in a pocket — every attach is a grouped session on the desk's tmux —
+   * and reconnecting over a socket that survived would drop a session that is
+   * working to replace it with an identical one.
+   *
+   * CONNECTING counts as alive: the first foreground event often lands while
+   * the initial socket is still opening, and racing it would throw away the
+   * attach that is already on its way.
+   *
+   * The pane keeps running on the machine throughout. This reattaches a view to
+   * work that never stopped, which is the whole promise of the tmux side of the
+   * app — the frozen screen was making it look otherwise.
+   */
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next !== "active") return;
+      const ws = socket.current;
+      if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+      setAttempt((n) => n + 1);
+    });
+    return () => sub.remove();
+  }, []);
 
   const onMessage = useCallback((event: WebViewMessageEvent): void => {
     let message: { t?: string; d?: string; cols?: number; rows?: number; text?: string | null; lines?: number };

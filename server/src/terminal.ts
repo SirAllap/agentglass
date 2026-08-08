@@ -319,7 +319,7 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, reclaimPinnedWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
 import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
 import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
@@ -672,6 +672,37 @@ export function ptyOpen(ws: PtyWs) {
       const onPhone = phoneWindows(frame.target.socket);
       for (const w of windows) if (onPhone.has(w.id)) w.phone = true;
 
+      /*
+       * And a window still at phone width with no phone on it gets its columns
+       * back, without anybody clicking anything.
+       *
+       * The notice this used to leave on the desk said it out loud: "your phone
+       * left without putting it back", beside a button. Everything in that
+       * sentence is something the machine already knows — the window is narrow,
+       * the mark says we narrowed it, and nothing is attached to it — so making
+       * somebody read it and press a button is asking them to do a job that has
+       * no decision in it. Found on a real machine as a window pinned at 80
+       * columns inside a 285-column terminal, hours after the phone had gone.
+       *
+       * The teardown still owes the restore and still usually pays it. This is
+       * for the three ways it cannot: a socket that never closed, a restore
+       * that ran while the phone was briefly still there, and a server killed
+       * between the fit and the teardown. See `reclaimPinnedWindow`, which
+       * holds the patience and the proof; here we only answer "is this window
+       * narrower than the terminal looking at it, and is it free".
+       *
+       * Free means more than tmux's answer. A phone whose socket is up but
+       * whose tmux client has not landed yet is between two attaches, and its
+       * own teardown owes the window — reclaiming it there is the tab-switch
+       * flicker `RECLAIM_AFTER_MS` exists to avoid, arriving by another road.
+       */
+      const client = frame.client;
+      if (client) for (const w of windows) {
+        const narrow = !!w.cols && w.cols < client.cols;
+        const held = onPhone.has(w.id) || phoneAttachedTo(frame.target.socket, w.id);
+        reclaimPinnedWindow(frame.target.socket, frame.target.id, w.id, narrow && !held);
+      }
+
       // "The agent in this tab finished its turn." Group the frame's panes by
       // their window, then: the active window (the one the desk is looking at) is
       // marked seen so its dot goes out; every other window lights if any pane in
@@ -896,6 +927,28 @@ export function ptyOpen(ws: PtyWs) {
  * socket at all in its argv while the phone's attach carries `-S /tmp/...`, so
  * comparing the two spellings never matches even on the same server.
  */
+/**
+ * Whether a phone socket in THIS process is on that window, whatever tmux says.
+ *
+ * tmux answers "which windows have a phone client attached right now", and that
+ * is a narrower question than "is a phone here". A socket that is up but whose
+ * tmux client has not landed — or has just gone, with its teardown already
+ * scheduled — is a phone between two attaches, and the window it names is owed
+ * a restore by that teardown rather than by anything else.
+ *
+ * Matched by resolved socket PATH for the reason `tellPhonesTheWindowMoved`
+ * spells out: the desk's argv usually names no socket and the phone's carries
+ * the resolved one, so comparing the arrays never matches on the same server.
+ */
+function phoneAttachedTo(socket: string[], windowId: string): boolean {
+  const server = socketPath(socket);
+  for (const s of sessions.values()) {
+    const at = s.phoneAttach;
+    if (at && at.windowId === windowId && socketPath(at.socket) === server) return true;
+  }
+  return false;
+}
+
 function tellPhonesTheWindowMoved(t: TmuxTarget, windowId: string) {
   const size = windowSize(t.socket, windowId);
   if (!size) return;
@@ -903,6 +956,29 @@ function tellPhonesTheWindowMoved(t: TmuxTarget, windowId: string) {
   for (const [ws, s] of sessions) {
     const at = s.phoneAttach;
     if (!at || at.windowId !== windowId || socketPath(at.socket) !== server) continue;
+    /*
+     * The FLAG, and not only the frame. This is the whole of a reported bug.
+     *
+     * `at.fit` is what the resize handler reads to decide whether a phone's
+     * geometry moves the real window, and it was written once at attach and
+     * never again. So the take-over gave the desk its columns back and left
+     * the attach still claiming the window: the phone's very next `resize`
+     * frame ran `fitWindow` and squeezed it to 80 again. That frame does not
+     * need anybody to touch the phone — a WebView re-measuring after the app
+     * comes back to the foreground sends one, which is exactly the shape it
+     * was reported in ("I take the width back on the computer and it goes
+     * narrow again on its own").
+     *
+     * Clearing it does not hang up on the phone and does not end its session;
+     * it ends this phone's CLAIM on the window's size. The phone tapping fit
+     * again reattaches with `fit=1` and gets it back, which is the rule the
+     * take-over already states: it ends the reflow that is happening, it is
+     * not a lock.
+     *
+     * Before the frame rather than after, so a send that throws still leaves
+     * the server's own state true.
+     */
+    at.fit = false;
     ctl(ws, { t: "pane", cols: size.cols, rows: size.rows, fit: false, by: "desk" });
   }
 }

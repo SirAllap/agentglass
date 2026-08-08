@@ -135,6 +135,39 @@ describe("the frame the desk sends when it takes its width back", () => {
     expect(screen).toContain("!following && grid.cols > columns");
   });
 
+  test("the take-over drops the attach's own claim, not just the phone's UI", () => {
+    /*
+     * The bug this pair exists to end, reported as "I take the width back on
+     * the computer and it goes narrow again on its own".
+     *
+     * `phoneAttach.fit` is what the resize handler reads to decide whether this
+     * phone's geometry moves the real window, and it was written once at attach.
+     * The take-over sent the frame and left the flag alone, so the next `resize`
+     * from that socket ran `fitWindow` and undid it — and a resize is not a
+     * gesture: a WebView re-measuring when the app comes back sends one.
+     */
+    const server = readFileSync(join(import.meta.dir, "..", "..", "server", "src", "terminal.ts"), "utf8");
+    const tell = between(server, "function tellPhonesTheWindowMoved", "\n}\n");
+    expect(tell).toContain("at.fit = false");
+    // Before the send, so a frame that throws still leaves the server true.
+    expect(tell.indexOf("at.fit = false")).toBeLessThan(tell.indexOf('ctl(ws, { t: "pane"'));
+  });
+
+  test("a phone whose socket died does not reattach still fitted", () => {
+    /*
+     * The other half, and the half that survives the app being closed: the
+     * take-over frame only reaches a phone that is there to receive it. Leaving
+     * the app with `fit` on left the switch lit over a socket that no longer
+     * existed, and the next attach read it and sent `fit=1` again — so coming
+     * back to the app took the width off the desk with nobody asking.
+     *
+     * The claim lives in the socket, so it dies with it.
+     */
+    const handler = between(screen, "const onState = useCallback", "}, []);");
+    expect(handler).toContain('next === "gone"');
+    expect(handler).toContain("setFit(false)");
+  });
+
   test("the server re-measures the window after this phone resizes it", () => {
     /*
      * The other half of the same fix, and the half without which the screen is
