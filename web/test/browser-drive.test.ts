@@ -221,3 +221,66 @@ describe("driving a page", () => {
     expect(r.error).toContain("Script failed");
   });
 });
+
+/*
+ * The selector and the typed text are the only outside strings that reach a
+ * literal in code this file builds, and they arrive over the wire from an
+ * agent. The server's gate (server/src/browserdrive.ts) refuses a newline, a
+ * carriage return and a NUL in a selector and lets everything else through —
+ * including U+2028 and U+2029, which JSON.stringify leaves bare and which were
+ * line terminators to a JS parser. So the lock is not "we called the right
+ * helper": it runs what the panel built and checks nothing escaped.
+ */
+describe("a hostile selector stays data", () => {
+  const PAYLOADS: Array<[string, string]> = [
+    ["a double quote", 'a"]'],
+    ["a quote break-out", 'x"); globalThis.__canary.hit = 1; ("'],
+    ["a trailing backslash", "a\\"],
+    ["a backslash before a quote", 'a\\"; globalThis.__canary.hit = 1; //'],
+    ["U+2028 and code after it", "a\u2028globalThis.__canary.hit = 1;//"],
+    ["U+2029 and code after it", "a\u2029globalThis.__canary.hit = 1;//"],
+    ["a closing script tag", '</script><img src=x onerror="globalThis.__canary.hit = 1">'],
+    ["a template literal", "a`${globalThis.__canary.hit = 1}`"],
+    ["a comment close", "a*/ globalThis.__canary.hit = 1; /*"],
+    ["a lone surrogate", "a\uD800b"],
+  ];
+  const VERBS = ["click", "type", "wait", "text", "scroll"];
+
+  /** Run the built code for real, with a querySelector that records exactly
+   *  what it was handed. Evaluating it is the point: asserting on the shape of
+   *  the string would pass for any escaping that merely looks careful. */
+  function run(code: string) {
+    const seen: string[] = [];
+    const doc = {
+      querySelector: (s: string) => { seen.push(s); return null; },
+      body: { innerText: "", scrollHeight: 100 },
+      title: "",
+    };
+    const win = { scrollTo: () => {}, scrollBy: () => {}, scrollY: 0, innerHeight: 10 };
+    // `wait` polls on a timer; a no-op setTimeout stops it after one look.
+    new Function("document", "window", "location", "setTimeout", `return ${code}`)(
+      doc, win, { href: "about:blank" }, () => 0,
+    );
+    return seen;
+  }
+
+  for (const [name, payload] of PAYLOADS) {
+    test(`${name} reaches querySelector verbatim and runs nothing`, async () => {
+      for (const op of VERBS) {
+        const el = fakeGuest(() => false);
+        const g = globalThis as unknown as { __canary: { hit: number } };
+        g.__canary = { hit: 0 };
+        await runBrowserAsk(el, ask(op, { selector: payload, text: payload, submit: false }));
+        const code = el.ran.find((c) => c.includes("querySelector"));
+        expect(code, `${op} built no querySelector`).toBeDefined();
+        expect(run(code!), `${op} did not receive the selector whole`).toEqual([payload]);
+        expect(g.__canary.hit, `${op} let the payload execute`).toBe(0);
+        // Nothing that could end a string, a line or a script element survives
+        // into the source — the property `jsLit` exists to hold.
+        expect(code).not.toContain("\u2028");
+        expect(code).not.toContain("\u2029");
+        expect(code!.slice(code!.indexOf("querySelector"))).not.toContain("<");
+      }
+    });
+  }
+});

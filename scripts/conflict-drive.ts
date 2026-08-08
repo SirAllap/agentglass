@@ -27,6 +27,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { connect, findChrome, until } from "./cdp.ts";
+import { jsLit } from "../shared/jsLit.ts";
 import { privateTmuxDir } from "./tmuxTmp.ts";
 
 const ROOT = resolve(import.meta.dir, "..");
@@ -164,7 +165,7 @@ const text = (cdp: any) => cdp.ev(`document.body.innerText`) as Promise<string>;
 const clickText = (cdp: any, re: string) =>
   cdp.ev(`(()=>{const b=[...document.querySelectorAll('button')].find(e=>${re}.test(e.textContent));if(!b)return false;b.click();return true})()`);
 const clickExact = (cdp: any, label: string) =>
-  cdp.ev(`(()=>{const b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(label)});if(!b)return false;b.click();return true})()`);
+  cdp.ev(`(()=>{const b=[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${jsLit(label)});if(!b)return false;b.click();return true})()`);
 
 /* ------------------------------------------------------------------ scenario */
 
