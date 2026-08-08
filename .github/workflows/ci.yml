@@ -157,11 +157,21 @@ jobs:
         if: steps.phone.outputs.there == 'yes'
         working-directory: mobile
         run: npm run typecheck
-      # `npm test` is `bun test`; no --timeout here because the only suite that
-      # needs more than bun's 5s default (test/pane-line.test.ts, a real Chrome
-      # over CDP driving a real tmux) passes its own 30s per test rather than
-      # depending on a flag somebody has to remember. That file self-skips
-      # wherever /usr/bin/google-chrome, tmux or python3 is absent.
+      # `npm test` is `bun test`, with no --timeout, and that is deliberate: the
+      # 31 other suites here are pure-module tests that finish in milliseconds,
+      # so the tight 5s default is what turns a genuine hang in one of them into
+      # a fast red rather than a five-minute one. The one suite that needs more
+      # (test/pane-line.test.ts, a real Chrome over CDP driving a real tmux)
+      # carries its own budgets. That file self-skips wherever
+      # /usr/bin/google-chrome, tmux or python3 is absent.
+      #
+      # This used to say the suite "passes its own 30s per test". It passed
+      # nothing — not on a test, not on a hook — and the sentence was the stated
+      # reason there is no flag here, so the gap it described as covered was the
+      # gap that took the job down: the file's two heavy hooks inherited the 5s
+      # default and the outer one alone polls for up to 10s, giving `(fail)
+      # (unnamed) [5000.30ms] — a beforeEach/afterEach hook timed out`. The
+      # budgets are real now, on the hooks, in that file.
       - name: Tests (mobile)
         if: steps.phone.outputs.there == 'yes'
         working-directory: mobile
