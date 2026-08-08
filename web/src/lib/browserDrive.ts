@@ -1,4 +1,5 @@
 import type { BrowserAskFrame } from "../../../shared/types.ts";
+import { jsLit } from "../../../shared/jsLit.ts";
 
 /**
  * The window's half of "let an agent drive the browser".
@@ -12,9 +13,14 @@ import type { BrowserAskFrame } from "../../../shared/types.ts";
  * Everything reaches the page through `executeJavaScript`, which is the only
  * door the webview tag offers, and that is exactly why the verbs are a closed
  * set with no `eval` among them: the code below is written here, and a selector
- * arriving from outside is embedded with JSON.stringify rather than pasted into
- * a template. A selector is data. It has been a source of injection everywhere
- * it was ever treated as anything else.
+ * arriving from outside is embedded as a literal rather than pasted into a
+ * template. A selector is data. It has been a source of injection everywhere it
+ * was ever treated as anything else.
+ *
+ * The literal is built by `jsLit`, which is the repository's one answer to
+ * this and not `JSON.stringify` — JSON is not a subset of JavaScript, and the
+ * server's gate on a selector refuses a newline while letting U+2028 through.
+ * See `shared/jsLit.ts`.
  */
 
 /** The slice of Electron's `<webview>` this needs. Narrowed rather than `any`,
@@ -81,7 +87,7 @@ export async function runBrowserAsk(
    *  file whose job is small enough to test without any of them. */
   captureFromShell: () => Promise<string | null> = async () => null,
 ): Promise<{ ok: boolean; value?: unknown; error?: string }> {
-  const sel = JSON.stringify(String(ask.args.selector ?? ""));
+  const sel = jsLit(String(ask.args.selector ?? ""));
   try {
     switch (ask.op) {
       case "open": {
@@ -137,7 +143,7 @@ export async function runBrowserAsk(
       }
 
       case "type": {
-        const text = JSON.stringify(String(ask.args.text ?? ""));
+        const text = jsLit(String(ask.args.text ?? ""));
         const submit = ask.args.submit === true;
         const hit = await el.executeJavaScript(
           `(() => { const e = document.querySelector(${sel});

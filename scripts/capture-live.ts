@@ -34,7 +34,8 @@ const PANEL_H = 1080;
  *  drive, so a fix to the connect retry loop reaches all three.
  *  (capture-phone.ts was the fourth; it photographed the browser companion for
  *  the README and went when that did — mobile/scripts/qa.ts shoots the app.) */
-import { connect, findChrome, key, lit, until } from "./cdp.ts";
+import { connect, findChrome, key, until } from "./cdp.ts";
+import { jsLit } from "../shared/jsLit.ts";
 
 async function main() {
   if (!existsSync(join(REPO, ".git"))) { console.error(`no scratch repo at ${REPO}`); process.exit(1); }
@@ -176,7 +177,7 @@ async function main() {
     for (const line of lines) {
       await cdp.ev(`(()=>{const t=document.querySelector('.xterm-helper-textarea');
         if(!t) return 0;
-        for (const ch of ${lit(line + "\r")}) {
+        for (const ch of ${jsLit(line + "\r")}) {
           t.dispatchEvent(new InputEvent('input',{data:ch,inputType:'insertText',bubbles:true}));
         }
         return 1})()`);

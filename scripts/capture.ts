@@ -54,7 +54,8 @@ const GIF_W = 1100, GIF_FPS = 12;
  *  see scripts/still.ts for why that step exists at all. */
 import { finishStill, STILL_W } from "./still.ts";
 /** Chrome, the protocol and the static server for the demo build. */
-import { connect, findChrome, key, lit, serveDist, until, DEMO_BASE } from "./cdp.ts";
+import { connect, findChrome, key, serveDist, until, DEMO_BASE } from "./cdp.ts";
+import { jsLit } from "../shared/jsLit.ts";
 
 async function main() {
   if (!existsSync(join(DIST, "index.html"))) {
@@ -97,7 +98,7 @@ async function main() {
     // is `agentglass-theme`, hyphenated; a dotted `agentglass.theme` reaches
     // nobody, and the mode is `agentglass-theme-mode`.)
     const setTheme = (id: string, mode: string) =>
-      cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme',${lit(id)});localStorage.setItem('agentglass-theme-mode',${lit(mode)});return 1}catch{return 0}})()`);
+      cdp.ev(`(()=>{try{localStorage.setItem('agentglass-theme',${jsLit(id)});localStorage.setItem('agentglass-theme-mode',${jsLit(mode)});return 1}catch{return 0}})()`);
     await setTheme("graphite", "dark");
     await cdp.ev(`location.reload()`);
     await until(cdp, `document.querySelector('#root')?.children.length`, "the graphite theme");
@@ -170,7 +171,7 @@ async function main() {
     await Bun.sleep(1200);
 
     for (const id of views) {
-      const ok = await cdp.ev(`(()=>{const b=document.querySelector('[data-view=${lit(id)}]');b?.click();return !!b})()`);
+      const ok = await cdp.ev(`(()=>{const b=document.querySelector('[data-view=${jsLit(id)}]');b?.click();return !!b})()`);
       if (!ok) { console.warn(`  ! no "${id}" view in the rail — skipped`); continue; }
       await Bun.sleep(1600);
       // The PR panel opens on Overview; Files is the view worth showing, and
@@ -193,7 +194,7 @@ async function main() {
     // Ports and Resources are an overlay, not a rail view — opened from the
     // rail's own buttons (aria-labelled) and dismissed with Escape.
     for (const [label, name] of [["Ports", "ports"], ["Resources", "resources"]] as const) {
-      const ok = await cdp.ev(`(()=>{const b=document.querySelector('button[aria-label=${lit(label)}]');b?.click();return !!b})()`);
+      const ok = await cdp.ev(`(()=>{const b=document.querySelector('button[aria-label=${jsLit(label)}]');b?.click();return !!b})()`);
       if (!ok) { console.warn(`  ! no "${label}" button — skipped`); continue; }
       await Bun.sleep(1600);
       await capture(name, STILLS_ONLY ? 0 : 14);

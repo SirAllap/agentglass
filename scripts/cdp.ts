@@ -9,6 +9,8 @@
  * two copies already drifting in their retry counts — and a third capture
  * script would have made it three. One copy now.
  */
+import { jsLit } from "../shared/jsLit.ts";
+
 export type CDP = {
   send: (m: string, p?: unknown) => Promise<any>;
   ev: (expr: string) => Promise<any>;
@@ -71,42 +73,16 @@ export async function until(cdp: CDP, expr: string, what: string, ms = 15_000) {
   throw new Error(`timed out waiting for ${what}`);
 }
 
-/**
- * A value as a JavaScript literal, safe to paste into source we are about to
- * evaluate in the page.
- *
- * Every helper here builds a snippet of JS as a string and hands it to
- * `Runtime.evaluate`, and the values pasted into it are selectors, key names
- * and label fragments. `JSON.stringify` alone is the obvious way to quote them
- * and it is not quite enough: JSON is not a subset of JavaScript. U+2028 and
- * U+2029 pass through it unescaped and were line terminators to a JS parser,
- * which ends the string mid-expression and leaves whatever follows as code. The
- * same value reaching an inline `<script>` would end it at a literal
- * `</script>`.
- *
- * Neither is exotic once a value stops being a literal in this file. Some of
- * them already do not come from here: `AUDIT_REPO` is read from the
- * environment, and label fragments are chosen to match text the app rendered.
- * So the quoting is done once, correctly, in the one place all of it passes
- * through, instead of being a property of who happened to call it.
- */
-export const lit = (v: unknown): string =>
-  JSON.stringify(v)
-    .replace(/\u2028/g, "\\u2028")
-    .replace(/\u2029/g, "\\u2029")
-    // `\x3c` is the same character to a JS parser and cannot close a script
-    // element, so a snippet stays inert wherever it is eventually placed.
-    .replace(/</g, "\\x3c");
 
 export const key = (cdp: CDP, k: string, mods: Record<string, boolean> = {}) =>
-  cdp.ev(`(()=>{window.dispatchEvent(new KeyboardEvent("keydown",Object.assign({key:${lit(k)},bubbles:true,cancelable:true},${lit(mods)})));return 1})()`);
+  cdp.ev(`(()=>{window.dispatchEvent(new KeyboardEvent("keydown",Object.assign({key:${jsLit(k)},bubbles:true,cancelable:true},${jsLit(mods)})));return 1})()`);
 
 /** Click the first element matching a predicate over its trimmed text.
  *  Returns false rather than throwing, so a caller can report which step of a
  *  capture went missing instead of dying with a selector error. */
 export const clickByText = (cdp: CDP, selector: string, needle: string) =>
-  cdp.ev(`(()=>{const el=[...document.querySelectorAll(${lit(selector)})]
-    .find(e=>e.textContent.includes(${lit(needle)}));el?.click();return !!el})()`);
+  cdp.ev(`(()=>{const el=[...document.querySelectorAll(${jsLit(selector)})]
+    .find(e=>e.textContent.includes(${jsLit(needle)}));el?.click();return !!el})()`);
 
 /** The demo build is based at /agentglass/demo/ so it can be served from
  *  GitHub Pages, so its asset URLs carry that prefix. Serving it at the root
