@@ -9,16 +9,20 @@
  * error, the terminal's own blue) are left alone. "Theme" means no override —
  * the theme's own primary shows through.
  */
+import { ACCENTS as SHARED_ACCENTS } from "../../../shared/palettes.ts";
+
 export interface Accent { id: string; name: string; primary: string; hover: string }
 
+/*
+ * The six hues now live in shared/palettes.ts, because the phone offers the
+ * same six and a colour with two homes is a colour with two values eventually.
+ * "Theme" stays here: it is this app's own idea — do not override, let whichever
+ * of thirty-seven palettes is on show its own primary — and it means nothing on
+ * a phone that has two.
+ */
 export const ACCENTS: Accent[] = [
   { id: "", name: "Theme", primary: "", hover: "" },
-  { id: "blue", name: "Blue", primary: "#3b82f6", hover: "#60a5fa" },
-  { id: "violet", name: "Violet", primary: "#8b5cf6", hover: "#a78bfa" },
-  { id: "green", name: "Green", primary: "#22c55e", hover: "#4ade80" },
-  { id: "amber", name: "Amber", primary: "#f59e0b", hover: "#fbbf24" },
-  { id: "rose", name: "Rose", primary: "#f43f5e", hover: "#fb7185" },
-  { id: "cyan", name: "Cyan", primary: "#06b6d4", hover: "#22d3ee" },
+  ...SHARED_ACCENTS,
 ];
 
 const KEY = "agentglass-accent";

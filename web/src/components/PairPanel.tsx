@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SettingRow } from "./SettingRow.tsx";
 import { api } from "../lib/api.ts";
 import { qrMatrix, qrSvgPath } from "../lib/qr.ts";
 import { fmtAgo } from "../lib/format.ts";
@@ -27,7 +28,20 @@ import type { DeviceScope, PairedDevice, PairRequest, PairState } from "../../..
  * The full protocol, and what it does and does not defend against, is in
  * server/src/pairing.ts.
  */
-export function PairPanel({ baseUrl }: { baseUrl: string }) {
+export function PairPanel({ baseUrl, variant = "hero", onPaired }: {
+  baseUrl: string;
+  /**
+   * `hero` is the first-run face: the code fills the pane, because there is
+   * nothing else to do on it yet. `row` is every visit after that, where
+   * pairing another phone is one line among the others and the code appears
+   * under it when asked for.
+   */
+  variant?: "hero" | "row";
+  /** How many devices are actually paired, told upward — the page above uses it
+   *  to decide which of those two faces to wear, and only this component talks
+   *  to the pairing endpoint. */
+  onPaired?: (n: number) => void;
+}) {
   const [ticket, setTicket] = useState<{ id: string; code: string; expiresAt: number } | null>(null);
   const [state, setState] = useState<PairState>({ ticket: null, pending: [], devices: [] });
   const [err, setErr] = useState<string | null>(null);
@@ -125,9 +139,16 @@ export function PairPanel({ baseUrl }: { baseUrl: string }) {
       className="t-mono text-[10.5px] text-left px-2 py-1.5 rounded-lg break-all w-full hover:opacity-80 flex items-center gap-2"
       style={{ color: "var(--text)", background: "color-mix(in srgb, var(--bg) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 50%, transparent)" }}>
       <span className="flex-1 min-w-0">{cmd}</span>
-      <span className="shrink-0 text-[9px]" style={{ color: copiedCmd === cmd ? "var(--success)" : "var(--text3)" }}>{copiedCmd === cmd ? "✓ copied" : "⧉ copy"}</span>
+      <span className="shrink-0 text-[10px]" style={{ color: copiedCmd === cmd ? "var(--success)" : "var(--text3)" }}>{copiedCmd === cmd ? "✓ copied" : "⧉ copy"}</span>
     </button>
   );
+
+  const hero = variant === "hero";
+  /* Told upward from an effect, not from a render. The page above uses this to
+     choose between its two faces, and setting a parent's state while a child is
+     rendering is the one thing React will not have. One frame late is right
+     here: the frame it is late by is the one before the first paint. */
+  useEffect(() => { onPaired?.(state.devices.length); }, [state.devices.length, onPaired]);
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -137,10 +158,25 @@ export function PairPanel({ baseUrl }: { baseUrl: string }) {
           background: "color-mix(in srgb, var(--error) 10%, transparent)",
           border: "1px solid color-mix(in srgb, var(--error) 35%, transparent)",
         }}>
+          {/* Whose limitation this is, said in the first clause. It used to be
+              phrased as something the PHONE could not do, which was a fact
+              about the browser wearing the phone's clothes — and it stopped
+              being true the moment there was an app, which does not ask a page
+              for its primitives. Getting that wrong is not cosmetic here: this
+              sits directly above the QR, so it talks somebody out of the
+              address that would have worked for them.
+
+              "The companion" is gone from the sentence with the companion
+              itself: the limitation was never about which application the page
+              mounts, it is about what a plain-HTTP origin is allowed to do, so
+              the cockpit inherits it unchanged. The subject stays "… in a
+              browser", which is what pair-secure-context.test.ts pins — the
+              clause that keeps this from sliding back to blaming the phone. */}
           <div>
-            <span style={{ color: "var(--error)" }}>A phone cannot pair over this address.</span>{" "}
-            A plain-HTTP page gets no WebCrypto from the browser, and pairing has to encrypt the
-            credential to the phone — so the handshake can't even start.
+            <span style={{ color: "var(--error)" }}>The cockpit in a browser cannot pair over this address.</span>{" "}
+            A plain-HTTP page gets no WebCrypto, and pairing has to encrypt the credential to the
+            phone — so the handshake can't even start. The agentglass app pairs over it fine: it
+            makes its own key. The traffic is still readable by anything else on this network.
           </div>
           {tailnet ? (
             <>
@@ -162,16 +198,16 @@ export function PairPanel({ baseUrl }: { baseUrl: string }) {
           )}
         </div>
       )}
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] t-dim2 uppercase tracking-wider flex-1">Connect a phone</span>
-        {ticket && (
+      {hero && ticket && (
+        <div className="flex items-center gap-2">
+          <span className="panel-eyebrow flex-1" style={{ paddingLeft: 0, paddingRight: 0 }}>Connect a phone</span>
           <button onClick={start} disabled={busy}
-            className="text-[10px] px-2 py-0.5 rounded-md hover:opacity-80"
+            className="text-[11px] px-2 py-0.5 rounded-lg hover:opacity-80"
             style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
             New code
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Requests come before the invitation. Somebody standing with a phone in
           their hand waiting to be let in is more urgent than the code, and a
@@ -181,41 +217,73 @@ export function PairPanel({ baseUrl }: { baseUrl: string }) {
       ))}
 
       {!ticket ? (
-        <button onClick={start} disabled={busy}
-          className="tile w-full !flex-row !items-center !gap-3 text-left hover:bg-white/5 px-3 py-2.5">
-          <span className="text-[15px]" aria-hidden>📱</span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[12.5px]" style={{ color: "var(--text)" }}>
-              {busy ? "Starting…" : "Show a pairing code"}
+        /* One line among the others once there is a phone on the list, and the
+           whole point of the page before there is one. Same handler either way
+           — what changes is how much of the screen it is worth. */
+        hero ? (
+          /* First run: there is one thing to do on this page, so it is the size
+             of one thing to do. The code is still not minted until it is asked
+             for — opening Settings should not burn a two-minute invitation — so
+             what fills the pane is the ask, not a ticking code. */
+          <div className="flex flex-col items-center text-center gap-2 py-6">
+            <span className="text-[26px] leading-none" aria-hidden>📱</span>
+            <span className="text-[15px]" style={{ color: "var(--text)" }}>
+              {busy ? "Starting…" : "Put this on your phone"}
             </span>
-            <span className="block text-[10.5px] t-dim2 mt-0.5">
-              A QR code and six digits, good for two minutes and one device.
+            <span className="text-[12.5px] t-dim max-w-[44ch]">
+              You get a QR code and six digits. Scan one, type the other, and say yes here — good for
+              two minutes and one device.
             </span>
-          </span>
-        </button>
-      ) : (
-        <div className="flex items-start gap-3.5">
-          <div className="shrink-0 flex flex-col items-center gap-1.5">
-            <Qr text={pairUrl} />
-            <span className="text-[10px] t-dim2">Scan with the camera</span>
+            <button onClick={start} disabled={busy}
+              className="mt-1 text-[13px] px-4 py-2 rounded-lg font-medium"
+              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 44%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              Show the code
+            </button>
           </div>
-          <div className="min-w-0 flex-1 flex flex-col gap-1.5">
-            <span className="text-[10px] t-dim2 uppercase tracking-wider">Then type this on the phone</span>
+        ) : (
+          <SettingRow
+            label={busy ? "Starting…" : "Pair a phone"}
+            hint="A QR code and six digits, good for two minutes and one device."
+            control={<button onClick={start} disabled={busy}
+              className="text-[12px] px-3 py-1.5 rounded-lg whitespace-nowrap"
+              style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)", opacity: busy ? 0.5 : 1 }}>
+              Show the code
+            </button>}
+          />
+        )
+      ) : (
+        /* Centred and large on first run, because it is the only thing to do;
+           beside the words afterwards, because by then it is one task among
+           several and the page has other rows to keep its shape. */
+        <div className={`flex items-center gap-5 ${hero ? "flex-col text-center py-3" : "items-start"}`}>
+          <div className="shrink-0 flex flex-col items-center gap-1.5">
+            <Qr text={pairUrl} big={hero} />
+            <span className="text-[11px] t-dim">Scan with the camera</span>
+          </div>
+          <div className={`min-w-0 flex flex-col gap-1 ${hero ? "items-center" : "flex-1"}`}>
+            <span className="panel-eyebrow" style={{ paddingLeft: 0, paddingRight: 0 }}>Then type this on the phone</span>
             {/* The biggest thing in the pane. It is being read off this screen
                 and copied onto another one, and every point of size is a
                 mis-typed digit that costs one of five attempts. */}
             <div className="t-mono select-all" style={{
-              fontSize: 30, letterSpacing: "0.24em", color: "var(--text)", lineHeight: 1.15,
+              fontSize: hero ? 38 : 30, letterSpacing: "0.24em", color: "var(--text)", lineHeight: 1.15,
             }}>
               {ticket.code}
             </div>
-            <div className="text-[10.5px]" style={{ color: left <= 20 ? "var(--warning)" : "var(--text3)" }}>
+            <div className="text-[12px]" style={{ color: left <= 20 ? "var(--warning)" : "var(--text3)" }}>
               {left > 0 ? `Expires in ${left}s` : "Expired — start a new one"}
             </div>
-            <div className="text-[10.5px] t-dim2">
+            <div className={`text-[12px] t-dim ${hero ? "max-w-[46ch]" : ""}`}>
               The code is not in the QR. Scanning it from a photo or a shared screen gets no further
               than asking for these six digits.
             </div>
+            {!hero && (
+              <button onClick={start} disabled={busy}
+                className="self-start mt-1 text-[11px] px-2 py-0.5 rounded-lg hover:opacity-80"
+                style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+                New code
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -330,52 +398,41 @@ function Paired({ devices, busy, onForget }: {
   const [confirming, setConfirming] = useState<string | null>(null);
   if (!devices.length) return null;
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[10px] t-dim2 uppercase tracking-wider px-0.5">Paired devices</span>
+    <>
+      <div className="panel-eyebrow pt-2 pb-1">Paired devices</div>
       {devices.map((d) => (
-        <div key={d.id} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg" style={{
-          background: "color-mix(in srgb, var(--bg2) 60%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)",
-        }}>
-          <div className="min-w-0 flex-1">
-            <div className="text-[11.5px] truncate" style={{ color: "var(--text)" }}>{d.label}</div>
-            <div className="text-[10px] t-dim2">
-              {SCOPE_WORD[d.scope]} · {d.lastSeenAt ? `last used ${fmtAgo(d.lastSeenAt)}` : "not used yet"}
-            </div>
-          </div>
-          {confirming === d.id ? (
-            <div className="flex items-center gap-1.5 shrink-0">
+        <SettingRow key={d.id}
+          label={d.label}
+          hint={`${SCOPE_WORD[d.scope]} · ${d.lastSeenAt ? `last used ${fmtAgo(d.lastSeenAt)}` : "not used yet"}`}
+          control={confirming === d.id ? (
+            <span className="flex items-center gap-1.5">
               <button onClick={() => { setConfirming(null); onForget(d); }} disabled={busy}
-                className="text-[10.5px] px-2 py-1 rounded-md"
+                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
                 style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 14%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 40%, transparent)" }}>
                 Forget it
               </button>
               <button onClick={() => setConfirming(null)}
-                className="text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
+                className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
                 style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
                 Keep
               </button>
-            </div>
+            </span>
           ) : (
             <button onClick={() => setConfirming(d.id)}
-              className="shrink-0 text-[10.5px] px-2 py-1 rounded-md hover:opacity-80"
-              style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 10%, transparent)", border: "1px solid color-mix(in srgb, var(--error) 32%, transparent)" }}>
+              className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap hover:opacity-80"
+              style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
               Forget
             </button>
           )}
-        </div>
+        />
       ))}
-      <div className="text-[10px] t-dim2 px-0.5">
-        Forgetting a device revokes only its own credential and closes what it is holding. The others
-        keep working.
-      </div>
-    </div>
+    </>
   );
 }
 
 /** Drawn from the matrix rather than fetched: an image of the way in to this
  *  machine has no business being a request to a third party. */
-function Qr({ text }: { text: string }) {
+function Qr({ text, big }: { text: string; big?: boolean }) {
   let path: string;
   let size: number;
   try {
@@ -387,9 +444,10 @@ function Qr({ text }: { text: string }) {
   }
   const quiet = 4; // scanners need the margin, so it is part of the image
   const span = size + quiet * 2;
+  const px = big ? 184 : 140;
   return (
     <svg
-      width={140} height={140} viewBox={`0 0 ${span} ${span}`} shapeRendering="crispEdges"
+      width={px} height={px} viewBox={`0 0 ${span} ${span}`} shapeRendering="crispEdges"
       role="img" aria-label="QR code for the pairing invitation"
       className="shrink-0 rounded-lg"
       style={{ background: "#fff", padding: 0 }}>

@@ -18,10 +18,17 @@
 // the second scrolling strip this was meant to replace.
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ContextMenu } from "./ContextMenu.tsx";
+import { RunDialog, runRecipeSteps } from "./RecipesPane.tsx";
+import type { GitRepoRef } from "../../../shared/types.ts";
+import { openSettings } from "../lib/openSettings.ts";
+import type { Recipe } from "../../../shared/types.ts";
 import type { ProjectCommand, TerminalCommands } from "../../../shared/types.ts";
 import { api, IS_DEMO } from "../lib/api.ts";
+import { retryLoad } from "../lib/retryLoad.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 /**
  * The four git one-liners this row used to hardcode as always-visible chips.
@@ -40,7 +47,8 @@ export const GIT_COMMANDS: ProjectCommand[] = [
 
 // --- pins --------------------------------------------------------------------
 
-export const MAX_PINS = 5;
+export const RECIPE = "recipe:";
+const MAX_PINS = 5;
 const PIN_KEY = "agentglass.commandPins";
 
 /**
@@ -178,23 +186,29 @@ export function groupByDir(list: ProjectCommand[]): [string, ProjectCommand[]][]
  * something a browser will lay out twice the same way.
  */
 function CommandRow({ c, font, on, full, onRun, onPin }: {
-  c: ProjectCommand; font: string; on: boolean; full: boolean;
+  c: ProjectCommand & { recipe?: Recipe }; font: string; on: boolean; full: boolean;
   onRun: (cmd: string) => void; onPin: (cmd: string) => void;
 }) {
+  const r = c.recipe;
   return (
     <div className="group w-full px-3 py-1.5 flex items-baseline gap-2.5 hover:bg-[color-mix(in_srgb,var(--primary)_10%,transparent)]">
-      <button onClick={() => onRun(c.cmd)} title={c.cmd} className="min-w-0 flex-1 text-left flex items-baseline gap-2.5">
-        <span className="shrink-0 font-medium" style={{ color: "var(--primary-hover)", fontFamily: font }}>{c.cmd}</span>
+      <button onClick={() => onRun(c.cmd)} title={r ? r.steps.join("\n") : c.cmd} className="min-w-0 flex-1 text-left flex items-baseline gap-2.5">
+        <span className="shrink-0 font-medium" style={{ color: "var(--primary-hover)", fontFamily: font }}>{r ? r.name : c.cmd}</span>
         <span className="min-w-0 flex-1 truncate t-dim2">{c.desc || "—"}</span>
+        {/* Marked, because a saved command and a found one behave differently:
+            one is a line, the other can be four and can ask you a question. */}
+        {r && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>{r.params?.length ? "asks" : "yours"}</span>}
       </button>
       {/* Pinned stars stay lit; the rest appear on hover, so a list of 300 rows
           is not 300 competing controls. */}
       <button
         onClick={(e) => { e.stopPropagation(); onPin(c.cmd); }}
         disabled={!on && full}
-        className={`shrink-0 text-[11px] leading-none px-1 ${on ? "" : "opacity-0 group-hover:opacity-100"}`}
-        style={{ color: on ? "var(--warning)" : "var(--text3)", opacity: !on && full ? 0.3 : undefined }}
-        title={on ? "Unpin" : full ? `${MAX_PINS} pinned already — unpin one first` : `Pin ${c.cmd} to the bar`}
+        // A real target, not a glyph. At 11px in a 1px gutter this was a dot
+        // you aimed at and missed; 22px square is a thing you press.
+        className={`shrink-0 text-[14px] leading-none rounded flex items-center justify-center hover:bg-white/10 ${on ? "" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
+        style={{ width: 22, height: 22, color: on ? "var(--warning)" : "var(--text3)", opacity: !on && full ? 0.3 : undefined }}
+        title={on ? "Unpin" : full ? `${MAX_PINS} pinned already — unpin one first` : `Pin ${r ? r.name : c.cmd} to the bar`}
       >{on ? "★" : "☆"}</button>
     </div>
   );
@@ -206,11 +220,15 @@ function CommandRow({ c, font, on, full, onRun, onPin }: {
  * `font` is the terminal's own face: a command is a thing you type, and it
  * reads as one when it is set in the face it will be typed in.
  */
-export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
+export function CommandBar({ root, disabled, font, onRun, runTargetInTmux, onClose, dropUp }: {
   root: string;
   disabled: boolean;
   font: string;
   onRun: (cmd: string) => void;
+  /** Whether the shell THIS bar drives (the focused pane, or the console for the
+   *  strip) is inside tmux. A recipe that wants a plain shell will not type into
+   *  it while it is — the line would land in the pane's program, not a prompt. */
+  runTargetInTmux?: boolean;
   /** Put the cursor back where it belongs once the dropdown closes.
    *
    *  The filter input has to take focus off the terminal while it is open (you
@@ -227,18 +245,146 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
   const [query, setQuery] = useState("");
   const wrap = useRef<HTMLDivElement>(null);
   const cmds = useCommands(root);
+  /* Your own, alongside the ones we found. Fetched here rather than threaded in
+     because this menu is where "what can I run here" is answered, and a saved
+     command is an answer to exactly that question. */
+  const [saved, setSaved] = useState<Recipe[]>([]);
+  /*
+   * The recipe that is asking for values, shown INSIDE the dropdown.
+   *
+   * The first version sent you to Settings for this, on the grounds that asking
+   * inside a menu would be a dialog within a menu. That was a rationalisation
+   * of a shortcut: pressing a command in the place you go to run commands and
+   * being taken to a settings page instead is the wrong answer however it is
+   * justified. The menu simply shows the form instead of the list — it is not a
+   * second surface, it is this one showing the next thing.
+   */
+  const [asking, setAsking] = useState<Recipe | null>(null);
+  /** A pinned chip's own form, anchored to the chip rather than to the menu. */
+  const [chip, setChip] = useState<{ r: Recipe; x: number; y: number } | null>(null);
+  const [repos, setRepos] = useState<GitRepoRef[]>([]);
+  useEffect(() => { void api.gitRepos().then(({ repos: r }) => setRepos(r)).catch(() => {}); }, []);
+  /*
+   * Re-read every time the menu OPENS, not once when it mounts.
+   *
+   * Editing a recipe in Settings left this list holding the copy from before —
+   * so the form asked for a parameter that had been deleted, while the preview
+   * beside it, which comes from the server, showed the new steps. One dialog
+   * disagreeing with itself.
+   *
+   * The repo picker in this app already re-reads on open for the same reason
+   * (a worktree cut after mount never appeared). Cheap, and the only way a
+   * change made elsewhere shows up without restarting the app.
+   */
   const pins = usePins(root);
-  const dismiss = useCallback(() => { setOpen(false); setQuery(""); onClose?.(); }, [onClose]);
+  useEffect(() => {
+    // Also when a pin points at one: the chips are on the bar whether or not
+    // the menu has ever been opened, and a chip that cannot resolve its recipe
+    // would type `recipe:<id>` at the shell as if it were a command.
+    if (!root || !(open || pins.some((c) => c.startsWith(RECIPE)))) return;
+    let gone = false;
+    // Retried, because at startup this fetch loses a race it cannot see. The
+    // window is up before the sidecar is listening — index.html's splash waits
+    // on exactly that — so the first read fails, and the old `.catch(() => {})`
+    // made the failure permanent: the chips sat there reading
+    // `recipe:rmsh8muud0` until somebody opened the menu, which re-ran this by
+    // accident and fixed it. Bounded: a few seconds, then it gives up.
+    const stop = retryLoad(() => api.recipes(root)
+      .then((r) => { if (!gone) setSaved(r.recipes); return true; })
+      .catch(() => false));
+    return () => { gone = true; stop(); };
+  }, [root, open, pins]);
+  /* Every way out closes the FORM too, not just the menu around it. Without
+     this, dismissing the dropdown left `asking` set: the next time it opened —
+     after switching branch, after anything — it came back showing a half-filled
+     form for a command you had walked away from. */
+  const dismiss = useCallback(() => { setOpen(false); setQuery(""); setAsking(null); onClose?.(); }, [onClose]);
   useDismiss(open, wrap, dismiss);
 
   const n = (cmds?.make.length ?? 0) + (cmds?.scripts.length ?? 0);
   const full = pins.length >= MAX_PINS;
   // Selecting a command hands focus back through onRun (it types into the
   // shell), so it closes without going through `dismiss`'s own refocus.
-  const run = (cmd: string) => { setOpen(false); setQuery(""); onRun(cmd); };
+  const run = (cmd: string) => { setOpen(false); setQuery(""); setAsking(null); onRun(cmd); };
+  /*
+   * A saved command, from the menu.
+   *
+   * With nothing to fill in, its steps are typed in order — the same thing the
+   * run dialog does, because it is the same console. With parameters it cannot
+   * run from here: it needs values, and asking for them inside a dropdown would
+   * be a dialog within a menu. It opens the editor, where the dialog with its
+   * preview already lives.
+   */
+  const runRecipe = (r: Recipe) => {
+    if (r.params?.length) { setAsking(r); return; }
+    // "Run inside tmux" goes to the app's persistent wrapper in the docked
+    // console. Everything else runs in the shell THIS bar drives — the one on
+    // screen — through `onRun`. But a plain-shell recipe will not type into that
+    // shell once it is in tmux (the line would land in the pane's program), so
+    // open the form with the reason instead of firing into nothing.
+    if (r.tmux) { runRecipeSteps(root, r.steps, true); setOpen(false); setQuery(""); setAsking(null); return; }
+    if (runTargetInTmux) { setAsking(r); return; }
+    setOpen(false); setQuery(""); setAsking(null);
+    for (const step of r.steps) onRun(step);
+  };
   const pin = (cmd: string) => { togglePin(root, cmd); };
+  /** A pinned chip is either a command line or a recipe id. Resolved here so
+   *  the bar shows a name rather than `recipe:r1k2…`, and so a pin survives the
+   *  recipe being edited — the id does not change, the steps do. */
+  const recipeOf = (cmd: string): Recipe | undefined =>
+    cmd.startsWith(RECIPE) ? saved.find((r) => r.id === cmd.slice(RECIPE.length)) : undefined;
+  /*
+   * A pinned chip opens its own form, under itself.
+   *
+   * It used to open the whole commands dropdown with the form inside — three
+   * hundred rows unfurling over the screen to ask for one value, anchored
+   * nowhere near the thing pressed. The chip is on the bar precisely so it can
+   * be used without the menu; sending you through the menu undid that.
+   *
+   * `ContextMenu` already knows how to sit at a point, keep itself on screen,
+   * close on Escape and on a click elsewhere. Same component the rail and the
+   * board pills use.
+   */
+  const pinned = (cmd: string, at: DOMRect) => {
+    const r = recipeOf(cmd);
+    if (r) {
+      // Fire on one press only when it can actually run: nothing to fill in, not
+      // marked "ask first", and — for a plain-shell recipe — the shell this bar
+      // drives is not already inside tmux. Otherwise open the form, which is
+      // where the values, the confirm, or the "shell is in tmux" reason live.
+      const wontRun = !r.tmux && !!runTargetInTmux;
+      if (!r.params?.length && !r.confirm && !wontRun) { runRecipe(r); return; }
+      setChip({ r, x: at.left, y: at.top });
+      return;
+    }
+    onRun(cmd);
+  };
 
   const groups: [string, ProjectCommand[]][] = [];
+  /*
+   * Recipes first, because they are the ones somebody chose to keep — and there
+   * are four of them against three hundred that were found.
+   *
+   * One with parameters asks for them here, in the menu itself: the list is
+   * replaced by the same form and preview the editor uses. One with nothing to
+   * fill in just runs, step by step, in order.
+   */
+  const mine = saved.filter((r) => {
+    const q = query.trim().toLowerCase();
+    return !q || r.name.toLowerCase().includes(q) || r.desc.toLowerCase().includes(q);
+  });
+  if (mine.length) {
+    groups.push(["yours", mine.map((r) => ({
+      name: r.name,
+      // Pinned by id, never by its lines: a recipe that asks for values has no
+      // single command to pin, and one that does not would pin a multi-line
+      // string that the bar cannot show or re-identify after an edit.
+      cmd: `${RECIPE}${r.id}`,
+      desc: r.desc || `${r.steps.length} step${r.steps.length === 1 ? "" : "s"}${r.params?.length ? " · needs values" : ""}`,
+      dir: "",
+      recipe: r,
+    }))]);
+  }
   if (cmds) {
     for (const [dir, list] of groupByDir(matchCommands(cmds.make, query))) groups.push([`make — ${dir ? `${dir}/Makefile` : "Makefile"}`, list]);
     for (const [dir, list] of groupByDir(matchCommands(cmds.scripts, query))) groups.push([`scripts — ${dir ? `${dir}/package.json` : "package.json"}`, list]);
@@ -247,6 +393,16 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
 
   return (
     <>
+      {/* Anchored to the chip, above the bar. Rendered outside the dropdown so
+          it does not need the dropdown open to exist. */}
+      {chip && (
+        <ContextMenu x={chip.x} y={chip.y} onClose={() => setChip(null)}>
+          <div className="p-1" style={{ minWidth: 300 }}>
+            <RunDialog r={chip.r} repos={repos} onRunStep={onRun} targetInTmux={runTargetInTmux}
+              onClose={() => setChip(null)} onNote={() => setChip(null)} />
+          </div>
+        </ContextMenu>
+      )}
       <div className="relative shrink-0" ref={wrap}>
         {/* onMouseDown keeps the shell's cursor: the trigger is a button, and a
             press on it would otherwise blur the terminal. Opening reveals the
@@ -278,16 +434,25 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
               {!!gitMatches.length && (
                 <div>
                   <div className="px-3 pt-1.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">git — always available</div>
-                  {gitMatches.map((c) => <CommandRow key={"g:" + c.cmd} c={c} font={font} on={pins.includes(c.cmd)} full={full} onRun={run} onPin={pin} />)}
+                  {gitMatches.map((c) => <CommandRow key={"g:" + c.cmd} c={c} font={font} on={pins.includes(c.cmd)} full={full} onRun={(cmd) => { const rr = (c as ProjectCommand & { recipe?: Recipe }).recipe; if (rr) runRecipe(rr); else run(cmd); }} onPin={pin} />)}
                 </div>
               )}
-              {groups.map(([label, list]) => (
+              {/* The form takes the whole menu while it is up: you came here to
+                  run this one, and a list of three hundred others underneath is
+                  only somewhere to lose your place. */}
+              {asking ? (
+                <div className="px-2 py-2">
+                  <RunDialog r={asking} repos={repos} onRunStep={onRun} targetInTmux={runTargetInTmux}
+                    onClose={() => { setAsking(null); setOpen(false); setQuery(""); }}
+                    onNote={() => { setAsking(null); setOpen(false); setQuery(""); }} />
+                </div>
+              ) : groups.map(([label, list]) => (
                 <div key={label}>
                   <div className="px-3 pt-2 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider">{label}</div>
-                  {list.map((c) => <CommandRow key={label + ":" + c.cmd} c={c} font={font} on={pins.includes(c.cmd)} full={full} onRun={run} onPin={pin} />)}
+                  {list.map((c) => <CommandRow key={label + ":" + c.cmd} c={c} font={font} on={pins.includes(c.cmd)} full={full} onRun={(cmd) => { const rr = (c as ProjectCommand & { recipe?: Recipe }).recipe; if (rr) runRecipe(rr); else run(cmd); }} onPin={pin} />)}
                 </div>
               ))}
-              {!gitMatches.length && !groups.length && (
+              {!asking && !gitMatches.length && !groups.length && (
                 <div className="px-3 py-2 t-dim2">{cmds ? `No command matches “${query.trim()}”` : "Reading the project…"}</div>
               )}
             </div>
@@ -314,18 +479,15 @@ export function CommandBar({ root, disabled, font, onRun, onClose, dropUp }: {
             {/* onMouseDown keeps the shell focused; running the chip refocuses
                 it anyway through onRun, but unpinning does not, so both carry
                 the guard rather than only one. */}
-            <button onMouseDown={keepTermFocus} onClick={() => onRun(cmd)} disabled={disabled || !root || IS_DEMO}
+            <button onMouseDown={keepTermFocus} onClick={(e) => pinned(cmd, e.currentTarget.getBoundingClientRect())} disabled={disabled || !root || IS_DEMO}
               className="text-[10px] pl-2 pr-1 py-1 min-w-0 truncate"
               style={{ color: "var(--text2)", fontFamily: font, maxWidth: 180 }}
-              title={`Run ${cmd}`}>{cmd}</button>
+              title={recipeOf(cmd) ? `Run ${recipeOf(cmd)!.name}` : `Run ${cmd}`}>{recipeOf(cmd)?.name ?? cmd}</button>
             {/* Unpin from inside the chip, in room the padding already holds:
                 hidden rather than absent, so revealing it cannot re-flow the
                 row and nothing can clip it. Going back to the dropdown to find
                 the row you pinned is the long way round. */}
-            <button onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)}
-              className="shrink-0 w-[15px] pr-[4px] text-[9px] leading-none opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100"
-              style={{ color: "var(--text3)" }}
-              title={`Unpin ${cmd}`}>✕</button>
+            <CloseButton onMouseDown={keepTermFocus} onClick={() => togglePin(root, cmd)} style={{ color: "var(--text3)" }} title={`Unpin ${cmd}`} className="shrink-0 w-[15px] pr-[4px] opacity-0 transition-opacity motion-reduce:transition-none group-hover:opacity-100 group-focus-within:opacity-100" />
           </span>
         ))}
         {!pins.length && !!root && (

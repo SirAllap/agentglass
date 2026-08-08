@@ -154,9 +154,22 @@ export function chordFromEvent(e: { key: string; ctrlKey: boolean; metaKey: bool
   if (mod) parts.push("mod");
   if (other) parts.push(IS_MAC ? "ctrl" : "meta");
   if (e.altKey) parts.push("alt");
-  // Only for keys that have no shifted form of their own: Shift+1 already
-  // arrives as "!", and recording both would never match.
-  if (e.shiftKey && k.length > 1) parts.push("shift");
+  /*
+   * Shift counts for named keys and for LETTERS, and for nothing else.
+   *
+   * A letter arrives shifted as its uppercase form — "P", not "p" — so the
+   * identity is unambiguous once lowercased, and dropping the shift made
+   * Ctrl+Shift+P and Ctrl+P the same chord. That mattered the moment something
+   * wanted Ctrl+Shift+P: in a terminal Ctrl+P is readline's previous-command
+   * and Ctrl+Shift+P is free, which is the whole reason every terminal-adjacent
+   * app binds the shifted one.
+   *
+   * Punctuation is different and is left alone: Shift+1 already arrives as "!",
+   * so its shifted form IS the key, and recording shift as well would produce a
+   * chord that can never match what the keyboard sends.
+   */
+  const letter = k.length === 1 && /^[A-Za-z]$/.test(k);
+  if (e.shiftKey && (k.length > 1 || letter)) parts.push("shift");
   parts.push(k.length === 1 ? k.toLowerCase() : k);
   return parts.join("+");
 }
@@ -242,6 +255,12 @@ export function rebindChord(id: ViewId, chord: string): RebindResult {
   if (CHORD_RESERVED.has(chord)) return { ok: false, error: `${chordLabel(chord)} belongs to the app` };
   const taken = VIEWS.find((v) => v.id !== id && chordFor(v.id) === chord);
   if (taken) return { ok: false, error: `already opens ${taken.label}` };
+  // App actions are checked here too, even though App resolves views first: a
+  // view that shadowed the file palette would leave that key looking broken
+  // from the other setting's point of view. Refuse rather than steal — the same
+  // rule the single-letter bindings follow.
+  const app = appActionForChord(chord);
+  if (app) return { ok: false, error: `already opens ${APP_CHORD_LABELS[app].label}` };
   chordCache = { ...chords(), [id]: chord };
   persistChords();
   return { ok: true };
@@ -263,5 +282,116 @@ export const chordsCustomised = (): boolean => Object.keys(chords()).length > 0;
 
 function persistChords() {
   try { localStorage.setItem(CHORD_KEY, JSON.stringify(chordCache)); } catch { /* non-fatal */ }
+  for (const fn of listeners) fn();
+}
+
+/* -------------------------------------------------------- app-action chords */
+
+/**
+ * Chords that open something which is not a view.
+ *
+ * A third mechanism, and it earns its keep: the two above answer "which of the
+ * rail's tabs" and "which single letter on the dashboard". The file palette is
+ * neither — it has no tab, it must work while a shell has focus, and it must
+ * work from every view including the ones that are not the workspace at all.
+ *
+ * Kept rebindable rather than reserved, unlike ⌘K and the zoom keys. Those are
+ * structural: lose them and you cannot get the palette or your eyesight back.
+ * This one opens a search you can also reach by other means, and it lands in a
+ * terminal — the one place in this app where a chord is genuinely somebody
+ * else's. If it collides with something in your shell you must be able to move
+ * it, and that is a preference, not a fault.
+ */
+export type AppChordId = "files.palette";
+
+/**
+ * Ctrl+Shift+P, not Ctrl+P — the same reasoning as isFindChord in termKeys.ts.
+ *
+ * Ctrl+P is readline's previous-command, and tmux, vim and emacs all spend it
+ * too. Binding it would break the program inside the shell in order to add a
+ * feature to the app around it. VS Code, GNOME Terminal and Konsole all settled
+ * on the shifted form for exactly this reason.
+ */
+export const APP_CHORD_DEFAULTS: Record<AppChordId, string> = {
+  "files.palette": "mod+shift+p",
+};
+
+export const APP_CHORD_LABELS: Record<AppChordId, { label: string; hint: string }> = {
+  "files.palette": {
+    label: "Find a file",
+    hint: "search any checkout from anywhere — names, contents, or what you opened recently",
+  },
+};
+
+const APP_CHORD_KEY = "agentglass.appChords";
+
+let appChordCache: Partial<Record<AppChordId, string>> | null = null;
+
+const APP_CHORD_IDS = Object.keys(APP_CHORD_DEFAULTS) as AppChordId[];
+
+function appChords(): Partial<Record<AppChordId, string>> {
+  if (appChordCache) return appChordCache;
+  let stored: unknown = null;
+  try { stored = JSON.parse(localStorage.getItem(APP_CHORD_KEY) || "null"); } catch { /* corrupt */ }
+  const out: Partial<Record<AppChordId, string>> = {};
+  if (stored && typeof stored === "object") {
+    for (const [id, k] of Object.entries(stored as Record<string, unknown>)) {
+      if (APP_CHORD_IDS.includes(id as AppChordId) && typeof k === "string" && VALID_CHORD.test(k)) {
+        out[id as AppChordId] = k;
+      }
+    }
+  }
+  appChordCache = out;
+  return appChordCache;
+}
+
+/** What actually opens it: the chosen chord, else the shipped one. */
+export const appChordFor = (id: AppChordId): string => appChords()[id] ?? APP_CHORD_DEFAULTS[id];
+
+/** Whether this action's chord was chosen rather than shipped. */
+export const hasCustomAppChord = (id: AppChordId): boolean => !!appChords()[id];
+
+/** Which app action a chord runs, or null. */
+export function appActionForChord(chord: string): AppChordId | null {
+  for (const id of APP_CHORD_IDS) if (appChordFor(id) === chord) return id;
+  return null;
+}
+
+export function rebindAppChord(id: AppChordId, chord: string): RebindResult {
+  if (!VALID_CHORD.test(chord)) return { ok: false, error: "hold a modifier — Ctrl, Alt or both" };
+  if (CHORD_RESERVED.has(chord)) return { ok: false, error: `${chordLabel(chord)} belongs to the app` };
+  // Both directions, because both would otherwise be silently shadowed: App
+  // checks view chords before app actions, so a collision would take THIS key
+  // away rather than the view's, and the setting would look like it did nothing.
+  const view = VIEWS.find((v) => chordFor(v.id) === chord);
+  if (view) return { ok: false, error: `already opens ${view.label}` };
+  /*
+   * Compared as strings on purpose.
+   *
+   * There is one app action today, so `a !== id` narrows the element type to
+   * `never` and the label lookup stops compiling — for a check that is dead
+   * code now and load-bearing the moment a second one exists. Widening the
+   * comparison keeps the check written rather than deleting it and having to
+   * remember it later.
+   */
+  const self: string = id;
+  for (const a of APP_CHORD_IDS) {
+    if ((a as string) === self) continue;
+    if (appChordFor(a) === chord) return { ok: false, error: `already opens ${APP_CHORD_LABELS[a].label}` };
+  }
+  appChordCache = { ...appChords(), [id]: chord };
+  persistAppChords();
+  return { ok: true };
+}
+
+export function resetAppChords() {
+  appChordCache = {};
+  persistAppChords();
+}
+
+export const appChordsCustomised = (): boolean => Object.keys(appChords()).length > 0;
+
+function persistAppChords() {
+  try { localStorage.setItem(APP_CHORD_KEY, JSON.stringify(appChordCache)); } catch { /* non-fatal */ }
   for (const fn of listeners) fn();
 }

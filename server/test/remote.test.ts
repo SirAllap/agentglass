@@ -76,8 +76,8 @@ describe("noteClient", () => {
   });
 
   test("a later request without a User-Agent does not erase the name", () => {
-    // The phone's service worker sends none, and it must not turn a named
-    // device back into "Unnamed device" between two polls.
+    // A native app's fetch sends none, and it must not turn a named device
+    // back into "Unnamed device" between two polls.
     noteClient("192.168.1.42", { now: 1000, agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1" });
     noteClient("192.168.1.42", { now: 2000, agent: null });
     expect(remoteDevices()[0]!.label).toBe("iPhone · Safari");

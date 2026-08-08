@@ -42,6 +42,50 @@ export interface PortEntry {
   /** Its working directory is gone: the checkout it was serving was deleted
    *  underneath it. */
   cwdGone: boolean;
+  /**
+   * What started it, nearest first — `bun ← bash ← agentglass-server`.
+   *
+   * A port and a pid say what is listening. They do not say why, and "why" is
+   * the question actually being asked of this panel: a server nobody remembers
+   * starting is the one you are here to find, and whether it is safe to stop it
+   * depends entirely on what is holding it. A `bun` under a login shell is a
+   * dev server somebody left running; the same `bun` under this app's own
+   * sidecar came out of an agent's terminal and inherited that terminal's
+   * environment — which is how one of these ended up on 0.0.0.0 carrying a
+   * token nobody meant to hand out.
+   *
+   * Empty for other users' processes, which /proc will not describe, and for
+   * the ones whose parents have already exited.
+   */
+  ancestry: Forebear[];
+  /**
+   * It is bound to every interface, not to loopback.
+   *
+   * Stated rather than left for the reader to spot in `addr`, because it is the
+   * one fact on the row with a consequence: everything else describes a process
+   * on this machine, and this says the machine is not where it ends.
+   */
+  publicBind: boolean;
+  /**
+   * The executable behind it has been deleted or replaced.
+   *
+   * `/proc/<pid>/exe` still resolves — the kernel holds the inode open — but the
+   * path it names is gone, which it reports by appending " (deleted)". It means
+   * the running code is not the code on disk: a rebuild happened underneath it,
+   * or an upgrade replaced the binary. Neither is an error, and both explain a
+   * process that is behaving like a version you no longer have.
+   *
+   * Ours only. Null where /proc would not say.
+   */
+  exeGone: boolean;
+}
+
+/** One rung of a process's ancestry. */
+export interface Forebear {
+  pid: number;
+  /** The short name — `bash`, not sixty characters of flags. Rows are narrow
+   *  and the chain is read at a glance or not at all. */
+  name: string;
 }
 
 export interface PortsReport {
@@ -188,6 +232,12 @@ export function parsePorts(out: string): PortsReport {
       port, addr, proc, pid, cwd, mine,
       ageSec: mine && pid != null ? ageSecOf(pid) : null,
       fromAgent: mine && pid != null ? startedByAgent(pid) : false,
+      // Ours only, for the same reason as `cwd` above: /proc says nothing
+      // useful about another user's tree, and asking anyway is how a ports
+      // panel turns into a machine audit.
+      ancestry: mine && pid != null ? ancestryOf(pid) : [],
+      publicBind: isPublicBind(addr),
+      exeGone: mine && pid != null ? exeDeleted(pid) : false,
       // A null cwd is unknown, not gone — an unreadable link and a deleted
       // directory are different facts and only one of them is a verdict.
       cwdGone: cwd != null && !existsSync(cwd),
@@ -529,14 +579,14 @@ export function spaceFor(rootIn: unknown, dir = true): SpaceReport {
 
 /** Is this process ours? The one check that decides whether we may read its
  *  working directory and whether we may signal it. */
-function ownedByMe(pid: number): boolean {
+export function ownedByMe(pid: number): boolean {
   if (MY_UID < 0) return false;
   try { return statSync(`/proc/${pid}`).uid === MY_UID; } catch { return false; }
 }
 
 /** Where a process was started. For anything we launched this is the worktree,
  *  which is the only reason any of this is more useful than `top`. */
-function cwdOf(pid: number): string | null {
+export function cwdOf(pid: number): string | null {
   try { return readlinkSync(`/proc/${pid}/cwd`); } catch { return null; }
 }
 
@@ -627,6 +677,86 @@ export function startedByAgent(pid: number, step: ProcStep = procFromSlashProc):
     cur = info.ppid;
   }
   return false;
+}
+
+/**
+ * The chain that started `pid`, nearest first.
+ *
+ * The same walk `startedByAgent` does, kept separate because they answer
+ * different questions: that one asks yes-or-no and can stop the moment it finds
+ * an agent shell, this one has to keep going to the top. Sharing the `ProcStep`
+ * seam means both are testable against a tree that is written down.
+ *
+ * Starts at the PARENT. The process itself is already the subject of the row it
+ * appears on, and repeating it would spend a third of the width saying what the
+ * reader just read.
+ *
+ * Stops at init rather than including it: every chain on a Linux box ends at
+ * pid 1, so it distinguishes nothing and costs a rung. The depth cap is what
+ * keeps a deep tree from turning a row into a paragraph, and the `seen` set is
+ * for the case that should be impossible — /proc has reported cycles under
+ * namespace churn, and a ports panel should not be the thing that hangs.
+ */
+export function ancestryOf(pid: number, step: ProcStep = procFromSlashProc, max = 5): Forebear[] {
+  const out: Forebear[] = [];
+  const seen = new Set<number>();
+  let cur = pid;
+  // `max` counts rungs pushed, not steps taken: one forebear per pass, so the
+  // bound is the length of the chain the row will have to fit.
+  for (let depth = 0; depth < max && cur > 1; depth++) {
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    const info = step(cur);
+    if (!info) break;
+    if (!Number.isInteger(info.ppid) || info.ppid <= 1) break;
+    const parent = step(info.ppid);
+    out.push({ pid: info.ppid, name: parent ? shortName(parent.cmdline) : String(info.ppid) });
+    cur = info.ppid;
+  }
+  return out;
+}
+
+/**
+ * A command line reduced to the thing you would say out loud.
+ *
+ * `/usr/bin/bun run src/index.ts` is "bun"; `node /path/to/vite` is "node".
+ * The interpreter rather than the script on purpose — two `bun`s are told apart
+ * by their working directory, which the row already carries, and a basename
+ * that changes with every script makes the chain unreadable as a shape.
+ */
+function shortName(cmdline: string): string {
+  const argv0 = cmdline.split(/\s+/)[0] ?? "";
+  const base = argv0.slice(argv0.lastIndexOf("/") + 1);
+  // A login shell is spelled `-bash`; the dash is a convention, not a name.
+  return (base.startsWith("-") ? base.slice(1) : base) || "?";
+}
+
+/** Bound to everything, rather than to this machine. `::` is the v6 spelling of
+ *  the same decision, and `ss` prints the wildcard as `*` on some builds. */
+/**
+ * Is the binary behind this pid gone from disk?
+ *
+ * The kernel keeps the inode alive for a running process, so `/proc/<pid>/exe`
+ * still resolves after the file is deleted — it marks it by appending
+ * " (deleted)" to the target. That is the whole detection, and it is why this
+ * cannot be answered by stat-ing a path: the path is exactly what no longer
+ * exists.
+ *
+ * A fact, not a fault. A rebuild replaces a binary underneath whatever is still
+ * running it, which is the ordinary case here and also the reason a server can
+ * behave like a version you no longer have on disk.
+ */
+export function exeDeleted(pid: number): boolean {
+  try {
+    return readlinkSync(`/proc/${pid}/exe`).endsWith(" (deleted)");
+  } catch {
+    // Gone, or not ours. Neither is "the binary was deleted".
+    return false;
+  }
+}
+
+export function isPublicBind(addr: string): boolean {
+  return addr === "0.0.0.0" || addr === "::" || addr === "*";
 }
 
 /** Enough of the command line to tell two `node`s apart, and no more: a webpack

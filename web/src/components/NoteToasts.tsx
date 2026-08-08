@@ -24,6 +24,7 @@ import { subscribeSystemNotes, openNote, type SystemNote } from "../lib/sysNotif
 import { Chevron, useClipped } from "./TopBarNotes.tsx";
 import { Portal } from "./Portal.tsx";
 import { TOP_BAR_H } from "./TopBar.tsx";
+import { CloseButton } from "./CloseButton.tsx";
 
 /** How long an ordinary card holds the corner. Long enough to read two lines of
  *  someone else's message without hurrying, short enough that a busy minute does
@@ -137,7 +138,7 @@ function Card({ n, onGone, onGoto }: {
         <span className="text-[10.5px] font-semibold truncate" style={{ color: "var(--text2)", maxWidth: 170 }}>{n.app}</span>
         <span className="text-[9.5px] shrink-0" style={{ color: "var(--text4)" }}>{ago(n.at)}</span>
         {n.urgency === 2 && (
-          <span className="text-[9px] uppercase tracking-wider shrink-0" style={{ color: "var(--error)" }}>urgent</span>
+          <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: "var(--error)" }}>urgent</span>
         )}
         {/* The rest of the message, on the card, without going to the bell for
             it. Same control the bell's rows carry, so opening a notification is
@@ -152,9 +153,8 @@ function Card({ n, onGone, onGoto }: {
         {/* Dismisses the card, not the record: it is still in the bell
             afterwards, because closing a banner is "I have seen it", never
             "delete what happened". */}
-        <button className={`agx-note-btn agx-note-icon shrink-0${cut || open ? "" : " ml-auto"}`}
-          onClick={(e) => { e.stopPropagation(); onGone(); }}
-          aria-label="Dismiss" title="Dismiss — it stays in the bell">✕</button>
+        <CloseButton onClick={(e) => { e.stopPropagation(); onGone(); }} title="Dismiss — it stays in the bell"
+          className={`agx-note-btn agx-note-icon${cut || open ? "" : " ml-auto"}`} />
       </div>
 
       <span className="text-[12px] font-semibold leading-snug" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>

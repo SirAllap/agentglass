@@ -46,6 +46,19 @@ function connect(home: string, ...args: string[]) {
   return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+/**
+ * Is opencode on this machine?
+ *
+ * `opencode_installed()` looks in TWO places — `$XDG_CONFIG_HOME/opencode` and
+ * `opencode` on the PATH — and this suite can only isolate the first. On a
+ * machine that has opencode (the one this is developed on, at
+ * ~/.opencode/bin), the "when it is not installed" case is not a case that
+ * exists, and pretending otherwise made it fail on every single run: green in
+ * CI, red at home, which is the worst way round. Scrubbing the PATH instead
+ * was tried and takes python's own directory with it.
+ */
+const opencodeHere = !!Bun.which("opencode");
+
 const pluginPath = (home: string) => join(home, "opencode", "plugins", "agentglass.js");
 
 describe("where the plugin will send", () => {
@@ -101,7 +114,7 @@ describe("what the plugin forwards", () => {
 });
 
 describe("deploying it", () => {
-  test.if(!!python)("does nothing when OpenCode is not installed", () => {
+  test.if(!!python && !opencodeHere)("does nothing when OpenCode is not installed", () => {
     const home = xdg();
     const r = connect(home);
     expect(r.status).toBe(0);

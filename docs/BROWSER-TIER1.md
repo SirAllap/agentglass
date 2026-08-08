@@ -15,6 +15,15 @@ address bar and back/forward/reload. No profiles, no cookie import, no agent
 driving. Those are tier 2 and 3, and the point of stopping here is to find out
 whether the thing gets used before paying for them.
 
+> **Since:** it did get used, and two of the three were paid for. Agents drive
+> it (`server/src/browserdrive.ts`, `bin/agentglass-browser`, the browser-use
+> skill), and logins can be brought in from a Firefox-family browser
+> (`server/src/cookieimport.ts`) — because Electron cannot host a password
+> manager, so importing cookies is the only way a page behind a login works
+> here. Tabs and profiles remain undone. The non-goals list below is kept as it
+> was written, with the two that moved marked, rather than quietly edited: what
+> a decision cost is more useful than a tidy list.
+
 Branch `browser/desktop-viewer`, worktree `../agentglass-browser`, cut from
 local `main` (13 commits ahead of origin at the time) so it carries today's work
 rather than a stale origin.
@@ -125,8 +134,10 @@ and a trap.
 The tier-1 answer can be small: forward a fixed allowlist of chords from the
 guest via `before-input-event` in main, rather than Orca's general mechanism.
 
-**Non-goals, stated so they do not creep in:** profiles, cookie import,
-downloads, certificate prompts, camera/mic/WebAuthn permissions, anti-detection.
+**Non-goals, stated so they do not creep in:** profiles, ~~cookie import~~ (done
+— Firefox-family only; Chromium's values are keyring-encrypted and out of
+reach), downloads, certificate prompts, camera/mic/WebAuthn permissions,
+anti-detection. ~~Agent driving~~ is done too.
 Each is a real subsystem — Orca's browser is 38 files and ~15,700 lines plus an
 11.5 MB binary — and none is needed to answer "is a page inside agentglass
 useful?".
@@ -165,12 +176,37 @@ overlay, that is known on day one rather than after the address bar is built.
 ## How it gets verified
 
 The app has no browser-driving test harness, and `<webview>` behaviour is not
-unit-testable. What *is* testable, and should be:
+unit-testable. What *is* testable, and now is:
 
 - URL normalisation and the search-vs-URL decision in the address bar (pure, and
-  the place typos become searches).
+  the place typos become searches) — `web/test/browser-url.test.ts`.
 - The `will-attach-webview` guard: given hostile params, assert the dangerous
-  ones are stripped.
+  ones are stripped. This section asked for that test when the browser shipped
+  and nothing covered it until the Electron 43 upgrade needed the guard proved.
+  The decision now lives on its own in `electron/guest-guard.js` — importable,
+  with no `electron` require in it — and is covered by
+  `web/test/browser-guest-guard.test.ts`.
+
+The half a unit test cannot reach was driven once against a live Electron 43
+build, from the renderer, which is the process that would be compromised in the
+attack the guard exists to stop. Recorded here because reproducing it is a
+half-hour otherwise:
+
+| guest | result |
+| --- | --- |
+| `http://…` on `persist:agentglass-browser` | attaches |
+| `http://…` on `persist:agentglass-browser-work2` (a profile) | attaches |
+| `about:blank` | attaches |
+| `file:///etc/passwd` | never attaches — `getWebContentsId()` throws |
+| partition `persist:agentglass` (the APP's own session) | never attaches |
+| partition `persist:agentglass-browser/../agentglass` | never attaches |
+| `https://user:pass@host/` | never attaches |
+| a legitimate guest that also asks for `preload`, `nodeintegration=on` and `webpreferences=contextIsolation=no,sandbox=no,webSecurity=no` | attaches, stripped: inside it `window.agentglass`, `window.process` and `window.require` are all `undefined` |
+
+The last row is the one that matters — the guard does not refuse a guest for
+asking, it takes the bridge away, and the guest cannot tell the difference from
+never having had one. Zoom (0 → 1.5) and `findInPage` both worked on the same
+guest, so nothing was broken to get there.
 
 The rest is manual, in the installed Electron app — which, per this repo's
 recent history, means rebuilding with `electron/install-local.sh` **and checking

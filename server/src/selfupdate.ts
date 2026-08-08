@@ -31,7 +31,8 @@ import type { UpdateStatus } from "../../shared/types.ts";
 
 export type BuildInfo = {
   version: string;
-  /** Commit the installed app was built from. */
+  /** Commit HEAD was on when this was built. NOT proof of what it contains —
+   *  see `stamp`, which is. */
   commit: string;
   builtAt: string;
   /** Where it was built from. Shown, never written to. */
@@ -41,10 +42,58 @@ export type BuildInfo = {
   /** Nearest release this build descends from, and how far past it. */
   baseTag: string;
   distance: number;
+  /**
+   * What this build IS: `9699619` when the packaged tree was exactly that
+   * commit, `9699619+dirty.a3f1c2e` when it was not. Seven bare hex characters
+   * mean a commit and nothing else does, which is the whole design — the field
+   * above rendered a commit sha for a tree that did not match it, and a binary
+   * stamped 9699619 turned out to contain its child's security fix.
+   */
+  stamp: string;
+  /** sha256 over every source file that feeds the package. Two different trees
+   *  cannot share one. Empty on builds made before this existed. */
+  tree: string;
+  dirty: boolean;
+  /** The packaged files that differ from `commit`, as `M path`. Provenance:
+   *  desktop only — it names work in flight in somebody's checkout. */
+  dirtyFiles: string[];
+  /** How many of them there are. Safe to show anywhere; the paths are not. */
+  dirtyCount: number;
 };
 
 /** A release looks like this. Anything else is somebody's private tag. */
 const TAG_RE = /^v\d+\.\d+\.\d+$/;
+
+/**
+ * The variables this server DERIVED for itself, which must not follow the
+ * update script down into the app it relaunches.
+ *
+ * The update script ends by reopening the app, and it was spawned here with
+ * `{ ...process.env }` — the sidecar's environment, which by construction holds
+ * every one of these (main.js builds it that way). So the app came back with
+ * AGENTGLASS_TOKEN set, and `rotateToken` refuses while it is: "Revoke this
+ * link" then complains about an environment variable the user never set and
+ * cannot find. AGENTGLASS_DIE_WITH_PARENT=1 rides in too, into an app that has
+ * no parent to die with.
+ *
+ * electron/appctl.sh strips the same seven on its way out, and that is not
+ * redundancy: it covers `make desktop-update` run from a terminal that happens
+ * to be inside agentglass, which never comes through here at all. This one
+ * covers everything the script itself launches. install-stop.test.ts fails if
+ * the two lists drift.
+ */
+export const DERIVED_ENV = [
+  "AGENTGLASS_TOKEN", "AGENTGLASS_PORT", "AGENTGLASS_BIND", "AGENTGLASS_TRUST_LAN",
+  "AGENTGLASS_WEB_DIR", "AGENTGLASS_DIE_WITH_PARENT", "AGENTGLASS_PTY_SIZE_FILE",
+] as const;
+
+/** This process's environment with those seven removed. */
+function scriptEnv(): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  const drop = new Set<string>(DERIVED_ENV);
+  for (const [k, v] of Object.entries(process.env)) if (!drop.has(k)) out[k] = v;
+  return out;
+}
 // Overridable by the same env var the update script already reads, so a test
 // can point the clone at a fixture instead of writing into the developer's
 // real one — the mistake #144 fixed for the database.
@@ -62,21 +111,46 @@ export function buildInfo(): BuildInfo {
     try {
       if (!existsSync(p)) continue;
       const j = JSON.parse(readFileSync(p, "utf8"));
-      if (j && typeof j.commit === "string") return {
-        version: String(j.version ?? "0.0.0"),
-        commit: String(j.commit),
-        builtAt: String(j.builtAt ?? ""),
-        source: String(j.source ?? ""),
-        origin: String(j.origin ?? ""),
-        baseTag: String(j.baseTag ?? ""),
-        distance: Number(j.distance ?? 0),
-      };
+      if (j && typeof j.commit === "string") {
+        const commit = String(j.commit);
+        const dirtyFiles = Array.isArray(j.dirtyFiles) ? j.dirtyFiles.map(String) : [];
+        return {
+          version: String(j.version ?? "0.0.0"),
+          commit,
+          builtAt: String(j.builtAt ?? ""),
+          source: String(j.source ?? ""),
+          origin: String(j.origin ?? ""),
+          baseTag: String(j.baseTag ?? ""),
+          distance: Number(j.distance ?? 0),
+          // A build made before the stamp existed carries no tree hash and
+          // cannot be made to. It reads as it always did — a commit sha — rather
+          // than being retro-flagged dirty, because a warning every installed
+          // app shows on day one is a warning nobody reads by day two. One
+          // install replaces it with a stamp that can be checked.
+          stamp: String(j.stamp || commit.slice(0, 7) || "unknown"),
+          tree: String(j.tree ?? ""),
+          dirty: !!j.dirty,
+          dirtyFiles,
+          dirtyCount: dirtyFiles.length,
+        };
+      }
     } catch { /* unreadable or malformed — fall through to the dev case */ }
   }
+  // `bun run dev` and the tests: there is no package, so the running code IS
+  // the checkout. Dirtiness still matters (it is what the About pane is looking
+  // at), but there is no tree hash here — nothing is being shipped, so the cost
+  // of two dev trees sharing a stamp is nil.
   const cwd = process.cwd();
   const head = git(cwd, ["rev-parse", "HEAD"]).stdout?.trim() ?? "";
   const origin = git(cwd, ["remote", "get-url", "origin"]).stdout?.trim() ?? "";
-  return { version: "dev", commit: head, builtAt: "", source: head ? cwd : "", origin, baseTag: "", distance: 0 };
+  const st = head ? git(cwd, ["status", "--porcelain", "--untracked-files=no"]) : null;
+  const dirtyFiles = (st?.status === 0 ? st.stdout ?? "" : "").split("\n").filter(Boolean).map((l) => l.trim());
+  const short = head.slice(0, 7);
+  return {
+    version: "dev", commit: head, builtAt: "", source: head ? cwd : "", origin, baseTag: "", distance: 0,
+    stamp: !head ? "unknown" : dirtyFiles.length ? `${short}+dirty` : short,
+    tree: "", dirty: dirtyFiles.length > 0, dirtyFiles, dirtyCount: dirtyFiles.length,
+  };
 }
 
 function readStamp(): UpdateStatus["last"] {
@@ -241,6 +315,12 @@ export function viewerStatus(): UpdateStatus {
     info: {
       version: info.version, commit: info.commit, builtAt: info.builtAt,
       baseTag: info.baseTag, distance: info.distance,
+      // Identity, so a phone gets the same honest answer about what it is
+      // looking at. `dirtyFiles` is the one field here that is provenance —
+      // repo-relative paths, but they are somebody's work in flight — so the
+      // count crosses and the list does not.
+      stamp: info.stamp, tree: info.tree, dirty: info.dirty, dirtyCount: info.dirtyCount,
+      dirtyFiles: [],
       source: "", origin: "",
     },
     branch: "", behind: 0, ahead: 0, incoming: [],
@@ -276,7 +356,7 @@ export async function startUpdate(): Promise<{ ok: boolean; error?: string; log?
     detached: true,
     stdio: "ignore",
     env: {
-      ...process.env,
+      ...scriptEnv(),
       AGENTGLASS_UPDATE_LOG: LOG,
       AGENTGLASS_UPDATE_STAMP: STAMP,
       AGENTGLASS_UPDATE_TAG: st.branch,

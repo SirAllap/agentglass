@@ -13,6 +13,8 @@ import { requestWorktreeJump } from "../lib/worktreeJump.ts";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { checkoutConfirm, needsCheckoutConfirm } from "../lib/checkoutWarning.ts";
 import { keepTermFocus } from "../lib/keepFocus.ts";
+import { focusFollowsMouse, subscribeFocusFollowsMouse, shouldFocusOnHover } from "../lib/termFocusPref.ts";
+import { cellAt, paneAt } from "../lib/tmuxHover.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -23,17 +25,18 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
-import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow } from "../../../shared/types.ts";
+import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 import { wantsWebgl, wantsCanvas, fallBackToCanvas } from "../lib/termRenderer.ts";
-import { isFindChord } from "../lib/termKeys.ts";
+import { isFindChord, isAppChord } from "../lib/termKeys.ts";
 import { typingWouldLandInApp } from "../lib/termForeground.ts";
 import { THEMES } from "../lib/themes.ts";
 import { deriveAnsi } from "../lib/termPalette.ts";
-import { termOptions } from "../lib/termPrefs.ts";
+import { termOptions, copyOnSelect, rightClickPaste } from "../lib/termPrefs.ts";
 import { useModernWidths } from "../lib/termUnicode.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 const ROOT_KEY = "agentglass.terminalRoot";
 /** The repo the terminal view last used — what a docked console should open
@@ -139,8 +142,16 @@ type Sess = {
    *  the strip belongs to the app rather than to whatever .tmux.conf this
    *  machine carries; tmux still decides what is in it and which is active. */
   tmuxWindows: TmuxWindow[];
+  /** The panes of the tmux window on screen, when it has more than one. Empty
+   *  otherwise — see the server's sweep. */
+  tmuxPanes: TmuxPane[];
   /** The session those windows belong to, for the status-line toggle. */
   tmuxSession: string | null;
+  /** The grid tmux thinks THIS client has — the terminal on this desk, not the
+   *  window it is drawing. They are the same number until something smaller
+   *  attaches to the same session, which is the whole reason it is on the wire:
+   *  the window's own size says nothing without the size it should have been. */
+  tmuxClient: { cols: number; rows: number } | null;
   /** The keys tmux treats as its prefix, as tmux spells them ("C-f"). */
   tmuxPrefix: string[];
   /** When one of them was last pressed. The status line most configs draw
@@ -301,6 +312,11 @@ function applyThemeLive(s: Sess): () => void {
         if (s.term.options.fontSize !== o.fontSize) s.term.options.fontSize = o.fontSize;
         if (s.term.options.lineHeight !== o.lineHeight) s.term.options.lineHeight = o.lineHeight;
         if (s.term.options.cursorStyle !== o.cursorStyle) s.term.options.cursorStyle = o.cursorStyle;
+        // Live, both of them: shrinking the scrollback trims the buffer, and a
+        // word boundary is read on the next double click. Neither touches the
+        // cell box, so neither needs a refit.
+        if (s.term.options.scrollback !== o.scrollback) s.term.options.scrollback = o.scrollback;
+        if (s.term.options.wordSeparator !== o.wordSeparator) s.term.options.wordSeparator = o.wordSeparator;
         if (needFit) fitTerm(s);
         // The WebGL renderer caches cells in a texture atlas and won't always
         // repaint already-drawn scrollback on a theme swap; force it. On the DOM
@@ -316,6 +332,17 @@ function applyThemeLive(s: Sess): () => void {
   return () => { cancelAnimationFrame(raf); mo.disconnect(); mq?.removeEventListener?.("change", restyle); };
 }
 
+/**
+ * A client frame out, as a string.
+ *
+ * The other half of the protocol had no declaration either: every send below
+ * built its own object literal, so the desk and the phone and the server each
+ * described `{t:"tmux", cmd:…}` separately and none of them could contradict
+ * another. Going through here costs nothing — the guards each caller already
+ * has are untouched — and buys the compiler a say in what leaves this file.
+ */
+const ptyFrame = (frame: PtyClientFrame): string => JSON.stringify(frame);
+
 function connect(s: Sess) {
   if (s.ws || IS_DEMO) return;
   s.status = "connecting";
@@ -326,8 +353,18 @@ function connect(s: Sess) {
   ws.onmessage = (ev) => {
     if (s.ws !== ws) return; // a stale socket (replaced by ⟲ new shell) must not touch the session
     if (typeof ev.data !== "string") { s.term.write(new Uint8Array(ev.data as ArrayBuffer)); return; }
-    let f: { t?: string; mode?: "pty" | "pipe"; shell?: string; resize?: boolean; code?: number; error?: string; active?: boolean; windows?: TmuxWindow[]; session?: string | null; prefix?: string[] };
-    try { f = JSON.parse(ev.data); } catch { return; }
+    /*
+     * The protocol, from the one declaration of it.
+     *
+     * This was a bag of optional fields written out here, and the phone had its
+     * own — a different one. Neither could be wrong about a frame it did not
+     * name: this end declared no `pane`, no `fit` and no `by`, so the whole
+     * `t:"pane"` frame could have changed shape and nothing on this side would
+     * have said a word. Narrowing on `t` against the union is also what makes
+     * each field readable only from the frame that carries it.
+     */
+    let f: PtyServerFrame;
+    try { f = JSON.parse(ev.data) as PtyServerFrame; } catch { return; }
     if (f.t === "ready") {
       reconnected(s);
       s.status = "live"; s.mode = f.mode ?? null; s.shell = f.shell || "shell"; s.canResize = f.resize !== false;
@@ -335,9 +372,9 @@ function connect(s: Sess) {
       // python3 gets, and "TUI apps won't render" alone left people believing
       // the terminal itself was broken.
       if (f.mode === "pipe") s.term.writeln("\x1b[2m(no pty on this host: plain-pipe shell, full-screen programs won't render. Install python3 and reopen; Settings ▸ Requirements has the details.)\x1b[0m");
-      for (const d of s.pending.splice(0)) ws.send(JSON.stringify({ t: "in", d }));
+      for (const d of s.pending.splice(0)) ws.send(ptyFrame({ t: "in", d }));
       // the fit that ran while connecting may not have reached the server
-      ws.send(JSON.stringify({ t: "resize", cols: s.term.cols, rows: s.term.rows }));
+      ws.send(ptyFrame({ t: "resize", cols: s.term.cols, rows: s.term.rows }));
       notify(s);
     } else if (f.t === "tmux") {
       // tmux brings its own tabs, splits and status line. The panel's split and
@@ -348,7 +385,9 @@ function connect(s: Sess) {
       // file the app has never seen.
       s.tmux = f.active === true;
       s.tmuxWindows = Array.isArray(f.windows) ? f.windows : [];
+      s.tmuxPanes = Array.isArray(f.panes) ? f.panes : [];
       s.tmuxSession = typeof f.session === "string" ? f.session : null;
+      s.tmuxClient = f.client ?? null;
       s.tmuxPrefix = Array.isArray(f.prefix) ? f.prefix : [];
       notify(s);
     } else if (f.t === "exit" || f.t === "fatal") {
@@ -445,20 +484,10 @@ function createSession(root: string): Sess {
     // otherwise — see termUnicode.
     allowProposedApi: true,
     cursorStyle: tp.cursorStyle,
-    /*
-     * Scrollback, and why it is not ten thousand any more.
-     *
-     * xterm keeps every line as cell data, so a wide window at 10k lines is
-     * tens of megabytes per shell — and this app holds several open at once,
-     * deliberately, so a build in one keeps running while you work in another.
-     * It is also what a resize has to reflow: every line, on every fit, which
-     * is the multi-second freeze people report when dragging a pane.
-     *
-     * Four thousand lines is still more than a screenful of build output by two
-     * orders of magnitude, and it is what the scroll bar can realistically be
-     * dragged through.
-     */
-    scrollback: 4_000,
+    // Scrollback and word boundaries are preferences now — see termPrefs for
+    // what each costs and why the default is what it is.
+    scrollback: tp.scrollback,
+    wordSeparator: tp.wordSeparator,
     theme: themeFromCss(),
     macOptionIsMeta: true,
   });
@@ -526,6 +555,10 @@ function createSession(root: string): Sess {
     if (e.type !== "keydown") return true;
     if (e.key === "Escape" && e.shiftKey) { panelClose(); return false; }
     if (isFindChord(e) && panelFind()) return false;
+    // The app's own chords — today the file palette. Returning false keeps the
+    // keystroke out of the PTY; the window listener in App still sees it, so
+    // the palette opens and the shell never hears about it.
+    if (isAppChord(e)) return false;
     return true;
   });
   // Copy on select, the tmux way: the instant a selection is made it is on the
@@ -535,6 +568,9 @@ function createSession(root: string): Sess {
   // may fail mid-drag if the document is momentarily unfocused; the settled
   // selection on mouse-up lands, and the failures are silent.
   term.onSelectionChange(() => {
+    // Read at selection time rather than captured here: the switch has to take
+    // effect on the next drag, not on the next shell.
+    if (!copyOnSelect()) return;
     const sel = term.getSelection();
     if (sel) navigator.clipboard?.writeText(sel).catch(() => { /* no clipboard permission */ });
   });
@@ -543,8 +579,27 @@ function createSession(root: string): Sess {
   // WebGL context loss, a swap to the DOM renderer) shows the terminal's own
   // background colour instead of a white flash.
   holder.style.cssText = "width:100%;height:100%;background:var(--bg)";
+  /*
+   * Right-click pastes, when asked for.
+   *
+   * Off by default because a right click opens a menu everywhere else in this
+   * app, and a terminal that silently swallows it is a terminal you cannot get
+   * a menu out of. Ctrl+right-click is left alone either way, so the menu is
+   * always one modifier away.
+   *
+   * The text is written to the shell rather than to xterm's own paste path: the
+   * pty is what needs the bytes, and this is the same route every other write
+   * takes.
+   */
+  holder.addEventListener("contextmenu", (e) => {
+    if (!rightClickPaste() || (e as MouseEvent).ctrlKey) return;
+    e.preventDefault();
+    navigator.clipboard?.readText()
+      .then((text) => { if (text) sess.ws?.send(JSON.stringify({ t: "d", d: text })); })
+      .catch(() => { /* no clipboard permission — the menu stayed shut, nothing pasted */ });
+  });
   const id = `t${++seq}-${Date.now().toString(36)}`;
-  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxSession: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
+  const sess: Sess = { id, root, title: `shell ${sessionsFor(root).length + 1}`, term, fit, search, holder, ws: null, status: "idle", mode: null, shell: "shell", canResize: true, opened: false, tmux: false, tmuxWindows: [], tmuxPanes: [], tmuxSession: null, tmuxClient: null, tmuxPrefix: [], tmuxPrefixAt: 0, pending: [], createdAt: Date.now(), lastUsed: Date.now(), retries: 0, retryTimer: null, subs: new Set() };
   term.onData((d) => {
     sess.lastUsed = Date.now();
     /*
@@ -571,13 +626,13 @@ function createSession(root: string): Sess {
       sess.tmuxPrefixAt = 0;
       notify(sess);
     }
-    if (sess.status === "live" && sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(JSON.stringify({ t: "in", d }));
+    if (sess.status === "live" && sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(ptyFrame({ t: "in", d }));
     else if (sess.status === "connecting") sess.pending.push(d); // don't drop keys typed before the shell is up
     else if (sess.status === "unauthorized" && d.includes("\r")) reauthPrompt(); // Enter → re-enter the token
     else if ((sess.status === "exited" || sess.status === "error") && d.includes("\r")) { sess.retries = 0; connect(sess); } // Enter → new shell, scrollback kept
   });
   term.onResize(({ cols, rows }) => {
-    if (sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(JSON.stringify({ t: "resize", cols, rows }));
+    if (sess.ws?.readyState === WebSocket.OPEN) sess.ws.send(ptyFrame({ t: "resize", cols, rows }));
   });
   sessions.set(id, sess);
   return sess;
@@ -709,7 +764,7 @@ function FindBar({ sess, onClose }: { sess: Sess | undefined; onClose: () => voi
       </span>
       <button onClick={() => step(true)} disabled={!q} title="Previous match (Shift+Enter)" className="text-[11px] px-1.5 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↑</button>
       <button onClick={() => step(false)} disabled={!q} title="Next match (Enter)" className="text-[11px] px-1.5 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↓</button>
-      <button onClick={close} title="Close find (Esc)" className="text-[11px] px-1.5 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>✕</button>
+      <CloseButton onClick={close} title="Close find (Esc)" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }} />
     </div>
   );
 }
@@ -730,10 +785,15 @@ function BlockedNotice({ cmd, onSend, onDismiss }: { cmd: string; onSend: () => 
         A full-screen program is running — <b className="font-mono">{cmd}</b> was not typed
       </span>
       <button onClick={onSend} className="shrink-0 px-1.5 py-0.5 rounded" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>Send anyway</button>
-      <button onClick={onDismiss} className="shrink-0 px-1 t-dim2" aria-label="Dismiss">✕</button>
+      <CloseButton onClick={onDismiss} title="Dismiss" className="shrink-0" />
     </div>
   );
 }
+
+/** A grid width in the "somebody took your columns" notice. The two numbers are
+ *  the entire content of that sentence — everything around them is there to say
+ *  which is which — so they are the only bright thing in the row. */
+const Cols = ({ n }: { n: number }) => <b className="tabular-nums" style={{ color: "var(--text)" }}>{n}</b>;
 
 /**
  * Type a command into the repo's shell (starting one if needed).
@@ -746,10 +806,29 @@ function BlockedNotice({ cmd, onSend, onDismiss }: { cmd: string; onSend: () => 
  * on screen wants that line.
  */
 function runInShell(s: Sess, cmd: string, force = false): boolean {
-  if (!force && typingWouldLandInApp(s.term.buffer.active)) return false;
+  /*
+   * tmux is the exception the guard has to make.
+   *
+   * `typingWouldLandInApp` exists so a command is never typed into vim or less,
+   * where it would be read as keystrokes rather than run. tmux trips it — it is
+   * a full-screen program by every test there is — but it is the one that hands
+   * what you type straight to the shell in its active pane. So under tmux the
+   * guard was answering a question nobody asked: not "will this land in an
+   * application" but "is an application on screen", and refusing every command
+   * with "was not typed. Send anyway".
+   *
+   * That made `keep running` and any saved recipe mutually exclusive, which is
+   * the opposite of the point: a long build is exactly what you want in tmux.
+   *
+   * Only tmux, and only because the app already knows: `s.tmux` is set from
+   * tmux's own report, not guessed from what the screen looks like. A pager
+   * INSIDE a tmux pane is still a pager, and that is a real limit of this — the
+   * guard cannot see through tmux to what is running in the pane.
+   */
+  if (!force && !s.tmux && typingWouldLandInApp(s.term.buffer.active)) return false;
   const line = cmd + "\r";
   s.lastUsed = Date.now();
-  if (s.status === "live" && s.ws?.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ t: "in", d: line }));
+  if (s.status === "live" && s.ws?.readyState === WebSocket.OPEN) s.ws.send(ptyFrame({ t: "in", d: line }));
   else { s.pending.push(line); if (!s.ws) connect(s); }
   s.term.focus();
   return true;
@@ -767,6 +846,20 @@ function runInShell(s: Sess, cmd: string, force = false): boolean {
  * command was therefore not typed. Callers from other panels get a plain answer
  * rather than a command that vanished into somebody's editor.
  */
+/**
+ * Whether the console for this checkout is already inside tmux.
+ *
+ * Exported because the button that puts it there needs to know not to do it
+ * twice. Pressing again typed the command AT tmux rather than at a prompt, and
+ * the panel's own full-screen guard then had to explain itself — a warning
+ * about a keystroke nobody meant to send, over a state the button could simply
+ * have read.
+ */
+export function consoleInTmux(root: string): boolean {
+  if (!root) return false;
+  return !!sessionsFor(root).find((x) => x.title === CONSOLE_TITLE)?.tmux;
+}
+
 export function runInConsole(root: string, cmd: string): boolean {
   if (!root || IS_DEMO) return false;
   const existing = sessionsFor(root).find((x) => x.title === CONSOLE_TITLE);
@@ -801,6 +894,8 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
   const slot = useRef<HTMLDivElement>(null);
   const [, redraw] = useReducer((x: number) => x + 1, 0);
   const [sid, setSid] = useState<string>("");
+  /** Whether a hover takes the keyboard — see lib/termFocusPref.ts. */
+  const ffm = useSyncExternalStore(subscribeFocusFollowsMouse, focusFollowsMouse, () => false);
   /**
    * Which checkout this console is in — its own choice, falling back to the
    * terminal view's repo until someone makes one. Changing it swaps which
@@ -827,6 +922,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
     if (s) requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
   }, [sid]);
   useDismiss(repoOpen, pickerRef, () => { setRepoOpen(false); setRepoQuery(""); focusConsole(); });
+
   // Every time the picker OPENS — not once. The `repos.length` short-circuit was
   // a fetch-once, so a worktree cut after this strip first loaded never showed:
   // the list stayed frozen until a full app restart. Re-reading on each open is
@@ -989,7 +1085,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
                     {r.worktreeOf && r.name !== r.branch && (
                       <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>
                     )}
-                    {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
+                    {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
                   </button>
                 ))}
                 {/* Local branches with no worktree — switch by checking out in
@@ -1001,7 +1097,7 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
                   if (!branches.length) return null;
                   return (
                     <>
-                      <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
+                      <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
                       {branches.slice(0, 80).map((b) => (
                         <button key={b.name} onClick={() => checkoutHere(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
                           <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
@@ -1017,13 +1113,13 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
           )}
         </div>
 
-        {sess && <span className="text-[9px] shrink-0" style={{ color: SESS_DOT[sess.status].color }}>● {SESS_DOT[sess.status].label}</span>}
+        {sess && <span className="text-[10px] shrink-0" style={{ color: SESS_DOT[sess.status].color }}>● {SESS_DOT[sess.status].label}</span>}
 
         {/* The same control the terminal view mounts — commands and pins, one
             component, so the two shells cannot drift apart again. Opens upward:
             there is nothing below this strip to open into. */}
         <div className="flex items-center gap-2 min-w-0" onMouseDown={(e) => e.stopPropagation()}>
-          <CommandBar root={root} disabled={!sid} font={TERM_FONT} onRun={runHere} onClose={focusConsole} dropUp />
+          <CommandBar root={root} disabled={!sid} font={TERM_FONT} onRun={runHere} runTargetInTmux={consoleInTmux(root)} onClose={focusConsole} dropUp />
         </div>
 
         {blocked && (
@@ -1032,10 +1128,18 @@ export function ConsoleStrip({ root: fallbackRoot, open, height, onHeight, onClo
           </div>
         )}
 
-        <span className="ml-auto text-[9px] t-dim2 shrink-0">Drag to resize</span>
-        <button onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} className="text-[12px] leading-none px-1.5 t-dim2 hover:opacity-70 shrink-0" title="Hide the console (the shell keeps running)">✕</button>
+        <span className="ml-auto text-[10px] t-dim2 shrink-0">Drag to resize</span>
+        <CloseButton onClick={(e) => { e.stopPropagation(); onClose(); }} onMouseDown={(e) => e.stopPropagation()} title="Hide the console (the shell keeps running)" className="shrink-0" />
       </div>
-      <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--bg)" }} onClick={() => sess?.term.focus()} />
+      {/* The strip is a terminal pane too, and the one with the strongest case:
+          it lives UNDER another panel, so you arrive at it from above every
+          time. Same switch and the same guards — a picker open above it is
+          somebody typing, and a held button is a selection being dragged. */}
+      <div ref={slot} className="flex-1 min-h-0" style={{ background: "var(--bg)" }}
+        onClick={() => sess?.term.focus()}
+        onMouseEnter={(e) => {
+          if (shouldFocusOnHover({ enabled: ffm, buttons: e.buttons, typing: repoOpen, visible: open })) focusConsole();
+        }} />
     </div>
   );
 }
@@ -1083,6 +1187,10 @@ function detectPaneWorktree(term: Terminal | undefined, worktrees: GitRepoRef[])
 
 export function TermView({ active, onClose = () => {} }: { active: boolean; onClose?: () => void }) {
   const open = active;
+  /** Whether a hover takes the keyboard — see lib/termFocusPref.ts. Subscribed
+   *  rather than read once, so flipping the switch in Settings takes effect in
+   *  the terminal you are looking at rather than at the next reload. */
+  const ffm = useSyncExternalStore(subscribeFocusFollowsMouse, focusFollowsMouse, () => false);
   const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const { ask, dialog } = useDialogs();
   const [root, setRoot] = useState<string>(() => { try { return localStorage.getItem(ROOT_KEY) || ""; } catch { return ""; } });
@@ -1106,16 +1214,18 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // The "jump to a worktree's git / changes" dropdown. Separate from the repo
   // picker above (which switches the terminal itself): this one leaves the
   // terminal where it is and takes you to Source control / File changes for the
-  // chosen worktree. The worktree is picked, never read from the focused pane —
-  // measured against a live fleet, the pane's cwd is always the parent repo.
+  // chosen worktree — with the one the focused pane's agent is in pinned on
+  // top, which is a question the server answers (see panewt.ts) rather than one
+  // this end guesses from the pane's own directory: that is the parent repo for
+  // every agent in a fleet, which is what made it look unanswerable.
   const [wtOpen, setWtOpen] = useState(false);
   const [wtQuery, setWtQuery] = useState("");
   const [wtShowAll, setWtShowAll] = useState(false);
-  /** The worktree the focused pane's agent is in, read from its output — shown
-   *  compact in the status bar and pinned atop the picker. */
+  /** The worktree the focused pane's agent is working in — shown compact in the
+   *  status bar and pinned atop the picker. */
   const [detectedWt, setDetectedWt] = useState<GitRepoRef | null>(null);
   /** The tmux window the current detection belongs to, so a read that comes up
-   *  empty keeps the last worktree (the agent just stopped printing paths)
+   *  empty keeps the last worktree (an agent between turns names nothing)
    *  rather than flickering it away — but switching windows starts fresh. */
   const detectedWinRef = useRef("");
   const wtRef = useRef<HTMLDivElement>(null);
@@ -1182,28 +1292,49 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   // back — see focusTerm.
   useDismiss(repoOpen, pickersRef, () => { setRepoOpen(false); focusTerm(); });
   useDismiss(wtOpen, wtRef, () => { setWtOpen(false); setWtQuery(""); setWtShowAll(false); focusTerm(); });
-  // Keep the focused pane's worktree fresh. The agent prints new paths as it
-  // works and xterm's buffer changes without React noticing, so re-read on a
-  // light poll (and whenever the focused pane or the repo list changes) rather
-  // than on render — a bounded scan of the scrollback tail, cheap to repeat.
+  // Keep the focused pane's worktree fresh.
+  //
+  // The server answers first, from the agent's own working directory and the
+  // transcript it is writing — see panewt.ts for why the screen cannot. The
+  // scan of the terminal buffer stays behind it as a fallback, for a machine
+  // whose agents do not report to this app at all: it can only add an answer
+  // where there was none, and it is what this feature did on its own before.
+  //
+  // Polled rather than read on render because neither source changes in a way
+  // React can see, and re-asked whenever the focused pane or the repo list
+  // changes. Both ends are bounded — one tmux call and a cached tail.
   useEffect(() => {
     if (!open || IS_DEMO) return;
     const project = here?.worktreeOf || here?.root || root;
     const cands = repos.filter((r) => r.worktreeOf && (r.worktreeOf || r.root) === project);
-    const run = () => {
+    let stopped = false;
+    const run = async () => {
       const s = sessions.get(paneIds[focusIdx] ?? "");
       const win = s?.tmuxWindows?.find((w) => w.active)?.id ?? "";
-      const d = detectPaneWorktree(s?.term, cands);
+      let d: GitRepoRef | null = null;
+      if (win) {
+        try {
+          const { dirs } = await api.paneDirs(win);
+          // In the order the server gave them: newest first, so an agent that
+          // has moved between worktrees answers with the one it is in now.
+          for (const p of dirs) {
+            const hit = cands.find((r) => p === r.root || p.startsWith(r.root + "/"));
+            if (hit) { d = hit; break; }
+          }
+        } catch { /* server busy or offline — the buffer scan below still works */ }
+      }
+      if (stopped) return;
+      if (!d) d = detectPaneWorktree(s?.term, cands);
       // Sticky: a pane's worktree does not vanish because the agent stopped
-      // printing its path, so only a fresh detection replaces it. When the
-      // focused window changes, take whatever the new one reads — even nothing,
-      // so an idle window does not keep wearing its neighbour's worktree.
+      // naming it, so only a fresh detection replaces it. When the focused
+      // window changes, take whatever the new one reads — even nothing, so an
+      // idle window does not keep wearing its neighbour's worktree.
       if (win !== detectedWinRef.current) { detectedWinRef.current = win; setDetectedWt(d); }
       else if (d) setDetectedWt((prev) => (prev?.root === d.root ? prev : d));
     };
-    run();
-    const id = setInterval(run, 4000);
-    return () => clearInterval(id);
+    void run();
+    const id = setInterval(() => { void run(); }, 4000);
+    return () => { stopped = true; clearInterval(id); };
   }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root]);
 
   const tabs = !IS_DEMO && root ? termSessionsFor(root) : [];
@@ -1234,6 +1365,69 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    *  a search is about one shell's scrollback, not about the panel. */
   const [findOpen, setFindOpen] = useState(false);
   useEffect(() => { setFindOpen(false); }, [root]);
+
+  /**
+   * Hovering a pane types into it — when that has been asked for.
+   *
+   * Two things are set, and they are not the same thing: the pane INDEX is what
+   * the chrome acts on (find, the window strip, the worktree readout), and
+   * xterm's own focus is where the next character lands. A click sets both
+   * because it lands inside xterm's textarea; a hover has to say so.
+   *
+   * Declared down here, below `findOpen`, and that placement is load-bearing: a
+   * `useCallback` reads its dependency array during render, so naming a `const`
+   * declared further down the component is a temporal dead zone — which in this
+   * app means a white window rather than a warning.
+   */
+  const hoverFocus = useCallback((i: number, buttons: number) => {
+    if (!shouldFocusOnHover({ enabled: ffm, buttons, typing: repoOpen || wtOpen || findOpen, visible: active && open })) return;
+    const s = sessions.get(paneIds[i] ?? "");
+    if (!s) return;
+    // Only when it moves. Re-entering the pane you are already in would re-run
+    // the mount effect below, which detaches and re-attaches a live terminal.
+    setFocusIdx((cur) => (cur === i ? cur : i));
+    requestAnimationFrame(() => { try { s.term.focus(); } catch { /* disposed mid-frame */ } });
+  }, [ffm, repoOpen, wtOpen, findOpen, active, open, paneIds]);
+
+  /** The tmux pane last asked for, so a pointer resting inside one does not
+   *  re-send for every mousemove in the half-second before the sweep reports
+   *  it active. */
+  const askedPane = useRef<string | null>(null);
+
+  /**
+   * The same idea one level down: inside tmux.
+   *
+   * Giving the terminal the keyboard is not enough when tmux is running in it.
+   * tmux has its own idea of which pane is current, and keystrokes go THERE —
+   * so hovering the right-hand split and typing still lands on the left one
+   * until you click. The click works because tmux's own mouse mode acts on the
+   * button; hovering has no such event, so the pane is worked out here from the
+   * geometry tmux reports and tmux is told to select it.
+   *
+   * Rate is not the concern the shape of the guard suggests: `mousemove` fires
+   * often, but the send happens only when the pane UNDER the pointer changes,
+   * so crossing a divider is one command and sitting in a pane is none.
+   */
+  const hoverTmuxPane = useCallback((i: number, e: { clientX: number; clientY: number; buttons: number }) => {
+    if (!shouldFocusOnHover({ enabled: ffm, buttons: e.buttons, typing: repoOpen || wtOpen || findOpen, visible: active && open })) return;
+    const s = sessions.get(paneIds[i] ?? "");
+    // Fewer than two panes and there is nothing to choose between — the server
+    // sends an empty list for exactly that case.
+    if (!s || !s.tmux || s.tmuxPanes.length < 2 || s.ws?.readyState !== WebSocket.OPEN) return;
+    // xterm's screen element, not the container: the container can be a few
+    // pixels taller than a whole number of rows, and dividing by the wrong
+    // height puts the pointer a row off at the bottom of a tall pane.
+    const screen = s.term.element?.querySelector(".xterm-screen") ?? s.term.element;
+    if (!screen) return;
+    const cell = cellAt(screen.getBoundingClientRect(), s.term.cols, s.term.rows, e.clientX, e.clientY);
+    if (!cell) return;
+    const pane = paneAt(s.tmuxPanes, cell.col, cell.row);
+    // No pane owns this cell (tmux's status line), it is already the current
+    // one, or we have just asked for it.
+    if (!pane || pane.active || askedPane.current === pane.id) return;
+    askedPane.current = pane.id;
+    s.ws.send(ptyFrame({ t: "tmux", cmd: "selectpane", pane: pane.id }));
+  }, [ffm, repoOpen, wtOpen, findOpen, active, open, paneIds]);
 
   useEffect(() => {
     if (!open || IS_DEMO) return;
@@ -1319,6 +1513,37 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
    * arriving on the next poll, never a local guess that could disagree with it.
    */
   const tmuxWindows = sess?.tmuxWindows ?? [];
+  /*
+   * Re-fit the terminal when tmux takes the panel over, or its window list
+   * changes shape.
+   *
+   * The moment tmux is detected, the panel's own chrome changes height — the
+   * shell-tab strip is swapped for tmux's window strip, the status hint row
+   * changes — so the number of rows that fit is not what it was a frame ago.
+   * The mount effect above measures ONCE, before any of that, and then keys on
+   * `[open, paneIds, focusIdx]` (deliberately not `tmuxActive`, so returning to
+   * the view never detaches a live terminal) — so nothing re-measures when tmux
+   * arrives. A view-switch does, but only incidentally: the panel goes to zero
+   * size and back, and the mount effect's ResizeObserver fires on the way in.
+   * The initial attach has no such transition, so the tmux window kept the
+   * taller pre-tmux grid and its bottom rows — an agent's input box — were drawn
+   * below the panel until the user happened to switch views. This is the missing
+   * re-fit, on the same rising edge a view-switch gets for free.
+   *
+   * rAF so it runs after the new chrome has laid out; `fitTerm` no-ops when the
+   * grid is unchanged, so the common re-render costs a measurement and no
+   * resize.
+   */
+  useEffect(() => {
+    if (!open || IS_DEMO) return;
+    const raf = requestAnimationFrame(() => {
+      for (const id of paneIds) {
+        const s = sessions.get(id);
+        if (s) try { fitTerm(s); } catch { /* not measurable yet */ }
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [open, tmuxActive, tmuxWindows.length, paneIds]);
   // Lit while tmux is waiting for the second half of a prefix sequence.
   const prefixLive = !!sess?.tmuxPrefixAt && Date.now() - sess.tmuxPrefixAt < PREFIX_MS;
   /*
@@ -1345,10 +1570,97 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const [pendingWindow, setPendingWindow] = useState<string | null>(null);
   useEffect(() => { setPendingWindow(null); }, [tmuxWindows]);
   const activeWindow = pendingWindow ?? tmuxWindows.find((w) => w.active)?.id ?? null;
-  const tmuxCmd = useCallback((cmd: string, extra: Record<string, unknown> = {}) => {
+  const tmuxClient = sess?.tmuxClient ?? null;
+  /*
+   * The window is bigger than the pane you can see.
+   *
+   * `window-size largest` keeps a phone from shrinking the desk, and its cost
+   * is this: with anything BIGGER attached — another agentglass window, a
+   * `tmux attach` in a real terminal — tmux sizes the window to that one and
+   * this panel shows its top-left corner. Measured on a private server, one
+   * 80x24 client gives `window 80x23`; a 240x60 client joining takes it to
+   * `window 240x59` while the small client stays 80x24.
+   *
+   * What that costs is not "some rows": it is the LAST row of the pane, which
+   * is where every editor puts its status line. Reported as exactly that,
+   * because "nvim has no status bar" is how it presents and is a different
+   * thing to go looking for.
+   */
+  const hiddenRows = (() => {
+    const rows = tmuxClient?.rows ?? 0;
+    if (!tmuxActive || !rows) return 0;
+    const deepest = (sess?.tmuxPanes ?? []).reduce((n, p) => Math.max(n, p.bottom + 1), 0);
+    return deepest > rows ? deepest - rows : 0;
+  })();
+  /*
+   * The window on screen is narrower than the terminal drawing it.
+   *
+   * tmux sizes a shared window to fit every client, so a phone attaching with a
+   * fit reflows this desk to 80 columns and the desk is given no explanation
+   * whatsoever — the panes just get small and stay small.
+   *
+   * The condition is the size comparison, never `w.phone` and never a
+   * server-side list of who is attached. A phone with no fit costs the desk
+   * nothing and is the common case, so a notice keyed on presence would cry
+   * wolf on it; and a registry disagrees with tmux the moment a fit fails, a
+   * phone changes window, or a phone's socket dies without cleanup running.
+   * This asks tmux what the window is, which cannot be wrong about it.
+   *
+   * Columns ONLY. Measured: a 200×50 client gives a 200×49 window, because tmux
+   * spends a row on the status line — so a rows comparison fires on every desk
+   * that has a bar, forever.
+   *
+   * A window with no `cols` is one tmux did not answer a size for, which is not
+   * the same claim as "narrow" — it takes the notice off, not on.
+   */
+  const activeWin = tmuxWindows.find((w) => w.id === activeWindow) ?? null;
+  /*
+   * And the second way a phone takes this window: it zooms it.
+   *
+   * A phone attaches to a WINDOW, so a four-pane window gave it four tabs
+   * drawing the same 2x2 grid — the server now zooms the pane that was tapped
+   * so one tab means one pane. That flag is on the shared window, so the desk
+   * gets a window with one pane where it had four. It is not narrow, so the
+   * comparison above cannot see it, and it is just as much of a "what happened
+   * to my layout" as the width is.
+   *
+   * `phone` IS the condition here, and that is the opposite of the rule above
+   * on purpose. Zoom is a key people press for themselves several times a day
+   * (`prefix z`); a notice on every zoomed window would be an explanation for
+   * something that needs none, forever. So it fires only while a phone is on
+   * the window. The cost is the mirror image of what the width notice avoids: a
+   * desk that zoomed a window ITSELF while a phone happened to be on it is told
+   * the phone did it. Wrong attribution on a rare case beats a permanent false
+   * alarm on a common one — and the button gives the panes back either way.
+   *
+   * The other end of it — a phone that dies without its teardown running leaves
+   * the window zoomed and this notice gone — is left alone deliberately. That
+   * state is one `prefix z` from fixed, which is a key the person already has,
+   * unlike a window pinned at 80 columns.
+   */
+  const zoomedByPhone = tmuxActive && !!activeWin?.phone && !!activeWin?.flags.includes("Z");
+  const narrow = tmuxActive && activeWin?.cols && tmuxClient && activeWin.cols < tmuxClient.cols
+    ? { winCols: activeWin.cols, deskCols: tmuxClient.cols }
+    : null;
+  // One row for both reasons rather than two rows that can stack: they have the
+  // same cause, the same button, and the same fix — and a desk that has lost
+  // both its width and its panes has one problem, not two.
+  const held = activeWin && (narrow || zoomedByPhone)
+    ? { win: activeWin, narrow, zoomed: zoomedByPhone }
+    : null;
+  /**
+   * A tmux command, minus the discriminant this helper supplies.
+   *
+   * Distributed over the union by hand, through the defaulted parameter:
+   * `Omit<A | B, "t">` collapses to the keys A and B have in COMMON, which
+   * would leave `{cmd:"issue"}` sendable with no `cwd` and put us back where
+   * `(cmd: string, extra: Record<string, unknown>)` was.
+   */
+  type TmuxCmdBody<F = Extract<PtyClientFrame, { t: "tmux" }>> = F extends unknown ? Omit<F, "t"> : never;
+  const tmuxCmd = useCallback((body: TmuxCmdBody) => {
     const s = sess;
     if (!s || s.ws?.readyState !== WebSocket.OPEN) return;
-    s.ws.send(JSON.stringify({ t: "tmux", cmd, ...extra }));
+    s.ws.send(ptyFrame({ t: "tmux", ...body }));
   }, [sess]);
   // Keyed by tmux's window id, not the index: a rename in flight must follow the
   // window even if killing another one renumbers the strip underneath it.
@@ -1399,7 +1711,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     // resolved (no /proc, an unusual socket, a tmux we could not reach), the
     // user keeps exactly the bar they had.
     if (!tmuxActive || !tmuxWindows.length) return;
-    tmuxCmd("status", { visible: tmuxBar });
+    tmuxCmd({ cmd: "status", visible: tmuxBar });
     try { localStorage.setItem("agentglass-tmux-bar", tmuxBar ? "on" : "off"); } catch { /* private mode */ }
   }, [tmuxActive, tmuxBar, tmuxCmd, tmuxWindows.length]);
 
@@ -1414,7 +1726,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const review = useSyncExternalStore(subscribeTermReview, termReview, termReview);
   useEffect(() => {
     if (!review || !tmuxActive) return;
-    tmuxCmd("review", { root: review.root, number: review.number });
+    tmuxCmd({ cmd: "review", root: review.root, number: review.number });
     clearTermReview();
   }, [review, tmuxActive, tmuxCmd]);
 
@@ -1423,7 +1735,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const issue = useSyncExternalStore(subscribeTermIssue, termIssue, termIssue);
   useEffect(() => {
     if (!issue || !tmuxActive) return;
-    tmuxCmd("issue", { cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo });
+    tmuxCmd({ cmd: "issue", cwd: issue.cwd, name: issue.name, prompt: issue.prompt, agent: issue.agent, yolo: issue.yolo, title: issue.title });
     clearTermIssue();
   }, [issue, tmuxActive, tmuxCmd]);
 
@@ -1574,9 +1886,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                   {live && <span title="Live shell" style={{ color: "var(--success, #98c379)" }}> ●</span>}
                                 </span>
                                 {!r.worktreeOf && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>}
-                                {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
-                                {r.behind > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
-                                {r.ahead > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
+                                {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
+                                {r.behind > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
+                                {r.ahead > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
                               </button>
                             );
                           })}
@@ -1590,7 +1902,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             if (!branches.length) return null;
                             return (
                               <>
-                                <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
+                                <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — check out in {here?.name ?? "this folder"}</div>
                                 {branches.slice(0, 80).map((b) => (
                                   <button key={b.name} onClick={() => checkoutBranch(b.name)} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2">
                                     <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
@@ -1612,7 +1924,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       mounts, so the two shells offer the same thing. Its own
                       dropdown state lives inside it, which is why it sits
                       outside the pickers group above. */}
-                  <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} onClose={focusTerm} />
+                  <CommandBar root={root} disabled={disabled} font={TERM_FONT} onRun={run} runTargetInTmux={!!sess?.tmux} onClose={focusTerm} />
 
                   {/* keepTermFocus so none of these buttons — split, restart,
                       clear, the status pill — steals the shell's cursor on
@@ -1634,12 +1946,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       title={status === "unauthorized" ? "This server needs an access token — click to enter it" : "Shell status"}>
                       <span style={{ color: statusDot[status].color }}>●</span>{statusDot[status].label}
                     </span>
-                    {/* Jump straight to a worktree's changes. The worktree is
-                        chosen here rather than inferred from the focused pane:
-                        every agent's pane and process sits in the parent repo,
-                        so there is nothing in the pane to read (see
-                        worktreeJump.ts). Dirty checkouts sort to the top, which
-                        is the one being worked in. */}
+                    {/* Jump straight to a worktree's changes. The one the
+                        focused pane's agent is in is pinned at the top when the
+                        server can say (panewt.ts); the rest are picked, with
+                        dirty checkouts first, which is where the work is. */}
                     <div className="relative" ref={wtRef}>
                       <button onClick={() => { if (wtOpen) { setWtOpen(false); focusTerm(); } else setWtOpen(true); }} disabled={!root || IS_DEMO || disabled} title="Open a worktree's Source control or File changes" className="text-[11px] px-2 py-1 rounded-lg" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>↗ Worktree ▾</button>
                       {wtOpen && (() => {
@@ -1672,15 +1982,15 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                             </div>
                             <input autoFocus value={wtQuery} onChange={(e) => setWtQuery(e.target.value)} placeholder="Filter by ticket or name…" className="m-1.5 px-2.5 py-1.5 rounded-md text-[11px] outline-none shrink-0" style={{ background: "color-mix(in srgb, var(--bg3) 50%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", color: "var(--text)" }} />
                             {detected && !wtQuery && (
-                              /* Auto-detected from the focused pane's agent output — the one you
+                              /* Auto-detected from what the focused pane's agent is doing — the one you
                                  almost certainly want, pinned above the list and out of the filter. */
                               <div className="w-full px-2.5 py-1.5 flex items-center gap-2 shrink-0" style={{ background: "color-mix(in srgb, var(--primary) 12%, transparent)", borderBottom: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
-                                <span className="shrink-0 text-[8px] uppercase tracking-wider px-1 py-[2px] rounded self-start mt-0.5" title="Read from this pane's agent output" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
+                                <span className="shrink-0 text-[10px] uppercase tracking-wider px-1 py-[2px] rounded self-start mt-0.5" title="Where this pane's agent is working — from its directory and its transcript" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}>This pane</span>
                                 <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${detected.branch}\n${detected.root}`}>
                                   <span className="truncate font-medium" style={{ color: "var(--text)" }}>{detected.branch}</span>
-                                  <span className="truncate text-[9px]" style={{ color: "var(--text3)" }}>{dirName(detected.root)}</span>
+                                  <span className="truncate text-[10px]" style={{ color: "var(--text3)" }}>{dirName(detected.root)}</span>
                                 </span>
-                                {detected.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${detected.dirty} changed file${detected.dirty === 1 ? "" : "s"}`}>●{detected.dirty}</span>}
+                                {detected.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${detected.dirty} changed file${detected.dirty === 1 ? "" : "s"}`}>●{detected.dirty}</span>}
                                 <button onClick={() => { requestWorktreeJump({ view: "git", root: detected.root }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open in Source control">Git</button>
                                 <button onClick={() => { requestWorktreeJump({ view: "diff", filter: dirName(detected.root) }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--primary) 50%, transparent)" }} title="Open its changes in File changes">Diff</button>
                               </div>
@@ -1696,9 +2006,9 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                         alone is not something anyone recognises without having memorised it. */}
                                     <span className="min-w-0 flex-1 flex flex-col leading-tight" title={`${r.branch}\n${r.root}`}>
                                       <span className="truncate font-medium" style={{ color: "var(--text)" }}>{wt ? r.branch : r.name}</span>
-                                      <span className="truncate text-[9px]" style={{ color: "var(--text3)" }}>{wt ? dirName(r.root) : r.branch}</span>
+                                      <span className="truncate text-[10px]" style={{ color: "var(--text3)" }}>{wt ? dirName(r.root) : r.branch}</span>
                                     </span>
-                                    {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
+                                    {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums self-start mt-0.5" style={{ color: "var(--warning)" }} title={`${r.dirty} changed file${r.dirty === 1 ? "" : "s"}`}>●{r.dirty}</span>}
                                     <button onClick={() => { requestWorktreeJump({ view: "git", root: r.root }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} title="Open in Source control">Git</button>
                                     <button onClick={() => { requestWorktreeJump({ view: "diff", filter: dirName(r.root) }); setWtOpen(false); setWtQuery(""); setWtShowAll(false); }} className="agx-btn shrink-0 px-1.5 py-0.5 rounded text-[10px]" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }} title="Open its changes in File changes">Diff</button>
                                   </div>
@@ -1753,7 +2063,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                               : { color: "var(--text3)" }}>
                           <span className="w-1.5 h-1.5 rounded-full" style={{ background: t.status === "live" ? "var(--success, #98c379)" : t.status === "error" ? "var(--error)" : "color-mix(in srgb, var(--text4) 60%, transparent)" }} />
                           <span>{t.title}</span>
-                          <button onClick={(e) => { e.stopPropagation(); closeShell(t.id); }} className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="Close shell">✕</button>
+                          <CloseButton onClick={(e) => { e.stopPropagation(); closeShell(t.id); }} title="Close shell" className="opacity-0 group-hover:opacity-100" />
                         </div>
                       );
                     })}
@@ -1776,10 +2086,10 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   // owning the keyboard the instant the tab changes. The rename
                   // input is excluded by the handler, so it can still be typed
                   // in; it hands focus back on close (see below).
-                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-1 px-3 py-1 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
+                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-2 px-3 py-0.5 border-b overflow-x-auto agw-noscrollbar" style={{ borderColor: "color-mix(in srgb, var(--border) 30%, transparent)" }}>
                     <span
                       title={prefixLive ? "tmux is waiting for the rest of the sequence" : `tmux prefix: ${(sess?.tmuxPrefix ?? []).join(" or ") || "unknown"}`}
-                      className="shrink-0 px-1.5 py-1 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
+                      className="shrink-0 px-1.5 py-0.5 rounded-md text-[10px] font-semibold tabular-nums transition-colors duration-75"
                       style={prefixLive
                         ? { background: "var(--primary)", color: "var(--bg2)" }
                         : { color: "var(--text4)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>
@@ -1797,28 +2107,27 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       </span>
                     )}
                     {tmuxWindows.map((w) => {
-                      // tmux's own marks, straight through, and kept apart
-                      // rather than merged: `!` is a bell, which the window
-                      // rang on purpose, and `#` is activity, which is only
-                      // output arriving. One dot for both said "something
-                      // happened over here" and left you to go and find out
-                      // which — and `monitor-activity` is off in most configs,
-                      // so the loud one is usually the only one that fires.
+                      // `!` is a bell — a window that rang on purpose, kept. `#`
+                      // (activity) is deliberately NOT drawn: it fires on any
+                      // output — an agent still working, nvim redrawing, every
+                      // window at once when the desk re-attaches — which is noise,
+                      // not "done". The honest "the agent here finished its turn"
+                      // is w.agentDone, derived server-side from the transcript's
+                      // own end-of-turn (Stop) event, not from tmux's flag.
                       const bell = w.flags.includes("!");
-                      const activity = w.flags.includes("#");
                       // Zoom is the flag that changes what the keyboard does:
                       // one pane is filling the window and the others are still
                       // there, which is confusing precisely when it is invisible.
                       const zoomed = w.flags.includes("Z");
                       return (
                         <div key={w.id}
-                          onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd("select", { window: w.id }); } }}
+                          onClick={() => { if (w.id !== activeWindow) { setPendingWindow(w.id); tmuxCmd({ cmd: "select", window: w.id }); } }}
                           onDoubleClick={() => setRenaming(w.id)}
                           title={`Window ${w.index}${w.flags ? ` (${w.flags})` : ""} — double-click to rename`}
-                          className="group flex items-center gap-1.5 px-2 py-1 rounded-md text-[10.5px] cursor-pointer shrink-0"
+                          className={`group flex items-center gap-1.5 px-1 py-[1px] text-[10.5px] cursor-pointer shrink-0 transition-colors${w.id === activeWindow ? " font-semibold" : ""}`}
                           style={w.id === activeWindow
-                            ? { background: "color-mix(in srgb, var(--primary) 20%, transparent)", color: "var(--primary-hover)" }
-                            : { background: "color-mix(in srgb, var(--bg3) 55%, transparent)", color: "var(--text2)" }}>
+                            ? { color: "var(--primary-hover)" }
+                            : { color: "var(--text2)" }}>
                           {/* The index doubles as the move box: `prefix .`
                               asks which number, and the number it is asking
                               about is right here. Typing over it is a more
@@ -1834,7 +2143,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 if (e.key === "Escape") { setMoving(null); focusTerm(); return; }
                                 if (e.key !== "Enter") return;
                                 const to = (e.target as HTMLInputElement).value.trim();
-                                if (/^\d{1,3}$/.test(to) && Number(to) !== w.index) tmuxCmd("move", { window: w.id, name: to });
+                                if (/^\d{1,3}$/.test(to) && Number(to) !== w.index) tmuxCmd({ cmd: "move", window: w.id, name: to });
                                 setMoving(null);
                                 focusTerm();
                               }}
@@ -1858,7 +2167,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                                 if (e.key === "Escape") { setRenaming(null); focusTerm(); return; }
                                 if (e.key !== "Enter") return;
                                 const name = (e.target as HTMLInputElement).value.trim();
-                                if (name && name !== w.name) tmuxCmd("rename", { window: w.id, name });
+                                if (name && name !== w.name) tmuxCmd({ cmd: "rename", window: w.id, name });
                                 setRenaming(null);
                                 focusTerm();
                               }}
@@ -1868,18 +2177,119 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                           ) : (
                             <span>{w.name || "shell"}</span>
                           )}
-                          {zoomed && <span className="text-[9px] font-semibold leading-none" style={{ color: "var(--text4)" }} title="A pane in this window is zoomed">⤢</span>}
+                          {zoomed && <span className="text-[10px] font-semibold leading-none" style={{ color: "var(--text4)" }} title="A pane in this window is zoomed">⤢</span>}
+                          {/* A phone is watching a pane in this window.
+                              Loud on purpose, and the only mark in this strip
+                              that is about a PERSON rather than about the work.
+                              A phone joins as a grouped tmux session, so it
+                              shares the window — whatever it does arrives here
+                              looking like the machine did it by itself, and
+                              this is the only thing on the desk that says
+                              otherwise. Drawn rather than typed: a phone emoji
+                              is a different picture on every platform and this
+                              one has to be recognisable at 9px. */}
+                          {/* The title names both grids, because "a phone is
+                              here" and "a phone is costing you 140 columns" are
+                              different news and the mark is identical for both
+                              — it is the same pixels either way. */}
+                          {w.phone && (
+                            <span className="inline-flex items-center"
+                              title={w.cols && tmuxClient
+                                ? `Your phone is on a pane in this window — it is ${w.cols} columns and your terminal is ${tmuxClient.cols}`
+                                : "Your phone is on a pane in this window"}>
+                              {/* A mark to notice rather than a target to hit: it annotates a
+                                  one-digit window number, and at the 12px floor it would be
+                                  larger than the number it annotates.
+                                  icon-floor-exempt: a status badge, not a control */}
+                              <svg width="9" height="13" viewBox="0 0 10 14" aria-label="phone attached"
+                                style={{ color: "var(--phone)", animation: "agx-phone-pulse 1.8s ease-in-out infinite" }}>
+                                <rect x="0.7" y="0.7" width="8.6" height="12.6" rx="1.6"
+                                  fill="none" stroke="currentColor" strokeWidth="1.4" />
+                                <circle cx="5" cy="10.8" r="0.9" fill="currentColor" />
+                              </svg>
+                            </span>
+                          )}
                           {bell && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--error)" }} title="Bell" />}
-                          {!bell && activity && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--warning)" }} title="Activity" />}
-                          <button onClick={(e) => { e.stopPropagation(); tmuxCmd("kill", { window: w.id }); }}
-                            className="opacity-0 group-hover:opacity-100 leading-none px-0.5" title="Close window (kill-window)">✕</button>
+                          {/* The agent in this tab finished its turn and you have
+                              not looked yet. Green = ready-for-you, distinct from
+                              the bell's red. Set from the transcript's Stop event,
+                              not tmux activity, so nvim and a still-working agent
+                              stay dark; clears the moment you switch to this tab. */}
+                          {!bell && w.agentDone && <span className="w-1.5 h-1.5 rounded-full" style={{ background: "var(--success, #98c379)" }} title="Agent finished — not seen yet" />}
+                          {/* Ultra-minimal: the close × lives ONLY on the active
+                              window. Switching means clicking a NON-active tab,
+                              which has no × to hit by accident — the whole point
+                              of this style. To close another window you select it
+                              first, then its × is there. */}
+                          {w.id === activeWindow && (
+                            <CloseButton onClick={(e) => { e.stopPropagation(); tmuxCmd({ cmd: "kill", window: w.id }); }} title="Close window (kill-window)" className="opacity-50 hover:opacity-100" />
+                          )}
                         </div>
                       );
                     })}
-                    <button onClick={() => tmuxCmd("new")} className="shrink-0 px-2 py-1 rounded-md text-[10.5px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
-                    <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-1 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
+                    <button onClick={() => tmuxCmd({ cmd: "new" })} className="shrink-0 px-1.5 py-0.5 rounded-md text-[11px]" style={{ color: "var(--text3)" }} title={`New tmux window (${px} c puts it next to this one)`}>+</button>
+                    <button onClick={() => setTmuxBar(true)} className="ml-auto shrink-0 px-2 py-0.5 rounded-md text-[10px]" style={{ color: "var(--text3)" }}
                       title="Give tmux its own status line back — this strip steps aside, so you are never looking at two window lists">
                       Use tmux's bar
+                    </button>
+                  </div>
+                )}
+
+                {/* Your terminal is being drawn at somebody else's width.
+
+                    A row, not an overlay: under tmux the pane is a full-screen
+                    TUI drawn edge to edge on purpose, and an overlay covers the
+                    output you are squinting at — which is the thing that sent
+                    you looking for an explanation in the first place.
+                    Deliberately OUTSIDE the `!tmuxBar` guard above: this is not
+                    the tab strip, and someone who kept tmux's own status line
+                    has exactly the same broken layout and none of the strip.
+
+                    keepTermFocus for the same reason the strip has it — the
+                    button must not take the keyboard off the pane. */}
+                {held && (
+                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b text-[10.5px]"
+                    style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--phone) 12%, transparent)", borderColor: "color-mix(in srgb, var(--phone) 30%, transparent)" }}>
+                    {/* The width sentence has two states, split on `w.phone`, so
+                        the present tense is only used when a phone is actually
+                        there. The second is not hypothetical: a phone that loses
+                        its network leaves exactly this — the fit is a size set on
+                        the window, so it outlives the client that asked for it,
+                        and the desk is left narrow with nothing attached to
+                        explain it.
+                        The zoom sentence has one state, because it is only ever
+                        shown while a phone is here (see `zoomedByPhone`), and it
+                        says the panes are still RUNNING: that is the actual
+                        question — a window that went from four panes to one
+                        reads like three programs died. */}
+                    <span className="min-w-0">
+                      {held.narrow && (held.win.phone ? (
+                        <>Your phone is driving this window. It is <Cols n={held.narrow.winCols} /> columns while your terminal is <Cols n={held.narrow.deskCols} />, so tmux is drawing everything at phone width.</>
+                      ) : (
+                        <>This window is still at phone size: <Cols n={held.narrow.winCols} /> columns to your terminal&apos;s <Cols n={held.narrow.deskCols} />. Your phone left without putting it back.</>
+                      ))}
+                      {held.narrow && held.zoomed && " "}
+                      {held.zoomed && (
+                        <>Your phone opened one pane here, so tmux has zoomed the window onto it — your other panes are still running, they are just not being drawn.</>
+                      )}
+                    </span>
+                    {/* Nothing is remembered from this click. The notice is a
+                        pure function of the next sweep, so if tmux did not
+                        actually move it correctly stays up — an optimistic
+                        "taken over" flag would hide a take-over that failed,
+                        and unlike the tab click above, this is not an answer
+                        the user already knows. */}
+                    {/* The label follows what is actually wrong. "Take the width
+                        back" on a window that is the right width and missing
+                        three panes would name the wrong problem, and a button
+                        that names the wrong problem is one nobody presses. */}
+                    <button onClick={() => tmuxCmd({ cmd: "takeover", window: held.win.id })}
+                      className="ml-auto shrink-0 px-2 py-0.5 rounded"
+                      style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--phone) 45%, transparent)" }}
+                      title={held.zoomed
+                        ? "Unzoom this window and resize it to your terminal, then leave it following your terminal — the phone stays connected and can still ask for the pane back later"
+                        : "Resize this window to your terminal and leave it following your terminal — the phone stays connected and can still ask for a reflow later"}>
+                      {held.zoomed ? "Give me my window back" : held.win.phone ? "Take the width back" : "Restore the width"}
                     </button>
                   </div>
                 )}
@@ -1900,6 +2310,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       <div key={id}
                         ref={(el) => { paneRefs.current[i] = el; }}
                         onMouseDown={() => setFocusIdx(i)}
+                        onMouseEnter={(e) => hoverFocus(i, e.buttons)}
+                        // And inside tmux, where the panes are painted rather
+                        // than rendered — so this needs the pointer's position,
+                        // not just the fact that it arrived.
+                        onMouseMove={(e) => hoverTmuxPane(i, e)}
                         // No padding. A full-screen TUI — tmux, nvim, htop —
                         // draws its own borders and status lines flush to the
                         // edge, so any inset here shows up as a dead margin
@@ -1949,7 +2364,24 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                       <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>tmux</span>
                       <span>Panel chrome hidden — tmux owns the panes</span>
                       <span className="t-dim2">·</span>
-                      {[["c", "Window"], ['"', "Split ↓"], ["%", "Split →"], ["o", "Next pane"], ["z", "Zoom"], ["d", "Detach"], ["?", "All keys"]].map(([key, what]) => (
+                      {hiddenRows > 0 ? (
+                        <>
+                          <span style={{ color: "var(--warning)" }}>
+                            {hiddenRows} row{hiddenRows === 1 ? "" : "s"} of this pane are below the panel —
+                            a bigger client is attached, so the last line (an editor's status bar) is off-screen
+                          </span>
+                          <button onClick={() => tmuxCmd({
+                              cmd: "fit",
+                              window: tmuxWindows.find((w) => w.active)?.id ?? "",
+                              cols: sess?.term.cols, rows: sess?.term.rows,
+                            })}
+                            title="Size this tmux window to this panel. The other client keeps working; it just stops deciding the size."
+                            className="agx-btn px-2 py-0.5 rounded"
+                            style={{ color: "var(--warning)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
+                            Fit to this window
+                          </button>
+                        </>
+                      ) : [["c", "Window"], ['"', "Split ↓"], ["%", "Split →"], ["o", "Next pane"], ["z", "Zoom"], ["d", "Detach"], ["?", "All keys"]].map(([key, what]) => (
                         <Fragment key={key}>
                           <b style={{ color: "var(--text2)" }}>{px} {key}</b><span>{what}</span>
                         </Fragment>
@@ -1965,14 +2397,29 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   )}
                   <span className="ml-auto flex items-center gap-2 shrink-0">
                     {/* The focused pane's worktree, offered right in the bar —
-                        read from the agent's output, one click to its changes. */}
+                        read from the agent's output, one click to its changes.
+
+                        This chip must NOT make the status bar any taller than it
+                        is without it — the row is `items-center`, so a child
+                        taller than the surrounding 9.5px text grows the whole
+                        bar. `leading-none` here + `py-0` on the buttons + a 9px
+                        badge keep every element inside the text's own line box.
+                        Give one back a normal line-height and the bar jumps a
+                        few pixels the moment a worktree is detected. */}
                     {detectedWt && (
-                      <span className="flex items-center gap-1.5" title={`This pane's worktree — ${detectedWt.branch}\n${detectedWt.root}`}>
-                        <span className="px-1 rounded text-[8px] uppercase tracking-wider" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>this pane</span>
-                        <span className="truncate max-w-[180px]" style={{ color: "var(--text2)" }}>{dirName(detectedWt.root)}</span>
+                      <span className="flex items-center gap-1.5 leading-none" title={`This pane's worktree — ${detectedWt.branch}\n${detectedWt.root}`}>
+                        <span className="px-1 rounded text-[9px] uppercase tracking-wider" style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}>this pane</span>
+                        {/* Branch is the name of the thing you are working on; the
+                            folder is where it lives. Show the branch, and the
+                            folder after it in a dimmer hand — both on one line, so
+                            the bar keeps its height. */}
+                        <span className="truncate max-w-[190px]" style={{ color: "var(--text2)" }}>{detectedWt.branch || dirName(detectedWt.root)}</span>
+                        {detectedWt.branch && detectedWt.branch !== dirName(detectedWt.root) && (
+                          <span className="truncate max-w-[110px] text-[9px]" style={{ color: "var(--text3)" }}>{dirName(detectedWt.root)}</span>
+                        )}
                         {detectedWt.dirty > 0 && <span className="tabular-nums" style={{ color: "var(--warning)" }}>●{detectedWt.dirty}</span>}
-                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn px-1.5 py-[1px] rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git</button>
-                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn px-1.5 py-[1px] rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff</button>
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "git", root: detectedWt.root })} className="agx-btn px-1.5 py-0 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open in Source control">Git</button>
+                        <button onMouseDown={keepTermFocus} onClick={() => requestWorktreeJump({ view: "diff", filter: dirName(detectedWt.root) })} className="agx-btn px-1.5 py-0 rounded" style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }} title="Open its changes in File changes">Diff</button>
                         <span className="t-dim2">·</span>
                       </span>
                     )}

@@ -156,19 +156,27 @@ describe("the screen keeps its two steps", () => {
     const url = panel.match(/const pairUrl = [^;]+;/)?.[0] ?? "";
     expect(url).toContain("?pair=");
     expect(url).not.toContain("ticket.code");
-    // …and the QR draws that, rather than anything else on the panel.
-    expect(panel).toContain("<Qr text={pairUrl} />");
+    // …and the QR draws that, rather than anything else on the panel. Matched
+    // on the prop rather than on the whole tag: the tag grew a `big` for the
+    // first-run layout, and a lock that breaks on an unrelated prop teaches
+    // people to edit the lock.
+    expect(panel).toMatch(/<Qr\s+text=\{pairUrl\}/);
   });
 
   test("and the app does not mount behind it", () => {
-    // This device holds no credential during the handshake, so mounting either
+    // This device holds no credential during the handshake, so mounting the
     // application would show an app failing to load behind a pairing form.
     const main = read("src/main.tsx");
     // The decision itself, not just the order the two branches appear in: a
     // rule about text order survives `const invitation = null`, which is
     // exactly the change that would mount the app behind the form.
+    //
+    // `<App />` rather than `<Root />`: there is no fork left to alias. main.tsx
+    // chose between the cockpit and the browser companion, and the companion is
+    // deleted — every browser gets the cockpit now, including a phone that
+    // scanned this QR.
     expect(main).toContain("const invitation = ticketFromUrl(location.href);");
-    expect(main).toMatch(/if \(invitation\) \{[\s\S]*<PairScreen[\s\S]*\} else \{[\s\S]*mount\(<Root \/>\)/);
+    expect(main).toMatch(/if \(invitation\) \{[\s\S]*<PairScreen[\s\S]*\} else \{[\s\S]*mount\(<App \/>\)/);
     expect(main).toContain("adoptServer({ token })");
   });
 });

@@ -105,6 +105,30 @@ export async function tmux(args: string[], stdin?: string): Promise<TmuxResult> 
       stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
       stdout: "pipe",
       stderr: "pipe",
+      /*
+       * `env: process.env`, which reads like a no-op and is not one.
+       *
+       * Measured on Bun 1.3.9, and re-measured rather than taken from the
+       * comment that already says it in tmuxctl.ts: a spawn with no `env` gets
+       * the environment as it was when the PROCESS started, not `process.env`
+       * as it is now — `Bun.spawnSync(["sh","-c","echo [$X]"])` after setting
+       * `process.env.X` prints `[]`, and with `env: process.env` prints the
+       * value. Same for the async form.
+       *
+       * So a test that points TMUX_TMPDIR at a directory of its own in
+       * `beforeAll` was setting it for everything EXCEPT this, and the pane
+       * engine's tmux went on resolving `-L <socket>` in /tmp/tmux-<uid> — the
+       * developer's. Found by running the suite behind a tmux that records
+       * where each call lands: with everything else clean, two calls from
+       * chat-pane.test.ts were the only ones left in his directory.
+       *
+       * A no-op in production, and checked rather than assumed: nothing in
+       * server/src assigns to `process.env`, so `process.env` here IS the
+       * environment the child would have inherited anyway. It only ever gives a
+       * caller that CAN set a variable a way to have it honoured. `tmuxctl.ts`
+       * has done this for the same reason since its own version of this bug.
+       */
+      env: process.env,
     });
     const kill = setTimeout(() => { try { proc.kill(); } catch { /* gone */ } }, TMUX_TIMEOUT_MS);
     const [stdout, stderr, code] = await Promise.all([

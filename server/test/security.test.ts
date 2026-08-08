@@ -148,25 +148,62 @@ describe("tokenOk", () => {
 });
 
 describe("auth exemption vs intake", () => {
-  test("append-only telemetry sinks are always tokenless", () => {
-    for (const p of ["/health", "/ingest", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs"]) {
-      expect(isAuthExempt(p)).toBe(true);
+  const SINKS = ["/ingest", "/v1/traces", "/otlp/v1/traces", "/v1/logs", "/otlp/v1/logs"];
+
+  test("append-only telemetry sinks are tokenless from this machine", () => {
+    // A hook or an OTel exporter on this box has no way to carry a secret, and
+    // hooks/send_event.py refuses any server that is not localhost — so
+    // loopback is the whole of what the local senders need.
+    for (const p of SINKS) expect(isAuthExempt(p, "loopback")).toBe(true);
+  });
+
+  test("and NOT from the network, because appending is not inert", () => {
+    // Measured before this rule existed, on a server bound 0.0.0.0: POST
+    // /ingest from a LAN address with no credential answered {"ok":true,"id":1}
+    // and put a notification with a chosen title and body on the desk and on
+    // the paired phone (/ingest → maybeAlert → sink.broadcast), while writing a
+    // permanent row into SQLite. POST /sessions from the same address answered
+    // 401, which is what the gate looks like when it is working.
+    for (const p of SINKS) expect(isAuthExempt(p, "remote"), p).toBe(false);
+  });
+
+  test("/health answers to anyone: it is how a caller finds out this is us", () => {
+    // The phone's pairing screen probes it before it has a credential, and the
+    // desktop shell probes it to tell our sidecar from a stranger on the port.
+    // It writes nothing, so there is nothing here to forge.
+    expect(isAuthExempt("/health", "loopback")).toBe(true);
+    expect(isAuthExempt("/health", "remote")).toBe(true);
+  });
+
+  test("the metrics refusal answers to anyone too — it stores nothing", () => {
+    // Gating it would turn a silent 404 into a silent 401 for an exporter that
+    // cannot carry a token: the same dead end wearing a different number.
+    for (const p of ["/v1/metrics", "/otlp/v1/metrics"]) {
+      expect(isAuthExempt(p, "remote"), p).toBe(true);
     }
   });
 
   test("/gate is the control plane — NOT auth-exempt, so a configured token guards it", () => {
     // Regression guard for the spoofed-approval-queue injection: /gate must sit
     // behind the token when one is set, not alongside the telemetry sinks.
-    expect(isAuthExempt("/gate")).toBe(false);
+    expect(isAuthExempt("/gate", "loopback")).toBe(false);
+    expect(isAuthExempt("/gate", "remote")).toBe(false);
   });
 
   test("/gate stays rate-limited as intake even though it authenticates", () => {
     expect(isIntake("/gate")).toBe(true);
   });
 
+  test("the sinks stay rate-limited whatever address they arrive from", () => {
+    // Throttling is a separate question from authentication: a flood is a
+    // flood, and the answer to one must not be silently taken from the other.
+    for (const p of SINKS) expect(isIntake(p), p).toBe(true);
+  });
+
   test("reads and writes are neither exempt nor intake", () => {
     for (const p of ["/events/recent", "/gate/decide", "/workspace", "/terminal/pty"]) {
-      expect(isAuthExempt(p)).toBe(false);
+      expect(isAuthExempt(p, "loopback")).toBe(false);
+      expect(isAuthExempt(p, "remote")).toBe(false);
       expect(isIntake(p)).toBe(false);
     }
   });

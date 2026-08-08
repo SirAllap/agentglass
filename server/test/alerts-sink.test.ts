@@ -19,14 +19,16 @@ afterAll(() => {
 let alerts: typeof import("../src/alerts.ts");
 let broadcasts: AlertNote[] = [];
 let fallbacks: AlertNote[] = [];
-let clientsPresent = true;
+/** What the sink says about the sockets it holds. `attached` decides who gets
+ *  the frame; `live` decides whether anybody was actually told. */
+let census = { attached: 1, live: 1 };
 
 beforeAll(async () => {
   // Fresh instance so its module-level `DESKTOP = AGENTGLASS_NOTIFY === "1"` is
   // read with the env set above, even if another test already imported alerts.ts
   // (bun shares the module registry across the suite).
   alerts = await import(`../src/alerts.ts?u=${Math.random()}`);
-  alerts.setAlertSink({ broadcast: (a) => broadcasts.push(a), hasClients: () => clientsPresent });
+  alerts.setAlertSink({ broadcast: (a) => broadcasts.push(a), census: () => census });
   // Captures the notify-send fallback instead of running it. Without this the
   // no-client test spawned a REAL desktop notification, so anyone running the
   // suite got "✋ Approval needed — wants to run Bash: rm -rf …" from a hold
@@ -40,7 +42,7 @@ describe("desktop alert routing", () => {
   // real "Approval needed" alert the moment anything stops stubbing delivery,
   // and `rm -rf <path>` in that position is alarming enough to be acted on.
   test("with a client attached, a gate hold broadcasts a critical native alert", () => {
-    broadcasts = []; fallbacks = []; clientsPresent = true;
+    broadcasts = []; fallbacks = []; census = { attached: 1, live: 1 };
     alerts.pushGate("app:sess1", "Bash", "ls fixture-one");
     expect(broadcasts.length).toBe(1);
     expect(broadcasts[0].title).toContain("Approval");
@@ -50,7 +52,7 @@ describe("desktop alert routing", () => {
   });
 
   test("with no client attached, it does NOT broadcast — notify-send gets it instead", () => {
-    broadcasts = []; fallbacks = []; clientsPresent = false;
+    broadcasts = []; fallbacks = []; census = { attached: 0, live: 0 };
     alerts.pushGate("app:sess2", "Bash", "ls fixture-two");
     expect(broadcasts.length).toBe(0);
     expect(fallbacks.length).toBe(1);
@@ -58,8 +60,40 @@ describe("desktop alert routing", () => {
     expect(fallbacks[0].body).toContain("ls fixture-two");
   });
 
+  /*
+   * The one that dropped an alert and left no trace.
+   *
+   * A phone in a pocket that Android has frozen is ATTACHED and not LISTENING:
+   * the socket is half-open, `ws.send()` returns the byte count without
+   * throwing, and nothing closes. Measured on this serve config, that state
+   * held for 120.1 seconds — and for all of it `clients.size > 0` was the whole
+   * test for "somebody was told", so the gate hold went into a frozen socket
+   * and the desk was never touched.
+   *
+   * Both halves are asserted, because either one alone is a different bug: the
+   * frame must STILL be broadcast (a frozen peer delivers its backlog when it
+   * thaws — measured, 4 frames queued during a 60s freeze all arrived 570ms
+   * after it resumed), and notify-send must ALSO fire.
+   */
+  test("attached but deaf: the frame still goes out AND notify-send fires", () => {
+    broadcasts = []; fallbacks = []; census = { attached: 1, live: 0 };
+    alerts.pushGate("app:sess3", "Bash", "ls fixture-three");
+    expect(broadcasts.length).toBe(1);
+    expect(fallbacks.length).toBe(1);
+    expect(fallbacks[0].body).toContain("ls fixture-three");
+  });
+
+  /** And the guard against over-correcting: one live client among several deaf
+   *  ones is still somebody being told, so the desk is not woken twice. */
+  test("one live client among the deaf ones suppresses the fallback", () => {
+    broadcasts = []; fallbacks = []; census = { attached: 3, live: 1 };
+    alerts.pushGate("app:sess4", "Bash", "ls fixture-four");
+    expect(broadcasts.length).toBe(1);
+    expect(fallbacks.length).toBe(0);
+  });
+
   test("an agent notification is normal urgency; a tool error is critical", () => {
-    broadcasts = []; fallbacks = []; clientsPresent = true;
+    broadcasts = []; fallbacks = []; census = { attached: 1, live: 1 };
     alerts.maybeAlert({ hook_event_type: "Notification", session_id: "s-notif", source_app: "app", payload: { message: "heads up" } } as any);
     alerts.maybeAlert({ hook_event_type: "PostToolUse", is_error: 1, session_id: "s-err", source_app: "app", tool_name: "Bash", error_text: "boom", payload: {} } as any);
     expect(broadcasts.map((b) => b.urgency).sort()).toEqual([1, 2]);

@@ -208,6 +208,60 @@ const EXT: Record<string, string> = {
   lua: "lua", r: "r", ex: "elixir", exs: "elixir", clj: "clojure",
   hs: "haskell", elm: "elm", ml: "ocaml", nim: "nim", zig: "zig",
 };
+/**
+ * The language named on a fence, as a grammar id.
+ *
+ * A fence carries a word rather than a filename — ```python, ```sh, ```console
+ * — so it needs its own table on top of the extension one. The aliases here are
+ * the ones people actually type and the ones ClickUp writes when somebody picks
+ * a language in its editor; anything unrecognised returns null and the block is
+ * shown as plain text, which is what it was before.
+ */
+const TAGS: Record<string, string> = {
+  py: "python", python: "python", py3: "python",
+  shell: "bash", console: "bash", sh: "bash", "shell-session": "bash", bash: "bash", zsh: "bash",
+  js: "javascript", node: "javascript", ts: "typescript",
+  yml: "yaml", jsonc: "jsonc", plist: "xml",
+  psql: "sql", postgres: "sql", postgresql: "sql", mysql: "sql",
+  golang: "go", rs: "rust", "c++": "cpp", "c#": "csharp", cs: "csharp",
+  dockerfile: "docker", docker: "docker", make: "make", makefile: "make",
+  http: "http", diff: "diff", patch: "diff", text: "", txt: "", plain: "", "": "",
+};
+export function langFromTag(tag?: string): string | null {
+  const t = (tag || "").trim().toLowerCase();
+  if (!t) return null;
+  if (t in TAGS) return TAGS[t] || null;
+  return EXT[t] || (/^[a-z0-9+#-]{1,18}$/.test(t) ? t : null);
+}
+
+/**
+ * What a fence with no language on it probably is.
+ *
+ * Most fenced blocks in the wild carry no tag at all — ClickUp's editor writes
+ * one only when somebody picks a language from its menu, and pasted code
+ * usually arrives bare. Guessing badly costs nothing here (a grammar that does
+ * not fit a snippet produces dull-but-correct text, never wrong text), and
+ * guessing right is the difference between a wall of grey and something you can
+ * read, so the shapes below are the unmistakable ones only.
+ */
+export function guessLang(code: string): string | null {
+  const c = code.slice(0, 1200);
+  if (/^\s*[{[]["\s{[]/.test(c) && /[:,]\s*["{[\d]/.test(c)) return "json";
+  if (/^\s*(def|class)\s+\w+|^\s*(from|import)\s+\w+|\bself\b|\belif\b|:=.*\bget\(/m.test(c)) return "python";
+  if (/\b(SELECT|INSERT INTO|UPDATE|DELETE FROM|CREATE TABLE|ALTER TABLE)\b/i.test(c) && /\bFROM\b|\bSET\b|\bVALUES\b|\(/i.test(c)) return "sql";
+  if (/^\s*(\$|#)\s+\S|^\s*(sudo|docker|git|make|npm|bun|yarn|curl|cd|export|kubectl)\s/m.test(c)) return "bash";
+  // Before the JavaScript test, which `let mut` would otherwise answer first:
+  // every keyword JavaScript owns is a keyword something else also uses, so the
+  // narrower languages get asked before the broad one.
+  if (/^\s*(func|package)\s+\w+/m.test(c)) return "go";
+  if (/^\s*(fn|impl|pub fn)\s+\w+|\blet mut\b/m.test(c)) return "rust";
+  if (/\b(interface|type)\s+\w+\s*[={]|:\s*(string|number|boolean)\b/.test(c)) return "typescript";
+  if (/\b(const|let|function|=>|require\()/.test(c)) return "javascript";
+  if (/^\s*<\w+[\s>/]/.test(c)) return "html";
+  if (/^\s*\w[\w-]*:\s+\S/m.test(c) && !/[;{}]/.test(c)) return "yaml";
+  return null;
+}
+
 export function langFromPath(path?: string): string | null {
   if (!path) return null;
   const base = (path.split("/").pop() || "").toLowerCase();

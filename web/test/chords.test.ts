@@ -23,7 +23,10 @@ const store = new Map<string, string>();
   key: () => null,
   length: 0,
 } as unknown as Storage;
-(globalThis as unknown as { navigator: Navigator }).navigator ??= { platform: "Linux" } as Navigator;
+// `as unknown as`, like the Storage stub above it: a two-key object is not a
+// Navigator and TypeScript is right to say so — only the one property the
+// keybinding code reads is stubbed.
+(globalThis as unknown as { navigator: Navigator }).navigator ??= { platform: "Linux" } as unknown as Navigator;
 // keybindings reaches views.ts, which reaches desktop.ts, which reaches api.ts
 // and reads `location` at module scope. Without this it throws half-initialised
 // and every import here dies on a TDZ for HAS_BROWSER — which reads as "the

@@ -27,7 +27,11 @@ beforeAll(async () => {
 const status = (over: Partial<UpdateStatus> = {}): UpdateStatus => ({
   ok: true,
   available: true,
-  info: { version: "0.3.0", commit: "abc1234", builtAt: "", source: "", origin: "https://example.com/x.git", baseTag: "v0.3.0", distance: 3 },
+  info: {
+    version: "0.3.0", commit: "abc1234", builtAt: "", source: "",
+    origin: "https://example.com/x.git", baseTag: "v0.3.0", distance: 3,
+    stamp: "abc1234", tree: "", dirty: false, dirtyCount: 0, dirtyFiles: [],
+  },
   branch: "v0.3.1",
   behind: 1,
   ahead: 0,

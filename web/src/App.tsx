@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { WatchEvent, SessionRollup } from "../../shared/types.ts";
 import { useLive } from "./lib/useLive.ts";
-import { subscribeWorktreeJump, worktreeJump } from "./lib/worktreeJump.ts";
+import { subscribeWorktreeJump, worktreeJump, requestWorktreeJump } from "./lib/worktreeJump.ts";
+import type { SystemNote } from "./lib/sysNotify.ts";
+import { setAlertGoto } from "./lib/sysNotify.ts";
 import { useStats } from "./lib/useStats.ts";
 import { deriveAgents, deriveAlerts, buildTitles, buildRollups, providersSeen } from "./lib/derive.ts";
 import { publishFleet } from "./lib/demoBridge.ts";
@@ -27,15 +29,20 @@ import { Workspace } from "./components/workspace/Workspace.tsx";
 import { VIEW_IDS, visibleIds, isVisibleView, moveView, loadRail, subscribeRail, SHIPPED_RAIL, loadLastView, type ViewId } from "./components/workspace/views.ts";
 import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
-import { chordFromEvent, viewForChord } from "./lib/keybindings.ts";
-import { onOpenSettings } from "./lib/openSettings.ts";
-import { onOpenPrs } from "./lib/openPrs.ts";
+import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
+import { FilePalette } from "./components/FilePalette.tsx";
+import { PeekFile, type Peek } from "./components/PeekFile.tsx";
+import { requestFilesReveal } from "./lib/filesReveal.ts";
+import { onOpenSettings, openSettings } from "./lib/openSettings.ts";
+import { onOpenPrs, onOpenPr } from "./lib/openPrs.ts";
+import { onOpenCard, openCard } from "./lib/openCard.ts";
 import { newChat, chatResuming, applyLiveEvent } from "./lib/chatStore.ts";
 import { sessionCwd } from "./lib/worktree.ts";
 import { SearchModal } from "./components/SearchModal.tsx";
 import { SettingsModal } from "./components/SettingsModal.tsx";
 import { MachinePanel, type MachineTab } from "./components/MachinePanel.tsx";
 import { ZoomToast } from "./components/ZoomToast.tsx";
+import { UpdateToast } from "./components/UpdateToast.tsx";
 import { NoteToasts } from "./components/NoteToasts.tsx";
 import { WhatsNew } from "./components/WhatsNew.tsx";
 import { SessionModal } from "./components/SessionModal.tsx";
@@ -72,6 +79,17 @@ export default function App() {
   const [opts, setOpts] = useState<{ source_apps: string[]; hook_event_types: string[] }>({ source_apps: [], hook_event_types: [] });
   const [selected, setSelected] = useState<WatchEvent | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /*
+   * The file palette, and the viewer it raises — both owned here rather than by
+   * a view, because the whole point is that neither belongs to one. It opens
+   * over a terminal, over a diff, over the dashboard, and the file it opens has
+   * to survive the palette closing.
+   */
+  const [filesOpen, setFilesOpen] = useState(false);
+  const [peek, setPeek] = useState<Peek | null>(null);
+  /** The palette's measured height, so a document it opens starts below it
+   *  instead of underneath it. 0 when the palette is shut. */
+  const [paletteH, setPaletteH] = useState(0);
   const [helpOpen, setHelpOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
@@ -137,8 +155,14 @@ export default function App() {
   // A pane a panel elsewhere asked us to land on — see lib/openSettings.ts.
   const [settingsPane, setSettingsPane] = useState<string | null>(null);
   const [prJump, setPrJump] = useState<import("./lib/openPrs.ts").PrJump | null>(null);
+  /** The other direction — a pull request asking for the card it came from. */
+  const [cardJump, setCardJump] = useState<import("./lib/openCard.ts").CardJump | null>(null);
   useEffect(() => onOpenSettings((pane) => { setSettingsPane(pane ?? null); setSettingsOpen(true); }), []);
   useEffect(() => onOpenPrs((j) => { setPrJump(j); goView("pr"); }), [goView]);
+  /* The other half: a sender that knows exactly which pull request it means
+     gets the panel's jump, which selects and opens, instead of a search. */
+  useEffect(() => onOpenPr(({ repo, number }) => { requestPrJump(repo, number); goView("pr"); }), [goView]);
+  useEffect(() => onOpenCard((j) => { setCardJump(j); goView("tasks"); }), [goView]);
   /** Which machine tab is open, or none. One piece of state for both surfaces:
    *  the dashboard header and the workspace rail open the same panel, and a
    *  second copy would be a second poll of /proc. */
@@ -152,7 +176,10 @@ export default function App() {
   const [scale, setScale] = useState(currentScale);
   /** The last zoom, for the pill that says what changed and how big it is. */
   const [zoomed, setZoomed] = useState<(ZoomResult & { n: number }) | null>(null);
-  const [workspace, setWorkspace] = useState<string | null>(null);
+  // `undefined` until the server has answered — see the effect below. It used
+  // to start as null, which is a real answer ("no scope"), so a cockpit that
+  // never got an answer displayed one anyway.
+  const [workspace, setWorkspace] = useState<string | null | undefined>(undefined);
 
   const [projectOpen, setProjectOpen] = useState(false);
   const mountedAt = useRef(Date.now());
@@ -167,9 +194,14 @@ export default function App() {
   // workspace the letters now *switch views* instead of being swallowed.
   const anyPanelOpen =
     paletteOpen || helpOpen || statsOpen || skillsOpen || searchOpen ||
-    projectOpen || sessionView !== null || selected !== null;
+    projectOpen || sessionView !== null || selected !== null ||
+    filesOpen || peek !== null;
   const anyPanelOpenRef = useRef(anyPanelOpen);
   anyPanelOpenRef.current = anyPanelOpen;
+  // Read by the keydown handler, which subscribes once with an empty dep array
+  // — a render value captured there would be the one from the mount.
+  const filesOpenRef = useRef(filesOpen);
+  filesOpenRef.current = filesOpen;
   const wsViewRef = useRef(wsView);
   wsViewRef.current = wsView;
   // The catalog is the one panel that can open *over* the workspace, from the
@@ -239,17 +271,45 @@ export default function App() {
   // closing) is remembered, so an unscoped instance doesn't nag on each load.
   useEffect(() => {
     if (IS_DEMO) return;
-    api.projects().then((p) => {
-      setWorkspace(p.workspace);
-      // The app filter is hidden while a project is open (the scope already
-      // says whose data this is). Clear it on the way in, or a filter set in
-      // the whole-machine view would keep narrowing the panels from behind a
-      // control that is no longer on screen to undo it.
-      if (p.workspace) setFilter((f) => (f.app ? { ...f, app: "" } : f));
-      let answered = false;
-      try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
-      if (!p.workspace && !answered) setProjectOpen(true);
-    }).catch(() => {});
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let wait = 300;
+    /*
+     * Keep asking until the server answers.
+     *
+     * One attempt was not enough and the failure was silent: the desktop shell
+     * shows its window WITHOUT waiting for the sidecar (electron/main.js — it
+     * cost up to twelve seconds of blank screen), so this effect can easily run
+     * before anything is listening. The fetch then rejected, the catch swallowed
+     * it, and `workspace` stayed at its initial value forever — nothing else
+     * ever asks again. The visible result was a cockpit correctly scoped to a
+     * project, with a title bar insisting it was showing "all repos", which
+     * reads exactly like the scope failing to save. It saves fine.
+     *
+     * Backoff rather than a fixed interval, capped: the common case is answered
+     * on the first or second try, and a server that is genuinely down should
+     * not be polled forever at full speed.
+     */
+    const ask = () => {
+      api.projects().then((p) => {
+        if (!live) return;
+        setWorkspace(p.workspace);
+        // The app filter is hidden while a project is open (the scope already
+        // says whose data this is). Clear it on the way in, or a filter set in
+        // the whole-machine view would keep narrowing the panels from behind a
+        // control that is no longer on screen to undo it.
+        if (p.workspace) setFilter((f) => (f.app ? { ...f, app: "" } : f));
+        let answered = false;
+        try { answered = localStorage.getItem(PICKER_ANSWERED_KEY) === "1"; } catch { /* ignore */ }
+        if (!p.workspace && !answered) setProjectOpen(true);
+      }).catch(() => {
+        if (!live) return;
+        timer = setTimeout(ask, wait);
+        wait = Math.min(wait * 2, 5000);
+      });
+    };
+    ask();
+    return () => { live = false; if (timer) clearTimeout(timer); };
   }, []);
 
   // Poll on an interval — NOT on every event. Passing lastEvent.id as `bump`
@@ -509,6 +569,14 @@ export default function App() {
           goView(target);
           return;
         }
+        // App actions after views, and rebindAppChord refuses a chord a view
+        // already holds — so the two can never both answer, whichever order
+        // this is read in.
+        if (appActionForChord(chord) === "files.palette") {
+          e.preventDefault();
+          setFilesOpen((o) => !o);
+          return;
+        }
       }
 
       if ((e.metaKey || e.ctrlKey) && !e.altKey) {
@@ -559,6 +627,19 @@ export default function App() {
       // because a focused textarea can swallow it before it reaches here.
       if (e.key === "Escape") {
         if ((e.target as HTMLElement)?.closest?.(".xterm")) return;
+        /*
+         * The file palette first, and alone.
+         *
+         * It stops Escape itself while its field has focus, so this line is for
+         * the case where focus is not in it — a click that landed on the scrim,
+         * focus falling back to <body>. Measured: without it the palette was
+         * closable by mouse and not by keyboard from that state, which is the
+         * worst way for a keyboard shortcut to be wrong.
+         *
+         * Returning here is what keeps one Escape to one layer: the document it
+         * raised stays up, and the next Escape puts that away.
+         */
+        if (filesOpenRef.current) { setFilesOpen(false); return; }
         // Escape closes whatever is ON the shell. It never closes the shell —
         // there is nothing behind it to go back to any more.
         setSelected(null);
@@ -568,6 +649,16 @@ export default function App() {
         setSkillsOpen(false);
         setSearchOpen(false);
         setSessionView(null);
+        /*
+         * The file palette is NOT closed here, and that is not an omission: it
+         * stops Escape itself so one keystroke closes one layer. Reaching this
+         * line with a file open means the palette is already gone, so Escape is
+         * now asking to put the document away.
+         *
+         * The editor face of the viewer is an xterm and was returned above —
+         * Escape belongs to vim while vim has focus.
+         */
+        setPeek(null);
         return;
       }
 
@@ -705,6 +796,59 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleEvents, lastEvent?.id]);
 
+  /*
+   * Where a notification wanted to send you.
+   *
+   * A pull request is a number and a repo, and the PR view takes both. A git
+   * job is a checkout NAME — that is all a mirrored desktop notification can
+   * tell us — so it is resolved against the repositories this machine actually
+   * has before the view is asked to scope itself to one. A name that matches
+   * nothing opens Source control unscoped rather than nothing at all: the
+   * notification was still right that there is something to do there.
+   */
+  const goFromNote = useCallback(async (g: NonNullable<SystemNote["goto"]>) => {
+    if (g.kind === "pr") { requestPrJump(g.repo, g.number); goView("pr"); return; }
+    // The card the notification is about, in Tasks — the same errand the pull
+    // request masthead sends, so it lands on the board that holds it when there
+    // is one and under Looked up when there is not.
+    if (g.kind === "card") { openCard(g.id, g.label); return; }
+    /*
+     * The pane the agent is in — resolved here rather than carried whole.
+     *
+     * tmux needs a session and a window to select a pane, and the notification
+     * only knows the pane id: that is the one thing recorded when the hook
+     * fired, and the other two can have changed since (a window renamed, a
+     * pane moved). Looking it up at the moment of the click asks tmux what is
+     * true now instead of replaying what was true then.
+     */
+    // Both of these already had a way in and simply were not being handed one.
+    if (g.kind === "chat") { openChatFor(g.id); return; }
+    if (g.kind === "settings") { openSettings(g.pane as never); return; }
+    if (g.kind === "pane") {
+      goView("term");
+      try {
+        const { panes } = await api.agentPanes();
+        const hit = panes.find((p) => p.paneId === g.pane);
+        // Gone: the window was closed after the notification arrived. The
+        // terminal view is already open, which is the nearest true thing.
+        if (hit) await api.focusPane({ sessionId: hit.sessionId, windowId: hit.windowId, paneId: hit.paneId });
+      } catch { /* the view is open; tmux just would not say */ }
+      return;
+    }
+    goView("git");
+    try {
+      const { repos } = await api.gitRepos();
+      const hit = repos.find((r) => r.root.endsWith(`/${g.repo}`))
+        ?? repos.find((r) => r.name === g.repo)
+        ?? (g.branch ? repos.find((r) => r.branch === g.branch) : undefined);
+      if (hit) requestWorktreeJump({ view: "git", root: hit.root });
+    } catch { /* the view is already open; it just keeps its own scope */ }
+  }, [goView, openChatFor]);
+
+  // The notification and the bell row lead to the same place, because they are
+  // the same news arriving twice.
+  useEffect(() => { setAlertGoto(goFromNote); return () => setAlertGoto(null); }, [goFromNote]);
+
   return (
     <div className="h-screen overflow-hidden flex flex-col relative">
       <div className="aurora" />
@@ -734,11 +878,13 @@ export default function App() {
         // over any view and the PR panel may not be mounted at all, so the
         // request is left in a slot and the view switched — the same shape the
         // issues panel uses to start a terminal it cannot reach.
-        onNoteGoto={(g) => { requestPrJump(g.repo, g.number); goView("pr"); }}
+        onOpenFiles={() => setFilesOpen(true)}
+        onNoteGoto={goFromNote}
       />
 
       <Workspace
         prJump={prJump}
+        cardJump={cardJump}
         view={wsView} onView={setWsView}
         onSkills={() => setSkillsOpen(true)}
         onSettings={() => setSettingsOpen(true)}
@@ -770,6 +916,28 @@ export default function App() {
           onOpenBrowser={() => { setMachine(null); goView("browser"); }} />
       )}
       <SearchModal open={searchOpen} onClose={() => setSearchOpen(false)} onSelectApp={(app) => setFilter((f) => ({ ...f, app }))} />
+
+      {/* Find a file from anywhere. Mounted at the shell rather than in a view
+          so the chord reaches it from the dashboard, a terminal or a diff — and
+          so the document it raises outlives the palette that found it. */}
+      <FilePalette
+        open={filesOpen}
+        onClose={() => setFilesOpen(false)}
+        docOpen={peek !== null}
+        onHeight={setPaletteH}
+        onOpenFile={(root, rel, branch, ref) =>
+          // A file found on another branch is read from that branch and is not
+          // editable — there is no file on disk to edit.
+          setPeek({ root, path: `${root}/${rel}`, label: rel, edit: !ref, branch, ref })}
+        onRevealDir={(root, dir) => { requestFilesReveal(root, dir); goView("files"); }}
+      />
+      {/* The two share the screen rather than stack: the palette stays open on
+          purpose, so the document starts below its measured bottom edge — 10px
+          of top margin plus a 12px gap. */}
+      {peek && (
+        <PeekFile peek={peek} onClose={() => setPeek(null)}
+          topPx={filesOpen && paletteH > 0 ? Math.round(paletteH) + 22 : undefined} />
+      )}
       {/* Shows once when the app first runs a version it has not run before —
           the update button restarts into a new build and otherwise says nothing
           about what changed. */}
@@ -779,8 +947,9 @@ export default function App() {
           the banner your desktop just drew. App-level and not inside a view, for
           the same reason MachinePanel is: a Slack ping is not about the panel
           you happen to be looking at. */}
-      <NoteToasts onGoto={(g) => { requestPrJump(g.repo, g.number); goView("pr"); }} />
+      <NoteToasts onGoto={goFromNote} />
       <ZoomToast zoom={zoomed} />
+      <UpdateToast />
       <SettingsModal
         open={settingsOpen}
         jumpTo={settingsPane}

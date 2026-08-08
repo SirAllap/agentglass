@@ -20,7 +20,7 @@ import { readdir } from "node:fs/promises";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import type { ServerWebSocket } from "bun";
-import type { ProjectCommand, TerminalCommands, TerminalDisabledReason } from "../../shared/types.ts";
+import type { ProjectCommand, TerminalCommands, TerminalDisabledReason, TmuxWindow, PtyServerFrame, PtyClientMessage } from "../../shared/types.ts";
 import { safeAbs, repoRootOf, repoRootOfAsync } from "./git.ts";
 import { terminalActive } from "./loopwatch.ts";
 import { inScope, workspaceRoot, terminalDisabledSource } from "./config.ts";
@@ -112,8 +112,82 @@ export type PtyWsData = { kind: "pty"; root: string; cols: number; rows: number;
    * away from editing a file nobody meant to touch; defaulting to read (as it
    * does) makes the editable case say so.
    */
-  edit?: boolean };
+  edit?: boolean;
+  /**
+   * A live tmux pane to show instead of a new shell — tmux's own id, `%58`.
+   *
+   * DATA, not a command: see the resolution in ptyOpen. The phone lists panes
+   * from /terminal/panes and sends back the id of the one that was tapped, so
+   * "the terminal on my phone" is the work already running on the machine
+   * rather than a second, empty shell beside it.
+   */
+  pane?: string;
+  /** Let this client's size win over the desk's — see attachArgvFor. */
+  fit?: boolean };
 type PtyWs = ServerWebSocket<unknown>;
+
+/**
+ * What a phone's attach wrote onto the USER'S tmux, and everything needed to
+ * put it back.
+ *
+ * A record and not a set of fields on the session because the way back has to
+ * outlive the session: it is handed to a pair of timers when the socket closes,
+ * and to `shutdownTerminals` when there is no time for timers at all.
+ */
+type PhoneAttach = {
+  socket: string[];
+  sessionId: string;
+  /**
+   * The window this phone attached to — ROUTING ONLY.
+   *
+   * It answers "which socket do I tell about window @3", and nothing else. It
+   * is NOT what the phone is currently looking at: a phone can walk to another
+   * window with tmux's own keys and this will not follow it, which is exactly
+   * why the mark on the strip comes from `phoneWindows` asking tmux instead.
+   * Using this as truth would put the same invisible lie back.
+   */
+  windowId: string;
+  /** `window-size` as each window of the group had it before this phone
+   *  arrived, so the way out is a restore and not a guess. */
+  hadWindowSize: Record<string, string>;
+  /** Whether this phone asked for the window to follow it. Kept because the
+   *  fit has to be applied more than once — see `fitWindow`. */
+  fit: boolean;
+  /**
+   * The window this phone zoomed, and onto which pane — null when it zoomed
+   * nothing.
+   *
+   * The other half of the width, and owed back for the same reason: a zoom is a
+   * flag on the SHARED window, so the desk gets a one-pane window where it had
+   * four, and killing the phone does not put it back. Held whole rather than as
+   * a boolean because the teardown has to address exactly what was zoomed —
+   * `windowId` above is routing and follows nothing.
+   */
+  zoomed: { windowId: string; paneId: string } | null;
+  /**
+   * The grouped session WE made for this phone, by name.
+   *
+   * Only the shutdown path uses it, and it is the whole reason that path can
+   * work: `restoreWindows` skips any window a phone is still on, and on the way
+   * out there is no time to wait for tmux to notice the client has gone. Ending
+   * our own session makes that true instead of waiting for it. See
+   * `endPhoneSession` — the name is checked against the one pattern this app
+   * ever creates before anything is killed.
+   */
+  phoneSession: string;
+  /**
+   * Which attach this was, counted from the start of the process.
+   *
+   * Ordering, and it decides an outcome rather than tidying a list. Two fitted
+   * phones on one window capture different things: the first reads the window's
+   * real `window-size` (usually nothing at all), the second reads the `manual`
+   * the first one's fit had already written. Whichever restore runs LAST is the
+   * one the window keeps — so the oldest capture has to go last, and "oldest"
+   * is not readable off the session map once a socket has closed and left it.
+   */
+  seq: number;
+};
+let attachSeq = 0;
 
 type Session = {
   proc: ReturnType<typeof Bun.spawn>;
@@ -131,6 +205,10 @@ type Session = {
   /** Cleared on close — a stray interval would keep reading /proc for a pty
    *  that no longer exists, once per session, forever. */
   tmuxPoll?: ReturnType<typeof setInterval> | null;
+  /** A one-shot sweep armed off pty output, so a keyboard window switch (which
+   *  redraws) shows in the tab strip without waiting out the poll. Cleared on
+   *  close like the poll. */
+  tmuxNudge?: ReturnType<typeof setTimeout> | null;
   /** The tmux client in this shell, once one is found. Survives a session
    *  switch, which is the whole reason it is kept apart from the target. */
   tmuxClient?: TmuxClient | null;
@@ -139,6 +217,10 @@ type Session = {
   /** tmux's prefix keys, re-read whenever the session changes rather than every
    *  tick: it is a config value, not a live one. */
   tmuxPrefix?: string[];
+  /** The windows the last sweep read. Held so an action can be refused for a
+   *  window that was not in the frame this client was shown — see `takeover`
+   *  in ptyMessage. */
+  tmuxWindows?: TmuxWindow[];
   /** Re-read tmux and push if anything moved. Held so an action can refresh
    *  immediately instead of leaving the strip stale until the next tick. */
   tmuxSweep?: () => void;
@@ -152,8 +234,47 @@ type Session = {
    *  no reason to connect it to us. It is the session and not a boolean because
    *  the one we borrowed from is not always the one we end up on. */
   tmuxStatusHiddenOn?: TmuxTarget | null;
+  /**
+   * The group this session joined, when it is a phone looking at a pane.
+   *
+   * Held for the way out. `fit` sets `window-size latest`, which is read per
+   * window and reaches every window in the group — so a phone on one pane of a
+   * five-window session pulls all five down to phone width, and letting go does
+   * not put them back on its own. See `restoreWindows`.
+   */
+  phoneAttach?: PhoneAttach | null;
+  /**
+   * The pane THIS phone put into copy mode, and has not been given back.
+   *
+   * Copy mode is a property of the shared pane, so a phone that scrolled back
+   * and then went away leaves the desk a pane that reads their next keystroke as
+   * a copy-mode command. Held only when we are the ones who started it — a copy
+   * mode the person at the desk opened is theirs and is not ours to cancel — and
+   * cleared as soon as tmux has left it on its own, which `copy-mode -e` does
+   * the moment a scroll reaches the bottom.
+   */
+  copyMode?: string | null;
 };
 const sessions = new Map<PtyWs, Session>();
+
+/**
+ * Restores this process owes the user's tmux and has not delivered yet.
+ *
+ * `cleanup` hands its restore to a pair of timers, and a timer is not a
+ * promise. A socket that closed one second before a SIGTERM has its window put
+ * back by nothing at all: the handler calls `shutdownTerminals` and then
+ * `process.exit(0)`, and a pending timer does not get a turn. That is the same
+ * window left at 80x24 and `window-size manual` as the live case, reached by
+ * being slightly earlier — and it looks identical to the user, who restarted
+ * the server and got a pinned window.
+ *
+ * So the record stays on this ledger until the last of the two timers has had
+ * it, and `shutdownTerminals` drains whatever is still on it. Removed by the
+ * +3000ms call and not the +1500ms one, because the second is not a retry: it
+ * is the one that catches a tmux session which had not finished going away at
+ * 1.5s.
+ */
+const owed = new Set<PhoneAttach>();
 
 /**
  * The last tmux client any terminal here was attached to.
@@ -197,13 +318,40 @@ function killGroup(s: Session, sigNum: number) {
   } catch { /* already gone */ }
 }
 
-import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { resolveClient, readFrame, runAction, setStatusLine, releaseStale, clearAsk, prefixKeys, newWindowRunning, selectPane, attachArgvFor, restoreWindows, endPhoneSession, phoneWindows, fitWindow, windowSize, socketPath, scrollPhonePane, leaveCopyMode, type TmuxClient, type TmuxTarget, type TmuxAction } from "./tmuxctl.ts";
+import { paneFinished, markSeen } from "./agentdone.ts";
 import { prepareReviewPrompt } from "./prs.ts";
-import { claudeCode } from "./agents/claudecode.ts";
+import { claudeCode, supportsSessionName } from "./agents/claudecode.ts";
 import { applyThemeTo } from "./themesync.ts";
 
 const enc = new TextEncoder();
-const ctl = (ws: PtyWs, frame: Record<string, unknown>) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
+
+/**
+ * A card's title, as a session name.
+ *
+ * Control characters out (a newline or an escape in an argv element is how a
+ * name becomes something else on a status line), whitespace collapsed, and
+ * capped — the CLI puts this in a terminal title and a picker column, and a
+ * ninety-character card title makes both useless. Empty in means empty out,
+ * and the caller then passes no flag at all rather than an empty one.
+ */
+export function sessionTitle(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  // eslint-disable-next-line no-control-regex
+  const flat = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.length > 72 ? flat.slice(0, 71).trimEnd() + "…" : flat;
+}
+/**
+ * A control frame out.
+ *
+ * Typed against the contract rather than `Record<string, unknown>`, the way
+ * `broadcast(frame: WsFrame)` already constrains /stream. It was the looser
+ * signature that let this end be the only description of the protocol: with
+ * anything at all acceptable here, a field could be renamed, dropped or nested
+ * and nothing on the server or the desk would notice — only the phone, at
+ * runtime, silently. See PtyServerFrame.
+ */
+const ctl = (ws: PtyWs, frame: PtyServerFrame) => { try { ws.send(JSON.stringify(frame)); } catch { /* closed */ } };
 
 /**
  * Is a tmux client running inside this shell?
@@ -341,7 +489,39 @@ export function ptyOpen(ws: PtyWs) {
   const bin = editor ? editor.split(/\s+/)[0]! : "";
   const readOnly = !d.edit || tempCopy;
   const readonlyFlags = readOnly && /\b(nvim|vim|view)$/.test(bin) ? ["-R", "-M"] : [];
-  const run = editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : [shell, ...args];
+
+  /*
+   * Showing a tmux pane that already exists, rather than starting a shell.
+   *
+   * The client sends an id and nothing else — `%58`. It never sends a socket,
+   * a session name or a command, and it could not: `attachArgvFor` looks the
+   * pane up in the live list on this machine and builds the command from what
+   * it finds. An id that names no live pane produces no command, which is the
+   * only safe answer for a socket the UI can reach.
+   *
+   * That is the same rule the file-viewer above follows — the client says WHAT,
+   * the server decides HOW — and it is the rule that keeps a terminal endpoint
+   * from being arbitrary execution.
+   */
+  const attach = d.pane
+    // The client's own grid goes in, because a fit is now one explicit
+    // `resize-window` on the window that was opened rather than an option that
+    // reaches the whole group. See `attachArgvFor`.
+    ? attachArgvFor(lastTmuxTarget()?.socket, String(d.pane), undefined, d.fit === true, { cols, rows })
+    : null;
+  if (d.pane && !attach) {
+    // Named rather than silently falling back to a shell: somebody tapped a
+    // specific pane, and a prompt in a directory is not that pane. Panes die
+    // between the list being drawn and a tap arriving, and saying so is what
+    // lets the caller re-read the list.
+    ctl(ws, { t: "fatal", error: "that pane is gone — the list may be out of date" });
+    ws.close(1008, "no such pane");
+    return;
+  }
+
+  const run = attach
+    ? attach.argv
+    : editor ? [...editor.split(/\s+/), ...readonlyFlags, wanted!] : [shell, ...args];
 
   let argv: string[];
   let mode: Session["mode"] = "pty";
@@ -375,9 +555,20 @@ export function ptyOpen(ws: PtyWs) {
   const viewDir = editor && wanted!.startsWith(join(tmpdir(), "agentglass-pr-"))
     ? wanted!.slice(0, wanted!.lastIndexOf("/"))
     : null;
-  const session: Session = { proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null };
+  const session: Session = {
+    proc, mode, grouped: HAS_SETSID, sizeDir, viewDir, closed: false, exited: false, killTimer: null,
+    phoneAttach: attach
+      ? { socket: attach.socket, sessionId: attach.groupedWith, windowId: attach.windowId, hadWindowSize: attach.hadWindowSize, fit: d.fit === true, zoomed: attach.zoomed, phoneSession: attach.session, seq: ++attachSeq }
+      : null,
+  };
   sessions.set(ws, session);
-  ctl(ws, { t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir });
+  // `pane` carries the window's real size when this is a pane attach. The phone
+  // needs it to know it is looking at a slice: without a fit, tmux renders at
+  // the desk's width and the columns past the phone's own never arrive.
+  ctl(ws, {
+    t: "ready", mode, shell: basename(shell), cwd, resize: !!sizeDir,
+    ...(attach?.grid ? { pane: attach.grid } : {}),
+  });
 
   /**
    * The client moved to a different session — follow it there.
@@ -441,7 +632,7 @@ export function ptyOpen(ws: PtyWs) {
         session.tmuxPrefix = [];
         session.tmuxStatusHiddenOn = null;
         sent = "";
-        ctl(ws, { t: "tmux", active: false, windows: [] });
+        ctl(ws, { t: "tmux", active: false, windows: [], panes: [] });
         return;
       }
     }
@@ -470,6 +661,38 @@ export function ptyOpen(ws: PtyWs) {
       session.tmux = null;
     }
     const windows = frame?.windows ?? [];
+    /*
+     * Which of these a phone is on, marked before the change check below so
+     * that a phone arriving or leaving is itself a change worth sending.
+     *
+     * One extra tmux call per tick in the ordinary case: `phoneWindows` asks
+     * for the session list, finds no `agx-phone-…` in it, and stops without
+     * listing a single pane.
+     */
+    if (frame) {
+      const onPhone = phoneWindows(frame.target.socket);
+      for (const w of windows) if (onPhone.has(w.id)) w.phone = true;
+
+      // "The agent in this tab finished its turn." Group the frame's panes by
+      // their window, then: the active window (the one the desk is looking at) is
+      // marked seen so its dot goes out; every other window lights if any pane in
+      // it holds an agent whose most recent event ended a turn and the desk has
+      // not looked since. A pane with no agent (nvim, a plain shell) never lights.
+      const panesByWindow = new Map<string, string[]>();
+      for (const [paneId, winId] of frame.windowOfPane) {
+        const list = panesByWindow.get(winId);
+        if (list) list.push(paneId); else panesByWindow.set(winId, [paneId]);
+      }
+      for (const w of windows) {
+        const paneIds = panesByWindow.get(w.id) ?? [];
+        if (w.active) markSeen(paneIds);
+        else if (paneIds.some(paneFinished)) w.agentDone = true;
+      }
+    }
+    // Only the active window's, and only while tmux is drawing them — see
+    // parsePaneGeometry. Empty is the honest answer for an unsplit window too:
+    // one pane covering everything is nothing to choose between.
+    const panes = (frame?.panes ?? []).length > 1 ? frame!.panes : [];
     /**
      * A prompt tmux would have drawn, taken off the window and forwarded once.
      *
@@ -491,10 +714,31 @@ export function ptyOpen(ws: PtyWs) {
     // tick is a tab strip that drops the click you were halfway through. The
     // session is part of "changed": switching between two sessions with the
     // same window names is still a switch, and the panel says which one it is.
-    const shape = JSON.stringify([session.tmux?.id ?? null, windows]);
+    /*
+     * The windows this client was last SHOWN, kept so an action can be checked
+     * against them. Assigned before the change check below on purpose: a sweep
+     * that finds nothing new still returns early, and a guard reading a list
+     * that only updates on change would reject a legitimate click on a quiet
+     * session.
+     */
+    session.tmuxWindows = windows;
+    /*
+     * `client` is part of the shape, not merely of the frame.
+     *
+     * The panel says "this window is 80 columns while your terminal is 220" by
+     * comparing the two, so a desk that drags its terminal narrower changes the
+     * answer without changing a single window. Left out, the notice would stay
+     * up (or stay down) until something else happened to move the shape —
+     * including the case of somebody resizing back to matching, where it is the
+     * TERMINAL that changed and no window did.
+     */
+    const shape = JSON.stringify([session.tmux?.id ?? null, windows, panes, frame?.client ?? null]);
     if (shape === sent) return;
     sent = shape;
-    ctl(ws, { t: "tmux", active: true, session: session.tmux?.session ?? null, prefix: session.tmuxPrefix ?? [], windows });
+    ctl(ws, {
+      t: "tmux", active: true, session: session.tmux?.session ?? null,
+      prefix: session.tmuxPrefix ?? [], windows, panes, client: frame?.client ?? null,
+    });
   };
   session.tmuxSweep = sweep;
   /*
@@ -509,6 +753,32 @@ export function ptyOpen(ws: PtyWs) {
    */
   const tmuxPoll = setInterval(sweep, 500);
   session.tmuxPoll = tmuxPoll;
+
+  /*
+   * Keep the tab strip up with the KEYBOARD, not just the poll.
+   *
+   * `^b n`, `^b <num>` and friends switch the window inside tmux — this server
+   * never sees the keystroke — so the strip only learned on the next 500ms
+   * sweep, which is the "mini retardo" a switch by hand feels (a click is
+   * instant because the panel updates optimistically; the keyboard has nobody
+   * to do that for it).
+   *
+   * But a switch REDRAWS the pane, so output lands right after it. Arm a sweep
+   * off that output. A trailing debounce with a ceiling: quiet for ~70ms after a
+   * burst → sweep (a switch is a short redraw then silence, so it fires fast);
+   * a log that never pauses keeps resetting it, so it does not turn every write
+   * into a tmux call — capped at ~220ms so even mid-stream it is never far off.
+   * The sweep already de-dupes, so a nudge that finds nothing sends nothing.
+   */
+  let nudgeFrom = 0;
+  const nudgeTmux = () => {
+    if (!session.tmux || session.closed) return;
+    const now = Date.now();
+    if (session.tmuxNudge) clearTimeout(session.tmuxNudge);
+    else nudgeFrom = now;
+    const wait = Math.min(70, Math.max(0, 220 - (now - nudgeFrom)));
+    session.tmuxNudge = setTimeout(() => { session.tmuxNudge = null; if (!session.closed) sweep(); }, wait);
+  };
 
   /**
    * Shell output → socket, coalesced and back-pressured.
@@ -571,6 +841,9 @@ export function ptyOpen(ws: PtyWs) {
           size += value.length;
           if (size >= BIG) flush();
           else if (!timer) timer = setTimeout(flush, FRAME_MS);
+          // A redraw means the window may have changed under the keyboard —
+          // catch it without waiting for the poll. Cheap: a debounce reset.
+          nudgeTmux();
         }
         // Let the client catch up before pulling more out of the shell. Two
         // ways to know it is behind: the transport said so on the last send, or
@@ -603,14 +876,58 @@ export function ptyOpen(ws: PtyWs) {
   })();
 }
 
+/**
+ * Tell whoever is looking at this window from a phone that it just changed size
+ * under them.
+ *
+ * The desk's take-over is complete without this — the window is already back at
+ * the desk's width. What is not complete is the phone: its `fit` flag is still
+ * true, so its own "you are seeing 80 of 200 columns" hint stays suppressed, and
+ * the width it quotes was written once when it attached and never again. It
+ * would be showing a fitted UI over a window that is no longer fitted, which is
+ * the same invisible lie the phone mark on the strip exists to kill.
+ *
+ * Sent, not asked for. The window is found by walking the live sockets rather
+ * than by asking tmux who is there: `phoneAttach.windowId` is how a socket is
+ * reached, and a socket that has since moved to another window gets a frame it
+ * will correct itself on its next attach — the alternative, trusting that id as
+ * truth, is the thing its own comment forbids.
+ *
+ * Sockets are matched by resolved PATH: the desk's client usually names no
+ * socket at all in its argv while the phone's attach carries `-S /tmp/...`, so
+ * comparing the two spellings never matches even on the same server.
+ */
+function tellPhonesTheWindowMoved(t: TmuxTarget, windowId: string) {
+  const size = windowSize(t.socket, windowId);
+  if (!size) return;
+  const server = socketPath(t.socket);
+  for (const [ws, s] of sessions) {
+    const at = s.phoneAttach;
+    if (!at || at.windowId !== windowId || socketPath(at.socket) !== server) continue;
+    ctl(ws, { t: "pane", cols: size.cols, rows: size.rows, fit: false, by: "desk" });
+  }
+}
+
 /** Client frame: {t:"in",d} keystrokes → shell stdin · {t:"resize",cols,rows}. */
 export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
   const s = sessions.get(ws);
   if (!s) return;
-  // `number`/`root` ride along only for {cmd:"review"} — see below, where the
-  // server builds what runs rather than taking a command string off the wire.
-  let msg: { t?: string; d?: string; cols?: number; rows?: number; cmd?: string; window?: string; name?: string; visible?: boolean;
-    number?: number; root?: string; cwd?: string; prompt?: string; agent?: boolean; yolo?: boolean };
+  /*
+   * The field names come from `PtyClientFrame`; the optionality does not.
+   *
+   * This used to be a hand-written bag of `?` fields, which was the third
+   * private copy of a protocol with no contract — `number` and `root` here,
+   * `{cmd:"review"}` on the desk, nothing anywhere that said they were the same
+   * message. `PtyClientMessage` is that union with every field made a maybe, so
+   * a rename in the contract stops compiling at the line below that reads it.
+   *
+   * Deliberately NOT the union itself. This is `JSON.parse` of whatever a
+   * client sent, and asserting it into `PtyClientFrame` would tell the compiler
+   * that `msg.d` is a string and `msg.cwd` is a path — retiring every guard on
+   * a socket that is reachable from the UI. The guards are the boundary; the
+   * type only makes sure they are guarding the right names.
+   */
+  let msg: PtyClientMessage;
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString()); } catch { return; }
   if (msg.t === "in" && typeof msg.d === "string" && msg.d) {
     // A keystroke is the least ambiguous "a human is waiting on this process"
@@ -629,6 +946,42 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       writeSizeFile(s.sizeDir, rows, cols);
       process.kill(s.proc.pid, "SIGWINCH"); // bridge applies TIOCSWINSZ + forwards
     } catch { /* shell gone */ }
+    /*
+     * And the window with it, when this phone asked the window to follow it.
+     *
+     * The fit at attach used the size on the query string, which for a fresh
+     * WebView is the 80x24 default — it has not measured itself yet. Reported
+     * from a phone: the text wrapped correctly at 80 columns and then stopped a
+     * third of the way down the screen, because the window really was 24 rows
+     * tall. tmux does not follow a grouped client on its own here, by design:
+     * `window-size` is `largest` and the desk is larger.
+     */
+    const at = s.phoneAttach;
+    if (at?.fit) fitWindow(at.socket, at.sessionId, at.windowId, cols, rows);
+    /*
+     * And then say how wide the window REALLY came out, whether or not this
+     * phone asked it to follow.
+     *
+     * `ready.pane` fires once and `t:"pane"` only ever fired when the desk moved
+     * the window, so a phone that changed its own width had no way to learn the
+     * consequence — and the consequence is not a constant. `window-size largest`
+     * means the window is as wide as the widest client, so asking for 60 columns
+     * moves the real window when this phone is the only one attached and moves
+     * nothing at all when an 80-column desk is looking. The screen was left
+     * inferring which by comparing the last size it had been told against the
+     * width it was asking for when it was told, and at a fresh attach those
+     * agree for a reason that has nothing to do with the phone: an 80-column
+     * desk and an 80-column default. That is how it came to say "it is 60
+     * columns for the computer too" with twenty columns falling off the right —
+     * proved with an 80-column ruler, where `shared` arrived as `sha`.
+     *
+     * One `windowSize` call per resize, and a resize is a width tap or a
+     * keyboard appearing, not something that happens per frame.
+     */
+    if (at) {
+      const real = windowSize(at.socket, at.windowId);
+      if (real) ctl(ws, { t: "pane", cols: real.cols, rows: real.rows, fit: at.fit, by: "phone" });
+    }
   } else if (msg.t === "tmux") {
     /*
      * A tab was clicked.
@@ -649,7 +1002,54 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       if (setStatusLine(s.tmux, visible)) s.tmuxStatusHiddenOn = visible ? null : s.tmux;
       return;
     }
+
+    /*
+     * A finger, moving this phone's own pane through its scrollback.
+     *
+     * The narrowest thing that could serve it: a signed count, on the pane the
+     * phone's own grouped session is looking at, resolved from the session name
+     * WE made. The client names nothing — not a pane, not a session, not a
+     * command — which is the same division every other branch here follows.
+     *
+     * It is on this socket rather than being a route of its own because it is
+     * per-attach state: which pane, and whether we are the ones who opened copy
+     * mode on it, are facts about this socket and die with it.
+     *
+     * Above the `s.tmux` guard below, because it does not use it. That guard is
+     * about the tmux the SWEEP resolved out of /proc, which arrives up to half a
+     * second after the attach; this reaches the phone's own grouped session by
+     * name, which the attach knew before the socket said it was ready. Behind
+     * the guard, the first swipe of a freshly opened tab was dropped in silence.
+     */
+    if (msg.cmd === "scroll") {
+      const at = s.phoneAttach;
+      if (!at || typeof msg.lines !== "number") return;
+      const did = scrollPhonePane(at.socket, at.phoneSession, msg.lines);
+      if (!did) return;
+      // Remembered on the way in, and forgotten when tmux has left the mode by
+      // itself — `-e` exits at the bottom of the history, which is the ordinary
+      // end of a scroll and must not leave a debt recorded against a pane that
+      // is no longer in copy mode.
+      if (did.entered) s.copyMode = did.paneId;
+      if (!did.inMode) s.copyMode = null;
+      return;
+    }
+
     if (!s.tmux) return;
+
+    /*
+     * "The pointer is over that pane" — focus follows mouse, inside tmux.
+     *
+     * The narrowest of these commands on purpose. It cannot change window or
+     * session, it carries no strings that reach a shell, and the pane id is
+     * checked against tmux's syntax before it is passed. It is also the only
+     * one sent without a click behind it, which is exactly why it is kept
+     * unable to do anything a hover should not.
+     */
+    if (msg.cmd === "selectpane") {
+      if (typeof msg.pane === "string") selectPane(s.tmux, msg.pane);
+      return;
+    }
 
     /*
      * Open a pull request review in a window of the user's own tmux.
@@ -704,6 +1104,7 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
       if (!cwd || !inScope(cwd) || !existsSync(cwd)) return;
       const name = typeof msg.name === "string" ? msg.name : "issue";
       const prompt = typeof msg.prompt === "string" ? msg.prompt : "";
+      const title = sessionTitle(msg.title);
       if (msg.agent === true && prompt) {
         const bin = claudeCode.bin();
         /*
@@ -721,7 +1122,27 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
          * first tool call and waiting for an answer nobody is there to give.
          * And it is worth being a CHOICE for the mirror-image reason.
          */
-        const args = msg.yolo === true ? ["--dangerously-skip-permissions", prompt] : [prompt];
+        /*
+         * The session, named after the card.
+         *
+         * Six windows into an afternoon, `claude` in a worktree called
+         * `app-ORBIT-1042` tells you nothing about which of five cards is in
+         * front of you, and the CLI's session picker lists them all as the same
+         * word. `--name` is what `/rename` writes, set before the first turn
+         * instead of after it — so there is no moment where the session exists
+         * unnamed and nothing has to be typed into a program that may not have
+         * finished starting.
+         *
+         * The value is DATA from the client and the flag is ours, which is the
+         * same division this handler already makes for `--dangerously-skip-
+         * permissions`. It reaches tmux as one element of an argv array, never
+         * through a shell, and `sessionTitle` is what makes sure a card title
+         * cannot be anything but a title.
+         */
+        const named = title && supportsSessionName(bin) ? ["--name", title] : [];
+        const args = msg.yolo === true
+          ? [...named, "--dangerously-skip-permissions", prompt]
+          : [...named, prompt];
         // No agent available is not a reason to open nothing: a shell in the
         // right worktree is still most of what was asked for.
         if (bin) newWindowRunning(target, cwd, name, [bin, ...args]);
@@ -734,8 +1155,29 @@ export function ptyMessage(ws: PtyWs, raw: string | Buffer) {
     }
 
     const action = msg.cmd as TmuxAction;
-    if (!["select", "new", "kill", "rename", "move"].includes(action)) return;
-    if (!runAction(s.tmux, action, msg.window, msg.name)) return;
+    if (!["select", "new", "kill", "rename", "move", "takeover", "fit"].includes(action)) return;
+    /*
+     * A window this client was actually shown, and not merely a well-formed id.
+     *
+     * `runAction` checks the id against tmux's syntax and runs it on the socket
+     * WE resolved, which is what stops a page addressing another user's tmux.
+     * It does not stop this client naming a window on our own server that
+     * belongs to a session it has never seen — and take-over writes an option
+     * on a window rather than acting on the one the tab strip is drawing, so
+     * "it is on the frame we sent" is the narrower and honest envelope.
+     *
+     * Take-over specifically, because it is the one action here that changes
+     * what somebody ELSE sees: a window in another session is a different
+     * screen and a different person's layout. The four older actions keep the
+     * looser check — the strip only ever offers ids it was given, and
+     * tightening them here is a behaviour change nobody asked for.
+     */
+    if (action === "takeover" && !(s.tmuxWindows ?? []).some((w) => w.id === msg.window)) return;
+    // The panel's own grid goes with it, for `fit`: only the client knows how
+    // big the thing you are looking at is. Range-checked in runAction, because
+    // it ends up as an argument to `resize-window`.
+    if (!runAction(s.tmux, action, msg.window, msg.name, msg.cols, msg.rows)) return;
+    if (action === "takeover") tellPhonesTheWindowMoved(s.tmux, msg.window!);
     // Answer now rather than at the next tick. The command has already been
     // applied by the time it returns, so the strip can be correct within a
     // round trip instead of within half a second — and the click that caused
@@ -761,24 +1203,174 @@ export function ptyClose(ws: PtyWs) {
 function cleanup(ws: PtyWs, s: Session) {
   sessions.delete(ws);
   if (s.tmuxPoll) { clearInterval(s.tmuxPoll); s.tmuxPoll = null; }
+  if (s.tmuxNudge) { clearTimeout(s.tmuxNudge); s.tmuxNudge = null; }
   // Give the status line back before letting go. The panel borrowed it; a
   // session left with `status off` after the panel closed looks broken in the
   // user's real terminal, and nothing there would point back at us.
   if (s.tmuxStatusHiddenOn) { setStatusLine(s.tmuxStatusHiddenOn, true); s.tmuxStatusHiddenOn = null; }
+  /*
+   * Give the desk its width and its panes back.
+   *
+   * Twice, and not immediately, and both numbers are races that were lost.
+   *
+   * Not immediately, because our own tmux session goes away when its client
+   * detaches (`destroy-unattached on`) and that happens after the pty dies — a
+   * resize asked for right now still sees the phone's own client and recomputes
+   * to it.
+   *
+   * And not at 300ms either, which is what this was: flipping `fit` closes this
+   * socket and opens another, and at 300ms the old session can be gone while
+   * the new one has not finished attaching. The restore then landed in that gap
+   * and undid a fit that was about to be a second old — which from the phone is
+   * a switch that does nothing at all. `restoreWindows` skips a window a
+   * phone is still on, and 1.5s is long enough for the new one to be there to
+   * be seen. The desk waits that long for its width back, and does not notice.
+   *
+   * Both of those delays are also why a take-over marks the window: this fires
+   * up to three seconds after the socket closed, and by then the desk may have
+   * asked for its width back on the same window. Restoring on top of that hands
+   * it to the phone again (measured: 80x24 with the phone still attached), so
+   * `restoreWindows` leaves a claimed window entirely alone.
+   *
+   * `zoomed` rides along on the same schedule and through the same skips. It
+   * has to: the zoom is the reason one tab means one pane on the phone, and it
+   * is a flag on the desk's own window, so the phone leaving without putting it
+   * back is a desk with three of its panes invisible and nothing on screen to
+   * say who did it.
+   */
+  const back = s.phoneAttach;
+  /*
+   * Copy mode back too, and before the window is — it is the same debt.
+   *
+   * A phone that scrolled into the history and then put the phone down leaves
+   * the shared pane in copy mode, so the desk's next keystroke is read as a
+   * copy-mode command by a pane that looks entirely ordinary. Immediately,
+   * unlike the window size below: nothing about it races the detach, because a
+   * pane's mode has nothing to do with which clients are attached. And only when
+   * WE opened it — `leaveCopyMode` checks the mode is still on before acting, so
+   * a person who has since started their own copy mode on that pane keeps it.
+   */
+  if (back && s.copyMode) {
+    try { leaveCopyMode(back.socket, s.copyMode); } catch { /* the server went away */ }
+    s.copyMode = null;
+  }
+  s.phoneAttach = null;
+  if (back) {
+    // On the ledger before either timer is armed, because the gap this closes
+    // is exactly "the process died between the socket closing and 3000ms" —
+    // see `owed`.
+    owed.add(back);
+    const put = () => { try { restoreWindows(back.socket, back.sessionId, back.hadWindowSize, back.zoomed); } catch { /* the server went away */ } };
+    setTimeout(put, 1500);
+    // Off the ledger only after the SECOND call has run, in that order and in
+    // one timer rather than two racing at the same delay.
+    setTimeout(() => { put(); owed.delete(back); }, 3000);
+  }
   if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.sizeDir = null; }
   if (s.viewDir) { try { rmSync(s.viewDir, { recursive: true, force: true }); } catch { /* tmp reaper will get it */ } s.viewDir = null; }
 }
 
-/** Hang up every live shell and remove their temp dirs. Called when the server
- *  is going down: a plain exit only reaps children the kernel happens to HUP,
- *  and the `script`/pipe fallbacks have no such guarantee, so a killed server
- *  would otherwise leave orphaned shells and /tmp dirs behind. */
+/**
+ * Hang up every live shell, remove their temp dirs, and give the user's tmux
+ * back everything a phone borrowed from it.
+ *
+ * Called when the server is going down: a plain exit only reaps children the
+ * kernel happens to HUP, and the `script`/pipe fallbacks have no such
+ * guarantee, so a killed server would otherwise leave orphaned shells and /tmp
+ * dirs behind.
+ *
+ * THE TMUX HALF WAS MISSING, and it is the fault this shape exists for. This
+ * function is wired to SIGINT/SIGTERM in index.ts with `process.exit(0)` on the
+ * next line. It never called `cleanup`, so `restoreWindows` never ran — and
+ * restarting the server left the desk's window at the phone's 80x24 with
+ * `window-size manual` written on it, on every window of that session, for
+ * ever, with nothing on screen to explain it. Measured on a private server
+ * (tmux 3.6a, `-f /dev/null`): with a fitted phone attached and its client
+ * killed, the window still reads `80x24`, `window-size manual`,
+ * `window_zoomed_flag 1`. Nothing puts that back on its own. It is the same
+ * fault that pinned seven of the user's windows, arriving through a different
+ * door.
+ *
+ * WHAT "RESTORE ON THE WAY OUT" MEANS WITH NO TIME TO BE ASYNCHRONOUS.
+ *
+ * `cleanup` is allowed to wait, and does: +1500ms and +3000ms, because tmux
+ * takes a moment to notice a client has gone and `restoreWindows` skips any
+ * window a phone is still on. A shutdown has no moment — `process.exit(0)`
+ * would not let a timer run, and deferring to a next tick that never arrives is
+ * the same as not restoring at all.
+ *
+ * So the precondition is MADE TRUE instead of waited for. `endPhoneSession`
+ * kills the grouped session this app made for that phone, which measured on a
+ * private server is gone from the very next `list-sessions` — the same call
+ * `phoneWindows` makes. `restoreWindows` then runs exactly as it does on the
+ * timer path, unmodified, skipping nothing it should not. No bypass flag: a
+ * teardown that could be told to ignore "a phone is still on this window" is
+ * one argument away from being the bug it was written to prevent.
+ *
+ * Two passes, and the order decides the outcome twice.
+ *
+ * Every phone session is ended BEFORE anything is restored: with two phones on
+ * one window, restoring after ending only the first finds the window still busy
+ * and skips it — a restore that silently does nothing is the original bug, not
+ * a smaller version of it.
+ *
+ * And the restores run newest first so the OLDEST capture is applied last and
+ * wins. Two fitted phones on one window: the first captured the window's real
+ * `window-size` (usually nothing), the second captured the `manual` the first
+ * one's fit had already written. In attach order the window keeps `manual` —
+ * which is the pinning this whole function is fixing, put back by the fix.
+ *
+ * Synchronous throughout: every tmux call underneath is a `spawnSync`. Measured
+ * on a private server, one fitted phone on a three-window session — eleven tmux
+ * calls — at 17.2ms, 15.4ms and 14.3ms over three runs. That is what a signal
+ * handler can afford to spend before `process.exit(0)`, and it is the number to
+ * re-measure if this ever grows a loop over something unbounded.
+ *
+ * RESIDUAL, both named rather than papered over:
+ *
+ *  - SIGKILL, an OOM kill, and the power going out. No handler runs there at
+ *    all. The status line survives that because it writes `@agx-owned` onto the
+ *    session and `releaseStale` sweeps it on the next run's first contact with
+ *    that server; `window-size` has no such mark, so a later run cannot tell a
+ *    `manual` we wrote from one the user set, and guessing would cost somebody
+ *    their own option to fix a squeeze they never had.
+ *  - A window the desk took back in the last ten seconds is skipped by
+ *    `restoreWindows`, deliberately. It is already at the desk's size, and the
+ *    `largest` it carries is `takeover`'s own effect — the user asking to stop
+ *    following the newest client — not the phone's squeeze. A window on
+ *    `largest` still follows the desk's terminal (measured in `runAction`: the
+ *    desk going to 160x45 takes it to 160x44), so this is not the pinning.
+ */
 export function shutdownTerminals() {
+  // The ledger first: these are sockets that closed moments ago whose timers
+  // are still in flight and are about to be cancelled by the exit.
+  const back: PhoneAttach[] = [...owed];
+  owed.clear();
   for (const [ws, s] of sessions) {
     if (!s.exited) killGroup(s, 1);
+    /*
+     * The status line, missing through the same door and given back for the
+     * same reason. `cleanup` returns it and this did not, so a server killed
+     * with a panel open left the user's real session with `status off` and
+     * `@agx-owned` set. It does heal — `releaseStale` sweeps that on the next
+     * run's first contact with the server — but "eventually" there means the
+     * next time they open a terminal in this app, and until then their session
+     * has no status line and nothing anywhere points at us.
+     */
+    if (s.tmuxStatusHiddenOn) { setStatusLine(s.tmuxStatusHiddenOn, true); s.tmuxStatusHiddenOn = null; }
+    if (s.phoneAttach) back.push(s.phoneAttach);
+    s.phoneAttach = null;
     if (s.sizeDir) { try { rmSync(s.sizeDir, { recursive: true, force: true }); } catch { /* best effort */ } }
+    // A pull request's fetched copy, which this function claims to remove and
+    // did not: every PR file opened since the server started was still under
+    // /tmp after it was killed.
+    if (s.viewDir) { try { rmSync(s.viewDir, { recursive: true, force: true }); } catch { /* best effort */ } }
     sessions.delete(ws);
   }
+  if (!back.length) return;
+  back.sort((a, b) => b.seq - a.seq); // newest first — see the note on `seq`
+  for (const p of back) { try { endPhoneSession(p.socket, p.phoneSession); } catch { /* that server is already gone */ } }
+  for (const p of back) { try { restoreWindows(p.socket, p.sessionId, p.hadWindowSize, p.zoomed); } catch { /* that server is already gone */ } }
 }
 
 // --- project commands: Makefile targets + package.json scripts ---------------

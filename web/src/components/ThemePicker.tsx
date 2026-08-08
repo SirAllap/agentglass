@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SettingRow } from "./SettingRow.tsx";
 import {
   THEMES, pickTheme, applyTheme, isDarkTheme, EXPERIMENTAL_THEME_IDS,
   themeMode, applyThemeMode, persistThemeMode, SERIOUS_DARK, SERIOUS_LIGHT,
@@ -13,30 +14,43 @@ import { ACCENTS, currentAccent, setAccentPref } from "../lib/accent.ts";
  * full palette grid underneath for anyone who wants a specific scheme. Picking
  * from the grid drops the segment to whatever that palette is. */
 
-function Swatch({ t }: { t: Theme }) {
-  return (
-    <span className="flex -space-x-1 shrink-0">
-      {[t.preview.primary, t.preview.secondary, t.preview.accent].map((c, i) => (
-        <span key={i} className="h-3 w-3 rounded-full ring-1 ring-black/40" style={{ background: c }} />
-      ))}
-    </span>
-  );
-}
-
+/**
+ * A palette shown as a palette.
+ *
+ * Three dots eleven pixels wide, in a row with a name, is a bullet — it says
+ * "this theme has colours" and stops. What you are choosing between is a
+ * GROUND and what sits on it, so the swatch is a band of the ground with the
+ * accent and a semantic colour beside it, at a size where the difference
+ * between two dark greys is actually visible.
+ *
+ * Drawn from `vars`, not from `preview`: preview is three colours somebody
+ * chose to represent the theme, and the real ones cannot disagree with the app
+ * because they ARE the app.
+ */
 function ThemeBtn({ t, current, onPick }: { t: Theme; current: string; onPick: (id: string) => void }) {
   const on = t.id === current;
+  const v = t.vars as Record<string, string>;
+  const ground = v["--bg"] ?? t.preview.primary;
   return (
     <button
       onClick={() => onPick(t.id)}
-      className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px] text-left transition-transform hover:scale-[1.02]"
+      title={t.name}
+      className="rounded-lg overflow-hidden text-left transition-transform hover:scale-[1.02]"
       style={{
-        background: on ? "color-mix(in srgb, var(--primary) 20%, transparent)" : "color-mix(in srgb, var(--bg3) 30%, transparent)",
-        border: `1px solid ${on ? "var(--primary)" : "transparent"}`,
+        border: `1px solid ${on ? "var(--primary)" : "color-mix(in srgb, var(--border) 45%, transparent)"}`,
+        boxShadow: on ? "0 0 0 1px var(--primary)" : undefined,
       }}
     >
-      <Swatch t={t} />
-      <span className="whitespace-nowrap t-dim">{t.name}</span>
-      {on && <span className="ml-auto shrink-0" style={{ color: "var(--primary-hover)" }}>✓</span>}
+      <span className="flex h-7" aria-hidden>
+        <span style={{ flex: 3, background: ground }} />
+        <span style={{ flex: 1, background: v["--primary"] ?? t.preview.accent }} />
+        <span style={{ flex: 1, background: v["--success"] ?? t.preview.secondary }} />
+      </span>
+      <span className="flex items-center gap-1.5 px-2 py-1 text-[11.5px]"
+        style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", color: on ? "var(--primary-hover)" : "var(--text3)" }}>
+        <span className="truncate">{t.name}</span>
+        {on && <span className="ml-auto shrink-0">✓</span>}
+      </span>
     </button>
   );
 }
@@ -52,8 +66,8 @@ function Grid({ items, current, onPick }: { items: Theme[]; current: string; onP
     <>
       {groups.map((g) => (
         <div key={g.label} className="mb-2">
-          <div className="px-1 pt-1 pb-1.5 text-[9px] uppercase tracking-[0.18em] t-dim2">{g.label}</div>
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="panel-eyebrow pt-1 pb-1.5" style={{ paddingLeft: 0, paddingRight: 0 }}>{g.label}</div>
+          <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))" }}>
             {g.items.map((t) => <ThemeBtn key={t.id} t={t} current={current} onPick={onPick} />)}
           </div>
         </div>
@@ -65,29 +79,49 @@ function Grid({ items, current, onPick }: { items: Theme[]; current: string; onP
 /** The palette grid alone — curated run plus a disclosure for the rest. Dumb by
  *  design: it reports a pick and applies nothing, so its parent stays the single
  *  place that decides what "picking a theme" means. */
+/**
+ * How many palettes to show before this becomes a catalogue.
+ *
+ * Thirty-seven is a list you read; six is a set you recognise. The six are the
+ * first of the curated ones plus, always, whichever you are actually using —
+ * because a picker that hides your own theme behind "more" is a picker that
+ * tells you your choice was not one of the good ones.
+ */
+const FEATURED = 6;
+
 export function ThemePicker({ current, onChange }: { current: string; onChange: (id: string) => void }) {
-  const [showExperimental, setShowExperimental] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const curated = THEMES.filter((t) => !EXPERIMENTAL_THEME_IDS.has(t.id));
   const experimental = THEMES.filter((t) => EXPERIMENTAL_THEME_IDS.has(t.id));
 
+  const featured = curated.slice(0, FEATURED);
+  if (!featured.some((t) => t.id === current)) {
+    const mine = THEMES.find((t) => t.id === current);
+    if (mine) featured[FEATURED - 1] = mine;
+  }
+  const rest = THEMES.filter((t) => !featured.some((f) => f.id === t.id));
+
   return (
     <div>
-      <Grid items={curated} current={current} onPick={onChange} />
+      <Grid items={featured} current={current} onPick={onChange} />
 
       <button
-        onClick={() => setShowExperimental((v) => !v)}
-        className="mt-1 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px]"
+        onClick={() => setShowAll((v) => !v)}
+        className="mt-1.5 w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-[12px]"
         style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)", background: "color-mix(in srgb, var(--bg3) 22%, transparent)", color: "var(--text3)" }}
       >
-        <span style={{ color: "var(--text2)" }}>More themes</span>
-        <span className="t-dim2">experimental · {experimental.length}</span>
-        <span className="ml-auto t-dim2">{showExperimental ? "▴" : "▾"}</span>
+        <span className="inline-block w-2.5 text-[10px]" aria-hidden>{showAll ? "▾" : "▸"}</span>
+        <span style={{ color: "var(--text2)" }}>{rest.length} more</span>
+        <span className="t-dim">including {experimental.length} experimental</span>
       </button>
 
-      {showExperimental && (
+      {showAll && (
         <div className="mt-2">
-          <p className="px-1 pb-1.5 text-[10.5px] t-dim2">Decorative and second-flavour palettes, kept for tinkering.</p>
-          <Grid items={experimental} current={current} onPick={onChange} />
+          <p className="pb-1.5 text-[12px] t-dim">
+            The rest of the curated palettes, then the decorative and second-flavour ones kept for
+            tinkering.
+          </p>
+          <Grid items={rest} current={current} onPick={onChange} />
         </div>
       )}
     </div>
@@ -127,16 +161,21 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
     setAccentState(id);
   };
 
+  /* Mode and accent are settings and read as rows; the palette grid is a
+     picker and stays a grid. Both used a label floated left with the control
+     pushed right by `ml-auto`, which is the row shape drawn by hand — and drawn
+     to a different left edge than every other page in the dialog. */
   return (
-    <div className="px-3 pb-2">
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-[11px]" style={{ color: "var(--text2)" }}>Mode</span>
-        <div className="ml-auto flex p-0.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
+    <>
+      <SettingRow
+        label="Mode"
+        hint={<>A serious neutral pair. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</>}
+        control={<span className="flex p-0.5 rounded-lg" style={{ background: "color-mix(in srgb, var(--bg3) 40%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}>
           {MODES.map(({ m, label }) => {
             const on = mode === m;
             return (
               <button key={m} onClick={() => chooseMode(m)}
-                className="px-3 py-1 rounded-md text-[11px] transition-colors"
+                className="px-3 py-1 rounded-md text-[12px] transition-colors"
                 style={on
                   ? { background: "var(--bg2)", color: "var(--text)", boxShadow: "0 1px 2px rgba(0,0,0,0.25)" }
                   : { color: "var(--text3)" }}>
@@ -144,15 +183,15 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
               </button>
             );
           })}
-        </div>
-      </div>
-      <p className="text-[10.5px] t-dim2 mb-3">A serious neutral pair. <b style={{ color: "var(--text3)" }}>System</b> follows your OS.</p>
+        </span>}
+      />
 
       {/* Accent — a colour laid over the theme's grey primary, for the things
           that read as "live". "Theme" (dashed) is no override. */}
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-[11px]" style={{ color: "var(--text2)" }}>Accent</span>
-        <div className="ml-auto flex items-center gap-1.5">
+      <SettingRow
+        label="Accent"
+        hint="Laid over the theme's own primary, for the things that read as live."
+        control={<span className="flex items-center gap-1.5">
           {ACCENTS.map((a) => {
             const on = accent === a.id;
             const isDefault = !a.primary;
@@ -167,11 +206,11 @@ export function AppearancePane({ current, onChange }: { current: string; onChang
                 }} />
             );
           })}
-        </div>
-      </div>
+        </span>}
+      />
 
-      <div className="text-[9px] uppercase tracking-[0.18em] t-dim2 px-1 pb-1.5" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 30%, transparent)", paddingTop: 12 }}>Or pick a palette</div>
+      <div className="panel-eyebrow pt-3 pb-1.5">Or pick a palette</div>
       <ThemePicker current={current} onChange={chooseTheme} />
-    </div>
+    </>
   );
 }

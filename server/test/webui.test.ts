@@ -75,22 +75,17 @@ describe("injectSameOrigin", () => {
     expect(injectSameOrigin("<div/>").startsWith("<script>")).toBe(true);
   });
 
-  // The off-box mark. It decides which application the device gets, so the one
-  // thing that must never happen is planting it by default: that would put the
-  // phone companion on the desk.
-  test("the remote mark is planted only when asked for", () => {
-    const local = injectSameOrigin("<html><head></head><body></body></html>");
-    expect(local).not.toContain("__AGENTGLASS_REMOTE__");
-
-    const remote = injectSameOrigin("<html><head></head><body></body></html>", true);
-    expect(remote).toContain("window.__AGENTGLASS_REMOTE__=true");
-    expect(remote.indexOf("__AGENTGLASS_REMOTE__")).toBeLessThan(remote.indexOf("</head>"));
-    // Both marks, and the same-origin one still first.
-    expect(remote.indexOf("__AGENTGLASS_SAME_ORIGIN__")).toBeLessThan(remote.indexOf("__AGENTGLASS_REMOTE__"));
-  });
-
-  test("headless html carries the remote mark too", () => {
-    expect(injectSameOrigin("<div/>", true)).toContain("__AGENTGLASS_REMOTE__");
+  /**
+   * One mark, and no second one about who is asking.
+   *
+   * `__AGENTGLASS_REMOTE__` was planted for a non-loopback request, and the
+   * bundle read it to mount the phone companion instead of the cockpit. The
+   * companion is deleted and `main.tsx` no longer forks, so the flag had no
+   * reader — and a planted global with no reader is the kind of thing that gets
+   * a new one, quietly restoring a fork nobody decided to restore.
+   */
+  test("nothing is said about where the request came from", () => {
+    expect(injectSameOrigin("<html><head></head><body></body></html>")).not.toContain("REMOTE");
   });
 });
 

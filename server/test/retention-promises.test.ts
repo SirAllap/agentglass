@@ -28,6 +28,12 @@ describe("the promises SECURITY.md makes about retention", () => {
       for (const m of read(`server/src/${f}`).matchAll(/DELETE\s+FROM\s+(\w+)/gi)) all.push(`${f}:${m[1]}`);
     }
     expect(all.sort()).toEqual([
+      // Not recorded data: one row holding the pid and port of whichever server
+      // process owns this database file, released on a clean exit so the next
+      // one need not prove the previous is dead. Deleting it removes no event,
+      // no session and no prompt — which is why it is listed here and not in
+      // pruneOldRows below.
+      "db.ts:db_claim",
       "db.ts:events",
       "db.ts:events_fts",
       "db.ts:gates",
@@ -40,6 +46,34 @@ describe("the promises SECURITY.md makes about retention", () => {
     for (const t of ["events_fts", "events", "sessions", "gates", "reminders"]) {
       expect(body, `DELETE FROM ${t} escaped pruneOldRows`).toContain(`DELETE FROM ${t}`);
     }
+  });
+
+  /**
+   * The README told the user his raw prompts were kept for ever.
+   *
+   * It said "the desktop app defaults AGENTGLASS_RETENTION_DAYS=0". Nothing set
+   * it — not `electron/main.js`, which builds the sidecar's environment and
+   * passes exactly three variables — so the packaged app ran at the eight-day
+   * default and pruned hourly. The app itself was honest the whole time (boot
+   * log, Settings ▸ Budgets); only the prose was wrong, and it was wrong about
+   * how long the most sensitive thing in the database survives.
+   *
+   * So: if anyone ever does set it, this fails, and the README is corrected in
+   * the same commit rather than years later.
+   */
+  test("nothing sets AGENTGLASS_RETENTION_DAYS, so the README must not claim it does", () => {
+    const setters: string[] = [];
+    for (const f of ["electron/main.js", "electron/build.mjs", "server/src/index.ts", "server/src/db.ts"]) {
+      // An assignment, not a read: `process.env.X ?? 8` has no `=` or `:` after
+      // the name, while `X: "0"` in an env object and `env.X = "0"` both do.
+      for (const m of read(f).matchAll(/AGENTGLASS_RETENTION_DAYS\s*[:=]\s*["'`0-9]/g)) setters.push(`${f}: ${m[0]}`);
+    }
+    expect(setters, "someone now sets a retention default — update README.md's desktop bullet").toEqual([]);
+
+    const readme = read("README.md");
+    expect(readme).not.toContain("defaults `AGENTGLASS_RETENTION_DAYS=0`");
+    // And the table still states the real default the code applies.
+    expect(readme).toContain("| `AGENTGLASS_RETENTION_DAYS` | `8` |");
   });
 
   test("the rollup has no expiry and no removal path", () => {
@@ -83,6 +117,12 @@ describe("the promises SECURITY.md makes about retention", () => {
     // and refusing a task manager the ability to delete a task would be an odd
     // reading of a promise about telemetry. The test below holds it to that.
     "/tasks/write/delete",
+    // Throws away the browsing history imported from the user's OWN browser,
+    // which lives in its own file (placestore.ts) precisely so it can be
+    // deleted without touching a month of fleet telemetry. Nothing recorded by
+    // agentglass is removed; the events database is not opened. The check
+    // below holds it to that.
+    "/browser/places/forget",
   ]);
 
   test("the reviewed exceptions still touch no stored data", () => {

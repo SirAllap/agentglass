@@ -4,6 +4,7 @@ import type { StatsSummary, UsageHistory } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
 import { fmtUsd, fmtTokens, fmtEq, eqTitle, typeColor } from "../lib/format.ts";
+import { CloseButton } from "./CloseButton.tsx";
 import { subscribeProviderUsage, providerUsage, usageLoaded, usedColor, resetLabel, ageLabel } from "../lib/usageStore.ts";
 import { panelState } from "./UsageBox.tsx";
 
@@ -33,7 +34,7 @@ function Heatmap({ data }: { data: number[] }) {
         ))}
         {DAYS.map((day, d) => (
           <div key={d} className="contents">
-            <span className="text-[9px] t-dim2 self-center pr-1 text-right">{day}</span>
+            <span className="text-[10px] t-dim2 self-center pr-1 text-right">{day}</span>
             {Array.from({ length: 24 }, (_, h) => {
               const n = data[d * 24 + h] ?? 0;
               const intensity = n === 0 ? 0 : 0.18 + (n / max) * 0.82;
@@ -302,7 +303,7 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                       <span className="text-[17px] font-semibold" style={{ color: "var(--text)" }}>Statistics</span>
                       <span className="chip" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 18%, transparent)", borderColor: "color-mix(in srgb, var(--primary) 45%, transparent)" }}>{windowLabel(windowMs)}</span>
                     </div>
-                    <button onClick={onClose} className="h-8 w-8 grid place-items-center rounded-full text-[15px] t-dim2 hover:opacity-80" style={{ background: "color-mix(in srgb, white 8%, transparent)", backdropFilter: "blur(10px)", border: "1px solid color-mix(in srgb, white 12%, transparent)" }}>✕</button>
+                    <CloseButton onClick={onClose} hit={32} className="rounded-full" style={{ background: "color-mix(in srgb, white 8%, transparent)", backdropFilter: "blur(10px)", border: "1px solid color-mix(in srgb, white 12%, transparent)" }} />
                   </motion.div>
 
                 <div className="flex flex-col gap-6">
@@ -368,7 +369,7 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                           })}
                           <div className="grid grid-cols-[minmax(0,160px)_1fr_auto] gap-x-3 mt-0.5">
                             <span />
-                            <div className="flex justify-between text-[9px] t-dim2"><span>{windowLabel(windowMs).replace("last ", "-")}</span><span>now</span></div>
+                            <div className="flex justify-between text-[10px] t-dim2"><span>{windowLabel(windowMs).replace("last ", "-")}</span><span>now</span></div>
                             <span />
                           </div>
                         </div>
@@ -403,7 +404,7 @@ export function StatsModal({ open, onClose, stats, windowMs }: { open: boolean; 
                     <div className="t-dim2 text-[11px] py-3">No activity in this window</div>
                   ) : (
                     <div className="flex flex-col">
-                      <div className="grid grid-cols-[minmax(0,1fr)_repeat(3,auto)] gap-x-4 text-[9px] uppercase tracking-wider t-dim2 pb-1">
+                      <div className="grid grid-cols-[minmax(0,1fr)_repeat(3,auto)] gap-x-4 text-[10px] uppercase tracking-wider t-dim2 pb-1">
                         <span>app</span><span className="text-right">sessions</span><span className="text-right">tokens (eq)</span><span className="text-right">cost</span>
                       </div>
                       {apps.map((a) => (

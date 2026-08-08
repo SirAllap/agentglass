@@ -52,14 +52,24 @@ describe("what is shown", () => {
 
   test("but no button for something that is not there", () => {
     // Nothing to wire. A Connect button over an absent CLI writes a config
-    // that never does anything.
-    expect(pane).toContain('{state === "missing" ? (');
+    // that never does anything. Matched on the branch rather than on one
+    // spelling of it — the row moved onto the shared SettingRow and the old
+    // assertion was checking the markup around the decision, not the decision.
+    expect(pane).toMatch(/control=\{state === "missing"/);
+    expect(pane).toMatch(/not found/);
   });
 });
 
 describe("what it says about itself", () => {
   test("that connected means an event landed", () => {
-    expect(pane).toMatch(/Connected means an event has actually arrived/);
+    // The distinction, not one spelling of it: the sentence moved into a fold
+    // when the page was thinned out, and what it has to keep saying is that the
+    // state comes from TRAFFIC and not from a file having been written.
+    expect(pane).toMatch(/An event has actually arrived/);
+    expect(pane).toMatch(/not that a file was written/);
+    // Whitespace-tolerant: the sentence wraps in the source, and a lock that
+    // breaks on a line break is a lock that gets edited rather than obeyed.
+    expect(pane).toMatch(/looks\s+like a successful write/);
   });
 
   test("and that the config is backed up and a bad one left alone", () => {

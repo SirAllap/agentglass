@@ -68,6 +68,9 @@ interface Config {
   /** Spending limits somebody set. See budget.ts. Hand-edited freely like the
    *  rest of this file, so every field is checked on read. */
   budgets?: Budget[];
+  /** Projects the picker should stop offering. Absolute paths. See
+   *  hiddenProjects(). */
+  hiddenProjects?: string[];
 }
 
 function load(path: string): Config {
@@ -150,6 +153,80 @@ export function readBudgets(): Budget[] {
     });
   }
   return out;
+}
+
+/**
+ * Projects the picker has been told not to offer again.
+ *
+ * A found repo is not the same thing as a project somebody wants: the sweep
+ * turns up scratch checkouts, a clone made once to read something, the vendored
+ * copy under a tool's cache. There was no way to say so, and a list you cannot
+ * prune stops being read.
+ *
+ * Hidden, not forgotten, and certainly not deleted: nothing here touches the
+ * filesystem. The path is remembered so the sweep can go on finding it and this
+ * can go on leaving it out — anything else would mean the entry coming back on
+ * the next sweep, which is how "remove" turns into a button that does nothing.
+ *
+ * Every row is checked on read, like the rest of this hand-editable file.
+ */
+export function hiddenProjects(): string[] {
+  const raw = config().hiddenProjects;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    console.error(`[config] ignoring "hiddenProjects" in ${configPath()}: expected an array`);
+    return [];
+  }
+  const out: string[] = [];
+  for (const p of raw) {
+    if (typeof p !== "string" || !p.trim()) continue;
+    out.push(resolve(expand(p.trim())));
+  }
+  return out;
+}
+
+/**
+ * Hide one, or put it back.
+ *
+ * Per-path rather than whole-set, because the two callers are one row's ✕ and
+ * one row's undo — handing the whole list back and forth would let two windows
+ * open at once overwrite each other's answer with a stale copy.
+ */
+export function setProjectHidden(pathIn: unknown, hidden: boolean): { ok: boolean; hidden: string[]; persisted: boolean; error?: string } {
+  const fail = (error: string) => ({ ok: false as const, hidden: hiddenProjects(), persisted: false, error });
+  if (typeof pathIn !== "string" || !pathIn.trim() || pathIn.includes("\0")) return fail("invalid path");
+  const target = resolve(expand(pathIn.trim()));
+  const next = hiddenProjects().filter((p) => p !== target);
+  if (hidden) next.push(target);
+
+  const file = configPath();
+  if (realConfigOffLimits(file)) {
+    // Applied in memory is not possible here — this is read from the file every
+    // time — so say plainly that it did not take rather than report success.
+    return { ok: false, hidden: hiddenProjects(), persisted: false, error: "not persisted: tests write settings only under os.tmpdir()" };
+  }
+  let existing: Record<string, unknown> = {};
+  try {
+    if (existsSync(file)) {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return fail(`config file is malformed — fix ${file} to change this`);
+      }
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch (e) {
+    return fail(`config file is malformed — fix ${file} to change this (${e instanceof Error ? e.message : e})`);
+  }
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const merged: Record<string, unknown> = { ...existing };
+    if (next.length) merged.hiddenProjects = next; else delete merged.hiddenProjects;
+    writeFileSync(file, JSON.stringify(merged, null, 2) + "\n");
+    cached = null; // so the next read sees what was just written
+  } catch (e) {
+    return fail(`could not save to ${file}: ${e instanceof Error ? e.message : e}`);
+  }
+  return { ok: true, hidden: next, persisted: true };
 }
 
 /**

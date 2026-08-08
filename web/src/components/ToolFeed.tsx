@@ -44,8 +44,8 @@ export function ToolFeed({ tools, streaming, children }: {
         aria-expanded={open}
         className="w-full flex items-center gap-1.5 text-left hover:opacity-80 px-1 py-0.5"
         title={open ? "Fold the tool calls away" : "Show what this turn ran"}>
-        <span className="text-[8px] t-dim2 transition-transform shrink-0" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
-        <span className="text-[9px] uppercase tracking-wider shrink-0" style={{ color: tint }}>
+        <span className="text-[10px] t-dim2 transition-transform shrink-0" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
+        <span className="text-[10px] uppercase tracking-wider shrink-0" style={{ color: tint }}>
           {n} tool call{n === 1 ? "" : "s"}
         </span>
         {/* Only while it runs: which call is in flight. This is the whole reason
@@ -55,10 +55,10 @@ export function ToolFeed({ tools, streaming, children }: {
             {toolLabel(latest)}
           </span>
         )}
-        {running && <span className="text-[9px] shrink-0" style={{ color: "var(--info)" }}>·</span>}
+        {running && <span className="text-[10px] shrink-0" style={{ color: "var(--info)" }}>·</span>}
         {/* A failure never folds silently. */}
         {failed > 0 && (
-          <span className="text-[9px] tabular-nums ml-auto shrink-0" style={{ color: "var(--error)" }}>
+          <span className="text-[10px] tabular-nums ml-auto shrink-0" style={{ color: "var(--error)" }}>
             ✕ {failed} failed
           </span>
         )}

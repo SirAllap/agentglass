@@ -31,7 +31,52 @@ export type SystemNote = {
    * way to say so, so seventeen rows about pull requests were seventeen rows
    * you could not click. Only kinds this app can actually reach belong here.
    */
-  goto?: { kind: "pr"; repo: string; number: number };
+  goto?:
+    | { kind: "pr"; repo: string; number: number }
+    /**
+     * A checkout with something to do in it — commits to pull, a branch behind.
+     *
+     * Derived from the notification's own words rather than sent with it,
+     * because these arrive MIRRORED from the desktop: whoever wrote them had no
+     * idea agentglass would be reading, so nothing structured comes along. What
+     * does come along is a repository and a branch, in a sentence, and those are
+     * the two things needed to open the right view scoped to the right place.
+     */
+    | { kind: "git"; repo: string; branch?: string }
+    /**
+     * A ClickUp card, opened in Tasks rather than in a browser.
+     *
+     * The id is ClickUp's own because that is what the finder takes; the label
+     * is what the row shows, since `ORBIT-1042` is what somebody recognises and
+     * `86dyn…` is not.
+     */
+    | { kind: "card"; id: string; label: string }
+    /**
+     * The tmux pane an agent is sitting in.
+     *
+     * The destination for "Claude is waiting for your input", and the one the
+     * notification could never offer: it named a session by eight characters of
+     * a UUID and left the reader to find the window themselves. The pane id is
+     * recorded by the hook that fires the notification, so this is a fact
+     * travelling with the news rather than a guess made about it.
+     */
+    | { kind: "pane"; pane: string }
+    /**
+     * A chat of this app's own, by id.
+     *
+     * "Blocked — needs Bash" and "Turn finished" are about a conversation that
+     * is one click away, and both arrived pointing nowhere. The id was in hand
+     * at the moment the note was made and simply not passed.
+     */
+    | { kind: "chat"; id: string }
+    /**
+     * A section of Settings.
+     *
+     * For the notes whose body is already an instruction to go there. The
+     * update note read "Settings › About to install" — a sentence telling
+     * somebody to do by hand what the row they are reading could have done.
+     */
+    | { kind: "settings"; pane: string };
 };
 export type NotifyCapability = {
   supported: boolean;
@@ -46,6 +91,8 @@ export type NotifyCapability = {
    */
   transient?: boolean;
 };
+
+import { gitDestination } from "./gitNote.ts";
 
 const KEY = "agentglass.sysNotify";
 /** The detail level to come back to when the switch is turned on again, so
@@ -119,6 +166,30 @@ export function appNotify(): boolean {
 
 export function setAppNotify(on: boolean) {
   localStorage.setItem(APP_KEY, on ? "1" : "0");
+  /*
+   * The one place this app has ever had to ask, and until now it never did.
+   *
+   * `grep -rn requestPermission web/src electron/main.js` returned nothing:
+   * every alert went straight at `new Notification(...)` behind a guard that
+   * could only ever be false in a browser tab, because "default" is where a
+   * permission stays if you do not ask. Measured, that is exactly where a tab
+   * at http://127.0.0.1 sits. The desktop shell is unaffected — its
+   * `agentglass://` scheme is registered secure and Electron's default
+   * permission manager answers "granted" — so this is the surface that was
+   * silently losing everything.
+   *
+   * Asked HERE because this is the row: switching on "agentglass's own
+   * notifications" is a click, in the settings pane, that says yes to exactly
+   * the thing the browser is about to be asked about. Chrome requires a user
+   * gesture for `requestPermission`, and this is the only gesture in the
+   * product that means it. Asked once — `askNotifyPermission` returns early
+   * unless the answer is still "default".
+   *
+   * Not awaited: the preference above is already saved and the listeners have
+   * already been told. The prompt's answer changes what a LATER alert can do,
+   * not this one.
+   */
+  if (on) void askNotifyPermission();
   for (const fn of appListeners) fn(on);
 }
 
@@ -260,15 +331,61 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null;
 //
 // A toast is gone in five seconds, which is fine for "something happened" and
 // useless for "what was it again". This is the list behind the notch: the last
-// few dozen, newest first, in memory only.
+// few dozen, newest first.
 //
-// Deliberately not persisted. The whole feature reads every notification you
-// receive; writing those bodies to disk would turn an ambient mirror into a
-// log of your messages that outlives the session. It dies with the page.
+// SOME of it survives a restart, and where that line falls is the whole point.
+//
+// Not persisting anything was deliberate and had a real reason: this feature
+// reads every notification you receive, so writing those bodies to disk would
+// turn an ambient mirror into a log of your messages that outlives the session.
+// That reason still holds — for the mirror.
+//
+// It does not hold for the notes that are WORK: "restarting the app wipes them,
+// and the useful ones — the ones that take me to the card or the pull request —
+// are the ones I lose". Those are exactly the notes carrying an in-app
+// destination, which is a property this app sets itself and a mirrored message
+// from somebody's chat client never has. So that is the rule, and it is not a
+// heuristic: a note survives a restart if and only if it has somewhere in this
+// app to go.
+//
+// A mirrored message with only an external link is still session-only. Nothing
+// of somebody's Slack ends up on disk.
 // ---------------------------------------------------------------------------
 
 const HISTORY_MAX = 60;
-let history: SystemNote[] = [];
+const HISTORY_KEY = "agentglass.notes.actionable";
+
+/** Only notes with an in-app destination are written down — see above. */
+const worthKeeping = (n: SystemNote): boolean => !!n.goto;
+
+function loadHistory(): SystemNote[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    // Filtered on the way in as well as on the way out: this was written by a
+    // previous version, and one malformed row must not take the list with it.
+    return raw.filter((n: unknown): n is SystemNote =>
+      !!n && typeof n === "object"
+      && typeof (n as SystemNote).id === "string"
+      && typeof (n as SystemNote).summary === "string"
+      && typeof (n as SystemNote).at === "number"
+      && !!(n as SystemNote).goto).slice(0, HISTORY_MAX);
+  } catch { return []; }
+}
+
+function saveHistory() {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.filter(worthKeeping))); }
+  catch { /* private mode, or full — the list still works for this session */ }
+}
+
+let history: SystemNote[] = loadHistory();
+/*
+ * Zero, not the number restored.
+ *
+ * The badge means "new since you last looked", and starting the app is looking.
+ * Restoring a count of eleven would make every launch shout about things you
+ * read yesterday, which is how a badge stops being read at all.
+ */
 let unread = 0;
 const historyListeners = new Set<() => void>();
 
@@ -281,6 +398,7 @@ export function subscribeNotifyHistory(fn: () => void): () => void {
 }
 
 function historyChanged() {
+  saveHistory();
   for (const fn of historyListeners) fn();
 }
 
@@ -303,12 +421,115 @@ function historyChanged() {
  * is already granted — which Electron does by default for the app — so it never
  * pops a permission prompt off the back of an incoming socket frame.
  */
-export function fireDesktopAlert(a: { title: string; body: string }) {
+/**
+ * Where a clicked alert should take you.
+ *
+ * A function rather than an import, because this module is below the app in the
+ * dependency order and must stay that way — it is imported by the notch, the
+ * service worker tests and the settings pane. App registers the same resolver
+ * the bell uses, so a notification and a bell row lead to the same place.
+ */
+let goto: ((g: NonNullable<SystemNote["goto"]>) => void) | null = null;
+export function setAlertGoto(fn: typeof goto) { goto = fn; }
+
+/**
+ * Raise agentglass's own alert as a native notification.
+ *
+ * Clickable when the alert knows where its agent is. This is the third of three
+ * complaints about these — it did not say which agent, did not say which pane,
+ * and went nowhere — and the one the other two had to be fixed first to make
+ * possible: there was no destination to offer until the pane travelled with the
+ * news.
+ *
+ * `requireInteraction` for the blocking kinds only. An agent stopped waiting
+ * for a person should still be on screen when the person comes back; a tool
+ * error should not have to be dismissed.
+ */
+export function fireDesktopAlert(a: { title: string; body: string; urgency?: 0 | 1 | 2; pane?: string }) {
+  /*
+   * The bell FIRST, above both guards.
+   *
+   * This used to be the last statement inside the try, under `typeof
+   * Notification === "undefined"` and `Notification.permission !== "granted"` —
+   * so the DURABLE record was gated on the TRANSIENT popup it exists to
+   * outlive. In exactly the case where nothing can pop, nothing was kept
+   * either, and the bell said the machine was quiet.
+   *
+   * How bad that was depends on the surface, and all three were measured
+   * (Electron 43.3.0, the app's own privileged `agentglass://` scheme, no
+   * permission handler anywhere in electron/main.js — the installed app.asar
+   * has none either):
+   *
+   *   agentglass://app in the desktop shell   secure, permission "granted"
+   *   http://127.0.0.1:PORT in a browser tab  secure, permission "default"
+   *   http://<lan-ip>:PORT in a browser tab   insecure, permission "denied"
+   *
+   * So the desk was fine and every browser tab was not: on "default" and
+   * "denied" both halves were dropped, and `grep -rn requestPermission web/src
+   * electron/main.js` returns nothing — the app has never asked, so "default"
+   * is where a tab stays for ever. See askNotifyPermission below, and the row
+   * in Settings that calls it.
+   *
+   * Recorded here rather than derived from the text later, because here is the
+   * only place that still has the pane as a fact rather than as a phrase. The
+   * mirror drops our own app to keep this from arriving twice.
+   */
+  recordNote({ app: OUR_APP, summary: a.title, body: a.body, urgency: a.urgency,
+    ...(a.pane ? { goto: { kind: "pane" as const, pane: a.pane } } : {}) });
   try {
     if (typeof Notification === "undefined") return;
-    if (Notification.permission === "granted") new Notification(a.title, { body: a.body });
+    if (Notification.permission !== "granted") return;
+    const n = new Notification(a.title, { body: a.body, requireInteraction: a.urgency === 2 });
+    if (a.pane) {
+      const pane = a.pane;
+      n.onclick = () => {
+        try { window.focus(); } catch { /* not a window we own */ }
+        goto?.({ kind: "pane", pane });
+        n.close();
+      };
+    }
   } catch {
     /* a host without Notification support — the notch still has it */
+  }
+}
+
+/**
+ * What the browser will let us pop right now.
+ *
+ * `null` for a host with no Notification API at all, which is a different
+ * answer from "denied": one is a build without the feature, the other is a
+ * decision somebody made, and the row in Settings says them differently.
+ */
+export function notifyPermission(): NotificationPermission | null {
+  return typeof Notification === "undefined" ? null : Notification.permission;
+}
+
+/**
+ * Ask, once, from a click.
+ *
+ * The app has never asked in its life. `alerts.ts` claimed otherwise — "the
+ * browser then asks its own permission before anything native happens
+ * (sysNotify.ts:178)" — and sysNotify.ts:178 is `shouldInterrupt`, a rule about
+ * urgency with no permission in it. That sentence was load-bearing and false,
+ * so a browser tab sat on "default" for ever and every one of agentglass's own
+ * alerts was discarded before it reached the screen.
+ *
+ * Only from a user gesture: Chrome requires transient activation for
+ * `requestPermission`, and a prompt fired off the back of an incoming socket
+ * frame is the interruption the feature is trying to earn the right to make.
+ * Asked only while the answer is still "default" — "denied" cannot be undone
+ * from script and re-asking would spend a gesture on nothing.
+ */
+export async function askNotifyPermission(): Promise<NotificationPermission | null> {
+  if (typeof Notification === "undefined") return null;
+  if (Notification.permission !== "default") return Notification.permission;
+  try {
+    return await Notification.requestPermission();
+  } catch {
+    // Insecure origin: Chrome removed requestPermission there, measured as
+    // permission "denied" and isSecureContext false at http://<lan-ip>. There
+    // is nothing to ask for and nothing to report beyond what it already says.
+    return Notification.permission;
   }
 }
 
@@ -327,6 +548,11 @@ export function recordNote(n: { app: string; summary: string; body: string; urge
   historyChanged();
 }
 let localSeq = 0;
+
+/** How the desktop names us. The notification is raised by the Electron shell,
+ *  so this is what the freedesktop `app_name` comes back as — matched by prefix
+ *  because a web build is plain "agentglass". */
+const OUR_APP = "agentglass";
 
 export function markNotifyRead() {
   if (!unread) return;
@@ -444,6 +670,17 @@ function attach() {
     // Applied here rather than on the server so the choice is the viewer's and
     // takes effect the instant it is changed, without a reconnect.
     if (sysNotifyMode() === "titles") n = { ...n, body: "" };
+    /*
+     * Our own alerts arrive here too, mirrored off D-Bus, and must not be kept.
+     *
+     * `fireDesktopAlert` already recorded them a moment ago WITH the pane they
+     * are about. The mirrored copy has the same words and none of the facts, so
+     * keeping it would put two identical rows behind the notch of which only
+     * one goes anywhere — and the useless one arrives second, so it wins.
+     */
+    if (n.app && n.app.toLowerCase().startsWith(OUR_APP)) return;
+    // A mirrored note cannot say where it points. Read it and see.
+    if (!n.goto) { const g = gitDestination(n); if (g) n = { ...n, goto: g }; }
     history = [n, ...history].slice(0, HISTORY_MAX);
     unread++;
     historyChanged();

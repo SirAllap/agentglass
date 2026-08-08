@@ -18,6 +18,10 @@ beforeAll(async () => {
 let id = 0;
 const ev = (o: Partial<WatchEvent> & { session_id: string; hook_event_type: string }): WatchEvent => ({
   id: ++id, source_app: "orbit", tool_name: null, tool_use_id: null, agent_id: null, agent_type: null,
+  // `provider` was the one required field this base literal omitted, so the
+  // spread left it `string | null | undefined` and the annotated return type
+  // was a claim nobody checked until tsconfig.test.json existed.
+  provider: null,
   model_name: null, is_error: 0, error_text: null, duration_ms: null, input_tokens: 0, output_tokens: 0,
   cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0, summary: null,
   timestamp: Date.now() + 60_000, payload: {}, ...o,

@@ -43,6 +43,8 @@ import {
 import { peekChatIntent, subscribeChatIntent, takeChatIntent } from "../lib/chatIntent.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
+import { CloseButton } from "./CloseButton.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 // Claude's list arrives from the server, like the other two agents'. It is data
 // there (shared/claude-models.json), filtered to the models whose shutdown date
@@ -175,11 +177,11 @@ function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
     <div className="mb-1.5 rounded-md overflow-hidden" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 22%, transparent)" }}>
       <button onClick={() => setOpen(!open)} aria-expanded={open}
         className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:opacity-80">
-        <span className="text-[8px] t-dim2 transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
-        <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>thinking</span>
-        {streaming && <span className="text-[9px]" style={{ color: "var(--info)" }}>·</span>}
+        <span className="text-[10px] t-dim2 transition-transform" style={{ transform: open ? "none" : "rotate(-90deg)" }}>▼</span>
+        <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>thinking</span>
+        {streaming && <span className="text-[10px]" style={{ color: "var(--info)" }}>·</span>}
         {/* A length cue, so a fold is an informed choice rather than a mystery. */}
-        {!open && <span className="text-[9px] t-dim2 ml-auto tabular-nums">{lines.length} line{lines.length === 1 ? "" : "s"}</span>}
+        {!open && <span className="text-[10px] t-dim2 ml-auto tabular-nums">{lines.length} line{lines.length === 1 ? "" : "s"}</span>}
       </button>
       {open && (
         <div className="px-2.5 pb-2 pt-0.5 text-[11px] leading-relaxed whitespace-pre-wrap break-words"
@@ -247,7 +249,7 @@ function Inspector({ chat }: { chat: Chat }) {
       </div>
       {u.costUsd > 0 && (
         <div className="flex items-baseline gap-2 pt-1 mt-0.5 border-t" style={{ borderColor: "color-mix(in srgb, var(--border) 20%, transparent)" }}>
-          <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>cost</span>
+          <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--text3)" }}>cost</span>
           <span className="ml-auto text-[11px] tabular-nums font-medium" style={{ color: "var(--success)" }}>{fmtUsd(u.costUsd)}</span>
         </div>
       )}
@@ -322,7 +324,7 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
             const pct = (chat.usage.contextTokens / chatLimit(chat, chat.usage.contextTokens)) * 100;
             if (pct < 1) return null;
             return (
-              <span className="ml-auto shrink-0 text-[9px] tabular-nums" title={`${fmtTokens(chat.usage.contextTokens)} of context used`}
+              <span className="ml-auto shrink-0 text-[10px] tabular-nums" title={`${fmtTokens(chat.usage.contextTokens)} of context used`}
                 style={{ color: pct >= 90 ? "var(--error)" : pct >= 70 ? "var(--warning)" : "var(--text3)" }}>
                 {pct.toFixed(0)}%
               </span>
@@ -330,12 +332,7 @@ function ChatRow({ chat, active, onPick, onClose }: { chat: Chat; active: boolea
           })()}
         </div>
       </div>
-      <button
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
-        className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 text-[13px] leading-none px-1 t-dim2 hover:opacity-70 shrink-0"
-        title="Close chat"
-        aria-label={`Close chat: ${chat.title}`}
-      >✕</button>
+      <CloseButton onClick={(e) => { e.stopPropagation(); onClose(); }} title="Close chat" aria-label={`Close chat: ${chat.title}`} className="opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 shrink-0" />
     </div>
   );
 }
@@ -643,7 +640,7 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
             <ResumeRow key={s.session_id} s={s} openChatId={chatResuming(s.session_id)?.id} onPick={() => onPick(s)} />
           ))}
         </div>
-        <div className="px-2.5 pt-1.5 pb-0.5 text-[9px] t-dim2 shrink-0">
+        <div className="px-2.5 pt-1.5 pb-0.5 text-[10px] t-dim2 shrink-0">
           Resuming keeps claude's full context · running sessions can't be resumed
         </div>
       </motion.div>
@@ -656,7 +653,7 @@ function ResumePicker({ onPick, onClose }: { onPick: (s: SessionRollup) => void;
 // and matches the stroke weight of the header's icons.
 function ClipIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <svg width={ICON.md} height={ICON.md} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7-7l8.9-8.9a3.3 3.3 0 0 1 4.7 4.7l-8.9 8.9a1.7 1.7 0 0 1-2.3-2.3l8.2-8.2" />
     </svg>
   );
@@ -1517,7 +1514,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                                 `--primary-hover` label sat on its own colour and
                                 vanished; the agent's still gets the accent it
                                 always had, because its bubble is a surface. */}
-                            <div className="text-[9px] uppercase tracking-wider mb-1 flex items-center gap-2"
+                            <div className="text-[10px] uppercase tracking-wider mb-1 flex items-center gap-2"
                               style={{ color: m.role === "user" ? "var(--text)" : "var(--info)", opacity: m.role === "user" ? 0.75 : 1 }}>
                               <span>{m.role}</span>
                               <span className="t-dim2 normal-case tracking-normal">{fmtTime(m.ts)}</span>
@@ -1606,9 +1603,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                             style={{ border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
                             title={`${a.name} · ${(a.bytes / 1024).toFixed(0)}KB`}>
                             <img src={a.url} alt={a.name} className="block h-14 w-14 object-cover" />
-                            <button onClick={() => dropAttachment(active.id, a.id)} aria-label={`Remove ${a.name}`}
-                              className="absolute top-0.5 right-0.5 w-4 h-4 grid place-items-center rounded text-[10px] leading-none"
-                              style={{ color: "var(--text)", background: "rgba(0,0,0,0.65)" }}>✕</button>
+                            <CloseButton onClick={() => dropAttachment(active.id, a.id)} aria-label={`Remove ${a.name}`} style={{ color: "var(--text)", background: "rgba(0,0,0,0.65)" }} className="absolute top-0.5 right-0.5 rounded" />
                           </div>
                         ))}
                       </div>
@@ -1675,8 +1670,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                           style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 18%, transparent)", border: "1px solid color-mix(in srgb, var(--warning) 45%, transparent)" }}>
                           Allow {active.blockedTool}
                         </button>
-                        <button onClick={() => update(active.id, (c) => { c.blockedTool = undefined; })}
-                          className="shrink-0 px-1 t-dim2 hover:opacity-70" aria-label="Dismiss">✕</button>
+                        <CloseButton onClick={() => update(active.id, (c) => { c.blockedTool = undefined; })} title="Dismiss" className="shrink-0" />
                       </div>
                     )}
                     {slashMatches.length > 0 && (
@@ -1729,8 +1723,7 @@ export function ChatView({ active: visible, focusId, onClose = () => {} }: { act
                               <button onClick={() => unqueue(active.id, q.id, true)} title="Put this back in the composer"
                                 className="shrink-0 text-[9.5px] t-dim2 hover:opacity-70">Edit</button>
                             )}
-                            <button onClick={() => unqueue(active.id, q.id)} aria-label="Remove queued message"
-                              className="shrink-0 px-1 t-dim2 hover:opacity-70">✕</button>
+                            <CloseButton onClick={() => unqueue(active.id, q.id)} title="Remove queued message" className="shrink-0" />
                           </div>
                         ))}
                       </div>

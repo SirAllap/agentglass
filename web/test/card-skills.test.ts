@@ -108,8 +108,8 @@ describe("the short name a team uses", () => {
   it("takes the prefix the title already carries", () => {
     // "waiting on T2" is something to act on; "waiting on ABC-21016" is a
     // lookup somebody has to perform before the sentence means anything.
-    expect(shortName("T16 - Non-destructive transition service", "ABC-1")).toBe("T16");
-    expect(shortName("T2 – Upgrade endpoint", "ABC-1")).toBe("T2");
+    expect(shortName("T16 - Non-destructive price rollout", "ABC-1")).toBe("T16");
+    expect(shortName("T2 – Refund endpoint", "ABC-1")).toBe("T2");
     expect(shortName("QA9: verify the thing", "ABC-1")).toBe("QA9");
   });
 

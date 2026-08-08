@@ -1,23 +1,28 @@
 #!/usr/bin/env bun
 /**
- * Render the phone's icons from the marks in the repository.
+ * Render the home-screen icons from the marks in the repository.
  *
- * Everything the companion offered a phone was an SVG, and the three places a
- * phone actually reads an icon from are the three that handle SVG worst:
- * `apple-touch-icon` (iOS ignores it and screenshots the page instead, so the
- * home-screen icon was a shrunken dashboard), the manifest's install and splash
- * path, and a notification's `icon`/`badge`. All three want rasters.
+ * Every icon this page offered was an SVG, and the places a phone actually
+ * reads one from are the places that handle SVG worst: `apple-touch-icon` (iOS
+ * ignores it and screenshots the page instead, so the home-screen icon was a
+ * shrunken dashboard) and the manifest's install and splash path. Both want
+ * rasters.
  *
  * They are generated rather than drawn, and the generator is checked in beside
- * them, because the alternative is five binaries nobody can regenerate when the
- * mark changes. Chromium does the rendering — it is already a dependency of the
- * phone audit, and it rasterises the same SVG the browser would.
+ * them, because the alternative is four binaries nobody can regenerate when the
+ * mark changes. Chromium does the rendering — it rasterises the same SVG the
+ * browser would.
  *
  *   bun scripts/make-icons.ts        # rewrites web/public/*.png
  *
- * Re-run it whenever web/public/icon-app.svg, icon-maskable.svg or
- * icon-badge.svg change. web/test/phone-icons.test.ts fails if a PNG a phone
- * needs is missing or is not actually a PNG.
+ * Re-run it whenever web/public/icon-app.svg or icon-maskable.svg change.
+ * web/test/phone-icons.test.ts fails if a PNG a phone needs is missing or is
+ * not actually a PNG.
+ *
+ * `icon-badge.svg` was here too, for the status-bar badge on a pushed
+ * notification. Web Push is gone and nothing draws a badge, so keeping the
+ * stencil would have meant regenerating art for a surface that no longer
+ * exists.
  */
 import { spawn } from "bun";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -37,8 +42,6 @@ const WANTED: { from: string; to: string; size: number; why: string }[] = [
     why: "The manifest's `any` icon at splash-screen size." },
   { from: "icon-maskable.svg", to: "icon-maskable-512.png", size: 512,
     why: "`maskable`: the mark sits inside the safe circle so a launcher can crop it to any shape." },
-  { from: "icon-badge.svg", to: "icon-badge.png", size: 96,
-    why: "The status-bar badge. Drawn from the alpha channel alone, so it is a white stencil." },
 ];
 
 const chromePort = 9351;
@@ -67,9 +70,12 @@ try {
     await cdp.send("Emulation.setDeviceMetricsOverride", {
       width: size, height: size, deviceScaleFactor: 1, mobile: false,
     });
-    // Without this the page composites onto opaque white, and the badge — whose
-    // whole job is to be a shape cut out of nothing — comes back as a white
-    // square with a slightly whiter mark on it.
+    // Without this the page composites onto opaque white, so any source SVG
+    // that does not paint its own background arrives as a white square with a
+    // mark on it. Every SVG here is full-bleed today — all four PNGs come back
+    // colour-type 2, no alpha channel — so it changes nothing right now; it was
+    // load-bearing for the notification badge, which was a stencil, and it
+    // stays because the next mark that is not full-bleed would fail silently.
     await cdp.send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
     await cdp.send("Page.navigate", { url: "data:text/html;charset=utf-8," + encodeURIComponent(page) });
     await Bun.sleep(220);

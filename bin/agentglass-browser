@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+"""Drive agentglass's built-in browser — the one with your logins in it.
+
+An agent can already fetch a URL from its shell and get the signed-out
+version of everything that matters, because the session lives in a browser
+and not in curl. This talks to the browser in the app window instead.
+
+    agentglass-browser open https://github.com/notifications
+    agentglass-browser read
+    agentglass-browser click "a.notification-list-item-link"
+    agentglass-browser type "#search" "billing bug" --submit
+    agentglass-browser wait ".results"
+    agentglass-browser shot /tmp/page.png
+
+Stdlib only, so it runs wherever the agent's shell runs. Exit code 0 when
+the browser did the thing, 1 when it did not — an agent branches on that.
+
+Env:
+    AGENTGLASS_SERVER   base url (default http://localhost:4000)
+    AGENTGLASS_TOKEN    only needed if the server was started with one
+"""
+import argparse
+import base64
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+
+SERVER = os.environ.get("AGENTGLASS_SERVER", "http://localhost:4000").rstrip("/")
+
+
+def call(op, body):
+    req = urllib.request.Request(
+        f"{SERVER}/browser/{op}",
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            # Same-origin is how the server tells a browser tab from everything
+            # else; a CLI on this machine says so plainly.
+            "Origin": SERVER,
+        },
+    )
+    token = os.environ.get("AGENTGLASS_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read() or b"{}")
+        except json.JSONDecodeError:
+            return {"ok": False, "error": f"server said {e.code}"}
+    except urllib.error.URLError as e:
+        return {"ok": False, "error": f"no agentglass at {SERVER} ({e.reason})"}
+
+
+def open_browser_view():
+    """Ask the window to show the browser pane.
+
+    The pane is where the guest lives, so nothing can answer until it is
+    mounted — and telling an agent to ask a human to click a tab is not an
+    answer. This is the same command a Stream Deck sends; it opens a panel and
+    grants nothing else.
+    """
+    req = urllib.request.Request(
+        f"{SERVER}/control",
+        data=json.dumps({"cmd": "view", "to": "browser"}).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "Origin": SERVER},
+    )
+    token = os.environ.get("AGENTGLASS_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+        return True
+    except Exception:
+        return False
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="agentglass-browser", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("open", help="go to a page and wait for it to load")
+    p.add_argument("url")
+    sub.add_parser("read", help="the page's url, title and visible text")
+    p = sub.add_parser("click", help="click the first element matching a CSS selector")
+    p.add_argument("selector")
+    p = sub.add_parser("type", help="type into a field, optionally submitting it")
+    p.add_argument("selector")
+    p.add_argument("text")
+    p.add_argument("--submit", action="store_true")
+    p = sub.add_parser("wait", help="wait for an element to appear")
+    p.add_argument("selector")
+    p = sub.add_parser("shot", help="screenshot the page")
+    p.add_argument("out", nargs="?", help="write the png here instead of printing a data url")
+    sub.add_parser("back", help="go back in this page's history")
+    sub.add_parser("forward", help="go forward again")
+    p = sub.add_parser("text", help="the text of one element, instead of the whole page")
+    p.add_argument("selector")
+    p = sub.add_parser("scroll", help="scroll to an element, by pixels, or to top/bottom")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--selector")
+    g.add_argument("--by", type=int, help="pixels; negative scrolls up")
+    g.add_argument("--to", choices=["top", "bottom"])
+    p = sub.add_parser("press", help="press a key that is not text (Enter, Escape, Tab, arrows...)")
+    p.add_argument("key")
+    a = ap.parse_args()
+
+    body = {}
+    if a.cmd == "open":
+        body = {"url": a.url}
+    elif a.cmd in ("click", "wait"):
+        body = {"selector": a.selector}
+    elif a.cmd == "type":
+        body = {"selector": a.selector, "text": a.text, "submit": a.submit}
+    elif a.cmd == "text":
+        body = {"selector": a.selector}
+    elif a.cmd == "scroll":
+        if a.selector:
+            body = {"selector": a.selector}
+        elif a.by is not None:
+            body = {"by": a.by}
+        else:
+            body = {"to": a.to}
+    elif a.cmd == "press":
+        body = {"key": a.key}
+
+    res = call(a.cmd, body)
+    # One retry, and only for the one failure a retry can fix: the pane was not
+    # up. Open it, give the guest a moment to attach, ask again. Any other
+    # failure is reported as it is — retrying a selector that matched nothing
+    # just makes an agent wait twice for the same answer.
+    # Both failures a retry can fix, and they are the same fix: the pane is not
+    # there, or it is there behind something else and therefore painting
+    # nothing. Anything else is reported as it is — retrying a selector that
+    # matched nothing just makes an agent wait twice for the same answer.
+    if not res.get("ok") and any(
+        s in (res.get("error") or "") for s in ("view is not open", "not on screen")
+    ):
+        if open_browser_view():
+            time.sleep(2)
+            res = call(a.cmd, body)
+
+    if not res.get("ok"):
+        print(res.get("error") or "the browser could not do that", file=sys.stderr)
+        return 1
+
+    value = res.get("value") or {}
+    if a.cmd == "text":
+        # Same reason as `read`: the caller is a model reading a page, and JSON
+        # around one string is punctuation it pays for.
+        print(value.get("text", ""))
+    elif a.cmd == "read":
+        # Plain text, because the caller is a language model reading a page —
+        # wrapping it in JSON would spend tokens on punctuation.
+        print(f"{value.get('title', '')}\n{value.get('url', '')}\n")
+        print(value.get("text", ""))
+    elif a.cmd == "shot":
+        png = value.get("png", "")
+        raw = base64.b64decode(png.split(",", 1)[1]) if "," in png else b""
+        if a.out:
+            with open(a.out, "wb") as f:
+                f.write(raw)
+            print(a.out)
+        else:
+            print(png)
+    else:
+        print(json.dumps(value))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

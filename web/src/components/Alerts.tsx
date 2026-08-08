@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { Alert, AgentCard } from "../lib/derive.ts";
 import { collectAttention } from "../lib/attention.ts";
 import { listChats, subscribe as subscribeChats } from "../lib/chatStore.ts";
-import { listGates, subscribeGates, forgetGate } from "../lib/gateStore.ts";
+import { listGates, subscribeGates, answerGate } from "../lib/gateStore.ts";
 import type { Insight, PendingGate, GateRecord } from "../../../shared/types.ts";
 import { Panel } from "./Panel.tsx";
 import { api } from "../lib/api.ts";
@@ -65,10 +65,25 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
     return () => { alive = false; clearInterval(id); };
   }, []);
 
+  /*
+   * The answer, and what happens when it does not take.
+   *
+   * This used to be `api.gateDecide(...).catch(() => {})` beside an optimistic
+   * `forgetGate`, which discarded the one reply worth reading: the route says
+   * "too late, the timeout already denied it" with a **200** and `ok: false`,
+   * so nothing was thrown and the card left the screen either way. An agent was
+   * left blocked behind a press that looked like it worked.
+   *
+   * `answerGate` owns both halves — it puts the card back and raises the
+   * server's own sentence on the notch — because undoing the optimistic drop
+   * means reaching into state this panel does not hold. All that is left here
+   * is re-enabling the buttons for a card that has come back.
+   */
   const decide = (g: PendingGate, decision: "allow" | "deny") => {
     setActing((a) => ({ ...a, [g.id]: true }));
-    forgetGate(g.id); // optimistic
-    api.gateDecide(g.id, decision).catch(() => {});
+    void answerGate(g, decision).then((took) => {
+      if (!took) setActing((a) => ({ ...a, [g.id]: false }));
+    });
   };
 
   /*
@@ -199,7 +214,7 @@ export function Alerts({ alerts, agents = [], onSelectApp, bump }: { alerts: Ale
 
         {insights.length > 0 && (
           <>
-            {alerts.length > 0 && <div className="text-[9px] uppercase tracking-[0.18em] t-dim2 px-1 pt-1 pb-1.5">Insights</div>}
+            {alerts.length > 0 && <div className="text-[10px] uppercase tracking-[0.18em] t-dim2 px-1 pt-1 pb-1.5">Insights</div>}
             <AnimatePresence initial={false}>
               {insights.map((i) => {
                 const color = SEV[i.severity];

@@ -35,6 +35,16 @@ export type TermIssue = {
    * card is an agent editing files nobody asked it to.
    */
   yolo?: boolean;
+  /**
+   * What to call the agent's session — the card's own title.
+   *
+   * Data, not a command, like everything else on this bus: the server decides
+   * that a title becomes `--name` and sanitises it, and a client that sends
+   * nothing simply gets an unnamed session. Sent because a tmux window name is
+   * an id (`orbit-21025`, so `tmux ls` is readable) and this is the sentence —
+   * they answer different questions and neither replaces the other.
+   */
+  title?: string;
   n: number;
 };
 
@@ -51,8 +61,8 @@ export function termIssue(): TermIssue | null { return pending; }
 /** `n` increments so starting the same issue twice is two requests — otherwise
  *  closing the window and pressing Start again would look like the request that
  *  has already been served. */
-export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false): void {
-  pending = { cwd, name, prompt, agent, yolo, n: (pending?.n ?? 0) + 1 };
+export function requestTermIssue(cwd: string, name: string, prompt: string, agent: boolean, yolo = false, title = ""): void {
+  pending = { cwd, name, prompt, agent, yolo, title, n: (pending?.n ?? 0) + 1 };
   subs.forEach((f) => f());
 }
 

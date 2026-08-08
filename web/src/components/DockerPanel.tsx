@@ -1,17 +1,19 @@
 // Live Docker — agentglass's lazydocker replacement. Containers grouped by
 // compose project with live CPU/mem, a streaming-ish log viewer, and start/
 // stop/restart/rm actions. Images / volumes / networks get their own tabs.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import type { DockerOverview, DockerContainer, DockerStat, DockerCapability } from "../../../shared/types.ts";
 import { depSpec } from "../../../shared/deps.ts";
 import { api } from "../lib/api.ts";
 import { Select } from "./Select.tsx";
 import { SCROLLBAR_CSS, CODE_FONT_STYLE } from "./ChangesModal.tsx";
-import { ConsoleStrip, consoleRoot, runInConsole } from "./TerminalPanel.tsx";
+import { ConsoleStrip, consoleRoot, runInConsole, consoleInTmux, subscribeSessions } from "./TerminalPanel.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
+import { CloseIcon } from "./CloseButton.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 // Strip ANSI CSI (colors, cursor moves, erases) + OSC sequences, not just SGR.
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g; // eslint-disable-line no-control-regex
@@ -103,9 +105,9 @@ function Stack({ id, label, n, open, active, onToggle, onActivate, children }: {
         className="w-full flex items-center gap-2 px-2.5 py-1 sticky top-0 z-20 text-left"
         style={{ background: "var(--bg2)", borderLeft: `2px solid ${active ? "var(--primary)" : "transparent"}` }}
         aria-expanded={open}>
-        <span className="text-[8px] t-dim2 w-2 shrink-0">{open ? "▾" : "▸"}</span>
+        <span className="text-[10px] t-dim2 w-2 shrink-0">{open ? "▾" : "▸"}</span>
         <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: active ? "var(--text)" : "var(--text2)" }}>{label}</span>
-        <span className="text-[9px] t-dim2 tabular-nums">{n}</span>
+        <span className="text-[10px] t-dim2 tabular-nums">{n}</span>
       </button>
       {open && children}
     </div>
@@ -119,7 +121,7 @@ function StackRow({ label, meta, dim, onClick }: { label: string; meta?: string;
       className="flex items-center gap-2 pl-6 pr-2 py-[3px] cursor-pointer rounded-md"
       style={{ opacity: dim ? 0.5 : 1 }}>
       <span className="min-w-0 flex-1 truncate text-[10.5px]" style={{ color: "var(--text2)" }}>{label}</span>
-      {meta && <span className="text-[9px] t-dim2 shrink-0 tabular-nums">{meta}</span>}
+      {meta && <span className="text-[10px] t-dim2 shrink-0 tabular-nums">{meta}</span>}
     </div>
   );
 }
@@ -152,7 +154,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
             Underneath, dimmer, it reads as what it is — provenance, not
             identity. In dense mode it goes back to the tooltip, which is the
             trade: half the rows, one less thing per row. */}
-        {!dense && <span className="truncate text-[9px] t-dim2">{c.image}</span>}
+        {!dense && <span className="truncate text-[10px] t-dim2">{c.image}</span>}
       </span>
 
       {/* Numbers, not two unlabelled bars. A bar with no scale and no figure
@@ -164,7 +166,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
         title={stat ? `memory ${stat.mem}% (${stat.memUsage})` : undefined}>
         {stat && running ? `${stat.mem.toFixed(0)}%` : ""}
       </span>
-      <span className="text-[9px] tabular-nums truncate" style={{ color: running ? "var(--info)" : "var(--text4)" }}>
+      <span className="text-[10px] tabular-nums truncate" style={{ color: running ? "var(--info)" : "var(--text4)" }}>
         {/* A stopped container has no numbers, and three blank columns read as
             missing data rather than as "this is not running". */}
         {running ? (port ? `:${port}` : "") : c.state}
@@ -184,7 +186,7 @@ function ContainerRow({ c, stat, active, writeEnabled, busy, dense, onSelect, on
             </>
           : <>
               <DockerAction onClick={() => onAction("start")} disabled={busy} tint="var(--success)" title="Start">▶</DockerAction>
-              <DockerAction onClick={() => onAction("rm")} disabled={busy} tint="var(--error)" title="Remove this container">✕</DockerAction>
+              <DockerAction onClick={() => onAction("rm")} disabled={busy} tint="var(--error)" title="Remove this container"><CloseIcon size={ICON.sm} /></DockerAction>
             </>)}
       </div>
     </div>
@@ -284,6 +286,10 @@ export function DockerView({ active }: { active: boolean }) {
   const sidebarW = useSidebarWidth();
   const { ask, dialog } = useDialogs();
   const [consoleOpen, setConsoleOpen] = useState(false);
+  /* Whether this console is already inside tmux. Subscribed rather than read
+     once: it becomes true a beat after the command is sent, when the client
+     actually starts, and the button has to stop offering to do it again. */
+  const inTmux = useSyncExternalStore(subscribeSessions, () => consoleInTmux(consoleRoot()), () => false);
   const [consoleH, setConsoleH] = useState<number>(() => {
     try { return Math.min(0.85, Math.max(0.08, Number(localStorage.getItem(CONSOLE_KEY)) || 0.1)); } catch { return 0.1; }
   });
@@ -564,7 +570,7 @@ export function DockerView({ active }: { active: boolean }) {
                         <div key={proj} className="mb-1">
                           <div className="flex items-center gap-2 px-2.5 py-1 sticky top-0 z-10" style={{ background: "var(--bg2)" }}>
                             <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: "var(--text2)" }}>{proj}</span>
-                            <span className="text-[9px] t-dim2 tabular-nums">{cs.filter((c) => c.state === "running").length}/{cs.length}</span>
+                            <span className="text-[10px] t-dim2 tabular-nums">{cs.filter((c) => c.state === "running").length}/{cs.length}</span>
                             {/* Names the columns once per project, in the same
                                 grid the rows use, so the figures below are not
                                 three anonymous numbers. */}
@@ -708,6 +714,55 @@ export function DockerView({ active }: { active: boolean }) {
                         hints nobody found it — and a shell docked under the
                         logs is the sort of thing you only use if you know it
                         is there. It reads as an action, not as a legend. */}
+                    {/*
+                      * Hand the work to tmux, so closing agentglass cannot take
+                      * it with it.
+                      *
+                      * The sidecar runs with AGENTGLASS_DIE_WITH_PARENT=1 — it
+                      * is tied to the window — so every shell it owns dies when
+                      * the window does. A `make app.build` five minutes in goes
+                      * with it, which is exactly what happened.
+                      *
+                      * A tmux server is nobody's child. Run the build inside one
+                      * and closing agentglass DETACHES rather than kills;
+                      * pressing this again re-attaches to the same session, mid
+                      * build, scrollback and all. `-A` is what makes it one
+                      * button instead of two: attach if it exists, create if it
+                      * does not.
+                      *
+                      * Deliberately typed into the console rather than built
+                      * into the terminal. It changes nothing until it is
+                      * pressed, it is undone by typing `exit`, and it leaves the
+                      * Terminal view and its tabs completely alone — which is
+                      * the whole reason it is one line here instead of a change
+                      * to how shells are started.
+                      */}
+                    <button
+                      onClick={() => {
+                        const root = consoleRoot();
+                        // Already inside: the only thing left to do is show it.
+                        // Sending the command again would type at tmux instead
+                        // of at a prompt, which is what the full-screen guard
+                        // was catching.
+                        if (consoleInTmux(root)) { setConsoleOpen(true); return; }
+                        // tmux refuses `.` and `:` in a session name, and a
+                        // checkout called `orbit-WEB-1042` has neither — but
+                        // one called `app.v2` does, and the failure is a cryptic
+                        // "bad session name" rather than anything about naming.
+                        const name = `agentglass-${(root.split("/").pop() || "shell").replace(/[^A-Za-z0-9_-]/g, "-")}`;
+                        setConsoleOpen(true);
+                        runInConsole(root, `tmux new-session -A -s ${name}`);
+                      }}
+                      className="ml-1 px-2.5 py-1 rounded-lg text-[10.5px] whitespace-nowrap transition-colors"
+                      title={inTmux
+                        ? "This console is inside tmux — what runs here survives agentglass closing, and comes back where you left it. Type `exit` to come back out."
+                        : "Run this console inside tmux, so a long build survives agentglass closing.\n\nThe shell here belongs to agentglass and dies with it. A tmux session does not: closing the app detaches, and opening this again puts you back in the same session with the build still running.\n\nType `exit` to come back out. Needs tmux installed."}
+                      style={inTmux
+                        ? { color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)" }
+                        : { color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--text) 18%, transparent)" }}
+                    >
+                      {inTmux ? "⧉ kept running" : "⧉ keep running"}
+                    </button>
                     <button
                       onClick={() => (consoleOpen ? closeConsole() : setConsoleOpen(true))}
                       className="ml-1 px-2.5 py-1 rounded-lg text-[10.5px] font-medium whitespace-nowrap transition-colors flex items-center gap-1.5"

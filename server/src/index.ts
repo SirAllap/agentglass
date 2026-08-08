@@ -1,5 +1,8 @@
+// FIRST, and it must stay first: `agentglass-server cookies …` is answered
+// here, before the imports below open the database and start their timers.
+import "./cookieentry.ts";
 import type { ServerWebSocket } from "bun";
-import type { IngestBody, WsFrame, WorkingTree } from "../../shared/types.ts";
+import type { IngestBody, WsFrame, WorkingTree, PanesResponse } from "../../shared/types.ts";
 import { normalize, detectError, clampIngestTimestamp, externalIngestError } from "./ingest.ts";
 import { db } from "./db.ts";
 import {
@@ -12,6 +15,7 @@ import {
   exportRows,
   pruneOldRows,
   RETENTION_DAYS,
+  dbPath,
   getChanges,
   getSession,
   searchEvents,
@@ -24,47 +28,55 @@ import {
   retentionSeamDay,
   getGate,
   actionLog,
+  claimDatabase,
+  releaseDatabaseClaim,
 } from "./db.ts";
-import { maybeAlert, setAlertSink, pushEveryone } from "./alerts.ts";
+import { maybeAlert, setAlertSink } from "./alerts.ts";
 import { noteAction, actorOf } from "./actions.ts";
 import { getSkills, catalogMarkdown, catalogCsv, usageSince } from "./skills.ts";
 import { getInsights } from "./insights.ts";
-import { vapidKeys, addSubscription, removeSubscription, removeDevice, deviceId, subscriptions } from "./pushstore.ts";
 import { getUsage, ingestStatusline } from "./usage.ts";
 import { allProviderUsage } from "./providerusage.ts";
 import { refreshCodexUsage } from "./codexusage.ts";
 import { submitGate, decideGate, pendingGates, awaitGate, restoreGates, typedReason, GATE_MAX_MS } from "./gate.ts";
 import { parseControlCmd } from "./control.ts";
+import { askBrowser, browserReadyCount, noteBrowserReady, parseAsk, setBrowserSink, settleBrowser, type BrowserOp } from "./browserdrive.ts";
+import { browserUseStatus, installSkill } from "./browseruse.ts";
 import { otlpTracesToEvents, otlpLogsToEvents } from "./otlp.ts";
 import { decodeOtlpTraces, decodeOtlpLogs } from "./otlp_pb.ts";
 import { statusForPaths, commit as gitCommit, COMMIT_ENABLED, gitAsync, gitCapability } from "./git.ts";
 import { dependencyReport } from "./deps.ts";
 import {
-  workingTree, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
+  workingTree, lastCommitChanges, discoverRepos, stage, unstage, stageAll, unstageAll, discard,
   commitStaged, push as gitPush, pull as gitPull, fetch as gitFetch,
   branches as gitBranches, checkout as gitCheckout, createBranch, deleteBranch,
   log as gitLog, commitDiff, stashList, stashPush, stashApply, stashPop, stashDrop,
   applyHunk, logGraph, mergeBranch, rebaseBranch, renameBranch, resetTo,
   worktreesWithState as gitWorktrees, addWorktree, removeWorktree, worktreeLeftovers, rescueLeftovers, fixWorktreeOwnership, startAutoFetch, syncFromBase, setBase, setGitChangeHook, setMergedVerdictHook, setPrBaseHook,
-  conflicts as gitConflicts, resolveWith, conflictBlocks, resolveBlocks, mergeAbort, mergeContinue, baseCandidates, undoMerge,
+  conflicts as gitConflicts, resolveWith, conflictBlocks, conflictFile, resolveBlocks, mergeSession, reopenConflict, stoppedRefusal, conflictPreview, mergeAbort, mergeContinue, baseCandidates, undoMerge, mergeInfo,
   remotes as gitRemotes, remoteBranches as gitRemoteBranches, trackRemoteBranch, tags as gitTags, reflog as gitReflog,
+  prepareConflictMerge,
 } from "./gitwork.ts";
+import { saveShot } from "./shots.ts";
+import { allPlaces, forgetPlaces, placeCount, recordVisit, saveFrom } from "./placestore.ts";
 import { recent as gitCommandLog } from "./gitlog.ts";
 import { worktreeParent } from "./worktree.ts";
 import { watchLoop, entered, stalls, backoff } from "./loopwatch.ts";
 import { spawnPoolStats } from "./spawnpool.ts";
 import { singleFlight, inflightCount } from "./singleflight.ts";
 import { openInEditor, editorTarget, editorCapability, HAS_NVIM } from "./editor.ts";
-import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme } from "./themesync.ts";
+import { syncTheme, snippetStatus, SNIPPETS, tmuxThemePath, repairTmuxTheme, currentTheme } from "./themesync.ts";
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite } from "node:fs";
 import { completePath, FS_BROWSE_ENABLED } from "./fsbrowse.ts";
 import { listPorts, listResources, spaceFor, killPort } from "./machine.ts";
+import { gitLocks, removeStaleLock } from "./gitlocks.ts";
+import { procDetail, revealEnv } from "./procdetail.ts";
 import {
   listIssues, issueDetail, startIssue, finishIssue, claimIssue, commentIssue, setIssueState, currentWork,
 } from "./issues.ts";
-import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, readView } from "./providers.ts";
-import { savedViews, currentView, setCurrent, removeView, cachedFor, setWritesAllowed } from "./clickupviews.ts";
-import { assignSelf, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
+import { providerStatuses, connectProvider, disconnectProvider, providerWorkspaces, chooseWorkspace, addViewByUrl, replaceViewUrl, readView } from "./providers.ts";
+import { savedViews, currentView, setCurrent, removeView, knownCardPrefix, boardHolding, setWritesAllowed } from "./clickupviews.ts";
+import { assignSelf, setAssignee, listMembers, setStatus, setField, taskDetail, findCard, cardPullRequests, clickupWriteEnabled } from "./clickup.ts";
 import { clickupTasks } from "./clickup.ts";
 import type { ProviderId } from "../../shared/providers.ts";
 import { listTasks, taskCapability, setTaskChangeHook, startTaskSweep, addTask, completeTask, reopenTask, deleteTask, cyclePriority, editTask, addTags, replaceNote, bulkApply, TASK_WRITE_ENABLED, type BulkAction } from "./tasks.ts";
@@ -72,7 +84,7 @@ import {
   addReminder, ackReminder, cancelReminder, snoozeReminder, listReminders,
   remindersFor, firedUnacked, setReminderHook, startReminderTick, localZone,
 } from "./reminders.ts";
-import { fileTree, findFiles, grepFiles } from "./files.ts";
+import { fileText, fileTree, findFiles, grepFiles, listRefs, filesExist } from "./files.ts";
 import {
   overview as dockerOverview, stats as dockerStats, logs as dockerLogs, inspect as dockerInspect, top as dockerTop,
   startContainer, stopContainer, restartContainer, removeContainer, dockerCapability,
@@ -83,32 +95,39 @@ import {
   setThreadResolved, react, editPr, setLabels, setReviewers, setDraft, updateBranch,
   rerunFailedChecks, mergePr, closePr, prepareReviewPrompt, branchUrl, subscribeCi, commitDiff as prCommitDiff, submitReviewWith, prFileToTemp,
   prBaseOf,
-} from "./prs.ts";
+  ghRateLimit,
+  branchBehind,
+  prBranches, prsForBranch } from "./prs.ts";
 import { generateWalkthrough, WALKTHROUGH_ENABLED } from "./walkthrough.ts";
 import { ptyOpen, ptyMessage, ptyClose, projectCommands, shutdownTerminals, lastTmuxTarget, TERMINAL_ENABLED, PTY_BACKEND, type PtyWsData } from "./terminal.ts";
-import { listPanes, focusPaneAnywhere } from "./tmuxctl.ts";
+import { listPanes, focusPaneAnywhere, activePane, sweepPinnedWindows, pinnedSockets } from "./tmuxctl.ts";
+import { withAgentSessions } from "./paneloc.ts";
+import { notePaneFromHook, paneDirs, paneAgentNote } from "./panewt.ts";
 import { chatSend, activeTurns, CHAT_ENABLED, CHAT_BYPASS_ALLOWED, CHAT_ENGINE_DEFAULT } from "./chat.ts";
 import { paneEngineCapability, attachCommand, validPaneName } from "./chatpane.ts";
 import { claudeModels } from "./claudemodels.ts";
 import { codexStream, codexModels, codexTranscript, codexCwd, CODEX_ENABLED, CODEX_BYPASS_ALLOWED } from "./codex.ts";
 import { antigravityStream, antigravityModels, ANTIGRAVITY_ENABLED, ANTIGRAVITY_BYPASS_ALLOWED } from "./antigravity.ts";
 import { paneAlive, killPane, forgetPane, startPaneSweeper, sendKey, sendableKey, capture as capturePane, pinPane, panes, classifyPanes, idleEvictMs } from "./tmuxpane.ts";
-import { startScanner, ownsSession, knownProjects, resyncScope, SCAN_ENABLED } from "./transcripts.ts";
-import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, readBudgets, writeBudgets } from "./config.ts";
+import { startScanner, ownsSession, knownProjects, resyncScope, scanningEnabled } from "./transcripts.ts";
+import { workspaceRoot, setWorkspaceRoot, inScope, sessionInScope, readBudgets, writeBudgets, hiddenProjects, setProjectHidden, configPath } from "./config.ts";
+import { cloneProject, createProject } from "./projectadd.ts";
 import { budgetStatus } from "./budget.ts";
 import type { Budget } from "../../shared/types.ts";
 import { hookStatus, applyHooks, hooksDir, hookPython } from "./hooksetup.ts";
 import { probeAgents, ROSTER } from "./agentprobe.ts";
 import { join as joinPath, basename } from "node:path";
-import { privateHost } from "./net.ts";
-import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller } from "./auth.ts";
-import { activeDevices, markSeen, revokeDevice, type Scope } from "./devices.ts";
+import { privateHost, resolvePeer, originOf } from "./net.ts";
+import { resolveToken, tokenOk, isIntake, isAuthExempt, callerFor, allowed, scopeNeeded, type Caller, type Origin } from "./auth.ts";
+import { activeDevices, markSeen, revokeDevice, devices, publicDevice, type Scope } from "./devices.ts";
+import { credentialsPath } from "./credentials.ts";
+import { startCardWatch } from "./clickupwatch.ts";
 import { mintTicket, claimTicket, pending as pendingPairings, acceptTicket, rejectTicket, collect as collectPairing, dropTicket, getTicket, MAX_ATTEMPTS } from "./pairing.ts";
 import { updateStatus, viewerStatus, startUpdate, updateLog, releaseNotes } from "./selfupdate.ts";
 import { rateOk } from "./ratelimit.ts";
-import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale } from "./remote.ts";
+import { noteClient, noteSocket, isLoopback, isSelf, isBlocked, blockDevice, remoteStatus, tailnetNames, refreshTailscale, TAILNET_OK_MS, proxiedByTailscaled } from "./remote.ts";
 import { parseWindowMs } from "./params.ts";
-import { serveWeb, serveIndex, WEB_UI_ENABLED } from "./webui.ts";
+import { serveWeb, serveIndex, WEB_UI_ENABLED, distPath } from "./webui.ts";
 import { notifyCapability, subscribeNotifications, notifyWatching, openNote } from "./notifications.ts";
 import { markIgnored } from "./ignored.ts";
 import { withEvidence } from "./evidence.ts";
@@ -156,6 +175,18 @@ const AUTH_TOKEN = AUTH.token;
 // on its own, which is a revoke in the list and not on the wire.
 type WsData = ({ kind: "events" } | { kind: "notify" } | PtyWsData) & { ip?: string | null; deviceId?: string | null };
 const clients = new Set<ServerWebSocket<WsData>>();
+/**
+ * When each event-stream socket last PROVED its peer is still running.
+ *
+ * Membership of `clients` is not evidence of anything. It is pruned in the
+ * `close` handler, and a peer that has been frozen — which is what Android
+ * does to a backgrounded app — never closes: measured on this exact serve
+ * config, a SIGSTOPped client left `clients.size === 1`, `ws.send()` returning
+ * bytes written and never throwing, for 120.1 seconds. Every alert in that
+ * window was "delivered to a client" and the notify-send fallback in alerts.ts
+ * was skipped. See the sweep below for what refreshes this.
+ */
+const alive = new Map<ServerWebSocket<WsData>, number>();
 /** Every open socket of every kind, which `clients` is not: it holds the event
  *  streams only, and a device cut off mid-session may be holding a terminal. */
 const sockets = new Set<ServerWebSocket<WsData>>();
@@ -249,9 +280,19 @@ function desktopOnly(req: Request): boolean {
   return !!o && fromDesktopShell(o);
 }
 
-function trustedCaller(req: Request): boolean {
+/** Sessions seen running only inside another tmux — a floating window. */
+const seenPopups = new Set<string>();
+
+function trustedCaller(req: Request, from: Origin): boolean {
   const o = req.headers.get("origin");
-  if (!o) return LOOPBACK_ONLY; // no origin is only safe when nobody remote can connect
+  // No Origin means a non-browser caller, which is only safe when this caller
+  // cannot be remote. That used to be `LOOPBACK_ONLY` — a property of the
+  // *bind*, decided once at startup — and `tailscale serve` falsifies it: it
+  // publishes a 127.0.0.1 bind to the tailnet, so LOOPBACK_ONLY stayed true
+  // while `websocat wss://<name>/terminal/pty` became reachable. Asking this
+  // request where it came from is the same test, applied to the thing it was
+  // always about.
+  if (!o) return from === "loopback";
   if (fromDesktopShell(o)) return true;
   try {
     return trusted(new URL(o).hostname);
@@ -371,7 +412,28 @@ const treeCache = new Map<string, { at: number; data: WorkingTree }>();
 // through the same git-change hook the tree cache uses.
 const WORKTREES_TTL_MS = 2_500;
 const worktreesCache = new Map<string, { at: number; body: string }>();
-setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); broadcast({ type: "git" }); });
+// The all-worktrees change list behind File changes, so it shows what each
+// checkout has actually changed (git), not only what an agent recorded. Keyed by
+// mode — "working" (the working tree) vs "committed" (each checkout's last
+// commit) — with a short TTL, cleared the instant git changes.
+const changesAllCache = new Map<string, { at: number; body: string }>();
+// Held a touch longer than the 4s File-changes poll so a poll reuses the last
+// answer instead of re-fanning git across every in-scope worktree each time —
+// which, at the old 2.5s, missed on every single poll. Safe to hold longer: the
+// git-change hook below clears it the instant anything is staged/committed/
+// discarded through the app, so this TTL only bounds how fast a change made
+// *outside* the app (an editor save, a raw `git` in the terminal) surfaces, and
+// a few seconds in a review panel is fine. backoff() stretches it while hot.
+const CHANGES_ALL_TTL_MS = 6_000;
+// Per-worktree cache of each checkout's last-commit diff — the committed-mode
+// analogue of treeCache. Without it, every committed-mode miss re-ran rev-list +
+// diff for every repo. Same short TTL, same hook clears it.
+const commitCache = new Map<string, { at: number; data: Awaited<ReturnType<typeof lastCommitChanges>> }>();
+// A hard ceiling on how many git rows File changes will take at once: a runaway
+// worktree (a giant last commit that slipped the no-merge filter, thousands of
+// uncommitted files) must never be able to freeze the view again.
+const CHANGES_ALL_MAX = 400;
+setGitChangeHook(() => { treeCache.clear(); worktreesCache.clear(); changesAllCache.clear(); commitCache.clear(); broadcast({ type: "git" }); });
 
 /**
  * The one thing the merged-branch sweep cannot do for itself.
@@ -394,9 +456,61 @@ setMergedVerdictHook(() => {
   for (const k of refsCache.keys()) if (k.startsWith("branches:")) refsCache.delete(k);
   broadcast({ type: "git" });
 });
+/**
+ * Prove the peers are there, and cut loose the ones that are not.
+ *
+ * A ping is answered by the peer's own websocket stack, so a pong is evidence
+ * that its process is being scheduled — which is exactly the thing a frozen
+ * phone stops doing while its TCP connection carries on accepting bytes.
+ *
+ * The CLOSE is not optional, and that is the part reading the code would not
+ * have found. Bun's own reaper does close a silent socket — measured at 120.1s
+ * with this serve config — but it counts a ping as traffic: with a 10s ping and
+ * no close of our own, the SIGSTOPped peer was still attached at 200s and
+ * climbing, so adding liveness detection without acting on it turns a
+ * two-minute leak into a permanent one. Closing on the deadline is what makes
+ * the ping safe to send at all.
+ *
+ * 10s and 30s: three missed pongs before a socket stops counting. The cost of
+ * being too eager is one duplicate notification (broadcast AND notify-send)
+ * for a client that was merely slow; the cost of being too slow is an alert
+ * nobody hears. Freshly opened sockets start alive, so the first alert after a
+ * connect is never a false negative.
+ */
+const LIVE_PING_MS = 10_000;
+const LIVE_DEADLINE_MS = 30_000;
+setInterval(() => {
+  const now = Date.now();
+  for (const ws of [...clients]) {
+    const at = alive.get(ws) ?? 0;
+    if (now - at > LIVE_DEADLINE_MS) {
+      // Deliberately not silent bookkeeping: the socket goes, so the peer's own
+      // reconnect fires and comes back with a socket that works. live.ts on the
+      // phone already measures that path at 62-76ms.
+      try { ws.close(1001, "no answer to a ping in 30s"); } catch { /* already gone */ }
+      clients.delete(ws);
+      alive.delete(ws);
+      continue;
+    }
+    try { ws.ping(); } catch { /* going away; close() will tidy up */ }
+  }
+  // Never a reason to hold the process open on its own.
+}, LIVE_PING_MS).unref?.();
+
 // Let the alert path reach a connected client, which raises a native OS
 // notification (cross-platform) instead of the Linux-only notify-send.
-setAlertSink({ broadcast: (a) => broadcast({ type: "alert", data: a }), hasClients: () => clients.size > 0 });
+setAlertSink({
+  broadcast: (a) => broadcast({ type: "alert", data: a }),
+  census: () => {
+    const now = Date.now();
+    let live = 0;
+    for (const ws of clients) if (now - (alive.get(ws) ?? 0) <= LIVE_DEADLINE_MS) live++;
+    return { attached: clients.size, live };
+  },
+});
+// The browser relay speaks through the same socket, and counts the same
+// clients: "is there a window to ask" is exactly "is anybody listening".
+setBrowserSink({ send: (ask) => broadcast({ type: "browser", data: ask }), listeners: () => clients.size });
 // The task store has a second writer — the user's editor — so a change there
 // reaches the panel through a sweep rather than through anything we did.
 setTaskChangeHook(() => broadcast({ type: "tasks" }));
@@ -444,7 +558,12 @@ function broadcast(frame: WsFrame) {
     try {
       ws.send(msg);
     } catch {
+      // Rare and not to be relied on: `ws.send()` into a peer that has been
+      // frozen returns the byte count and does not throw (measured, 68 bytes,
+      // buffered 0, for the full two minutes it stayed attached). The sweep
+      // above is what actually finds those.
       clients.delete(ws);
+      alive.delete(ws);
     }
   }
 }
@@ -549,10 +668,31 @@ const server = Bun.serve<WsData>({
     // anonymous freeze in a terminal. See loopwatch.ts.
     entered(`${req.method} ${pathname}`);
 
+    // Who is actually on the other end.
+    //
+    // Not `srv.requestIP()` any more, and that one line was three bugs. Under
+    // `tailscale serve` tailscaled terminates TLS and re-dials our port from
+    // 127.0.0.1, so the socket said "loopback" for every phone on the tailnet:
+    // the tokenless intake sinks were open to all of them (measured — `POST
+    // https://<name>/ingest` reached the handler and answered 400, while
+    // `/sessions` from the raw tailnet IP correctly answered 401), the device
+    // list came back empty because noteClient drops loopback on purpose, and
+    // Block was dead because isSelf() said every one of them was this machine.
+    //
+    // resolvePeer only believes a forwarding header when proxiedByTailscaled
+    // has verified the *uid owning the connecting socket*, which no non-root
+    // local process can choose. See net.ts for the rules and remote.ts for the
+    // measurement.
+    const peerSock = srv.requestIP(req);
+    const peer = resolvePeer({
+      socketAddress: peerSock?.address,
+      headers: req.headers,
+      proxied: proxiedByTailscaled(peerSock, srv.port ?? PORT, req.headers),
+    });
+    const clientIp = peer.address;
     // Proof of reachability for the remote-access panel: which off-box devices
     // have actually arrived. Loopback is ignored — it is every call the app
     // makes of itself and says nothing about whether a phone can get in.
-    const clientIp = srv.requestIP(req)?.address;
     noteClient(clientIp, { agent: req.headers.get("user-agent") });
     // Cut off on sight. A device the user turned away in the panel is refused
     // before the token is even considered, because the case this exists for is
@@ -563,12 +703,6 @@ const server = Bun.serve<WsData>({
     if (isBlocked(clientIp)) return new Response(JSON.stringify({ ok: false, error: "this device was disconnected from this machine" }), {
       status: 403, headers: { "content-type": "application/json" },
     });
-    // Same fact, put to a second use: a page served off-box gets the phone
-    // application, not the cockpit (see webui.ts). An address we cannot read is
-    // treated as local — it means the socket had no peer to report, which on
-    // this server is the app talking to itself.
-    const fromRemote = clientIp ? !isLoopback(clientIp) : false;
-
     // Per-request response helpers: `cors` reflects this caller's Origin, so it
     // has to be built here rather than shared as a module constant.
     const cors = corsFor(req);
@@ -601,7 +735,7 @@ const server = Bun.serve<WsData>({
     // never collide here: none of them maps to a real file under web/dist, so
     // for them this falls straight through to the routes.
     if (req.method === "GET" || req.method === "HEAD") {
-      const asset = serveWeb(pathname, cors, fromRemote);
+      const asset = serveWeb(pathname, cors);
       if (asset) return asset;
     }
 
@@ -619,8 +753,36 @@ const server = Bun.serve<WsData>({
     // for it.
     // Held for the WebSocket upgrades below: a socket has to remember which
     // device opened it, or forgetting that device cannot close what it holds.
+    //
+    // The append-only sinks are tokenless only from this machine (see
+    // LOCAL_SINKS in auth.ts), so the gate needs the source address, not just
+    // the path. An address we could not read counts as remote — the same call
+    // `atMachine()` makes below, and the only safe direction for a guard whose
+    // other side is "no credential at all".
+    //
+    // This used to end "resolveToken refuses to run unauthenticated on a
+    // non-loopback bind, so AUTH_TOKEN unset already means loopback only". That
+    // was the bug, written down as a reassurance. `tailscale serve` publishes a
+    // 127.0.0.1 bind to the whole tailnet, so "loopback bind" and "only local
+    // callers" are different statements — and the gate below no longer assumes
+    // one from the other.
+    const from: Origin = originOf(peer);
     let caller: Caller | null = null;
-    if (AUTH_TOKEN && !isAuthExempt(pathname)) {
+    // A remote caller is never tokenless, even on a box that decided it did not
+    // need a token.
+    //
+    // LOOPBACK_ONLY is what makes AUTH_TOKEN null (resolveToken's zero-config
+    // path), and it was read as "nobody off-box can reach us". `tailscale
+    // serve` makes that false: it fronts a 127.0.0.1 bind and publishes it to
+    // the tailnet, which is the *recommended* way to run this — so the safest
+    // looking configuration was the one that skipped the auth gate entirely for
+    // the whole tailnet. This refuses instead. Loopback is untouched, so his
+    // hooks and the desk keep their zero-config UX; /health and the pairing
+    // handshake stay exempt so the phone still gets an answer it can act on.
+    if (!AUTH_TOKEN && from === "remote" && !isAuthExempt(pathname, from)) {
+      return json({ ok: false, error: "unauthorized — this server has no token configured and only answers local callers" }, 401);
+    }
+    if (AUTH_TOKEN && !isAuthExempt(pathname, from)) {
       caller = callerFor(req, url, AUTH_TOKEN);
       if (!caller) return json({ ok: false, error: "unauthorized — pass ?token= or Authorization: Bearer" }, 401);
       if (!allowed(caller, req.method, pathname)) {
@@ -643,7 +805,7 @@ const server = Bun.serve<WsData>({
     // Throttle the unauthenticated intake sinks so a runaway client can't flood
     // the DB and the broadcast fan-out. Keyed by source address + route.
     if (req.method === "POST" && isIntake(pathname)) {
-      const ip = srv.requestIP(req)?.address || "local";
+      const ip = clientIp || "local";
       if (!rateOk(`${ip} ${pathname}`)) return json({ ok: false, error: "rate limited" }, 429);
     }
 
@@ -653,14 +815,14 @@ const server = Bun.serve<WsData>({
     // localhost and read the whole fleet's prompts, paths and errors as they
     // stream — a read this feed is not meant to give to the open web.
     if (pathname === "/stream") {
-      if (!trustedCaller(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       if (srv.upgrade(req, { data: { kind: "events", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
       return new Response("upgrade failed", { status: 426 });
     }
 
     // --- in-browser terminal: a real PTY shell over a WebSocket ---
     if (pathname === "/terminal/pty") {
-      if (!trustedCaller(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       if (!TERMINAL_ENABLED) return json({ error: "terminal is disabled" }, 403);
       const data: PtyWsData & { ip?: string | null; deviceId?: string | null } = {
         kind: "pty",
@@ -672,6 +834,13 @@ const server = Bun.serve<WsData>({
         // Editing is asked for explicitly. Absent, the file opens read-only —
         // see PtyWsData.edit for why that default is the whole point.
         edit: url.searchParams.get("edit") === "1",
+        // A live tmux pane to show instead of a new shell. Tmux's own id and
+        // nothing else — the server looks it up and builds the command, so a
+        // socket path can never arrive from a client. See PtyWsData.pane.
+        pane: url.searchParams.get("pane") || undefined,
+        // Reflow the tmux window to this client instead of keeping the desk's
+        // size. A choice the phone makes per connection — see attachArgvFor.
+        fit: url.searchParams.get("fit") === "1",
         cols: Number(url.searchParams.get("cols") || 80),
         rows: Number(url.searchParams.get("rows") || 24),
         ip: clientIp ?? null,
@@ -687,14 +856,14 @@ const server = Bun.serve<WsData>({
     // spawned and nothing is read — not "read it and don't show it".
     if (pathname === "/notifications/capability") return json(notifyCapability());
     if (pathname === "/notifications/open" && req.method === "POST") {
-      if (!trustedCaller(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       let body: { id?: unknown };
       try { body = (await req.json()) as { id?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const r = openNote(body?.id);
       return json(r, r.ok ? 200 : 404);
     }
     if (pathname === "/notifications") {
-      if (!trustedCaller(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       const cap = notifyCapability();
       if (!cap.supported) return json({ error: cap.reason ?? "unsupported" }, 501);
       if (srv.upgrade(req, { data: { kind: "notify", ip: clientIp ?? null, deviceId: caller?.device?.id ?? null } })) return undefined as unknown as Response;
@@ -718,6 +887,12 @@ const server = Bun.serve<WsData>({
       }
       const ingestError = externalIngestError(body);
       if (ingestError) return json({ error: ingestError }, 400);
+      // Which pane this agent is sitting in — the one fact only the hook can
+      // tell us, because it runs as a child of the agent and inherits the
+      // pane's TMUX_PANE. Noted before the ownership check below: a session the
+      // scanner owns still has a pane, and "where is this agent working" is a
+      // question about the pane, not about who counts its tokens.
+      notePaneFromHook(body);
       // A Claude Code session with a transcript on disk is already covered by
       // the scanner, which reads the same turns in richer form. Taking the hook
       // copy too would count every tool call and every token twice.
@@ -825,7 +1000,10 @@ const server = Bun.serve<WsData>({
       // worktree still lists the project its sessions roll up to.
       const ws = workspaceRoot();
       const projects = knownProjects().filter((p) => inScope(p.path, ws));
-      return json({ projects, scanning: SCAN_ENABLED, workspace: ws });
+      // `scanning` is what this process is actually doing, not what it was
+      // configured to do: it is also false when another live server holds the
+      // database file and this one stood its scanner down.
+      return json({ projects, scanning: scanningEnabled(), workspace: ws });
     }
     // Pick the project this cockpit is about (or null → the whole machine).
     // Applied live and persisted for the next launch.
@@ -839,6 +1017,44 @@ const server = Bun.serve<WsData>({
       // client reloads on this response; answering earlier would show it a
       // dashboard the backfill hasn't reached yet.
       if (res.ok) await resyncScope();
+      return json(res, res.ok ? 200 : 400);
+    }
+    /**
+     * Add a project that is not on this machine yet — clone one, or start an
+     * empty one. Both answer with the folder they made, which the picker then
+     * opens exactly as if you had browsed to it.
+     *
+     * Same-origin only, like every other write: these create directories and
+     * run git, and the browser is the only thing that should be asking. The
+     * arguments are checked in projectadd.ts, where the reasoning lives.
+     */
+    if (pathname === "/projects/clone" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = await cloneProject(b.url, b.parent);
+      return json(res, res.ok ? 200 : 400);
+    }
+    /**
+     * Stop offering a project — or offer it again.
+     *
+     * Only the picker's list: nothing is deleted, moved or forgotten anywhere
+     * else, and the sweep goes on finding it. A path is remembered rather than
+     * an entry removed, because an entry removed comes straight back on the
+     * next sweep.
+     */
+    if (pathname === "/projects/hidden" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = setProjectHidden(b.path, b.hidden !== false);
+      return json(res, res.ok ? 200 : 400);
+    }
+    if (pathname === "/projects/new" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = await createProject(b.name, b.parent);
       return json(res, res.ok ? 200 : 400);
     }
     // Claude Code hook wiring (#187): a packaged install can turn on live
@@ -1023,72 +1239,6 @@ const server = Bun.serve<WsData>({
           .map((g) => ({ ...g, reason: typedReason(g) || null })),
       });
     }
-    // ── web push: the only way an alert reaches a locked phone ────────
-    //
-    // The socket closes with the screen on purpose, so nothing the server
-    // already had could wake a device in a pocket — which is the one case the
-    // companion exists for. See server/src/push.ts.
-    if (pathname === "/push/key") {
-      // Public by definition: the browser needs it to subscribe at all.
-      return json({ key: (await vapidKeys()).publicKey });
-    }
-    // No per-route origin check on either write: the gate at the top of this
-    // handler already covers the whole surface, reads included, so one here
-    // could never fire. An unprovable guard is worse than none — it reads as
-    // protection and no mutation can show it working.
-    if (pathname === "/push/subscribe" && req.method === "POST") {
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ ok: false, error: "bad body" }); }
-      const sub = b?.subscription;
-      if (!sub?.endpoint || !sub?.keys?.p256dh || !sub?.keys?.auth) {
-        return json({ ok: false, error: "a subscription needs an endpoint and both keys" });
-      }
-      const subs = addSubscription(sub, typeof b.label === "string" ? b.label.slice(0, 60) : undefined);
-      return json({ ok: true, devices: subs.length });
-    }
-    if (pathname === "/push/unsubscribe" && req.method === "POST") {
-      let b: any = {};
-      try { b = await req.json(); } catch { return json({ ok: false, error: "bad body" }); }
-      // Either handle. The phone knows its own endpoint and unsubscribes with
-      // that; the device list only ever saw an id, because an endpoint is a
-      // capability and this response goes to whatever is asking.
-      const subs = b?.id
-        ? removeDevice(String(b.id))
-        : removeSubscription(String(b?.endpoint || ""));
-      return json({ ok: true, devices: subs.length });
-    }
-    if (pathname === "/push/devices") {
-      // Endpoints and keys never leave the machine: an endpoint is a
-      // capability — anyone holding one can ask the push service to wake that
-      // phone — and this answer is only ever "how many, and what are they
-      // called".
-      return json({
-        devices: subscriptions().map((s) => ({
-          // A one-way handle, not the endpoint: enough to forget this device
-          // against this server, and useless anywhere else.
-          id: deviceId(s.endpoint),
-          label: s.label ?? "", addedAt: s.addedAt, lastOkAt: s.lastOkAt ?? null,
-        })),
-      });
-    }
-    if (pathname === "/push/test" && req.method === "POST") {
-      // Until an agent happens to block while nobody is looking, there is no
-      // way to find out whether any of this works — and the way you would find
-      // out is by missing the one thing it exists for. This is the same fan-out
-      // the alert path uses, not a special case: same encryption, same headers,
-      // same pruning on 404/410. A test that took a different route could pass
-      // while the real one was broken.
-      const r = await pushEveryone(
-        "✅ agentglass",
-        "Push is working. This is what a held gate will look like.",
-        // Deliberately not "wake": a test should not be the thing that teaches
-        // somebody to swipe these away, and a notification that will not
-        // dismiss itself is a poor introduction.
-        "tell",
-      );
-      return json({ ok: r.sent > 0, ...r });
-    }
-
     if (pathname === "/gate/decide" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
@@ -1102,7 +1252,7 @@ const server = Bun.serve<WsData>({
       // one write with a stopped agent on the other end of it. Resolved once
       // and handed to both writers, so the gate row and the log line cannot
       // name two different people for one press.
-      const who = actorOf(srv.requestIP(req)?.address, caller);
+      const who = actorOf(clientIp, caller);
       const ok = decideGate(String(b.id), decision, String(b.reason || ""), who);
       /*
        * Why it did not take, in words.
@@ -1124,7 +1274,7 @@ const server = Bun.serve<WsData>({
         : !held?.decision ? "that request is not one this server is holding"
         : `already ${held.decision === "deny" ? "denied" : "allowed"} by ${
             held.resolution === "human" ? "somebody else" : "the timeout"} — this answer arrived too late`;
-      noteAction(srv.requestIP(req)?.address, `/gate/${decision}`,
+      noteAction(clientIp, `/gate/${decision}`,
         { tool: held?.tool_name, summary: held?.summary }, { ok, error }, caller);
       return json({ ok, ...(error ? { error } : {}) });
     }
@@ -1143,6 +1293,65 @@ const server = Bun.serve<WsData>({
       broadcast({ type: "control", data: cmd });
       return json({ ok: true });
     }
+    /**
+     * Whether an agent could drive this browser at all, and what is missing.
+     *
+     * Under `/browser-use/` and not `/browser/` deliberately: the relay below
+     * claims every POST under that prefix and hands the tail to parseAsk, so a
+     * setup route parked there would come back "unknown browser operation" and
+     * read as a broken panel.
+     */
+    if (pathname === "/browser-use/status") {
+      return json(browserUseStatus(browserReadyCount(), true));
+    }
+    if (pathname === "/browser-use/install" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      const res = installSkill();
+      return json(res, res.ok ? 200 : 400);
+    }
+
+    /**
+     * Drive the built-in browser — the one with your logins in it.
+     *
+     * `/browser/<op>`, one closed verb each, relayed to the window and answered
+     * with what actually happened (see browserdrive.ts). This is the surface an
+     * agent reaches from its shell, so it carries the same origin + token gate
+     * as everything else and offers no way to run script of its own choosing.
+     *
+     * The data routes under /browser/ — the history save, the visit record and
+     * the forget — are NOT drive ops; they are handled further down. They must
+     * be excluded here or this relay claims them first and answers "unknown
+     * browser operation", which is the very trap the /browser-use/ comment above
+     * warns about. Left in, it silently broke both history import and own-visit
+     * recording: every POST /browser/places came back 400, places.db stayed
+     * empty, and the address bar had nothing of yours to complete.
+     */
+    const browserDataPost = pathname === "/browser/places" || pathname === "/browser/places/forget" || pathname === "/browser/visit";
+    if (pathname.startsWith("/browser/") && req.method === "POST" && !browserDataPost) {
+      if (!localOrigin(req)) return csrfBlocked();
+      const op = pathname.slice("/browser/".length);
+      if (op === "ready") {
+        // A window saying it has a browser panel that can answer. Heartbeat, so
+        // a window that dies without saying goodbye stops being counted.
+        let b: any = {};
+        try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        return json({ ok: noteBrowserReady(b.client, b.on !== false) });
+      }
+      if (op === "result") {
+        // The window reporting back. Not an agent-facing route.
+        let b: any = {};
+        try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+        const known = settleBrowser(b.id, { ok: b.ok === true, value: b.value, error: typeof b.error === "string" ? b.error : undefined });
+        return json({ ok: true, known });
+      }
+      let b: unknown = {};
+      try { b = await req.json(); } catch { b = {}; }
+      const parsed = parseAsk(op as BrowserOp, b);
+      if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
+      const reply = await askBrowser(parsed.ask);
+      return json(reply, reply.ok ? 200 : 409);
+    }
+
     /**
      * Where this server can be reached from another device, and whether one
      * ever has been.
@@ -1168,7 +1377,7 @@ const server = Bun.serve<WsData>({
      * panel and is not disconnected on the wire.
      */
     if (pathname === "/remote/device" && req.method === "POST") {
-      const ip = srv.requestIP(req)?.address ?? null;
+      const ip = clientIp ?? null;
       if (!ip || !isLoopback(ip)) return json({ ok: false, error: "only this machine can disconnect a device" }, 403);
       let b: { address?: unknown; blocked?: unknown };
       try { b = (await req.json()) as { address?: unknown; blocked?: unknown }; } catch { return json({ ok: false, error: "invalid json" }, 400); }
@@ -1216,7 +1425,7 @@ const server = Bun.serve<WsData>({
      * three things that must happen where the user is sitting.
      */
     const atMachine = (): boolean => {
-      const ip = srv.requestIP(req)?.address ?? null;
+      const ip = clientIp ?? null;
       if (!ip || !isLoopback(ip)) return false;
       return !AUTH_TOKEN || tokenOk(req, url, AUTH_TOKEN);
     };
@@ -1251,7 +1460,10 @@ const server = Bun.serve<WsData>({
       return json({
         ticket: t ? { id: t.id, code: t.code, expiresAt: t.expiresAt } : null,
         pending: pendingPairings(),
-        devices: activeDevices(),
+        // Without the credential hash: the pane draws a label, a scope and two
+        // timestamps, and the hash is the one field on a device that is a
+        // secret. See publicDevice.
+        devices: activeDevices().map(publicDevice),
       });
     }
 
@@ -1265,7 +1477,7 @@ const server = Bun.serve<WsData>({
       const scope: Scope = asked === "read" || asked === "full" ? asked : "answer";
       const r = acceptTicket(typeof b.ticket === "string" ? b.ticket : "", scope);
       if (!r.ok) return json({ ok: false, error: r.error === "unknown" ? "that request expired" : "that request is not waiting on you" }, 404);
-      return json({ ok: true, device: r.device });
+      return json({ ok: true, device: publicDevice(r.device) });
     }
 
     if (pathname === "/pair/reject" && req.method === "POST") {
@@ -1320,7 +1532,7 @@ const server = Bun.serve<WsData>({
           label: typeof b.label === "string" ? b.label : "",
           pub: typeof b.pub === "string" ? b.pub : undefined,
           agent: req.headers.get("user-agent") ?? "",
-          ip: srv.requestIP(req)?.address ?? "",
+          ip: clientIp ?? "",
         },
       );
       if (r.ok) return json({ ok: true, secret: r.secret });
@@ -1437,7 +1649,13 @@ const server = Bun.serve<WsData>({
       // it still handles reuse across time; this handles reuse across callers.)
       return body(await singleFlight(`repos:${ignoreScope}`, async () => {
         const paths = getChanges(300).map((c) => c.file_path);
-        return JSON.stringify({ repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }) });
+        // `hidden` rides along rather than being filtered out here: the picker
+        // is the one surface that has to be able to show them again, and a list
+        // it cannot see is a list it cannot restore from.
+        return JSON.stringify({
+          repos: await discoverRepos(paths, knownProjects().map((p) => p.path), { ignoreScope }),
+          hidden: hiddenProjects(),
+        });
       }));
     }
     // Directory completion for the project picker's free-text path input. A
@@ -1462,6 +1680,74 @@ const server = Bun.serve<WsData>({
         if (treeCache.size > 40) treeCache.clear();
         treeCache.set(root, { at: Date.now(), data });
         return JSON.stringify(data);
+      }));
+    }
+    if (pathname === "/git/changes-all") {
+      // What each in-scope worktree has changed, in one list for File changes.
+      // Two modes: "working" — the working tree (staged + unstaged + untracked),
+      // what is uncommitted right now; and "committed" — each checkout's LAST
+      // commit, so a change survives being committed instead of vanishing with
+      // the working tree. Deliberately not the branch-vs-base diff either way: on
+      // a branch that merged master that drags in every file the merge brought,
+      // work that is not yours. Cached per mode, single-flighted.
+      const mode = url.searchParams.get("mode") === "committed" ? "committed" : "working";
+      return body(await singleFlight(`changes-all:${mode}`, async () => {
+        const cached = changesAllCache.get(mode);
+        if (cached && Date.now() - cached.at < CHANGES_ALL_TTL_MS * backoff()) return cached.body;
+        const paths = getChanges(300).map((c) => c.file_path);
+        // Only your branches: the trunk checkout (master/main) is the base you
+        // cut from, not something you are working on, so it stays out of File
+        // changes entirely — and out of the cap below.
+        const repos = (await discoverRepos(paths, knownProjects().map((p) => p.path), {}))
+          .filter((r) => r.branch !== "master" && r.branch !== "main");
+        // A stable NEGATIVE id per (file, key): the recorded-edit list keys
+        // selection, review and dedup off the positive DB event id, so a git row
+        // must never collide with one — and must keep the same id across polls,
+        // or the selected file jumps and a review tick is lost every few seconds.
+        const sid = (s: string): number => {
+          let h = 5381;
+          for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+          return -Math.abs(h) - 1;
+        };
+        let changes: unknown[];
+        if (mode === "committed") {
+          // Same read-through-cache shape as working mode's treeCache below.
+          const commitOf = async (root: string) => {
+            const hit = commitCache.get(root);
+            if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return hit.data;
+            const data = await lastCommitChanges(root);
+            if (commitCache.size > 40) commitCache.clear();
+            commitCache.set(root, { at: Date.now(), data });
+            return data;
+          };
+          const perRepo = await Promise.all(repos.map(async (r) => {
+            try {
+              const { subject, changes: cs } = await commitOf(r.root);
+              // session_id carries the commit subject so a Session grouping heads
+              // each worktree's rows with what the commit was.
+              return cs.map((c) => ({ ...c, session_id: subject || "last commit" }));
+            } catch { return []; }
+          }));
+          changes = perRepo.flat().map((c) => ({ ...c, id: sid(`${c.session_id}\0${c.file_path}`), ignored: false, outside: false }));
+        } else {
+          const trees = await Promise.all(repos.map(async (r) => {
+            const hit = treeCache.get(r.root);
+            if (hit && Date.now() - hit.at < TREE_TTL_MS * backoff()) return hit.data;
+            try {
+              const data = await workingTree(r.root);
+              if (treeCache.size > 40) treeCache.clear();
+              treeCache.set(r.root, { at: Date.now(), data });
+              return data;
+            } catch { return null; }
+          }));
+          changes = trees.flatMap((t) =>
+            t && !t.error
+              ? [...t.staged, ...t.unstaged].map((c) => ({ ...c, id: sid(`${c.session_id}\0${c.file_path}`), ignored: false, outside: false }))
+              : []);
+        }
+        const out = JSON.stringify({ changes: changes.slice(0, CHANGES_ALL_MAX) });
+        changesAllCache.set(mode, { at: Date.now(), body: out });
+        return out;
       }));
     }
     if (pathname === "/git/branches") {
@@ -1527,6 +1813,9 @@ const server = Bun.serve<WsData>({
     }
     if (pathname === "/git/conflicts") return json(gitConflicts(url.searchParams.get("root") || ""));
     if (pathname === "/git/conflict-blocks") return json(conflictBlocks(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
+    if (pathname === "/git/merge-session") return json(mergeSession(url.searchParams.get("root") || ""));
+    if (pathname === "/git/conflict-file") return json(conflictFile(url.searchParams.get("root") || "", url.searchParams.get("path") || ""));
+    if (pathname === "/git/merge-info") return json(mergeInfo(url.searchParams.get("root") || ""));
     if (pathname === "/git/base-candidates") return json(baseCandidates(url.searchParams.get("root") || ""));
     if (pathname === "/git/log") return json({ commits: gitLog(url.searchParams.get("root") || "", Number(url.searchParams.get("limit") || 100)) });
     if (pathname === "/git/commit-diff") return json({ changes: commitDiff(url.searchParams.get("root") || "", url.searchParams.get("hash") || "") });
@@ -1557,6 +1846,15 @@ const server = Bun.serve<WsData>({
     // Carry the cockpit's palette out to tmux and nvim — see themesync.ts.
     if (pathname === "/editor/capability") return json(editorCapability());
     if (pathname === "/theme/status") return json({ ...snippetStatus(), snippets: SNIPPETS });
+    /*
+     * What this machine is wearing, so a paired phone can wear it too.
+     *
+     * A read, so any device scope reaches it — a phone that may only look at
+     * things may certainly know what colour they are. `theme: null` means
+     * nobody has picked one and the client should keep its own defaults, which
+     * is a different answer from a palette and has to stay distinguishable.
+     */
+    if (pathname === "/theme/current") return json({ theme: currentTheme() });
     if (pathname === "/theme/sync" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
@@ -1571,12 +1869,64 @@ const server = Bun.serve<WsData>({
       return json(await openInEditor(b.path, b.line));
     }
 
+    /* An image an agent can read. See shots.ts: a tmux window takes text, and a
+       megabyte of base64 pasted into a shell is not text. */
+    /* The pages brought over from another browser. The shell does the reading
+       (see ag:browserPlaces); this only keeps them and hands them back to the
+       address bar. */
+    if (pathname === "/browser/places" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const source = String(b.source ?? "");
+      const rows = Array.isArray(b.places) ? b.places : [];
+      if (!source) return json({ ok: false, error: "no source" });
+      const clean = rows
+        .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
+        .filter((r) => typeof r.url === "string" && /^https?:\/\//i.test(r.url))
+        .slice(0, 60_000)
+        .map((r) => ({
+          url: String(r.url), title: String(r.title ?? "").slice(0, 300),
+          visits: Number(r.visits ?? 0) || 0, lastAt: Number(r.lastAt ?? 0) || 0,
+          bookmarked: !!r.bookmarked,
+        }));
+      return json({ ok: true, saved: saveFrom(source, clean), ...placeCount() });
+    }
+    if (pathname === "/browser/places" && req.method === "GET") {
+      return json({ ok: true, ...placeCount() });
+    }
+    if (pathname === "/browser/places/all") {
+      return json({ ok: true, places: allPlaces() });
+    }
+    if (pathname === "/browser/places/forget" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      forgetPlaces();
+      return json({ ok: true, ...placeCount() });
+    }
+    /* A page the built-in browser just visited. Its OWN history, kept under the
+       'agentglass' source so a browser re-import (which DELETEs by source) never
+       wipes it — see recordVisit(). */
+    if (pathname === "/browser/visit" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      recordVisit(String(b.url ?? ""), String(b.title ?? ""));
+      return json({ ok: true });
+    }
+    if (pathname === "/scratch/image" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      return json(saveShot(b.dataUrl, b.name));
+    }
     if (pathname.startsWith("/git/") && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const root = String(b.root || "");
       const paths = Array.isArray(b.paths) ? b.paths : [];
+      // Enforced here rather than by the screen not offering it: the routes are
+      // still reachable from the Diff view, from another window, and from an
+      // agent driving the app. See stoppedRefusal().
+      const stopped = stoppedRefusal(root, pathname);
+      if (stopped) { noteAction(clientIp, pathname, b, stopped, caller); return json(stopped, 400); }
       let res;
       switch (pathname) {
         case "/git/stage": res = stage(root, paths); break;
@@ -1616,15 +1966,16 @@ const server = Bun.serve<WsData>({
         case "/git/sync-base": res = await syncFromBase(root, b.base); break;
         case "/git/set-base": res = setBase(root, b.branch, b.base ?? null); break;
         case "/git/resolve": res = resolveWith(root, b.paths ?? b.path, b.side); break;
-        case "/git/resolve-blocks": res = resolveBlocks(root, b.path, b.choices); break;
+        case "/git/resolve-blocks": res = resolveBlocks(root, b.path, b.choices, b.stamp); break;
         case "/git/merge-abort": res = mergeAbort(root); break;
-        case "/git/merge-continue": res = mergeContinue(root); break;
+        case "/git/merge-continue": res = mergeContinue(root, b.anyway); break;
+        case "/git/reopen-conflict": res = reopenConflict(root, b.path, b.confirm); break;
         case "/git/undo-merge": res = await undoMerge(root); break;
         default: res = null;
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(clientIp, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- live docker panel (lazydocker-style) ---
@@ -1666,7 +2017,20 @@ const server = Bun.serve<WsData>({
      * rather than a flag.
      */
     if (pathname === "/providers") {
-      return json({ providers: await providerStatuses() });
+      const providers = await providerStatuses();
+      /*
+       * Answer first, then go and find out.
+       *
+       * The statuses read ClickUp's cache and never fill it, because filling it
+       * costs ten seconds of ClickUp's own latency and this page's question —
+       * does the token work — does not need the task list. So the page is
+       * instant, and this warms the cache for the next look; the 60s TTL and
+       * the single-flight lock mean reopening Settings does not re-ask.
+       * Deliberately not awaited, and its rejection swallowed: nobody is
+       * waiting on it, and an unhandled rejection would go to the error log.
+       */
+      void clickupTasks().catch(() => { /* the next look finds out */ });
+      return json({ providers });
     }
     if (pathname === "/providers/workspaces") {
       return json(await providerWorkspaces((url.searchParams.get("id") ?? "") as ProviderId));
@@ -1687,14 +2051,63 @@ const server = Bun.serve<WsData>({
        the write path refuses unless AGENTGLASS_CLICKUP_WRITE=1 — see
        clickup.ts for why this one defaults to off while the local list
        defaults to on. */
+    /* Recipes — the commands somebody saved. Read is open; every write goes
+       through `saveRecipe`, which is the only thing that decides what may end
+       up in the file. Nothing here executes anything: running a recipe is the
+       terminal's job, through the same path a typed command takes. */
+    if (pathname === "/recipes") {
+      const { recipes, recipesFor } = await import("./recipes.ts");
+      const root = url.searchParams.get("root") ?? "";
+      return json({ recipes: root ? recipesFor(root) : recipes() });
+    }
+    if (pathname === "/recipes/render") {
+      // What WILL run, so it can be shown before it does. Never runs it.
+      const { recipes, renderSteps } = await import("./recipes.ts");
+      const id = url.searchParams.get("id") ?? "";
+      const r = recipes().find((x) => x.id === id);
+      if (!r) return json({ ok: false, error: "no such recipe" }, 404);
+      let values: Record<string, string> = {};
+      try { values = JSON.parse(url.searchParams.get("values") || "{}") as Record<string, string>; } catch { /* none */ }
+      return json({ ok: true, ...renderSteps(r, values) });
+    }
+    if (pathname.startsWith("/recipes/") && req.method === "POST") {
+      const { saveRecipe, removeRecipe } = await import("./recipes.ts");
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const r = pathname === "/recipes/save" ? saveRecipe(b as never)
+        : pathname === "/recipes/remove" ? removeRecipe(String(b.id ?? ""))
+        : null;
+      if (!r) return json({ ok: false, error: "not found" }, 404);
+      return json(r, r.ok ? 200 : 400);
+    }
     if (pathname === "/clickup/views") {
-      return json({ views: savedViews(), current: currentView(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
+      // `prefix` is what this workspace's ids look like, so a surface that has
+      // only a string — the pull-request masthead reading a branch name — can
+      // tell a card id of ours from another tracker's before it offers to open
+      // one. Empty means nothing has been read yet, which is "unknown".
+      return json({ views: savedViews(), current: currentView(), prefix: knownCardPrefix(), writeEnabled: clickupWriteEnabled(), writeForced: process.env.AGENTGLASS_CLICKUP_WRITE === "1" });
     }
     if (pathname === "/clickup/view") {
-      const id = url.searchParams.get("id") ?? currentView() ?? "";
+      // Falls back to the first board rather than to nothing, and the first
+      // board is the built-in one — so a fresh install opens on the tasks
+      // assigned to you instead of on a form asking for an address.
+      const id = url.searchParams.get("id") || currentView() || savedViews()[0]?.id || "";
       if (!id) return json({ tasks: [], statuses: [], fields: [], at: 0 });
       setCurrent(id);
       return json(await readView(id, url.searchParams.get("force") === "1"));
+    }
+    /* One list's own statuses and fields, for a card that is not from the board
+       you are looking at — the built-in board's rows never are. Offering the
+       board's statuses for such a card would offer a move that 400s, or worse,
+       one that lands somewhere that means something else. */
+    if (pathname === "/clickup/list") {
+      const { secretFor } = await import("./credentials.ts");
+      const { listMeta } = await import("./clickup.ts");
+      const token = secretFor("clickup");
+      const listId = url.searchParams.get("id") ?? "";
+      if (!token) return json({ ok: false, error: "ClickUp is not connected" }, 400);
+      if (!listId) return json({ ok: false, error: "no list asked for" }, 400);
+      const r = await listMeta(token, listId);
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error }, r.ok ? 200 : 400);
     }
     if (pathname === "/clickup/prs") {
       // The checkout the search runs in, vetted the same way every other route
@@ -1712,8 +2125,21 @@ const server = Bun.serve<WsData>({
     if (pathname === "/clickup/find") {
       // The prefix comes from what we have already read, so a bare number is
       // enough and nobody has to be asked what their ids look like.
-      const seen = savedViews().map((v) => cachedFor(v.id)?.tasks?.[0]?.customId ?? "").find(Boolean) ?? "";
-      const r = await findCard(url.searchParams.get("q") ?? "", seen.replace(/[0-9]+$/, ""));
+      const r = await findCard(url.searchParams.get("q") ?? "", knownCardPrefix());
+      return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
+    }
+    if (pathname === "/clickup/where") {
+      // "Is this card already on a board I have?" — answered from the cache, so
+      // it costs ClickUp nothing and can be asked before every lookup. A miss
+      // is "not that we know of", not "nowhere": see boardHolding.
+      const held = boardHolding(url.searchParams.get("id") ?? "");
+      return json(held ? { ok: true, ...held } : { ok: false });
+    }
+    if (pathname === "/clickup/members") {
+      // Who can be put on a card. Scoped to the LIST the card lives in: a
+      // workspace here holds the whole company, and a picker offering all of
+      // them to assign one backend card is a picker nobody uses twice.
+      const r = await listMembers(url.searchParams.get("list") ?? "");
       return json(r.ok ? { ok: true, ...r.data } : { ok: false, error: r.error });
     }
     if (pathname === "/clickup/task") {
@@ -1725,8 +2151,14 @@ const server = Bun.serve<WsData>({
       const id = String(b.id ?? "");
       const seen = typeof b.updated === "number" ? b.updated : undefined;
       const r = pathname === "/clickup/views/add" ? await addViewByUrl(String(b.url ?? ""))
+        : pathname === "/clickup/views/replace" ? await replaceViewUrl(id, String(b.url ?? ""))
         : pathname === "/clickup/views/remove" ? (removeView(id), { ok: true })
-        : pathname === "/clickup/assign" ? await assignSelf(id, b.on !== false, seen)
+        // `user` names somebody other than you; without it this stays what it
+        // has always been, the self-assign toggle.
+        : pathname === "/clickup/assign"
+          ? (b.user != null
+            ? await setAssignee(id, Number(b.user), b.on !== false, seen)
+            : await assignSelf(id, b.on !== false, seen))
         : pathname === "/clickup/status" ? await setStatus(id, String(b.status ?? ""), seen)
         : pathname === "/clickup/field" ? await setField(id, String(b.field ?? ""), String(b.value ?? ""))
         : pathname === "/clickup/writes" ? (setWritesAllowed(b.on === true), { ok: true })
@@ -1766,6 +2198,14 @@ const server = Bun.serve<WsData>({
     // On demand only, and never on a poll: `du` over a checkout walks every
     // inode in it, which is seconds on a repository with a node_modules.
     if (pathname === "/machine/space") return json(spaceFor(url.searchParams.get("root") || ""));
+    // The checkouts we already know about, which is the same list the project
+    // picker is built from. No `git` is run — see gitlocks.ts for why a panel
+    // must not shell out to git in a repository that is already stuck.
+    if (pathname === "/machine/locks") return json(gitLocks(knownProjects().map((p) => p.path)));
+    // Everything about one process that will not fit on a row. Secret-looking
+    // values come back masked — see procdetail.ts for why that is not optional
+    // on a surface a paired phone can reach.
+    if (pathname === "/machine/process") return json(procDetail(url.searchParams.get("pid")));
 
     // --- browsing and searching a checkout ---
     // Their own switch, not the terminal's: an operator who turned the shell off
@@ -1775,8 +2215,15 @@ const server = Bun.serve<WsData>({
       if (!FS_BROWSE_ENABLED) return json({ error: "directory browsing is disabled (AGENTGLASS_FS_BROWSE_DISABLED=1)" }, 403);
       const root = url.searchParams.get("root") || "";
       if (pathname === "/files/tree") return json(fileTree(root, url.searchParams.get("rel") || ""));
-      if (pathname === "/files/find") return json(findFiles(root, url.searchParams.get("q") || ""));
-      if (pathname === "/files/grep") return json(grepFiles(root, url.searchParams.get("q") || ""));
+      /* One file's text, for the viewer that renders markdown rather than
+         editing it. Same containment as the tree — see files.ts. */
+      // `ref` is optional everywhere: absent means this working tree, which is
+      // what every existing caller sends and must keep meaning.
+      if (pathname === "/files/read") return json(fileText(root, url.searchParams.get("rel") || "", url.searchParams.get("ref") || undefined));
+      if (pathname === "/files/find") return json(findFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined));
+      if (pathname === "/files/grep") return json(grepFiles(root, url.searchParams.get("q") || "", undefined, url.searchParams.get("ref") || undefined));
+      if (pathname === "/files/refs") return json(listRefs(root));
+      if (pathname === "/files/exist") return json(filesExist(root, url.searchParams.getAll("rel")));
     }
 
     if (pathname === "/docker/capability") return json(await dockerCapability());
@@ -1813,7 +2260,7 @@ const server = Bun.serve<WsData>({
     // Spends a little quota to measure quota, so it is opt-in on the client and
     // gated here like the other routes that run a CLI.
     if (pathname === "/usage/codex/refresh" && req.method === "POST") {
-      if (!trustedCaller(req)) return csrfBlocked();
+      if (!trustedCaller(req, from)) return csrfBlocked();
       return json(await refreshCodexUsage());
     }
     if (pathname.startsWith("/docker/") && req.method === "POST") {
@@ -1831,7 +2278,7 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(clientIp, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     /*
@@ -1900,18 +2347,60 @@ const server = Bun.serve<WsData>({
         case "/issues/state": res = await setIssueState(root, b.number, b.close === true); break;
         default: res = null;
       }
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(clientIp, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // The one write in the machine panel, and it signals a process. Origin
     // checked like every other write, recorded like every other write, and
     // refused for any pid this user does not own — see killPort.
+    /*
+     * Delete a lock nothing is holding.
+     *
+     * A write, and the only destructive one this panel has beyond `kill`, so it
+     * is gated the same way and then re-checks its own premise: the path has to
+     * still be a stale lock in a checkout we know, decided server-side at the
+     * moment of the call. The client's opinion is a request, not evidence — the
+     * list it is looking at is up to 2.5 seconds old, and in that window a real
+     * git can have picked the lock up.
+     */
+    /*
+     * Unmask one environment variable.
+     *
+     * `desktopOnly`, not `localOrigin`, and that is the entire point of the
+     * route existing separately. Everything else in this panel is safe to read
+     * from a paired phone; a decrypted API key is not. The desktop shell serves
+     * itself from a scheme nothing on the web can be served under and a page
+     * cannot forge an Origin, so this is the one gate that cannot be reached
+     * from a device that merely paired.
+     */
+    if (pathname === "/machine/env" && req.method === "POST") {
+      if (!desktopOnly(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = revealEnv(b.pid, b.key);
+      // Deliberately NOT passed to noteAction: the action log is readable from
+      // the panel, and writing the value there would undo the masking by a
+      // different door. The fact that a reveal happened is worth recording; the
+      // value is the thing being protected.
+      noteAction(clientIp, pathname, { pid: b.pid, key: b.key }, { ok: res.ok, error: res.error }, caller);
+      return json(res, res.ok ? 200 : 400);
+    }
+
+    if (pathname === "/machine/unlock" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
+      let b: any = {};
+      try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
+      const res = removeStaleLock(b.path, knownProjects().map((p) => p.path));
+      noteAction(clientIp, pathname, b, res, caller);
+      return json(res, res.ok ? 200 : 400);
+    }
+
     if (pathname === "/machine/kill" && req.method === "POST") {
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const res = killPort(b.pid);
-      noteAction(srv.requestIP(req)?.address, pathname, b, res, caller);
+      noteAction(clientIp, pathname, b, res, caller);
       return json(res, res.ok ? 200 : 400);
     }
 
@@ -1921,6 +2410,65 @@ const server = Bun.serve<WsData>({
     // waits on a subprocess. Writes are all POST and all origin-checked; the
     // irreversible ones additionally carry the head sha the UI showed.
     if (pathname === "/prs/capability") return json(await ghCapability(url.searchParams.get("force") === "1"));
+    // What is left of GitHub's hourly budget. Asked by a settings page somebody
+    // is looking at, so it is never served from a cache — see ghRateLimit.
+    if (pathname === "/prs/rate-limit") return json(await ghRateLimit());
+    // How far behind its base a branch is — asked apart from the detail because
+    // it costs about 600ms, and the detail should not. See branchBehind.
+    /*
+     * Put a pull request's conflict in a worktree, so there is something to
+     * resolve.
+     *
+     * A POST because it writes: it cuts a worktree and merges into it. Never
+     * the checkout the user is standing in — see prepareConflictMerge.
+     */
+    if (pathname === "/prs/conflict" && req.method === "POST") {
+      const b = await req.json().catch(() => ({})) as Record<string, unknown>;
+      const asked = String(b.root ?? "");
+      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const number = Number(b.number ?? 0);
+      const pr = await prBranches(root, number);
+      if (!pr) return json({ ok: false, error: "could not read that pull request's branches" });
+      return json(prepareConflictMerge(root, pr.head, pr.base));
+    }
+    /* Which files a pull request would conflict on, WITHOUT merging anything —
+       see conflictPreview(). Read-only: the checkout somebody is working in is
+       untouched. */
+    if (pathname === "/prs/conflict-files") {
+      const asked = url.searchParams.get("root") ?? "";
+      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      const number = Number(url.searchParams.get("number") ?? 0);
+      const pr = await prBranches(root, number);
+      if (!pr) return json({ ok: false, conflicts: [], clean: false, error: "could not read that pull request's branches" });
+      // The number goes through: a pull request from a fork has no branch on
+      // origin, and refs/pull/<n>/head is the only ref that always exists.
+      return json(await conflictPreview(root, pr.base, pr.head, number));
+    }
+    /* The pull requests on a branch — one out of it, any number into it. Asked
+       of GitHub by name rather than filtered out of a scope, because a scope is
+       about an AUTHOR and this question is about a branch. */
+    if (pathname === "/prs/for-branch") {
+      const asked = url.searchParams.get("root") ?? "";
+      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      return json(await prsForBranch(root, url.searchParams.get("branch") ?? ""));
+    }
+    if (pathname === "/prs/behind") {
+      const asked = url.searchParams.get("root") ?? "";
+      const root = asked && inScope(asked) ? asked : (workspaceRoot() ?? process.cwd());
+      return json(await branchBehind(root, Number(url.searchParams.get("number") ?? 0)));
+    }
+    /* Where this app keeps things, and for how long — read by Settings →
+       Privacy. Paths, not contents: the page says what is on disk so somebody
+       can go and look, and nothing here reads a credential to display it. */
+    if (pathname === "/privacy") {
+      return json({
+        db: dbPath(),
+        config: configPath(),
+        credentials: credentialsPath(),
+        retentionDays: RETENTION_DAYS,
+        pairedDevices: devices().length,
+      });
+    }
     if (pathname === "/prs/list") {
       return json(await listPrs(
         url.searchParams.get("root") || "",
@@ -2003,7 +2551,7 @@ const server = Bun.serve<WsData>({
         case "/prs/labels": res = await setLabels(root, n, b.add, b.remove); break;
         case "/prs/reviewers": res = await setReviewers(root, n, b.add, b.remove); break;
         case "/prs/draft": res = await setDraft(root, n, b.draft); break;
-        case "/prs/update-branch": res = await updateBranch(root, n); break;
+        case "/prs/update-branch": res = await updateBranch(root, n, b.syncLocal); break;
         case "/prs/rerun": res = await rerunFailedChecks(root, n); break;
         case "/prs/rerun-jobs": res = await rerunJobs(root, b.what, b.id); break;
         case "/prs/line-comment": res = await addLineComment(root, n, b); break;
@@ -2015,7 +2563,7 @@ const server = Bun.serve<WsData>({
       }
       // Every write through this switch is recorded — see actions.ts for why
       // it keeps the small ones too.
-      if (res) { noteAction(srv.requestIP(req)?.address, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
+      if (res) { noteAction(clientIp, pathname, b, res, caller); return json(res, res.ok ? 200 : 400); }
     }
 
     // --- in-browser terminal: ready-to-run project commands (make + scripts) ---
@@ -2040,16 +2588,89 @@ const server = Bun.serve<WsData>({
       // The socket a terminal was last attached to is a hint, not a
       // requirement: the servers are discovered from the socket directory, so
       // this answers whether or not a terminal has ever been opened here.
-      const panes = listPanes(lastTmuxTarget()?.socket)
-        .filter((p) => !p.agentCwds.length || p.agentCwds.some((c) => sessionInScope({ cwd_path: c })))
+      /*
+       * Every pane on the machine, and deliberately NOT filtered by workspace.
+       *
+       * It used to drop any pane whose agents were all out of scope, and the
+       * result was a tab strip with holes in it: window 3 and window 5 simply
+       * were not there. Reported from a phone, and it took a measurement to
+       * see, because the rule produces an absurdity — a window running an idle
+       * shell is listed, and the SAME window with an agent working in it
+       * vanishes. The two most interesting tabs are exactly the ones it hid.
+       *
+       * It was not protecting anything either. `pane_current_path` is on every
+       * row already, including for the panes the filter let through, so a
+       * directory outside the workspace was on the wire regardless — the rule
+       * cost a complete answer and bought nothing.
+       *
+       * This is the machine's tmux, which is what the caller asked for. What
+       * belongs to a workspace is a session's transcripts, and that is a
+       * different question asked at a different endpoint.
+       */
+      const live = listPanes(lastTmuxTarget()?.socket)
         // The socket is a filesystem path and stays on this side of the wire.
         .map(({ socket: _s, ...p }) => p);
-      return json({ ok: true, panes });
+      /*
+       * A session seen as a floating window stays marked as one.
+       *
+       * The mark is only readable while the popup is OPEN — that is when its
+       * client exists to be asked what terminal it is running under. Closed, it
+       * looks like any other detached session. Without remembering, it would
+       * appear and disappear from a phone depending on whether it happened to
+       * be on screen, which is worse than either answer.
+       *
+       * Before `withAgentSessions`, which copies each row: setting the flag
+       * afterwards would set it on the originals and answer with the copies.
+       */
+      for (const p of live) if (p.popup) seenPopups.add(p.session);
+      for (const p of live) if (seenPopups.has(p.session)) p.popup = true;
+      // Which session is in which pane, where a hook said so. The list is the
+      // live one, so a note pointing at a pane that has since closed drops out
+      // here rather than becoming a button that goes nowhere.
+      const panes = withAgentSessions(live, (id) => {
+        const n = paneAgentNote(id);
+        return n ? { sessionId: n.session_id, at: n.at } : null;
+      });
+      /*
+       * `canAttach` says this server understands `?pane=` on the terminal
+       * socket.
+       *
+       * A build without it ignores the parameter and opens a plain shell, so a
+       * phone tapping a tab gets an empty prompt where it expected the session
+       * that is already running — and nothing anywhere says why. The flag
+       * costs a boolean and turns that into a sentence.
+       */
+      // Annotated, not just handed to `json()`: this is the line that makes the
+      // three ends one protocol. `json` takes anything, so without it the body
+      // was whatever the expressions above happened to produce and `canAttach`
+      // existed in no shared declaration at all.
+      const body: PanesResponse = { ok: true, panes, canAttach: true };
+      return json(body);
+    }
+
+    /**
+     * Where the agent in the pane you are typing in has been working.
+     *
+     * Directories, newest first — not "the worktree". Which of them is a
+     * worktree of the repo on screen is decided by the panel, which is already
+     * holding that list and already filtering it to this project; answering it
+     * here would be a second copy of that decision, kept in a different file.
+     *
+     * Asked by the worktree menu while it is open, at the same lazy cadence the
+     * screen scrape it replaces used. Scoped like every other read: a cockpit
+     * opened for one project does not get to enumerate directories from another.
+     */
+    if (pathname === "/terminal/pane-dirs") {
+      const pane = activePane(lastTmuxTarget()?.socket, url.searchParams.get("window") || "");
+      if (!pane) return json({ ok: true, pane: null, dirs: [] });
+      const { dirs } = paneDirs(pane.paneId, pane.pid);
+      return json({ ok: true, pane: pane.paneId, dirs: dirs.filter((d) => sessionInScope({ cwd_path: d })) });
     }
 
     /** Put one of them in front of whoever is attached. The ids are validated
      *  against tmux's own syntax in focusPane() before they reach a command. */
     if (pathname === "/terminal/panes/focus" && req.method === "POST") {
+      if (!localOrigin(req)) return csrfBlocked();
       let b: { sessionId?: unknown; windowId?: unknown; paneId?: unknown };
       try { b = (await req.json()) as typeof b; } catch { return json({ ok: false, error: "invalid json" }, 400); }
       const ok = focusPaneAnywhere(lastTmuxTarget()?.socket, String(b.sessionId ?? ""), String(b.windowId ?? ""), String(b.paneId ?? ""));
@@ -2093,9 +2714,19 @@ const server = Bun.serve<WsData>({
       // The prompt is deliberately not kept here. It is already in the
       // transcript and in `events`, and a second copy in an append-only table
       // that nothing prunes is a copy nobody asked for.
-      noteAction(srv.requestIP(req)?.address, "/chat/send",
+      noteAction(clientIp, "/chat/send",
         { root: b.cwd, name: b.model }, { ok: true }, caller);
-      return chatSend(b);
+      // What the turn may be is the caller's business, not the body's: a device
+      // paired for "answer" gets the prompting default, no pre-approved tools,
+      // and has to name a session that already exists — see scopedTurn in
+      // chat.ts for the argv that came out of trusting the body instead.
+      //
+      // A null caller is the machine. The gate above only runs when a token is
+      // configured, and with none configured this server refuses to bind
+      // anything but loopback (resolveToken), so there is nobody else it could
+      // be — and no device credentials exist in that world to be narrower than
+      // it.
+      return chatSend(b, caller?.scope ?? "full");
     }
     // The command that hands a chat to the user's own terminal. Server-side
     // because the socket name and flags are the engine's business, and a string
@@ -2201,7 +2832,7 @@ const server = Bun.serve<WsData>({
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
       // Same reasoning as /chat/send: the launch is the auditable fact, not the
       // turn, and the prompt is already in Codex's own rollout.
-      noteAction(srv.requestIP(req)?.address, "/codex/send",
+      noteAction(clientIp, "/codex/send",
         { root: b.cwd, name: b.model }, { ok: true }, caller);
       return codexStream(b.cwd, b.message, b.model, b.resumeId, b.mode, b.images);
     }
@@ -2226,7 +2857,7 @@ const server = Bun.serve<WsData>({
       if (!localOrigin(req)) return csrfBlocked();
       let b: any = {};
       try { b = await req.json(); } catch { return json({ error: "invalid json" }, 400); }
-      noteAction(srv.requestIP(req)?.address, "/antigravity/send",
+      noteAction(clientIp, "/antigravity/send",
         { root: b.cwd, name: b.model }, { ok: true }, caller);
       // `ingestBody` is handed in rather than imported by antigravity.ts, which
       // would be a cycle. It is also what puts an Antigravity chat on the radar
@@ -2416,7 +3047,7 @@ const server = Bun.serve<WsData>({
     // index.html and let the bundle take it from there. Anything else — curl,
     // fetch, an exporter probing a bad path — still gets the JSON 404.
     if (req.method === "GET" && (req.headers.get("accept") || "").includes("text/html")) {
-      const page = serveIndex(cors, fromRemote);
+      const page = serveIndex(cors);
       if (page) return page;
     }
 
@@ -2438,6 +3069,10 @@ const server = Bun.serve<WsData>({
         return;
       }
       clients.add(ws);
+      // Alive from the moment it connects, so the first alert after a page load
+      // is never mistaken for a frozen peer and answered with notify-send as
+      // well. The sweep has 30 seconds to disagree.
+      alive.set(ws, Date.now());
       // openTools seeds the client's "running" state for tools whose PreToolUse
       // predates the 300-event initial slice — otherwise a long job in flight
       // when the page loads shows as idle (or missing) until its Post arrives.
@@ -2449,6 +3084,11 @@ const server = Bun.serve<WsData>({
     },
     close(ws: ServerWebSocket<WsData>) {
       sockets.delete(ws);
+      // With `sockets`, above the per-kind branches, because a pty or notify
+      // socket answers a ping too — and those two branches return before the
+      // bottom of this function, so anything tidied down there is tidied for
+      // event streams only and leaks an entry per terminal.
+      alive.delete(ws);
       noteSocket(ws.data?.ip, -1);
       if (ws.data?.kind === "pty") { ptyClose(ws); return; }
       if (ws.data?.kind === "notify") {
@@ -2463,6 +3103,13 @@ const server = Bun.serve<WsData>({
     message(ws: ServerWebSocket<WsData>, msg) {
       if (ws.data?.kind === "pty") ptyMessage(ws, msg as string | Buffer);
       /* event-stream clients are read-only */
+      // ...but a frame that did arrive is still proof somebody is running.
+      else alive.set(ws, Date.now());
+    },
+    /** The answer to the sweep's ping, and the only routine evidence an
+     *  event-stream client ever sends: it is otherwise read-only. */
+    pong(ws: ServerWebSocket<WsData>) {
+      alive.set(ws, Date.now());
     },
   },
 });
@@ -2606,6 +3253,29 @@ startPaneSweeper();
 startTaskSweep();
 startReminderTick();
 
+/*
+ * Take the database file for this process, before anything sweeps it.
+ *
+ * The transcript scanner is not idempotent — its events carry no event_id, so
+ * the ingest idempotency index cannot dedupe them — and the default database
+ * path is the shared one under $XDG_DATA_HOME. A second server pointed at the
+ * same file (a test instance on another port, which the ":4000 attach" check
+ * never sees) therefore doubles events, tokens and cost in silence. Measured on
+ * this machine's real history: 22 duplicate groups out of 100,354 scanner
+ * events. The loser of this claim still serves, still ingests hooks, still
+ * shows the dashboard — it just does not sweep. See db.ts for how a claim left
+ * behind by a SIGKILLed process is told apart from a live one.
+ */
+const dbClaim = claimDatabase(server.port ?? PORT);
+if (!dbClaim.ok && dbClaim.holder) {
+  console.warn(
+    `🔒 ${dbPath()} is claimed by pid ${dbClaim.holder.pid} (port ${dbClaim.holder.port}) — this server will not scan transcripts.`
+  );
+  console.warn(`   Set AGENTGLASS_DB to a file of your own to run a second instance with its own history.`);
+} else if (dbClaim.tookOver) {
+  console.log(`🔒 took over the database claim from pid ${dbClaim.tookOver.pid} — it is no longer running`);
+}
+
 // Read every Claude Code session on this machine from ~/.claude/projects, then
 // keep watching. This is what makes the dashboard cover all projects at once
 // instead of only the directory agentglass happens to run from.
@@ -2640,8 +3310,40 @@ if (gates.restored || gates.expired) {
 // Hang up shells and clean temp dirs on the way out — a bare kill leaves them
 // orphaned. Re-raise so the default disposition still terminates the process.
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
-  process.on(sig, () => { shutdownTerminals(); process.exit(0); });
+  process.on(sig, () => { shutdownTerminals(); releaseDatabaseClaim(); process.exit(0); });
 }
+
+/*
+ * Give back every tmux window a previous run pinned and was killed before
+ * releasing.
+ *
+ * The handler above covers SIGINT and SIGTERM. It does not cover SIGKILL, an
+ * OOM kill, or the machine going down — and after a day of hard kills a user
+ * was left with one window of a five-window session at 54 rows inside a 59-row
+ * client, `window-size manual`, permanently, with nothing on screen to say
+ * what had done it. A restore that only ever runs on the way out cannot fix
+ * that; only the next way IN can. See `sweepPinnedWindows` for what proves a
+ * window is ours to touch and for the one case where it would be wrong.
+ *
+ * Synchronous, and deliberately before the server starts answering: measured at
+ * 2.4ms for a walk that finds nothing (one `list-windows` per tmux server —
+ * every boot after a clean shutdown) and 28.3ms for the worst case measured,
+ * eight marked windows with one really pinned. A window put back after the UI
+ * is already showing a tab strip is a window the user watches jump.
+ *
+ * `pinnedSockets()` and NOT `tmuxSockets()`, which is what this line used to
+ * say and is the whole of the bug it was changed for. `tmuxSockets()` lists
+ * every socket in `$TMUX_TMPDIR/tmux-<uid>` — 25 of them here, and with
+ * TMUX_TMPDIR unset that directory is the developer's own. This module runs at
+ * import, so every process that starts this file ran that walk: the desktop
+ * app, `make dev`, and the six scripts under `scripts/` that spawn this server
+ * with no NODE_ENV and no TMUX_TMPDIR. `pinnedSockets()` answers the question
+ * this line is actually asking — which servers has this installation pinned a
+ * window on — and a boot that has pinned none now issues no tmux command at
+ * all. See THE PIN LEDGER in tmuxctl.ts.
+ */
+const unpinned = sweepPinnedWindows(pinnedSockets());
+if (unpinned) console.log(`🪟 tmux: ${unpinned} window(s) released — a previous run was killed before it could put window-size back`);
 
 // Parent-death watchdog: a server must never outlive whoever launched it.
 //
@@ -2674,6 +3376,10 @@ if (process.env.AGENTGLASS_DIE_WITH_PARENT === "1") {
   setInterval(() => {
     if (process.ppid === 1 || process.ppid !== bornUnder || !alive(bornUnder)) {
       shutdownTerminals();
+      // The orphan path is a normal exit, not a crash, so hand the database
+      // claim back here too — a released claim saves the next boot a liveness
+      // check, and this is the way the packaged app most often goes away.
+      releaseDatabaseClaim();
       process.exit(0);
     }
   }, 3000).unref?.();
@@ -2681,11 +3387,30 @@ if (process.env.AGENTGLASS_DIE_WITH_PARENT === "1") {
 
 console.log(`🛰  agentglass server on http://${LOOPBACK_ONLY ? "localhost" : BIND}:${server.port}`);
 
-// The origin gate trusts this machine's own Tailscale name, and the Remote pane
-// offers its HTTPS URL to pair over — both read a cache filled here. First read
-// at boot; refreshed to catch `tailscale serve` being turned on or off.
-void refreshTailscale(server.port ?? PORT);
-setInterval(() => void refreshTailscale(server.port ?? PORT), 120_000);
+/*
+ * The origin gate trusts this machine's own Tailscale name, and the Remote pane
+ * offers its HTTPS URL to pair over — both read a cache filled here. First read
+ * at boot; refreshed to catch `tailscale serve` being turned on or off.
+ *
+ * Self-scheduling rather than a fixed 120s interval, and that is the T26 half
+ * that lives outside remote.ts. A fixed interval was fine while every probe was
+ * believed. It is wrong now that a probe can come back "could not ask": the
+ * cache is then running on a HELD value with a deadline on it, and the failing
+ * state is the one worth leaving fastest. `refreshTailscale` returns how long
+ * to wait — short after a failure, TAILNET_OK_MS after an answer.
+ *
+ * The `.catch` is not decoration: `refreshTailscale` is written not to throw,
+ * but if it ever did, an unguarded chain would stop here for good and the trust
+ * cache would freeze at whatever it last held — silently, which is the exact
+ * failure class this ticket is about.
+ */
+const watchTailnet = async (): Promise<void> => {
+  const next = await refreshTailscale(server.port ?? PORT)
+    .then((p) => p.nextMs)
+    .catch((e) => { console.warn("[remote] tailnet refresh threw:", e); return TAILNET_OK_MS; });
+  setTimeout(() => void watchTailnet(), next);
+};
+void watchTailnet();
 if (!LOOPBACK_ONLY) {
   const posture = AUTH_TOKEN ? "token-protected" : "UNAUTHENTICATED";
   console.warn(`⚠  bound to ${BIND} — this exposes a shell, git write access and docker control to the network (${posture})`);
@@ -2702,7 +3427,7 @@ if (AUTH_TOKEN) {
     console.log(`🔑 AGENTGLASS_TOKEN set — clients must pass ?token= or Authorization: Bearer`);
   }
 }
-if (WEB_UI_ENABLED) console.log(`   Web UI      → http://localhost:${server.port}/ (serving web/dist)`);
+if (WEB_UI_ENABLED) console.log(`   Web UI      → http://localhost:${server.port}/ (serving ${distPath()})`);
 console.log(`   POST events → http://localhost:${server.port}/ingest`);
 console.log(`   WebSocket   → ws://localhost:${server.port}/stream`);
 console.log(`   Stats API   → http://localhost:${server.port}/stats`);
@@ -2715,6 +3440,10 @@ startAutoFetch();
 // arrives once per verdict no matter how many browser tabs are watching, and
 // the frame carries the names of what failed rather than only a count.
 subscribeCi((v) => broadcast({ type: "ci", data: v }));
+/* A card of yours moved. Derived from a poll rather than received — ClickUp has
+   no notifications API — and silent on the first run, so connecting an account
+   does not announce a day of history. See clickupwatch.ts. */
+startCardWatch((n) => broadcast({ type: "card", data: n }));
 // Watch our own event loop. Cheap (one timer, one subtraction) and the only
 // thing that turns "the terminal feels laggy" into a name and a number.
 watchLoop();

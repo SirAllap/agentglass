@@ -14,6 +14,7 @@
 import { safeAbs, repoRootOf, gitCapability } from "./git.ts";
 import { inScope, chatBypassAllowed } from "./config.ts";
 import { paneTurnStream, paneEngineCapability } from "./chatpane.ts";
+import type { Scope } from "./devices.ts";
 import { CHAT_EFFORTS } from "../../shared/types.ts";
 import type { ChatImage, ChatImageMediaType, ChatEffort } from "../../shared/types.ts";
 
@@ -192,6 +193,51 @@ export function startKeepalive(controller: { enqueue: (c: Uint8Array) => void },
   return () => clearInterval(timer);
 }
 
+// --- stderr -----------------------------------------------------------------
+
+/** Drain a child's stderr from the start, and keep what has arrived readable
+ *  before the child exits.
+ *
+ *  Two callers with opposite needs. The exit path wants all of it, which means
+ *  waiting for the pipe to close. The first-run watchdog wants whatever has
+ *  been said *while the process is still running* — and in the case the hint
+ *  exists for, a CLI blocked on a login prompt, the pipe never closes at all,
+ *  so "all of it" is precisely the promise that never resolves.
+ *
+ *  What this replaces, in all three agents that spawn a CLI:
+ *
+ *      const hint = (await Promise.race([stderrText, Promise.resolve("")])).trim();
+ *
+ *  `Promise.resolve("")` is already resolved, so the race is decided in the
+ *  same microtask, every time, in favour of the empty string. `hint` was
+ *  unconditionally "" and the user always got the generic fallback — the one
+ *  case the watchdog was written to explain (a `codex`/`agy`/`claude` that has
+ *  never been logged in) is exactly the one whose reason was thrown away.
+ *
+ *  Draining also has to happen regardless: a pipe holds ~64KB, and a child that
+ *  fills it blocks on write forever, so waiting for exit before reading is a
+ *  deadlock the moment the CLI gets talkative. */
+export function drainStderr(stream: ReadableStream<Uint8Array>): {
+  /** Everything, once the pipe closes. */
+  all: Promise<string>;
+  /** Everything decoded so far. Safe to call at any moment, including while the
+   *  child is alive and holding the pipe open. */
+  soFar: () => string;
+} {
+  let seen = "";
+  const dec = new TextDecoder();
+  const all = (async () => {
+    const reader = stream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) seen += dec.decode(value, { stream: true });
+    }
+    return seen;
+  })().catch(() => seen);
+  return { all, soFar: () => seen };
+}
+
 /** The stdin line for a turn that carries image blocks.
  *
  *  This envelope is not guesswork: it is the shape `claude` itself writes when
@@ -228,7 +274,80 @@ export type TurnPlan =
   | { ok: false; response: Response }
   | { ok: true; dir: string; text: string; model: string; mode: string; effort: ChatEffort | ""; resumeId: string; images: ChatImage[]; allow: string[] };
 
-export function planTurn(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown, effort?: unknown): TurnPlan {
+/**
+ * What a turn is allowed to be, once you know who asked for it.
+ *
+ * `/chat/send` is one of the three routes a phone paired for `answer` may POST,
+ * because answering is what a phone is for. The body it sends was trusted
+ * completely, and two of its fields are execution: `mode:"bypassPermissions"`
+ * becomes `--dangerously-skip-permissions`, and `allowedTools:["Bash"]` reaches
+ * the same place one tool at a time with the bypass switched off. Both were
+ * measured from a device holding nothing but `answer`, against a server with
+ * the gate live — the argv that came out was
+ *
+ *   -p --output-format stream-json --verbose --model claude-opus-5 --dangerously-skip-permissions
+ *   -p --output-format stream-json --verbose --model claude-opus-5 --permission-mode default --allowedTools Bash Write Edit
+ *
+ * in the workspace root, which the same device reads off `/projects` with the
+ * `read` half of its scope. On the machine this was found on, that directory
+ * was the owner's employer's repository. `/terminal/pty` is carefully held at
+ * `full` by FULL_GET so a phone cannot open a shell; this walked around it with
+ * an agent that needs no shell of its own.
+ *
+ * So the scope decides, not the body. Anything short of `full` gets the
+ * prompting default and no pre-approved tools, and has to name a session that
+ * already exists — "replying to a session that is already running" is exactly
+ * what the phone's settings screen promises `answer` means, and a turn with no
+ * `resumeId` is not a reply, it is a new unattended agent.
+ *
+ * The desk is unaffected: it holds the machine's token, so it is `full`, and so
+ * is a caller on a server with no token configured at all (there are no device
+ * credentials in that world, and the bind is loopback — see index.ts).
+ */
+export type ScopedTurn =
+  | { ok: true; mode: string; allow: string[] }
+  | { ok: false; error: string };
+
+export function scopedTurn(scope: Scope, mode: string, allowedTools: unknown, resumeId: string): ScopedTurn {
+  // Bypass already allows everything, so an allowlist alongside it is noise.
+  if (scope === "full") return { ok: true, mode, allow: mode === "bypassPermissions" ? [] : allowList(allowedTools) };
+  if (!resumeId) {
+    return {
+      ok: false,
+      error: "this device is paired to answer sessions that are already running — starting a new one needs full access",
+    };
+  }
+  return { ok: true, mode: "default", allow: [] };
+}
+
+/**
+ * The command line a planned turn runs as.
+ *
+ * Lifted out of the spawn so a test can assert the ARGUMENTS a scope produces.
+ * The bug above was never a route answering the wrong status — every request in
+ * it answered 200, correctly, having built an argv nobody had authorised.
+ */
+export function turnArgv(bin: string, plan: Extract<TurnPlan, { ok: true }>): string[] {
+  const args = [bin, "-p", "--output-format", "stream-json", "--verbose", "--model", plan.model];
+  // Same flag both engines use. Verified it applies to `-p` as well as to an
+  // interactive session, which is what makes the chat's dial mean the same
+  // thing whichever engine a chat happens to run on.
+  if (plan.effort) args.push("--effort", plan.effort);
+  // Structured input is only switched on for a turn that actually needs it.
+  // Plain text is the overwhelmingly common case and its path through `claude`
+  // is the well-trodden one; `--input-format stream-json` is comparatively
+  // undocumented, so a turn with nothing to gain from it keeps the old
+  // behaviour byte for byte rather than riding a newer code path for free.
+  if (plan.images.length) args.push("--input-format", "stream-json");
+  if (plan.mode === "bypassPermissions") args.push("--dangerously-skip-permissions");
+  else args.push("--permission-mode", plan.mode);
+  // Only meaningful for the prompting modes — bypass already allows everything.
+  if (plan.allow.length) args.push("--allowedTools", ...plan.allow);
+  if (plan.resumeId) args.push("--resume", plan.resumeId);
+  return args;
+}
+
+export function planTurn(scope: Scope, cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown, effort?: unknown): TurnPlan {
   const no = (r: Response): TurnPlan => ({ ok: false, response: r });
   if (!claudeBin()) return no(err("no local `claude` CLI: install Claude Code to chat (Settings ▸ Requirements lists it, with the install guide)", 403));
   if (process.env.AGENTGLASS_CHAT_DISABLED === "1") return no(err("chat is disabled (AGENTGLASS_CHAT_DISABLED=1)", 403));
@@ -256,8 +375,14 @@ export function planTurn(cwd: unknown, message: unknown, model: unknown, resumeI
   let pm = typeof mode === "string" && MODES.has(mode) ? mode : "default";
   if (pm === "bypassPermissions" && !BYPASS_ALLOWED) pm = "default"; // opt-in only
   const rid = typeof resumeId === "string" && SESSION_RE.test(resumeId) ? resumeId : "";
-  const allow = pm === "bypassPermissions" ? [] : allowList(allowedTools);
-  return { ok: true, dir, text: message, model: m, mode: pm, effort: effortLevel(effort), resumeId: rid, images: imgs, allow };
+  // Last, and after the mode has already been validated: what the caller is
+  // allowed to have asked for. See scopedTurn — this is the line that keeps a
+  // phone paired for "answer" from running an unattended agent in this
+  // directory. 403 rather than 400: the request is well formed, the credential
+  // is real and was accepted, and it is the credential that is short.
+  const scoped = scopedTurn(scope, pm, allowedTools, rid);
+  if (!scoped.ok) return no(err(scoped.error, 403));
+  return { ok: true, dir, text: message, model: m, mode: scoped.mode, effort: effortLevel(effort), resumeId: rid, images: imgs, allow: scoped.allow };
 }
 
 /** Which engine a chat uses when the request does not say.
@@ -275,8 +400,8 @@ export const CHAT_ENGINE_DEFAULT = process.env.AGENTGLASS_CHAT_ENGINE === "tmux"
  *
  *  Validation happens once, before the split, so neither engine can be reached
  *  with a directory the other would have refused. */
-export function chatSend(b: Record<string, unknown>): Response {
-  const plan = planTurn(b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images, b.effort);
+export function chatSend(b: Record<string, unknown>, scope: Scope): Response {
+  const plan = planTurn(scope, b.cwd, b.message, b.model, b.resumeId, b.mode, b.allowedTools, b.images, b.effort);
   if (!plan.ok) return plan.response;
   const want = b.engine === "tmux" || b.engine === "process" ? b.engine : CHAT_ENGINE_DEFAULT;
   if (want !== "tmux") return chatStreamPlanned(plan);
@@ -299,8 +424,11 @@ export function chatSend(b: Record<string, unknown>): Response {
   });
 }
 
-export function chatStream(cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown): Response {
-  const plan = planTurn(cwd, message, model, resumeId, mode, allowedTools, images);
+/** The unstreamed sibling of chatSend. No caller today — it keeps the scope
+ *  parameter anyway, so it cannot be revived as a second door into planTurn
+ *  that nobody remembered to put a caller behind. */
+export function chatStream(scope: Scope, cwd: unknown, message: unknown, model: unknown, resumeId: unknown, mode: unknown, allowedTools?: unknown, images?: unknown): Response {
+  const plan = planTurn(scope, cwd, message, model, resumeId, mode, allowedTools, images);
   if (!plan.ok) return plan.response;
   return chatStreamPlanned(plan);
 }
@@ -346,7 +474,7 @@ export function sessionIdIn(chunk: string): string | null {
 
 function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
   const bin = claudeBin()!;
-  const { dir, text: msgText, model: m, mode: pm, resumeId: rid, images: imgs } = plan;
+  const { dir, text: msgText, resumeId: rid, images: imgs } = plan;
 
   // The guard itself, not just the advice. A client that asks anyway — an old
   // build, a stale tab, a retry — would otherwise put a second `claude` on a
@@ -360,22 +488,7 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
     }), { status: 409, headers: { "content-type": "application/json", ...CORS } });
   }
 
-  const args = [bin, "-p", "--output-format", "stream-json", "--verbose", "--model", m];
-  // Same flag both engines use. Verified it applies to `-p` as well as to an
-  // interactive session, which is what makes the chat's dial mean the same
-  // thing whichever engine a chat happens to run on.
-  if (plan.effort) args.push("--effort", plan.effort);
-  // Structured input is only switched on for a turn that actually needs it.
-  // Plain text is the overwhelmingly common case and its path through `claude`
-  // is the well-trodden one; `--input-format stream-json` is comparatively
-  // undocumented, so a turn with nothing to gain from it keeps the old
-  // behaviour byte for byte rather than riding a newer code path for free.
-  if (imgs.length) args.push("--input-format", "stream-json");
-  if (pm === "bypassPermissions") args.push("--dangerously-skip-permissions");
-  else args.push("--permission-mode", pm);
-  // Only meaningful for the prompting modes — bypass already allows everything.
-  if (plan.allow.length) args.push("--allowedTools", ...plan.allow);
-  if (rid) args.push("--resume", rid);
+  const args = turnArgv(bin, plan);
 
   // Its own process group, so stopping a turn reaches the whole job tree.
   // `claude` spawns tools of its own — a test run, a dev server — and killing
@@ -389,12 +502,10 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
     env: { ...process.env },
   });
 
-  // Drain stderr from the start rather than after the process exits. A pipe
-  // holds ~64KB; once it's full the child blocks on write and never exits, so
-  // waiting on exit first is a deadlock the moment claude gets talkative
-  // (an MCP warning, a stack trace). It also has to be consumed on the success
+  // Drained from the start rather than after the process exits, and readable
+  // mid-flight — see drainStderr. It also has to be consumed on the success
   // path or the fd leaks for every turn.
-  const stderrText = new Response(proc.stderr as ReadableStream<Uint8Array>).text().catch(() => "");
+  const stderr = drainStderr(proc.stderr as ReadableStream<Uint8Array>);
 
   const enc = new TextEncoder();
   let cancelled = false;
@@ -426,7 +537,9 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
       let firstByte = false;
       const watchdog = setTimeout(async () => {
         if (firstByte || cancelled) return;
-        const hint = (await Promise.race([stderrText, Promise.resolve("")])).trim();
+        // Not awaited: what stderr has said so far is the whole point, and a
+        // CLI hung on a login prompt never closes the pipe.
+        const hint = stderr.soFar().trim();
         try {
           controller.enqueue(enc.encode(JSON.stringify({
             type: "agx_error",
@@ -470,7 +583,7 @@ function chatStreamPlanned(plan: Extract<TurnPlan, { ok: true }>): Response {
       // every "stop" the user presses.
       if (cancelled) return;
       if (code !== 0) {
-        const text = (await stderrText).trim();
+        const text = (await stderr.all).trim();
         controller.enqueue(enc.encode(JSON.stringify({ type: "agx_error", code, error: text || `claude exited ${code}` }) + "\n"));
       }
       controller.close();

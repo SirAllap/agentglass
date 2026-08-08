@@ -18,7 +18,7 @@ import { basename, delimiter, join } from "node:path";
 import type { IngestBody } from "../../shared/types.ts";
 import { normalize } from "./ingest.ts";
 import { entered, backoff, terminalHot } from "./loopwatch.ts";
-import { db, insertEvent, setSessionTitles, RETENTION_DAYS, type InsertResult } from "./db.ts";
+import { db, insertEvent, setSessionTitles, RETENTION_DAYS, dbClaimedElsewhere, dbPath, type InsertResult } from "./db.ts";
 // safeAbs: translates Windows drive paths, so a WSL-side transcript groups
 // under its own folder rather than collapsing onto the server's cwd.
 import { projectRootOf, safeAbs } from "./git.ts";
@@ -138,7 +138,28 @@ interface FileRow {
 }
 
 const getFile = db.query<FileRow, [string]>("SELECT * FROM transcript_files WHERE path = ?");
-const putFile = db.query(`
+/** Just the progress marker, for the in-transaction re-read that turns it from a
+ *  read into a claim. Its own statement so the claim costs one integer, not a
+ *  whole row. */
+const linesDoneOf = db.query<{ lines_done: number }, [string]>(
+  "SELECT lines_done FROM transcript_files WHERE path = ?"
+);
+/**
+ * Advance a file's progress ONLY if it still stands where the caller last saw it.
+ *
+ * Compare-and-swap, not a blind write. `lines_done` is read outside any
+ * transaction (scanOnce, below) and written many milliseconds later, at the end
+ * of a batch; between those two moments a second server process can have
+ * ingested the same lines and moved the marker. The old unconditional UPSERT
+ * then wrote our stale idea of progress over theirs, and every line between the
+ * two positions was ingested twice — invisibly, because scanner events carry
+ * `event_id: null` and the idempotency index in db.ts only covers non-null ids.
+ *
+ * The `WHERE` rides the DO UPDATE, so a moved marker leaves the row untouched
+ * rather than erroring. The INSERT half needs no guard: no row means nobody has
+ * claimed this transcript yet.
+ */
+const putFileIfUnmoved = db.query(`
   INSERT INTO transcript_files (path, session_id, source_app, project_path, lines_done, size, mtime)
   VALUES ($path, $sid, $src, $proj, $lines, $size, $mtime)
   ON CONFLICT(path) DO UPDATE SET
@@ -148,12 +169,35 @@ const putFile = db.query(`
     lines_done = excluded.lines_done,
     size = excluded.size,
     mtime = excluded.mtime
+  WHERE transcript_files.lines_done = $expect
 `);
+
+/**
+ * May this process sweep transcripts at all?
+ *
+ * Two reasons it may not: the operator turned the scanner off, or another live
+ * server process holds the database claim (db.ts). The second is checked per
+ * call rather than pinned, because the claim is taken at boot — after this
+ * module is imported — and because it is the answer `/projects` reports.
+ */
+export function scanningEnabled(): boolean {
+  return SCAN_ENABLED && !dbClaimedElsewhere();
+}
 
 /** Session ids that have a transcript on disk — the scanner owns these. */
 const owned = new Set<string>();
-/** True when this session's data comes from disk, so the hook path can skip it
- *  instead of counting the same work twice. */
+/**
+ * True when this session's data comes from disk, so the hook path can skip it
+ * instead of counting the same work twice.
+ *
+ * Deliberately `SCAN_ENABLED` and not `scanningEnabled()`. "Comes from disk" is
+ * a fact about the machine, not about which process did the reading: when this
+ * one has stood its scanner down for another (see the claim in db.ts), that
+ * other process is still ingesting the same transcript into the same database,
+ * so accepting the hooks here as well is exactly the double count. `owned` is
+ * seeded at import from `transcript_files`, so a held-off process still knows
+ * every session either of them has ever read.
+ */
 export function ownsSession(session_id: string): boolean {
   return SCAN_ENABLED && owned.has(session_id);
 }
@@ -399,6 +443,16 @@ function lineToBodies(
       // repo discovery that fills the git/terminal/chat pickers) reads
       // tool_input off the PostToolUse, not the Pre.
       const call = id ? ctx.toolCalls.get(id) : undefined;
+      // A tool_use is matched by exactly one tool_result, so once this result has
+      // read the call's input the entry is dead weight. Drop it now instead of
+      // waiting for the whole tail to be evicted: a long-lived active session
+      // (one that never idles the 10 min TAIL_IDLE_MS wants) would otherwise hold
+      // every Read/Write/Edit input — routinely megabytes each — for its entire
+      // life. A cold re-read rebuilds and re-drops these deterministically from
+      // lines_done, so this only frees memory, never changes output. A call whose
+      // result lands in a later chunk is not deleted here (it's not in the map to
+      // get), so cross-chunk pairing is unaffected.
+      if (id) ctx.toolCalls.delete(id);
       out.push({
         ...base,
         hook_event_type: "PostToolUse",
@@ -487,8 +541,18 @@ const tails = new Map<string, Tail>();
  *  entry is always safe — the next sweep just re-reads the file whole. */
 const TAIL_IDLE_MS = 10 * 60_000;
 /** Hard ceiling on cached files, so a machine running dozens of sessions at once
- *  can't grow this without bound between idle sweeps. Oldest-touched go first. */
-const MAX_TAILS = 24;
+ *  can't grow this without bound between idle sweeps. Oldest-touched go first.
+ *
+ *  Sized for the real load: one person can have ~10 sessions live at once, and
+ *  each spawns its own subagent transcripts, so the count of files *actively
+ *  appending* in a single sweep routinely passes two dozen. At the old 24 the
+ *  overflow was evicted every sweep and then cold-read *whole* the next time it
+ *  grew — a byte-for-byte re-read of a multi-MB file, which is exactly the
+ *  transient-memory spike and event-loop stall the tail was built to avoid. 64
+ *  keeps a realistic working set warm on the cheap incremental path; each tail is
+ *  also far lighter now that a matched tool_use input is dropped on sight (see
+ *  the toolCalls.delete above), so the memory this trades for is modest. */
+const MAX_TAILS = 64;
 /** Drop every cached tail. Exported for the tests, which use it to stand in for
  *  a server restart — offsets gone, `lines_done` intact — and so to prove that
  *  eviction can only cost time, never correctness. */
@@ -510,15 +574,23 @@ function evictTails(now: number): void {
  * the file was rewritten) we read it whole and skip the first `from` lines,
  * still parsing them so a PostToolUse finds the tool name its PreToolUse
  * recorded. Correctness never depends on the cache being warm.
+ *
+ * `expectLines` is the `transcript_files.lines_done` the caller read to decide
+ * `from`, and it is NOT the same number — a rewritten file is deliberately
+ * re-read with `from = 0` while the stored marker still says 900. Every write
+ * below is conditional on the stored marker still holding that value, so a
+ * second process that moved it in the meantime is detected rather than
+ * overwritten. `lost` in the result says that happened.
  */
 async function ingestFile(
   path: string,
   fallbackSessionId: string,
   from: number,
+  expectLines: number,
   onLive: ((r: InsertResult) => void) | null,
   scope: string | null,
   allowTail = true
-): Promise<{ lines: number; ingested: number; source_app: string; project_path: string; session_id: string; skipped?: boolean }> {
+): Promise<{ lines: number; ingested: number; source_app: string; project_path: string; session_id: string; skipped?: boolean; lost?: boolean; expect: number }> {
   // Read the sweep's tuning once for this file: batch shape and the oversize cap.
   const BATCH_LINES = batchLines();
   const BATCH_BYTES = batchBytes();
@@ -647,7 +719,7 @@ async function ingestFile(
   // linked worktrees directly, which covers a cockpit opened *on* a worktree.
   if (scope && cwd) {
     if (!inScope(cwd, scope) && !inScope(resolvedRoot(cwd), scope)) {
-      return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true };
+      return { lines: 0, ingested: 0, source_app: "", project_path: "", session_id, skipped: true, expect: expectLines };
     }
   }
   if (cwd) projectPaths.set(source_app, project_path);
@@ -694,6 +766,13 @@ async function ingestFile(
   let consumed = baseByte;
   let doneLines = baseLine;
   let i = 0;
+  // What we believe transcript_files.lines_done holds right now: the value the
+  // caller read, then whatever each committed batch wrote. Every write below is
+  // conditional on it.
+  let expect = expectLines;
+  // Set when the claim below finds the marker somewhere else — another process
+  // is ingesting this file, so we give it up rather than ingest its lines again.
+  let lost = false;
 
   // The per-file loop, in bounded batches that each commit and then yield. See
   // the BATCH_LINES/BATCH_BYTES note up top for why this is not one transaction.
@@ -709,6 +788,18 @@ async function ingestFile(
     let bConsumed = consumed;
     let bDone = doneLines;
     const run = db.transaction(() => {
+      // THE CLAIM. Re-read the progress marker here, inside the write
+      // transaction, and abandon the batch if it is no longer where we left it —
+      // a second server process has ingested past this point and these lines are
+      // already in the database. Nothing has been parsed or inserted yet at this
+      // line, so returning now leaves the in-memory toolCalls/seenUsage maps
+      // untouched and the transaction empty.
+      //
+      // Not `run().changes` on a guarded UPDATE, which is the obvious shortcut
+      // and lies: measured on 2026-08-07 it reported 7 for a 3-row DELETE where
+      // `SELECT changes()` correctly said 3. An explicit SELECT is the only
+      // number here worth trusting.
+      if ((linesDoneOf.get(path)?.lines_done ?? 0) !== expect) { lost = true; return; }
       let nInBatch = 0;
       let bytesInBatch = 0;
       while (bi < lines.length && nInBatch < BATCH_LINES && bytesInBatch < BATCH_BYTES) {
@@ -757,7 +848,7 @@ async function ingestFile(
       // scanOnce writes the final row, so an interrupted file is re-examined —
       // never skipped as done — on the next sweep, and resumed from exactly here.
       if (bDone > from) {
-        putFile.run({
+        putFileIfUnmoved.run({
           $path: path,
           $sid: session_id,
           $src: source_app,
@@ -765,11 +856,19 @@ async function ingestFile(
           $lines: bDone,
           $size: bConsumed,
           $mtime: 0,
+          $expect: expect,
         });
       }
     });
     try {
-      run();
+      // IMMEDIATE, not the default deferred. A deferred transaction takes its
+      // read snapshot on the claim above and only asks for the write lock at the
+      // first insert — so a second process that commits in between makes that
+      // upgrade fail outright with SQLITE_BUSY_SNAPSHOT, which busy_timeout does
+      // NOT wait out (measured: "database is locked" aborting a whole file's
+      // sweep). Taking the write lock at BEGIN turns that into an ordinary wait
+      // and makes claim-then-write one indivisible step across processes.
+      run.immediate();
     } catch (e) {
       // The rollback undoes this batch's inserts and its progress row, but not
       // the in-memory maps lineToBodies already mutated — seenUsage in
@@ -780,12 +879,23 @@ async function ingestFile(
       tails.delete(path);
       throw e;
     }
+    if (lost) {
+      // Someone else owns this file's progress now. Drop the tail: its byte
+      // offset describes a position the other process has already moved past, so
+      // the next sweep must re-read from whatever marker they leave behind
+      // rather than resume from ours. Committed batches stay committed.
+      tails.delete(path);
+      return { lines: doneLines, ingested, source_app, project_path, session_id, lost: true, expect };
+    }
     // Committed: adopt the batch's cursor, refresh the tail to match, and only
     // now push the events — they are durable, so a later batch failing can't
     // un-say them.
     i = bi;
     consumed = bConsumed;
     doneLines = bDone;
+    // Only a batch that actually wrote moved the marker; a from-zero re-read of
+    // an already-ingested prefix (bDone <= from) leaves it where it was.
+    if (bDone > from) expect = bDone;
     saveTail(consumed, doneLines);
     for (const r of emitted) onLive?.(r);
     // Hand the loop back between batches so the PTY runs. Not after the last
@@ -798,7 +908,7 @@ async function ingestFile(
   // entirely; still refresh the tail so its byte/line offset is recorded.
   if (customTitle || aiTitle) setSessionTitles(session_id, customTitle, aiTitle);
   saveTail(consumed, doneLines);
-  return { lines: doneLines, ingested, source_app, project_path, session_id };
+  return { lines: doneLines, ingested, source_app, project_path, session_id, expect };
 }
 
 /** Every *.jsonl under a project dir, at any depth.
@@ -866,15 +976,28 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null): Prom
           // saved offset now points into different content. Re-read it whole
           // rather than skipping past records that no longer exist.
           const rewritten = !!prev && st.size < prev.size;
-          const from = rewritten ? 0 : prev?.lines_done ?? 0;
+          // This read is outside any transaction and is only a *hint* by the time
+          // the batch below writes — see putFileIfUnmoved. `from` and the marker
+          // are different numbers on the rewrite path, so both travel.
+          const marker = prev?.lines_done ?? 0;
+          const from = rewritten ? 0 : marker;
           // A rewrite also invalidates the cached tail: its byte offset and its
           // carried tool calls describe content that no longer exists.
-          const r = await ingestFile(path, basename(path, ".jsonl"), from, onLive, scope, !rewritten);
+          const r = await ingestFile(path, basename(path, ".jsonl"), from, marker, onLive, scope, !rewritten);
           // Out of scope: claim nothing, so widening the scope later can still
           // pick it up, and the hook path isn't blocked for a session we skipped.
           if (r.skipped) continue;
+          // Still ours to skip on the hook path: the transcript exists and is
+          // being read from disk, whichever process is doing the reading.
           owned.add(r.session_id);
-          putFile.run({
+          total += r.ingested;
+          // Another process moved the marker mid-file. Writing the final row now
+          // would stamp our stale line count — and a size/mtime saying "fully
+          // done" — over their progress, which is the double-ingest this whole
+          // path exists to prevent. Leave the file to them; the next sweep picks
+          // it up from wherever they left it.
+          if (r.lost) continue;
+          putFileIfUnmoved.run({
             $path: path,
             $sid: r.session_id,
             $src: r.source_app,
@@ -882,8 +1005,8 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null): Prom
             $lines: r.lines,
             $size: st.size,
             $mtime: Math.floor(st.mtimeMs),
+            $expect: r.expect,
           });
-          total += r.ingested;
         } catch (e) {
           console.error(`[scan] ${path}: ${e instanceof Error ? e.message : e}`);
         }
@@ -899,6 +1022,12 @@ export async function scanOnce(onLive: ((r: InsertResult) => void) | null): Prom
 
 // Shared between the interval watcher and resyncScope, so a manual catch-up
 // sweep and a timed one never run over the same files at once.
+//
+// A module-level flag serialises sweeps inside ONE process and says nothing
+// about a second process on the same database file — which is a real
+// configuration, not a hypothetical one. That half is handled twice over: the
+// boot claim in db.ts stops a second scanner from starting, and the
+// compare-and-swap on `lines_done` above stops one that somehow does.
 let sweepBusy = false;
 
 /**
@@ -911,7 +1040,7 @@ let sweepBusy = false;
  * startup backfill is silent). Waits out any in-flight sweep first.
  */
 export async function resyncScope(): Promise<void> {
-  if (!SCAN_ENABLED) return;
+  if (!scanningEnabled()) return;
   while (sweepBusy) await new Promise((r) => setTimeout(r, 200));
   sweepBusy = true;
   try {
@@ -982,6 +1111,19 @@ async function backfillTitles(): Promise<number> {
 export function startScanner(onLive: (r: InsertResult) => void): void {
   if (!SCAN_ENABLED) {
     console.log("📴 transcript scan disabled (AGENTGLASS_SCAN_DISABLED=1)");
+    return;
+  }
+  // Another server already has this database file. Two scanners over one file
+  // silently double events, tokens and cost (see db.ts), so this one serves and
+  // ingests hooks but does not sweep. Loud, because the usual cause is a test
+  // server started without AGENTGLASS_DB and the symptom is otherwise "the
+  // dashboard is fine but the numbers are wrong".
+  const holder = dbClaimedElsewhere();
+  if (holder) {
+    console.warn(
+      `📴 transcript scan disabled — ${dbPath()} is already claimed by pid ${holder.pid} (port ${holder.port}). ` +
+        `Point this server at its own AGENTGLASS_DB to scan.`
+    );
     return;
   }
   const t0 = Date.now();

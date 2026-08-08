@@ -27,8 +27,42 @@ web: ## Run only the Vite dashboard on :6180
 build: ## Production build of the web dashboard (web/dist)
 	bun run build
 
-test: ## Run the server test suite (what CI runs)
-	cd server && bun test
+# This said "what CI runs" and ran one of the six things CI runs. `make ci`
+# below is the target that can honestly make that claim; this one is the fast
+# half you run while working, and the timeout matches CI's for the same reason
+# CI has it.
+test: ## Run the server + web test suites (the fast half — `make ci` runs everything CI does)
+	cd server && bun test --timeout 20000
+	cd web && bun test
+
+# Every step of both CI jobs, in the order .github/workflows/ci.yml declares
+# them. `make smoke` and `make perf` are the same scripts those steps run, and
+# smoke depends on `build`, which is CI's "Build web".
+#
+# `headcheck` is the one target here that CI does NOT have a step for, and on
+# purpose: actions/checkout hands every job a pristine tree of the commit, so
+# up there the typecheck steps below ARE the head check. Down here they are
+# not — work-2026-08-05 is never pushed, and a dirty tree is its normal state.
+# It goes first because it is the cheapest thing in this list and the only one
+# that can fail on something none of the others can see.
+ci: ## Run everything CI runs, in CI's order — plus headcheck, which only a local tree needs
+	$(MAKE) headcheck
+	bun scripts/logo.mjs --check
+	cd web && bun run typecheck
+	cd server && bun run typecheck
+	cd server && bun test --timeout 20000
+	cd web && bun test
+	$(MAKE) mobile-test
+	$(MAKE) smoke
+	$(MAKE) perf
+
+# `npm ci` and not `npm install`, because that is what the CI job runs — which
+# means it deletes and rebuilds mobile/node_modules, and regenerates
+# engine.generated.ts and nerdfont.generated.ts through the postinstall.
+mobile-test: ## Install and check the phone app exactly as CI's mobile job does (npm ci wipes mobile/node_modules)
+	cd mobile && npm ci
+	cd mobile && npm run typecheck
+	cd mobile && npm test
 
 # The scripts kill the server/Chrome they spawn on their own SIGINT/SIGTERM;
 # `trap 'kill 0'` here is the group-wide backstop for a SIGTERM aimed at make.
@@ -44,9 +78,26 @@ soak: ## Run the server hard for a few minutes and fail if its memory keeps clim
 loadtest: ## Hammer the server (many clients × every panel) against a copy of the REAL DB and fail if the PTY stutters (AGX_LOAD_CLIENTS=10 for heavier)
 	trap 'kill 0' INT TERM; bun scripts/loadtest.ts
 
-typecheck: ## Type-check both halves (vite build and bun both strip types without checking)
-	cd web && bunx tsc --noEmit
-	cd server && bunx tsc --noEmit
+# `bun run typecheck`, not `bunx tsc`: bunx downloads the newest published
+# TypeScript when the directory has none, which is how server/ ended up being
+# checked by 7.0.2 while web/ used 5.9.3. Both declare it now, and `bun run`
+# fails loudly instead of fetching. web's script covers src AND test/.
+typecheck: ## Type-check both halves, app and tests (vite build and bun both strip types without checking)
+	cd web && bun run typecheck
+	cd server && bun run typecheck
+
+# The target above reads your DESK. This one reads the COMMIT, and they are not
+# the same question on this branch: work-2026-08-05 is the trunk every session
+# commits into and rebuilds from, so its working tree is always dirty and the
+# commit is what everyone else actually gets.
+#
+# 5d2ac02 is why it exists. A `git add -A` in the shared worktree committed
+# another session's *use* of a `PanesResponse` type without its declaration, and
+# `bun run typecheck` stayed green in every tree on the machine for a day —
+# everyone had the good shared/types.ts uncommitted on disk. It was found by
+# accident. `make headcheck REF=5d2ac02` still fails on it, in 9 seconds.
+headcheck: ## Type-check the COMMIT in a clean extraction of itself — the check a dirty tree cannot fake (make headcheck REF=<sha>)
+	bun scripts/headcheck.ts $(REF)
 
 start: ## Run the server in production mode
 	bun run start
@@ -115,5 +166,5 @@ desktop-open: ## Open the desktop app scoped to a project — make desktop-open 
 	@test -n "$(DIR)" || { echo "usage: make desktop-open DIR=/path/to/repo" >&2; exit 1; }
 	AGENTGLASS_PROJECT="$(DIR)" ~/.local/share/agentglass-desktop/agentglass
 
-.PHONY: help install dev server web build test smoke perf soak typecheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
+.PHONY: help install dev server web build test ci mobile-test smoke perf soak loadtest typecheck headcheck start setup setup-undo connect connect-undo connect-opencode connect-opencode-undo demo-feed assets \
         desktop desktop-dev desktop-dist desktop-dist-linux desktop-install desktop-update desktop-open

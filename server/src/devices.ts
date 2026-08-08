@@ -83,6 +83,19 @@ export interface Device {
   revokedAt?: number;
 }
 
+/**
+ * A device as it may leave this process: everything except the credential hash.
+ *
+ * The hash is why devices.json is written 0600. It is not brute-forceable — 32
+ * random bytes through SHA-256 — but /pair/state and /pair/accept were handing
+ * it to the pane, and a secret in a response body is a secret in a browser's
+ * memory, in whatever logs the response, and in the next screenshot of that
+ * panel. Nothing outside this file has ever needed it: `deviceFor` does the
+ * comparison here, and no client reads `.hash`.
+ */
+export type PublicDevice = Omit<Device, "hash">;
+export const publicDevice = ({ hash, ...rest }: Device): PublicDevice => rest;
+
 interface DeviceFile { devices?: Device[] }
 
 function read(): DeviceFile {
@@ -104,8 +117,11 @@ function write(f: DeviceFile): boolean {
   if (offLimits(p)) return false;
   try {
     mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, JSON.stringify(f, null, 2) + "\n");
-    // It holds credential hashes and the shape of who can reach this machine.
+    // It holds credential hashes and the shape of who can reach this machine, so
+    // create it 0600 outright. writeFileSync's mode only applies when it creates
+    // the file, so the chmod below still covers a file that already existed (and
+    // the brief 0644 window a create-then-chmod would otherwise leave open).
+    writeFileSync(p, JSON.stringify(f, null, 2) + "\n", { mode: 0o600 });
     try { chmodSync(p, 0o600); } catch { /* not every fs has modes */ }
     return true;
   } catch {

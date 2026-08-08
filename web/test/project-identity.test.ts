@@ -15,27 +15,17 @@
  *   - two unrelated repositories both called "web" DO compare equal, so each
  *     claims the other's containers.
  *
- * One rule now, in shared/projectKey.ts, imported by both surfaces. The last
- * describe is the one that keeps it that way.
+ * One rule now, in shared/projectKey.ts, imported by every surface.
+ *
+ * A fourth describe used to walk `web/src/mobile/` and fail on any file that
+ * still compared a compose name to a directory basename, or defined its own
+ * copy of the naming rule. That tree is deleted — the browser companion went
+ * when the native app replaced it — so the rule-over-the-tree went with it.
+ * What is tested here is the rule itself, which is what the server, the cockpit
+ * and the phone all now call.
  */
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 import { baseName, normaliseProject, projectKey, inProject, ownerOf } from "../../shared/projectKey.ts";
-
-const SRC = join(import.meta.dir, "..", "src");
-const read = (p: string) => readFileSync(join(SRC, p), "utf8");
-
-function walk(dir: string, out: string[] = []): string[] {
-  for (const name of readdirSync(dir)) {
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) walk(p, out);
-    else if (/\.tsx?$/.test(name)) out.push(p);
-  }
-  return out;
-}
-/** The rule is about code; a comment quoting the old formula is not a breach. */
-const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 
 const ctr = (project: string | null, workingDir: string | null = null) => ({ project, workingDir });
 
@@ -121,49 +111,5 @@ describe("which checkout a container belongs to, out of everything we know", () 
     // what real compose writes — separates them properly.
     expect(ownerOf(ctr(null, "/home/x/b/web"), two)).toBe("/home/x/b/web");
     expect(ownerOf(ctr(null, "/home/x/a/web/svc"), two)).toBe("/home/x/a/web");
-  });
-});
-
-describe("the phone stops guessing", () => {
-  test("no mobile file compares a compose project to a directory name", () => {
-    /*
-     * The rule over the tree. Every one of these was a line like
-     * `(c.project ?? "") === name`, and each was written independently, which
-     * is how three of them ended up disagreeing about separators and about
-     * what an empty path means.
-     */
-    const offenders: string[] = [];
-    for (const file of walk(join(SRC, "mobile"))) {
-      const src = code(readFileSync(file, "utf8"));
-      if (/\.project\s*\?\?\s*""\)\s*===/.test(src) || /===\s*\(c\.project/.test(src)) {
-        offenders.push(file.replace(SRC, ""));
-      }
-    }
-    expect(offenders, "a container matched by name equality").toEqual([]);
-  });
-
-  test("attribution goes through the shared rule", () => {
-    const app = code(read("mobile/MobileApp.tsx"));
-    expect(app).toContain("ownerOf");
-    expect(app).toContain("ownerByContainer");
-  });
-
-  test("the three private copies of the naming rule are gone", () => {
-    // Each file may still USE baseName; none may define its own.
-    const defined: string[] = [];
-    for (const file of walk(join(SRC, "mobile"))) {
-      const src = code(readFileSync(file, "utf8"));
-      if (/(?:const|function)\s+(?:baseName|repoName)\s*[=(]/.test(src)) defined.push(file.replace(SRC, ""));
-    }
-    expect(defined, "a local copy of the project-naming rule").toEqual([]);
-  });
-
-  test("a container that belongs to no project is still reachable", () => {
-    const app = code(read("mobile/MobileApp.tsx"));
-    // It used to search for a repo by name and toast when it found none, so
-    // an unplaceable container had no screen.
-    expect(app).toContain("openContainer");
-    expect(app).toContain("ContainerScreen");
-    expect(app).not.toContain("is not in a repo agentglass knows");
   });
 });

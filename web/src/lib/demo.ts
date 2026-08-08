@@ -1197,23 +1197,79 @@ export function filesTree(rel = ""): TreeReport {
   };
   return { ok: true, root: "/home/dev/code/shop-web", rel, entries: T[rel] ?? T[""] };
 }
+/**
+ * A markdown document, so the demo can show the viewer at all.
+ *
+ * It used to answer "not available in the demo" for every file, which made the
+ * rendered face — the headings, the tables, the reading width, the find bar —
+ * invisible in the one build that exists to show what this app looks like. The
+ * text is fabricated for the same reason every other fixture here is: a real
+ * one would be somebody's Tuesday.
+ */
+export function filesRead(rel: string): { ok: boolean; rel: string; text: string; bytes: number; error?: string } {
+  if (!/\.(md|markdown|mdx)$/i.test(rel)) {
+    return { ok: false, rel, text: "", bytes: 0, error: "only markdown is readable in the demo" };
+  }
+  const text = [
+    "# Checkout rebuild — status",
+    "",
+    "Living document. Fixed structure; updated on a weekly review cadence.",
+    "",
+    "## 1. Where the work stands",
+    "",
+    "The cart rewrite landed behind a flag and the **risk** of a silent regression is",
+    "carried by the checkout suite, which now runs on every push.",
+    "",
+    "| Area | Owner | State |",
+    "| --- | --- | --- |",
+    "| Cart | Dana | done |",
+    "| Checkout | Priya | in review |",
+    "| Pricing | Sam | at risk |",
+    "",
+    "## 2. Open risks",
+    "",
+    "1. A coupon applied twice is not rejected — see `src/lib/pricing.ts`.",
+    "2. The receipt email renders the old total when a discount is removed.",
+    "3. Session expiry during payment leaves the order in `pending` forever.",
+    "",
+    "## 3. What happens next",
+    "",
+    "- Land the idempotency key on the charge endpoint.",
+    "- Re-run the upgrade suite against the staging tier.",
+    "- Decide whether the legacy plan mapping stays for another release.",
+  ].join("\n");
+  return { ok: true, rel, text, bytes: text.length };
+}
+
 export function filesFind(q: string): FindReport {
   const all = ["src/components/Cart.tsx", "src/components/Checkout.tsx", "src/lib/pricing.ts", "src/routes/checkout.ts", "package.json", "README.md"];
+  // Folders too, and derived the same way the git fallback derives them: every
+  // prefix of every path. A demo that answered with files only would be showing
+  // a search this app no longer has.
+  const dirsAll = [...new Set(all.flatMap((f) => {
+    const parts = f.split("/");
+    return parts.slice(0, -1).map((_, n) => parts.slice(0, n + 1).join("/"));
+  }))].sort();
   const t = q.trim().toLowerCase();
-  return { ok: true, files: t ? all.filter((f) => f.toLowerCase().includes(t)) : all, truncated: false, via: "demo" };
+  return {
+    ok: true,
+    files: t ? all.filter((f) => f.toLowerCase().includes(t)) : all,
+    dirs: t ? dirsAll.filter((d) => d.toLowerCase().includes(t)) : dirsAll,
+    truncated: false, via: "demo",
+  };
 }
 
 // --- Ports: what is listening on this (fictional) dev machine ---------------
 const GB = 1024 ** 3, MB = 1024 ** 2;
 export function machinePorts(): PortsReport {
   const ports: PortEntry[] = [
-    { port: 5173, addr: "127.0.0.1", proc: "vite", pid: 48213, cwd: "/home/dev/code/shop-web", mine: true, ageSec: 5400, fromAgent: true, cwdGone: false },
-    { port: 3000, addr: "127.0.0.1", proc: "bun", pid: 48090, cwd: "/home/dev/code/shop-api", mine: true, ageSec: 5460, fromAgent: true, cwdGone: false },
-    { port: 8080, addr: "0.0.0.0", proc: "node", pid: 47771, cwd: "/home/dev/code/inventory-svc", mine: true, ageSec: 12600, fromAgent: true, cwdGone: false },
-    { port: 4317, addr: "127.0.0.1", proc: "otelcol", pid: 4102, cwd: null, mine: true, ageSec: 86400, fromAgent: false, cwdGone: false },
-    { port: 5432, addr: "127.0.0.1", proc: "postgres", pid: 1893, cwd: null, mine: false, ageSec: 259200, fromAgent: false, cwdGone: false },
-    { port: 9229, addr: "127.0.0.1", proc: "node", pid: 41220, cwd: "/home/dev/code/payments-svc-209", mine: true, ageSec: 640, fromAgent: true, cwdGone: false },
-    { port: 4173, addr: "127.0.0.1", proc: "node", pid: 30112, cwd: "/home/dev/code/shop-web-old", mine: true, ageSec: 46800, fromAgent: true, cwdGone: true },
+    { port: 5173, addr: "127.0.0.1", proc: "vite", pid: 48213, cwd: "/home/dev/code/shop-web", mine: true, ageSec: 5400, fromAgent: true, cwdGone: false, publicBind: false, exeGone: false, ancestry: [{ pid: 48090, name: "bun" }, { pid: 46001, name: "claude" }, { pid: 1201, name: "tmux: server" }] },
+    { port: 3000, addr: "127.0.0.1", proc: "bun", pid: 48090, cwd: "/home/dev/code/shop-api", mine: true, ageSec: 5460, fromAgent: true, cwdGone: false, publicBind: false, exeGone: false, ancestry: [{ pid: 46001, name: "claude" }, { pid: 1201, name: "tmux: server" }] },
+    { port: 8080, addr: "0.0.0.0", proc: "node", pid: 47771, cwd: "/home/dev/code/inventory-svc", mine: true, ageSec: 12600, fromAgent: true, cwdGone: false, publicBind: true, exeGone: false, ancestry: [{ pid: 46050, name: "claude" }, { pid: 1201, name: "tmux: server" }] },
+    { port: 4317, addr: "127.0.0.1", proc: "otelcol", pid: 4102, cwd: null, mine: true, ageSec: 86400, fromAgent: false, cwdGone: false, publicBind: false, exeGone: false, ancestry: [] },
+    { port: 5432, addr: "127.0.0.1", proc: "postgres", pid: 1893, cwd: null, mine: false, ageSec: 259200, fromAgent: false, cwdGone: false, publicBind: false, exeGone: false, ancestry: [] },
+    { port: 9229, addr: "127.0.0.1", proc: "node", pid: 41220, cwd: "/home/dev/code/payments-svc-209", mine: true, ageSec: 640, fromAgent: true, cwdGone: false, publicBind: false, exeGone: false, ancestry: [{ pid: 41100, name: "bash" }, { pid: 46001, name: "claude" }, { pid: 1201, name: "tmux: server" }] },
+    { port: 4173, addr: "127.0.0.1", proc: "node", pid: 30112, cwd: "/home/dev/code/shop-web-old", mine: true, ageSec: 46800, fromAgent: true, cwdGone: true, publicBind: false, exeGone: false, ancestry: [{ pid: 30000, name: "claude" }, { pid: 1201, name: "tmux: server" }] },
   ];
   return { ports, mine: ports.filter((p) => p.mine).length, external: ports.filter((p) => p.addr === "0.0.0.0").length };
 }

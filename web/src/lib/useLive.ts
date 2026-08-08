@@ -3,9 +3,10 @@ import type { WatchEvent, WsFrame, OpenToolCall } from "../../../shared/types.ts
 import { WS_URL, IS_DEMO, hasToken, probeAuth } from "./api.ts";
 import * as demo from "./demo.ts";
 import { gitChanged } from "./gitBus.ts";
-import { sessionChanged } from "./sessionBus.ts";
 import { emitControl } from "./controlBus.ts";
+import { emitBrowserAsk } from "./browserBus.ts";
 import { recordNote, fireDesktopAlert } from "./sysNotify.ts";
+import { ciShouldNotify } from "./ciNotifyPref.ts";
 
 const MAX_EVENTS = 2000;
 const FLUSH_MS = 220; // coalesce bursts into ~5 renders/sec
@@ -58,20 +59,24 @@ export interface LiveData {
  * flushed on a timer (not per-message) so a busy fleet causes a few renders a
  * second instead of dozens. Rendering pauses entirely while the tab is hidden.
  *
- * `keepEvents` is what makes this usable on a phone. The event buffer is the
- * expensive part — up to two thousand rows, re-set every 220ms — and it exists
- * for the cockpit's event stream, which the companion does not draw. Everything
- * the phone *does* need rides the same socket: `openTools` (what each agent has
- * open right now), the connection state, and the git / control / alert frames
- * that arrive as side effects. Turning the buffer off is not a smaller feature
- * set, it is the same subscription without the one part nobody is looking at.
+ * The buffer is unconditional. It used to be optional, behind a `keepEvents`
+ * parameter written for the browser companion — a second, phone-shaped page
+ * that opened this same socket and drew everything but the event stream, so it
+ * paid for two thousand rows re-set every 220ms and looked at none of them.
+ * That companion was deleted; this half of it was missed, and the parameter
+ * defaulted to true, so every path that exists took the same branch. `grep -rn
+ * "useLive(" web/src` is one call site, App.tsx's `useLive(anyPanelOpen)`, and
+ * has been for as long as the companion has been gone.
  *
- * A second socket for the phone was the alternative and would have been worse:
- * the reconnect, the backoff, the give-up window and the auth probe below are
- * subtle, and a copy of them would drift from this one the first time either
- * was touched.
+ * The React Native app is not that companion and never was: it opens /stream
+ * through its own client (mobile/src/lib/live.ts) and reads `{type:"alert"}`
+ * off it. It has never asked this hook for anything, openTools included.
+ *
+ * The `sessionBus` comment further down was rewritten when the companion went;
+ * this was the piece left behind, and four comments here went on describing a
+ * caller that no longer existed.
  */
-export function useLive(paused = false, keepEvents = true): LiveData {
+export function useLive(paused = false): LiveData {
   const [events, setEvents] = useState<WatchEvent[]>([]);
   const [conn, setConn] = useState<ConnState>("connecting");
   const [lastEvent, setLastEvent] = useState<WatchEvent | null>(null);
@@ -101,8 +106,6 @@ export function useLive(paused = false, keepEvents = true): LiveData {
   // without the callback being rebuilt on each toggle.
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
-  const keepRef = useRef(keepEvents);
-  keepRef.current = keepEvents;
 
   const flush = useCallback(() => {
     flushScheduled.current = false;
@@ -188,6 +191,14 @@ export function useLive(paused = false, keepEvents = true): LiveData {
         gitChanged();
         return;
       }
+      if (frame.type === "browser") {
+        // An agent is driving the built-in browser. Imperative and addressed to
+        // one panel, so it goes to its own bus rather than through the control
+        // one — and it is answered even when no panel is listening, or the
+        // agent's request hangs until the server gives up on it.
+        emitBrowserAsk(frame.data);
+        return;
+      }
       if (frame.type === "control") {
         // An external controller (Stream Deck, phone) drove the UI. Imperative,
         // not data — hand it to App, which runs it through the same setters the
@@ -204,7 +215,43 @@ export function useLive(paused = false, keepEvents = true): LiveData {
         fireDesktopAlert(frame.data);
         return;
       }
+      if (frame.type === "card") {
+        /* A ClickUp card of yours moved. Recorded in the bell rather than fired
+           as an OS pop-up: this is news, not a blockage, and the one thing it
+           needs is somewhere to go — which it has, because the note carries the
+           card and the bell knows how to open one. */
+        const c = frame.data;
+        // Four sentences, and each says only what the API actually answered.
+        // A comment carries its author, so it names one; an assignment does
+        // not, so it never does.
+        const summary =
+          c.kind === "assigned" ? `${c.label} assigned to you`
+          : c.kind === "status" ? `${c.label} → ${c.status}`
+          : c.kind === "mention" ? `${c.who ?? "Somebody"} mentioned you on ${c.label}`
+          : `${c.who ?? "Somebody"} commented on ${c.label}`;
+        const body =
+          c.kind === "assigned" ? `${c.title}${c.status ? ` · ${c.status}` : ""}`
+          : c.kind === "status" ? `${c.title}${c.was ? ` · was ${c.was}` : ""}`
+          : c.said || c.title;
+        recordNote({
+          app: "ClickUp",
+          summary,
+          body,
+          // A mention is somebody asking you something; the rest is news.
+          urgency: c.kind === "mention" ? 2 : 1,
+          goto: { kind: "card", id: c.id, label: c.label },
+        });
+        return;
+      }
       if (frame.type === "ci") {
+        /*
+         * Only the pull requests that are about to merge, unless told
+         * otherwise. A suite finishing is news whose weight depends entirely on
+         * where the pull request is — on something half-written it is a status
+         * line, on something approved it is the last thing between you and
+         * merging. See ciNotifyPref.ts; the switch is in Settings.
+         */
+        if (!ciShouldNotify(frame.data)) return;
         // The server holds the latch, so this arrives once per verdict for a
         // whole suite. Naming the failures is the point: "1 failing" without a
         // name is what sends you to the browser.
@@ -224,10 +271,10 @@ export function useLive(paused = false, keepEvents = true): LiveData {
         return;
       }
       if (frame.type === "initial") {
-        // openTools is taken either way: it is the whole reason a phone opens
-        // this socket, and it rides on the same first frame.
+        // openTools seeds the per-agent "running" state for sessions whose
+        // calls have already aged out of the buffer, and it rides on the same
+        // first frame — so it is read before the events, not instead of them.
         setOpenTools(frame.openTools ?? []);
-        if (!keepRef.current) return;
         const initial = frame.data.slice(-MAX_EVENTS);
         seen.current = new Set(initial.map((e) => e.id));
         pending.current = [];
@@ -241,21 +288,10 @@ export function useLive(paused = false, keepEvents = true): LiveData {
       } else if (frame.type === "event") {
         if (seen.current.has(frame.data.id)) return; // duplicate delivery
         seen.current.add(frame.data.id);
-        if (keepRef.current) {
-          pending.current.push(frame.data);
-          scheduleFlush();
-        } else if (seen.current.size > MAX_EVENTS) {
-          // Without the buffer nothing else ever trims this, so it would grow one
-          // id per event for as long as the phone is open. Ids arrive ascending,
-          // so keeping the newest half still catches every re-delivery that is
-          // close enough in time to matter.
-          seen.current = new Set([...seen.current].slice(-MAX_EVENTS / 2));
-        }
+        pending.current.push(frame.data);
+        scheduleFlush();
         // A Post closes its tool: drop the matching seed so it can't keep a
         // finished tool marked "running" after its Post later evicts the buffer.
-        // This runs whether or not the buffer is kept — a phone that draws only
-        // the open call needs the close more than the cockpit does, because it
-        // has no event list underneath to contradict a stale one.
         const ev = frame.data;
         if (ev.hook_event_type === "PostToolUse" || ev.hook_event_type === "PostToolUseFailure") {
           setOpenTools((cur) =>
@@ -264,14 +300,13 @@ export function useLive(paused = false, keepEvents = true): LiveData {
               : cur
           );
         }
-      } else if (frame.type === "session") {
-        // The cockpit's Sessions panel fetches its own roll-ups on its own
-        // clock and does not need this. The companion does: a phone poll costs
-        // a radio wake, so its interval was tuned for battery rather than for
-        // truth. Announced rather than handled, so each surface decides how
-        // much of a several-a-second frame it actually wants.
-        sessionChanged(frame.data.session_id);
       }
+      // `session` frames fall through on purpose. They were announced on a
+      // `sessionBus` for the browser companion, whose polls were tuned for
+      // battery rather than for truth; the cockpit's Sessions panel fetches its
+      // own roll-ups on its own clock and never subscribed. With the companion
+      // deleted the bus had one publisher and no listeners — several fan-outs a
+      // second into an empty Set on this socket's hot path — so both went.
     };
   }, [scheduleFlush]);
 

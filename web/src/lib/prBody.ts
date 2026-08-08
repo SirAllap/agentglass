@@ -50,23 +50,145 @@ const EMOJI: Record<string, string> = {
   robot: "🤖", ok_hand: "👌",
 };
 
+/**
+ * The inline HTML a comment is allowed to keep.
+ *
+ * GitHub renders a little raw HTML inside a comment body and the machines lean
+ * on it: a coverage bot signs off with `<i>report-only-changed-files is
+ * enabled…</i>`, a release note footnotes itself in `<sub>`, a review writes a
+ * shortcut in `<kbd>`. Escaped wholesale, every one of those arrived on screen
+ * as its own source.
+ *
+ * The list is short, it is exact, and it is the entire safety argument, because
+ * what this function produces is handed to `dangerouslySetInnerHTML` and the
+ * string it was given was written by anybody who can comment on a public pull
+ * request. So it is worth saying which doors stay shut, and why:
+ *
+ *  - **No attributes, ever.** `<i>` is inert; `<i onmouseover=…>` is script. A
+ *    pattern loose enough to carry one attribute carries `onerror=` too, and
+ *    there is no attribute on any of these tags worth having.
+ *  - **No `<a>`.** An href accepts `javascript:`. A markdown link is how you
+ *    write a link here, and that rule is http(s)-only.
+ *  - **No `<img>`.** `src` fetches and `onerror` runs. Images are lifted out as
+ *    their own block and go through the server's allowlisted proxy.
+ *  - **No `<span>`/`<div>`/`<font>`.** `style` alone is enough to cover the
+ *    page with something that looks like the app.
+ *  - Everything on the list is inline, cannot load anything, cannot run
+ *    anything, and means exactly the same thing with no attributes at all.
+ *
+ * `<br>` is not in this list because it is void — it never has a closer — and
+ * is handled on its own just below.
+ */
+const INLINE_TAGS = ["b", "strong", "i", "em", "code", "del", "sub", "sup", "kbd"] as const;
+
+/**
+ * Put those tags back, and only where they pair up.
+ *
+ * Runs on the ALREADY-ESCAPED string, which is what makes it safe by
+ * construction rather than by vigilance: the only thing it can emit is one of
+ * nine exact strings. An attribute, a capital, a space before the name, a name
+ * that is not on the list — none of them match the pattern, so all of them stay
+ * `&lt;…&gt;` by default rather than by having been thought of.
+ *
+ * Counts have to balance or the name is left escaped. An opener with no closer
+ * is somebody typing about HTML, or a fragment, and making it a real tag hands
+ * it the rest of the block. The count is per rendered fragment — a paragraph is
+ * rendered a line at a time — so a tag opened on one line and closed on the next
+ * stays as text. That is the direction worth being wrong in.
+ */
+function allowInlineTags(escaped: string): string {
+  // Nothing was escaped, so there is no tag to find. Worth the line: a coverage
+  // comment arrives as 46,551 characters on ONE line, and this saves walking it
+  // twenty times to learn that.
+  if (!escaped.includes("&lt;")) return escaped;
+  // `<br>`, `<br/>` and `<br />` are the three spellings people write, and all
+  // three mean the break. Anything else after the name — `<br onload=…>` — is
+  // not this tag.
+  let out = escaped.replace(/&lt;br\s*\/?&gt;/g, "<br>");
+  for (const t of INLINE_TAGS) {
+    const open = `&lt;${t}&gt;`;
+    const close = `&lt;/${t}&gt;`;
+    const n = out.split(open).length - 1;
+    if (!n || n !== out.split(close).length - 1) continue;
+    // Balanced but back to front — `</b>x<b>` — is a fragment too, and the
+    // opener at the end of it would run on into whatever follows.
+    if (out.indexOf(open) > out.indexOf(close)) continue;
+    out = out.split(open).join(`<${t}>`).split(close).join(`</${t}>`);
+  }
+  return out;
+}
+
+/**
+ * The parts of the string that are not already inside a link or a code tag.
+ *
+ * Autolinking is the one pass that has to know where it is: an `<a>` inside an
+ * `<a>` is not a link at all — the browser closes the first one and the click
+ * lands somewhere nobody chose — and a sha inside `<code>` is quoted text, the
+ * same answer one inside backticks gets. Measured before this existed,
+ * `[see #123](https://…)` came out as exactly that nested pair.
+ *
+ * Backtick code spans need no help: they are already parked in `spans` as
+ * placeholders and only come back once every rule has run.
+ */
+function outsideLinksAndCode(s: string, fn: (chunk: string) => string): string {
+  return s
+    .split(/(<a\b[^>]*>[\s\S]*?<\/a>|<code\b[^>]*>[\s\S]*?<\/code>)/)
+    .map((part, i) => (i % 2 ? part : fn(part)))
+    .join("");
+}
+
 export function renderInline(raw: string, autolinkRepo?: string): string {
   const spans: string[] = [];
-  let s = decodeEntities(raw).replace(/`([^`]+)`/g, (_m, code: string) => {
+  /*
+   * The placeholder character is removed from the author's text first.
+   *
+   * `SLOT` is U+E000, a private-use codepoint — which is a fine choice for a
+   * marker and not a safe one on its own, because a commenter can type it. A
+   * body containing a literal `U+E000 0 U+E000` collided with a real lifted
+   * span and the same code span came back twice, in the wrong place. Inert —
+   * what is reinserted is always the escaped `<code>` we built — but wrong on
+   * screen, and a marker a stranger can write is a marker waiting for a sharper
+   * use. Nobody loses anything: it is a codepoint with no meaning outside the
+   * font that defines it.
+   */
+  let s = decodeEntities(raw).split(SLOT).join("").replace(/`([^`]+)`/g, (_m, code: string) => {
     spans.push(`<code>${escapeHtml(code)}</code>`);
     return `${SLOT}${spans.length - 1}${SLOT}`;
   });
 
   s = escapeHtml(s);
+  // Everything is escaped, and then the nine inline tags on the allowlist are
+  // put back. Here rather than at the end, so every rule below it sees a real
+  // `<` where the author wrote a tag: the bare-URL rule stops at `<`, and with
+  // the tags still escaped it swallowed `&lt;br&gt;` into the href and lost the
+  // break with it.
+  s = allowInlineTags(s);
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
 
-  // http(s) only — a markdown link is a fine place to hide `javascript:`.
+  /*
+   * http(s) only — a markdown link is a fine place to hide `javascript:` — and
+   * the href is ESCAPED on the way into the attribute.
+   *
+   * It was interpolated raw, and that was arbitrary script execution, not a
+   * cosmetic bug. A URL may legally contain a double quote, so a crafted link
+   * closed the attribute and named its own: a security audit built
+   * `[hover me](https://e.com/(https://x/onmouseover=…)` , loaded the output as
+   * `innerHTML` in real Chrome, dispatched a mouseover and watched the handler
+   * run. Every pull request body, review and bot comment in this panel is
+   * untrusted text written by anyone who can comment.
+   *
+   * Two holes, both closed. The href is escaped, so a quote inside it is an
+   * inert `&quot;` and cannot end the attribute; and the bare-URL pass now runs
+   * only OUTSIDE anchors and code, so it can no longer re-match the `https://`
+   * that the markdown-link pass just wrote into an href and swallow the closing
+   * quote on its way out.
+   */
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    (_m, text: string, href: string) => `<a href="${href}" target="_blank" rel="noreferrer noopener">${text}</a>`);
-  s = s.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)/g,
-    (_m, pre: string, href: string) => `${pre}<a href="${href}" target="_blank" rel="noreferrer noopener">${href}</a>`);
+    (_m, text: string, href: string) => `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${text}</a>`);
+  s = outsideLinksAndCode(s, (chunk) => chunk.replace(/(^|[\s(])((?:https?:\/\/)[^\s<)]+)/g,
+    (_m, pre: string, href: string) => `${pre}<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${escapeHtml(href)}</a>`));
 
   // `:tada:` and friends. GitHub renders these everywhere and a bot's release
   // notes are full of them; unrendered they read as punctuation soup.
@@ -76,12 +198,54 @@ export function renderInline(raw: string, autolinkRepo?: string): string {
   // body is mostly made of. Linked against the repo this body belongs to, which
   // the caller supplies; without it they stay as text rather than guessing.
   if (autolinkRepo) {
-    s = s.replace(/(^|[\s(])(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/g,
-      (_m, pre: string, repo: string | undefined, num: string) =>
-        `${pre}<a href="https://github.com/${repo ?? autolinkRepo}/issues/${num}" target="_blank" rel="noreferrer noopener">${repo ?? ""}#${num}</a>`);
-    s = s.replace(/(^|[\s(])([0-9a-f]{7,40})\b/g,
-      (_m, pre: string, sha: string) =>
-        `${pre}<a href="https://github.com/${autolinkRepo}/commit/${sha}" target="_blank" rel="noreferrer noopener"><code>${sha.slice(0, 7)}</code></a>`);
+    s = outsideLinksAndCode(s, (t) => {
+      t = t.replace(/(^|[\s(])(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/g,
+        (_m, pre: string, repo: string | undefined, num: string) =>
+          `${pre}<a href="https://github.com/${repo ?? autolinkRepo}/issues/${num}" target="_blank" rel="noreferrer noopener">${repo ?? ""}#${num}</a>`);
+      /*
+       * A bare commit sha, which GitHub turns into a link and this printed as
+       * plain text — `delta since 8c362cc → c9ed653`, with the commit two
+       * clicks away in the Commits tab and no way to get there from the
+       * sentence naming it.
+       *
+       * The href is the ordinary GitHub commit URL on purpose. `PrPanel`
+       * already intercepts a click on `/commit/<sha>` and opens that commit
+       * inside the app when it belongs to this pull request, falling back to
+       * GitHub when it does not (`shaFromHref`), so a private convention here
+       * would only be a second thing to keep in step.
+       *
+       * What it refuses is the part worth reading, because everything else it
+       * could match is a number, and a link to a commit that does not exist is
+       * worse than text — it looks answerable:
+       *
+       *  - **glued to something longer** — a word character, `#`, `/`, `=`,
+       *    `?`, `&`, `%`, `:` or `-` on either side — is part of that longer
+       *    thing: `#deadbeef` is a colour, `build-8c362cc-linux` is an
+       *    artifact, `…/runs/8c362cca1b2` is a path. `.` is deliberately NOT in
+       *    that set: `8c362cc..c9ed653` is how a range is written and both ends
+       *    of it are shas.
+       *  - **all digits** is a build id, a row count, an epoch. `1754500000`
+       *    linked as a commit and, worse, drew itself as `1754500`.
+       *  - **all letters** is a word: `defaced` linked, and so would
+       *    `deadbeef`, `effaced`, `beefcafe`.
+       *
+       *    Asking for at least one digit AND at least one a-f costs the 3.7% of
+       *    7-character shas that are all digits — (10/16)^7, and a third less
+       *    with every extra character, vanishing by the time a full 40-character
+       *    sha is written — and buys back every number and every hex-shaped word
+       *    in the prose. GitHub can be looser here because it resolves the sha
+       *    against the repository before linking it; with no such lookup, the
+       *    shape is all there is to go on.
+       *  - **already inside a link or `<code>`** never reaches this at all —
+       *    see `outsideLinksAndCode`.
+       */
+      t = t.replace(/(?<![\w#&/=?%:-])([0-9a-f]{7,40})(?![\w-])/g,
+        (m, sha: string) =>
+          (/\d/.test(sha) && /[a-f]/.test(sha)
+            ? `<a href="https://github.com/${autolinkRepo}/commit/${sha}" target="_blank" rel="noreferrer noopener"><code>${sha.slice(0, 7)}</code></a>`
+            : m));
+      return t;
+    });
   }
 
   return s.replace(new RegExp(`${SLOT}(\\d+)${SLOT}`, "g"), (_m, i: string) => spans[Number(i)] ?? "");
@@ -109,7 +273,13 @@ export function stripTags(raw: string): string {
   return out.replace(/[<>]/g, "");
 }
 
-export type MdListItem = { html: string; checked?: boolean; depth: number };
+export type MdListItem = {
+  html: string; checked?: boolean; depth: number;
+  /** This item's OWN marker. The block's `ordered` is the root list's; a bullet
+   *  nested under a numbered step is a bullet, and drawing it as one flat `<ol>`
+   *  numbered it and renumbered everything after it. */
+  ordered?: boolean;
+};
 
 export type MdBlock =
   | { kind: "heading"; level: number; html: string }
@@ -267,12 +437,61 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
   // machine markers — to find and rewrite their own comment later — so on a CI
   // comment they are most of the noise. Only whole-line comments go: one buried
   // mid-sentence is likelier to be someone demonstrating the syntax.
-  const lines = (body || "").replace(/^[ \t]*<!--[\s\S]*?-->[ \t]*$/gm, "").split(/\r?\n/);
+  /*
+   * A line is dropped only when it is NOTHING BUT machine markers.
+   *
+   * The old pattern was `^[ \t]*<!--[\s\S]*?-->[ \t]*$`, and although the
+   * middle is lazy it backtracks forward until the end anchor can match — so on
+   * a line carrying TWO comments it ran from the first `<!--` to the last
+   * `-->` and took the words between them with it. A sticky-comment bot writes
+   * exactly that shape, and its comment arrived as an empty box: an author, a
+   * timestamp, and nothing. Measured: `parseBody("<!-- a -->Coverage is 75%<!-- /b -->")`
+   * returned `[]`.
+   */
+  const lines = (body || "").split(/\r?\n/).map((ln) => {
+    if (!ln.includes("<!--")) return ln;
+    /*
+     * Markers at the EDGES of a line go; one in the middle of a sentence stays.
+     *
+     * Two shapes, and the rule has to serve both. A sticky-comment bot writes
+     * `<!-- sticky:cov -->Coverage is 75%<!-- /sticky -->` on ONE line, and the
+     * old pattern — anchored `^…$` with a lazy middle — backtracked from the
+     * first `<!--` to the last `-->` and took the words between them, so the
+     * comment arrived as an author, a timestamp and an empty box. Meanwhile
+     * somebody writing `Write <!-- like this --> to hide a note` is showing you
+     * the syntax, and that one is content.
+     *
+     * An edge marker is bookkeeping — a bot's handle on its own comment. One
+     * inside a sentence is something a person typed on purpose.
+     */
+    let out = ln;
+    let prev: string;
+    do {
+      prev = out;
+      out = out.replace(/^[ \t]*<!--[\s\S]*?-->/, "").replace(/<!--[\s\S]*?-->[ \t]*$/, "");
+    } while (out !== prev);
+    return out.trim() === "" ? "" : out;
+  });
   let para: string[] = [];
 
   const flushPara = () => {
     if (!para.length) return;
-    out.push({ kind: "para", html: para.map((x) => renderInline(x, autolinkRepo)).join(" ") });
+    /*
+     * `<br>`, not a space.
+     *
+     * GitHub renders comment bodies with hard line breaks on, so a lone newline
+     * inside a paragraph IS a break — every review bot and half the humans on a
+     * pull request write against that. Joining with a space ran two lines into
+     * one: measured on a real review, "Review Summary" and "1 Critical. 1 High.
+     * 5 Medium. 4 Low." arrived as a single sentence where GitHub had two, and
+     * every stat line in the body lost its shape the same way.
+     *
+     * A markdown paragraph in a README wraps at column 80 and does NOT want
+     * this — but a README is not what this parser reads. `prBody` exists for
+     * what GitHub's comment box produced, and matching what GitHub then drew is
+     * the whole job.
+     */
+    out.push({ kind: "para", html: para.map((x) => renderInline(x, autolinkRepo)).join("<br>") });
     para = [];
   };
 
@@ -429,6 +648,8 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
       flushPara();
       const ordered = /\d/.test(li[2]!);
       const items: MdListItem[] = [];
+      /** The indents currently open, outermost first — see `depth` below. */
+      const open: number[] = [];
       while (i < lines.length) {
         const m = lines[i]!.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
         if (!m) {
@@ -439,13 +660,45 @@ export function parseBody(body: string, autolinkRepo?: string): MdBlock[] {
             i++;
             continue;
           }
+          /*
+           * A blank line between items does NOT end the list — that is a loose
+           * list, and it is how every review bot and half the humans write a
+           * numbered procedure. Ending there gave each step its own `<ol>`, and
+           * an `<ol>` with no `start` begins at 1: a three-step procedure read
+           * "1. / 1. / 1." the moment the markers were turned back on. A blank
+           * run followed by anything that is not an item still ends it.
+           */
+          if (items.length && !lines[i]!.trim()) {
+            let k = i;
+            while (k < lines.length && !lines[k]!.trim()) k++;
+            if (k < lines.length && /^(\s*)([-*+]|\d+[.)])\s+/.test(lines[k]!)) { i = k; continue; }
+          }
           break;
         }
-        const depth = Math.min(4, Math.floor(m[1]!.replace(/\t/g, "  ").length / 2));
+        /*
+         * Depth from a STACK of open indents, not from dividing by two.
+         *
+         * Dividing filed a four-space sublist a level below a two-space one, so
+         * a body that indents some of its sublists by two and some by four —
+         * which is most of them — nested the second inside the first. Measured:
+         * `- a / __- b / - c / ____- d` gave depths [0,1,0,2] where GitHub puts
+         * b and d level; `- a / ____- b / ________- c` gave [0,2,4].
+         *
+         * What matters is only whether this item is further in than the one it
+         * follows, never by how much.
+         */
+        const indent = m[1]!.replace(/\t/g, "  ").length;
+        while (open.length && indent < open[open.length - 1]!) open.pop();
+        if (!open.length || indent > open[open.length - 1]!) open.push(indent);
+        const depth = Math.min(4, open.length - 1);
+        /* Each item remembers its OWN marker. A bullet nested under a numbered
+           step is a bullet; drawn as one flat `<ol>` it took a number and
+           renumbered every sibling after it, so three steps read as five. */
+        const itemOrdered = /\d/.test(m[2]!);
         const task = m[3]!.match(/^\[([ xX])\]\s+(.*)$/);
         items.push(task
-          ? { html: renderInline(task[2]!, autolinkRepo), checked: task[1]!.toLowerCase() === "x", depth }
-          : { html: renderInline(m[3]!, autolinkRepo), depth });
+          ? { html: renderInline(task[2]!, autolinkRepo), checked: task[1]!.toLowerCase() === "x", depth, ordered: itemOrdered }
+          : { html: renderInline(m[3]!, autolinkRepo), depth, ordered: itemOrdered });
         i++;
       }
       i--;

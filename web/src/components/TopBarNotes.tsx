@@ -41,7 +41,9 @@ import {
   sysNotifyOn, setSysNotifyOn, subscribeSysNotifyMode, notifyCapability,
   type SystemNote, type NotifyCapability,
 } from "../lib/sysNotify.ts";
+import { openPrs } from "../lib/openPrs.ts";
 import { Portal } from "./Portal.tsx";
+import { CloseButton } from "./CloseButton.tsx";
 
 export type NoteKind = "done" | "blocked" | "pull";
 export type Note = {
@@ -141,10 +143,10 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
         if (c.attention === "blocked") {
           // Blocked, not merely finished: the chat cannot continue without you.
           push({ id: `${c.id}-b-${c.messages.length}`, kind: "blocked", color: "var(--error)", title: c.title || "Chat", sub: c.blockedTool ? `Needs "${c.blockedTool}"` : "Waiting on you", urgent: true });
-          recordNote({ app: "chat", summary: c.title || "Chat", body: c.blockedTool ? `Blocked — needs "${c.blockedTool}"` : "Blocked — waiting on you", urgency: 2 });
+          recordNote({ app: "chat", summary: c.title || "Chat", body: c.blockedTool ? `Blocked — needs "${c.blockedTool}"` : "Blocked — waiting on you", urgency: 2 , goto: { kind: "chat", id: c.id } });
         } else if (c.attention === "done") {
           push({ id: `${c.id}-d-${c.messages.length}`, kind: "done", color: "var(--success)", title: c.title || "Chat", sub: "Turn finished" });
-          recordNote({ app: "chat", summary: c.title || "Chat", body: "Turn finished" });
+          recordNote({ app: "chat", summary: c.title || "Chat", body: "Turn finished" , goto: { kind: "chat", id: c.id } });
         }
       }
       first = false;
@@ -207,7 +209,12 @@ export function useAmbientNotes(): { note: Note | null; behind: number; ahead: n
           seen.set(r.root, r.behind);
           if (!first && r.behind > prev) {
             push({ id: `${r.root}-${r.behind}`, kind: "pull", color: "var(--info)", title: r.name, sub: `${r.behind} to pull on ${r.branch}` });
-            recordNote({ app: "git", summary: r.name, body: `${r.behind} commit${r.behind === 1 ? "" : "s"} to pull on ${r.branch}` });
+            // The destination was already a supported kind and simply never
+            // passed: mirrored git notes get one derived from their *text*
+            // (gitDestination), while ours — which hold the repo and the branch
+            // as facts — arrived with nothing and could not be clicked.
+            recordNote({ app: "git", summary: r.name, body: `${r.behind} commit${r.behind === 1 ? "" : "s"} to pull on ${r.branch}`,
+              goto: { kind: "git", repo: r.name, branch: r.branch } });
           }
         }
         setBehind(total);
@@ -282,7 +289,7 @@ const ago = (t: number) => {
 
 function Cap({ children, dim }: { children: React.ReactNode; dim?: boolean }) {
   return (
-    <span className="text-[9px] uppercase tracking-wider" style={{ color: dim ? "var(--text4)" : "var(--text3)" }}>{children}</span>
+    <span className="text-[10px] uppercase tracking-wider" style={{ color: dim ? "var(--text4)" : "var(--text3)" }}>{children}</span>
   );
 }
 
@@ -346,7 +353,24 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
   // Clickable only when there is somewhere to go. A row that highlights under
   // the pointer and then does nothing is the thing being fixed here, so the
   // affordance appears exactly where it is honest.
-  const go = n.goto ? () => onGoto(n.goto!) : null;
+  const git = n.goto?.kind === "git" ? n.goto : null;
+  /*
+   * A card row says where it goes, instead of only behaving as if it did.
+   *
+   * Clicking the row has always opened the card in Tasks, and nobody found it:
+   * a row that is a button but does not look like one is a feature you own and
+   * cannot use. Reported as "there should be a button to go to that ClickUp
+   * card" — and there was, it was the whole row.
+   *
+   * Named the way the git rows next to it are named, for the same reason those
+   * are: a bare arrow beside a ClickUp notification reads as "open ClickUp",
+   * which is the one thing this does not do. It stays here, in agentglass.
+   */
+  const card = n.goto?.kind === "card" ? n.goto : null;
+  /* A whole-row click needs ONE destination. A git job has two — the checkout
+     and the pull request for its branch — so that row keeps its ordinary
+     open-the-message click and offers both as named buttons instead. */
+  const go = n.goto && !git ? () => onGoto(n.goto!) : null;
   const expandable = cut || open;
   // With nowhere to go, the row itself opens the message — which is what the
   // desktop's own list does, and what anyone tries first.
@@ -355,13 +379,15 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
     <div className={`agx-note-row${go ? " agx-note-row-go" : act ? " agx-note-row-open" : ""}`}
       onClick={act ?? undefined}
       role={act ? "button" : undefined}
-      title={go ? `Open ${n.goto!.repo}#${n.goto!.number}` : expandable ? (open ? "Show less" : "Show the whole message") : undefined}>
+      title={go && n.goto?.kind === "pr" ? `Open ${n.goto.repo}#${n.goto.number}`
+        : go && n.goto?.kind === "card" ? `Open ${n.goto.label} in Tasks`
+        : expandable ? (open ? "Show less" : "Show the whole message") : undefined}>
       <div className="flex items-start gap-2">
         <span className="flex flex-col min-w-0 flex-1 gap-[3px]">
           <span className="flex items-center gap-2">
             <Cap>{n.app}</Cap>
             <Cap dim>{ago(n.at)}</Cap>
-            {n.urgency === 2 && <span className="text-[9px] uppercase tracking-wider" style={{ color: "var(--error)" }}>urgent</span>}
+            {n.urgency === 2 && <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--error)" }}>urgent</span>}
           </span>
           {/* The title unwraps too. Expanding has to mean "show me all of it",
               and a summary cut at one line with an ellipsis is part of "all of
@@ -385,6 +411,31 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
               ↗ Open {hostOf(n.url)}
             </button>
           )}
+          {/* The two things a "commits to pull" row is actually asking you to
+              do. Named rather than arrowed, and side by side, because they are
+              different destinations: one is the checkout where the work is, the
+              other is the review it belongs to. */}
+          {card && (
+            <button className="agx-note-link self-start"
+              title={`Open ${card.label} on the board here — no browser`}
+              onClick={(e) => { e.stopPropagation(); onGoto(card); }}>
+              ↗ Card · {card.label}
+            </button>
+          )}
+          {git && (
+            <span className="flex items-center gap-1 self-start flex-wrap">
+              <button className="agx-note-link" title={`Source control, scoped to ${git.repo}`}
+                onClick={(e) => { e.stopPropagation(); void onGoto(git); }}>
+                ↗ Git · {git.repo}
+              </button>
+              {git.branch && (
+                <button className="agx-note-link" title={`Find the pull request for ${git.branch}`}
+                  onClick={(e) => { e.stopPropagation(); openPrs(git.branch!, "all"); }}>
+                  ↗ Its PR
+                </button>
+              )}
+            </span>
+          )}
         </span>
         <span className="flex items-center gap-1 shrink-0">
           {/* A control, not a character. This was a 10px "▾" wedged against the
@@ -399,7 +450,7 @@ function HistoryRow({ n, onGone, onGoto }: { n: SystemNote; onGone: () => void; 
               <Chevron up={open} />
             </button>
           )}
-          <button className="agx-note-btn agx-note-icon" onClick={(e) => { e.stopPropagation(); onGone(); }} title="Dismiss">✕</button>
+          <CloseButton onClick={(e) => { e.stopPropagation(); onGone(); }} title="Dismiss" className="agx-note-btn agx-note-icon" />
         </span>
       </div>
     </div>
@@ -493,7 +544,7 @@ export function NotifyBell({ noDrag, onGoto }: {
             to spare, and a badge is read as "on the bell" wherever it is drawn. */}
         {unread > 0 && (
           <span
-            className="absolute text-[8px] font-bold tabular-nums grid place-items-center rounded-full"
+            className="absolute text-[9px] font-bold tabular-nums grid place-items-center rounded-full"
             style={{
               top: -1, right: -2, minWidth: 11, height: 11, padding: "0 2px",
               background: "var(--primary)", color: "var(--bg)",
@@ -531,7 +582,7 @@ export function NotifyBell({ noDrag, onGoto }: {
                 {quiet ? "Quiet on" : "Quiet"}
               </button>
               <button className="agx-note-btn ml-auto" onClick={() => { clearNotes(); setOpen(false); }}>Clear all</button>
-              <button className="agx-note-btn" onClick={() => setOpen(false)} title="Close (Esc)">✕</button>
+              <CloseButton onClick={() => setOpen(false)} title="Close (Esc)" className="agx-note-btn" />
             </div>
             {hist.length ? (
               <div className="agx-inbox-list">

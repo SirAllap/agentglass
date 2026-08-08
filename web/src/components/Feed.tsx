@@ -5,6 +5,7 @@ import { Panel } from "./Panel.tsx";
 import { Portal } from "./Portal.tsx";
 import { friendly, detail, DOT_COLOR } from "../lib/labels.ts";
 import { fmtTime, fmtMs, fmtUsd, agentKey, hashColor } from "../lib/format.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 type Category = "all" | "tools" | "chat" | "alerts";
 
@@ -429,7 +430,7 @@ function FeedInner({ events, filter, sessionProvider, onSelect, onClearFilter }:
                     </div>
                     <div className="flex items-center gap-3">
                       {followToggle}
-                      <button onClick={() => setFull(false)} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70" title="Collapse (Esc)">✕</button>
+                      <CloseButton onClick={() => setFull(false)} title="Collapse (Esc)" />
                     </div>
                   </div>
                   <div className="flex-1 min-h-0 px-5 pb-4 pt-3">{body}</div>

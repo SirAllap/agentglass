@@ -305,7 +305,7 @@ describe("asset proxy allowlist", () => {
   test("admits the hosts that actually serve PR images", () => {
     expect(prs.assetAllowed("https://github.com/user-attachments/assets/abc")).not.toBeNull();
     expect(prs.assetAllowed("https://user-images.githubusercontent.com/1/x.png")).not.toBeNull();
-    expect(prs.assetAllowed("https://t14295188.p.clickup-attachments.com/t1/x.png")).not.toBeNull();
+    expect(prs.assetAllowed("https://t9000001.p.clickup-attachments.com/t1/x.png")).not.toBeNull();
   });
 
   test("refuses anything else, and anything not https", () => {
@@ -369,7 +369,7 @@ describe("who may see the GitHub token", () => {
   /** Allowed to serve images, never allowed the credential. */
   test("the other asset hosts are not token hosts", () => {
     expect(prs.tokenAllowedHost("user-images.githubusercontent.com")).toBe(false);
-    expect(prs.tokenAllowedHost("t14295188.p.clickup-attachments.com")).toBe(false);
+    expect(prs.tokenAllowedHost("t9000001.p.clickup-attachments.com")).toBe(false);
   });
 
   /** `https://github.com./x` is a valid absolute-form FQDN. */

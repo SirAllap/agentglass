@@ -19,44 +19,61 @@ import { readFileSync } from "node:fs";
 const repo = (p: string) => readFileSync(new URL("../../" + p, import.meta.url), "utf8");
 const README = repo("README.md");
 
-/** The part of the README this file is about, so a mention somewhere else does
- *  not satisfy a check about what the remote section says. */
+/** The section of the README this file is about, so a mention somewhere else
+ *  does not satisfy a check about what the remote section says. */
+const ALERTS_HEADING = "### Alerts on the phone, and what they honestly cover";
+
 const section = (() => {
   const from = README.indexOf("### Reaching it when you are not on the same wifi");
   expect(from, "the remote-access section is gone from the README").toBeGreaterThan(-1);
-  return README.slice(from, README.indexOf("### Alerts that reach a locked phone", from));
+  const to = README.indexOf(ALERTS_HEADING, from);
+  expect(to, "the alerts section no longer follows the remote one").toBeGreaterThan(-1);
+  return README.slice(from, to);
 })();
 
 /**
- * The README also promises the notification can be answered from the lock
- * screen, which is a promise about `web/public/sw.js`. A worker that stops
- * drawing the buttons is invisible — the alert still arrives, and only the
- * thing the README says it does is missing.
+ * The README used to promise a notification answerable from the lock screen,
+ * which was a promise about `web/public/sw.js` — and those checks read that
+ * worker. Web Push is gone: no worker registers, no route hands out a VAPID
+ * key, and the phone app raises a LOCAL notification from the alert frame on
+ * the socket it already holds.
+ *
+ * So the claim to check is the new one, and it is the more important kind:
+ * "there is no third party in this path" is a privacy statement, and a route
+ * quietly coming back would make it false while the README went on saying it.
  */
-describe("what the README promises about the notification", () => {
+describe("what the README promises about an alert reaching a phone", () => {
   const alerts = (() => {
-    const from = README.indexOf("### Alerts that reach a locked phone");
+    const from = README.indexOf(ALERTS_HEADING);
     expect(from, "the alerts section is gone from the README").toBeGreaterThan(-1);
-    return README.slice(from, README.indexOf("Independent of `AGENTGLASS_NOTIFY`", from));
+    return README.slice(from, README.indexOf("\n---", from));
   })();
 
-  test("the buttons it names are the buttons the worker draws", () => {
-    expect(alerts).toContain("Allow and Deny on the notification");
-    const sw = repo("web/public/sw.js");
-    expect(sw).toContain('{ action: "allow", title: "Allow" }');
-    expect(sw).toContain('{ action: "deny", title: "Deny" }');
+  test("the frame it names is the one the server actually broadcasts", () => {
+    expect(alerts).toContain('`{type:"alert"}`');
+    expect(repo("shared/types.ts")).toContain('type: "alert"');
+    // Same call for every attached client. The README's claim that the phone
+    // gets "the identical frame the desk turns into a native notification" is
+    // true only while there is one broadcast rather than a phone-shaped copy.
+    //
+    // A PREFIX, and the count below is what actually carries the claim. Pinning
+    // the whole argument list pinned one branch's version of the frame: this
+    // was written as `{ title, body, urgency })` while, on the other branch,
+    // the same call had already grown `...(pane ? { pane } : {})` — where the
+    // agent is, for the one client that can act on it. The two met here and the
+    // test failed over a field that makes the frame richer for everybody, which
+    // is the opposite of what it exists to catch.
+    expect(repo("server/src/alerts.ts")).toContain("sink.broadcast({ title, body, urgency");
+    // The real assertion: ONE broadcast. A phone-shaped copy would be a second.
+    expect(repo("server/src/alerts.ts").match(/sink\.broadcast\(/g)).toHaveLength(1);
   });
 
-  test("and it still says only a held gate gets them", () => {
-    // The claim that keeps the feature from becoming a notification with
-    // buttons on everything, which is the version nobody wants.
-    expect(alerts).toMatch(/Only a held gate gets them/);
-    expect(repo("web/public/sw.js")).toContain("actions: gate");
-  });
-
-  test("the tap-to-open path it points iPhone users at is still there", () => {
-    expect(alerts).toContain("Safari draws no");
-    expect(repo("web/public/sw.js")).toContain("openWindow");
+  test("and no push route it says is gone is still being served", () => {
+    expect(README).not.toContain("/push/");
+    expect(repo("server/src/index.ts")).not.toContain('pathname === "/push');
+    // The switch that turned it on was in the deleted companion, so a route
+    // left behind would be reachable by nothing but a stranger with the token.
+    expect(repo("server/src/alerts.ts")).not.toContain("pushEveryone");
   });
 });
 

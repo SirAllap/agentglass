@@ -27,3 +27,12 @@ __pycache__/
 # review — anyone upgrading has some, and they are not the repository's.
 # `git worktree remove` them when you want the disk back.
 .agentglass/
+
+# Working notes stay out of a public repo. Backlogs, decision logs and audit
+# write-ups are how a session keeps its own place; they are not documentation of
+# the product, and three of them had reached the tree before anyone looked.
+# The reasoning inside them is worth keeping — it just belongs beside the
+# session, not in front of the people who install this.
+/TASKS.md
+/DECISIONS.md
+/THEME_AUDIT.md

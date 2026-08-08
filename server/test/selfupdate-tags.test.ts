@@ -3,9 +3,11 @@
 // can stop telling an offline user to go publish a tag.
 //
 // Loaded through a fresh dynamic import, not a static one: selfupdate.ts reads
-// AGENTGLASS_UPDATE_SRC into a module-load const, and release-notes.test.ts
-// depends on being the module's first importer. A static import here would
-// initialise the shared module early and break that, order-dependently.
+// AGENTGLASS_UPDATE_SRC into a module-load const, so a static import here would
+// initialise the shared module with whatever env happened to be set. Each suite
+// that cares about SRC now takes its own instance — release-notes.test.ts no
+// longer relies on being the first importer, because being first is not
+// something a test file can assert or defend.
 import { describe, expect, test } from "bun:test";
 
 const load = async () => await import(`../src/selfupdate.ts?u=${Math.random()}`);

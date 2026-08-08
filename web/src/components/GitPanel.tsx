@@ -3,10 +3,13 @@
 // (browse commits, view a commit's diff), and stash — all with the same diff
 // renderer as the telemetry view.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
 import { conflictBriefing, CONFLICT_ASK } from "../lib/conflictBrief.ts";
+import { ConflictMode } from "./ConflictMode.tsx";
+import { requestTermIssue } from "../lib/termIssue.ts";
 import { useDismiss } from "../lib/useDismiss.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
-import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding } from "../../../shared/types.ts";
+import type { GitRepoRef, WorkingTree, GitFileChange, GitBranch, GitBranchInfo, GitStash, GitGraphLine, GitWorktree, WorktreeLeftovers, GitRemote, GitRemoteBranch, GitTag, GitReflogEntry, ConflictBlock, BlockChoice, MergeInfo, FileChange, WalkthroughResult, WalkthroughFile, TidyReport, TidyFinding } from "../../../shared/types.ts";
 import { partitionByWorktree, splitReadable, goneConfirmTitle, goneConfirmBody, forcedDeletePrompt } from "../lib/goneCleanup.ts";
 import { BasePicker } from "./BasePicker.tsx";
 import { ShellConsole } from "./ShellConsole.tsx";
@@ -14,7 +17,7 @@ import { RescueModal } from "./RescueModal.tsx";
 import { useDialogs } from "./ConfirmDialog.tsx";
 import { api } from "../lib/api.ts";
 import { subscribeGitChanged } from "../lib/gitBus.ts";
-import { newChat, update, setActiveChatId } from "../lib/chatStore.ts";
+import { seedChat } from "../lib/chatStore.ts";
 import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import { usePoll } from "../lib/usePoll.ts";
 import { worktreeTag } from "../lib/worktree.ts";
@@ -26,6 +29,10 @@ import { CommandLog } from "./CommandLog.tsx";
 import { UnifiedDiff, SplitDiff, ThemePicker, Toggle, SCROLLBAR_CSS, ChangesModal, changesetSig, readWalkCache, writeWalkCache } from "./ChangesModal.tsx";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
+import { CloseButton } from "./CloseButton.tsx";
+import { openPrs, openPr } from "../lib/openPrs.ts";
+import { chipTarget } from "../lib/chipTarget.ts";
+import type { PrBranchSummary } from "../../../shared/types.ts";
 
 const unifiedText = (c: GitFileChange) => c.hunks.map((h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n${h.lines.join("\n")}`).join("\n");
 
@@ -44,7 +51,7 @@ type View = "changes" | "log" | "reflog" | "branches" | "remotes" | "tags" | "st
 function Says({ label, children, tint }: { label: string; children: React.ReactNode; tint?: string }) {
   return (
     <span className="block">
-      <span className="block text-[9px] uppercase tracking-wider mb-0.5" style={{ color: "var(--text4)" }}>{label}</span>
+      <span className="block text-[10px] uppercase tracking-wider mb-0.5" style={{ color: "var(--text4)" }}>{label}</span>
       <span className="block text-[10.5px] leading-relaxed" style={{ color: tint ?? "var(--text2)" }}>{children}</span>
     </span>
   );
@@ -489,7 +496,7 @@ function HelpSheet({ view, onClose }: { view: View; onClose: () => void }) {
         <div className="flex items-center gap-2 mb-3">
           <span className="text-[12px] font-semibold" style={{ color: "var(--text)" }}>Keys</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "color-mix(in srgb, var(--primary) 14%, transparent)", color: "var(--primary-hover)" }}>{VIEW_LABEL[view]}</span>
-          <button onClick={onClose} className="ml-auto text-[14px] t-dim2 hover:opacity-70">✕</button>
+          <CloseButton onClick={onClose} className="ml-auto" />
         </div>
         {rows(VIEW_KEYS[view])}
         <div className="my-2.5 h-px" style={{ background: "color-mix(in srgb, var(--border) 35%, transparent)" }} />
@@ -546,10 +553,10 @@ function DirRow({ name, depth, count, collapsed, onToggle }: {
   return (
     <div onClick={onToggle} className="flex items-center gap-1.5 py-0.5 rounded-md cursor-pointer select-none hover:opacity-80"
       style={{ paddingLeft: 8 + depth * 12 }}>
-      <span className="w-2.5 text-[8px] shrink-0 t-dim2">{collapsed ? "▶" : "▼"}</span>
+      <span className="w-2.5 text-[10px] shrink-0 t-dim2">{collapsed ? "▶" : "▼"}</span>
       <span className="text-[11px] truncate" style={{ color: "var(--text2)" }}>{name}</span>
       {/* Only meaningful while folded — otherwise you can just count the rows. */}
-      {collapsed && <span className="text-[9px] tabular-nums t-dim2">{count}</span>}
+      {collapsed && <span className="text-[10px] tabular-nums t-dim2">{count}</span>}
     </div>
   );
 }
@@ -632,7 +639,7 @@ function BlockResolver({ blocks, error, picks, onPick, onApply, busy }: {
   const left = blocks.filter((b) => !picks[b.index]).length;
   const Side = ({ label, lines, tone }: { label: string; lines: string[]; tone: string }) => (
     <div className="min-w-0 flex-1">
-      <div className="text-[9px] mb-0.5 truncate" style={{ color: tone }}>{label}</div>
+      <div className="text-[10px] mb-0.5 truncate" style={{ color: tone }}>{label}</div>
       <pre className="text-[10px] leading-[1.5] px-1.5 py-1 rounded overflow-x-auto agx-scroll m-0"
         style={{ background: "color-mix(in srgb, var(--bg) 60%, transparent)", color: "var(--text2)", maxHeight: 160 }}>
         {lines.length ? lines.join("\n") : "(Nothing — this side removes these lines)"}
@@ -714,8 +721,8 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [treeFor, setTreeFor] = useState("");
   const [view, setView] = useState<View>("changes");
   const [selKey, setSelKey] = useState<string | null>(null);
-  const [split, setSplit] = useState(true);
-  const [wrap, setWrap] = useState(false);
+  const [split, setSplit] = useState(diffSplit);
+  const [wrap, setWrap] = useState(diffWrap);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -797,9 +804,28 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    *  per worktree row — because a worktree family shares its refs. */
   const [baseRefs, setBaseRefs] = useState<{ name: string; remote: boolean }[]>([]);
   const mergeState = tree?.branch.state ?? "clean";
+  /**
+   * Which two sides git has stopped between, as git has them — not as the
+   * checkout's base branch suggests.
+   *
+   * Read alongside the conflict list because everything downstream needs it:
+   * the band labels, the handoff prompt, and whether this operation replays a
+   * series. The deduction it replaces names the wrong ref for any merge that
+   * is not of your own base, and the wrong commit for every rebase.
+   */
+  const [merge, setMerge] = useState<MergeInfo | null>(null);
+  /**
+   * Git has stopped, and there is a decision to make.
+   *
+   * Bisecting is excluded deliberately: it is a stopped state with no two
+   * sides to choose between, so the conflict screen would have nothing to
+   * show. It keeps the old strip, which offers the one thing it needs (reset).
+   */
+  const inConflict = mergeState !== "clean" && mergeState !== "bisecting";
   useEffect(() => {
-    if (!open || !root || mergeState === "clean") { setConflicts([]); return; }
+    if (!open || !root || mergeState === "clean") { setConflicts([]); setMerge(null); return; }
     api.gitConflicts(root).then((r) => setConflicts(r.files ?? [])).catch(() => {});
+    api.gitMergeInfo(root).then((r) => setMerge(r.ok ? r : null)).catch(() => {});
   }, [open, root, mergeState, tree]);
 
   /**
@@ -810,20 +836,48 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
    * genuinely good at — and the chat already runs `claude` in a given cwd, so
    * this is a prompt and a tab rather than a feature.
    */
-  const askClaude = () => {
+  /** The prompt both handoffs send. Written once: the briefing is the valuable
+   *  part, and two copies of it would drift. */
+  const conflictPrompt = () => {
     const rels = conflicts.map((p) => p.startsWith(root) ? p.slice(root.length + 1) : p);
-    const c = newChat(root);
-    update(c.id, (ch) => {
-      ch.title = "Resolve merge conflicts";
-      // Read from `tree`/`repos` rather than the `branch`/`repoRef` consts
-      // declared further down: same values, no dependence on where in this
-      // component the declarations happen to sit.
-      ch.draft = [
-        ...conflictBriefing(root, tree?.branch, repos.find((r) => r.root === root), mergeState, rels),
-        ...CONFLICT_ASK,
-      ].join("\n");
-    });
-    setActiveChatId(c.id);
+    return [
+      ...conflictBriefing(root, tree?.branch, repos.find((r) => r.root === root), mergeState, rels, merge),
+      ...CONFLICT_ASK,
+    ].join("\n");
+  };
+
+  /**
+   * The same conflict, in a terminal instead of the chat.
+   *
+   * Two places the same work can happen, and it is not a setting: the chat
+   * renders from the transcript and keeps the pane out of sight; a tmux window
+   * gives you the session itself, attached, beside your other shells — where
+   * you can watch it edit and take the keyboard off it. Which you want depends
+   * on whether you intend to watch or to join in, which is the same choice the
+   * pull request panel already offers for a review.
+   */
+  const askClaudeInTerminal = () => {
+    requestTermIssue(root, "conflicts", conflictPrompt(), true);
+    // It opens a tmux window somewhere you are not looking, and until this said
+    // so the button read as broken: it worked perfectly, silently, and people
+    // pressed it again.
+    flash(true, `Claude is on it in a tmux window — "conflicts", in ${repoRef?.name ?? "this repo"}`);
+  };
+
+  /**
+   * The same handoff, in the chat pane instead.
+   *
+   * Deliberately the lesser of the two: the terminal gives you the session
+   * itself, attached, where you can watch it edit and take the keyboard off it.
+   *
+   * Goes through seedChat() rather than assembling the tab here. This function
+   * used to do it by hand and left out the one call that matters — the chat
+   * panel keeps its own selection in component state and reads the stored id
+   * only at mount — so the prompt landed in a tab nobody was looking at and the
+   * chat opened blank. It looked exactly like the button doing nothing.
+   */
+  const askClaude = () => {
+    seedChat(root, conflictPrompt(), "Resolve merge conflicts");
     onOpenChat?.();
   };
   // Only the branches whose upstream is gone — the merged-and-tidied ones. Off
@@ -834,6 +888,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   const [treeMode, setTreeMode] = useState(true);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [logOpen, setLogOpen] = useState(false);
+  /** Mid-merge: whether the four hundred files the merge brought are on screen.
+   *  Off, because they are not what you came for — and they come back on their
+   *  own once the conflict is gone. */
+  const [mergeRest, setMergeRest] = useState(false);
   // Whether this machine can edit at all. Probed once on open — a key that is
   // advertised and then fails with "command not found" is worse than a key that
   // was never offered.
@@ -864,6 +922,34 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
   const all = useMemo(() => [...(tree?.staged ?? []), ...(tree?.unstaged ?? [])], [tree]);
   const selected = useMemo(() => all.find((c) => keyOf(c) === selKey) ?? all[0] ?? null, [all, selKey]);
+
+  /**
+   * Mid-merge, open the conflict — in the resolver, not in the file list.
+   *
+   * Two things are true and only the second one is obvious. A merge stages
+   * everything it merged, so a branch four hundred commits behind arrives with
+   * four hundred rows and ONE that needs a person. And the conflicted file is
+   * not among those rows at all: git emits an unmerged path as a COMBINED diff
+   * (`diff --cc`, `@@@` hunks) which this panel's parser does not read, so the
+   * one file worth opening is the one file missing from the list. Measured on
+   * the real thing after two attempts at selecting a row that was never there.
+   *
+   * So the answer is not a selection. It is the block resolver, which is the
+   * tool for this and already knows how to read a conflicted file — opened on
+   * arrival rather than waiting to be found.
+   *
+   * Once per set of conflicts: reopening what somebody just closed is worse
+   * than not opening it at all.
+   */
+  const autoOpened = useRef<string>("");
+  useEffect(() => {
+    if (!conflicts.length) { autoOpened.current = ""; return; }
+    const rels = conflicts.map((p) => (p.startsWith(root) ? p.slice(root.length + 1) : p));
+    const key = rels.join("|");
+    if (autoOpened.current === key || blockFile) return;
+    autoOpened.current = key;
+    void openBlocks(rels[0]!);
+  }, [conflicts, root, blockFile, openBlocks]);
 
   /**
    * Open the selected file in nvim, at the change you're looking at.
@@ -1265,6 +1351,69 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
   // switch — from here, the terminal, or another window — without a lag where
   // the list still crowns the branch you just left.
   const currentBranchName = tree?.branch?.name || branchData.current;
+
+  /*
+   * The pull request open on this branch, if there is one.
+   *
+   * Asked of GitHub BY BRANCH, not filtered out of a scope. The first version
+   * read the `mine` scope and matched on head, and it was wrong in the ordinary
+   * case rather than at the edges: the branch open on this checkout had a pull
+   * request, opened by a colleague, and the chip never appeared. A scope is
+   * about an author; this question is about a branch.
+   */
+  const [branchPr, setBranchPr] = useState<PrBranchSummary | null>(null);
+  /*
+   * The other half, and the reason the first half read as broken.
+   *
+   * A branch can have no pull request of its own and still be the one twelve
+   * others land ON — a base branch, which is exactly what an integration branch
+   * is. Measured on a real checkout: standing on it, no chip appeared, and the
+   * repository had twelve open pull requests pointing at it. "Only when there
+   * is one" was the right rule applied to the wrong question.
+   */
+  const [prsOntoBranch, setPrsOntoBranch] = useState<PrBranchSummary[]>([]);
+  /* Kept beside them because the chip's whole job is to OPEN one, and the
+     panel's jump is addressed by owner/name and number. Without the name the
+     only thing a click can do with a number is type it into a search box —
+     which is what it used to do, and it stopped on "25 of 388 matches". */
+  const [prRepo, setPrRepo] = useState<string | null>(null);
+  /* Why the chips are absent, when the reason is not "there is no pull
+     request". Silence used to cover both, and the two want different actions
+     from you — one is nothing to do, the other is `gh auth login`. */
+  const [prAskFailed, setPrAskFailed] = useState<string | null>(null);
+  // Whoever opened it. A branch you are standing in is yours to care about
+  // however it got its pull request.
+  useEffect(() => {
+    if (!root || !currentBranchName) { setBranchPr(null); setPrsOntoBranch([]); setPrRepo(null); setPrAskFailed(null); return; }
+    let live = true;
+    void api.prsForBranch(root, currentBranchName)
+      .then((r) => {
+        if (!live) return;
+        setBranchPr(r.from ?? null);
+        setPrsOntoBranch(r.into ?? []);
+        setPrRepo(r.repo ?? null);
+        /*
+         * Only when GitHub could not be ASKED — not when there is no GitHub.
+         *
+         * `prsForBranch` also answers `ok:false` with "no GitHub remote here",
+         * which is not a failure, it is the truth about a local-only checkout.
+         * Reading `ok` alone put a dashed "PR unknown" chip in the header of
+         * every repository that has no remote, where the honest answer is
+         * silence. `needsAuth` is the field that was added to tell the two
+         * apart, and this is the reader it was added for.
+         */
+        setPrAskFailed(r.needsAuth ? (r.error || "GitHub did not answer") : null);
+      })
+      /* A thrown request is the network, not the repository — that one IS a
+         "could not ask". */
+      .catch(() => { if (live) { setBranchPr(null); setPrsOntoBranch([]); setPrRepo(null); setPrAskFailed("GitHub did not answer"); } });
+    return () => { live = false; };
+  }, [root, currentBranchName]);
+  /* The chip's whole decision, in one value: whether there is anything to draw
+     and, if there is, exactly which pull request pressing it opens. Held here
+     rather than spelled into the `onClick` because that is where it was when it
+     went wrong, and a line of JSX is not something a test can reach. */
+  const prChip = chipTarget(prRepo, branchPr);
   // Branch → its worktree, so the list reads like lazygit's: one list, each
   // branch tagged when it is checked out in a worktree, and switching to it
   // opens that worktree instead of a checkout git would refuse.
@@ -1619,6 +1768,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     const el = e.target as HTMLElement | null;
     if (/input|textarea|select/i.test(el?.tagName ?? "") || el?.isContentEditable) return;
     if (commitView) return;
+    // Conflict mode owns the keyboard while it is up: its own 1..4/e/n/p would
+    // otherwise also switch tabs underneath it, to views that are not rendered.
+    if (inConflict) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key;
 
@@ -1695,7 +1847,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     act(() => api.gitApplyHunk(root, selected.file_path, selected.staged, action, selected.hunks[i]), `${action}d hunk`);
   };
   const hunkBtn = (label: string, tint: string, onClick: () => void) => (
-    <button onClick={onClick} className="text-[9px] px-1.5 py-0.5 rounded" style={{ fontFamily: "system-ui, sans-serif", color: tint, background: "color-mix(in srgb, var(--bg3) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>{label}</button>
+    <button onClick={onClick} className="text-[10px] px-1.5 py-0.5 rounded" style={{ fontFamily: "system-ui, sans-serif", color: tint, background: "color-mix(in srgb, var(--bg3) 70%, transparent)", border: "1px solid color-mix(in srgb, var(--border) 30%, transparent)" }}>{label}</button>
   );
   const hunkActionFn = (writeEnabled && selected && selected.status === "modified" && !selected.binary)
     ? (i: number) => (
@@ -1910,7 +2062,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
             nobody uses. A bare digit was ambiguous with the count while both
             sat on the same line at the same size; raising the count settles it
             without needing an outline around this one. */}
-        <span className="tabular-nums" style={{ fontSize: 8, opacity: on ? 0.9 : 0.5, color: on ? "var(--primary-hover)" : undefined }}>{num}</span>
+        <span className="tabular-nums" style={{ fontSize: 10, opacity: on ? 0.9 : 0.5, color: on ? "var(--primary-hover)" : undefined }}>{num}</span>
         <span className="relative">
           {VIEW_LABEL[id]}
           {/* Zero is left off rather than drawn: these counts start at zero and
@@ -1946,6 +2098,42 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
     <div ref={frameRef} tabIndex={-1} onKeyDown={onKey}
       className="flex-1 min-h-0 flex flex-col outline-none overflow-hidden relative">
                 <style>{SCROLLBAR_CSS}</style>
+                {/*
+                  * While git is stopped, this IS the panel.
+                  *
+                  * Not a strip of buttons above the ordinary view: that left
+                  * fetch, push, stage, discard, branch-switch and the commit
+                  * box all one click away in the middle of a merge, where each
+                  * of them either fails with a message nobody reads or makes
+                  * the situation worse. Reducing the screen to the decision in
+                  * front of you is the point, not a side effect.
+                  *
+                  * The lockdown is not this line: the server refuses the same
+                  * moves whoever asks. This is what stops you being offered
+                  * them.
+                  */}
+                {inConflict ? (
+                  <ConflictMode
+                    root={root}
+                    branchName={currentBranchName || (branch?.name ?? "")}
+                    merge={merge}
+                    conflicts={conflicts}
+                    staged={tree?.staged ?? []}
+                    busy={busy}
+                    writeEnabled={writeEnabled}
+                    act={act}
+                    ask={ask}
+                    flash={flash}
+                    onAskClaude={askClaude}
+                    onAskClaudeTerminal={askClaudeInTerminal}
+                    onOpenEditor={(relPath, line) => {
+                      void api.editorOpen(`${root}/${relPath}`, line).then((r) => {
+                        if (!r.ok) flash(false, r.error || "Could not open the editor");
+                      }).catch((e) => flash(false, String(e)));
+                    }}
+                  />
+                ) : (
+                <>
                 {/* No overflow-hidden here, ever: the repo picker's dropdown is
                     absolutely positioned inside this row, and clipping the row
                     clipped the menu to a sliver. Overflow is prevented by the
@@ -2020,12 +2208,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               {!r.worktreeOf
                                 ? <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.branch}>{r.branch}</span>
                                 : r.name !== r.branch && <span className="shrink-0 truncate t-dim2 text-[9.5px]" style={{ maxWidth: 150 }} title={r.root}>{r.name}</span>}
-                              {r.dirty > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
+                              {r.dirty > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }}>●{r.dirty}</span>}
                               {/* Same reading as the header chip. This used to be
                                   hardcoded to zero, so the one place you pick a
                                   repo from could never tell you one had drifted. */}
-                              {r.behind > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
-                              {r.ahead > 0 && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
+                              {r.behind > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${r.behind} behind upstream`}>↓{r.behind}</span>}
+                              {r.ahead > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--success)" }} title={`${r.ahead} ahead of upstream`}>↑{r.ahead}</span>}
                             </button>
                           ))}
                           {/* Local branches with no checkout of their own — the
@@ -2039,12 +2227,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             if (!pickerBranches.length) return null;
                             return (
                               <>
-                                <div className="px-2.5 pt-2 pb-1 text-[9px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
+                                <div className="px-2.5 pt-2 pb-1 text-[10px] uppercase tracking-wider t-dim2" style={{ borderTop: "1px solid color-mix(in srgb, var(--border) 25%, transparent)" }}>Branches — checkout here</div>
                                 {pickerBranches.slice(0, 80).map((b) => (
                                   <button key={b.name} disabled={busy || !writeEnabled} onClick={() => { checkout(b.name); setRepoOpen(false); setRepoQuery(""); }} className="w-full text-left px-2.5 py-1.5 flex items-center gap-2 disabled:opacity-50">
                                     <span className="shrink-0 text-[8.5px] leading-none px-1 py-[2px] rounded" title="local branch — checked out in the current directory" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}>BR</span>
                                     <span className="min-w-0 flex-1 truncate font-medium" style={{ color: "var(--text)" }} title={b.name}>{b.name}</span>
-                                    {trackChip(b.track).gone && <span className="shrink-0 text-[9px] px-1 rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
+                                    {trackChip(b.track).gone && <span className="shrink-0 text-[10px] px-1 rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }}>gone</span>}
                                   </button>
                                 ))}
                               </>
@@ -2088,6 +2276,79 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)", opacity: busy ? 0.5 : 1 }}
                     title="Undo the last merge — the branch returns to exactly where it was. Offered only because it is unpushed and nothing sits on top of it.">
                     {pending === "undo" ? "undoing…" : "⎌ undo merge"}
+                      </button>
+                    )}
+
+                    {/*
+                      * The pull request for the branch you are standing on.
+                      *
+                      * Getting from a checkout to its review meant going to the
+                      * Pull requests view and finding it in a list of hundreds
+                      * that reorders itself by activity — for a branch whose
+                      * name is already on screen, two feet to the left.
+                      *
+                      * Shown only when there IS one. A button that leads to a
+                      * search returning nothing is worse than no button: it
+                      * makes you doubt the branch rather than the button.
+                      */}
+                    {/* Where it goes is `chipTarget`'s answer and not this
+                        line's — see the file, which carries the four
+                        screenshots. No fallback on the press: `from` only ever
+                        comes back on the one success path, and that path always
+                        names the repository, so a "we know the number but not
+                        the repository" case does not exist and a branch for it
+                        would be a lie the next reader has to keep alive. What
+                        it does instead is not draw the chip, because a button
+                        that leads nowhere is worse than no button. */}
+                    {prChip.kind === "open" && (
+                      <button
+                        onClick={() => openPr(prChip.repo, prChip.pr.number)}
+                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap flex items-center gap-1.5"
+                        style={{ color: "var(--primary)", border: "1px solid color-mix(in srgb, var(--primary) 40%, transparent)" }}
+                        title={`${prChip.pr.title} — open it in Pull requests`}>
+                        {/* The state as a dot rather than a word: the row is
+                            already dense and the colour is the whole message. */}
+                        {/*
+                          * Optional, and that is not defensiveness — it is the
+                          * shape of what this asks for.
+                          *
+                          * The lookup requests the cheap field set on purpose:
+                          * `statusCheckRollup` is a separate GraphQL walk per
+                          * pull request and measured four times the cost of the
+                          * rest put together, which is not a price worth paying
+                          * behind a chip. So there IS no rollup here, and
+                          * reading `checks.failure` off it threw at render and
+                          * took the whole Source control view to a black screen.
+                          */}
+                        {/* And so there is no dot either. It was drawn grey in
+                            every case, because `checks` is never here — and grey
+                            is this app's word for "nothing has reported", so a
+                            branch with three red checks looked exactly like one
+                            with no CI. An absent fact is not a state; the way to
+                            draw it is not to. */}
+                        PR #{prChip.pr.number}
+                      </button>
+                    )}
+
+                    {/* Nothing comes OUT of this branch, but things go INTO it.
+                        An integration branch is the ordinary case of that, and
+                        the answer to "where is my pull request" there is "there
+                        are twelve, and they land here". */}
+                    {prAskFailed && !branchPr && prsOntoBranch.length === 0 && (
+                      <span className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap"
+                        title={`${prAskFailed} — so this header cannot say whether the branch has a pull request`}
+                        style={{ color: "var(--text4)", border: "1px dashed color-mix(in srgb, var(--text) 18%, transparent)" }}>
+                        PR unknown
+                      </span>
+                    )}
+                    {!branchPr && prsOntoBranch.length > 0 && (
+                      <button
+                        onClick={() => openPrs(currentBranchName)}
+                        className="text-[11px] px-2 py-1 rounded-lg whitespace-nowrap flex items-center gap-1.5"
+                        style={{ color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }}
+                        title={`${prsOntoBranch.length} open pull request${prsOntoBranch.length === 1 ? "" : "s"} merge into ${currentBranchName}:\n${prsOntoBranch.slice(0, 6).map((p) => `#${p.number} ${p.title}`).join("\n")}`}>
+                        <span style={{ color: "var(--text4)" }}>→</span>
+                        {prsOntoBranch.length} PR{prsOntoBranch.length === 1 ? "" : "s"} land here
                       </button>
                     )}
 
@@ -2191,10 +2452,19 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         style={{ color: "var(--success)", border: "1px solid color-mix(in srgb, var(--success) 40%, transparent)", opacity: conflicts.length ? 0.4 : 1 }}
                         title={conflicts.length ? "resolve every file first" : "commit the merge"}>continue</button>
                       {conflicts.length > 0 && (
-                        <button onClick={askClaude}
-                          className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
-                          style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
-                          title="Open a chat in this repo, asking Claude to resolve them">✦ ask claude</button>
+                        <>
+                          <button onClick={askClaude}
+                            className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
+                            style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                            title="Open a chat in this repo, asking Claude to resolve them">✦ ask claude</button>
+                          {/* The other half of the same choice — see
+                              askClaudeInTerminal. A tmux window in this repo,
+                              attached, beside your own shells. */}
+                          <button onClick={askClaudeInTerminal}
+                            className="text-[10.5px] px-2 py-0.5 rounded-lg whitespace-nowrap"
+                            style={{ color: "var(--primary-hover)", border: "1px solid color-mix(in srgb, var(--primary) 45%, transparent)" }}
+                            title="Open a tmux window in this repo with Claude on it, told which side is which">▸_ in a terminal</button>
+                        </>
                       )}
                     </div>
                     {/* Whole-file resolutions: the two that need no editor, and
@@ -2206,7 +2476,14 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       return (
                         <div key={f} className="flex flex-col gap-1">
                         <div className="flex items-center gap-2 text-[10.5px]">
-                          <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text2)" }} title={f}>{relPath}</span>
+                          {/* The name opens the resolver, because that is the
+                              only place this file can be read: an unmerged path
+                              is a combined diff, which the changes list does not
+                              parse — so it is not in that list to select. */}
+                          <button onClick={() => void openBlocks(relPath)}
+                            className="min-w-0 flex-1 truncate text-left hover:underline"
+                            style={{ color: open ? "var(--text)" : "var(--text2)" }}
+                            title={`Work through the conflicts in ${f}`}>{relPath}</button>
                           {/* Whole-file is still one click; this is for the file
                               with two unrelated conflicts, where taking a side
                               wholesale to fix one throws away the other. */}
@@ -2223,15 +2500,10 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             className="px-1.5 py-0.5 rounded shrink-0" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
                             title="Take the incoming version">theirs</button>
                         </div>
-                        {open && <BlockResolver
-                          blocks={blocks} error={blockErr} picks={picks}
-                          onPick={(i: number, c: BlockChoice) => setPicks((p) => ({ ...p, [i]: c }))}
-                          busy={busy}
-                          onApply={() => {
-                            const list = (blocks ?? []).map((b) => picks[b.index] ?? "ours");
-                            void act(() => api.gitResolveBlocks(root, relPath, list), `resolved ${relPath}`)
-                              .then(() => { setBlockFile(null); setBlocks(null); setPicks({}); });
-                          }} />}
+                        {/* The resolver itself is in the MAIN pane — see
+                            below. In this strip it was three inches tall under
+                            a list of four hundred files that had nothing to do
+                            with it. */}
                         </div>
                       );
                     })}
@@ -2276,12 +2548,48 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                       )}
                       <div className="agx-scroll flex-1 min-h-0 overflow-y-auto py-1">
                         {tree?.clean && <div className="px-3 py-6 text-center t-dim2 text-[11px]">✓ nothing to commit, working tree clean</div>}
-                        {!!tree?.staged.length && (
+                        {/*
+                          * Mid-merge, the list is about the conflict.
+                          *
+                          * A merge stages everything it merged: a branch four
+                          * hundred commits behind arrives with four hundred rows
+                          * and one file that needs a person — and that file is
+                          * not even among them, because git emits an unmerged
+                          * path as a combined diff this panel cannot parse. So
+                          * the rows that matter are built from the conflict list
+                          * itself, and everything the merge brought waits behind
+                          * a count until it is asked for.
+                          */}
+                        {conflicts.length > 0 && (
+                          <Section title="Conflicted" count={conflicts.length} tint="var(--warning)">
+                            {conflicts.map((f) => {
+                              const relPath = f.startsWith(root) ? f.slice(root.length + 1) : f;
+                              const on = blockFile === relPath;
+                              return (
+                                <button key={f} onClick={() => void openBlocks(relPath)}
+                                  className="w-full flex items-center gap-2 px-2.5 py-1 text-left hover:bg-white/5"
+                                  style={on ? { background: "color-mix(in srgb, var(--warning) 14%, transparent)" } : undefined}
+                                  title={f}>
+                                  <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: "var(--warning)" }}>!</span>
+                                  <span className="text-[11.5px] truncate" style={{ color: on ? "var(--text)" : "var(--text2)" }}>{relPath}</span>
+                                </button>
+                              );
+                            })}
+                          </Section>
+                        )}
+                        {conflicts.length > 0 && !mergeRest && (
+                          <button onClick={() => setMergeRest(true)}
+                            className="w-full text-left px-3 py-2 text-[10.5px] hover:bg-white/5"
+                            style={{ color: "var(--text3)" }}>
+                            ＋ {(tree?.staged.length ?? 0) + (tree?.unstaged.length ?? 0)} more the merge brought — show them
+                          </button>
+                        )}
+                        {(!conflicts.length || mergeRest) && !!tree?.staged.length && (
                           <Section title="Staged" count={tree.staged.length} tint="var(--success)" action="unstage all" onAll={writeEnabled ? () => act(() => api.gitUnstageAll(root)) : undefined}>
                             {renderFiles(tree.staged, "unstage", unstage, "s")}
                           </Section>
                         )}
-                        {!!tree?.unstaged.length && (
+                        {(!conflicts.length || mergeRest) && !!tree?.unstaged.length && (
                           <Section title="Changes" count={tree.unstaged.length} tint="var(--warning)" action="stage all" onAll={writeEnabled ? () => act(() => api.gitStageAll(root)) : undefined}>
                             {renderFiles(tree.unstaged, "stage", stage, "u")}
                           </Section>
@@ -2296,7 +2604,46 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                     </div>
                     <SidebarGrip />
                     <div className="flex-1 min-w-0 min-h-0 flex flex-col">
-                      {selected ? (
+                      {/*
+                        * A conflict takes the whole pane, like every other tool
+                        * that resolves one.
+                        *
+                        * It used to render inside the merge strip: three inches
+                        * of two-column comparison above a list of four hundred
+                        * files the merge had brought along and an unrelated
+                        * diff. The file being argued about is the screen while
+                        * you are arguing about it.
+                        */}
+                      {blockFile ? (
+                        <>
+                          <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
+                            <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: "var(--warning)" }}>!</span>
+                            <span className="text-[12px] font-medium truncate" style={{ color: "var(--text)" }} title={blockFile}>{blockFile}</span>
+                            <span className="text-[10.5px] shrink-0" style={{ color: "var(--warning)" }}>in conflict</span>
+                            <div className="ml-auto flex items-center gap-1.5 shrink-0">
+                              <button onClick={() => act(() => api.gitResolve(root, [blockFile], "ours"), `kept ours for ${blockFile}`)} disabled={busy}
+                                className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                                title="Keep this branch's version of the whole file">ours</button>
+                              <button onClick={() => act(() => api.gitResolve(root, [blockFile], "theirs"), `took theirs for ${blockFile}`)} disabled={busy}
+                                className="text-[10.5px] px-1.5 py-0.5 rounded" style={{ color: "var(--text3)", border: "1px solid color-mix(in srgb, var(--border) 40%, transparent)" }}
+                                title="Take the incoming version of the whole file">theirs</button>
+                              <CloseButton onClick={() => { setBlockFile(null); setBlocks(null); setPicks({}); }} style={{ color: "var(--text3)" }} title="Back to the changes" className="rounded" />
+                            </div>
+                          </div>
+                          <div className="agx-scroll flex-1 min-h-0 overflow-y-auto p-3">
+                            <BlockResolver
+                              blocks={blocks} error={blockErr} picks={picks}
+                              onPick={(i: number, c: BlockChoice) => setPicks((p) => ({ ...p, [i]: c }))}
+                              busy={busy}
+                              onApply={() => {
+                                const list = (blocks ?? []).map((b) => picks[b.index] ?? "ours");
+                                const f = blockFile;
+                                void act(() => api.gitResolveBlocks(root, f, list), `resolved ${f}`)
+                                  .then(() => { setBlockFile(null); setBlocks(null); setPicks({}); });
+                              }} />
+                          </div>
+                        </>
+                      ) : selected ? (
                         <>
                           <div className="flex items-center gap-2 px-4 py-2 border-b shrink-0" style={{ borderColor: "color-mix(in srgb, var(--border) 40%, transparent)" }}>
                             <span className="w-3.5 text-center text-[11px] font-bold shrink-0" style={{ color: STATUS_TINT[selected.status] }}>{STATUS_LETTER[selected.status]}</span>
@@ -2366,7 +2713,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           <span style={{ color: "color-mix(in srgb, var(--primary) 75%, var(--text3))" }}>{l.graph}</span>
                           {isCommit && <>
                             <span className="shrink-0 tabular-nums" style={{ color: "var(--primary-hover)" }}>{l.hash}</span>
-                            {l.refs && <span className="shrink-0 text-[9px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{l.refs}</span>}
+                            {l.refs && <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }}>{l.refs}</span>}
                             <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }}>{l.subject}</span>
                             <span className="shrink-0 text-[9.5px] t-dim2">{l.author}</span>
                             <span className="shrink-0 text-[9.5px] t-dim2 w-24 text-right">{l.date}</span>
@@ -2468,7 +2815,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                           <span className="flex items-center gap-1.5 min-w-0">
                             <button disabled={isCurrent || !writeEnabled || busy} onClick={(e) => { e.stopPropagation(); switchTo(b); }} className="text-[12px] font-medium text-left truncate min-w-0" style={{ color: isCurrent ? "var(--text)" : "var(--text2)", cursor: isCurrent ? "default" : "pointer" }} title={isCurrent ? `${b.name} — you are here` : wtElsewhere ? `${b.name} — open its worktree` : `Switch to ${b.name}`}>{b.name}</button>
                             {/* Checked out in a worktree — switching opens it. */}
-                            {wt && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${wt.path}`}>▸ {wtName(wt.path)}</span>}
+                            {wt && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${wt.path}`}>▸ {wtName(wt.path)}</span>}
                             {/* Behind before ahead — "pull this many, push that many". */}
                             {(t.ahead > 0 || t.behind > 0) && (
                               <span className="shrink-0 text-[9.5px] tabular-nums">
@@ -2479,7 +2826,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                             {/* Its remote branch is gone — a merged, tidied-up PR.
                                 Safe to delete locally, and the usual reason a branch
                                 list grows to 57 entries. */}
-                            {t.gone && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }} title={`${b.upstream} no longer exists on the remote — this branch was probably merged`}>gone</span>}
+                            {t.gone && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--error)", background: "color-mix(in srgb, var(--error) 12%, transparent)" }} title={`${b.upstream} no longer exists on the remote — this branch was probably merged`}>gone</span>}
                             {/* In sync, and freshly enough fetched to mean it. */}
                             {b.upstream && !t.gone && !t.ahead && !t.behind && <span className="shrink-0 text-[9.5px]" style={{ color: "var(--success)" }} title={`in sync with ${b.upstream}`}>✓</span>}
                           </span>
@@ -2554,7 +2901,7 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                               {/* Only worth showing when they differ — the fork
                                   setup, where you fetch from upstream and push
                                   to your own. */}
-                              {r.pushUrl && r.pushUrl !== r.fetchUrl && <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>push ≠ fetch</span>}
+                              {r.pushUrl && r.pushUrl !== r.fetchUrl && <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 12%, transparent)" }}>push ≠ fetch</span>}
                             </button>
                           );
                         })}
@@ -2600,9 +2947,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                                 it out is stronger still — that is where the
                                 work would go. */}
                             {b.worktree
-                              ? <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${b.worktree}`}>▸ {wtName(b.worktree)}</span>
+                              ? <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }} title={`checked out in ${b.worktree}`}>▸ {wtName(b.worktree)}</span>
                               : b.local
-                                ? <span className="shrink-0 text-[9px] px-1 py-px rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }} title={b.tracking ? "you have this branch, tracking this remote one" : "you have a local branch of this name — it tracks something else"}>{b.tracking ? "local" : "local ≠"}</span>
+                                ? <span className="shrink-0 text-[10px] px-1 py-px rounded" style={{ color: "var(--success)", background: "color-mix(in srgb, var(--success) 12%, transparent)" }} title={b.tracking ? "you have this branch, tracking this remote one" : "you have a local branch of this name — it tracks something else"}>{b.tracking ? "local" : "local ≠"}</span>
                                 : null}
                             <span className="text-[9.5px] tabular-nums t-dim2">{b.hash}</span>
                             <span className="min-w-0 truncate text-[10px] t-dim2" title={b.subject}>{b.subject}</span>
@@ -2704,12 +3051,12 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
                         <span className="text-[10px] px-1.5 py-0.5 rounded truncate min-w-0" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 10%, transparent)" }} title={w.branch}>⎇ {w.branch}</span>
                         <span className="text-[9.5px] tabular-nums t-dim2 flex items-center gap-1">
                           {w.head}
-                          {w.locked && <span className="text-[9px]" style={{ color: "var(--warning)" }}>locked</span>}</span>
+                          {w.locked && <span className="text-[10px]" style={{ color: "var(--warning)" }}>locked</span>}</span>
                         {/* Same reading as the repo picker's. It is also the
                             reason the sync button below may be disabled, so it
                             has to be visible on the row that carries it. */}
                         <span className="min-w-0 truncate text-[9.5px] t-dim2 flex items-center gap-1.5" title={w.path}>
-                          {!!w.dirty && <span className="shrink-0 text-[9px] tabular-nums" style={{ color: "var(--warning)" }} title={`${w.dirty} uncommitted change${w.dirty === 1 ? "" : "s"} in this checkout`}>●{w.dirty}</span>}
+                          {!!w.dirty && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--warning)" }} title={`${w.dirty} uncommitted change${w.dirty === 1 ? "" : "s"} in this checkout`}>●{w.dirty}</span>}
                           <span className="truncate min-w-0">{w.path}</span>
                         </span>
                         <span className="flex items-center justify-end gap-2 whitespace-nowrap">
@@ -2778,7 +3125,9 @@ export function GitView({ active, onOpenChat }: { active: boolean; onOpenChat?: 
 
                 <CommandLog open={logOpen} onClose={() => setLogOpen(false)} />
                 <ShortcutBar view={view} logOpen={logOpen} onToggleLog={() => setLogOpen((v) => !v)} editorName={editor?.editor} />
-                {helpOpen && <HelpSheet view={view} onClose={() => setHelpOpen(false)} />}
+                </>
+                )}
+                {helpOpen && !inConflict && <HelpSheet view={view} onClose={() => setHelpOpen(false)} />}
                 {toast && <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-lg text-[11px] shadow-xl" style={{ zIndex: 40, background: "var(--bg3)", border: `1px solid ${toast.ok ? "color-mix(in srgb, var(--success) 50%, transparent)" : "color-mix(in srgb, var(--error) 50%, transparent)"}`, color: toast.ok ? "var(--success)" : "var(--error)" }}>{toast.msg}</div>}
       {/* A commit's diff, reusing the full file-changes viewer. Still a modal:
           it's a drill-down from a row you clicked, not a place you navigate

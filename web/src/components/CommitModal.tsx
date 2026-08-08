@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import type { RepoStatus, GitFileStatus, CommitResult } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { api } from "../lib/api.ts";
+import { CloseButton } from "./CloseButton.tsx";
 
 // Commits the repo's LIVE working tree (not the telemetry snapshot): the agent's
 // changed-file list is only the entry point — we read `git status` fresh and
@@ -33,7 +34,7 @@ function suggestTitle(files: string[]): string {
 function Checkbox({ on }: { on: boolean }) {
   return (
     <span
-      className="shrink-0 w-3.5 h-3.5 rounded flex items-center justify-center text-[9px] leading-none"
+      className="shrink-0 w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] leading-none"
       style={{
         color: on ? "var(--bg)" : "transparent",
         background: on ? "var(--primary)" : "transparent",
@@ -48,11 +49,11 @@ function FileRow({ f, on, onToggle }: { f: GitFileStatus; on: boolean; onToggle:
   return (
     <button onClick={onToggle} className="w-full flex items-center gap-2 px-2 py-1 rounded-md text-left transition-colors hover:bg-[color-mix(in_srgb,var(--bg3)_40%,transparent)]">
       <Checkbox on={on} />
-      <span className="text-[9px] px-1 rounded shrink-0 tabular-nums w-[68px] text-center" style={{ color, background: `color-mix(in srgb, ${color} 15%, transparent)` }}>{f.status}</span>
+      <span className="text-[10px] px-1 rounded shrink-0 tabular-nums w-[68px] text-center" style={{ color, background: `color-mix(in srgb, ${color} 15%, transparent)` }}>{f.status}</span>
       <span className="text-[11.5px] truncate" style={{ color: on ? "var(--text)" : "var(--text3)" }}>
         <span className="t-dim2">{dirName(f.path)}</span><span className="font-medium">{baseName(f.path)}</span>
       </span>
-      {!on && f.unstaged && f.staged && <span className="ml-auto text-[9px] t-dim2 shrink-0">Partly staged</span>}
+      {!on && f.unstaged && f.staged && <span className="ml-auto text-[10px] t-dim2 shrink-0">Partly staged</span>}
     </button>
   );
 }
@@ -128,7 +129,7 @@ export function CommitModal({ open, onClose, paths }: { open: boolean; onClose: 
                   <span className="text-[15px] font-semibold" style={{ color: "var(--text)" }}>Commit</span>
                   {repo && <span className="chip text-[10px]" style={{ color: "var(--warning)", background: "color-mix(in srgb, var(--warning) 14%, transparent)" }}>⎇ {repo.branch}</span>}
                   {repo && <span className="text-[10.5px] t-dim2 truncate" title={repo.root}>{repo.root}</span>}
-                  <button onClick={onClose} className="ml-auto text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>
+                  <CloseButton onClick={onClose} className="ml-auto" />
                 </div>
 
                 <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3">

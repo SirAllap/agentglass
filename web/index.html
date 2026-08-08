@@ -17,10 +17,10 @@
       The remote-access flow ends with someone scanning a QR code, and a link
       opened from a camera lands in a browser tab that they will lose. With a
       manifest the same page can be added to the home screen and opens
-      standalone, which is what makes it a companion rather than a bookmark —
-      and `theme_color` is what stops iOS drawing a white status bar over a
-      dark UI. `start_url` is relative on purpose: the token is stripped from
-      the URL on first load and kept in storage, so the installed copy must
+      standalone, which is what makes it something you go back to rather than a
+      bookmark — and `theme_color` is what stops iOS drawing a white status bar
+      over a dark UI. `start_url` is relative on purpose: the token is stripped
+      from the URL on first load and kept in storage, so the installed copy must
       resolve against whatever host it was installed from, not a baked-in one.
     -->
     <link rel="manifest" href="./manifest.webmanifest" />
@@ -32,8 +32,7 @@
     <!--
       A PNG, because iOS does not support SVG here at all. It ignored the tag,
       fell back to a screenshot of the page, and the home-screen icon was a
-      shrunken dashboard — on the one platform where Add to Home Screen is not
-      optional, since it is the only way an iPhone gets Web Push.
+      shrunken dashboard.
     -->
     <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
     <!--

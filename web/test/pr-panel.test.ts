@@ -255,11 +255,23 @@ describe("table cells are markdown", () => {
     expect(t.rows[0]![0]).not.toContain("**");
   });
 
-  test("a header cell renders too, and is escaped", () => {
-    const blocks = parseBody("| **RED** | <b>x</b> |\n|---|---|\n| 1 | 2 |\n");
+  test("a header cell renders too, and keeps only the tags on the allowlist", () => {
+    /*
+     * `<b>` used to be escaped here, and that assertion was the old contract:
+     * no raw HTML anywhere. It changed on purpose — GitHub renders that header
+     * bold and coverage bots write `| <b>TOTAL</b> |`, so the app was printing
+     * angle brackets at a reader for a tag every other client draws.
+     *
+     * The safety half is unchanged and is asserted right below: the allowlist
+     * is nine tag names with no attributes, so anything carrying one — or not
+     * on the list — is still escaped.
+     */
+    const blocks = parseBody("| **RED** | <b>x</b> | <img src=x onerror=alert(1)> |\n|---|---|---|\n| 1 | 2 | 3 |\n");
     const t = blocks.find((b) => b.kind === "table");
     if (t?.kind !== "table") throw new Error("no table");
     expect(t.head[0]).toContain("<strong>RED</strong>");
-    expect(t.head[1]).toContain("&lt;b&gt;");
+    expect(t.head[1]).toContain("<b>x</b>");
+    expect(t.head[2]).toContain("&lt;img");
+    expect(t.head[2]).not.toContain("<img");
   });
 });

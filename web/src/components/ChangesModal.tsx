@@ -1,8 +1,9 @@
 import { memo, Fragment, createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { diffSplit, diffWrap } from "../lib/diffPrefs.ts";
 import { subscribeWorktreeJump, worktreeJump } from "../lib/worktreeJump.ts";
 import { viewHeaderClass, viewHeaderStyle, viewTitleClass } from "./workspace/ViewHeader.tsx";
 import { motion, AnimatePresence } from "motion/react";
-import type { FileChange, DiffHunk, WalkthroughResult } from "../../../shared/types.ts";
+import type { FileChange, DiffHunk, WalkthroughResult, GitRepoRef } from "../../../shared/types.ts";
 import { Portal } from "./Portal.tsx";
 import { PeekFile, type Peek } from "./PeekFile.tsx";
 import { api } from "../lib/api.ts";
@@ -14,6 +15,8 @@ import { HiliteCtx, useDiffHighlight } from "../lib/diffHighlight.ts";
 import type { Hilite } from "../lib/diffHighlight.ts";
 import { useSidebarWidth } from "../lib/sidebarWidth.ts";
 import { SidebarGrip } from "./SidebarGrip.tsx";
+import { CloseButton } from "./CloseButton.tsx";
+import { ICON } from "../lib/iconSize.ts";
 
 const HATCH = "repeating-linear-gradient(45deg, transparent, transparent 5px, color-mix(in srgb, var(--border) 10%, transparent) 5px, color-mix(in srgb, var(--border) 10%, transparent) 6px)";
 // Typical diff/coding font stack (honors an app --font-mono override if set).
@@ -400,8 +403,9 @@ function fileType(c: FileChange): { label: string; color: string } {
   return { label, color: TYPE_STYLE[label] ?? "var(--info)" };
 }
 
-type GroupBy = "session" | "agent" | "folder" | "tool";
+type GroupBy = "worktree" | "session" | "agent" | "folder" | "tool";
 const GROUP_DIMS: { id: GroupBy; label: string }[] = [
+  { id: "worktree", label: "Worktree" },
   { id: "session", label: "Session" },
   { id: "agent", label: "Agent" },
   { id: "folder", label: "Folder" },
@@ -413,6 +417,15 @@ const dirOf = (path: string) => {
   const base = path.split("/").pop() ?? "";
   return path.slice(0, path.length - base.length).replace(/\/+$/, "") || "./";
 };
+/** The worktree a path lives in — the longest repo root that prefixes it, so a
+ *  linked worktree wins over the parent checkout it was cut from. */
+function repoForPath(path: string, repos?: GitRepoRef[]): GitRepoRef | null {
+  let best: GitRepoRef | null = null;
+  for (const r of repos ?? []) {
+    if ((path === r.root || path.startsWith(r.root + "/")) && (!best || r.root.length > best.root.length)) best = r;
+  }
+  return best;
+}
 const shortDir = (dir: string) => {
   if (dir === "./") return "./";
   const segs = dir.split("/").filter(Boolean);
@@ -442,12 +455,21 @@ function dayLabel(d: Date): string {
  * axis, not a fifth option, so it layers: sections stay Session (or Agent, or
  * Folder), and each one is scoped to a day when the split is on.
  */
-function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>, byDate = false): FileGroup[] {
+function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<string, string>, byDate = false, repos?: GitRepoRef[]): FileGroup[] {
   const map = new Map<string, FileGroup>();
   const order: string[] = [];
   for (const c of list) {
     let key: string, label: string, sub: string | undefined;
-    if (by === "session") {
+    if (by === "worktree") {
+      // The branch is what the work is called; the folder is where it sits.
+      // Group by the checkout, headed by its branch, so every change lands
+      // under the worktree it belongs to and nothing spills into "the fleet".
+      const r = repoForPath(c.file_path, repos);
+      key = r ? r.root : "~outside";
+      label = r ? (r.branch || r.name) : "Outside any worktree";
+      sub = r ? (r.root.split("/").filter(Boolean).pop() ?? undefined) : undefined;
+    }
+    else if (by === "session") {
       key = `${c.source_app}:${c.session_id}`;
       // Named if the session has a name. Grouping by "session" and then
       // labelling each group with a uuid means reading hex to tell two
@@ -484,7 +506,7 @@ function groupChanges(list: FileChange[], by: GroupBy, titles?: ReadonlyMap<stri
 function TypeTag({ c, override }: { c: FileChange; override?: string }) {
   const label = override ? override.toUpperCase() : fileType(c).label;
   const color = TYPE_STYLE[label] ?? fileType(c).color;
-  return <span className="chip shrink-0 text-[9px] tracking-wide" style={{ color, background: `color-mix(in srgb, ${color} 15%, transparent)` }}>{label}</span>;
+  return <span className="chip shrink-0 text-[10px] tracking-wide" style={{ color, background: `color-mix(in srgb, ${color} 15%, transparent)` }}>{label}</span>;
 }
 
 function ReviewDot({ on, onClick, title }: { on: boolean; onClick?: (e: React.MouseEvent) => void; title?: string }) {
@@ -492,7 +514,7 @@ function ReviewDot({ on, onClick, title }: { on: boolean; onClick?: (e: React.Mo
     <button
       onClick={onClick}
       title={title}
-      className="shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[9px] leading-none transition-colors"
+      className="shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[10px] leading-none transition-colors"
       style={{
         color: on ? "var(--success)" : "var(--text3)",
         border: `1px solid ${on ? "color-mix(in srgb, var(--success) 70%, transparent)" : "color-mix(in srgb, var(--border) 55%, transparent)"}`,
@@ -500,6 +522,32 @@ function ReviewDot({ on, onClick, title }: { on: boolean; onClick?: (e: React.Mo
       }}
     >{on ? "✓" : ""}</button>
   );
+}
+
+/**
+ * One file, however many times it was written.
+ *
+ * An agent does not edit a file once. It writes it, runs the tests, fixes the
+ * assertion, fixes the import — and a section that was meant to say "what
+ * happened here" says `test_cancellation_lockout.py` four times in a row with
+ * four sets of numbers, and the file you are looking for is somewhere in the
+ * repetition. On a real session: 122 rows, 76 of them the same handful of paths.
+ *
+ * Folding is by PATH and keeps every edit, which is the part that matters — the
+ * individual diffs are still there, one click down, in the order they happened.
+ * Nothing is summed away that cannot be reopened.
+ */
+type FileStack = { path: string; items: FileChange[]; add: number; del: number };
+
+function stackByPath(items: FileChange[]): FileStack[] {
+  const map = new Map<string, FileStack>();
+  const order: string[] = [];
+  for (const c of items) {
+    let s = map.get(c.file_path);
+    if (!s) { s = { path: c.file_path, items: [], add: 0, del: 0 }; map.set(c.file_path, s); order.push(c.file_path); }
+    s.items.push(c); s.add += c.additions; s.del += c.deletions;
+  }
+  return order.map((p) => map.get(p)!);
 }
 
 function FileItem({ c, active, reviewed, onSelect, onToggleReviewed }: { c: FileChange; active: boolean; reviewed: boolean; onSelect: () => void; onToggleReviewed: () => void }) {
@@ -534,10 +582,109 @@ function FileItem({ c, active, reviewed, onSelect, onToggleReviewed }: { c: File
   );
 }
 
-function GroupBlock({ g, collapsed, selId, reviewed, onToggleCollapse, onSelect, onToggleReviewed, onToggleGroup }: {
+/**
+ * A file that was touched more than once, as one row that opens.
+ *
+ * Selecting it opens the LATEST edit, which is what somebody clicking a
+ * filename means — the state it ended in. The earlier ones are a click away and
+ * keep their own numbers, so "unify" never means "lose".
+ *
+ * The count is drawn where the diff totals are, in the same tabular figures,
+ * because it is the same kind of fact: how much happened here.
+ */
+function FileStackItem({ s, open, selId, reviewed, onOpen, onSelect, onToggleReviewed, onToggleAll }: {
+  s: FileStack; open: boolean; selId: number | null; reviewed: Set<number>;
+  onOpen: () => void; onSelect: (id: number) => void; onToggleReviewed: (id: number) => void;
+  onToggleAll: (s: FileStack, next: boolean) => void;
+}) {
+  const base = s.path.split("/").pop();
+  const newest = s.items[0]!;
+  const holdsSel = s.items.some((c) => c.id === selId);
+  const allRev = s.items.every((c) => reviewed.has(c.id));
+  /*
+   * Opens itself when the selection is one of the edits UNDERNEATH it.
+   *
+   * j/k walk every change, folded or not, so they can land inside a stack — and
+   * a folded row cannot show which of its four edits is selected. Left closed,
+   * the cursor moves and nothing on screen does, which reads as a stuck key.
+   * Clicking the row still opens the newest without unfolding, because that is
+   * a different intent: "show me this file", not "walk through it".
+   */
+  const showKids = open || (holdsSel && selId !== newest.id);
+  return (
+    <div>
+      <div
+        data-file={holdsSel && !showKids ? "active" : undefined}
+        role="button"
+        tabIndex={-1}
+        onClick={() => onSelect(newest.id)}
+        className="w-full text-left rounded-lg px-2 py-1.5 transition-colors cursor-pointer"
+        style={{
+          background: holdsSel ? "color-mix(in srgb, var(--primary) 16%, transparent)" : "transparent",
+          border: `1px solid ${holdsSel ? "color-mix(in srgb, var(--primary) 32%, transparent)" : "transparent"}`,
+        }}
+      >
+        <div className="flex items-center gap-1.5">
+          <ReviewDot on={allRev} onClick={(e) => { e.stopPropagation(); onToggleAll(s, !allRev); }}
+            title={allRev ? `Mark all ${s.items.length} unreviewed` : `Mark all ${s.items.length} reviewed`} />
+          <TypeTag c={newest} />
+          <span className="text-[11.5px] font-medium truncate" style={{ color: allRev ? "var(--text3)" : "var(--text)" }}>{base}</span>
+          {/* The whole point of the row, so it is the one thing with a shape:
+              a filled pill among flat numbers. */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onOpen(); }}
+            title={open ? "Hide the individual edits" : `Show all ${s.items.length} edits, oldest last`}
+            className="shrink-0 flex items-center gap-0.5 text-[9.5px] tabular-nums rounded-full px-1.5 leading-[15px] transition-colors"
+            style={{
+              color: "var(--primary)",
+              background: "color-mix(in srgb, var(--primary) 15%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--primary) 30%, transparent)",
+            }}
+          >
+            <span>×{s.items.length}</span>
+            <span aria-hidden className="transition-transform" style={{ transform: open ? "rotate(90deg)" : "none", opacity: 0.75 }}>›</span>
+          </button>
+          <span className="ml-auto flex items-center gap-1.5 shrink-0 text-[10px] tabular-nums">
+            {s.add > 0 && <span style={{ color: "var(--success)" }}>+{s.add}</span>}
+            {s.del > 0 && <span style={{ color: "var(--error)" }}>−{s.del}</span>}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 mt-0.5 text-[9.5px] t-dim2 pl-[22px]">
+          <span className="truncate min-w-0" title={s.path}>{dirOf(s.path)}</span>
+          {/* When it started and when it stopped: the span is the thing a
+              folded row hides, and the one worth keeping. */}
+          <span className="ml-auto shrink-0">
+            {s.items.length > 1
+              ? `${fmtTime(s.items[s.items.length - 1]!.timestamp)} → ${fmtTime(newest.timestamp)}`
+              : fmtTime(newest.timestamp)}
+          </span>
+        </div>
+      </div>
+      {showKids && (
+        // Indented and hairlined, so an expanded stack cannot be mistaken for
+        // the flat list it just replaced.
+        <div className="mt-0.5 space-y-0.5 pl-3 ml-2"
+          style={{ borderLeft: "1px solid color-mix(in srgb, var(--primary) 25%, transparent)" }}>
+          {s.items.map((c) => (
+            <FileItem key={c.id} c={c} active={c.id === selId} reviewed={reviewed.has(c.id)}
+              onSelect={() => onSelect(c.id)} onToggleReviewed={() => onToggleReviewed(c.id)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GroupBlock({ g, collapsed, selId, reviewed, fold, onToggleCollapse, onSelect, onToggleReviewed, onToggleGroup }: {
   g: FileGroup; collapsed: boolean; selId: number | null; reviewed: Set<number>;
+  /** One row per file rather than one per edit. See stackByPath. */
+  fold: boolean;
   onToggleCollapse: () => void; onSelect: (id: number) => void; onToggleReviewed: (id: number) => void; onToggleGroup: (g: FileGroup, next: boolean) => void;
 }) {
+  /* Which stacks the reader has opened. Kept per group and forgotten when the
+     fold is switched off, because it describes a shape that no longer exists. */
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  const stacks = useMemo(() => (fold ? stackByPath(g.items) : []), [fold, g.items]);
   const revCount = g.items.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0);
   const allRev = revCount === g.items.length;
   return (
@@ -550,7 +697,7 @@ function GroupBlock({ g, collapsed, selId, reviewed, onToggleCollapse, onSelect,
           numeric drops underneath, where it still reads fine. */}
       <div className="flex items-start gap-1.5 px-1.5 py-1 rounded-md" style={{ background: "color-mix(in srgb, var(--bg3) 30%, transparent)" }}>
         <button onClick={onToggleCollapse} className="flex items-start gap-1.5 min-w-0 flex-1 text-left">
-          <span className="text-[9px] t-dim2 transition-transform shrink-0 mt-[3px]" style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}>▾</span>
+          <span className="text-[10px] t-dim2 transition-transform shrink-0 mt-[3px]" style={{ transform: collapsed ? "rotate(-90deg)" : "none" }}>▾</span>
           <span className="min-w-0 flex-1">
             <span className="block text-[11px] font-semibold leading-snug" title={g.label}
               style={{ color: "var(--text2, var(--text))", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", overflowWrap: "anywhere" }}>
@@ -567,15 +714,27 @@ function GroupBlock({ g, collapsed, selId, reviewed, onToggleCollapse, onSelect,
         <button
           onClick={() => onToggleGroup(g, !allRev)}
           title={allRev ? "Mark group unreviewed" : "Mark whole group reviewed"}
-          className="shrink-0 text-[9px] tabular-nums px-1 rounded hover:opacity-80"
+          className="shrink-0 text-[10px] tabular-nums px-1 rounded hover:opacity-80"
           style={{ color: allRev ? "var(--success)" : "var(--text3)" }}
         >{revCount}/{g.items.length}</button>
       </div>
       {!collapsed && (
         <div className="mt-0.5 space-y-0.5">
-          {g.items.map((c) => (
-            <FileItem key={c.id} c={c} active={c.id === selId} reviewed={reviewed.has(c.id)} onSelect={() => onSelect(c.id)} onToggleReviewed={() => onToggleReviewed(c.id)} />
-          ))}
+          {fold
+            ? stacks.map((s) => (
+                s.items.length === 1
+                  // One edit is not a stack, and dressing it as one would put a
+                  // "×1" on most rows to solve a problem they do not have.
+                  ? <FileItem key={s.path} c={s.items[0]!} active={s.items[0]!.id === selId} reviewed={reviewed.has(s.items[0]!.id)}
+                      onSelect={() => onSelect(s.items[0]!.id)} onToggleReviewed={() => onToggleReviewed(s.items[0]!.id)} />
+                  : <FileStackItem key={s.path} s={s} open={opened.has(s.path)} selId={selId} reviewed={reviewed}
+                      onOpen={() => setOpened((o) => { const n = new Set(o); n.has(s.path) ? n.delete(s.path) : n.add(s.path); return n; })}
+                      onSelect={onSelect} onToggleReviewed={onToggleReviewed}
+                      onToggleAll={(st, next) => { for (const c of st.items) if (reviewed.has(c.id) !== next) onToggleReviewed(c.id); }} />
+              ))
+            : g.items.map((c) => (
+                <FileItem key={c.id} c={c} active={c.id === selId} reviewed={reviewed.has(c.id)} onSelect={() => onSelect(c.id)} onToggleReviewed={() => onToggleReviewed(c.id)} />
+              ))}
         </div>
       )}
     </div>
@@ -625,7 +784,7 @@ export function ThemePicker({ value, onChange, error }: { value: string; onChang
             colors that aren't on screen. */}
         {error && <span aria-hidden>⚠</span>}
         <span className="truncate" style={{ maxWidth: 92 }}>{label}</span>
-        <span style={{ opacity: 0.6, fontSize: 8 }}>▼</span>
+        <span style={{ opacity: 0.6, fontSize: 10 }}>▼</span>
       </button>
       {/* zIndex must beat the diff's sticky hunk headers, which are also z-20:
           on a tie the later-painted element wins, so those headers were
@@ -665,7 +824,22 @@ export function Toggle({ on, onClick, children, title }: { on?: boolean; onClick
 }
 
 const REVIEW_KEY = "agentglass.reviewedChanges";
-const GROUPBY_KEY = "agentglass.diffGroupBy";
+// This view is a rolling history of edits — today, yesterday, a few days back —
+// not an all-time archive. HISTORY_DAYS is the window; HISTORY_LIMIT is how many
+// recent edits to pull so the window is actually filled on a busy fleet (the
+// server caps it at 500).
+const HISTORY_DAYS = 5;
+const HISTORY_LIMIT = 500;
+// The git side of the view: "working" — uncommitted changes + the edit history;
+// "committed" — each worktree's last commit only, so what you committed does not
+// vanish with the working tree.
+const GITMODE_KEY = "agentglass.diffGitMode";
+// v2: the default became "worktree" when File changes started grouping by the
+// checkout an edit is in. Bumped so a stored "session" from before doesn't
+// override it — everyone starts on the new default and re-persists their choice.
+const GROUPBY_KEY = "agentglass.diffGroupBy.v2";
+/** Remembered, because it is a way of reading rather than a one-off question. */
+const FOLD_KEY = "agentglass.diffFoldFiles";
 const WALK_KEY = "agentglass.walkCache";
 
 // The AI walkthrough is cached per *changeset* (persisted), so it survives
@@ -711,6 +885,14 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const sidebarW = useSidebarWidth();
   const open = active;
   const [changes, setChanges] = useState<FileChange[] | null>(null);
+  // Each in-scope worktree's uncommitted changes (git), shown next to the edit
+  // history so what a checkout actually changed is there even when no agent
+  // recorded it. Plus the repo list, to group everything by worktree.
+  const [gitChanges, setGitChanges] = useState<FileChange[]>([]);
+  const [gitMode, setGitMode] = useState<"working" | "committed">(() => {
+    try { return localStorage.getItem(GITMODE_KEY) === "committed" ? "committed" : "working"; } catch { return "working"; }
+  });
+  const [repos, setRepos] = useState<GitRepoRef[]>([]);
   const [titles, setTitles] = useState<ReadonlyMap<string, string>>(new Map());
   const [q, setQ] = useState("");
   /** Ignored files start folded away — see `visible` below. */
@@ -721,15 +903,18 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   const [project, setProject] = useState<string | null>(null);
   /** Split whichever grouping is chosen by day as well. */
   const [byDate, setByDate] = useState(false);
+  const [fold, setFold] = useState(() => {
+    try { return localStorage.getItem(FOLD_KEY) === "1"; } catch { return false; }
+  });
   const [selId, setSelId] = useState<number | null>(null);
-  const [wrap, setWrap] = useState(false);
-  const [split, setSplit] = useState(true);
+  const [wrap, setWrap] = useState(diffWrap);
+  const [split, setSplit] = useState(diffSplit);
   const [copied, setCopied] = useState<null | "path" | "diff">(null);
   /** A file being read whole, over the modal. */
   const [peek, setPeek] = useState<Peek | null>(null);
   const [groupBy, setGroupBy] = useState<GroupBy>(() => {
-    try { const v = localStorage.getItem(GROUPBY_KEY); if (v === "session" || v === "agent" || v === "folder" || v === "tool") return v; } catch { /* ignore */ }
-    return "session";
+    try { const v = localStorage.getItem(GROUPBY_KEY); if (v === "worktree" || v === "session" || v === "agent" || v === "folder" || v === "tool") return v as GroupBy; } catch { /* ignore */ }
+    return "worktree";
   });
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [reviewed, setReviewed] = useState<Set<number>>(() => new Set());
@@ -741,6 +926,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   useEffect(() => {
     if (!open) return;
     setChanges(null);
+    setGitChanges([]);
     setQ("");
     setCollapsed(new Set());
     // walk state is (re)hydrated from the per-changeset cache by its own effect
@@ -751,11 +937,14 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
       const sel = presetPath ? presetChanges.find((c) => c.file_path === presetPath) : null;
       setSelId((sel ?? presetChanges[0])?.id ?? null);
     } else {
-      api.changes(200).then((r) => {
+      api.changes(HISTORY_LIMIT).then((r) => {
         setChanges(r.changes);
         setProject(r.project ?? null);
         setSelId(r.changes[0]?.id ?? null);
       }).catch(() => setChanges([]));
+      // The repos, to group by worktree. The git side (working tree, or the last
+      // commit) is fetched by its own mode-dependent effect below.
+      api.gitRepos().then((r) => setRepos(r.repos)).catch(() => { /* grouping falls back to "outside" */ });
     }
     // Session names, so grouping by session shows what each one is rather than
     // a uuid. Fetched here rather than passed in: this modal is opened from
@@ -765,6 +954,18 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     // focus the frame so j/k nav works immediately (filter is opt-in via click)
     requestAnimationFrame(() => frameRef.current?.focus());
   }, [open]);
+
+  // The git side — the working tree, or each worktree's last commit — refetched
+  // whenever the mode toggles (the poll keeps it fresh after). Its own effect so
+  // flipping the toggle does not reset the filter, selection or collapsed groups
+  // the way re-running the open effect would.
+  useEffect(() => {
+    if (!open || presetChanges) return;
+    try { localStorage.setItem(GITMODE_KEY, gitMode); } catch { /* ignore */ }
+    let gone = false;
+    api.gitChangesAll(gitMode).then((r) => { if (!gone) setGitChanges(r.changes); }).catch(() => { if (!gone) setGitChanges([]); });
+    return () => { gone = true; };
+  }, [open, gitMode, presetChanges]);
 
   // A worktree jump from the Terminal chrome seeds the file-path filter with the
   // worktree's folder name. Declared after the open-reset above (which clears
@@ -787,7 +988,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
   // Not polled for a preset changeset — those are one session's changes, handed
   // in already resolved, and re-fetching would replace them with the fleet's.
   usePoll(open && !presetChanges, () => {
-    api.changes(200).then((r) => {
+    api.changes(HISTORY_LIMIT).then((r) => {
       setProject(r.project ?? null);
       setChanges((prev) => {
         // Same ids in the same order → keep the old array so nothing downstream
@@ -795,7 +996,13 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
         if (prev && prev.length === r.changes.length && prev.every((c, i) => c.id === r.changes[i].id)) return prev;
         return r.changes;
       });
-      setSelId((cur) => (cur && r.changes.some((c) => c.id === cur) ? cur : r.changes[0]?.id ?? null));
+      // Keep the current selection; the `selected` memo heals a vanished id to
+      // the first visible row, so only seed one when there is none.
+      setSelId((cur) => cur ?? r.changes[0]?.id ?? null);
+    }).catch(() => { /* keep showing what we have */ });
+    api.gitChangesAll(gitMode).then((r) => {
+      setGitChanges((prev) =>
+        prev.length === r.changes.length && prev.every((c, i) => c.id === r.changes[i].id) ? prev : r.changes);
     }).catch(() => { /* keep showing what we have */ });
   }, 4000);
 
@@ -811,8 +1018,30 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     });
   }, [changes]);
   useEffect(() => { try { localStorage.setItem(GROUPBY_KEY, groupBy); } catch { /* ignore */ } }, [groupBy]);
+  useEffect(() => { try { localStorage.setItem(FOLD_KEY, fold ? "1" : "0"); } catch { /* ignore */ } }, [fold]);
 
-  const all = changes ?? [];
+  // What this view is: each worktree's uncommitted git changes (what a checkout
+  // has actually changed, now) next to the edit history (what the fleet did over
+  // time). The edit log is a ROLLING window — past HISTORY_DAYS it is memory,
+  // not "what's happening", and buries today under last week — so it is trimmed;
+  // git rows are always current and pass through untouched. git is the truth of
+  // the moment, so where a file has an uncommitted git change it wins and its
+  // edit rows fold away; a file only in the log still shows.
+  const all = useMemo(() => {
+    // Only your branches — never the trunk checkout (master/main), the base you
+    // cut from rather than something you are working on. Git rows already come
+    // trunk-free from the server; the edit log does not, so drop edits living in
+    // a master/main checkout here.
+    const mine = (c: FileChange) => { const r = repoForPath(c.file_path, repos); return !r || (r.branch !== "master" && r.branch !== "main"); };
+    // "Committed" is a clean, single answer — each worktree's last commit — so it
+    // stands alone, without the edit log beside it.
+    if (gitMode === "committed") return gitChanges;
+    const cutoff = Date.now() - HISTORY_DAYS * 24 * 60 * 60 * 1000;
+    const edits = (changes ?? []).filter((c) => c.timestamp >= cutoff && mine(c));
+    if (!gitChanges.length) return edits;
+    const gitPaths = new Set(gitChanges.map((c) => c.file_path));
+    return [...gitChanges, ...edits.filter((c) => !gitPaths.has(c.file_path))];
+  }, [changes, gitChanges, gitMode, repos]);
   /**
    * Files git ignores are folded away by default.
    *
@@ -849,7 +1078,15 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
     [all, showIgnored, showOutside],
   );
   const filtered = useMemo(() => (q ? visible.filter((c) => c.file_path.toLowerCase().includes(q.toLowerCase())) : visible), [visible, q]);
-  const groups = useMemo(() => groupChanges(filtered, groupBy, titles, byDate), [filtered, groupBy, titles, byDate]);
+  const groups = useMemo(() => groupChanges(filtered, groupBy, titles, byDate, repos), [filtered, groupBy, titles, byDate, repos]);
+  /* How many rows are a file already listed in the same section. Counted from
+     the groups, not from the whole list, because that is what folding would
+     actually remove — a file edited under two different sessions is two rows
+     either way, and promising to fold it would be a lie. */
+  const dupRows = useMemo(
+    () => groups.reduce((n, g) => n + (g.items.length - new Set(g.items.map((c) => c.file_path)).size), 0),
+    [groups],
+  );
   const shown = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const totals = useMemo(() => all.reduce((a, c) => ({ add: a.add + c.additions, del: a.del + c.deletions }), { add: 0, del: 0 }), [all]);
   const revCount = useMemo(() => all.reduce((n, c) => n + (reviewed.has(c.id) ? 1 : 0), 0), [all, reviewed]);
@@ -969,7 +1206,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                         read past to get to it. */}
                     {/* only when framed as a modal — inside the workspace the
                         rail owns closing */}
-                    {onClose && <button onClick={onClose} className="text-[18px] leading-none px-2 t-dim2 hover:opacity-70">✕</button>}
+                    {onClose && <CloseButton onClick={onClose} />}
                   </div>
                 </div>
 
@@ -989,6 +1226,24 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           which is legible, instead of one button becoming two
                           lines tall and dragging its neighbours' baseline. */}
                       <div className="flex items-center flex-wrap gap-1">
+                        {/* What the git rows are: the working tree (uncommitted,
+                            beside the edit history) or each worktree's last
+                            commit — so what you committed does not vanish. First,
+                            because it changes what the whole list is. */}
+                        {(["working", "committed"] as const).map((m) => (
+                          <button
+                            key={m}
+                            onClick={() => setGitMode(m)}
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5"
+                            title={m === "working" ? "Uncommitted changes, next to the edit history" : "Each worktree's last commit — what you just committed"}
+                            style={{
+                              background: gitMode === m ? "color-mix(in srgb, var(--primary) 18%, transparent)" : "transparent",
+                              color: gitMode === m ? "var(--text)" : "var(--text3)",
+                              border: `1px solid color-mix(in srgb, var(--border) ${gitMode === m ? 45 : 18}%, transparent)`,
+                            }}
+                          >{m === "working" ? "Working" : "Committed"}</button>
+                        ))}
+                        <span className="w-px h-4 mx-0.5 shrink-0" style={{ background: "color-mix(in srgb, var(--border) 45%, transparent)" }} />
                         {GROUP_DIMS.map((d) => (
                           <button
                             key={d.id}
@@ -1015,6 +1270,42 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                             border: `1px solid color-mix(in srgb, var(--border) ${byDate ? 45 : 18}%, transparent)`,
                           }}
                         >By date</button>
+                        {/*
+                          * Carries its own reason: the number is how many rows
+                          * folding would take away, so the button answers "is
+                          * this worth pressing" before it is pressed — and
+                          * disappears entirely when the answer is no.
+                          *
+                          * Filled rather than outlined when on, unlike the four
+                          * dimensions beside it, because this one changes the
+                          * SHAPE of the list rather than its order, and that is
+                          * worth telling apart at a glance.
+                          */}
+                        {dupRows > 0 && (
+                          <button
+                            onClick={() => setFold((v) => !v)}
+                            aria-pressed={fold}
+                            className="px-1.5 py-0.5 rounded text-[9.5px] transition-colors whitespace-nowrap leading-5 flex items-center gap-1"
+                            title={fold
+                              ? "Show every edit as its own row again"
+                              : `${dupRows} row${dupRows === 1 ? "" : "s"} repeat a file already listed — fold each file into one, keeping every edit a click away`}
+                            style={fold
+                              ? { background: "color-mix(in srgb, var(--primary) 30%, transparent)", color: "var(--text)",
+                                  border: "1px solid color-mix(in srgb, var(--primary) 60%, transparent)" }
+                              : { background: "transparent", color: "var(--text3)",
+                                  border: "1px solid color-mix(in srgb, var(--border) 18%, transparent)" }}
+                          >
+                            {/* Three lines becoming one — the operation, drawn.
+                                A glyph would have been a speck at this size;
+                                this is 9 real pixels of stroke. */}
+                            <svg width={ICON.xs} height={ICON.xs} viewBox="0 0 10 10" fill="none" aria-hidden className="shrink-0">
+                              <path d={fold ? "M1 2h8M1 5h8M1 8h8" : "M1 5h8M2.5 2.2h5M2.5 7.8h5"}
+                                stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                            </svg>
+                            <span>One row per file</span>
+                            {!fold && <span className="tabular-nums" style={{ opacity: 0.7 }}>−{dupRows}</span>}
+                          </button>
+                        )}
                         {/* Says what it is hiding, and offers it back. A
                             filter that silently drops rows makes the list lie
                             about what the session touched. */}
@@ -1075,6 +1366,7 @@ export function DiffView({ active, onClose, onBack, backLabel, presetChanges, pr
                           collapsed={collapsed.has(g.key) && !q}
                           selId={selected?.id ?? null}
                           reviewed={reviewed}
+                          fold={fold}
                           onToggleCollapse={() => toggleCollapse(g.key)}
                           onSelect={select}
                           onToggleReviewed={toggleReviewed}

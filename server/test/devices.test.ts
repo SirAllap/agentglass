@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   issueDevice, deviceFor, devices, activeDevices, revokeDevice, markSeen,
-  scopeAllows, hashToken, devicesPath, __resetDevices,
+  scopeAllows, hashToken, devicesPath, publicDevice, __resetDevices,
 } from "../src/devices.ts";
 
 beforeEach(() => {
@@ -27,6 +27,21 @@ describe("what is stored", () => {
     const { token } = issueDevice("iPhone", "answer");
     expect(readFileSync(devicesPath(), "utf8")).not.toContain(token);
     expect(devices()[0]!.hash).toBe(hashToken(token));
+  });
+
+  test("and the hash does not leave this file when a device is shown", () => {
+    // The reason the file below is 0600, handed to the pane by /pair/state and
+    // /pair/accept for no reason at all — nothing outside devices.ts reads it,
+    // because the comparison happens here.
+    const { device } = issueDevice("iPhone", "answer");
+    markSeen(device.id);
+    const shown = publicDevice(devices()[0]!);
+    expect(shown).not.toHaveProperty("hash");
+    // Written as a subtraction rather than as a list of kept fields, so a field
+    // added to Device keeps reaching the pane instead of being silently lost.
+    expect(Object.keys(shown).sort()).toEqual(
+      Object.keys(devices()[0]!).filter((k) => k !== "hash").sort(),
+    );
   });
 
   test("the file is not readable by anyone else", () => {

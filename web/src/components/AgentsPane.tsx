@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Fold, SettingRow } from "./SettingRow.tsx";
 import { api } from "../lib/api.ts";
 import { fmtAgo } from "../lib/format.ts";
 import type { AgentProbe } from "../../../shared/types.ts";
@@ -56,74 +57,72 @@ export function AgentsPane({ open }: { open: boolean }) {
     load();
   };
 
-  if (!agents) return <div className="text-[11px] t-dim2">Looking for agents…</div>;
+  if (!agents) return <div className="py-2 text-[12px] t-dim">Looking for agents…</div>;
 
+  /*
+   * One row per agent, on the dialog's own grid rather than in a card of its
+   * own. Cards read as a gallery of unrelated things; these are six answers to
+   * the same question, and lining their buttons up is what lets you see at a
+   * glance which ones you have not done yet.
+   */
   return (
-    <div className="flex flex-col gap-1.5">
+    <>
       {agents.map((p) => {
         const state = stateOf(p);
         const tint = state === "live" ? "var(--success)"
           : state === "waiting" ? "var(--warning)"
           : state === "ready" ? "var(--primary-hover)" : "var(--text4)";
         return (
-          <div key={p.id} className="flex flex-col gap-1 px-2.5 py-2 rounded-lg" style={{
-            background: state === "missing" ? "transparent" : "color-mix(in srgb, var(--bg2) 60%, transparent)",
-            border: `1px solid color-mix(in srgb, ${state === "live" ? "var(--success)" : "var(--border)"} ${state === "live" ? 30 : 40}%, transparent)`,
-            opacity: state === "missing" ? 0.72 : 1,
-          }}>
-            <div className="flex items-center gap-2.5">
+          <SettingRow key={p.id} align="start" disabled={state === "missing"}
+            label={<span className="flex items-center gap-2">
               <span className="shrink-0 rounded-full" aria-hidden style={{
                 width: 7, height: 7,
                 background: state === "live" ? "var(--success)" : "transparent",
                 border: state === "live" ? "none" : `1px solid ${tint}`,
               }} />
-              <div className="min-w-0 flex-1">
-                <div className="text-[12px]" style={{ color: "var(--text)" }}>{p.label}</div>
-                <div className="text-[10px]" style={{ color: state === "missing" ? "var(--text4)" : tint }}>
-                  {state === "live" && `Reporting · last event ${fmtAgo(p.seenAt!)}`}
-                  {/* The state this pane exists for. A written config and an
-                      arrived event are different facts, and this is the gap
-                      somebody otherwise sits in wondering what they did wrong. */}
-                  {state === "waiting" && "Wired, but nothing has arrived yet — start a new session for it to take effect"}
-                  {state === "ready" && `Installed, not connected · ${p.connects}`}
-                  {state === "missing" && `Not on this machine · ${p.install}`}
-                </div>
-              </div>
-
-              {state === "missing" ? (
-                <span className="chip shrink-0 t-dim2">not found</span>
-              ) : (
-                <button onClick={() => void connect(p, p.connected)} disabled={busy === p.id}
+              {p.label}
+            </span>}
+            hint={<>
+              <span className="block" style={{ color: state === "missing" ? "var(--text4)" : tint }}>
+                {state === "live" && `Reporting · last event ${fmtAgo(p.seenAt!)}`}
+                {/* The state this pane exists for. A written config and an
+                    arrived event are different facts, and this is the gap
+                    somebody otherwise sits in wondering what they did wrong. */}
+                {state === "waiting" && "Wired, but nothing has arrived yet — start a new session for it to take effect"}
+                {state === "ready" && `Installed, not connected · ${p.connects}`}
+                {state === "missing" && `Not on this machine · ${p.install}`}
+              </span>
+              {/* Where the change lands, named rather than implied. It is a
+                  file in somebody's home directory. */}
+              {state !== "missing" && <span className="block t-mono truncate mt-0.5">{p.configPath}</span>}
+              {note?.id === p.id && (
+                <span className="block whitespace-pre-wrap mt-0.5"
+                  style={{ color: note.bad ? "var(--error)" : "var(--text3)" }}>{note.text}</span>
+              )}
+            </>}
+            control={state === "missing"
+              ? <span className="chip t-dim">not found</span>
+              : <button onClick={() => void connect(p, p.connected)} disabled={busy === p.id}
                   title={p.connected
                     ? `Remove the agentglass wiring from ${p.configPath}. The file is backed up first.`
                     : `Write the agentglass wiring into ${p.configPath}. The file is backed up first, and a config we cannot parse is left alone.`}
-                  className="shrink-0 text-[10.5px] px-2.5 py-1 rounded-md hover:opacity-80"
+                  className="text-[12px] px-2.5 py-1 rounded-lg whitespace-nowrap"
                   style={p.connected
                     ? { color: "var(--text2)", border: "1px solid color-mix(in srgb, var(--border) 45%, transparent)" }
                     : { color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 12%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 42%, transparent)" }}>
                   {busy === p.id ? "…" : p.connected ? "Disconnect" : "Connect"}
-                </button>
-              )}
-            </div>
-
-            {/* Where the change lands, named rather than implied. It is a file
-                in somebody's home directory. */}
-            {state !== "missing" && (
-              <div className="text-[9.5px] t-dim2 t-mono truncate pl-[17px]">{p.configPath}</div>
-            )}
-            {note?.id === p.id && (
-              <div className="text-[10px] pl-[17px] whitespace-pre-wrap"
-                style={{ color: note.bad ? "var(--error)" : "var(--text3)" }}>{note.text}</div>
-            )}
-          </div>
+                </button>}
+          />
         );
       })}
 
-      <div className="text-[10px] t-dim2">
-        Connected means an event has actually arrived, not that a file was written — every failure here
-        looks like a successful write. Each config is backed up before it is touched, and one this app
-        cannot parse is left alone.
-      </div>
-    </div>
+      {/* The distinction the list depends on, kept where somebody who doubts a
+          green row can reach it, and out of the way of somebody who does not. */}
+      <Fold label="What “connected” means here">
+        An event has actually arrived — not that a file was written. Every failure in this list looks
+        like a successful write, which is why the state comes from traffic rather than from the config.
+        Each config is backed up before it is touched, and one this app cannot parse is left alone.
+      </Fold>
+    </>
   );
 }

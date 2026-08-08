@@ -42,7 +42,7 @@ describe("parsePorts", () => {
   test("the same port on two addresses is two rows, the same row twice is one", () => {
     const r = parsePorts([
       `LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*`,
-      `LISTEN 0 4096 100.69.209.63:443 0.0.0.0:*`,
+      `LISTEN 0 4096 100.64.0.1:443 0.0.0.0:*`,
       `LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*`,
     ].join("\n"));
     expect(r.ports).toHaveLength(2);

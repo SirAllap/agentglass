@@ -131,7 +131,7 @@ export function BasePicker({
                   style={{ background: "color-mix(in srgb, var(--primary) 15%, transparent)", border: "1px solid color-mix(in srgb, var(--primary) 35%, transparent)" }}>
                   <span className="shrink-0" style={{ color: "var(--primary-hover)" }}>✓</span>
                   <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text)" }} title={base ?? ""}>{base ?? "no base"}</span>
-                  <span className="shrink-0 text-[9px] t-dim2">current base</span>
+                  <span className="shrink-0 text-[10px] t-dim2">current base</span>
                 </div>
                 <div className="px-2.5 pb-0.5 t-dim2 text-[9.5px] uppercase tracking-wider shrink-0">or change to…</div>
                 {/* A real repo has hundreds of refs — this one offers 827 — so
@@ -169,7 +169,7 @@ export function BasePicker({
                         {b.remote ? "REMOTE" : "LOCAL"}
                       </span>
                       <span className="min-w-0 flex-1 truncate">{b.name}</span>
-                      {b.name === base && <span className="shrink-0 text-[9px]" style={{ color: "var(--primary-hover)" }}>current</span>}
+                      {b.name === base && <span className="shrink-0 text-[10px]" style={{ color: "var(--primary-hover)" }}>current</span>}
                     </button>
                   ))}
                   {!refs.length && <div className="px-2.5 py-2 t-dim2">loading branches…</div>}

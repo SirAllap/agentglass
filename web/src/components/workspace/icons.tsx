@@ -1,3 +1,4 @@
+import { ICON } from "../../lib/iconSize.ts";
 /** The workspace glyphs, shared by the rail and the header button.
  *  They used to live in Header.tsx, where the rail couldn't reach them. */
 
@@ -14,7 +15,7 @@ type P = { size?: number };
 
 /** A checklist: the one shape that reads as "things to do" rather than "things
  *  that happened", which is the difference between an issue and an event. */
-export function IssuesIcon({ size = 15 }: P) {
+export function IssuesIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M3.5 6.5l2 2 3.5-3.5" />
@@ -26,7 +27,7 @@ export function IssuesIcon({ size = 15 }: P) {
 }
 
 /** Four panes: the shape of a dashboard since the first one. */
-export function DashIcon({ size = 15 }: P) {
+export function DashIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <rect x="3" y="3" width="7.5" height="7.5" rx="1.4" />
@@ -45,7 +46,7 @@ export function DashIcon({ size = 15 }: P) {
  * a document: a rail with two icons meaning "a file" is a rail with neither.
  * A folder is what the view actually opens on anyway — a checkout you browse.
  */
-export function FilesIcon({ size = 15 }: P) {
+export function FilesIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M3 6.6a2 2 0 0 1 2-2h3.5l2 2.6H19a2 2 0 0 1 2 2v9.2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -70,7 +71,17 @@ export function FilesIcon({ size = 15 }: P) {
  * brand mark, and homogeneity is worth nothing on an icon nobody can identify.
  * DockerIcon is filled for the same reason and no others are.
  */
-export function GitIcon({ size = 15 }: P) {
+export function GitIcon({ size = ICON.md }: P) {
+  /*
+   * The one icon the 83% rule gets wrong, and it is geometry rather than taste.
+   *
+   * The mark is a DIAMOND — a square turned 45° — so its bounding box is its
+   * diagonal, and a diamond that fills 83% of a box carries about half the ink
+   * of a square that fills the same 83%. Normalised with everything else it
+   * came out visibly the runt of the rail. It gets its own box back, filling it
+   * corner to corner, which is the √2 a rotated square needs to weigh what an
+   * upright one does.
+   */
   return (
     <svg viewBox="0 0 15 15" width={size} height={size} fill="currentColor">
       <path d="M6.79286 1.20708L7.14642 1.56063L7.14642 1.56063L6.79286 1.20708ZM1.20708 6.79287L0.853524 6.43931H0.853524L1.20708 6.79287ZM1.20708 8.20708L1.56063 7.85352L1.56063 7.85352L1.20708 8.20708ZM6.79287 13.7929L6.43931 14.1464L6.79287 13.7929ZM8.20708 13.7929L7.85352 13.4393L8.20708 13.7929ZM13.7929 8.20708L14.1464 8.56063L13.7929 8.20708ZM13.7929 6.79286L13.4393 7.14642L13.7929 6.79286ZM8.20708 1.20708L8.56063 0.853524V0.853524L8.20708 1.20708ZM6.43931 0.853525L0.853524 6.43931L1.56063 7.14642L7.14642 1.56063L6.43931 0.853525ZM0.853525 8.56063L6.43931 14.1464L7.14642 13.4393L1.56063 7.85352L0.853525 8.56063ZM8.56063 14.1464L14.1464 8.56063L13.4393 7.85352L7.85352 13.4393L8.56063 14.1464ZM14.1464 6.43931L8.56063 0.853524L7.85352 1.56063L13.4393 7.14642L14.1464 6.43931ZM14.1464 8.56063C14.7322 7.97484 14.7322 7.0251 14.1464 6.43931L13.4393 7.14642C13.6346 7.34168 13.6346 7.65826 13.4393 7.85352L14.1464 8.56063ZM6.43931 14.1464C7.0251 14.7322 7.97485 14.7322 8.56063 14.1464L7.85352 13.4393C7.65826 13.6346 7.34168 13.6346 7.14642 13.4393L6.43931 14.1464ZM0.853524 6.43931C0.267737 7.0251 0.267739 7.97485 0.853525 8.56063L1.56063 7.85352C1.36537 7.65826 1.36537 7.34168 1.56063 7.14642L0.853524 6.43931ZM7.14642 1.56063C7.34168 1.36537 7.65826 1.36537 7.85352 1.56063L8.56063 0.853524C7.97484 0.267737 7.0251 0.267739 6.43931 0.853525L7.14642 1.56063ZM5.14642 2.85352L6.14642 3.85352L6.85352 3.14642L5.85352 2.14642L5.14642 2.85352ZM7.49997 4.99997C7.22383 4.99997 6.99997 4.77611 6.99997 4.49997H5.99997C5.99997 5.3284 6.67154 5.99997 7.49997 5.99997V4.99997ZM7.99997 4.49997C7.99997 4.77611 7.77611 4.99997 7.49997 4.99997V5.99997C8.3284 5.99997 8.99997 5.3284 8.99997 4.49997H7.99997ZM7.49997 3.99997C7.77611 3.99997 7.99997 4.22383 7.99997 4.49997H8.99997C8.99997 3.67154 8.3284 2.99997 7.49997 2.99997V3.99997ZM7.49997 2.99997C6.67154 2.99997 5.99997 3.67154 5.99997 4.49997H6.99997C6.99997 4.22383 7.22383 3.99997 7.49997 3.99997V2.99997ZM8.14642 5.85352L9.64642 7.35352L10.3535 6.64642L8.85352 5.14642L8.14642 5.85352ZM10.5 7.99997C10.2238 7.99997 9.99997 7.77611 9.99997 7.49997H8.99997C8.99997 8.3284 9.67154 8.99997 10.5 8.99997V7.99997ZM11 7.49997C11 7.77611 10.7761 7.99997 10.5 7.99997V8.99997C11.3284 8.99997 12 8.3284 12 7.49997H11ZM10.5 6.99997C10.7761 6.99997 11 7.22383 11 7.49997H12C12 6.67154 11.3284 5.99997 10.5 5.99997V6.99997ZM10.5 5.99997C9.67154 5.99997 8.99997 6.67154 8.99997 7.49997H9.99997C9.99997 7.22383 10.2238 6.99997 10.5 6.99997V5.99997ZM6.99997 5.49997V9.49997H7.99997V5.49997H6.99997ZM7.49997 11C7.22383 11 6.99997 10.7761 6.99997 10.5H5.99997C5.99997 11.3284 6.67154 12 7.49997 12V11ZM7.99997 10.5C7.99997 10.7761 7.77611 11 7.49997 11V12C8.3284 12 8.99997 11.3284 8.99997 10.5H7.99997ZM7.49997 9.99997C7.77611 9.99997 7.99997 10.2238 7.99997 10.5H8.99997C8.99997 9.67154 8.3284 8.99997 7.49997 8.99997V9.99997ZM7.49997 8.99997C6.67154 8.99997 5.99997 9.67154 5.99997 10.5H6.99997C6.99997 10.2238 7.22383 9.99997 7.49997 9.99997V8.99997Z" />
@@ -86,7 +97,7 @@ export function GitIcon({ size = 15 }: P) {
  * — and both were correct and unreadable: at 17px they were the Git glyph
  * again, only fuzzier. A page with + and − needs no vocabulary at all.
  */
-export function DiffIcon({ size = 15 }: P) {
+export function DiffIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
@@ -98,7 +109,7 @@ export function DiffIcon({ size = 15 }: P) {
 }
 
 /** A globe: the one view that is not this machine. */
-export function BrowserIcon({ size = 15 }: P) {
+export function BrowserIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <circle cx="12" cy="12" r="9" />
@@ -110,7 +121,7 @@ export function BrowserIcon({ size = 15 }: P) {
 
 /** A pull request, at Octicons' proportions: one line carries on, the other
  *  asks to come in, and the arrow is the ask. */
-export function PrIcon({ size = 15 }: P) {
+export function PrIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
       <circle cx="6" cy="6" r="3" />
@@ -126,38 +137,54 @@ export function PrIcon({ size = 15 }: P) {
  * Docker's own whale. Filled, for the reason set out on GitIcon: at 17px the
  * silhouette survives and the outline does not — mine lost its fin twice.
  */
-export function DockerIcon({ size = 15 }: P) {
+export function DockerIcon({ size = ICON.md }: P) {
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="currentColor">
+    <svg viewBox="-3.06 -3.06 30.12 30.12" width={size} height={size} fill="currentColor">
       <path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z" />
     </svg>
   );
 }
 
-export function TerminalIcon({ size = 15 }: P) {
-  return <svg {...svg} width={size} height={size}><path d="M6 8l3.5 4L6 16" /><path d="M12.5 16.5H18" /></svg>;
+/**
+ * A console: the window, with a prompt in it.
+ *
+ * It used to be the prompt alone — a chevron and an underscore floating in the
+ * middle of an otherwise empty box. Measured, its ink covered 44% of its own
+ * height while the rest of the rail sat at 83%, so at the same nominal size it
+ * read as a smaller icon, and on a strip whose whole job is to be scanned that
+ * is the one thing an icon must not be. The window gives it the same footprint
+ * as its neighbours and says "terminal" more plainly than punctuation does.
+ */
+export function TerminalIcon({ size = ICON.md }: P) {
+  return (
+    <svg {...svg} width={size} height={size}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M7 10l2.5 2.5L7 15" />
+      <path d="M12.5 15.5H17" />
+    </svg>
+  );
 }
 
-export function ChatIcon({ size = 15 }: P) {
-  return <svg {...svg} width={size} height={size}><path d="M20 4H4v12h5v4l5-4h6z" /></svg>;
+export function ChatIcon({ size = ICON.md }: P) {
+  return <svg {...svg} viewBox="1.16 1.16 21.69 21.69" strokeWidth={1.81} width={size} height={size}><path d="M20 4H4v12h5v4l5-4h6z" /></svg>;
 }
 
 /** The single header button that replaced the five. A pane split off a frame. */
-export function WorkspaceIcon({ size = 15 }: P) {
+export function WorkspaceIcon({ size = ICON.md }: P) {
   return <svg {...svg} width={size} height={size}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>;
 }
 
 /** The skills catalog: a reference you open, not a view you work in — which is
  *  why it sits with close at the foot of the rail rather than among the tabs. */
-export function SkillsIcon({ size = 15 }: P) {
+export function SkillsIcon({ size = ICON.md }: P) {
   return (
     <svg {...svg} width={size} height={size}>
-      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-      <path d="M6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5v-13A2.5 2.5 0 0 1 6.5 3z" />
+      <path d="M3 19.5A2.5 2.5 0 0 1 5.5 17H21" />
+      <path d="M5.5 3H21v18H5.5A2.5 2.5 0 0 1 3 18.5v-13A2.5 2.5 0 0 1 5.5 3z" />
     </svg>
   );
 }
 
-export function CloseIcon({ size = 15 }: P) {
+export function CloseIcon({ size = ICON.md }: P) {
   return <svg {...svg} width={size} height={size}><path d="M6 6l12 12M18 6L6 18" /></svg>;
 }
