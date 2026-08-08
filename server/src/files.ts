@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, relative, sep } from "node:path";
 import { git, safeAbs } from "./git.ts";
 import { inScope } from "./config.ts";
+import { makeViewTempDir } from "./viewtemp.ts";
 
 export interface FileEntry {
   name: string;
@@ -514,7 +515,7 @@ export function fileToTemp(rootIn: unknown, relIn: unknown, refIn: unknown): { o
   if (!ref) return { ok: false, error: "no ref given" };
   const read = fileText(rootIn, relIn, ref);
   if (!read.ok) return { ok: false, error: read.error ?? "could not read that file" };
-  const dir = mkdtempSync(join(tmpdir(), "agentglass-ref-"));
+  const dir = makeViewTempDir("ref");
   // The ref in the name, because two of these open at once is the ordinary case
   // — the same path on two branches is exactly what somebody is comparing — and
   // an editor's tab strip showing the same basename twice says nothing.

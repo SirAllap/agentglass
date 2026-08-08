@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { gitAsync, safeAbs, repoRootOf } from "./git.ts";
+import { makeViewTempDir } from "./viewtemp.ts";
 import { inScope } from "./config.ts";
 import type {
   PrRepoId, PrSummary, PrBranchSummary, PrDetail, PrListResponse, PrActionResult, PrCheck, PrCheckRollup,
@@ -2484,7 +2485,7 @@ export async function prFileToTemp(rootIn: unknown, numberIn: unknown, pathIn: u
   if (r.code !== 0) return { ok: false, error: r.stderr.trim() || "GitHub would not return that file" };
   // Named for what it is, and kept out of the repository: a stray file inside a
   // checkout would show up in somebody's `git status` an hour later.
-  const dir = mkdtempSync(join(tmpdir(), "agentglass-pr-"));
+  const dir = makeViewTempDir("pr");
   const file = join(dir, `${sha.slice(0, 7)}-${path.split("/").pop() || "file"}`);
   writeFileSync(file, r.stdout);
   return { ok: true, file, sha };

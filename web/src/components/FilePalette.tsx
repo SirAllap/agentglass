@@ -272,6 +272,31 @@ export function FilePalette({
       ?.scrollIntoView({ block: "nearest" });
   }, [cursor, rows.length]);
 
+  /**
+   * Three rows, and the rest on the scrollbar — only with a document open.
+   *
+   * Alone, this list is the thing you are looking at and it may have the screen.
+   * Over a document it is a strip you glance at while reading something else,
+   * and thirteen rows of it took most of the window to say what three rows say:
+   * the top of the answer, and that there is more.
+   *
+   * Measured off a row rather than written down as a number, because the row's
+   * height is its font's, and this app's reading size is a preference. It keeps
+   * the last measurement it managed to take: while the list is showing a note —
+   * "Searching…", "Type to search" — there is no row to measure, and falling
+   * back to zero would uncap the list for exactly as long as it takes to type.
+   */
+  const [rowH, setRowH] = useState(0);
+  useEffect(() => {
+    if (!docOpen) return;
+    const h = listRef.current?.querySelector<HTMLElement>('[data-row="0"]')?.offsetHeight;
+    if (h) setRowH(h);
+  }, [docOpen, rows, tab]);
+  /** The list's own vertical padding (py-1), so three rows are three rows and
+   *  not three rows minus the padding they sit in. */
+  const LIST_PAD = 8;
+  const listCap = docOpen && rowH && rows.length > 3 ? rowH * 3 + LIST_PAD : undefined;
+
   const openRow = useCallback((row: Row | undefined) => {
     if (!row || !root) return;
     if (row.kind === "dir") { onRevealDir(root, row.rel); onClose(); return; }
@@ -438,7 +463,10 @@ export function FilePalette({
             </div>
 
             {/* the answers */}
-            <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto py-1">
+            <div ref={listRef} className="flex-1 min-h-0 agx-scroll overflow-y-auto py-1"
+              /* A cap, not a height: three results stay three rows tall rather
+                 than being stretched to a box sized for more. */
+              style={listCap ? { maxHeight: listCap } : undefined}>
               <Answers tab={tab} q={q} root={root} rows={rows} cursor={cursor}
                 status={status} onHover={setCursor} onPick={openRow} />
             </div>
