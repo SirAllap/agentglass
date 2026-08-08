@@ -12,6 +12,11 @@ import { score, suggest, typedHost, searchTerm, SUGGEST_MAX, SEARCH_MAX, type Pl
 const p = (url: string, over: Partial<Place> = {}): Place =>
   ({ url, title: "", visits: 1, lastAt: 0, bookmarked: false, ...over });
 
+/** Which site a row is FROM. `url.includes("github.com")` is also true of
+ *  `https://elsewhere.test/?ref=github.com`, and the one thing the host-dedup
+ *  test has to get right is which rows are the same site. */
+const hostOf = (url: string): string => new URL(url).hostname;
+
 describe("the part of a URL you type at", () => {
   it("drops the scheme, the www and the trailing slash", () => {
     expect(typedHost("https://www.github.com/")).toBe("github.com");
@@ -82,9 +87,15 @@ describe("how many, and of what", () => {
       p("https://github.com/b", { visits: 8 }),
       p("https://github.com/c", { visits: 7 }),
       p("https://gitlab.com/x", { visits: 1 }),
+      // The row that made this test read the HOST rather than the string. It
+      // said `url.includes("github.com")`, and this URL contains that — in its
+      // query, where a host name means nothing. A de-dup test that counts a
+      // different site as the same site is measuring the wrong thing, and the
+      // suite two blocks up already keeps a fixture of exactly this shape.
+      p("https://elsewhere.test/?ref=github.com", { visits: 6 }),
     ], "git");
-    expect(rows.filter((r) => r.url.includes("github.com"))).toHaveLength(1);
-    expect(rows.some((r) => r.url.includes("gitlab.com"))).toBe(true);
+    expect(rows.filter((r) => hostOf(r.url) === "github.com")).toHaveLength(1);
+    expect(rows.some((r) => hostOf(r.url) === "gitlab.com")).toBe(true);
   });
 
   it("lets a bookmark through even when its host is already there", () => {

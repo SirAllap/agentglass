@@ -97,6 +97,45 @@ describe("the markers a machine writes to itself", () => {
      */
     expect(stripMarkers("we render <!-- verbatim")).toBe("we render <!-- verbatim");
   });
+
+  /*
+   * Why the line above is allowed to leave a `<!--` standing.
+   *
+   * CodeQL calls that an incomplete sanitizer and warns about HTML element
+   * injection, and it is right about the shape: a remover of `<!--…-->` that
+   * lets a lone `<!--` through is not a sanitizer. The reason it does not
+   * matter is the sink, not the filter — everything `stripMarkers` touches
+   * leaves this module as `RailSpan[]`, and the rail draws a span as a React
+   * TEXT CHILD. React escapes those. The rail has no `dangerouslySetInnerHTML`
+   * at all; the panel's markup pipeline is `prBody.ts`, which `stripMarkers`
+   * never reaches (it is imported by this file and by fileRail.ts, nowhere
+   * else).
+   *
+   * That is the whole argument, and it is an argument about a WIRE. So it is
+   * asserted rather than written down: the day someone hands a rail body to
+   * something that sets innerHTML, this goes red and the reasoning above stops
+   * being true out loud instead of quietly. That is not hypothetical — the same
+   * panel shipped an XSS through an unescaped `href` this week, and the hole
+   * was not in the allow-list, it was where the output got BUILT.
+   */
+  it("draws a body as text, which is why an unclosed marker is harmless", async () => {
+    const React = (await import("react")).default;
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const payload = 'see <!--<img src=x onerror="alert(1)"> and <script>alert(2)</script>';
+
+    const spans = railPreview(payload, 260);
+    // It survives the strip, deliberately — the assertion above is the rule.
+    expect(spans.map((s) => s.text).join("")).toContain("<!--");
+
+    // And it survives it as TEXT. This mirrors Quote in FileRail.tsx.
+    const html = renderToStaticMarkup(React.createElement("p", null,
+      spans.map((s, i) => React.createElement(
+        s.kind === "code" ? "code" : s.kind === "bold" ? "b" : s.kind === "italic" ? "i" : "span",
+        { key: i }, s.text))));
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<script");
+    expect(html).toContain("&lt;!--&lt;img");
+  });
 });
 
 describe("naming a file and being about it, which are not the same thing", () => {

@@ -49,10 +49,20 @@ const pr = (
 type Props = React.ComponentProps<typeof TriageBoard>;
 
 /*
- * `<!-- -->` is stripped because React writes those separators between adjacent
- * text nodes for the client's benefit and the number of them is a detail of the
- * renderer, not of this component. Asserting around them would make every
- * sentence here hostage to a React upgrade.
+ * This used to end in `.replace(/<!--.*?-->/g, "")`, to drop the `<!-- -->`
+ * separators React writes between adjacent text nodes — so that a sentence here
+ * was not hostage to a React upgrade.
+ *
+ * Measured, because CodeQL asked what that pattern does to a comment with a
+ * newline in it: the separators are not there. `renderToStaticMarkup` does not
+ * write them — that is `renderToString`, which needs them for hydration.
+ * Rendering the real board on React 18.3.1 gives 4253 characters of markup and
+ * ZERO `<!--` in it, with or without cards.
+ *
+ * So the strip removed nothing and, being a wildcard, could only ever remove
+ * something it was not aimed at. It is gone, and the guarantee it was standing
+ * in for is asserted instead, once, below — loudly on the day it stops holding
+ * rather than by quietly eating whatever appears.
  */
 const render = (props: Partial<Props> = {}): string =>
   renderToStaticMarkup(React.createElement(TriageBoard, {
@@ -60,7 +70,7 @@ const render = (props: Partial<Props> = {}): string =>
     pinned: () => false, onOpen: () => {}, onTogglePin: () => {},
     onShowTable: () => {}, onAct: () => {},
     ...props,
-  })).replace(/<!--.*?-->/g, "");
+  }));
 
 /** One lane's column, from its own marker to the next one's. */
 const column = (html: string, lane: string): string => {
@@ -99,6 +109,21 @@ const MINE = [
 ];
 const INVOLVED = REVIEW.length + MINE.length;
 const full = (props: Partial<Props> = {}) => render({ mine: MINE, review: REVIEW, total: 388, ...props });
+
+describe("the markup these tests read", () => {
+  it("carries no HTML comment, so no sentence here has to step around one", () => {
+    /*
+     * The guarantee the old `.replace(/<!--.*?-->/g, "")` was standing in for,
+     * asserted on a FULL board rather than an empty one — separators appear
+     * between adjacent text nodes, and an empty board has almost none of those.
+     *
+     * If a React upgrade (or a move to `renderToString`) ever does start
+     * writing them, this is the one line that goes red, and it says what to do:
+     * strip the exact separator `<!-- -->`, never a wildcard.
+     */
+    expect(full()).not.toContain("<!--");
+  });
+});
 
 describe("the lanes", () => {
   it("counts each lane from the two lists it was handed", () => {

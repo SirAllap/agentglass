@@ -135,3 +135,62 @@ describe("the whole comment", () => {
     expect(commentMarkdown([nl(), nl()])).toBe("");
   });
 });
+
+/*
+ * A table's cells, and the one character that can end the row it is in.
+ *
+ * `|` is the column separator, so a cell that contains one has to escape it —
+ * and escaping is where this went wrong. Only the pipe was escaped, which is
+ * fine until the cell also has a backslash in front of it: markdown reads `\\`
+ * as one literal backslash and then meets a BARE pipe, and the row gains a
+ * column that nobody wrote. A Windows path or a regex in a cell is enough.
+ *
+ * Every cell below carries the count it should draw, because the failure is
+ * silent — the table still renders, just with the columns shifted one to the
+ * left from the broken cell onwards.
+ */
+describe("a table's cells", () => {
+  const table = (cells: string[][]) => commentMarkdown([{
+    "table-embed": {
+      rows: cells.map(() => ({})),
+      columns: cells[0].map(() => ({})),
+      cells: Object.fromEntries(cells.flatMap((row, r) =>
+        row.map((text, c) => [`${r + 1}:${c + 1}`, { content: [{ insert: text }] }]))),
+    },
+  }]);
+  /** Columns as a READER counts them: the separators markdown still acts on. */
+  const columnsOn = (line: string) => line.replace(/\\[\s\S]/g, "").split("|").length - 1;
+
+  test("draws a header, a rule and the rest", () => {
+    expect(table([["Field", "Value"], ["retries", "3"]]))
+      .toBe("| Field | Value |\n| --- | --- |\n| retries | 3 |");
+  });
+
+  test("a pipe in a cell stays inside its cell", () => {
+    const md = table([["what", "pattern"], ["either", "a|b"]]);
+    expect(md).toContain("| either | a\\|b |");
+    expect(columnsOn(md.split("\n")[2])).toBe(3);
+  });
+
+  test("a backslash before a pipe does not open a column", () => {
+    /*
+     * The regression. `C:\|next` was escaped to `C:\\|next` — a literal
+     * backslash followed by a live separator — so this row drew FOUR columns
+     * where the header drew three. The escape now goes on the backslash first
+     * and the pipe second; the other order would re-escape the backslashes the
+     * pipe pass had just written and print them.
+     */
+    const md = table([["where", "cell"], ["drive", "C:\\|next"]]);
+    const [header, , row] = md.split("\n");
+    expect(row).toBe("| drive | C:\\\\\\|next |");
+    expect(columnsOn(row)).toBe(columnsOn(header));
+  });
+
+  test("a lone backslash is drawn, not eaten", () => {
+    // `\` before an ordinary character escapes it away in markdown, so an
+    // unescaped trailing backslash swallows the space and the separator after
+    // it — the same broken row by a different route.
+    const md = table([["path"], ["share\\"]]);
+    expect(md.split("\n")[2]).toBe("| share\\\\ |");
+  });
+});

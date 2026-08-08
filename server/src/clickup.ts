@@ -1046,6 +1046,15 @@ function tableMarkdown(t: { rows?: unknown[]; columns?: unknown[]; cells?: Recor
       // markdown table has instead, and the renderer passes it through as text
       // rather than as markup, which is the safe half of the trade.
       .replace(/\s*\n\s*/g, " ")
+      // The backslash goes FIRST, and the order is the whole point: escaping it
+      // after the pipe would re-escape the backslashes this line just wrote and
+      // print them. A cell reading `C:\|next` used to come out `C:\\|next`,
+      // where markdown reads `\\` as one literal backslash and then meets a
+      // BARE pipe — so that cell ended the row and every column after it slid
+      // one to the left. Not markup: what this feeds is `<Markdown>`, which
+      // builds elements and never sets innerHTML, so the damage is a table
+      // drawn wrong, not a tag.
+      .replace(/\\/g, "\\\\")
       .replace(/\|/g, "\\|")
       .trim();
   const line = (r: number) => `| ${Array.from({ length: cols }, (_, i) => cell(r, i + 1)).join(" | ")} |`;
