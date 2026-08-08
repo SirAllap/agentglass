@@ -19,7 +19,7 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { Portal } from "./Portal.tsx";
 import { LAYER } from "../lib/layers.ts";
-import { ptyWsUrl } from "../lib/api.ts";
+import { ptyWsUrl, IS_DEMO } from "../lib/api.ts";
 import { themeFromCss } from "./TerminalPanel.tsx";
 import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { termOptions } from "../lib/termPrefs.ts";
@@ -127,7 +127,11 @@ export function PeekFile({ peek, onClose, topPx }: {
   /* A ref has no file on disk, so there is nothing for an editor to open. Held
      as its own name because it is the reason for several decisions below. */
   const atRef = !!peek.ref;
-  const [reading, setReading] = useState(canRender || !!peek.ref);
+  /* The demo has no PTY, so there is no editor to switch to and reading is the
+     only face there is. Without this, code opened in the demo took the editor
+     face and drew nothing — a dead panel, which is the thing the demo's terminal
+     and browser each had to be talked out of being. */
+  const [reading, setReading] = useState(canRender || !!peek.ref || IS_DEMO);
   const [text, setText] = useState<string | null>(null);
   const [textErr, setTextErr] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
