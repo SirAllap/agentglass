@@ -27,6 +27,7 @@ import { answerDecrqm } from "../lib/xtermDecrqm.ts";
 import { openExternal } from "../lib/externalUrl.ts";
 import type { GitRepoRef, GitBranch, TerminalCommands, TmuxWindow, TmuxPane, PtyServerFrame, PtyClientFrame } from "../../../shared/types.ts";
 import { api, IS_DEMO, ptyWsUrl, hasToken, probeAuth, reauthPrompt } from "../lib/api.ts";
+import { playDemoSession } from "../lib/demoTerm.ts";
 import { CommandBar, loadCommands } from "./CommandBar.tsx";
 import { SCROLLBAR_CSS } from "./ChangesModal.tsx";
 import { wantsWebgl, wantsCanvas, fallBackToCanvas } from "../lib/termRenderer.ts";
@@ -270,10 +271,30 @@ function evictLru(exceptRoot: string) {
   // An evicted session must not resurrect itself from a pending retry.
   if (lru.retryTimer) { clearTimeout(lru.retryTimer); lru.retryTimer = null; }
   try { ws?.close(); } catch { /* already gone */ }
+  stopDemoFor(lru.id);
   try { lru.term.dispose(); } catch { /* already disposed */ }
   lru.holder.remove();
   sessions.delete(lru.id);
   rosterChanged();
+}
+
+/**
+ * The demo's canned session, and the two things that have to be remembered
+ * about it: which sessions have already played it, and how to stop one.
+ *
+ * Module scope rather than component state, because `sessions` is module scope
+ * too — the panel unmounts and remounts as views are switched while a terminal
+ * outlives it, and a replay tracked in a hook would restart on every remount.
+ * A timer chain that writes into a disposed xterm throws from a callback nobody
+ * is awaiting, so eviction and close both stop it first.
+ */
+const demoPlayed = new Set<string>();
+const stopDemo = new Map<string, () => void>();
+function stopDemoFor(id: string) {
+  const stop = stopDemo.get(id);
+  if (!stop) return;
+  stop();
+  stopDemo.delete(id);
 }
 
 /**
@@ -687,6 +708,7 @@ function killSession(s: Sess) {
   const ws = s.ws;
   s.ws = null; // detach first so the close handler stays quiet
   try { ws?.close(); } catch { /* already gone */ }
+  stopDemoFor(s.id);
   try { s.term.dispose(); } catch { /* already disposed */ }
   s.holder.remove();
   sessions.delete(s.id);
@@ -1337,12 +1359,17 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
     return () => { stopped = true; clearInterval(id); };
   }, [open, focusIdx, paneIds, repos, root, here?.worktreeOf, here?.root]);
 
-  const tabs = !IS_DEMO && root ? termSessionsFor(root) : [];
+  const tabs = root ? termSessionsFor(root) : [];
 
   // Every repo opens with a shell, and the panes always name shells that still
   // exist — closing one must not leave an empty frame behind.
+  //
+  // The demo creates them too. `createSession` builds an xterm and touches
+  // nothing else — `connect` is the only step that opens a socket, and it
+  // returns early in a demo build — so what the demo gets is the real terminal
+  // with nothing talking to it, which is what `playDemoSession` then fills.
   useEffect(() => {
-    if (!open || !root || IS_DEMO) return;
+    if (!open || !root) return;
     const live = termSessionsFor(root);
     const first = live[0] ?? createSession(root);
     setPaneIds((prev) => {
@@ -1430,7 +1457,7 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   }, [ffm, repoOpen, wtOpen, findOpen, active, open, paneIds]);
 
   useEffect(() => {
-    if (!open || IS_DEMO) return;
+    if (!open) return;
     panelClose = () => closeRef.current();
     // Claim the find chord only while this view is on screen and has a pane to
     // search — see `panelFind`.
@@ -1453,6 +1480,13 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
       const fitSoon = () => { if (fitTimer) clearTimeout(fitTimer); fitTimer = setTimeout(doFit, 100); };
       doFit();
       if (s.status === "idle") connect(s);
+      // Once per session, not once per mount: switching views and coming back
+      // would otherwise replay the same test run on top of itself, and the
+      // scrollback would read as a shell stuck in a loop.
+      if (IS_DEMO && !demoPlayed.has(s.id)) {
+        demoPlayed.add(s.id);
+        stopDemo.set(s.id, playDemoSession(s.term));
+      }
       const ro = new ResizeObserver(fitSoon);
       ro.observe(el);
       mounted.push({ s, el, ro, unTheme, stopFit: () => { if (fitTimer) clearTimeout(fitTimer); } });
@@ -1791,7 +1825,11 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   }, [paneIds, focusIdx]);
 
   const repoRef = repos.find((r) => r.root === root);
-  const disabled = cmds ? !cmds.enabled : false;
+  /* The demo has no server to ask, so `loadCommands` answers with a terminal
+     that is switched off — and the overlay that message drives was covering the
+     canned session. The demo's terminal is not disabled: it has no shell, which
+     is a different thing and is what the status line says. */
+  const disabled = !IS_DEMO && cmds ? !cmds.enabled : false;
 
   const statusDot: Record<SessStatus, { color: string; label: string }> = {
     idle: { color: "var(--text2)", label: "Idle" },
@@ -2340,11 +2378,14 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         }} />
                     ))}
                   </div>
-                  {(IS_DEMO || disabled) && (
+                  {/* Not in the demo any more. The overlay is for a terminal
+                      that cannot draw anything — Windows, or disabled by config
+                      — and in the demo it was covering a terminal that now has
+                      a session in it. What the demo owes a visitor is the note
+                      in the status line below, not a sheet over the feature. */}
+                  {disabled && (
                     <div className="absolute inset-0 flex items-center justify-center text-[12px] t-dim2" style={{ background: "color-mix(in srgb, var(--bg) 80%, transparent)" }}>
-                      {IS_DEMO
-                        ? "The terminal is disabled in the demo — run agentglass locally for a real shell"
-                        : cmds?.reason === "windows"
+                      {cmds?.reason === "windows"
                         ? "The terminal is not available on Windows yet (the PTY backend needs POSIX; ConPTY support is planned)"
                         : cmds?.reason === "config"
                         ? "Terminal disabled (terminalDisabled in config.json)"
@@ -2387,10 +2428,19 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         </Fragment>
                       ))}
                     </span>
-                  ) : IS_DEMO || disabled ? (
-                    // The shell isn't running here (demo, Windows, or disabled by
-                    // env), so promising a real shell with working TUIs would be
-                    // the lie the overlay above just corrected. Say nothing.
+                  ) : IS_DEMO ? (
+                    // The renderer, the theme and the scrollback are real; the
+                    // bytes are written into the build. Said here rather than
+                    // over the pane, because a visitor should be able to read
+                    // the session and be told what it is at the same time.
+                    <span className="flex items-center gap-2">
+                      <span className="px-1.5 rounded" style={{ color: "var(--primary-hover)", background: "color-mix(in srgb, var(--primary) 14%, transparent)" }}>demo</span>
+                      <span>A canned session — the terminal is real, nothing is running behind it. Run agentglass locally for a shell you can type in.</span>
+                    </span>
+                  ) : disabled ? (
+                    // The shell isn't running here (Windows, or disabled by env),
+                    // so promising a real shell with working TUIs would be the
+                    // lie the overlay above just corrected. Say nothing.
                     <span className="t-dim2">{cmds?.reason === "windows" ? "Terminal not available on Windows yet" : "Terminal unavailable"}</span>
                   ) : (
                     <span>Real shell — Ctrl+C, Ctrl+R, Tab-complete, vim/htop all work · sessions survive closing this panel · Shift+Esc closes it</span>
