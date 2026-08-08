@@ -34,10 +34,10 @@ jobs:
   # checked at that tag, which it had not. An artefact that does not exist
   # misleads nobody; one carrying the wrong version does.
   #
-  # `shared/` counts as the phone: it imports palettes, project, providers,
-  # session, term and types from there, so a change to the wire is a change to
-  # the app even with mobile/ untouched. So does this workflow, because a build
-  # whose recipe changed has not been proven by the last one that ran.
+  # `shared/` counts, but only the modules the phone actually imports — read out
+  # of the phone below rather than listed, because a list goes stale the first
+  # time somebody imports one more. A change to the wire is a change to the app
+  # with mobile/ untouched, which is why the phone lands last in a stack.
   #
   # workflow_dispatch always builds. Running it by hand is asking whether the
   # build still works, and "nothing changed" is not an answer to that question.
@@ -63,15 +63,33 @@ jobs:
             echo "no earlier tag — building"
             echo "build=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          changed="$(git diff --name-only "$prev" "$GITHUB_REF_NAME" -- mobile/ shared/ .github/workflows/android-apk.yml)"
-          if [ -n "$changed" ]; then
-            echo "changed since $prev:"; echo "$changed"
+          # Only the phone. Not this file: editing it changes WHEN the build
+          # runs, not what it produces, and workflow_dispatch is here to check
+          # the build by hand after touching it. Not documentation either — a
+          # README cannot change an APK, and `mobile/**/*.md` does not match
+          # `mobile/README.md`, which is how the first version of this counted it.
+          mob="$(git diff --name-only "$prev" "$GITHUB_REF_NAME" -- mobile/ ':(exclude)*.md' ':(exclude)mobile/*.md')"
+          # `shared/` counts only where the phone actually reaches into it, and
+          # the list is read from the phone rather than written here: a hardcoded
+          # one goes stale the first time somebody imports one more module. Today
+          # that is palettes, projectKey, providers, sessionTitle, termPalette and
+          # types — and NOT, for instance, jsLit, which only the desk uses.
+          deps="$(grep -rhoE '\.\./+shared/[a-zA-Z0-9_-]+' mobile/src mobile/app 2>/dev/null \
+                  | grep -oE 'shared/[a-zA-Z0-9_-]+' | sort -u || true)"
+          shr=""
+          for d in $deps; do
+            if [ -n "$(git diff --name-only "$prev" "$GITHUB_REF_NAME" -- "$d.ts")" ]; then
+              shr="$shr $d.ts"
+            fi
+          done
+          if [ -n "$mob" ] || [ -n "$shr" ]; then
+            echo "the phone changed since $prev:"; echo "$mob"; echo "$shr"
             echo "build=true" >> "$GITHUB_OUTPUT"
           else
             # Said out loud rather than silently skipped: a job that vanishes
             # from a release run reads as a job that broke.
-            echo "nothing under mobile/ or shared/ changed since $prev — the phone"
-            echo "of $prev is still the current build, and its APK is on that release."
+            echo "nothing the phone is made of changed since $prev — the APK on"
+            echo "$prev is still the current build of this app."
             echo "build=false" >> "$GITHUB_OUTPUT"
           fi
 
