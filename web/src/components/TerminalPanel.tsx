@@ -1709,12 +1709,25 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
   const narrow = tmuxActive && activeWin?.cols && tmuxClient && activeWin.cols < tmuxClient.cols
     ? { winCols: activeWin.cols, deskCols: tmuxClient.cols }
     : null;
-  // One row for both reasons rather than two rows that can stack: they have the
+  // One card for both reasons rather than two that can stack: they have the
   // same cause, the same button, and the same fix — and a desk that has lost
   // both its width and its panes has one problem, not two.
   const held = activeWin && (narrow || zoomedByPhone)
     ? { win: activeWin, narrow, zoomed: zoomedByPhone }
     : null;
+  /**
+   * The state the card is describing, as one string.
+   *
+   * Only used to decide whether a dismiss still applies. Closing the card puts
+   * this key in `heldHidden`, so the card stays gone while nothing changes and
+   * comes back by itself the moment the situation is a different one: another
+   * window, another width, or a zoom on top of a width that was already wrong.
+   * That keeps the dismiss from turning into the optimistic flag the button
+   * below deliberately does not have — nothing here is remembered ACROSS a
+   * change of state, so a phone that grabs the window again is announced again.
+   */
+  const heldKey = held ? `${held.win.id}:${held.narrow?.winCols ?? 0}:${held.zoomed ? "z" : "-"}` : null;
+  const [heldHidden, setHeldHidden] = useState<string | null>(null);
   /**
    * A tmux command, minus the discriminant this helper supplies.
    *
@@ -2262,65 +2275,6 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                   </div>
                 )}
 
-                {/* Your terminal is being drawn at somebody else's width.
-
-                    A row, not an overlay: under tmux the pane is a full-screen
-                    TUI drawn edge to edge on purpose, and an overlay covers the
-                    output you are squinting at — which is the thing that sent
-                    you looking for an explanation in the first place.
-                    Deliberately OUTSIDE the `!tmuxBar` guard above: this is not
-                    the tab strip, and someone who kept tmux's own status line
-                    has exactly the same broken layout and none of the strip.
-
-                    keepTermFocus for the same reason the strip has it — the
-                    button must not take the keyboard off the pane. */}
-                {held && (
-                  <div onMouseDown={keepTermFocus} className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b text-[10.5px]"
-                    style={{ color: "var(--text2)", background: "color-mix(in srgb, var(--phone) 12%, transparent)", borderColor: "color-mix(in srgb, var(--phone) 30%, transparent)" }}>
-                    {/* The width sentence has two states, split on `w.phone`, so
-                        the present tense is only used when a phone is actually
-                        there. The second is not hypothetical: a phone that loses
-                        its network leaves exactly this — the fit is a size set on
-                        the window, so it outlives the client that asked for it,
-                        and the desk is left narrow with nothing attached to
-                        explain it.
-                        The zoom sentence has one state, because it is only ever
-                        shown while a phone is here (see `zoomedByPhone`), and it
-                        says the panes are still RUNNING: that is the actual
-                        question — a window that went from four panes to one
-                        reads like three programs died. */}
-                    <span className="min-w-0">
-                      {held.narrow && (held.win.phone ? (
-                        <>Your phone is driving this window. It is <Cols n={held.narrow.winCols} /> columns while your terminal is <Cols n={held.narrow.deskCols} />, so tmux is drawing everything at phone width.</>
-                      ) : (
-                        <>This window is still at phone size: <Cols n={held.narrow.winCols} /> columns to your terminal&apos;s <Cols n={held.narrow.deskCols} />. Your phone left without putting it back.</>
-                      ))}
-                      {held.narrow && held.zoomed && " "}
-                      {held.zoomed && (
-                        <>Your phone opened one pane here, so tmux has zoomed the window onto it — your other panes are still running, they are just not being drawn.</>
-                      )}
-                    </span>
-                    {/* Nothing is remembered from this click. The notice is a
-                        pure function of the next sweep, so if tmux did not
-                        actually move it correctly stays up — an optimistic
-                        "taken over" flag would hide a take-over that failed,
-                        and unlike the tab click above, this is not an answer
-                        the user already knows. */}
-                    {/* The label follows what is actually wrong. "Take the width
-                        back" on a window that is the right width and missing
-                        three panes would name the wrong problem, and a button
-                        that names the wrong problem is one nobody presses. */}
-                    <button onClick={() => tmuxCmd({ cmd: "takeover", window: held.win.id })}
-                      className="ml-auto shrink-0 px-2 py-0.5 rounded"
-                      style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--phone) 45%, transparent)" }}
-                      title={held.zoomed
-                        ? "Unzoom this window and resize it to your terminal, then leave it following your terminal — the phone stays connected and can still ask for the pane back later"
-                        : "Resize this window to your terminal and leave it following your terminal — the phone stays connected and can still ask for a reflow later"}>
-                      {held.zoomed ? "Give me my window back" : held.win.phone ? "Take the width back" : "Restore the width"}
-                    </button>
-                  </div>
-                )}
-
                 {/* the terminals — one slot per visible pane */}
                 <div className="flex-1 min-h-0 relative" style={{ background: "var(--bg)" }}>
                   {/* The gap survives — it separates two panes and is doing real
@@ -2379,6 +2333,104 @@ export function TermView({ active, onClose = () => {} }: { active: boolean; onCl
                         : cmds?.reason === "config"
                         ? "Terminal disabled (terminalDisabled in config.json)"
                         : "Terminal disabled (AGENTGLASS_TERMINAL_DISABLED=1)"}
+                    </div>
+                  )}
+
+                  {/* Your terminal is being drawn at somebody else's width.
+
+                      A card that floats over the bottom right corner of the
+                      panes, NOT a row above them. As a row it took its height
+                      out of the terminal, so a phone connecting reflowed every
+                      pane on the desk and disconnecting reflowed them back:
+                      the notice about a resize was itself causing one, and a
+                      full-screen TUI redrew underneath it both times. Floating,
+                      it costs the terminal no rows at all and nothing moves.
+
+                      Anchored inside the pane box rather than to the viewport,
+                      which puts it in the screen's bottom right corner without
+                      covering the status line, and, because the whole terminal
+                      view is hidden with `visibility` when you are looking at
+                      another view, means it cannot follow you into chat or the
+                      diff the way a portal to the body would.
+
+                      Deliberately OUTSIDE the `!tmuxBar` guard above: this is
+                      not the tab strip, and someone who kept tmux's own status
+                      line has exactly the same broken layout and none of the
+                      strip.
+
+                      keepTermFocus for the same reason the strip has it — the
+                      button must not take the keyboard off the pane. Pointer
+                      events stop at the card itself, so a drag that starts
+                      anywhere else on the pane still selects text as usual. */}
+                  {held && heldKey !== heldHidden && (
+                    <div onMouseDown={keepTermFocus} role="status"
+                      className="absolute bottom-3 right-3 max-w-[21rem] flex flex-col gap-2 px-3.5 py-2.5 rounded-xl text-[10.5px] leading-relaxed"
+                      style={{
+                        zIndex: 20,
+                        color: "var(--text2)",
+                        // Opaque rather than blurred: this sits over a terminal
+                        // that repaints constantly, and a backdrop-filter here
+                        // is a per-frame cost for the whole rectangle.
+                        background: "var(--bg2)",
+                        border: "1px solid color-mix(in srgb, var(--phone) 45%, transparent)",
+                        boxShadow: "0 18px 40px -18px var(--shadow)",
+                        animation: "agx-zoom-in .12s ease-out",
+                      }}>
+                      <div className="flex items-start gap-2">
+                        {/* The width sentence has two states, split on `w.phone`,
+                            so the present tense is only used when a phone is
+                            actually there. The second is not hypothetical: a
+                            phone that loses its network leaves exactly this —
+                            the fit is a size set on the window, so it outlives
+                            the client that asked for it, and the desk is left
+                            narrow with nothing attached to explain it.
+                            The zoom sentence has one state, because it is only
+                            ever shown while a phone is here (see
+                            `zoomedByPhone`), and it says the panes are still
+                            RUNNING: that is the actual question — a window that
+                            went from four panes to one reads like three
+                            programs died. */}
+                        <span className="min-w-0">
+                          {held.narrow && (held.win.phone ? (
+                            <>Your phone is driving this window. It is <Cols n={held.narrow.winCols} /> columns while your terminal is <Cols n={held.narrow.deskCols} />, so tmux is drawing everything at phone width.</>
+                          ) : (
+                            <>This window is still at phone size: <Cols n={held.narrow.winCols} /> columns to your terminal&apos;s <Cols n={held.narrow.deskCols} />. Your phone left without putting it back.</>
+                          ))}
+                          {held.narrow && held.zoomed && " "}
+                          {held.zoomed && (
+                            <>Your phone opened one pane here, so tmux has zoomed the window onto it — your other panes are still running, they are just not being drawn.</>
+                          )}
+                        </span>
+                        {/* Closing hides the card, never the situation: the
+                            width stays wrong, and the same card comes back on
+                            its own as soon as the state is a different one (see
+                            `heldKey`). It exists because this now sits over your
+                            output instead of above it, and a card you cannot put
+                            away would be a permanent hole in the corner of a
+                            full-screen TUI. */}
+                        <CloseButton onClick={() => setHeldHidden(heldKey)}
+                          className="shrink-0 opacity-50 hover:opacity-100"
+                          title="Hide this until the window changes — the width stays as it is" />
+                      </div>
+                      {/* Nothing is remembered from this click. The notice is a
+                          pure function of the next sweep, so if tmux did not
+                          actually move it correctly stays up — an optimistic
+                          "taken over" flag would hide a take-over that failed,
+                          and unlike the tab click above, this is not an answer
+                          the user already knows. */}
+                      {/* The label follows what is actually wrong. "Take the
+                          width back" on a window that is the right width and
+                          missing three panes would name the wrong problem, and a
+                          button that names the wrong problem is one nobody
+                          presses. */}
+                      <button onClick={() => tmuxCmd({ cmd: "takeover", window: held.win.id })}
+                        className="agx-btn self-end shrink-0 px-2 py-0.5 rounded"
+                        style={{ color: "var(--text)", border: "1px solid color-mix(in srgb, var(--phone) 45%, transparent)" }}
+                        title={held.zoomed
+                          ? "Unzoom this window and resize it to your terminal, then leave it following your terminal — the phone stays connected and can still ask for the pane back later"
+                          : "Resize this window to your terminal and leave it following your terminal — the phone stays connected and can still ask for a reflow later"}>
+                        {held.zoomed ? "Give me my window back" : held.win.phone ? "Take the width back" : "Restore the width"}
+                      </button>
                     </div>
                   )}
                 </div>
