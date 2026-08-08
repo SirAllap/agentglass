@@ -6,7 +6,7 @@
 
 ## How was it tested?
 
-<!-- e.g. `bunx tsc --noEmit` in web/ and server/, `bunx vite build`, and which panel / flow you exercised in the UI. -->
+<!-- e.g. `bun run typecheck` in web/ and server/, `bunx vite build`, and which panel / flow you exercised in the UI. -->
 
 ---
 

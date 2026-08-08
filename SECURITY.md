@@ -39,12 +39,24 @@ complement, rather than replace, the private reporting path below.
   check, plus a DNS-rebinding guard that refuses a request arriving under a
   `Host` that is not localhost or private (`AGENTGLASS_ALLOWED_HOSTS` allows a
   reverse-proxy name explicitly).
-- **Token.** `AGENTGLASS_TOKEN` is required on every route except the telemetry
-  intake sinks (`/ingest`, the OTLP receivers) and `/health`, which stay
-  tokenless because local hooks and OTel exporters have no way to carry a
-  secret. Binding off loopback — **or setting `AGENTGLASS_TRUST_LAN=1` at all** —
-  makes a token mandatory; if none is set the server mints, persists (`0600`) and
-  prints one.
+- **Token.** `AGENTGLASS_TOKEN` is required on every route except `/health`, the
+  pairing handshake, and the telemetry intake sinks (`/ingest`, the OTLP
+  receivers) **when the request arrives on loopback**. Local hooks and OTel
+  exporters have no way to carry a secret, so the exemption exists for them; it
+  is a property of where the request came from and not of the path alone,
+  because those sinks write permanent rows and the alert they raise leaves the
+  machine. From anywhere else — including through a reverse proxy — they need
+  the token like everything else. `/health` stays open to anyone: it stores
+  nothing, and the pairing screen probes it before it has a credential to carry.
+  Binding off loopback — **or setting `AGENTGLASS_TRUST_LAN=1` at all** — makes a
+  token mandatory; if none is set the server mints, persists (`0600`) and prints
+  one.
+- **A proxy cannot claim to be loopback.** `tailscale serve` terminates TLS and
+  re-dials the port from `127.0.0.1`, which would otherwise hand the whole
+  tailnet the loopback exemption above. Forwarding headers are never the
+  decision on their own: `X-Forwarded-For` is consulted only when the socket peer
+  is loopback *and* the uid owning that socket is tailscaled's, and a proxied
+  request is treated as remote unconditionally.
 - **Intake is rate-limited** rather than authenticated: `AGENTGLASS_RATE_MAX`
   requests per source-address+route inside `AGENTGLASS_RATE_WINDOW_MS`.
 - **Hooks refuse to send anywhere but this machine.** The hook and seed scripts
