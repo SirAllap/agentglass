@@ -90,7 +90,7 @@ export function FilePalette({
   open: boolean;
   onClose: () => void;
   /** Raise the viewer on this file. The palette stays put — see the note above. */
-  onOpenFile: (root: string, rel: string, branch: string, ref?: string) => void;
+  onOpenFile: (root: string, rel: string, branch: string, ref?: string) => void | Promise<void>;
   /** A folder is a place: go to Files and walk the tree there. */
   onRevealDir: (root: string, dir: string) => void;
   /**

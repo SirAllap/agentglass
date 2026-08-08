@@ -16,7 +16,8 @@
 // it before it reaches the filesystem — a listing endpoint that accepts
 // `../../../etc` is a file server for the whole machine.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve, relative, sep } from "node:path";
 import { git, safeAbs } from "./git.ts";
 import { inScope } from "./config.ts";
@@ -488,6 +489,39 @@ export function fileText(rootIn: unknown, relIn: unknown, refIn?: unknown): File
   const truncated = buf.length > MAX_TEXT_BYTES;
   const text = new TextDecoder().decode(truncated ? buf.subarray(0, MAX_TEXT_BYTES) : buf);
   return { ok: true, rel: at.rel, text, bytes: st.size, ...(truncated ? { truncated: true } : {}) };
+}
+
+/**
+ * That branch's version of a file, on disk, so an editor can open it.
+ *
+ * The reason this exists rather than the viewer rendering the text it already
+ * has: only markdown is worth rendering, and everything else in a checkout is
+ * code, which belongs in the editor that knows its language. But a file found on
+ * a branch this worktree is not on has no path an editor could be pointed at —
+ * the working tree's copy is a different file wearing the right name, and that
+ * is the wrong answer that looks like it worked.
+ *
+ * So it is materialised, exactly as `prFileToTemp` does for a pull request's
+ * copy. Everything about what may be read at all — containment, ref resolution,
+ * the size ceiling, the binary refusal — is `fileText`'s, because a second
+ * reader is a second set of rules to keep in step.
+ *
+ * Written outside the checkout: a temp file inside one turns up in somebody's
+ * `git status` an hour later, wearing a name that looks like theirs.
+ */
+export function fileToTemp(rootIn: unknown, relIn: unknown, refIn: unknown): { ok: true; file: string; ref: string } | { ok: false; error: string } {
+  const ref = typeof refIn === "string" ? refIn.trim() : "";
+  if (!ref) return { ok: false, error: "no ref given" };
+  const read = fileText(rootIn, relIn, ref);
+  if (!read.ok) return { ok: false, error: read.error ?? "could not read that file" };
+  const dir = mkdtempSync(join(tmpdir(), "agentglass-ref-"));
+  // The ref in the name, because two of these open at once is the ordinary case
+  // — the same path on two branches is exactly what somebody is comparing — and
+  // an editor's tab strip showing the same basename twice says nothing.
+  const safeRef = ref.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 40);
+  const file = join(dir, `${safeRef}-${read.rel.split("/").pop() || "file"}`);
+  writeFileSync(file, read.text);
+  return { ok: true, file, ref };
 }
 
 /**

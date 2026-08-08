@@ -11,11 +11,11 @@
  * branch's files without touching the worktree is not a thing to mock.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const { findFiles, grepFiles, fileText, listRefs, resolveRef } = await import("../src/files.ts");
+const { findFiles, grepFiles, fileText, fileToTemp, listRefs, resolveRef } = await import("../src/files.ts");
 
 let box = "", origin = "", clone = "";
 let hadRoot: string | undefined;
@@ -200,5 +200,79 @@ describe("which branches to offer", () => {
     const after = Bun.spawnSync(["git", "-C", clone, "rev-parse", "HEAD"]).stdout.toString();
     expect(after).toBe(before);
     expect(existsSync(join(clone, "src/billing/migrations/0097_returnlabelrequest.py"))).toBe(true);
+  });
+});
+
+/*
+ * Writing a branch's copy out so an editor can open it.
+ *
+ * Why this is not "the viewer already has the text": only markdown is worth
+ * rendering, and everything else in a checkout is code, which belongs in the
+ * editor that knows its language. The palette used to send a `.py` found on
+ * another branch to the document viewer instead, which renders MARKDOWN — so it
+ * arrived with its lines collapsed into paragraphs, its `**` bold and its
+ * backticks as chips.
+ *
+ * An editor needs a path, and this file has none here. That is the whole reason
+ * for a temp file, and the assertion below is the reason it cannot be the
+ * working tree's path.
+ */
+describe("a branch's copy, on disk for the editor", () => {
+  it("writes the branch's content, not this checkout's", () => {
+    const rel = "src/billing/migrations/0096_entry_date.py";
+    // The same path, different on each side — which is the case that makes
+    // opening the working tree's copy wrong rather than merely stale.
+    put(clone, rel, "# 0096\nDEPENDS = 'billing/0095'\nLOCAL_EDIT = True\n");
+    run(clone, "commit", "-qm", "local edit");
+
+    const r = fileToTemp(clone, rel, "origin/master");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const wrote = readFileSync(r.file, "utf8");
+    expect(wrote).toContain("DEPENDS");
+    expect(wrote).not.toContain("LOCAL_EDIT");
+    // And the disk really does say something else, so the assertion above is
+    // about the ref rather than about a file that happened to match.
+    expect(readFileSync(join(clone, rel), "utf8")).toContain("LOCAL_EDIT");
+  });
+
+  it("writes outside the checkout", () => {
+    const r = fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "origin/master");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // A temp file inside the checkout turns up in somebody's `git status` an
+    // hour later wearing a name that looks like theirs.
+    expect(r.file.startsWith(clone)).toBe(false);
+    expect(existsSync(r.file)).toBe(true);
+  });
+
+  it("names the file after the ref, so two of them are telling apart", () => {
+    const rel = "src/billing/migrations/0095_order_is_gift_wrapped.py";
+    const a = fileToTemp(clone, rel, "origin/master");
+    const b = fileToTemp(clone, rel, "master");
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    // The same basename twice says nothing in an editor's tab strip, and the
+    // same path on two branches is exactly what somebody is comparing.
+    expect(a.file.split("/").pop()).not.toBe(b.file.split("/").pop());
+    expect(a.file.split("/").pop()).toContain("origin-master");
+  });
+
+  it("refuses a path that branch does not have, rather than writing an empty file", () => {
+    // 0097 exists HERE and not upstream. An empty temp file would open in the
+    // editor as a real, blank version of a file that does not exist.
+    const r = fileToTemp(clone, "src/billing/migrations/0097_returnlabelrequest.py", "origin/master");
+    expect(r.ok).toBe(false);
+  });
+
+  it("refuses a ref that does not exist, and one that was not given", () => {
+    expect(fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "no/such/branch").ok).toBe(false);
+    expect(fileToTemp(clone, "src/billing/migrations/0095_order_is_gift_wrapped.py", "").ok).toBe(false);
+  });
+
+  it("is contained by the same rules as every other reader here", () => {
+    // `inside()` is fileText's, and this borrows it rather than growing a second
+    // set of rules to keep in step.
+    expect(fileToTemp(clone, "../../etc/passwd", "origin/master").ok).toBe(false);
   });
 });

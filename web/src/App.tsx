@@ -31,7 +31,7 @@ import ServerBanner from "./components/ServerBanner.tsx";
 import GitMissingBanner from "./components/GitMissingBanner.tsx";
 import { chordFromEvent, viewForChord, appActionForChord } from "./lib/keybindings.ts";
 import { FilePalette } from "./components/FilePalette.tsx";
-import { PeekFile, type Peek } from "./components/PeekFile.tsx";
+import { PeekFile, isRenderable, type Peek } from "./components/PeekFile.tsx";
 import { requestFilesReveal } from "./lib/filesReveal.ts";
 import { onOpenSettings, openSettings } from "./lib/openSettings.ts";
 import { onOpenPrs, onOpenPr } from "./lib/openPrs.ts";
@@ -87,6 +87,16 @@ export default function App() {
    */
   const [filesOpen, setFilesOpen] = useState(false);
   const [peek, setPeek] = useState<Peek | null>(null);
+  /* Opening a file from another branch has to fetch it first, and a click that
+     answers nothing for a beat reads as a click that missed. Named for what is
+     happening rather than a bare boolean: the note says which file. */
+  const [opening, setOpening] = useState<string | null>(null);
+  const [openErr, setOpenErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!openErr) return;
+    const t = setTimeout(() => setOpenErr(null), 4000);
+    return () => clearTimeout(t);
+  }, [openErr]);
   /** The palette's measured height, so a document it opens starts below it
    *  instead of underneath it. 0 when the palette is shut. */
   const [paletteH, setPaletteH] = useState(0);
@@ -925,10 +935,28 @@ export default function App() {
         onClose={() => setFilesOpen(false)}
         docOpen={peek !== null}
         onHeight={setPaletteH}
-        onOpenFile={(root, rel, branch, ref) =>
-          // A file found on another branch is read from that branch and is not
-          // editable — there is no file on disk to edit.
-          setPeek({ root, path: `${root}/${rel}`, label: rel, edit: !ref, branch, ref })}
+        onOpenFile={async (root, rel, branch, ref) => {
+          // On this checkout: the file itself, in the editor, writable.
+          if (!ref) { setPeek({ root, path: `${root}/${rel}`, label: rel, edit: true, branch }); return; }
+          // On another branch, and worth rendering — a document, read as one.
+          if (isRenderable(rel)) { setPeek({ root, path: `${root}/${rel}`, label: rel, edit: false, branch, ref }); return; }
+          /*
+           * On another branch, and code. It used to open in the document viewer,
+           * which renders markdown — so a .py arrived with its lines collapsed
+           * into paragraphs, its `**` bold and its backticks as chips. Code goes
+           * to the editor, which is what READABLE said all along.
+           *
+           * The editor needs a path, and this file is not on disk here: the
+           * working tree's copy is a different file wearing the right name. So
+           * the ref's copy is written out first, exactly as a pull request's is.
+           */
+          setOpening(`${rel} on ${ref}`);
+          try {
+            const r = await api.filesTemp(root, rel, ref);
+            if (!r.ok || !r.file) { setOpenErr(r.error ?? "Could not read that file on that branch"); return; }
+            setPeek({ root, path: r.file, label: `${rel} · ${ref} · read-only` });
+          } finally { setOpening(null); }
+        }}
         onRevealDir={(root, dir) => { requestFilesReveal(root, dir); goView("files"); }}
       />
       {/* The two share the screen rather than stack: the palette stays open on
@@ -937,6 +965,23 @@ export default function App() {
       {peek && (
         <PeekFile peek={peek} onClose={() => setPeek(null)}
           topPx={filesOpen && paletteH > 0 ? Math.round(paletteH) + 22 : undefined} />
+      )}
+      {/* Where the document is about to be, so the answer appears where the eye
+          already went. Both of these are one line and neither takes the focus:
+          the palette stays usable, and a failure says which file failed rather
+          than leaving a click that did nothing. */}
+      {(opening || openErr) && !peek && (
+        <div className="fixed left-1/2 -translate-x-1/2 z-[60] px-3 py-1.5 rounded-lg text-[11.5px] flex items-center gap-2"
+          style={{
+            top: filesOpen && paletteH > 0 ? Math.round(paletteH) + 34 : "12vh",
+            background: "var(--bg2)", border: "1px solid var(--border)",
+            color: openErr ? "var(--error)" : "var(--text2)",
+          }}>
+          {/* Bare: `.agx-spin` carries its own size, border and accent, and the
+              inline styles this used to have were overriding all three. */}
+          {opening && <span className="agx-spin" />}
+          <span>{openErr ?? `Opening ${opening}…`}</span>
+        </div>
       )}
       {/* Shows once when the app first runs a version it has not run before —
           the update button restarts into a new build and otherwise says nothing

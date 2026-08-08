@@ -783,6 +783,11 @@ const realApi = {
   filesRead: (root: string, rel: string, ref?: string) =>
     get<{ ok: boolean; rel: string; text: string; bytes: number; truncated?: boolean; error?: string }>(
       `/files/read?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),
+  /** That ref's copy of a file, written out so the editor can open it. For
+   *  everything the viewer does not render — which is everything but markdown. */
+  filesTemp: (root: string, rel: string, ref: string) =>
+    get<{ ok: boolean; file?: string; ref?: string; error?: string }>(
+      `/files/temp?root=${encodeURIComponent(root)}&rel=${encodeURIComponent(rel)}&ref=${encodeURIComponent(ref)}`),
   filesFind: (root: string, q: string, ref?: string) =>
     get<FindReport>(`/files/find?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}${ref ? `&ref=${encodeURIComponent(ref)}` : ""}`),
   /** Which of these paths the working tree still has — see filesExist. */
@@ -1322,6 +1327,11 @@ const demoApi: typeof realApi = {
   machineUnlock: (_p: string) => D({ ok: false, error: "not available in the demo" }),
   filesTree: (_r: string, rel = "") => D(demo.filesTree(rel)),
   filesRead: (_r: string, rel: string, _ref?: string) => D(demo.filesRead(rel)),
+  /* No git and no disk here, so there is nothing to write a ref's copy out of.
+     Said rather than answered with a path that does not exist: the caller opens
+     an editor on whatever comes back. */
+  filesTemp: (_r: string, _rel: string, _ref: string) =>
+    D({ ok: false as const, error: "the demo has no checkout to read a branch from" }),
   filesFind: (_r: string, q: string) => D(demo.filesFind(q)),
   filesExist: (_r: string, rels: string[]) => D({ ok: true, here: rels }),
   filesRefs: (_r: string) => D({ ok: true, local: ["main", "feat/checkout-rewrite"], remote: ["origin/main", "origin/release"], head: "main" }),

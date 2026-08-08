@@ -69,6 +69,13 @@ export type Peek = {
  *  that knows its language than in a viewer that would have to learn them all. */
 const READABLE = /\.(md|markdown|mdx)$/i;
 
+/** Exported so a caller can ask the question before deciding how to open a file
+ *  — the palette has to know, because a file on another branch has to be written
+ *  out for the editor and a document does not. One regexp, one answer: two
+ *  places disagreeing about what "renderable" means is how a `.py` ended up in
+ *  the markdown viewer. */
+export const isRenderable = (path: string) => READABLE.test(path);
+
 export function PeekFile({ peek, onClose, topPx }: {
   peek: Peek;
   onClose: () => void;
@@ -526,7 +533,17 @@ export function PeekFile({ peek, onClose, topPx }: {
               style={{ maxWidth: width ? `${width}ch` : "none", fontSize: size }}>
               {textErr && <div className="text-[12px]" style={{ color: "var(--error)" }}>{textErr}</div>}
               {text === null && !textErr && <div className="text-[12px] t-dim">Reading…</div>}
-              {text !== null && <Markdown text={text} />}
+              {/* Markdown only for markdown. A caller that lands anything else
+                  in reading mode gets it as it is: the renderer collapses
+                  newlines into paragraphs, bolds a `**`, and turns backticks
+                  into chips — which is a document's job and the exact opposite
+                  of what code needs. Callers are supposed to send code to the
+                  editor (see isRenderable), and this is the wall behind that
+                  door rather than a second opinion about where code belongs. */}
+              {text !== null && (canRender
+                ? <Markdown text={text} />
+                : <pre className="text-[12.5px] leading-relaxed whitespace-pre overflow-x-auto agx-scroll"
+                    style={{ fontFamily: "var(--mono, ui-monospace, monospace)" }}>{text}</pre>)}
               {truncated && (
                 <div className="mt-4 text-[11.5px]" style={{ color: "var(--warning)" }}>
                   This file is longer than a megabyte and is shown up to there. Open it in the editor
